@@ -1,19 +1,22 @@
-<h1 align="center">
+# Infisical CLI
+
+<div align="center">
   <img width="300" src="https://raw.githubusercontent.com/Infisical/infisical/main/img/logoname-white.svg#gh-dark-mode-only" alt="infisical">
   <img width="300" src="https://raw.githubusercontent.com/Infisical/infisical/main/img/logoname-black.svg#gh-light-mode-only" alt="infisical">
-</h1>
+</div>
+
 <p align="center">
-  <p align="center"><b>The official Infisical CLI</b>: Inject secrets into applications and manage your Infisical infrastructure.</p>
+  <b>The official Infisical CLI</b>: Inject secrets into applications and manage your Infisical infrastructure.
 </p>
 
-<h4 align="center">
+<div align="center">
   <a href="https://infisical.com/slack">Slack</a> |
   <a href="https://infisical.com/">Infisical Cloud</a> |
   <a href="https://infisical.com/docs/cli/overview">CLI Docs</a> |
   <a href="https://www.infisical.com">Website</a>
-</h4>
+</div>
 
-<h4 align="center">
+<div align="center">
   <a href="https://github.com/Infisical/cli/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Infisical CLI is released under the MIT license." />
   </a>
@@ -29,7 +32,7 @@
   <a href="https://twitter.com/infisical">
     <img src="https://img.shields.io/twitter/follow/infisical?label=Follow" alt="Infisical Twitter" />
   </a>
-</h4>
+</div>
 
 ## Introduction
 
@@ -43,22 +46,58 @@ The **[Infisical CLI](https://infisical.com/docs/cli/overview)** is a powerful c
 
 ## Installation
 
-Choose your preferred installation method:
-
 ### Package Managers
 
-**macOS:** `brew install infisical/get-cli/infisical`
+**macOS**
 
-**Windows:** `scoop install infisical` or `winget install infisical`
+```bash
+brew install infisical/get-cli/infisical
+```
 
-**NPM:** `npm install -g @infisical/cli`
+**Windows**
 
-**Linux:**
+```bash
+# Scoop
+scoop install infisical
 
-- **Ubuntu/Debian:** `curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash && sudo apt-get install -y infisical`
-- **Alpine:** `curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.alpine.sh' | bash && sudo apk add infisical`
-- **RHEL/CentOS:** `curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.rpm.sh' | sudo -E bash && sudo yum install infisical`
-- **Arch:** `yay -S infisical-bin`
+# Winget
+winget install infisical
+```
+
+**NPM**
+
+```bash
+npm install -g @infisical/cli
+```
+
+**Linux**
+
+_Ubuntu/Debian:_
+
+```bash
+curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+sudo apt-get install -y infisical
+```
+
+_Alpine:_
+
+```bash
+curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.alpine.sh' | bash
+sudo apk add infisical
+```
+
+_RHEL/CentOS:_
+
+```bash
+curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.rpm.sh' | sudo -E bash
+sudo yum install infisical
+```
+
+_Arch Linux:_
+
+```bash
+yay -S infisical-bin
+```
 
 ### Direct Download
 
