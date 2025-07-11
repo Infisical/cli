@@ -1,0 +1,10 @@
+.infisical.json
+dist/
+agent-config.test.yaml
+
+.test.env
+.env
+
+infisical-merge
+test/infisical-merge
+.DS_Store
