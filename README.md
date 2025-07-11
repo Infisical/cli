@@ -1,5 +1,3 @@
-# Infisical CLI
-
 <div align="center">
   <img width="300" src="https://raw.githubusercontent.com/Infisical/infisical/main/img/logoname-white.svg#gh-dark-mode-only" alt="infisical">
   <img width="300" src="https://raw.githubusercontent.com/Infisical/infisical/main/img/logoname-black.svg#gh-light-mode-only" alt="infisical">
@@ -8,31 +6,6 @@
 <p align="center">
   <b>The official Infisical CLI</b>: Inject secrets into applications and manage your Infisical infrastructure.
 </p>
-
-<div align="center">
-  <a href="https://infisical.com/slack">Slack</a> |
-  <a href="https://infisical.com/">Infisical Cloud</a> |
-  <a href="https://infisical.com/docs/cli/overview">CLI Docs</a> |
-  <a href="https://www.infisical.com">Website</a>
-</div>
-
-<div align="center">
-  <a href="https://github.com/Infisical/cli/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Infisical CLI is released under the MIT license." />
-  </a>
-  <a href="https://github.com/infisical/cli/blob/main/CONTRIBUTING.md">
-    <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen" alt="PRs welcome!" />
-  </a>
-  <a href="https://github.com/Infisical/cli/issues">
-    <img src="https://img.shields.io/github/commit-activity/m/infisical/cli" alt="git commit activity" />
-  </a>
-  <a href="https://infisical.com/slack">
-    <img src="https://img.shields.io/badge/chat-on%20Slack-blueviolet" alt="Slack community channel" />
-  </a>
-  <a href="https://twitter.com/infisical">
-    <img src="https://img.shields.io/twitter/follow/infisical?label=Follow" alt="Infisical Twitter" />
-  </a>
-</div>
 
 ## Introduction
 
@@ -102,65 +75,6 @@ yay -S infisical-bin
 ### Direct Download
 
 Download binaries from [GitHub Releases](https://github.com/Infisical/cli/releases).
-
-## Quick Start
-
-### Local Development
-
-```bash
-# Login and initialize
-infisical login
-infisical init
-
-# Inject secrets into your app
-infisical run --env=dev -- npm start
-infisical run --env=production -- python app.py
-```
-
-### CI/CD & Production
-
-```bash
-# Authenticate with machine identity
-export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id=<id> --client-secret=<secret> --silent --plain)
-
-# Export secrets to file
-infisical export --format=dotenv-export > .env
-```
-
-## Key Features
-
-### 🔐 Secret Injection
-
-```bash
-infisical run --env=production -- npm start
-```
-
-### 🔍 Secret Scanning
-
-```bash
-infisical scan --verbose
-infisical scan install --pre-commit-hook
-```
-
-### 🗂️ Secret Management
-
-```bash
-infisical export --env=dev --format=dotenv
-infisical secrets get API_KEY
-```
-
-### 🚀 CI/CD Integration
-
-```bash
-infisical run --token=$INFISICAL_TOKEN -- pytest
-```
-
-### 🏢 Self-Hosted Support
-
-```bash
-infisical login  # Choose your instance
-export INFISICAL_API_URL="https://your-instance.com/api"
-```
 
 ## Documentation
 
