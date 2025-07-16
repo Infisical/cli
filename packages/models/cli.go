@@ -46,15 +46,10 @@ type SingleEnvironmentVariable struct {
 
 // TLDR; Why you shouldn't depend on "SkipMultilineEncoding" and instead use this method
 // "SkipMultilineEncoding" generally means that the value should not be encoded as a multiline string
-// But due to an oversight or a bug, this property actually does the opposite - it encodes the value as a multiline string
+// But due to historic reasons this property actually does the opposite - it encodes the value as a multiline string
 func (s SingleEnvironmentVariable) IsMultilineEncodingEnabled() bool {
-	if s.SkipMultilineEncoding {
-		// Encode the value as a multiline string if doesn't exist or is true
-		return true
-	}
-
-	// Return true if SkipMultilineEncoding is false or not set
-	return false
+	// Encode the value only if "skipMultilineEncoding" doesn't exist or is true
+	return s.SkipMultilineEncoding
 }
 
 type PlaintextSecretResult struct {
