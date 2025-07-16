@@ -41,14 +41,14 @@ type SingleEnvironmentVariable struct {
 	Etag    string `json:"Etag"`
 
 	// Deprecated: SkipMultilineEncoding is deprecated. Use IsMultilineEncodingEnabled() instead.
-	SkipMultilineEncoding *bool `json:"skipMultilineEncoding"`
+	SkipMultilineEncoding bool `json:"skipMultilineEncoding"`
 }
 
 // TLDR; Why you shouldn't depend on "SkipMultilineEncoding" and instead use this method
 // "SkipMultilineEncoding" generally means that the value should not be encoded as a multiline string
 // But due to an oversight or a bug, this property actually does the opposite - it encodes the value as a multiline string
 func (s SingleEnvironmentVariable) IsMultilineEncodingEnabled() bool {
-	if s.SkipMultilineEncoding != nil && *s.SkipMultilineEncoding {
+	if s.SkipMultilineEncoding {
 		// Encode the value as a multiline string if doesn't exist or is true
 		return true
 	}

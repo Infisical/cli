@@ -602,7 +602,7 @@ type GetRawSecretsV3Response struct {
 		SecretValue           string `json:"secretValue"`
 		SecretComment         string `json:"secretComment"`
 		SecretPath            string `json:"secretPath"`
-		SkipMultilineEncoding *bool  `json:"skipMultilineEncoding"`
+		SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 	} `json:"secrets"`
 	Imports []ImportedRawSecretV3 `json:"imports"`
 	ETag    string
@@ -627,7 +627,7 @@ type GetRawSecretV3ByNameResponse struct {
 		SecretValue           string `json:"secretValue"`
 		SecretComment         string `json:"secretComment"`
 		SecretPath            string `json:"secretPath"`
-		SkipMultilineEncoding *bool  `json:"skipMultilineEncoding"`
+		SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 	} `json:"secret"`
 	ETag string
 }
