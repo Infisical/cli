@@ -190,7 +190,7 @@ func formatAsCSV(envs []models.SingleEnvironmentVariable) string {
 	writer := csv.NewWriter(csvString)
 	writer.Write([]string{"Key", "Value"})
 	for _, env := range envs {
-		writer.Write([]string{env.Key, env.Value})
+		writer.Write([]string{env.Key, escapeNewLinesIfRequired(env)})
 	}
 	writer.Flush()
 	return csvString.String()
@@ -200,7 +200,7 @@ func formatAsCSV(envs []models.SingleEnvironmentVariable) string {
 func formatAsDotEnv(envs []models.SingleEnvironmentVariable) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("%s='%s'\n", env.Key, escapeNewLines(env.Value))
+		dotenv += fmt.Sprintf("%s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
 	}
 	return dotenv
 }
@@ -209,7 +209,7 @@ func formatAsDotEnv(envs []models.SingleEnvironmentVariable) string {
 func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLines(env.Value))
+		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
 	}
 	return dotenv
 }
@@ -217,7 +217,7 @@ func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
 func formatAsYaml(envs []models.SingleEnvironmentVariable) (string, error) {
 	m := make(map[string]string)
 	for _, env := range envs {
-		m[env.Key] = escapeNewLines(env.Value)
+		m[env.Key] = escapeNewLinesIfRequired(env)
 	}
 
 	yamlBytes, err := yaml.Marshal(m)
@@ -239,10 +239,10 @@ func formatAsJson(envs []models.SingleEnvironmentVariable) string {
 	return string(json)
 }
 
-func escapeNewLines(input string) string {
-	if strings.ContainsRune(input, '\n') {
-		return strings.ReplaceAll(input, "\n", "\\n")
+func escapeNewLinesIfRequired(env models.SingleEnvironmentVariable) string {
+	if !env.SkipMultilineEncoding && strings.ContainsRune(env.Value, '\n') {
+		return strings.ReplaceAll(env.Value, "\n", "\\n")
 	}
 
-	return input
+	return env.Value
 }

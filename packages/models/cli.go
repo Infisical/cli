@@ -37,8 +37,9 @@ type SingleEnvironmentVariable struct {
 		Slug      string `json:"slug"`
 		Workspace string `json:"workspace"`
 	} `json:"tags"`
-	Comment string `json:"comment"`
-	Etag    string `json:"Etag"`
+	Comment               string `json:"comment"`
+	Etag                  string `json:"Etag"`
+	SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 }
 
 type PlaintextSecretResult struct {
