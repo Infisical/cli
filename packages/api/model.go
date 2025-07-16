@@ -593,15 +593,16 @@ type GetRawSecretsV3Request struct {
 
 type GetRawSecretsV3Response struct {
 	Secrets []struct {
-		ID            string `json:"_id"`
-		Version       int    `json:"version"`
-		Workspace     string `json:"workspace"`
-		Type          string `json:"type"`
-		Environment   string `json:"environment"`
-		SecretKey     string `json:"secretKey"`
-		SecretValue   string `json:"secretValue"`
-		SecretComment string `json:"secretComment"`
-		SecretPath    string `json:"secretPath"`
+		ID                    string `json:"_id"`
+		Version               int    `json:"version"`
+		Workspace             string `json:"workspace"`
+		Type                  string `json:"type"`
+		Environment           string `json:"environment"`
+		SecretKey             string `json:"secretKey"`
+		SecretValue           string `json:"secretValue"`
+		SecretComment         string `json:"secretComment"`
+		SecretPath            string `json:"secretPath"`
+		SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 	} `json:"secrets"`
 	Imports []ImportedRawSecretV3 `json:"imports"`
 	ETag    string
@@ -617,15 +618,16 @@ type GetRawSecretV3ByNameRequest struct {
 
 type GetRawSecretV3ByNameResponse struct {
 	Secret struct {
-		ID            string `json:"_id"`
-		Version       int    `json:"version"`
-		Workspace     string `json:"workspace"`
-		Type          string `json:"type"`
-		Environment   string `json:"environment"`
-		SecretKey     string `json:"secretKey"`
-		SecretValue   string `json:"secretValue"`
-		SecretComment string `json:"secretComment"`
-		SecretPath    string `json:"secretPath"`
+		ID                    string `json:"_id"`
+		Version               int    `json:"version"`
+		Workspace             string `json:"workspace"`
+		Type                  string `json:"type"`
+		Environment           string `json:"environment"`
+		SecretKey             string `json:"secretKey"`
+		SecretValue           string `json:"secretValue"`
+		SecretComment         string `json:"secretComment"`
+		SecretPath            string `json:"secretPath"`
+		SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 	} `json:"secret"`
 	ETag string
 }
