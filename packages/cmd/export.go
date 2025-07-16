@@ -240,7 +240,7 @@ func formatAsJson(envs []models.SingleEnvironmentVariable) string {
 }
 
 func escapeNewLinesIfRequired(env models.SingleEnvironmentVariable) string {
-	if !env.SkipMultilineEncoding && strings.ContainsRune(env.Value, '\n') {
+	if env.IsMultilineEncodingEnabled() && strings.ContainsRune(env.Value, '\n') {
 		return strings.ReplaceAll(env.Value, "\n", "\\n")
 	}
 

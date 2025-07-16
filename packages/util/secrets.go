@@ -66,13 +66,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		var isMultiline bool
-
-		if secret.SkipMultilineEncoding != nil && *secret.SkipMultilineEncoding {
-			isMultiline = true
-		}
-
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: isMultiline})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding})
 	}
 
 	if includeImports {
@@ -117,13 +111,7 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		var isMultiline bool
-
-		if secret.SkipMultilineEncoding != nil && *secret.SkipMultilineEncoding {
-			isMultiline = true
-		}
-
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: isMultiline})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: secret.SkipMultilineEncoding})
 	}
 
 	if includeImports {
@@ -162,13 +150,14 @@ func GetSinglePlainTextSecretByNameV3(accessToken string, workspaceId string, en
 	}
 
 	formattedSecrets := models.SingleEnvironmentVariable{
-		Key:         rawSecret.Secret.SecretKey,
-		WorkspaceId: rawSecret.Secret.Workspace,
-		Value:       rawSecret.Secret.SecretValue,
-		Type:        rawSecret.Secret.Type,
-		ID:          rawSecret.Secret.ID,
-		Comment:     rawSecret.Secret.SecretComment,
-		SecretPath:  rawSecret.Secret.SecretPath,
+		Key:                   rawSecret.Secret.SecretKey,
+		WorkspaceId:           rawSecret.Secret.Workspace,
+		Value:                 rawSecret.Secret.SecretValue,
+		Type:                  rawSecret.Secret.Type,
+		ID:                    rawSecret.Secret.ID,
+		Comment:               rawSecret.Secret.SecretComment,
+		SecretPath:            rawSecret.Secret.SecretPath,
+		SkipMultilineEncoding: rawSecret.Secret.SkipMultilineEncoding,
 	}
 
 	return formattedSecrets, rawSecret.ETag, nil

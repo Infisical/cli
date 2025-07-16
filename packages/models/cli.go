@@ -37,9 +37,24 @@ type SingleEnvironmentVariable struct {
 		Slug      string `json:"slug"`
 		Workspace string `json:"workspace"`
 	} `json:"tags"`
-	Comment               string `json:"comment"`
-	Etag                  string `json:"Etag"`
-	SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
+	Comment string `json:"comment"`
+	Etag    string `json:"Etag"`
+
+	// Deprecated: SkipMultilineEncoding is deprecated. Use IsMultilineEncodingEnabled() instead.
+	SkipMultilineEncoding *bool `json:"skipMultilineEncoding"`
+}
+
+// TLDR; Why you shouldn't depend on "SkipMultilineEncoding" and instead use this method
+// "SkipMultilineEncoding" generally means that the value should not be encoded as a multiline string
+// But due to an oversight or a bug, this property actually does the opposite - it encodes the value as a multiline string
+func (s SingleEnvironmentVariable) IsMultilineEncodingEnabled() bool {
+	if s.SkipMultilineEncoding != nil && *s.SkipMultilineEncoding {
+		// Encode the value as a multiline string if doesn't exist or is true
+		return true
+	}
+
+	// Return true if SkipMultilineEncoding is false or not set
+	return false
 }
 
 type PlaintextSecretResult struct {
