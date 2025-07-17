@@ -31,7 +31,7 @@ var exportCmd = &cobra.Command{
 	Use:                   "export",
 	Short:                 "Used to export environment variables to a file",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical export --env=prod --format=json --output-file=secrets.json",
+	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		environmentName, _ := cmd.Flags().GetString("env")
@@ -152,18 +152,23 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
-		// Determine output file path (always save to file now)
-		finalPath, err := resolveOutputPath(outputFile, format)
-		if err != nil {
-			util.HandleError(err, "Unable to resolve output path")
-		}
+		// Handle output file logic - only save to file if --output-file is specified
+		if outputFile != "" {
+			finalPath, err := resolveOutputPath(outputFile, format)
+			if err != nil {
+				util.HandleError(err, "Unable to resolve output path")
+			}
 
-		err = writeToFile(finalPath, output, 0644)
-		if err != nil {
-			util.HandleError(err, "Failed to write output to file")
-		}
+			err = writeToFile(finalPath, output, 0644)
+			if err != nil {
+				util.HandleError(err, "Failed to write output to file")
+			}
 
-		fmt.Printf("Successfully exported secrets to: %s\n", finalPath)
+			fmt.Printf("Successfully exported secrets to: %s\n", finalPath)
+		} else {
+			// Original behavior - print to stdout when no output file specified
+			fmt.Print(output)
+		}
 
 		// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))
 	},
@@ -171,17 +176,6 @@ var exportCmd = &cobra.Command{
 
 // resolveOutputPath determines the final output path based on the provided path and format
 func resolveOutputPath(outputFile, format string) (string, error) {
-	// If no output file specified, use defaults in current working directory
-	if outputFile == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get current working directory: %w", err)
-		}
-		
-		defaultFilename := getDefaultFilename(format)
-		return filepath.Join(cwd, defaultFilename), nil
-	}
-
 	// Expand ~ to home directory if present
 	if strings.HasPrefix(outputFile, "~") {
 		homeDir, err := os.UserHomeDir()
@@ -281,7 +275,7 @@ func init() {
 	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
-	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. If not specified, defaults to '.env' for dotenv formats or 'secrets.{format}' for other formats in the current directory")
+	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 }
 
 // Format according to the format flag
