@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -30,7 +31,7 @@ var exportCmd = &cobra.Command{
 	Use:                   "export",
 	Short:                 "Used to export environment variables to a file",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical export --env=prod --format=json > secrets.json",
+	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		environmentName, _ := cmd.Flags().GetString("env")
@@ -82,6 +83,11 @@ var exportCmd = &cobra.Command{
 		}
 
 		secretsPath, err := cmd.Flags().GetString("path")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
+		outputFile, err := cmd.Flags().GetString("output-file")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -146,10 +152,115 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
-		fmt.Print(output)
+		// Handle output file logic - only save to file if --output-file is specified
+		if outputFile != "" {
+			finalPath, err := resolveOutputPath(outputFile, format)
+			if err != nil {
+				util.HandleError(err, "Unable to resolve output path")
+			}
+
+			err = writeToFile(finalPath, output, 0644)
+			if err != nil {
+				util.HandleError(err, "Failed to write output to file")
+			}
+
+			fmt.Printf("Successfully exported secrets to: %s\n", finalPath)
+		} else {
+			// Original behavior - print to stdout when no output file specified
+			fmt.Print(output)
+		}
 
 		// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))
 	},
+}
+
+// resolveOutputPath determines the final output path based on the provided path and format
+func resolveOutputPath(outputFile, format string) (string, error) {
+	// Expand ~ to home directory if present
+	if strings.HasPrefix(outputFile, "~") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve home directory: %w", err)
+		}
+		outputFile = strings.Replace(outputFile, "~", homeDir, 1)
+	}
+
+	// Get absolute path to handle relative paths consistently
+	absPath, err := filepath.Abs(outputFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve absolute path: %w", err)
+	}
+
+	// Check if the path is a directory
+	if info, err := os.Stat(absPath); err == nil && info.IsDir() {
+		// If it's a directory, append the default filename
+		defaultFilename := getDefaultFilename(format)
+		return filepath.Join(absPath, defaultFilename), nil
+	} else if os.IsNotExist(err) {
+		// Path doesn't exist, check if it looks like a directory (ends with /)
+		if strings.HasSuffix(absPath, string(filepath.Separator)) {
+			// Treat as directory, create it and add default filename
+			err := os.MkdirAll(absPath, 0755)
+			if err != nil {
+				return "", fmt.Errorf("failed to create directory %s: %w", absPath, err)
+			}
+			defaultFilename := getDefaultFilename(format)
+			return filepath.Join(absPath, defaultFilename), nil
+		}
+		
+		// Ensure the parent directory exists
+		parentDir := filepath.Dir(absPath)
+		if _, err := os.Stat(parentDir); os.IsNotExist(err) {
+			err := os.MkdirAll(parentDir, 0755)
+			if err != nil {
+				return "", fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
+			}
+		}
+		
+		// If no extension provided, add default extension based on format
+		if filepath.Ext(absPath) == "" {
+			ext := getDefaultExtension(format)
+			absPath += ext
+		}
+	}
+
+	return absPath, nil
+}
+
+// getDefaultFilename returns the default filename based on the format
+func getDefaultFilename(format string) string {
+	switch strings.ToLower(format) {
+	case FormatJson:
+		return "secrets.json"
+	case FormatCSV:
+		return "secrets.csv"
+	case FormatYaml:
+		return "secrets.yaml"
+	case FormatDotEnvExport:
+		return ".env"
+	case FormatDotenv:
+		return ".env"
+	default:
+		return ".env"
+	}
+}
+
+// getDefaultExtension returns the default file extension based on the format
+func getDefaultExtension(format string) string {
+	switch strings.ToLower(format) {
+	case FormatJson:
+		return ".json"
+	case FormatCSV:
+		return ".csv"
+	case FormatYaml:
+		return ".yaml"
+	case FormatDotEnvExport:
+		return ".env"
+	case FormatDotenv:
+		return ".env"
+	default:
+		return ".env"
+	}
 }
 
 func init() {
@@ -164,6 +275,7 @@ func init() {
 	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
+	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 }
 
 // Format according to the format flag
