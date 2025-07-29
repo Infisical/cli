@@ -32,15 +32,24 @@ type Tag struct {
 }
 
 type SingleEnvironmentVariable struct {
-	Key         string `json:"key"`
-	WorkspaceId string `json:"workspace"`
-	Value       string `json:"value"`
-	Type        string `json:"type"`
-	ID          string `json:"_id"`
-	SecretPath  string `json:"secretPath"`
-	Tags        []Tag  `json:"tags"`
-	Comment     string `json:"comment"`
-	Etag        string `json:"Etag"`
+	Key                   string `json:"key"`
+	WorkspaceId           string `json:"workspace"`
+	Value                 string `json:"value"`
+	Type                  string `json:"type"`
+	ID                    string `json:"_id"`
+	SecretPath            string `json:"secretPath"`
+	Tags                  []Tag  `json:"tags"`
+	Comment               string `json:"comment"`
+	Etag                  string `json:"Etag"`
+	SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
+}
+
+// TLDR; Why you shouldn't depend on "SkipMultilineEncoding" and instead use this method
+// "SkipMultilineEncoding" generally means that the value should not be encoded as a multiline string
+// But due to historic reasons this property actually does the opposite - it encodes the value as a multiline string
+func (s SingleEnvironmentVariable) IsMultilineEncodingEnabled() bool {
+	// Encode the value only if "skipMultilineEncoding" doesn't exist or is true
+	return s.SkipMultilineEncoding
 }
 
 type PlaintextSecretResult struct {
