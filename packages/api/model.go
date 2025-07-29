@@ -1,6 +1,10 @@
 package api
 
-import "time"
+import (
+	"time"
+
+	"github.com/Infisical/infisical-merge/packages/models"
+)
 
 // Stores info for login one
 type LoginOneRequest struct {
@@ -593,16 +597,16 @@ type GetRawSecretsV3Request struct {
 
 type GetRawSecretsV3Response struct {
 	Secrets []struct {
-		ID                    string `json:"_id"`
-		Version               int    `json:"version"`
-		Workspace             string `json:"workspace"`
-		Type                  string `json:"type"`
-		Environment           string `json:"environment"`
-		SecretKey             string `json:"secretKey"`
-		SecretValue           string `json:"secretValue"`
-		SecretComment         string `json:"secretComment"`
-		SecretPath            string `json:"secretPath"`
-		SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
+		ID            string       `json:"_id"`
+		Version       int          `json:"version"`
+		Workspace     string       `json:"workspace"`
+		Type          string       `json:"type"`
+		Environment   string       `json:"environment"`
+		SecretKey     string       `json:"secretKey"`
+		SecretValue   string       `json:"secretValue"`
+		SecretComment string       `json:"secretComment"`
+		SecretPath    string       `json:"secretPath"`
+		Tags          []models.Tag `json:"tags"`
 	} `json:"secrets"`
 	Imports []ImportedRawSecretV3 `json:"imports"`
 	ETag    string
