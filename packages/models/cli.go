@@ -24,24 +24,24 @@ type LoggedInUser struct {
 	Domain string `json:"domain"`
 }
 
-type SingleEnvironmentVariable struct {
-	Key         string `json:"key"`
-	WorkspaceId string `json:"workspace"`
-	Value       string `json:"value"`
-	Type        string `json:"type"`
-	ID          string `json:"_id"`
-	SecretPath  string `json:"secretPath"`
-	Tags        []struct {
-		ID        string `json:"_id"`
-		Name      string `json:"name"`
-		Slug      string `json:"slug"`
-		Workspace string `json:"workspace"`
-	} `json:"tags"`
-	Comment string `json:"comment"`
-	Etag    string `json:"Etag"`
+type Tag struct {
+	ID    string `json:"_id"`
+	Name  string `json:"name"`
+	Slug  string `json:"slug"`
+	Color string `json:"color"`
+}
 
-	// Deprecated: SkipMultilineEncoding is deprecated. Use IsMultilineEncodingEnabled() instead.
-	SkipMultilineEncoding bool `json:"skipMultilineEncoding"`
+type SingleEnvironmentVariable struct {
+	Key                   string `json:"key"`
+	WorkspaceId           string `json:"workspace"`
+	Value                 string `json:"value"`
+	Type                  string `json:"type"`
+	ID                    string `json:"_id"`
+	SecretPath            string `json:"secretPath"`
+	Tags                  []Tag  `json:"tags"`
+	Comment               string `json:"comment"`
+	Etag                  string `json:"Etag"`
+	SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 }
 
 // TLDR; Why you shouldn't depend on "SkipMultilineEncoding" and instead use this method

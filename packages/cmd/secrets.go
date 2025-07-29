@@ -528,12 +528,7 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 
 	type TagsAndSecrets struct {
 		Secrets []models.SingleEnvironmentVariable
-		Tags    []struct {
-			ID        string `json:"_id"`
-			Name      string `json:"name"`
-			Slug      string `json:"slug"`
-			Workspace string `json:"workspace"`
-		}
+		Tags    []models.Tag
 	}
 
 	// sort secrets by associated tags (most number of tags to least tags)
@@ -542,12 +537,7 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 	})
 
 	for i, secret := range secrets {
-		filteredTag := []struct {
-			ID        string "json:\"_id\""
-			Name      string "json:\"name\""
-			Slug      string "json:\"slug\""
-			Workspace string "json:\"workspace\""
-		}{}
+		filteredTag := []models.Tag{}
 
 		for _, secretTag := range secret.Tags {
 			_, exists := slugsToFilerBy[secretTag.Slug]
