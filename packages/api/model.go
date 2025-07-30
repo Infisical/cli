@@ -585,6 +585,15 @@ type CreateDynamicSecretLeaseV1Response struct {
 	Data map[string]interface{} `json:"data"`
 }
 
+type GetLoginV3Request struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type GetLoginV3Response struct {
+	AccessToken string `json:"accessToken"`
+}
+
 type GetRawSecretsV3Request struct {
 	Environment            string `json:"environment"`
 	WorkspaceId            string `json:"workspaceId"`
