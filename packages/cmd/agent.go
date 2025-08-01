@@ -83,9 +83,10 @@ type AwsIamAuth struct {
 }
 
 type LdapAuth struct {
-	IdentityID   string `yaml:"identity-id"`
-	LdapUsername string `yaml:"ldap-username"`
-	LdapPassword string `yaml:"ldap-password"`
+	IdentityID           string `yaml:"identity-id"`
+	LdapUsername         string `yaml:"ldap-username"`
+	LdapPassword         string `yaml:"ldap-password"`
+	RemovePasswordOnRead bool   `yaml:"remove_password_on_read"`
 }
 
 type Sink struct {
@@ -587,7 +588,6 @@ func (tm *AgentManager) FetchUniversalAuthAccessToken() (credential infisicalSdk
 	}
 
 	return tm.infisicalClient.Auth().UniversalAuthLogin(clientID, clientSecret)
-
 }
 
 func (tm *AgentManager) FetchKubernetesAuthAccessToken() (credential infisicalSdk.MachineIdentityCredential, err error) {
@@ -708,6 +708,11 @@ func (tm *AgentManager) FetchLdapAuthAccessToken() (credential infisicalSdk.Mach
 	if err != nil {
 		return infisicalSdk.MachineIdentityCredential{}, fmt.Errorf("unable to get ldap password: %v", err)
 	}
+
+	if ldapAuthConfig.RemovePasswordOnRead {
+		defer os.Remove(ldapAuthConfig.LdapPassword)
+	}
+
 	return tm.infisicalClient.Auth().LdapAuthLogin(identityId, username, password)
 }
 
