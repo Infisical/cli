@@ -84,8 +84,8 @@ type AwsIamAuth struct {
 
 type LdapAuth struct {
 	IdentityID           string `yaml:"identity-id"`
-	LdapUsername         string `yaml:"ldap-username"`
-	LdapPassword         string `yaml:"ldap-password"`
+	LdapUsername         string `yaml:"username"`
+	LdapPassword         string `yaml:"password"`
 	RemovePasswordOnRead bool   `yaml:"remove-password-on-read"`
 }
 
