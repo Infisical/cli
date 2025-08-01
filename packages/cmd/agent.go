@@ -86,7 +86,7 @@ type LdapAuth struct {
 	IdentityID           string `yaml:"identity-id"`
 	LdapUsername         string `yaml:"ldap-username"`
 	LdapPassword         string `yaml:"ldap-password"`
-	RemovePasswordOnRead bool   `yaml:"remove_password_on_read"`
+	RemovePasswordOnRead bool   `yaml:"remove-password-on-read"`
 }
 
 type Sink struct {
