@@ -34,6 +34,9 @@ const (
 
 	// JWT AUTH
 	INFISICAL_JWT_NAME = "INFISICAL_JWT"
+	// LDAP AUTH
+	INFISICAL_LDAP_USERNAME = "INFISICAL_LDAP_USERNAME"
+	INFISICAL_LDAP_PASSWORD = "INFISICAL_LDAP_PASSWORD"
 
 	INFISICAL_GATEWAY_TOKEN_NAME_LEGACY = "TOKEN" // backwards compatibility with gateway helm chart, where token was the only supported auth method
 

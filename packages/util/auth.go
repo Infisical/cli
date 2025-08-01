@@ -21,6 +21,7 @@ var AuthStrategy = struct {
 	AWS_IAM_AUTH      AuthStrategyType
 	OIDC_AUTH         AuthStrategyType
 	JWT_AUTH          AuthStrategyType
+	LDAP_AUTH         AuthStrategyType
 }{
 	UNIVERSAL_AUTH:    "universal-auth",
 	KUBERNETES_AUTH:   "kubernetes",
@@ -30,6 +31,7 @@ var AuthStrategy = struct {
 	AWS_IAM_AUTH:      "aws-iam",
 	OIDC_AUTH:         "oidc-auth",
 	JWT_AUTH:          "jwt-auth",
+	LDAP_AUTH:         "ldap-auth",
 }
 
 var AVAILABLE_AUTH_STRATEGIES = []AuthStrategyType{
@@ -41,6 +43,7 @@ var AVAILABLE_AUTH_STRATEGIES = []AuthStrategyType{
 	AuthStrategy.AWS_IAM_AUTH,
 	AuthStrategy.OIDC_AUTH,
 	AuthStrategy.JWT_AUTH,
+	AuthStrategy.LDAP_AUTH,
 }
 
 func IsAuthMethodValid(authMethod string, allowUserAuth bool) (isValid bool, strategy AuthStrategyType) {
@@ -205,4 +208,23 @@ func (a *SdkAuthenticator) HandleOidcAuthLogin() (credential infisicalSdk.Machin
 	}
 
 	return a.infisicalClient.Auth().OidcAuthLogin(identityId, jwt)
+}
+
+func (a *SdkAuthenticator) HandleLdapAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
+	identityId, err := GetCmdFlagOrEnv(a.cmd, "machine-identity-id", []string{INFISICAL_MACHINE_IDENTITY_ID_NAME})
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	ldapUsername, err := GetCmdFlagOrEnv(a.cmd, "ldap-username", []string{INFISICAL_LDAP_USERNAME})
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	ldapPassword, err := GetCmdFlagOrEnv(a.cmd, "ldap-password", []string{INFISICAL_LDAP_PASSWORD})
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().LdapAuthLogin(identityId, ldapUsername, ldapPassword)
 }

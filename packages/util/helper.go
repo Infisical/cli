@@ -294,7 +294,7 @@ func GetEnvVarOrFileContent(envName string, filePath string) (string, error) {
 		return "", fmt.Errorf("unable to read file content from file path '%s' [err=%v]", filePath, err)
 	}
 
-	return fileContent, nil
+	return strings.TrimSpace(fileContent), nil
 }
 
 func GetCmdFlagOrEnv(cmd *cobra.Command, flag string, envNames []string) (string, error) {

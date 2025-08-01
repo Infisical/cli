@@ -82,6 +82,13 @@ type AwsIamAuth struct {
 	IdentityID string `yaml:"identity-id"`
 }
 
+type LdapAuth struct {
+	IdentityID           string `yaml:"identity-id"`
+	LdapUsername         string `yaml:"username"`
+	LdapPassword         string `yaml:"password"`
+	RemovePasswordOnRead bool   `yaml:"remove-password-on-read"`
+}
+
 type Sink struct {
 	Type   string      `yaml:"type"`
 	Config SinkDetails `yaml:"config"`
@@ -581,7 +588,6 @@ func (tm *AgentManager) FetchUniversalAuthAccessToken() (credential infisicalSdk
 	}
 
 	return tm.infisicalClient.Auth().UniversalAuthLogin(clientID, clientSecret)
-
 }
 
 func (tm *AgentManager) FetchKubernetesAuthAccessToken() (credential infisicalSdk.MachineIdentityCredential, err error) {
@@ -682,9 +688,36 @@ func (tm *AgentManager) FetchAwsIamAuthAccessToken() (credential infisicalSdk.Ma
 
 }
 
+func (tm *AgentManager) FetchLdapAuthAccessToken() (credential infisicalSdk.MachineIdentityCredential, err error) {
+	var ldapAuthConfig LdapAuth
+	if err := ParseAuthConfig(tm.authConfigBytes, &ldapAuthConfig); err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, fmt.Errorf("unable to parse auth config due to error: %v", err)
+	}
+
+	identityId, err := util.GetEnvVarOrFileContent(util.INFISICAL_MACHINE_IDENTITY_ID_NAME, ldapAuthConfig.IdentityID)
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, fmt.Errorf("unable to get identity id: %v", err)
+	}
+
+	username, err := util.GetEnvVarOrFileContent(util.INFISICAL_LDAP_USERNAME, ldapAuthConfig.LdapUsername)
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, fmt.Errorf("unable to get ldap username: %v", err)
+	}
+
+	password, err := util.GetEnvVarOrFileContent(util.INFISICAL_LDAP_PASSWORD, ldapAuthConfig.LdapPassword)
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, fmt.Errorf("unable to get ldap password: %v", err)
+	}
+
+	if ldapAuthConfig.RemovePasswordOnRead {
+		defer os.Remove(ldapAuthConfig.LdapPassword)
+	}
+
+	return tm.infisicalClient.Auth().LdapAuthLogin(identityId, username, password)
+}
+
 // Fetches a new access token using client credentials
 func (tm *AgentManager) FetchNewAccessToken() error {
-
 	authStrategies := map[util.AuthStrategyType]func() (credential infisicalSdk.MachineIdentityCredential, e error){
 		util.AuthStrategy.UNIVERSAL_AUTH:    tm.FetchUniversalAuthAccessToken,
 		util.AuthStrategy.KUBERNETES_AUTH:   tm.FetchKubernetesAuthAccessToken,
@@ -692,6 +725,7 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 		util.AuthStrategy.GCP_ID_TOKEN_AUTH: tm.FetchGcpIdTokenAuthAccessToken,
 		util.AuthStrategy.GCP_IAM_AUTH:      tm.FetchGcpIamAuthAccessToken,
 		util.AuthStrategy.AWS_IAM_AUTH:      tm.FetchAwsIamAuthAccessToken,
+		util.AuthStrategy.LDAP_AUTH:         tm.FetchLdapAuthAccessToken,
 	}
 
 	if _, ok := authStrategies[tm.authStrategy]; !ok {
