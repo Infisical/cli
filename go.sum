@@ -312,8 +312,6 @@ github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:
 github.com/ianlancetaylor/demangle v0.0.0-20200824232613-28f6c0f3b639/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/inconshreveable/mousetrap v1.0.1 h1:U3uMjPSQEBMNp1lFxmllqCPM6P5u/Xq7Pgzkat/bFNc=
 github.com/inconshreveable/mousetrap v1.0.1/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/infisical/go-sdk v0.5.96 h1:huky6bQ1Y3oRdPb5MO3Ru868qZaPHUxZ7kP7FPNRn48=
-github.com/infisical/go-sdk v0.5.96/go.mod h1:ExjqFLRz7LSpZpGluqDLvFl6dFBLq5LKyLW7GBaMAIs=
 github.com/infisical/go-sdk v0.5.99 h1:trvn7JhKYuSzDkc44h+yqToVjclkrRyP42t315k5kEE=
 github.com/infisical/go-sdk v0.5.99/go.mod h1:j2D2a5WPNdKXDfHO+3y/TNyLWh5Aq9QYS7EcGI96LZI=
 github.com/infisical/infisical-kmip v0.3.5 h1:QM3s0e18B+mYv3a9HQNjNAlbwZJBzXq5BAJM2scIeiE=
@@ -437,6 +435,8 @@ github.com/posthog/posthog-go v0.0.0-20221221115252-24dfed35d71a/go.mod h1:oa2sA
 github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
 github.com/quic-go/quic-go v0.50.0 h1:3H/ld1pa3CYhkcc20TPIyG1bNsdhn9qZBGN3b9/UyUo=
 github.com/quic-go/quic-go v0.50.0/go.mod h1:Vim6OmUvlYdwBhXP9ZVrtGmCMWa3wEqhq3NgYrI8b4E=
+github.com/quic-go/quic-go v0.50.1 h1:unsgjFIUqW8a2oopkY7YNONpV1gYND6Nt9hnt1PN94Q=
+github.com/quic-go/quic-go v0.50.1/go.mod h1:Vim6OmUvlYdwBhXP9ZVrtGmCMWa3wEqhq3NgYrI8b4E=
 github.com/rivo/uniseg v0.1.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
 github.com/rivo/uniseg v0.2.0 h1:S1pD9weZBuJdFmowNwbpi7BJ8TNftyUImj/0WQi72jY=
 github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
