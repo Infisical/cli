@@ -287,9 +287,10 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials) {
 		return
 	}
 
-	if !strings.Contains(err.Error(), "LegacyEncryptionScheme") {
-		util.HandleError(err)
-	}
+	// TODO(daniel): At a later time we should re-add this check, but we don't want to break older Infisical instances that doesn't have the latest SRP removal initiative on them.
+	// if !strings.Contains(err.Error(), "LegacyEncryptionScheme") {
+	// 	util.HandleError(err)
+	// }
 
 	log.Info().Msg("Unable to authenticate with the provided credentials, falling back to SRP authentication")
 
