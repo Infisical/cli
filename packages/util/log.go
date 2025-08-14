@@ -18,6 +18,10 @@ func HandleError(err error, messages ...string) {
 func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 	// Check if it's an API error for special formatting
 	if apiErr, ok := err.(*api.APIError); ok {
+		if len(messages) > 0 {
+			apiErr.Details = append(messages, apiErr.Details...)
+		}
+
 		printPrettyAPIError(*apiErr)
 	} else {
 		printError(err)
