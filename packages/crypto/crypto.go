@@ -10,6 +10,15 @@ import (
 	"golang.org/x/crypto/nacl/box"
 )
 
+func GenerateRandomBytes(length int) ([]byte, error) {
+	bytes := make([]byte, length)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
 // will decrypt cipher text to plain text using iv and tag
 func DecryptSymmetric(key []byte, cipherText []byte, tag []byte, iv []byte) ([]byte, error) {
 	// Case: empty string
