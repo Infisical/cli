@@ -4,8 +4,6 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -115,24 +113,11 @@ var tokensCreateCmd = &cobra.Command{
 			}
 		}
 
-		workspaceKey, err := util.GetPlainTextWorkspaceKey(loggedInUserDetails.UserCredentials.JTWToken, loggedInUserDetails.UserCredentials.PrivateKey, workspaceId)
-		if err != nil {
-			util.HandleError(err, "Unable to get workspace key needed to create service token")
-		}
-
-		newWorkspaceEncryptionKey := make([]byte, 16)
-		_, err = rand.Read(newWorkspaceEncryptionKey)
+		randomBytes, err := crypto.GenerateRandomBytes(16)
 		if err != nil {
 			util.HandleError(err)
 		}
-
-		newWorkspaceEncryptionKeyHexFormat := hex.EncodeToString(newWorkspaceEncryptionKey)
-
-		// encrypt the workspace key symmetrically
-		encryptedDetails, err := crypto.EncryptSymmetric(workspaceKey, []byte(newWorkspaceEncryptionKeyHexFormat))
-		if err != nil {
-			util.HandleError(err)
-		}
+		hexEncodedRandomBytes := hex.EncodeToString(randomBytes)
 
 		// make a call to the api to save the encrypted symmetric key details
 		httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -144,22 +129,24 @@ var tokensCreateCmd = &cobra.Command{
 			SetHeader("Accept", "application/json")
 
 		createServiceTokenResponse, err := api.CallCreateServiceToken(httpClient, api.CreateServiceTokenRequest{
-			Name:         serviceTokenName,
-			WorkspaceId:  workspaceId,
-			Scopes:       permissions,
-			ExpiresIn:    expireSeconds,
-			EncryptedKey: base64.StdEncoding.EncodeToString(encryptedDetails.CipherText),
-			Iv:           base64.StdEncoding.EncodeToString(encryptedDetails.Nonce),
-			Tag:          base64.StdEncoding.EncodeToString(encryptedDetails.AuthTag),
-			RandomBytes:  newWorkspaceEncryptionKeyHexFormat,
-			Permissions:  accessLevels,
+			Name:        serviceTokenName,
+			WorkspaceId: workspaceId,
+			Scopes:      permissions,
+			ExpiresIn:   expireSeconds,
+			Permissions: accessLevels,
+			RandomBytes: hexEncodedRandomBytes,
+
+			// No longer required for creating service tokens:
+			EncryptedKey: "",
+			Iv:           "",
+			Tag:          "",
 		})
 
 		if err != nil {
 			util.HandleError(err, "Unable to create service token")
 		}
 
-		serviceToken := createServiceTokenResponse.ServiceToken + "." + newWorkspaceEncryptionKeyHexFormat
+		serviceToken := createServiceTokenResponse.ServiceToken + "." + hexEncodedRandomBytes
 
 		if tokenOnly {
 			fmt.Println(serviceToken)
