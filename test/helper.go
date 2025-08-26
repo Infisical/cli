@@ -74,8 +74,10 @@ func SetupCli() {
 func FilterRequestID(input string) string {
 	requestIDPattern := regexp.MustCompile(`\[request-id=[^\]]+\]`)
 	reqIDPattern := regexp.MustCompile(`\[reqId=[^\]]+\]`)
+	requestIdPattern := regexp.MustCompile(`Request\sID\:\s[A-z0-9-]+`)
 	input = requestIDPattern.ReplaceAllString(input, "[request-id=<unknown-value>]")
 	input = reqIDPattern.ReplaceAllString(input, "[reqId=<unknown-value>]")
+	input = requestIdPattern.ReplaceAllString(input, "Request ID: <unknown-value>")
 
 	start := strings.Index(input, "{")
 	end := strings.LastIndex(input, "}") + 1
