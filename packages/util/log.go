@@ -68,13 +68,6 @@ func printPrettyAPIError(apiErr api.APIError) {
 	gray := lipgloss.Color("245")   // Light gray
 	white := lipgloss.Color("255")  // White
 
-	errorBoxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(red).
-		Padding(1, 2).
-		MarginTop(1).
-		MarginBottom(1)
-
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(red)
@@ -198,9 +191,7 @@ func printPrettyAPIError(apiErr api.APIError) {
 	supportMsg := supportStyle.Render("If this issue continues, get support at ") + linkStyle.Render("https://infisical.com/slack")
 	content.WriteString(supportMsg)
 
-	// Render the error box
-	errorBox := errorBoxStyle.Render(content.String())
-	fmt.Fprintln(os.Stderr, errorBox)
+	fmt.Fprintln(os.Stderr, content.String())
 }
 
 func getStatusCodeColor(statusCode int) string {
