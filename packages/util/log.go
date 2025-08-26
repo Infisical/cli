@@ -128,9 +128,13 @@ func printPrettyAPIError(apiErr api.APIError) {
 		content.WriteString("\n")
 	}
 
-	content.WriteString("\n")
-	content.WriteString(labelStyle.Render("Details:"))
-	content.WriteString("\n")
+	if len(apiErr.ExtraMessages) > 0 && apiErr.Details != nil {
+		content.WriteString("\n")
+		content.WriteString(labelStyle.Render("Details:"))
+		content.WriteString("\n")
+	} else {
+		content.WriteString("\n")
+	}
 
 	for _, msg := range apiErr.ExtraMessages {
 		content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", msg)))
