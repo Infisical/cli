@@ -1,6 +1,7 @@
 package util
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,7 +20,7 @@ func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 	// Check if it's an API error for special formatting
 	if apiErr, ok := err.(*api.APIError); ok {
 		if len(messages) > 0 {
-			apiErr.Details = append(messages, apiErr.Details...)
+			apiErr.ExtraMessages = messages
 		}
 
 		printPrettyAPIError(*apiErr)
@@ -62,8 +63,8 @@ func printError(e error) {
 
 func printPrettyAPIError(apiErr api.APIError) {
 	// Using ANSI color codes
-	red := lipgloss.Color("197")    // Bright red
-	yellow := lipgloss.Color("220") // Bright yellow/gold
+	red := lipgloss.Color("196")    // Bright red
+	yellow := lipgloss.Color("184") // Bright yellow/gold
 	gray := lipgloss.Color("245")   // Light gray
 	white := lipgloss.Color("255")  // White
 
@@ -116,7 +117,6 @@ func printPrettyAPIError(apiErr api.APIError) {
 		content.WriteString("\n")
 		content.WriteString(labelStyle.Render("Message: "))
 		content.WriteString(apiErr.ErrorMessage)
-		content.WriteString("\n")
 	}
 
 	// Additional context if available
@@ -128,13 +128,56 @@ func printPrettyAPIError(apiErr api.APIError) {
 		content.WriteString("\n")
 	}
 
+	content.WriteString("\n")
+	content.WriteString(labelStyle.Render("Details:"))
+	content.WriteString("\n")
+
+	for _, msg := range apiErr.ExtraMessages {
+		content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", msg)))
+		content.WriteString("\n")
+	}
+
 	// Details if available
-	if len(apiErr.Details) > 0 {
-		content.WriteString("\n")
-		content.WriteString(labelStyle.Render("Details:"))
-		content.WriteString("\n")
-		for _, detail := range apiErr.Details {
-			content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", detail)))
+	if apiErr.Details != nil {
+		// Handle different types of Details
+		switch details := apiErr.Details.(type) {
+		case []string:
+			// Array of strings
+			for _, detail := range details {
+				content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", detail)))
+				content.WriteString("\n")
+			}
+		case []any:
+			// Array of any type
+			for _, detail := range details {
+				if str, ok := detail.(string); ok {
+					content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", str)))
+				} else if detailJSON, err := json.Marshal(detail); err == nil {
+					content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", string(detailJSON))))
+				} else {
+					content.WriteString(detailStyle.Render(fmt.Sprintf("• %v", detail)))
+				}
+				content.WriteString("\n")
+			}
+		case map[string]any:
+			// JSON object
+			if detailsJSON, err := json.Marshal(details); err == nil {
+				content.WriteString(detailStyle.Render(string(detailsJSON)))
+			} else {
+				content.WriteString(detailStyle.Render(fmt.Sprintf("%v", details)))
+			}
+			content.WriteString("\n")
+		case string:
+			// Single string
+			content.WriteString(detailStyle.Render(fmt.Sprintf("• %s", details)))
+			content.WriteString("\n")
+		default:
+			// Any other type - try to JSON marshal it
+			if detailsJSON, err := json.Marshal(details); err == nil {
+				content.WriteString(detailStyle.Render(string(detailsJSON)))
+			} else {
+				content.WriteString(detailStyle.Render(fmt.Sprintf("%v", details)))
+			}
 			content.WriteString("\n")
 		}
 	}

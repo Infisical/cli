@@ -24,7 +24,8 @@ func NewGenericRequestError(operation string, err error) *GenericRequestError {
 // APIError represents an error response from the API
 type APIError struct {
 	AdditionalContext string   `json:"additionalContext,omitempty"`
-	Details           []string `json:"details,omitempty"`
+	ExtraMessages     []string `json:"-"`
+	Details           any      `json:"details,omitempty"`
 	Operation         string   `json:"operation"`
 	Method            string   `json:"method"`
 	URL               string   `json:"url"`
@@ -52,7 +53,25 @@ func (e APIError) Error() string {
 	}
 
 	if e.Details != nil {
-		msg = fmt.Sprintf("%s [details=\"%s\"]", msg, e.Details)
+		// Check if details is an empty slice or empty map
+		isEmpty := false
+		switch v := e.Details.(type) {
+		case []string:
+			isEmpty = len(v) == 0
+		case []any:
+			isEmpty = len(v) == 0
+		case map[string]any:
+			isEmpty = len(v) == 0
+		}
+
+		if !isEmpty {
+			// Marshal details to JSON for proper display
+			if detailsJSON, err := json.Marshal(e.Details); err == nil {
+				msg = fmt.Sprintf("%s [details=%s]", msg, string(detailsJSON))
+			} else {
+				msg = fmt.Sprintf("%s [details=\"%v\"]", msg, e.Details)
+			}
+		}
 	}
 
 	return msg
@@ -90,16 +109,16 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 }
 
 type errorResponse struct {
-	Message string   `json:"message"`
-	Details []string `json:"details"`
-	ReqId   string   `json:"reqId"`
+	Message string `json:"message"`
+	Details any    `json:"details"`
+	ReqId   string `json:"reqId"`
 }
 
 /*
 Instead of changing the signature of the sdk function - let's just keep a one local to this codebase
 */
-func TryParseErrorBody(res *resty.Response) (string, []string) {
-	details := []string{}
+func TryParseErrorBody(res *resty.Response) (string, any) {
+	var details any
 
 	if res == nil || !res.IsError() {
 		return "", details
@@ -122,6 +141,28 @@ func TryParseErrorBody(res *resty.Response) (string, []string) {
 
 	if err != nil {
 		return "", details
+	}
+
+	// Check if details is empty and return nil if so
+	if errorResponse.Details != nil {
+		switch v := errorResponse.Details.(type) {
+		case []any:
+			if len(v) == 0 {
+				return errorResponse.Message, nil
+			}
+		case []string:
+			if len(v) == 0 {
+				return errorResponse.Message, nil
+			}
+		case map[string]any:
+			if len(v) == 0 {
+				return errorResponse.Message, nil
+			}
+		case string:
+			if v == "" {
+				return errorResponse.Message, nil
+			}
+		}
 	}
 
 	return errorResponse.Message, errorResponse.Details
