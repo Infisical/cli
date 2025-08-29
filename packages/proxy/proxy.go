@@ -255,6 +255,19 @@ func (p *Proxy) setupTLSServer() error {
 	certChain := [][]byte{serverCertBlock.Bytes}
 	certChain = append(certChain, chainCerts...)
 
+	// Debug: log the complete certificate chain as PEM
+	var chainPEM strings.Builder
+	for i, certBytes := range certChain {
+		chainPEM.WriteString(fmt.Sprintf("--- Certificate %d ---\n", i+1))
+		certPEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: certBytes,
+		})
+		chainPEM.Write(certPEM)
+		chainPEM.WriteString("\n")
+	}
+	log.Printf("Complete certificate chain PEM:\n%s", chainPEM.String())
+
 	// Create TLS config
 	p.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{
