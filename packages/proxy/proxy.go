@@ -213,18 +213,6 @@ func (p *Proxy) setupTLSServer() error {
 		return fmt.Errorf("failed to parse server certificate: %v", err)
 	}
 
-	// Parse all certificates from the chain (intermediate + root CAs)
-	var chainCerts [][]byte
-	chainData := []byte(p.certificates.PKI.ServerCertificateChain)
-	for {
-		block, rest := pem.Decode(chainData)
-		if block == nil {
-			break
-		}
-		chainCerts = append(chainCerts, block.Bytes)
-		chainData = rest
-	}
-
 	// Parse TLS server private key
 	serverKeyBlock, _ := pem.Decode([]byte(p.certificates.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
@@ -236,43 +224,35 @@ func (p *Proxy) setupTLSServer() error {
 		return fmt.Errorf("failed to parse server private key: %v", err)
 	}
 
-	// Parse client CA certificate
-	clientCABlock, _ := pem.Decode([]byte(p.certificates.PKI.ClientCA))
-	if clientCABlock == nil {
-		return fmt.Errorf("failed to decode client CA certificate")
-	}
-
-	clientCA, err := x509.ParseCertificate(clientCABlock.Bytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse client CA certificate: %v", err)
-	}
-
 	// Create certificate pool for client CAs
 	clientCAPool := x509.NewCertPool()
-	clientCAPool.AddCert(clientCA)
 
-	// Create certificate chain: server cert + chain certs (intermediate + root)
-	certChain := [][]byte{serverCertBlock.Bytes}
-	certChain = append(certChain, chainCerts...)
-
-	// Debug: log the complete certificate chain as PEM
-	var chainPEM strings.Builder
-	for i, certBytes := range certChain {
-		chainPEM.WriteString(fmt.Sprintf("--- Certificate %d ---\n", i+1))
-		certPEM := pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: certBytes,
-		})
-		chainPEM.Write(certPEM)
-		chainPEM.WriteString("\n")
+	var chainCerts [][]byte
+	chainData := []byte(p.certificates.PKI.ClientCertificateChain)
+	for {
+		block, rest := pem.Decode(chainData)
+		if block == nil {
+			break
+		}
+		chainCerts = append(chainCerts, block.Bytes)
+		chainData = rest
 	}
-	log.Printf("Complete certificate chain PEM:\n%s", chainPEM.String())
+
+	for i, certBytes := range chainCerts {
+		cert, err := x509.ParseCertificate(certBytes)
+		if err != nil {
+			log.Printf("Failed to parse client chain certificate %d: %v", i+1, err)
+			continue
+		}
+		clientCAPool.AddCert(cert)
+		log.Printf("Added client CA certificate %d to pool: %s", i+1, cert.Subject.CommonName)
+	}
 
 	// Create TLS config
 	p.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{
 			{
-				Certificate: certChain,
+				Certificate: [][]byte{serverCertBlock.Bytes},
 				PrivateKey:  serverKey,
 			},
 		},

@@ -712,9 +712,8 @@ type RegisterProxyRequest struct {
 type RegisterProxyResponse struct {
 	PKI struct {
 		ServerCertificate      string `json:"serverCertificate"`
-		ServerCertificateChain string `json:"serverCertificateChain"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
-		ClientCA               string `json:"clientCA"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
 	} `json:"pki"`
 	SSH struct {
 		ServerCertificate string `json:"serverCertificate"`
