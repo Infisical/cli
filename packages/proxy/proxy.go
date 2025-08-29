@@ -335,7 +335,7 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 }
 
 func (p *Proxy) startTLSServer() {
-	listener, err := net.Listen("tcp", ":"+p.config.TLSPort)
+	listener, err := tls.Listen("tcp", ":"+p.config.TLSPort, p.tlsConfig)
 	if err != nil {
 		log.Fatalf("Failed to start TLS server: %v", err)
 	}
@@ -349,33 +349,20 @@ func (p *Proxy) startTLSServer() {
 			log.Printf("Failed to accept TLS connection: %v", err)
 			continue
 		}
-		go p.handleTLSClient(conn)
+		go p.handleClient(conn)
 	}
-}
-
-func (p *Proxy) handleTLSClient(conn net.Conn) {
-	defer conn.Close()
-
-	log.Printf("Client connected from %s", conn.RemoteAddr())
-
-	// Wrap connection with TLS
-	tlsConn := tls.Server(conn, p.tlsConfig)
-	if err := tlsConn.Handshake(); err != nil {
-		log.Printf("TLS handshake failed: %v", err)
-		return
-	}
-
-	// Log client certificate info
-	if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
-		cert := tlsConn.ConnectionState().PeerCertificates[0]
-		log.Printf("Client connected with certificate: %s", cert.Subject.CommonName)
-	}
-
-	p.handleClient(tlsConn)
 }
 
 func (p *Proxy) handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
+
+	// Log client certificate info if this is a TLS connection
+	if tlsConn, ok := clientConn.(*tls.Conn); ok {
+		if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
+			cert := tlsConn.ConnectionState().PeerCertificates[0]
+			log.Printf("Client connected with certificate: %s", cert.Subject.CommonName)
+		}
+	}
 
 	// Read the first few bytes to determine which agent to connect to
 	// Format: "agent1:host:port\n" or "agent1:host:port" followed by data
