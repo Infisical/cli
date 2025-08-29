@@ -213,6 +213,18 @@ func (p *Proxy) setupTLSServer() error {
 		return fmt.Errorf("failed to parse server certificate: %v", err)
 	}
 
+	// Parse all certificates from the chain (intermediate + root CAs)
+	var chainCerts [][]byte
+	chainData := []byte(p.certificates.PKI.ServerCertificateChain)
+	for {
+		block, rest := pem.Decode(chainData)
+		if block == nil {
+			break
+		}
+		chainCerts = append(chainCerts, block.Bytes)
+		chainData = rest
+	}
+
 	// Parse TLS server private key
 	serverKeyBlock, _ := pem.Decode([]byte(p.certificates.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
@@ -239,11 +251,15 @@ func (p *Proxy) setupTLSServer() error {
 	clientCAPool := x509.NewCertPool()
 	clientCAPool.AddCert(clientCA)
 
+	// Create certificate chain: server cert + chain certs (intermediate + root)
+	certChain := [][]byte{serverCertBlock.Bytes}
+	certChain = append(certChain, chainCerts...)
+
 	// Create TLS config
 	p.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{
 			{
-				Certificate: [][]byte{serverCertBlock.Bytes},
+				Certificate: certChain,
 				PrivateKey:  serverKey,
 			},
 		},
