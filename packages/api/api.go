@@ -40,6 +40,9 @@ const (
 	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
+	operationCallRegisterInstanceProxy             = "CallRegisterInstanceProxy"
+	operationCallRegisterOrgProxy                  = "CallRegisterOrgProxy"
+	operationCallRegisterGateway                   = "CallRegisterGateway"
 )
 
 func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
@@ -667,6 +670,66 @@ func CallBootstrapInstance(httpClient *resty.Client, request BootstrapInstanceRe
 
 	if response.IsError() {
 		return BootstrapInstanceResponse{}, NewAPIErrorWithResponse(operationCallBootstrapInstance, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRegisterInstanceProxy(httpClient *resty.Client, request RegisterProxyRequest) (RegisterProxyResponse, error) {
+	var resBody RegisterProxyResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/proxies/register-instance-proxy", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterProxyResponse{}, NewGenericRequestError(operationCallRegisterInstanceProxy, err)
+	}
+
+	if response.IsError() {
+		return RegisterProxyResponse{}, NewAPIErrorWithResponse(operationCallRegisterInstanceProxy, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRegisterProxy(httpClient *resty.Client, request RegisterProxyRequest) (RegisterProxyResponse, error) {
+	var resBody RegisterProxyResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/proxies/register-org-proxy", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterProxyResponse{}, NewGenericRequestError(operationCallRegisterOrgProxy, err)
+	}
+
+	if response.IsError() {
+		return RegisterProxyResponse{}, NewAPIErrorWithResponse(operationCallRegisterOrgProxy, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayRequest) (RegisterGatewayResponse, error) {
+	var resBody RegisterGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/gateways", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterGatewayResponse{}, NewGenericRequestError(operationCallRegisterGateway, err)
+	}
+
+	if response.IsError() {
+		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallRegisterGateway, response, nil)
 	}
 
 	return resBody, nil
