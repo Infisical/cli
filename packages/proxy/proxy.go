@@ -12,8 +12,6 @@ import (
 	"log"
 	"net"
 
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -365,64 +363,23 @@ func (p *Proxy) startTLSServer() {
 func (p *Proxy) handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
 
+	var gatewayId string
+
 	// Log client certificate info if this is a TLS connection
 	if tlsConn, ok := clientConn.(*tls.Conn); ok {
+		fmt.Println(tlsConn.ConnectionState().PeerCertificates)
 		if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
 			cert := tlsConn.ConnectionState().PeerCertificates[0]
 			log.Printf("Client connected with certificate: %s", cert.Subject.CommonName)
+			gatewayId = cert.Subject.CommonName
 		}
 	}
 
-	// Read the first few bytes to determine which agent to connect to
-	// Format: "agent1:host:port\n" or "agent1:host:port" followed by data
-	buffer := make([]byte, 1024)
-	n, err := clientConn.Read(buffer)
-	if err != nil {
-		log.Printf("Failed to read from client: %v", err)
-		return
-	}
+	fmt.Println("gatewayId", gatewayId)
 
-	// Find the first newline to separate agent info from data
-	data := buffer[:n]
-	log.Printf("Received %d bytes from client: %q", n, string(data))
-	newlineIndex := bytes.IndexByte(data, '\n')
-
-	var gatewayId, targetHost string
-	var targetPort uint32
-	var remainingData []byte
-
-	if newlineIndex != -1 {
-		// Agent info is everything before the newline
-		agentInfo := string(data[:newlineIndex])
-		remainingData = data[newlineIndex+1:]
-
-		// Parse agent info in format "agent:host:port"
-		parts := strings.Split(agentInfo, ":")
-		if len(parts) != 3 {
-			log.Printf("Invalid client data format, expected 'agent:host:port', got: %s", agentInfo)
-			clientConn.Write([]byte("ERROR: Invalid format. Expected 'agent:host:port'\n"))
-			return
-		}
-
-		gatewayId = parts[0]
-		targetHost = parts[1]
-		portStr := parts[2]
-
-		// Parse port number
-		port, err := strconv.ParseUint(portStr, 10, 32)
-		if err != nil {
-			log.Printf("Invalid port number: %s", portStr)
-			clientConn.Write([]byte("ERROR: Invalid port number\n"))
-			return
-		}
-		targetPort = uint32(port)
-
-		log.Printf("Extracted gateway: %s, target: %s:%d", gatewayId, targetHost, targetPort)
-	} else {
-		log.Printf("Invalid client data format - no newline found")
-		clientConn.Write([]byte("ERROR: Please use format 'gatewayId:host:port'\n"))
-		return
-	}
+	// TODO: extract these from the certificate
+	targetHost := "localhost"
+	targetPort := uint32(22)
 
 	// Get the SSH connection for this agent
 	p.mu.RLock()
@@ -452,11 +409,6 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 		return
 	}
 	defer channel.Close()
-
-	// If we have remaining data from the initial read, write it to the channel
-	if len(remainingData) > 0 {
-		channel.Write(remainingData)
-	}
 
 	// Bidirectional forwarding
 	go func() {
