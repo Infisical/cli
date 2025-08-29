@@ -11,7 +11,7 @@ import (
 	"io"
 	"log"
 	"net"
-
+	"strings"
 	"sync"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -367,12 +367,33 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 
 	// Log client certificate info if this is a TLS connection
 	if tlsConn, ok := clientConn.(*tls.Conn); ok {
-		fmt.Println(tlsConn.ConnectionState().PeerCertificates)
-		if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
-			cert := tlsConn.ConnectionState().PeerCertificates[0]
-			log.Printf("Client connected with certificate: %s", cert.Subject.CommonName)
-			gatewayId = cert.Subject.CommonName
+		log.Printf("TLS connection detected, forcing handshake...")
+		err := tlsConn.Handshake()
+		if err != nil {
+			log.Printf("TLS handshake failed: %v", err)
+			return
 		}
+
+		state := tlsConn.ConnectionState()
+		log.Printf("TLS handshake completed, peer certificates count: %d", len(state.PeerCertificates))
+
+		if len(state.PeerCertificates) > 0 {
+			cert := state.PeerCertificates[0]
+			log.Printf("Client connected with certificate: %s", cert.Subject.CommonName)
+			parts := strings.Split(cert.Subject.CommonName, ":")
+			if len(parts) >= 2 {
+				gatewayId = parts[1]
+			} else {
+				log.Printf("Invalid CommonName format, expected 'part1:part2', got: %s", cert.Subject.CommonName)
+				return
+			}
+		} else {
+			log.Printf("No peer certificates found")
+			return
+		}
+	} else {
+		log.Printf("Not a TLS connection, connection type: %T", clientConn)
+		return
 	}
 
 	fmt.Println("gatewayId", gatewayId)
