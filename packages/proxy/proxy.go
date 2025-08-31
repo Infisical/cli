@@ -365,7 +365,6 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 
 	var gatewayId string
 
-	// Log client certificate info if this is a TLS connection
 	if tlsConn, ok := clientConn.(*tls.Conn); ok {
 		log.Printf("TLS connection detected, forcing handshake...")
 		err := tlsConn.Handshake()
@@ -395,8 +394,6 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 		log.Printf("Not a TLS connection, connection type: %T", clientConn)
 		return
 	}
-
-	fmt.Println("gatewayId", gatewayId)
 
 	// TODO: extract these from the certificate
 	targetHost := "localhost"

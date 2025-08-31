@@ -361,20 +361,28 @@ func (g *Gateway) createMTLSConfig() (*tls.Config, error) {
 		return nil, fmt.Errorf("failed to parse server private key: %v", err)
 	}
 
-	// Parse client CA certificate
-	clientCABlock, _ := pem.Decode([]byte(g.certificates.PKI.ClientCA))
-	if clientCABlock == nil {
-		return nil, fmt.Errorf("failed to decode client CA certificate")
-	}
-
-	clientCA, err := x509.ParseCertificate(clientCABlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse client CA certificate: %v", err)
-	}
-
 	// Create certificate pool for client CAs
 	clientCAPool := x509.NewCertPool()
-	clientCAPool.AddCert(clientCA)
+	var chainCerts [][]byte
+	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
+	for {
+		block, rest := pem.Decode(chainData)
+		if block == nil {
+			break
+		}
+		chainCerts = append(chainCerts, block.Bytes)
+		chainData = rest
+	}
+
+	for i, certBytes := range chainCerts {
+		cert, err := x509.ParseCertificate(certBytes)
+		if err != nil {
+			log.Printf("Failed to parse client chain certificate %d: %v", i+1, err)
+			continue
+		}
+		clientCAPool.AddCert(cert)
+		log.Printf("Added client CA certificate %d to pool: %s", i+1, cert.Subject.CommonName)
+	}
 
 	// Create TLS config
 	return &tls.Config{

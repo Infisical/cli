@@ -732,9 +732,8 @@ type RegisterGatewayResponse struct {
 	ProxyIP   string `json:"proxyIp"`
 	PKI       struct {
 		ServerCertificate      string `json:"serverCertificate"`
-		ServerCertificateChain string `json:"serverCertificateChain"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
-		ClientCA               string `json:"clientCA"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
 	} `json:"pki"`
 	SSH struct {
 		ClientCertificate string `json:"clientCertificate"`
