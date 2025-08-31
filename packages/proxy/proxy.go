@@ -396,7 +396,7 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 	}
 
 	// TODO: extract these from the certificate
-	targetHost := "localhost"
+	targetHost := "gateway"
 	targetPort := uint32(22)
 
 	// Get the SSH connection for this agent
