@@ -1,24 +1,51 @@
 package gatewayv2
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
-	"log"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
+
+// ForwardMode represents the type of forwarding
+type ForwardMode string
+
+const (
+	ForwardModeHTTP ForwardMode = "HTTP"
+	ForwardModeTCP  ForwardMode = "TCP"
+)
+
+// ForwardConfig contains the configuration for forwarding
+type ForwardConfig struct {
+	Mode          ForwardMode
+	CACertificate []byte // Decoded CA certificate for HTTPS verification
+	VerifyTLS     bool   // Whether to verify TLS certificates
+	TargetHost    string
+	TargetPort    int
+}
+
+// RoutingInfo represents the routing information embedded in client certificates
+type RoutingInfo struct {
+	TargetHost string `json:"targetHost"`
+	TargetPort int    `json:"targetPort"`
+}
 
 type GatewayConfig struct {
 	Name           string
@@ -76,11 +103,11 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 
 // Change the Start method to accept a context
 func (g *Gateway) Start(ctx context.Context) error {
-	log.Printf("Starting gateway")
+	log.Info().Msgf("Starting gateway")
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Gateway stopped by context cancellation")
+			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
 		default:
 			if err := g.connectAndServe(); err != nil {
@@ -93,7 +120,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 				}
 			}
 			// If we get here, the connection was closed gracefully
-			log.Printf("Connection closed, reconnecting in 10 seconds...")
+			log.Info().Msgf("Connection closed, reconnecting in 10 seconds...")
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -132,7 +159,7 @@ func (g *Gateway) connectAndServe() error {
 	}
 
 	// Connect to Proxy server
-	log.Printf("Connecting to SSH server on %s:%d...", g.certificates.ProxyIP, g.config.SSHPort)
+	log.Info().Msgf("Connecting to SSH server on %s:%d...", g.certificates.ProxyIP, g.config.SSHPort)
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.ProxyIP, g.config.SSHPort), sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %v", err)
@@ -151,7 +178,7 @@ func (g *Gateway) connectAndServe() error {
 		client.Close()
 	}()
 
-	log.Printf("SSH connection established for gateway")
+	log.Info().Msgf("SSH connection established for gateway")
 
 	// Handle incoming channels from the server
 	channels := client.HandleChannelOpen("direct-tcpip")
@@ -180,7 +207,57 @@ func (g *Gateway) registerGateway() error {
 
 	g.GatewayID = certResp.GatewayID
 	g.certificates = &certResp
-	log.Printf("Successfully registered gateway and received certificates")
+	log.Info().Msgf("Successfully registered gateway and received certificates")
+
+	// Create mTLS config once during registration
+	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
+	if serverCertBlock == nil {
+		return fmt.Errorf("failed to decode server certificate")
+	}
+
+	serverKeyBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerPrivateKey))
+	if serverKeyBlock == nil {
+		return fmt.Errorf("failed to decode server private key")
+	}
+
+	serverKey, err := x509.ParsePKCS8PrivateKey(serverKeyBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse server private key: %v", err)
+	}
+
+	clientCAPool := x509.NewCertPool()
+	var chainCerts [][]byte
+	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
+	for {
+		block, rest := pem.Decode(chainData)
+		if block == nil {
+			break
+		}
+		chainCerts = append(chainCerts, block.Bytes)
+		chainData = rest
+	}
+
+	for i, certBytes := range chainCerts {
+		cert, err := x509.ParseCertificate(certBytes)
+		if err != nil {
+			log.Info().Msgf("Failed to parse client chain certificate %d: %v", i+1, err)
+			continue
+		}
+		clientCAPool.AddCert(cert)
+	}
+
+	g.tlsConfig = &tls.Config{
+		Certificates: []tls.Certificate{
+			{
+				Certificate: [][]byte{serverCertBlock.Bytes},
+				PrivateKey:  serverKey,
+			},
+		},
+		ClientCAs:  clientCAPool,
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		MinVersion: tls.VersionTLS12,
+	}
+
 	return nil
 }
 
@@ -232,10 +309,8 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 }
 
 func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
-	// Parse CA public key once when creating the callback
 	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ServerCAPublicKey))
 	if err != nil {
-		// Return a callback that always fails since we can't parse the CA key
 		return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			return fmt.Errorf("failed to parse CA public key: %v", err)
 		}
@@ -262,7 +337,7 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 		return fmt.Errorf("host certificate check failed: %v", err)
 	}
 
-	log.Printf("Host certificate validated successfully for %s", hostname)
+	log.Info().Msgf("Host certificate validated successfully for %s", hostname)
 	return nil
 }
 
@@ -275,32 +350,24 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	}
 
 	if err := ssh.Unmarshal(newChannel.ExtraData(), &req); err != nil {
-		log.Printf("Failed to parse channel request: %v", err)
+		log.Info().Msgf("Failed to parse channel request: %v", err)
 		newChannel.Reject(ssh.Prohibited, "invalid request")
 		return
 	}
 
-	log.Printf("Incoming connection request to %s:%d from %s:%d",
-		req.Host, req.Port, req.OriginHost, req.OriginPort)
-
-	// Accept the channel
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
-		log.Printf("Failed to accept channel: %v", err)
+		log.Info().Msgf("Failed to accept channel: %v", err)
 		return
 	}
 	defer channel.Close()
 
 	go ssh.DiscardRequests(requests)
 
-	// Determine the target address
-	target := fmt.Sprintf("%s:%d", req.Host, req.Port)
-	log.Printf("Creating TCP tunnel to: %s", target)
-
 	// Create mTLS server configuration
-	tlsConfig, err := g.createMTLSConfig()
-	if err != nil {
-		log.Printf("Failed to create mTLS config: %v", err)
+	tlsConfig := g.tlsConfig
+	if tlsConfig == nil {
+		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
 		return
 	}
 
@@ -314,88 +381,124 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 
 	// Perform TLS handshake
 	if err := tlsConn.Handshake(); err != nil {
-		log.Printf("TLS handshake failed: %v", err)
+		log.Info().Msgf("TLS handshake failed: %v", err)
 		return
 	}
 
-	log.Printf("mTLS connection established with client: %s", tlsConn.ConnectionState().ServerName)
+	log.Info().Msgf("mTLS connection established with client")
 
-	// Connect to local service
-	localConn, err := net.Dial("tcp", target)
+	// Create reader for the TLS connection
+	reader := bufio.NewReader(tlsConn)
+
+	// Get the forward mode here
+	forwardConfig, err := g.parseForwardConfig(tlsConn, reader)
 	if err != nil {
-		log.Printf("Failed to connect to local service %s: %v", target, err)
+		log.Info().Msgf("Failed to parse forward command: %v", err)
 		return
 	}
-	defer localConn.Close()
 
-	log.Printf("TCP tunnel established to %s", target)
+	// Use target from certificate
+	target := fmt.Sprintf("%s:%d", forwardConfig.TargetHost, forwardConfig.TargetPort)
+	log.Info().Msgf("Using target from certificate: %s", target)
 
-	// Create bidirectional tunnel with TLS
-	// Forward data from TLS connection to local service
-	go func() {
-		io.Copy(localConn, tlsConn)
-		localConn.Close()
-		log.Printf("TLS -> local service tunnel closed")
-	}()
-
-	// Forward data from local service to TLS connection
-	io.Copy(tlsConn, localConn)
-	log.Printf("Local service -> TLS tunnel closed")
+	if forwardConfig.Mode == ForwardModeHTTP {
+		handleHTTPProxy(tlsConn, reader, target, forwardConfig.CACertificate, forwardConfig.VerifyTLS)
+		return
+	} else if forwardConfig.Mode == ForwardModeTCP {
+		handleTCPProxy(tlsConn, target)
+		return
+	}
 }
 
-func (g *Gateway) createMTLSConfig() (*tls.Config, error) {
-	// Parse server certificate
-	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
-	if serverCertBlock == nil {
-		return nil, fmt.Errorf("failed to decode server certificate")
+func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*ForwardConfig, error) {
+	config := &ForwardConfig{}
+
+	if err := g.parseRoutingInfoFromCertificate(tlsConn, config); err != nil {
+		return nil, fmt.Errorf("failed to parse routing info from certificate: %v", err)
 	}
 
-	// Parse server private key
-	serverKeyBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerPrivateKey))
-	if serverKeyBlock == nil {
-		return nil, fmt.Errorf("failed to decode server private key")
-	}
-
-	serverKey, err := x509.ParsePKCS8PrivateKey(serverKeyBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse server private key: %v", err)
-	}
-
-	// Create certificate pool for client CAs
-	clientCAPool := x509.NewCertPool()
-	var chainCerts [][]byte
-	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
 	for {
-		block, rest := pem.Decode(chainData)
-		if block == nil {
-			break
-		}
-		chainCerts = append(chainCerts, block.Bytes)
-		chainData = rest
-	}
-
-	for i, certBytes := range chainCerts {
-		cert, err := x509.ParseCertificate(certBytes)
+		msg, err := reader.ReadBytes('\n')
 		if err != nil {
-			log.Printf("Failed to parse client chain certificate %d: %v", i+1, err)
-			continue
+			return nil, fmt.Errorf("failed to read command: %v", err)
 		}
-		clientCAPool.AddCert(cert)
-		log.Printf("Added client CA certificate %d to pool: %s", i+1, cert.Subject.CommonName)
+
+		cmd := strings.ToUpper(strings.TrimSpace(string(strings.Split(string(msg), " ")[0])))
+		args := strings.TrimSpace(strings.TrimPrefix(string(msg), strings.Split(string(msg), " ")[0]))
+
+		switch cmd {
+		case "FORWARD-TCP":
+			config.Mode = ForwardModeTCP
+			return config, nil
+
+		case "FORWARD-HTTP":
+			config.Mode = ForwardModeHTTP
+			if args != "" {
+				if err := g.parseForwardHTTPParams(args, config); err != nil {
+					return nil, fmt.Errorf("failed to parse HTTP parameters: %v", err)
+				}
+			}
+
+			return config, nil
+
+		default:
+			return nil, fmt.Errorf("invalid forward command: %s", cmd)
+		}
+	}
+}
+
+func (g *Gateway) parseForwardHTTPParams(params string, config *ForwardConfig) error {
+	parts := strings.Fields(params)
+
+	for _, part := range parts {
+		if strings.HasPrefix(part, "ca=") {
+			caB64 := strings.TrimPrefix(part, "ca=")
+			caCert, err := base64.StdEncoding.DecodeString(caB64)
+			if err != nil {
+				return fmt.Errorf("invalid base64 CA certificate: %v", err)
+			}
+			config.CACertificate = caCert
+		} else if strings.HasPrefix(part, "verify=") {
+			verifyStr := strings.TrimPrefix(part, "verify=")
+			verify, err := strconv.ParseBool(verifyStr)
+			if err != nil {
+				return fmt.Errorf("invalid verify parameter: %s", verifyStr)
+			}
+			config.VerifyTLS = verify
+		}
 	}
 
-	// Create TLS config
-	return &tls.Config{
-		Certificates: []tls.Certificate{
-			{
-				Certificate: [][]byte{serverCertBlock.Bytes},
-				PrivateKey:  serverKey,
-			},
-		},
-		ClientCAs:  clientCAPool,
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		MinVersion: tls.VersionTLS12,
-	}, nil
+	return nil
+}
+
+// parseRoutingInfoFromCertificate extracts target host and port from client certificate custom extension
+func (g *Gateway) parseRoutingInfoFromCertificate(tlsConn *tls.Conn, config *ForwardConfig) error {
+	const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
+
+	// Get the peer certificates
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return fmt.Errorf("no peer certificates found")
+	}
+
+	clientCert := state.PeerCertificates[0]
+
+	// Look for the routing extension
+	for _, ext := range clientCert.Extensions {
+		if ext.Id.String() == GATEWAY_ROUTING_INFO_OID {
+			var routingInfo RoutingInfo
+			if err := json.Unmarshal(ext.Value, &routingInfo); err != nil {
+				return fmt.Errorf("failed to parse routing info JSON: %v", err)
+			}
+
+			config.TargetHost = routingInfo.TargetHost
+			config.TargetPort = routingInfo.TargetPort
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("routing extension with OID %s not found in client certificate", GATEWAY_ROUTING_INFO_OID)
 }
 
 // virtualConnection implements net.Conn to bridge SSH channel and TLS

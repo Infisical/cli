@@ -57,9 +57,9 @@ var networkProxyCmd = &cobra.Command{
 		}
 
 		if instanceType == "instance" {
-			proxyAuthSecret := os.Getenv("PROXY_AUTH_SECRET")
+			proxyAuthSecret := os.Getenv(gatewayv2.PROXY_AUTH_SECRET_ENV_NAME)
 			if proxyAuthSecret == "" {
-				util.HandleError(fmt.Errorf("PROXY_AUTH_SECRET is not set"), "unable to get proxy auth secret")
+				util.HandleError(fmt.Errorf("%s is not set", gatewayv2.PROXY_AUTH_SECRET_ENV_NAME), "unable to get proxy auth secret")
 			}
 
 			proxyInstance.SetToken(proxyAuthSecret)
@@ -145,14 +145,14 @@ var networkGatewayCmd = &cobra.Command{
 	Long:  "Run the Infisical gateway component",
 	Run: func(cmd *cobra.Command, args []string) {
 
-		proxyName, err := cmd.Flags().GetString("proxy-name")
-		if err != nil || proxyName == "" {
-			util.HandleError(err, "unable to get proxy-name flag")
+		proxyName, err := util.GetCmdFlagOrEnv(cmd, "proxy-name", []string{gatewayv2.PROXY_NAME_ENV_NAME})
+		if err != nil {
+			util.HandleError(err, fmt.Sprintf("unable to get proxy-name flag or %s env", gatewayv2.PROXY_NAME_ENV_NAME))
 		}
 
-		gatewayName, err := cmd.Flags().GetString("name")
-		if err != nil || gatewayName == "" {
-			util.HandleError(err, "unable to get name flag")
+		gatewayName, err := util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
+		if err != nil {
+			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
 		}
 
 		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{

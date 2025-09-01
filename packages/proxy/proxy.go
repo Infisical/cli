@@ -374,7 +374,6 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 		}
 
 		state := tlsConn.ConnectionState()
-		log.Printf("TLS handshake completed, peer certificates count: %d", len(state.PeerCertificates))
 
 		if len(state.PeerCertificates) > 0 {
 			cert := state.PeerCertificates[0]
