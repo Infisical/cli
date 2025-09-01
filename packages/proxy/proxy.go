@@ -9,14 +9,13 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"log"
 	"net"
-	"strings"
 	"sync"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -101,7 +100,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	// Start TLS server
 	go p.startTLSServer()
 
-	log.Printf("Proxy server started successfully")
+	log.Info().Msg("Proxy server started successfully")
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -131,7 +130,7 @@ func (p *Proxy) registerProxy() error {
 		p.certificates = &certResp
 	}
 
-	log.Printf("Successfully registered proxy and received certificates from API")
+	log.Info().Msg("Successfully registered proxy and received certificates from API")
 	return nil
 }
 
@@ -166,13 +165,13 @@ func (p *Proxy) setupSSHServer() error {
 			// Check if this is an SSH certificate
 			cert, ok := key.(*ssh.Certificate)
 			if !ok {
-				log.Printf("Gateway '%s' tried to authenticate with raw public key (rejected)", conn.User())
+				log.Warn().Msgf("Gateway '%s' tried to authenticate with raw public key (rejected)", conn.User())
 				return nil, fmt.Errorf("certificates required, raw public keys not allowed")
 			}
 
 			// Validate the certificate
 			if err := p.validateSSHCertificate(cert, conn.User(), sshCAPubKey); err != nil {
-				log.Printf("Gateway '%s' certificate validation failed: %v", conn.User(), err)
+				log.Error().Msgf("Gateway '%s' certificate validation failed: %v", conn.User(), err)
 				return nil, err
 			}
 
@@ -239,11 +238,10 @@ func (p *Proxy) setupTLSServer() error {
 	for i, certBytes := range chainCerts {
 		cert, err := x509.ParseCertificate(certBytes)
 		if err != nil {
-			log.Printf("Failed to parse client chain certificate %d: %v", i+1, err)
+			log.Error().Msgf("Failed to parse client chain certificate %d: %v", i+1, err)
 			continue
 		}
 		clientCAPool.AddCert(cert)
-		log.Printf("Added client CA certificate %d to pool: %s", i+1, cert.Subject.CommonName)
 	}
 
 	// Create TLS config
@@ -268,7 +266,7 @@ func (p *Proxy) validateSSHCertificate(cert *ssh.Certificate, username string, c
 		return fmt.Errorf("invalid certificate type: %d", cert.CertType)
 	}
 
-	// Check if certificate is signed by our CA
+	// Check if certificate is signed expected CA
 	checker := &ssh.CertChecker{
 		IsUserAuthority: func(auth ssh.PublicKey) bool {
 			return bytes.Equal(auth.Marshal(), caPubKey.Marshal())
@@ -280,23 +278,23 @@ func (p *Proxy) validateSSHCertificate(cert *ssh.Certificate, username string, c
 		return fmt.Errorf("certificate check failed: %v", err)
 	}
 
-	log.Printf("SSH certificate valid for user '%s', principals: %v", username, cert.ValidPrincipals)
+	log.Debug().Msgf("SSH certificate valid for user '%s', principals: %v", username, cert.ValidPrincipals)
 	return nil
 }
 
 func (p *Proxy) startSSHServer() {
 	listener, err := net.Listen("tcp", ":"+p.config.SSHPort)
 	if err != nil {
-		log.Fatalf("Failed to start SSH server: %v", err)
+		log.Fatal().Msgf("Failed to start SSH server: %v", err)
 	}
 	p.sshListener = listener
 
-	log.Printf("SSH server listening on :%s for gateways", p.config.SSHPort)
+	log.Info().Msgf("SSH server listening on :%s for gateways", p.config.SSHPort)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept SSH connection: %v", err)
+			log.Error().Msgf("Failed to accept SSH connection: %v", err)
 			continue
 		}
 		go p.handleSSHAgent(conn)
@@ -309,12 +307,12 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 	// SSH handshake
 	sshConn, chans, _, err := ssh.NewServerConn(conn, p.sshConfig)
 	if err != nil {
-		log.Printf("SSH handshake failed: %v", err)
+		log.Error().Msgf("SSH handshake failed: %v", err)
 		return
 	}
 
 	gatewayId := sshConn.Permissions.Extensions["gateway-id"]
-	log.Printf("SSH handshake successful for gateway: %s", gatewayId)
+	log.Info().Msgf("SSH handshake successful for gateway: %s", gatewayId)
 
 	// Store the connection
 	p.mu.Lock()
@@ -326,7 +324,7 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 		p.mu.Lock()
 		delete(p.tunnels, gatewayId)
 		p.mu.Unlock()
-		log.Printf("Gateway %s disconnected", gatewayId)
+		log.Info().Msgf("Gateway %s disconnected", gatewayId)
 	}()
 
 	for newChannel := range chans {
@@ -344,16 +342,16 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 func (p *Proxy) startTLSServer() {
 	listener, err := tls.Listen("tcp", ":"+p.config.TLSPort, p.tlsConfig)
 	if err != nil {
-		log.Fatalf("Failed to start TLS server: %v", err)
+		log.Fatal().Msgf("Failed to start TLS server: %v", err)
 	}
 	p.tlsListener = listener
 
-	log.Printf("TLS server listening on :%s for clients", p.config.TLSPort)
+	log.Info().Msgf("TLS server listening on :%s for clients", p.config.TLSPort)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept TLS connection: %v", err)
+			log.Error().Msgf("Failed to accept TLS connection: %v", err)
 			continue
 		}
 		go p.handleClient(conn)
@@ -366,10 +364,10 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 	var gatewayId string
 
 	if tlsConn, ok := clientConn.(*tls.Conn); ok {
-		log.Printf("TLS connection detected, forcing handshake...")
+		log.Debug().Msg("TLS connection detected, forcing handshake...")
 		err := tlsConn.Handshake()
 		if err != nil {
-			log.Printf("TLS handshake failed: %v", err)
+			log.Error().Msgf("TLS handshake failed: %v", err)
 			return
 		}
 
@@ -377,20 +375,14 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 
 		if len(state.PeerCertificates) > 0 {
 			cert := state.PeerCertificates[0]
-			log.Printf("Client connected with certificate: %s", cert.Subject.CommonName)
-			parts := strings.Split(cert.Subject.CommonName, ":")
-			if len(parts) >= 2 {
-				gatewayId = parts[1]
-			} else {
-				log.Printf("Invalid CommonName format, expected 'part1:part2', got: %s", cert.Subject.CommonName)
-				return
-			}
+			log.Info().Msgf("Client connected with certificate: %s", cert.Subject.CommonName)
+			gatewayId = cert.Subject.CommonName
 		} else {
-			log.Printf("No peer certificates found")
+			log.Warn().Msg("No peer certificates found")
 			return
 		}
 	} else {
-		log.Printf("Not a TLS connection, connection type: %T", clientConn)
+		log.Error().Msgf("Not a TLS connection, connection type: %T", clientConn)
 		return
 	}
 
@@ -404,12 +396,12 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 	p.mu.RUnlock()
 
 	if !exists {
-		log.Printf("Gateway '%s' not connected", gatewayId)
+		log.Warn().Msgf("Gateway '%s' not connected", gatewayId)
 		clientConn.Write([]byte("ERROR: Gateway not connected\n"))
 		return
 	}
 
-	log.Printf("Routing TCP connection to gateway: %s", gatewayId)
+	log.Info().Msgf("Routing TCP connection to gateway: %s", gatewayId)
 
 	// Open SSH channel to connect to agent's local service through the tunnel
 	payload := struct {
@@ -421,7 +413,7 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 
 	channel, _, err := conn.OpenChannel("direct-tcpip", ssh.Marshal(&payload))
 	if err != nil {
-		log.Printf("Failed to connect to agent: %v", err)
+		log.Error().Msgf("Failed to connect to agent: %v", err)
 		clientConn.Write([]byte("ERROR: Failed to connect to agent\n"))
 		return
 	}
@@ -434,11 +426,11 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 	}()
 
 	io.Copy(clientConn, channel)
-	log.Printf("Client %s disconnected", clientConn.RemoteAddr())
+	log.Info().Msgf("Client %s disconnected", clientConn.RemoteAddr())
 }
 
 func (p *Proxy) cleanup() {
-	log.Printf("Shutting down proxy server...")
+	log.Info().Msg("Shutting down proxy server...")
 
 	if p.sshListener != nil {
 		p.sshListener.Close()
@@ -447,5 +439,5 @@ func (p *Proxy) cleanup() {
 		p.tlsListener.Close()
 	}
 
-	log.Printf("Proxy server shutdown complete")
+	log.Info().Msg("Proxy server shutdown complete")
 }

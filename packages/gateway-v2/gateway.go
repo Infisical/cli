@@ -32,6 +32,16 @@ const (
 	ForwardModeTCP  ForwardMode = "TCP"
 )
 
+type ActorType string
+
+const (
+	ActorTypePlatform ActorType = "platform"
+	ActorTypeUser     ActorType = "user"
+)
+
+const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
+const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
+
 // ForwardConfig contains the configuration for forwarding
 type ForwardConfig struct {
 	Mode          ForwardMode
@@ -39,12 +49,17 @@ type ForwardConfig struct {
 	VerifyTLS     bool   // Whether to verify TLS certificates
 	TargetHost    string
 	TargetPort    int
+	ActorType     ActorType
 }
 
 // RoutingInfo represents the routing information embedded in client certificates
 type RoutingInfo struct {
 	TargetHost string `json:"targetHost"`
 	TargetPort int    `json:"targetPort"`
+}
+
+type ActorDetails struct {
+	Type string `json:"type"`
 }
 
 type GatewayConfig struct {
@@ -111,7 +126,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			return nil
 		default:
 			if err := g.connectAndServe(); err != nil {
-				log.Printf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -397,15 +412,13 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	}
 
-	// Use target from certificate
-	target := fmt.Sprintf("%s:%d", forwardConfig.TargetHost, forwardConfig.TargetPort)
-	log.Info().Msgf("Using target from certificate: %s", target)
+	log.Info().Msgf("Forward config: %+v", forwardConfig)
 
 	if forwardConfig.Mode == ForwardModeHTTP {
-		handleHTTPProxy(tlsConn, reader, target, forwardConfig.CACertificate, forwardConfig.VerifyTLS)
+		handleHTTPProxy(tlsConn, reader, forwardConfig)
 		return
 	} else if forwardConfig.Mode == ForwardModeTCP {
-		handleTCPProxy(tlsConn, target)
+		handleTCPProxy(tlsConn, forwardConfig)
 		return
 	}
 }
@@ -413,7 +426,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*ForwardConfig, error) {
 	config := &ForwardConfig{}
 
-	if err := g.parseRoutingInfoFromCertificate(tlsConn, config); err != nil {
+	if err := g.parseDetailsFromCertificate(tlsConn, config); err != nil {
 		return nil, fmt.Errorf("failed to parse routing info from certificate: %v", err)
 	}
 
@@ -471,10 +484,7 @@ func (g *Gateway) parseForwardHTTPParams(params string, config *ForwardConfig) e
 	return nil
 }
 
-// parseRoutingInfoFromCertificate extracts target host and port from client certificate custom extension
-func (g *Gateway) parseRoutingInfoFromCertificate(tlsConn *tls.Conn, config *ForwardConfig) error {
-	const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
-
+func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *ForwardConfig) error {
 	// Get the peer certificates
 	state := tlsConn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
@@ -483,8 +493,8 @@ func (g *Gateway) parseRoutingInfoFromCertificate(tlsConn *tls.Conn, config *For
 
 	clientCert := state.PeerCertificates[0]
 
-	// Look for the routing extension
 	for _, ext := range clientCert.Extensions {
+		// Extract target host and port from client certificate custom extension
 		if ext.Id.String() == GATEWAY_ROUTING_INFO_OID {
 			var routingInfo RoutingInfo
 			if err := json.Unmarshal(ext.Value, &routingInfo); err != nil {
@@ -493,12 +503,18 @@ func (g *Gateway) parseRoutingInfoFromCertificate(tlsConn *tls.Conn, config *For
 
 			config.TargetHost = routingInfo.TargetHost
 			config.TargetPort = routingInfo.TargetPort
-
-			return nil
+		}
+		// Extract actor type from client certificate custom extension
+		if ext.Id.String() == GATEWAY_ACTOR_OID {
+			var actorDetails ActorDetails
+			if err := json.Unmarshal(ext.Value, &actorDetails); err != nil {
+				return fmt.Errorf("failed to parse actor details JSON: %v", err)
+			}
+			config.ActorType = ActorType(actorDetails.Type)
 		}
 	}
 
-	return fmt.Errorf("routing extension with OID %s not found in client certificate", GATEWAY_ROUTING_INFO_OID)
+	return nil
 }
 
 // virtualConnection implements net.Conn to bridge SSH channel and TLS
