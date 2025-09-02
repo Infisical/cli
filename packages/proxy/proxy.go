@@ -350,7 +350,7 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 }
 
 func (p *Proxy) startTLSServer() {
-	listener, err := tls.Listen("tcp", ":"+p.config.TLSPort, p.tlsConfig)
+	listener, err := net.Listen("tcp", ":"+p.config.TLSPort)
 	if err != nil {
 		log.Fatal().Msgf("Failed to start TLS server: %v", err)
 	}
@@ -364,8 +364,25 @@ func (p *Proxy) startTLSServer() {
 			log.Error().Msgf("Failed to accept TLS connection: %v", err)
 			continue
 		}
-		go p.handleClient(conn)
+		go p.handleTLSClient(conn)
 	}
+}
+
+func (p *Proxy) handleTLSClient(conn net.Conn) {
+	defer conn.Close()
+
+	// Perform TLS handshake using current TLS config
+	tlsConn := tls.Server(conn, p.tlsConfig)
+	defer tlsConn.Close()
+
+	// Force TLS handshake
+	err := tlsConn.Handshake()
+	if err != nil {
+		log.Error().Msgf("TLS handshake failed: %v", err)
+		return
+	}
+
+	p.handleClient(tlsConn)
 }
 
 func (p *Proxy) handleClient(clientConn net.Conn) {
