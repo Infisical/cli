@@ -385,35 +385,19 @@ func (p *Proxy) handleTLSClient(conn net.Conn) {
 	p.handleClient(tlsConn)
 }
 
-func (p *Proxy) handleClient(clientConn net.Conn) {
-	defer clientConn.Close()
-
+func (p *Proxy) handleClient(tlsConn *tls.Conn) {
 	var gatewayId string
+	state := tlsConn.ConnectionState()
 
-	if tlsConn, ok := clientConn.(*tls.Conn); ok {
-		log.Debug().Msg("TLS connection detected, forcing handshake...")
-		err := tlsConn.Handshake()
-		if err != nil {
-			log.Error().Msgf("TLS handshake failed: %v", err)
-			return
-		}
-
-		state := tlsConn.ConnectionState()
-
-		if len(state.PeerCertificates) > 0 {
-			cert := state.PeerCertificates[0]
-			log.Info().Msgf("Client connected with certificate: %s", cert.Subject.CommonName)
-			gatewayId = cert.Subject.CommonName
-		} else {
-			log.Warn().Msg("No peer certificates found")
-			return
-		}
+	if len(state.PeerCertificates) > 0 {
+		cert := state.PeerCertificates[0]
+		log.Info().Msgf("Client connected with certificate: %s", cert.Subject.CommonName)
+		gatewayId = cert.Subject.CommonName
 	} else {
-		log.Error().Msgf("Not a TLS connection, connection type: %T", clientConn)
+		log.Warn().Msg("No peer certificates found")
 		return
 	}
 
-	// TODO: extract these from the certificate
 	targetHost := "gateway"
 	targetPort := uint32(22)
 
@@ -424,7 +408,7 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 
 	if !exists {
 		log.Warn().Msgf("Gateway '%s' not connected", gatewayId)
-		clientConn.Write([]byte("ERROR: Gateway not connected\n"))
+		tlsConn.Write([]byte("ERROR: Gateway not connected\n"))
 		return
 	}
 
@@ -441,19 +425,19 @@ func (p *Proxy) handleClient(clientConn net.Conn) {
 	channel, _, err := conn.OpenChannel("direct-tcpip", ssh.Marshal(&payload))
 	if err != nil {
 		log.Error().Msgf("Failed to connect to agent: %v", err)
-		clientConn.Write([]byte("ERROR: Failed to connect to agent\n"))
+		tlsConn.Write([]byte("ERROR: Failed to connect to agent\n"))
 		return
 	}
 	defer channel.Close()
 
 	// Bidirectional forwarding
 	go func() {
-		io.Copy(channel, clientConn)
+		io.Copy(channel, tlsConn)
 		channel.CloseWrite()
 	}()
 
-	io.Copy(clientConn, channel)
-	log.Info().Msgf("Client %s disconnected", clientConn.RemoteAddr())
+	io.Copy(tlsConn, channel)
+	log.Info().Msgf("Client %s disconnected", tlsConn.RemoteAddr())
 }
 
 func (p *Proxy) cleanup() {
