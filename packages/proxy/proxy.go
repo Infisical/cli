@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -92,6 +93,9 @@ func (p *Proxy) Start(ctx context.Context) error {
 	if err := p.setupTLSServer(); err != nil {
 		return fmt.Errorf("failed to setup TLS server: %v", err)
 	}
+
+	// Start certificate renewal goroutine
+	go p.startCertificateRenewal(ctx)
 
 	// Start SSH server
 	go p.startSSHServer()
@@ -446,4 +450,46 @@ func (p *Proxy) cleanup() {
 	}
 
 	log.Info().Msg("Proxy server shutdown complete")
+}
+
+// startCertificateRenewal runs a background process to renew certificates every 24 hours
+func (p *Proxy) startCertificateRenewal(ctx context.Context) {
+	log.Info().Msg("Starting certificate renewal goroutine")
+	ticker := time.NewTicker(30 * time.Second) // TODO: update this to be every 10 days
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("Certificate renewal goroutine stopping...")
+			return
+		case <-ticker.C:
+			log.Info().Msg("Checking certificates for renewal...")
+			if err := p.renewCertificates(); err != nil {
+				log.Error().Msgf("Failed to renew certificates: %v", err)
+			} else {
+				log.Info().Msg("Certificates renewed successfully")
+			}
+		}
+	}
+}
+
+// renewCertificates fetches new certificates and updates the server configurations
+func (p *Proxy) renewCertificates() error {
+	// Re-register proxy to get fresh certificates
+	if err := p.registerProxy(); err != nil {
+		return fmt.Errorf("failed to register proxy: %v", err)
+	}
+
+	// Update SSH server configuration
+	if err := p.setupSSHServer(); err != nil {
+		return fmt.Errorf("failed to setup SSH server: %v", err)
+	}
+
+	// Update TLS server configuration
+	if err := p.setupTLSServer(); err != nil {
+		return fmt.Errorf("failed to setup TLS server: %v", err)
+	}
+
+	return nil
 }
