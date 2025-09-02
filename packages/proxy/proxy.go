@@ -462,7 +462,7 @@ func (p *Proxy) cleanup() {
 // startCertificateRenewal runs a background process to renew certificates every 24 hours
 func (p *Proxy) startCertificateRenewal(ctx context.Context) {
 	log.Info().Msg("Starting certificate renewal goroutine")
-	ticker := time.NewTicker(30 * time.Second) // TODO: update this to be every 10 days
+	ticker := time.NewTicker(10 * 24 * time.Hour)
 	defer ticker.Stop()
 
 	for {
