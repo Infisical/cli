@@ -79,7 +79,6 @@ func (p *Proxy) SetToken(token string) {
 }
 
 func (p *Proxy) Start(ctx context.Context) error {
-	// Register proxy and get certificates from API
 	if err := p.registerProxy(); err != nil {
 		return fmt.Errorf("failed to register proxy: %v", err)
 	}
@@ -184,6 +183,13 @@ func (p *Proxy) setupSSHServer() error {
 				return nil, fmt.Errorf("gateway id is required")
 			}
 
+			// Validate that the user is authorized to connect to the current proxy
+			expectedKeyId := "client-" + p.config.ProxyName
+			if cert.KeyId != expectedKeyId {
+				log.Error().Msgf("Gateway '%s' certificate Key ID '%s' does not match expected '%s'", conn.User(), cert.KeyId, expectedKeyId)
+				return nil, fmt.Errorf("certificate Key ID does not match expected value")
+			}
+
 			return &ssh.Permissions{
 				Extensions: map[string]string{
 					"gateway-id": gatewayId,
@@ -266,7 +272,7 @@ func (p *Proxy) validateSSHCertificate(cert *ssh.Certificate, username string, c
 		return fmt.Errorf("invalid certificate type: %d", cert.CertType)
 	}
 
-	// Check if certificate is signed expected CA
+	// Check if certificate is signed by expected CA
 	checker := &ssh.CertChecker{
 		IsUserAuthority: func(auth ssh.PublicKey) bool {
 			return bytes.Equal(auth.Marshal(), caPubKey.Marshal())

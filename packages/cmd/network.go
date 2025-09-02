@@ -131,7 +131,6 @@ var networkProxyCmd = &cobra.Command{
 			}()
 		}
 
-		// Use the same context for the proxy server
 		err = proxyInstance.Start(cmd.Context())
 		if err != nil {
 			util.HandleError(err, "unable to start proxy instance")
@@ -272,10 +271,16 @@ var networkGatewayInstallCmd = &cobra.Command{
 		if err != nil {
 			util.HandleError(err, "Unable to parse name flag")
 		}
+		if gatewayName == "" {
+			util.HandleError(errors.New("Gateway name is required"))
+		}
 
 		proxyName, err := cmd.Flags().GetString("proxy-name")
 		if err != nil {
 			util.HandleError(err, "Unable to parse proxy-name flag")
+		}
+		if proxyName == "" {
+			util.HandleError(errors.New("Proxy name is required"))
 		}
 
 		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, proxyName)
