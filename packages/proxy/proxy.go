@@ -471,7 +471,7 @@ func (p *Proxy) startCertificateRenewal(ctx context.Context) {
 			log.Info().Msg("Certificate renewal goroutine stopping...")
 			return
 		case <-ticker.C:
-			log.Info().Msg("Checking certificates for renewal...")
+			log.Info().Msg("Renewing certificates...")
 			if err := p.renewCertificates(); err != nil {
 				log.Error().Msgf("Failed to renew certificates: %v", err)
 			} else {

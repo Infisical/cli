@@ -159,6 +159,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	g.registerHeartBeat(ctx, errCh)
 
+	// Start certificate renewal goroutine
+	go g.startCertificateRenewal(ctx)
+
 	go func() {
 		for {
 			select {
@@ -289,7 +292,15 @@ func (g *Gateway) registerGateway() error {
 	g.certificates = &certResp
 	log.Info().Msgf("Successfully registered gateway and received certificates")
 
-	// Create mTLS config once during registration
+	// Setup mTLS config
+	if err := g.setupTLSConfig(); err != nil {
+		return fmt.Errorf("failed to setup TLS config: %v", err)
+	}
+
+	return nil
+}
+
+func (g *Gateway) setupTLSConfig() error {
 	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
 	if serverCertBlock == nil {
 		return fmt.Errorf("failed to decode server certificate")
@@ -620,5 +631,37 @@ func (vc *virtualConnection) SetReadDeadline(t time.Time) error {
 }
 
 func (vc *virtualConnection) SetWriteDeadline(t time.Time) error {
+	return nil
+}
+
+// startCertificateRenewal runs a background process to renew certificates every 10 days
+func (g *Gateway) startCertificateRenewal(ctx context.Context) {
+	log.Info().Msg("Starting gateway certificate renewal goroutine")
+	ticker := time.NewTicker(10 * 24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("Gateway certificate renewal goroutine stopping...")
+			return
+		case <-ticker.C:
+			log.Info().Msg("Renewing gateway certificates...")
+			if err := g.renewCertificates(); err != nil {
+				log.Error().Msgf("Failed to renew gateway certificates: %v", err)
+			} else {
+				log.Info().Msg("Gateway certificates renewed successfully")
+			}
+		}
+	}
+}
+
+// renewCertificates fetches new certificates and updates the gateway configurations
+func (g *Gateway) renewCertificates() error {
+	// Re-register gateway to get fresh certificates
+	if err := g.registerGateway(); err != nil {
+		return fmt.Errorf("failed to register gateway: %v", err)
+	}
+
 	return nil
 }
