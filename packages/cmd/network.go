@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,9 +25,12 @@ var networkCmd = &cobra.Command{
 }
 
 var networkProxyCmd = &cobra.Command{
-	Use:   "proxy",
-	Short: "Run the Infisical proxy component",
-	Long:  "Run the Infisical proxy component",
+	Use:                   "proxy",
+	Short:                 "Run the Infisical proxy component",
+	Long:                  "Run the Infisical proxy component",
+	Example:               "infisical network proxy --type=instance --ip=<ip> --name=<name> --token=<token>",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		proxyName, err := cmd.Flags().GetString("name")
@@ -135,19 +139,13 @@ var networkProxyCmd = &cobra.Command{
 	},
 }
 
-var networkProxyInstallCmd = &cobra.Command{
-	Use:   "proxy install",
-	Short: "Install and enable systemd service for the proxy (requires sudo)",
-	Long:  "Install and enable systemd service for the proxy. Must be run with sudo on Linux.",
-	Run: func(cmd *cobra.Command, args []string) {
-		// TODO: Implement this
-	},
-}
-
 var networkGatewayCmd = &cobra.Command{
-	Use:   "gateway",
-	Short: "Run the Infisical gateway component",
-	Long:  "Run the Infisical gateway component",
+	Use:                   "gateway",
+	Short:                 "Run the Infisical gateway component",
+	Long:                  "Run the Infisical gateway component. Use 'network gateway install' to set up the systemd service.",
+	Example:               "infisical network gateway --proxy-name=<proxy-name> --name=<name> --token=<token>",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		proxyName, err := util.GetCmdFlagOrEnv(cmd, "proxy-name", []string{gatewayv2.PROXY_NAME_ENV_NAME})
@@ -240,6 +238,75 @@ var networkGatewayCmd = &cobra.Command{
 	},
 }
 
+var networkGatewayInstallCmd = &cobra.Command{
+	Use:                   "install",
+	Short:                 "Install and enable systemd service for the gateway (requires sudo)",
+	Long:                  "Install and enable systemd service for the gateway. Must be run with sudo on Linux.",
+	Example:               "sudo infisical network gateway install --token=<token> --domain=<domain> --name=<name> --proxy-name=<proxy-name>",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS != "linux" {
+			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
+		}
+
+		if os.Geteuid() != 0 {
+			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+		}
+
+		token, err := util.GetInfisicalToken(cmd)
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
+		if token == nil {
+			util.HandleError(errors.New("Token not found"))
+		}
+
+		domain, err := cmd.Flags().GetString("domain")
+		if err != nil {
+			util.HandleError(err, "Unable to parse domain flag")
+		}
+
+		gatewayName, err := cmd.Flags().GetString("name")
+		if err != nil {
+			util.HandleError(err, "Unable to parse name flag")
+		}
+
+		proxyName, err := cmd.Flags().GetString("proxy-name")
+		if err != nil {
+			util.HandleError(err, "Unable to parse proxy-name flag")
+		}
+
+		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, proxyName)
+		if err != nil {
+			util.HandleError(err, "Unable to install systemd service")
+		}
+	},
+}
+
+var networkGatewayUninstallCmd = &cobra.Command{
+	Use:                   "uninstall",
+	Short:                 "Uninstall and remove systemd service for the gateway (requires sudo)",
+	Long:                  "Uninstall and remove systemd service for the gateway. Must be run with sudo on Linux.",
+	Example:               "sudo infisical network gateway uninstall",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS != "linux" {
+			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
+		}
+
+		if os.Geteuid() != 0 {
+			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+		}
+
+		if err := gatewayv2.UninstallGatewaySystemdService(); err != nil {
+			util.HandleError(err, "Failed to uninstall systemd service")
+		}
+	},
+}
+
 func init() {
 	networkGatewayCmd.Flags().String("proxy-name", "", "The name of the proxy to connect to")
 	networkGatewayCmd.Flags().String("name", "", "The name of the gateway")
@@ -264,7 +331,13 @@ func init() {
 	networkProxyCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	networkProxyCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
-	networkProxyCmd.AddCommand(networkProxyInstallCmd)
+	networkGatewayInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
+	networkGatewayInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
+	networkGatewayInstallCmd.Flags().String("name", "", "The name of the gateway")
+	networkGatewayInstallCmd.Flags().String("proxy-name", "", "The name of the proxy")
+
+	networkGatewayCmd.AddCommand(networkGatewayInstallCmd)
+	networkGatewayCmd.AddCommand(networkGatewayUninstallCmd)
 
 	networkCmd.AddCommand(networkProxyCmd)
 	networkCmd.AddCommand(networkGatewayCmd)
