@@ -364,6 +364,7 @@ func (p *Proxy) startTLSServer() {
 			log.Error().Msgf("Failed to accept TLS connection: %v", err)
 			continue
 		}
+		log.Info().Msgf("TLS connection accepted from %s", conn.RemoteAddr())
 		go p.handleTLSClient(conn)
 	}
 }
