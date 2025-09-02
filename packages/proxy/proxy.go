@@ -364,7 +364,6 @@ func (p *Proxy) startTLSServer() {
 			log.Error().Msgf("Failed to accept TLS connection: %v", err)
 			continue
 		}
-		log.Info().Msgf("TLS connection accepted from %s", conn.RemoteAddr())
 		go p.handleTLSClient(conn)
 	}
 }
@@ -376,12 +375,18 @@ func (p *Proxy) handleTLSClient(conn net.Conn) {
 	tlsConn := tls.Server(conn, p.tlsConfig)
 	defer tlsConn.Close()
 
+	// Set handshake timeout to avoid hanging on slow/malicious connections
+	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+
 	// Force TLS handshake
 	err := tlsConn.Handshake()
 	if err != nil {
-		log.Error().Msgf("TLS handshake failed: %v", err)
+		log.Debug().Msgf("TLS handshake failed from %s: %v", conn.RemoteAddr(), err)
 		return
 	}
+
+	// Clear deadline for actual data transfer
+	tlsConn.SetDeadline(time.Time{})
 
 	p.handleClient(tlsConn)
 }
