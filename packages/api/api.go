@@ -39,6 +39,7 @@ const (
 	operationCallRegisterGatewayIdentityV1         = "CallRegisterGatewayIdentityV1"
 	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
+	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
 	operationCallRegisterInstanceProxy             = "CallRegisterInstanceProxy"
 	operationCallRegisterOrgProxy                  = "CallRegisterOrgProxy"
@@ -650,6 +651,23 @@ func CallGatewayHeartBeatV1(httpClient *resty.Client) error {
 
 	if response.IsError() {
 		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV1, response, nil)
+	}
+
+	return nil
+}
+
+func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/gateways/heartbeat", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallGatewayHeartBeatV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV2, response, nil)
 	}
 
 	return nil

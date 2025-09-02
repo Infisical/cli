@@ -91,10 +91,15 @@ var networkProxyCmd = &cobra.Command{
 				cancelCmd()
 				cancelSdk()
 
-				// If we get a second signal, force exit
-				<-sigCh
-				log.Warn().Msgf("Force exit triggered")
-				os.Exit(1)
+				// Give graceful shutdown 10 seconds, then force exit on second signal
+				select {
+				case <-sigCh:
+					log.Warn().Msg("Second signal received, force exit triggered")
+					os.Exit(1)
+				case <-time.After(10 * time.Second):
+					log.Info().Msg("Graceful shutdown completed")
+					os.Exit(0)
+				}
 			}()
 
 			// Token refresh goroutine - runs every 10 seconds
@@ -192,10 +197,15 @@ var networkGatewayCmd = &cobra.Command{
 			cancelCmd()
 			cancelSdk()
 
-			// If we get a second signal, force exit
-			<-sigCh
-			log.Warn().Msgf("Force exit triggered")
-			os.Exit(1)
+			// Give graceful shutdown 10 seconds, then force exit on second signal
+			select {
+			case <-sigCh:
+				log.Warn().Msg("Second signal received, force exit triggered")
+				os.Exit(1)
+			case <-time.After(10 * time.Second):
+				log.Info().Msg("Graceful shutdown completed")
+				os.Exit(0)
+			}
 		}()
 
 		// Token refresh goroutine - runs every 10 seconds

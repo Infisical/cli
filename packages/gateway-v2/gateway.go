@@ -30,6 +30,7 @@ type ForwardMode string
 const (
 	ForwardModeHTTP ForwardMode = "HTTP"
 	ForwardModeTCP  ForwardMode = "TCP"
+	ForwardModePing ForwardMode = "PING"
 )
 
 type ActorType string
@@ -116,9 +117,59 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 	}, nil
 }
 
-// Change the Start method to accept a context
+func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
+	sendHeartbeat := func() {
+		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
+			log.Warn().Msgf("Heartbeat failed: %v", err)
+			select {
+			case errCh <- err:
+			default:
+				log.Warn().Msg("Error channel full, skipping heartbeat error report")
+			}
+		} else {
+			log.Info().Msg("Gateway is reachable by Infisical")
+		}
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			sendHeartbeat()
+		}
+
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sendHeartbeat()
+			}
+		}
+	}()
+}
+
 func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
+
+	errCh := make(chan error, 1)
+	g.registerHeartBeat(ctx, errCh)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case err := <-errCh:
+				log.Warn().Msgf("Heartbeat error received: %v", err)
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -179,6 +230,7 @@ func (g *Gateway) connectAndServe() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %v", err)
 	}
+	log.Info().Msgf("SSH connection established for gateway")
 
 	g.mu.Lock()
 	g.sshClient = client
@@ -193,20 +245,33 @@ func (g *Gateway) connectAndServe() error {
 		client.Close()
 	}()
 
-	log.Info().Msgf("SSH connection established for gateway")
-
 	// Handle incoming channels from the server
 	channels := client.HandleChannelOpen("direct-tcpip")
 	if channels == nil {
 		return fmt.Errorf("failed to handle channel open")
 	}
 
-	// Process incoming channels
-	for newChannel := range channels {
-		go g.handleIncomingChannel(newChannel)
-	}
+	// Monitor for context cancellation and close SSH client
+	go func() {
+		<-g.ctx.Done()
+		log.Info().Msg("Context cancelled, closing SSH connection...")
+		client.Close()
+	}()
 
-	return nil // Connection closed
+	// Process incoming channels with context cancellation support
+	for {
+		select {
+		case <-g.ctx.Done():
+			log.Info().Msg("Context cancelled, stopping channel processing")
+			return g.ctx.Err()
+		case newChannel, ok := <-channels:
+			if !ok {
+				log.Info().Msg("SSH channels closed")
+				return nil
+			}
+			go g.handleIncomingChannel(newChannel)
+		}
+	}
 }
 
 func (g *Gateway) registerGateway() error {
@@ -352,7 +417,6 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 		return fmt.Errorf("host certificate check failed: %v", err)
 	}
 
-	log.Info().Msgf("Host certificate validated successfully for %s", hostname)
 	return nil
 }
 
@@ -400,8 +464,6 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	}
 
-	log.Info().Msgf("mTLS connection established with client")
-
 	// Create reader for the TLS connection
 	reader := bufio.NewReader(tlsConn)
 
@@ -415,10 +477,13 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	log.Info().Msgf("Forward config: %+v", forwardConfig)
 
 	if forwardConfig.Mode == ForwardModeHTTP {
-		handleHTTPProxy(tlsConn, reader, forwardConfig)
+		handleHTTPProxy(g.ctx, tlsConn, reader, forwardConfig)
 		return
 	} else if forwardConfig.Mode == ForwardModeTCP {
-		handleTCPProxy(tlsConn, forwardConfig)
+		handleTCPProxy(g.ctx, tlsConn, forwardConfig)
+		return
+	} else if forwardConfig.Mode == ForwardModePing {
+		handlePing(g.ctx, tlsConn, reader)
 		return
 	}
 }
@@ -452,6 +517,10 @@ func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*
 				}
 			}
 
+			return config, nil
+
+		case "PING":
+			config.Mode = ForwardModePing
 			return config, nil
 
 		default:
