@@ -332,11 +332,23 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 
 	// Store the connection (ensure only one connection per gateway)
 	p.mu.Lock()
-	if existingConn, exists := p.tunnels[gatewayId]; exists {
+	if _, exists := p.tunnels[gatewayId]; exists {
 		p.mu.Unlock()
 		log.Warn().Msgf("Gateway '%s' already has an active connection, rejecting new connection", gatewayId)
-		sshConn.Close()
-		existingConn.Close() // Also close the existing connection to force re-auth
+
+		// Send error message to the new connection before closing
+		go func() {
+			// Send a global request with error information
+			_, _, err := sshConn.SendRequest("duplicate-connection-error", false, []byte(fmt.Sprintf("Gateway '%s' already has an active connection. Only one connection per gateway is allowed.", gatewayId)))
+			if err != nil {
+				log.Debug().Msgf("Failed to send duplicate connection error message to gateway '%s': %v", gatewayId, err)
+			}
+
+			// Give a moment for the message to be sent before closing
+			time.Sleep(1000 * time.Millisecond)
+			sshConn.Close()
+		}()
+
 		return
 	}
 
