@@ -165,11 +165,6 @@ func (p *Proxy) setupSSHServer() error {
 	// Setup SSH server config
 	p.sshConfig = &ssh.ServerConfig{
 		MaxAuthTries: 3,
-		AuthLogCallback: func(conn ssh.ConnMetadata, method string, err error) {
-			if err != nil {
-				log.Warn().Msgf("Auth failed for %s@%s using %s: %v", conn.User(), conn.RemoteAddr(), method, err)
-			}
-		},
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			// Check if this is an SSH certificate
 			cert, ok := key.(*ssh.Certificate)
