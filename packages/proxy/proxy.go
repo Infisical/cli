@@ -164,6 +164,12 @@ func (p *Proxy) setupSSHServer() error {
 
 	// Setup SSH server config
 	p.sshConfig = &ssh.ServerConfig{
+		MaxAuthTries: 3,
+		AuthLogCallback: func(conn ssh.ConnMetadata, method string, err error) {
+			if err != nil {
+				log.Warn().Msgf("Auth failed for %s@%s using %s: %v", conn.User(), conn.RemoteAddr(), method, err)
+			}
+		},
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			// Check if this is an SSH certificate
 			cert, ok := key.(*ssh.Certificate)
@@ -315,7 +321,7 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 	defer conn.Close()
 
 	// SSH handshake
-	sshConn, chans, _, err := ssh.NewServerConn(conn, p.sshConfig)
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, p.sshConfig)
 	if err != nil {
 		log.Error().Msgf("SSH handshake failed: %v", err)
 		return
@@ -324,8 +330,16 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 	gatewayId := sshConn.Permissions.Extensions["gateway-id"]
 	log.Info().Msgf("SSH handshake successful for gateway: %s", gatewayId)
 
-	// Store the connection
+	// Store the connection (ensure only one connection per gateway)
 	p.mu.Lock()
+	if existingConn, exists := p.tunnels[gatewayId]; exists {
+		p.mu.Unlock()
+		log.Warn().Msgf("Gateway '%s' already has an active connection, rejecting new connection", gatewayId)
+		sshConn.Close()
+		existingConn.Close() // Also close the existing connection to force re-auth
+		return
+	}
+
 	p.tunnels[gatewayId] = sshConn
 	p.mu.Unlock()
 
@@ -337,14 +351,34 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 		log.Info().Msgf("Gateway %s disconnected", gatewayId)
 	}()
 
+	// Handle global requests (reject all for security)
+	go func() {
+		for req := range reqs {
+			log.Debug().Msgf("Rejecting global request: %s from gateway %s", req.Type, gatewayId)
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+		}
+	}()
+
+	// Handle channel requests
 	for newChannel := range chans {
 		switch newChannel.ChannelType() {
 		case "session":
+			log.Debug().Msgf("Rejecting session channel from gateway %s", gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no shell access")
 		case "x11":
+			log.Debug().Msgf("Rejecting X11 forwarding from gateway %s", gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no X11 forwarding")
 		case "auth-agent":
+			log.Debug().Msgf("Rejecting auth-agent forwarding from gateway %s", gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no agent forwarding")
+		case "forwarded-tcpip":
+			log.Debug().Msgf("Rejecting forwarded-tcpip from gateway %s", gatewayId)
+			newChannel.Reject(ssh.Prohibited, "no port forwarding")
+		default:
+			log.Warn().Msgf("Rejecting unknown channel type '%s' from gateway %s", newChannel.ChannelType(), gatewayId)
+			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 		}
 	}
 }
