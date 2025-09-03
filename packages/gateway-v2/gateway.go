@@ -225,12 +225,12 @@ func (g *Gateway) connectAndServe() error {
 	}
 
 	// Connect to Proxy server
-	log.Info().Msgf("Connecting to SSH server on %s:%d...", g.certificates.ProxyIP, g.config.SSHPort)
+	log.Info().Msgf("Connecting to proxy server %s on %s:%d...", g.config.ProxyName, g.certificates.ProxyIP, g.config.SSHPort)
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.ProxyIP, g.config.SSHPort), sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %v", err)
 	}
-	log.Info().Msgf("SSH connection established for gateway")
+	log.Info().Msgf("Proxy connection established for gateway")
 
 	g.mu.Lock()
 	g.sshClient = client
@@ -254,7 +254,7 @@ func (g *Gateway) connectAndServe() error {
 	// Monitor for context cancellation and close SSH client
 	go func() {
 		<-g.ctx.Done()
-		log.Info().Msg("Context cancelled, closing SSH connection...")
+		log.Info().Msg("Context cancelled, closing proxy connection...")
 		client.Close()
 	}()
 
