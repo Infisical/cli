@@ -332,11 +332,10 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 
 	// Store the connection (ensure only one connection per gateway)
 	p.mu.Lock()
-	if existingConn, exists := p.tunnels[gatewayId]; exists {
+	if _, exists := p.tunnels[gatewayId]; exists {
 		p.mu.Unlock()
 		log.Warn().Msgf("Gateway '%s' already has an active connection, rejecting new connection", gatewayId)
 		sshConn.Close()
-		existingConn.Close() // Also close the existing connection to force re-auth
 		return
 	}
 
