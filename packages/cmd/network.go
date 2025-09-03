@@ -51,7 +51,7 @@ var networkProxyCmd = &cobra.Command{
 		proxyInstance, err := proxy.NewProxy(&proxy.ProxyConfig{
 			ProxyName: proxyName,
 			SSHPort:   "2222",
-			TLSPort:   "443",
+			TLSPort:   "8443",
 			StaticIP:  ip,
 			Type:      instanceType,
 		})
