@@ -409,7 +409,7 @@ func (p *Proxy) handleTLSClient(conn net.Conn) {
 	defer tlsConn.Close()
 
 	// Set handshake timeout to avoid hanging on slow/malicious connections
-	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+	tlsConn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	// Force TLS handshake
 	err := tlsConn.Handshake()
