@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -83,8 +82,6 @@ type Gateway struct {
 
 	// mTLS server components
 	tlsConfig *tls.Config
-	tlsCACert []byte
-	tlsCAKey  *rsa.PrivateKey
 
 	// Connection management
 	mu          sync.RWMutex
@@ -364,8 +361,13 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
 
+	sshCert, ok := cert.(*ssh.Certificate)
+	if !ok {
+		return nil, fmt.Errorf("parsed key is not an SSH certificate, got type: %T", cert)
+	}
+
 	// Create certificate signer
-	certSigner, err := ssh.NewCertSigner(cert.(*ssh.Certificate), privateKey)
+	certSigner, err := ssh.NewCertSigner(sshCert, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create certificate signer: %v", err)
 	}
@@ -432,19 +434,6 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 }
 
 func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
-	var req struct {
-		Host       string
-		Port       uint32
-		OriginHost string
-		OriginPort uint32
-	}
-
-	if err := ssh.Unmarshal(newChannel.ExtraData(), &req); err != nil {
-		log.Info().Msgf("Failed to parse channel request: %v", err)
-		newChannel.Reject(ssh.Prohibited, "invalid request")
-		return
-	}
-
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
 		log.Info().Msgf("Failed to accept channel: %v", err)

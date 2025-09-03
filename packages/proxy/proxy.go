@@ -437,9 +437,6 @@ func (p *Proxy) handleClient(tlsConn *tls.Conn) {
 		return
 	}
 
-	targetHost := "gateway"
-	targetPort := uint32(22)
-
 	// Get the SSH connection for this agent
 	p.mu.RLock()
 	conn, exists := p.tunnels[gatewayId]
@@ -453,15 +450,7 @@ func (p *Proxy) handleClient(tlsConn *tls.Conn) {
 
 	log.Info().Msgf("Routing TCP connection to gateway: %s", gatewayId)
 
-	// Open SSH channel to connect to agent's local service through the tunnel
-	payload := struct {
-		Host string
-		Port uint32
-		_    string
-		_    uint32
-	}{targetHost, targetPort, "", 0}
-
-	channel, _, err := conn.OpenChannel("direct-tcpip", ssh.Marshal(&payload))
+	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
 		log.Error().Msgf("Failed to connect to agent: %v", err)
 		tlsConn.Write([]byte("ERROR: Failed to connect to agent\n"))
