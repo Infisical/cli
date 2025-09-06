@@ -704,12 +704,12 @@ type BootstrapUser struct {
 	SuperAdmin bool   `json:"superAdmin"`
 }
 
-type RegisterProxyRequest struct {
+type RegisterRelayRequest struct {
 	IP   string `json:"ip"`
 	Name string `json:"name"`
 }
 
-type RegisterProxyResponse struct {
+type RegisterRelayResponse struct {
 	PKI struct {
 		ServerCertificate      string `json:"serverCertificate"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
@@ -722,15 +722,15 @@ type RegisterProxyResponse struct {
 	} `json:"ssh"`
 }
 
-type RegisterGatewayRequest struct {
-	ProxyName string `json:"proxyName"`
+type RegisterConnectorRequest struct {
+	RelayName string `json:"relayName"`
 	Name      string `json:"name"`
 }
 
-type RegisterGatewayResponse struct {
-	GatewayID string `json:"gatewayId"`
-	ProxyIP   string `json:"proxyIp"`
-	PKI       struct {
+type RegisterConnectorResponse struct {
+	ConnectorID string `json:"connectorId"`
+	RelayIP     string `json:"relayIp"`
+	PKI         struct {
 		ServerCertificate      string `json:"serverCertificate"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
 		ClientCertificateChain string `json:"clientCertificateChain"`

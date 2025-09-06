@@ -1,4 +1,4 @@
-package gatewayv2
+package connector
 
 import (
 	"fmt"
@@ -11,14 +11,14 @@ import (
 )
 
 const systemdServiceTemplate = `[Unit]
-Description=Infisical Gateway Service
+Description=Infisical Connector Service
 After=network.target
 
 [Service]
 Type=notify
 NotifyAccess=all
-EnvironmentFile=/etc/infisical/gateway.conf
-ExecStart=infisical network gateway
+EnvironmentFile=/etc/infisical/connector.conf
+ExecStart=infisical connector start
 Restart=on-failure
 InaccessibleDirectories=/home
 PrivateTmp=yes
@@ -32,7 +32,7 @@ LimitRTTIME=7000000
 WantedBy=multi-user.target
 `
 
-func InstallGatewaySystemdService(token string, domain string, name string, proxyName string) error {
+func InstallConnectorSystemdService(token string, domain string, name string, relayName string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -54,18 +54,18 @@ func InstallGatewaySystemdService(token string, domain string, name string, prox
 	}
 
 	if name != "" {
-		configContent += fmt.Sprintf("%s=%s\n", GATEWAY_NAME_ENV_NAME, name)
+		configContent += fmt.Sprintf("%s=%s\n", CONNECTOR_NAME_ENV_NAME, name)
 	}
-	if proxyName != "" {
-		configContent += fmt.Sprintf("%s=%s\n", PROXY_NAME_ENV_NAME, proxyName)
+	if relayName != "" {
+		configContent += fmt.Sprintf("%s=%s\n", RELAY_NAME_ENV_NAME, relayName)
 	}
 
-	configPath := filepath.Join(configDir, "gateway.conf")
+	configPath := filepath.Join(configDir, "connector.conf")
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %v", err)
 	}
 
-	servicePath := "/etc/systemd/system/infisical-gateway.service"
+	servicePath := "/etc/systemd/system/infisical-connector.service"
 	if err := os.WriteFile(servicePath, []byte(systemdServiceTemplate), 0644); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
 	}
@@ -76,13 +76,13 @@ func InstallGatewaySystemdService(token string, domain string, name string, prox
 	}
 
 	log.Info().Msg("Successfully installed systemd service")
-	log.Info().Msg("To start the service, run: sudo systemctl start infisical-gateway")
-	log.Info().Msg("To enable the service on boot, run: sudo systemctl enable infisical-gateway")
+	log.Info().Msg("To start the service, run: sudo systemctl start infisical-connector")
+	log.Info().Msg("To enable the service on boot, run: sudo systemctl enable infisical-connector")
 
 	return nil
 }
 
-func UninstallGatewaySystemdService() error {
+func UninstallConnectorSystemdService() error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service uninstallation - not on Linux")
 		return nil
@@ -94,25 +94,25 @@ func UninstallGatewaySystemdService() error {
 	}
 
 	// Stop the service if it's running
-	stopCmd := exec.Command("systemctl", "stop", "infisical-gateway")
+	stopCmd := exec.Command("systemctl", "stop", "infisical-connector")
 	if err := stopCmd.Run(); err != nil {
 		log.Warn().Msgf("Failed to stop service: %v", err)
 	}
 
 	// Disable the service
-	disableCmd := exec.Command("systemctl", "disable", "infisical-gateway")
+	disableCmd := exec.Command("systemctl", "disable", "infisical-connector")
 	if err := disableCmd.Run(); err != nil {
 		log.Warn().Msgf("Failed to disable service: %v", err)
 	}
 
 	// Remove the service file
-	servicePath := "/etc/systemd/system/infisical-gateway.service"
+	servicePath := "/etc/systemd/system/infisical-connector.service"
 	if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove systemd service file: %v", err)
 	}
 
 	// Remove the configuration file
-	configPath := "/etc/infisical/gateway.conf"
+	configPath := "/etc/infisical/connector.conf"
 	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove config file: %v", err)
 	}
@@ -123,6 +123,6 @@ func UninstallGatewaySystemdService() error {
 		return fmt.Errorf("failed to reload systemd: %v", err)
 	}
 
-	log.Info().Msg("Successfully uninstalled Infisical Gateway systemd service")
+	log.Info().Msg("Successfully uninstalled Infisical Connector systemd service")
 	return nil
 }

@@ -1,4 +1,4 @@
-package gatewayv2
+package connector
 
 import (
 	"bufio"
@@ -18,7 +18,7 @@ import (
 )
 
 func buildHttpInternalServerError(message string) string {
-	return fmt.Sprintf("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n{\"message\": \"gateway: %s\"}", message)
+	return fmt.Sprintf("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n{\"message\": \"connector: %s\"}", message)
 }
 
 func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
@@ -39,7 +39,7 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 			caCertPool := x509.NewCertPool()
 			if caCertPool.AppendCertsFromPEM(caCert) {
 				tlsConfig.RootCAs = caCertPool
-				log.Info().Msg("Using provided CA certificate from gateway client")
+				log.Info().Msg("Using provided CA certificate from connector client")
 			} else {
 				log.Error().Msg("Failed to parse provided CA certificate")
 			}
@@ -98,15 +98,15 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 
 		// Only platform actor can perform privileged actions
 		if actionHeader != "" && forwardConfig.ActorType == ActorTypePlatform {
-			if actionHeader == HttpProxyActionInjectGatewayK8sServiceAccountToken {
+			if actionHeader == HttpProxyActionInjectConnectorK8sServiceAccountToken {
 				token, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
 				if err != nil {
 					conn.Write([]byte(buildHttpInternalServerError("failed to read k8s sa auth token")))
 					continue // Continue to next request instead of returning
 				}
 				req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", string(token)))
-				log.Info().Msgf("Injected gateway k8s SA auth token in request to %s", targetURL)
-			} else if actionHeader == HttpProxyActionUseGatewayK8sServiceAccount {
+				log.Info().Msgf("Injected connector k8s SA auth token in request to %s", targetURL)
+			} else if actionHeader == HttpProxyActionUseConnectorK8sServiceAccount {
 				// will work without a target URL set
 				// set the ca cert to the pod's k8s service account ca cert:
 				caCert, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)

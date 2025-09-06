@@ -1,4 +1,4 @@
-package gatewayv2
+package connector
 
 import (
 	"bufio"
@@ -39,8 +39,8 @@ const (
 	ActorTypeUser     ActorType = "user"
 )
 
-const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
-const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
+const CONNECTOR_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
+const CONNECTOR_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
 
 // ForwardConfig contains the configuration for forwarding
 type ForwardConfig struct {
@@ -62,23 +62,23 @@ type ActorDetails struct {
 	Type string `json:"type"`
 }
 
-type GatewayConfig struct {
+type ConnectorConfig struct {
 	Name           string
-	ProxyName      string
+	RelayName      string
 	IdentityToken  string
 	SSHPort        int
 	ReconnectDelay time.Duration
 }
 
-type Gateway struct {
-	GatewayID string
+type Connector struct {
+	ConnectorID string
 
 	httpClient *resty.Client
-	config     *GatewayConfig
+	config     *ConnectorConfig
 	sshClient  *ssh.Client
 
 	// Certificate storage
-	certificates *api.RegisterGatewayResponse
+	certificates *api.RegisterConnectorResponse
 
 	// mTLS server components
 	tlsConfig *tls.Config
@@ -90,8 +90,8 @@ type Gateway struct {
 	cancel      context.CancelFunc
 }
 
-// NewGateway creates a new gateway instance
-func NewGateway(config *GatewayConfig) (*Gateway, error) {
+// NewConnector creates a new connector instance
+func NewConnector(config *ConnectorConfig) (*Connector, error) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return nil, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
@@ -106,7 +106,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		config.SSHPort = 2222
 	}
 
-	return &Gateway{
+	return &Connector{
 		httpClient: httpClient,
 		config:     config,
 		ctx:        ctx,
@@ -114,9 +114,9 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 	}, nil
 }
 
-func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
+func (c *Connector) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() {
-		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
+		if err := api.CallConnectorHeartBeat(c.httpClient); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
 			select {
 			case errCh <- err:
@@ -124,7 +124,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 				log.Warn().Msg("Error channel full, skipping heartbeat error report")
 			}
 		} else {
-			log.Info().Msg("Gateway is reachable by Infisical")
+			log.Info().Msg("Connector is reachable by Infisical")
 		}
 	}
 
@@ -150,14 +150,14 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	}()
 }
 
-func (g *Gateway) Start(ctx context.Context) error {
-	log.Info().Msgf("Starting gateway")
+func (c *Connector) Start(ctx context.Context) error {
+	log.Info().Msgf("Starting connector")
 
 	errCh := make(chan error, 1)
-	g.registerHeartBeat(ctx, errCh)
+	c.registerHeartBeat(ctx, errCh)
 
 	// Start certificate renewal goroutine
-	go g.startCertificateRenewal(ctx)
+	go c.startCertificateRenewal(ctx)
 
 	go func() {
 		for {
@@ -173,15 +173,15 @@ func (g *Gateway) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msgf("Gateway stopped by context cancellation")
+			log.Info().Msgf("Connector stopped by context cancellation")
 			return nil
 		default:
-			if err := g.connectAndServe(); err != nil {
-				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+			if err := c.connectAndServe(); err != nil {
+				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, c.config.ReconnectDelay)
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case <-time.After(g.config.ReconnectDelay):
+				case <-time.After(c.config.ReconnectDelay):
 					continue
 				}
 			}
@@ -197,51 +197,51 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 }
 
-func (g *Gateway) SetToken(token string) {
-	g.httpClient.SetAuthToken(token)
+func (c *Connector) SetToken(token string) {
+	c.httpClient.SetAuthToken(token)
 }
 
-func (g *Gateway) Stop() {
-	g.cancel()
+func (c *Connector) Stop() {
+	c.cancel()
 
-	g.mu.Lock()
-	if g.sshClient != nil {
-		g.sshClient.Close()
-		g.sshClient = nil
+	c.mu.Lock()
+	if c.sshClient != nil {
+		c.sshClient.Close()
+		c.sshClient = nil
 	}
-	g.isConnected = false
-	g.mu.Unlock()
+	c.isConnected = false
+	c.mu.Unlock()
 }
 
-func (g *Gateway) connectAndServe() error {
-	if err := g.registerGateway(); err != nil {
-		return fmt.Errorf("failed to register gateway: %v", err)
+func (c *Connector) connectAndServe() error {
+	if err := c.registerConnector(); err != nil {
+		return fmt.Errorf("failed to register connector: %v", err)
 	}
 
 	// Create SSH client config
-	sshConfig, err := g.createSSHConfig()
+	sshConfig, err := c.createSSHConfig()
 	if err != nil {
 		return fmt.Errorf("failed to create SSH config: %v", err)
 	}
 
-	// Connect to Proxy server
-	log.Info().Msgf("Connecting to proxy server %s on %s:%d...", g.config.ProxyName, g.certificates.ProxyIP, g.config.SSHPort)
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.ProxyIP, g.config.SSHPort), sshConfig)
+	// Connect to Relay server
+	log.Info().Msgf("Connecting to relay server %s on %s:%d...", c.config.RelayName, c.certificates.RelayIP, c.config.SSHPort)
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", c.certificates.RelayIP, c.config.SSHPort), sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %v", err)
 	}
-	log.Info().Msgf("Proxy connection established for gateway")
+	log.Info().Msgf("Relay connection established for connector")
 
-	g.mu.Lock()
-	g.sshClient = client
-	g.isConnected = true
-	g.mu.Unlock()
+	c.mu.Lock()
+	c.sshClient = client
+	c.isConnected = true
+	c.mu.Unlock()
 
 	defer func() {
-		g.mu.Lock()
-		g.sshClient = nil
-		g.isConnected = false
-		g.mu.Unlock()
+		c.mu.Lock()
+		c.sshClient = nil
+		c.isConnected = false
+		c.mu.Unlock()
 		client.Close()
 	}()
 
@@ -253,57 +253,57 @@ func (g *Gateway) connectAndServe() error {
 
 	// Monitor for context cancellation and close SSH client
 	go func() {
-		<-g.ctx.Done()
-		log.Info().Msg("Context cancelled, closing proxy connection...")
+		<-c.ctx.Done()
+		log.Info().Msg("Context cancelled, closing relay connection...")
 		client.Close()
 	}()
 
 	// Process incoming channels with context cancellation support
 	for {
 		select {
-		case <-g.ctx.Done():
+		case <-c.ctx.Done():
 			log.Info().Msg("Context cancelled, stopping channel processing")
-			return g.ctx.Err()
+			return c.ctx.Err()
 		case newChannel, ok := <-channels:
 			if !ok {
 				log.Info().Msg("SSH channels closed")
 				return nil
 			}
-			go g.handleIncomingChannel(newChannel)
+			go c.handleIncomingChannel(newChannel)
 		}
 	}
 }
 
-func (g *Gateway) registerGateway() error {
-	body := api.RegisterGatewayRequest{
-		ProxyName: g.config.ProxyName,
-		Name:      g.config.Name,
+func (c *Connector) registerConnector() error {
+	body := api.RegisterConnectorRequest{
+		RelayName: c.config.RelayName,
+		Name:      c.config.Name,
 	}
 
-	certResp, err := api.CallRegisterGateway(g.httpClient, body)
+	certResp, err := api.CallRegisterConnector(c.httpClient, body)
 	if err != nil {
-		return fmt.Errorf("failed to register gateway: %v", err)
+		return fmt.Errorf("failed to register connector: %v", err)
 	}
 
-	g.GatewayID = certResp.GatewayID
-	g.certificates = &certResp
-	log.Info().Msgf("Successfully registered gateway and received certificates")
+	c.ConnectorID = certResp.ConnectorID
+	c.certificates = &certResp
+	log.Info().Msgf("Successfully registered connector and received certificates")
 
 	// Setup mTLS config
-	if err := g.setupTLSConfig(); err != nil {
+	if err := c.setupTLSConfig(); err != nil {
 		return fmt.Errorf("failed to setup TLS config: %v", err)
 	}
 
 	return nil
 }
 
-func (g *Gateway) setupTLSConfig() error {
-	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
+func (c *Connector) setupTLSConfig() error {
+	serverCertBlock, _ := pem.Decode([]byte(c.certificates.PKI.ServerCertificate))
 	if serverCertBlock == nil {
 		return fmt.Errorf("failed to decode server certificate")
 	}
 
-	serverKeyBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerPrivateKey))
+	serverKeyBlock, _ := pem.Decode([]byte(c.certificates.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
 		return fmt.Errorf("failed to decode server private key")
 	}
@@ -315,7 +315,7 @@ func (g *Gateway) setupTLSConfig() error {
 
 	clientCAPool := x509.NewCertPool()
 	var chainCerts [][]byte
-	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
+	chainData := []byte(c.certificates.PKI.ClientCertificateChain)
 	for {
 		block, rest := pem.Decode(chainData)
 		if block == nil {
@@ -334,7 +334,7 @@ func (g *Gateway) setupTLSConfig() error {
 		clientCAPool.AddCert(cert)
 	}
 
-	g.tlsConfig = &tls.Config{
+	c.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{serverCertBlock.Bytes},
@@ -349,14 +349,14 @@ func (g *Gateway) setupTLSConfig() error {
 	return nil
 }
 
-func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
-	privateKey, err := ssh.ParsePrivateKey([]byte(g.certificates.SSH.ClientPrivateKey))
+func (c *Connector) createSSHConfig() (*ssh.ClientConfig, error) {
+	privateKey, err := ssh.ParsePrivateKey([]byte(c.certificates.SSH.ClientPrivateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH private key: %v", err)
 	}
 
 	// Parse certificate
-	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ClientCertificate))
+	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.certificates.SSH.ClientCertificate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
@@ -374,11 +374,11 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 
 	// Create SSH client config
 	config := &ssh.ClientConfig{
-		User: g.GatewayID,
+		User: c.ConnectorID,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(certSigner),
 		},
-		HostKeyCallback: g.createHostKeyCallback(),
+		HostKeyCallback: c.createHostKeyCallback(),
 		Timeout:         30 * time.Second,
 		Config: ssh.Config{
 			KeyExchanges: []string{
@@ -401,8 +401,8 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 	return config, nil
 }
 
-func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
-	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ServerCAPublicKey))
+func (c *Connector) createHostKeyCallback() ssh.HostKeyCallback {
+	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.certificates.SSH.ServerCAPublicKey))
 	if err != nil {
 		return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			return fmt.Errorf("failed to parse CA public key: %v", err)
@@ -415,11 +415,11 @@ func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
 			return fmt.Errorf("host certificates required, raw host keys not allowed")
 		}
 
-		return g.validateHostCertificate(cert, hostname, caKey)
+		return c.validateHostCertificate(cert, hostname, caKey)
 	}
 }
 
-func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string, caKey ssh.PublicKey) error {
+func (c *Connector) validateHostCertificate(cert *ssh.Certificate, hostname string, caKey ssh.PublicKey) error {
 	checker := &ssh.CertChecker{
 		IsHostAuthority: func(auth ssh.PublicKey, address string) bool {
 			return bytes.Equal(auth.Marshal(), caKey.Marshal())
@@ -433,7 +433,7 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 	return nil
 }
 
-func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
+func (c *Connector) handleIncomingChannel(newChannel ssh.NewChannel) {
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
 		log.Info().Msgf("Failed to accept channel: %v", err)
@@ -444,7 +444,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	go ssh.DiscardRequests(requests)
 
 	// Create mTLS server configuration
-	tlsConfig := g.tlsConfig
+	tlsConfig := c.tlsConfig
 	if tlsConfig == nil {
 		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
 		return
@@ -468,7 +468,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	reader := bufio.NewReader(tlsConn)
 
 	// Get the forward mode here
-	forwardConfig, err := g.parseForwardConfig(tlsConn, reader)
+	forwardConfig, err := c.parseForwardConfig(tlsConn, reader)
 	if err != nil {
 		log.Info().Msgf("Failed to parse forward command: %v", err)
 		return
@@ -477,21 +477,21 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	log.Info().Msgf("Forward config: %+v", forwardConfig)
 
 	if forwardConfig.Mode == ForwardModeHTTP {
-		handleHTTPProxy(g.ctx, tlsConn, reader, forwardConfig)
+		handleHTTPProxy(c.ctx, tlsConn, reader, forwardConfig)
 		return
 	} else if forwardConfig.Mode == ForwardModeTCP {
-		handleTCPProxy(g.ctx, tlsConn, forwardConfig)
+		handleTCPProxy(c.ctx, tlsConn, forwardConfig)
 		return
 	} else if forwardConfig.Mode == ForwardModePing {
-		handlePing(g.ctx, tlsConn, reader)
+		handlePing(c.ctx, tlsConn, reader)
 		return
 	}
 }
 
-func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*ForwardConfig, error) {
+func (c *Connector) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*ForwardConfig, error) {
 	config := &ForwardConfig{}
 
-	if err := g.parseDetailsFromCertificate(tlsConn, config); err != nil {
+	if err := c.parseDetailsFromCertificate(tlsConn, config); err != nil {
 		return nil, fmt.Errorf("failed to parse routing info from certificate: %v", err)
 	}
 
@@ -512,7 +512,7 @@ func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*
 		case "FORWARD-HTTP":
 			config.Mode = ForwardModeHTTP
 			if args != "" {
-				if err := g.parseForwardHTTPParams(args, config); err != nil {
+				if err := c.parseForwardHTTPParams(args, config); err != nil {
 					return nil, fmt.Errorf("failed to parse HTTP parameters: %v", err)
 				}
 			}
@@ -529,7 +529,7 @@ func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*
 	}
 }
 
-func (g *Gateway) parseForwardHTTPParams(params string, config *ForwardConfig) error {
+func (c *Connector) parseForwardHTTPParams(params string, config *ForwardConfig) error {
 	parts := strings.Fields(params)
 
 	for _, part := range parts {
@@ -553,7 +553,7 @@ func (g *Gateway) parseForwardHTTPParams(params string, config *ForwardConfig) e
 	return nil
 }
 
-func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *ForwardConfig) error {
+func (c *Connector) parseDetailsFromCertificate(tlsConn *tls.Conn, config *ForwardConfig) error {
 	// Get the peer certificates
 	state := tlsConn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
@@ -564,7 +564,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 
 	for _, ext := range clientCert.Extensions {
 		// Extract target host and port from client certificate custom extension
-		if ext.Id.String() == GATEWAY_ROUTING_INFO_OID {
+		if ext.Id.String() == CONNECTOR_ROUTING_INFO_OID {
 			var routingInfo RoutingInfo
 			if err := json.Unmarshal(ext.Value, &routingInfo); err != nil {
 				return fmt.Errorf("failed to parse routing info JSON: %v", err)
@@ -574,7 +574,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 			config.TargetPort = routingInfo.TargetPort
 		}
 		// Extract actor type from client certificate custom extension
-		if ext.Id.String() == GATEWAY_ACTOR_OID {
+		if ext.Id.String() == CONNECTOR_ACTOR_OID {
 			var actorDetails ActorDetails
 			if err := json.Unmarshal(ext.Value, &actorDetails); err != nil {
 				return fmt.Errorf("failed to parse actor details JSON: %v", err)
@@ -624,32 +624,32 @@ func (vc *virtualConnection) SetWriteDeadline(t time.Time) error {
 }
 
 // startCertificateRenewal runs a background process to renew certificates every 10 days
-func (g *Gateway) startCertificateRenewal(ctx context.Context) {
-	log.Info().Msg("Starting gateway certificate renewal goroutine")
+func (c *Connector) startCertificateRenewal(ctx context.Context) {
+	log.Info().Msg("Starting connector certificate renewal goroutine")
 	ticker := time.NewTicker(10 * 24 * time.Hour)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("Gateway certificate renewal goroutine stopping...")
+			log.Info().Msg("Connector certificate renewal goroutine stopping...")
 			return
 		case <-ticker.C:
-			log.Info().Msg("Renewing gateway certificates...")
-			if err := g.renewCertificates(); err != nil {
-				log.Error().Msgf("Failed to renew gateway certificates: %v", err)
+			log.Info().Msg("Renewing connector certificates...")
+			if err := c.renewCertificates(); err != nil {
+				log.Error().Msgf("Failed to renew connector certificates: %v", err)
 			} else {
-				log.Info().Msg("Gateway certificates renewed successfully")
+				log.Info().Msg("Connector certificates renewed successfully")
 			}
 		}
 	}
 }
 
-// renewCertificates fetches new certificates and updates the gateway configurations
-func (g *Gateway) renewCertificates() error {
-	// Re-register gateway to get fresh certificates
-	if err := g.registerGateway(); err != nil {
-		return fmt.Errorf("failed to register gateway: %v", err)
+// renewCertificates fetches new certificates and updates the connector configurations
+func (c *Connector) renewCertificates() error {
+	// Re-register connector to get fresh certificates
+	if err := c.registerConnector(); err != nil {
+		return fmt.Errorf("failed to register connector: %v", err)
 	}
 
 	return nil
