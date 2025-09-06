@@ -703,3 +703,41 @@ type BootstrapUser struct {
 	Username   string `json:"username"`
 	SuperAdmin bool   `json:"superAdmin"`
 }
+
+type RegisterRelayRequest struct {
+	IP   string `json:"ip"`
+	Name string `json:"name"`
+}
+
+type RegisterRelayResponse struct {
+	PKI struct {
+		ServerCertificate      string `json:"serverCertificate"`
+		ServerPrivateKey       string `json:"serverPrivateKey"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
+	} `json:"pki"`
+	SSH struct {
+		ServerCertificate string `json:"serverCertificate"`
+		ServerPrivateKey  string `json:"serverPrivateKey"`
+		ClientCAPublicKey string `json:"clientCAPublicKey"`
+	} `json:"ssh"`
+}
+
+type RegisterConnectorRequest struct {
+	RelayName string `json:"relayName"`
+	Name      string `json:"name"`
+}
+
+type RegisterConnectorResponse struct {
+	ConnectorID string `json:"connectorId"`
+	RelayIP     string `json:"relayIp"`
+	PKI         struct {
+		ServerCertificate      string `json:"serverCertificate"`
+		ServerPrivateKey       string `json:"serverPrivateKey"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
+	} `json:"pki"`
+	SSH struct {
+		ClientCertificate string `json:"clientCertificate"`
+		ClientPrivateKey  string `json:"clientPrivateKey"`
+		ServerCAPublicKey string `json:"serverCAPublicKey"`
+	} `json:"ssh"`
+}
