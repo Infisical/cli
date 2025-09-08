@@ -225,8 +225,8 @@ func (g *Gateway) connectAndServe() error {
 	}
 
 	// Connect to Relay server
-	log.Info().Msgf("Connecting to relay server %s on %s:%d...", g.config.RelayName, g.certificates.RelayIP, g.config.SSHPort)
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayIP, g.config.SSHPort), sshConfig)
+	log.Info().Msgf("Connecting to relay server %s on %s:%d...", g.config.RelayName, g.certificates.RelayHost, g.config.SSHPort)
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %v", err)
 	}

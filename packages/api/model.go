@@ -729,7 +729,7 @@ type RegisterGatewayRequest struct {
 
 type RegisterGatewayResponse struct {
 	GatewayID string `json:"gatewayId"`
-	RelayIP   string `json:"relayIp"`
+	RelayHost string `json:"relayHost"`
 	PKI       struct {
 		ServerCertificate      string `json:"serverCertificate"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
