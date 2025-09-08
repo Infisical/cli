@@ -32,7 +32,7 @@ type RelayConfig struct {
 	TLSPort string
 
 	// Network Configuration
-	StaticIP string
+	Host string
 }
 
 type Relay struct {
@@ -115,7 +115,7 @@ func (r *Relay) Start(ctx context.Context) error {
 
 func (r *Relay) registerRelay() error {
 	body := api.RegisterRelayRequest{
-		IP:   r.config.StaticIP,
+		Host: r.config.Host,
 		Name: r.config.RelayName,
 	}
 

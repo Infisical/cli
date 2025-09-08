@@ -705,7 +705,7 @@ type BootstrapUser struct {
 }
 
 type RegisterRelayRequest struct {
-	IP   string `json:"ip"`
+	Host string `json:"host"`
 	Name string `json:"name"`
 }
 

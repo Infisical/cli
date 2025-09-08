@@ -37,9 +37,9 @@ var relayStartCmd = &cobra.Command{
 			util.HandleError(err, "unable to get name flag")
 		}
 
-		ip, err := cmd.Flags().GetString("ip")
-		if err != nil || ip == "" {
-			util.HandleError(err, "unable to get ip flag")
+		host, err := cmd.Flags().GetString("host")
+		if err != nil || host == "" {
+			util.HandleError(err, "unable to get host flag")
 		}
 
 		instanceType, err := cmd.Flags().GetString("type")
@@ -51,7 +51,7 @@ var relayStartCmd = &cobra.Command{
 			RelayName: relayName,
 			SSHPort:   "2222",
 			TLSPort:   "8443",
-			StaticIP:  ip,
+			Host:      host,
 			Type:      instanceType,
 		})
 
@@ -139,7 +139,7 @@ var relayStartCmd = &cobra.Command{
 
 func init() {
 	relayStartCmd.Flags().String("type", "org", "The type of relay to run. Must be either 'instance' or 'org'")
-	relayStartCmd.Flags().String("ip", "", "The IP address of the relay")
+	relayStartCmd.Flags().String("host", "", "The IP or hostname for the relay")
 	relayStartCmd.Flags().String("name", "", "The name of the relay")
 	relayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
 	relayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
