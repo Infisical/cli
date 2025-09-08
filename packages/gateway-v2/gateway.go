@@ -64,7 +64,7 @@ type ActorDetails struct {
 
 type GatewayConfig struct {
 	Name           string
-	ProxyName      string
+	RelayName      string
 	IdentityToken  string
 	SSHPort        int
 	ReconnectDelay time.Duration
@@ -224,13 +224,13 @@ func (g *Gateway) connectAndServe() error {
 		return fmt.Errorf("failed to create SSH config: %v", err)
 	}
 
-	// Connect to Proxy server
-	log.Info().Msgf("Connecting to proxy server %s on %s:%d...", g.config.ProxyName, g.certificates.ProxyIP, g.config.SSHPort)
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.ProxyIP, g.config.SSHPort), sshConfig)
+	// Connect to Relay server
+	log.Info().Msgf("Connecting to relay server %s on %s:%d...", g.config.RelayName, g.certificates.RelayIP, g.config.SSHPort)
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayIP, g.config.SSHPort), sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %v", err)
 	}
-	log.Info().Msgf("Proxy connection established for gateway")
+	log.Info().Msgf("Relay connection established for gateway")
 
 	g.mu.Lock()
 	g.sshClient = client
@@ -254,7 +254,7 @@ func (g *Gateway) connectAndServe() error {
 	// Monitor for context cancellation and close SSH client
 	go func() {
 		<-g.ctx.Done()
-		log.Info().Msg("Context cancelled, closing proxy connection...")
+		log.Info().Msg("Context cancelled, closing relay connection...")
 		client.Close()
 	}()
 
@@ -276,7 +276,7 @@ func (g *Gateway) connectAndServe() error {
 
 func (g *Gateway) registerGateway() error {
 	body := api.RegisterGatewayRequest{
-		ProxyName: g.config.ProxyName,
+		RelayName: g.config.RelayName,
 		Name:      g.config.Name,
 	}
 

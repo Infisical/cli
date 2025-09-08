@@ -41,8 +41,8 @@ const (
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
-	operationCallRegisterInstanceProxy             = "CallRegisterInstanceProxy"
-	operationCallRegisterOrgProxy                  = "CallRegisterOrgProxy"
+	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
+	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 )
 
@@ -693,41 +693,41 @@ func CallBootstrapInstance(httpClient *resty.Client, request BootstrapInstanceRe
 	return resBody, nil
 }
 
-func CallRegisterInstanceProxy(httpClient *resty.Client, request RegisterProxyRequest) (RegisterProxyResponse, error) {
-	var resBody RegisterProxyResponse
+func CallRegisterInstanceRelay(httpClient *resty.Client, request RegisterRelayRequest) (RegisterRelayResponse, error) {
+	var resBody RegisterRelayResponse
 	response, err := httpClient.
 		R().
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/proxies/register-instance-proxy", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v1/relays/register-instance-relay", config.INFISICAL_URL))
 
 	if err != nil {
-		return RegisterProxyResponse{}, NewGenericRequestError(operationCallRegisterInstanceProxy, err)
+		return RegisterRelayResponse{}, NewGenericRequestError(operationCallRegisterInstanceRelay, err)
 	}
 
 	if response.IsError() {
-		return RegisterProxyResponse{}, NewAPIErrorWithResponse(operationCallRegisterInstanceProxy, response, nil)
+		return RegisterRelayResponse{}, NewAPIErrorWithResponse(operationCallRegisterInstanceRelay, response, nil)
 	}
 
 	return resBody, nil
 }
 
-func CallRegisterProxy(httpClient *resty.Client, request RegisterProxyRequest) (RegisterProxyResponse, error) {
-	var resBody RegisterProxyResponse
+func CallRegisterRelay(httpClient *resty.Client, request RegisterRelayRequest) (RegisterRelayResponse, error) {
+	var resBody RegisterRelayResponse
 	response, err := httpClient.
 		R().
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/proxies/register-org-proxy", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v1/relays/register-org-relay", config.INFISICAL_URL))
 
 	if err != nil {
-		return RegisterProxyResponse{}, NewGenericRequestError(operationCallRegisterOrgProxy, err)
+		return RegisterRelayResponse{}, NewGenericRequestError(operationCallRegisterOrgRelay, err)
 	}
 
 	if response.IsError() {
-		return RegisterProxyResponse{}, NewAPIErrorWithResponse(operationCallRegisterOrgProxy, response, nil)
+		return RegisterRelayResponse{}, NewAPIErrorWithResponse(operationCallRegisterOrgRelay, response, nil)
 	}
 
 	return resBody, nil

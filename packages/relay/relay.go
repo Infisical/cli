@@ -1,4 +1,4 @@
-package proxy
+package relay
 
 import (
 	"bytes"
@@ -20,10 +20,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type ProxyConfig struct {
+type RelayConfig struct {
 	// API Configuration
 	Token     string
-	ProxyName string
+	RelayName string
 
 	Type string
 
@@ -35,12 +35,12 @@ type ProxyConfig struct {
 	StaticIP string
 }
 
-type Proxy struct {
+type Relay struct {
 	httpClient *resty.Client
-	config     *ProxyConfig
+	config     *RelayConfig
 
 	// Certificate storage
-	certificates *api.RegisterProxyResponse
+	certificates *api.RegisterRelayResponse
 
 	// SSH server components
 	sshConfig *ssh.ServerConfig
@@ -60,7 +60,7 @@ type Proxy struct {
 	tlsListener net.Listener
 }
 
-func NewProxy(config *ProxyConfig) (*Proxy, error) {
+func NewRelay(config *RelayConfig) (*Relay, error) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return nil, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
@@ -68,90 +68,90 @@ func NewProxy(config *ProxyConfig) (*Proxy, error) {
 
 	httpClient.SetAuthToken(config.Token)
 
-	return &Proxy{
+	return &Relay{
 		httpClient: httpClient,
 		config:     config,
 		tunnels:    make(map[string]*ssh.ServerConn),
 	}, nil
 }
 
-func (p *Proxy) SetToken(token string) {
-	p.httpClient.SetAuthToken(token)
+func (r *Relay) SetToken(token string) {
+	r.httpClient.SetAuthToken(token)
 }
 
-func (p *Proxy) Start(ctx context.Context) error {
-	if err := p.registerProxy(); err != nil {
-		return fmt.Errorf("failed to register proxy: %v", err)
+func (r *Relay) Start(ctx context.Context) error {
+	if err := r.registerRelay(); err != nil {
+		return fmt.Errorf("failed to register relay: %v", err)
 	}
 
 	// Setup SSH server
-	if err := p.setupSSHServer(); err != nil {
+	if err := r.setupSSHServer(); err != nil {
 		return fmt.Errorf("failed to setup SSH server: %v", err)
 	}
 
 	// Setup TLS server
-	if err := p.setupTLSServer(); err != nil {
+	if err := r.setupTLSServer(); err != nil {
 		return fmt.Errorf("failed to setup TLS server: %v", err)
 	}
 
 	// Start certificate renewal goroutine
-	go p.startCertificateRenewal(ctx)
+	go r.startCertificateRenewal(ctx)
 
 	// Start SSH server
-	go p.startSSHServer()
+	go r.startSSHServer()
 
 	// Start TLS server
-	go p.startTLSServer()
+	go r.startTLSServer()
 
-	log.Info().Msg("Proxy server started successfully")
+	log.Info().Msg("Relay server started successfully")
 
 	// Wait for context cancellation
 	<-ctx.Done()
 
 	// Cleanup
-	p.cleanup()
+	r.cleanup()
 	return nil
 }
 
-func (p *Proxy) registerProxy() error {
-	body := api.RegisterProxyRequest{
-		IP:   p.config.StaticIP,
-		Name: p.config.ProxyName,
+func (r *Relay) registerRelay() error {
+	body := api.RegisterRelayRequest{
+		IP:   r.config.StaticIP,
+		Name: r.config.RelayName,
 	}
 
-	if p.config.Type == "instance" {
-		certResp, err := api.CallRegisterInstanceProxy(p.httpClient, body)
+	if r.config.Type == "instance" {
+		certResp, err := api.CallRegisterInstanceRelay(r.httpClient, body)
 		if err != nil {
-			return fmt.Errorf("failed to register instance proxy: %v", err)
+			return fmt.Errorf("failed to register instance relay: %v", err)
 		}
-		p.certificates = &certResp
+		r.certificates = &certResp
 	} else {
-		certResp, err := api.CallRegisterProxy(p.httpClient, body)
+		certResp, err := api.CallRegisterRelay(r.httpClient, body)
 		if err != nil {
-			return fmt.Errorf("failed to register org proxy: %v", err)
+			return fmt.Errorf("failed to register org relay: %v", err)
 		}
-		p.certificates = &certResp
+		r.certificates = &certResp
 	}
 
-	log.Info().Msg("Successfully registered proxy and received certificates from API")
+	log.Info().Msg("Successfully registered relay and received certificates from API")
 	return nil
 }
 
-func (p *Proxy) setupSSHServer() error {
+func (r *Relay) setupSSHServer() error {
 	// Parse SSH CA public key
-	sshCAPubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(p.certificates.SSH.ClientCAPublicKey))
+	sshCAPubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(r.certificates.SSH.ClientCAPublicKey))
 	if err != nil {
 		return fmt.Errorf("failed to parse SSH CA public key: %v", err)
 	}
 
 	// Parse SSH server private key
-	sshServerKey, err := ssh.ParsePrivateKey([]byte(p.certificates.SSH.ServerPrivateKey))
+	sshServerKey, err := ssh.ParsePrivateKey([]byte(r.certificates.SSH.ServerPrivateKey))
 	if err != nil {
 		return fmt.Errorf("failed to parse SSH server private key: %v", err)
 	}
 
 	// Parse SSH server certificate
-	sshServerCert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(p.certificates.SSH.ServerCertificate))
+	sshServerCert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(r.certificates.SSH.ServerCertificate))
 	if err != nil {
 		return fmt.Errorf("failed to parse SSH server certificate: %v", err)
 	}
@@ -163,7 +163,7 @@ func (p *Proxy) setupSSHServer() error {
 	}
 
 	// Setup SSH server config
-	p.sshConfig = &ssh.ServerConfig{
+	r.sshConfig = &ssh.ServerConfig{
 		MaxAuthTries: 3,
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			// Check if this is an SSH certificate
@@ -174,7 +174,7 @@ func (p *Proxy) setupSSHServer() error {
 			}
 
 			// Validate the certificate
-			if err := p.validateSSHCertificate(cert, conn.User(), sshCAPubKey); err != nil {
+			if err := r.validateSSHCertificate(cert, conn.User(), sshCAPubKey); err != nil {
 				log.Error().Msgf("Gateway '%s' certificate validation failed: %v", conn.User(), err)
 				return nil, err
 			}
@@ -188,8 +188,8 @@ func (p *Proxy) setupSSHServer() error {
 				return nil, fmt.Errorf("gateway id is required")
 			}
 
-			// Validate that the user is authorized to connect to the current proxy
-			expectedKeyId := "client-" + p.config.ProxyName
+			// Validate that the user is authorized to connect to the current relay
+			expectedKeyId := "client-" + r.config.RelayName
 			if cert.KeyId != expectedKeyId {
 				log.Error().Msgf("Gateway '%s' certificate Key ID '%s' does not match expected '%s'", conn.User(), cert.KeyId, expectedKeyId)
 				return nil, fmt.Errorf("certificate Key ID does not match expected value")
@@ -203,13 +203,13 @@ func (p *Proxy) setupSSHServer() error {
 		},
 	}
 
-	p.sshConfig.AddHostKey(certSigner)
+	r.sshConfig.AddHostKey(certSigner)
 	return nil
 }
 
-func (p *Proxy) setupTLSServer() error {
+func (r *Relay) setupTLSServer() error {
 	// Parse TLS server certificate
-	serverCertBlock, _ := pem.Decode([]byte(p.certificates.PKI.ServerCertificate))
+	serverCertBlock, _ := pem.Decode([]byte(r.certificates.PKI.ServerCertificate))
 	if serverCertBlock == nil {
 		return fmt.Errorf("failed to decode server certificate")
 	}
@@ -222,7 +222,7 @@ func (p *Proxy) setupTLSServer() error {
 	}
 
 	// Parse TLS server private key
-	serverKeyBlock, _ := pem.Decode([]byte(p.certificates.PKI.ServerPrivateKey))
+	serverKeyBlock, _ := pem.Decode([]byte(r.certificates.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
 		return fmt.Errorf("failed to decode server private key")
 	}
@@ -236,7 +236,7 @@ func (p *Proxy) setupTLSServer() error {
 	clientCAPool := x509.NewCertPool()
 
 	var chainCerts [][]byte
-	chainData := []byte(p.certificates.PKI.ClientCertificateChain)
+	chainData := []byte(r.certificates.PKI.ClientCertificateChain)
 	for {
 		block, rest := pem.Decode(chainData)
 		if block == nil {
@@ -256,7 +256,7 @@ func (p *Proxy) setupTLSServer() error {
 	}
 
 	// Create TLS config
-	p.tlsConfig = &tls.Config{
+	r.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{serverCertBlock.Bytes},
@@ -271,7 +271,7 @@ func (p *Proxy) setupTLSServer() error {
 	return nil
 }
 
-func (p *Proxy) validateSSHCertificate(cert *ssh.Certificate, username string, caPubKey ssh.PublicKey) error {
+func (r *Relay) validateSSHCertificate(cert *ssh.Certificate, username string, caPubKey ssh.PublicKey) error {
 	// Check certificate type
 	if cert.CertType != ssh.UserCert {
 		return fmt.Errorf("invalid certificate type: %d", cert.CertType)
@@ -293,14 +293,14 @@ func (p *Proxy) validateSSHCertificate(cert *ssh.Certificate, username string, c
 	return nil
 }
 
-func (p *Proxy) startSSHServer() {
-	listener, err := net.Listen("tcp", ":"+p.config.SSHPort)
+func (r *Relay) startSSHServer() {
+	listener, err := net.Listen("tcp", ":"+r.config.SSHPort)
 	if err != nil {
 		log.Fatal().Msgf("Failed to start SSH server: %v", err)
 	}
-	p.sshListener = listener
+	r.sshListener = listener
 
-	log.Info().Msgf("SSH server listening on :%s for gateways", p.config.SSHPort)
+	log.Info().Msgf("SSH server listening on :%s for gateways", r.config.SSHPort)
 
 	for {
 		conn, err := listener.Accept()
@@ -308,15 +308,15 @@ func (p *Proxy) startSSHServer() {
 			log.Error().Msgf("Failed to accept SSH connection: %v", err)
 			continue
 		}
-		go p.handleSSHAgent(conn)
+		go r.handleSSHAgent(conn)
 	}
 }
 
-func (p *Proxy) handleSSHAgent(conn net.Conn) {
+func (r *Relay) handleSSHAgent(conn net.Conn) {
 	defer conn.Close()
 
 	// SSH handshake
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, p.sshConfig)
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, r.sshConfig)
 	if err != nil {
 		log.Error().Msgf("SSH handshake failed: %v", err)
 		return
@@ -326,22 +326,22 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 	log.Info().Msgf("SSH handshake successful for gateway: %s", gatewayId)
 
 	// Store the connection (ensure only one connection per gateway)
-	p.mu.Lock()
-	if _, exists := p.tunnels[gatewayId]; exists {
-		p.mu.Unlock()
+	r.mu.Lock()
+	if _, exists := r.tunnels[gatewayId]; exists {
+		r.mu.Unlock()
 		log.Warn().Msgf("Gateway '%s' already has an active connection, rejecting new connection", gatewayId)
 		sshConn.Close()
 		return
 	}
 
-	p.tunnels[gatewayId] = sshConn
-	p.mu.Unlock()
+	r.tunnels[gatewayId] = sshConn
+	r.mu.Unlock()
 
 	// Clean up when agent disconnects
 	defer func() {
-		p.mu.Lock()
-		delete(p.tunnels, gatewayId)
-		p.mu.Unlock()
+		r.mu.Lock()
+		delete(r.tunnels, gatewayId)
+		r.mu.Unlock()
 		log.Info().Msgf("Gateway %s disconnected", gatewayId)
 	}()
 
@@ -377,14 +377,14 @@ func (p *Proxy) handleSSHAgent(conn net.Conn) {
 	}
 }
 
-func (p *Proxy) startTLSServer() {
-	listener, err := net.Listen("tcp", ":"+p.config.TLSPort)
+func (r *Relay) startTLSServer() {
+	listener, err := net.Listen("tcp", ":"+r.config.TLSPort)
 	if err != nil {
 		log.Fatal().Msgf("Failed to start TLS server: %v", err)
 	}
-	p.tlsListener = listener
+	r.tlsListener = listener
 
-	log.Info().Msgf("TLS server listening on :%s for clients", p.config.TLSPort)
+	log.Info().Msgf("TLS server listening on :%s for clients", r.config.TLSPort)
 
 	for {
 		conn, err := listener.Accept()
@@ -392,15 +392,15 @@ func (p *Proxy) startTLSServer() {
 			log.Error().Msgf("Failed to accept TLS connection: %v", err)
 			continue
 		}
-		go p.handleTLSClient(conn)
+		go r.handleTLSClient(conn)
 	}
 }
 
-func (p *Proxy) handleTLSClient(conn net.Conn) {
+func (r *Relay) handleTLSClient(conn net.Conn) {
 	defer conn.Close()
 
 	// Perform TLS handshake using current TLS config
-	tlsConn := tls.Server(conn, p.tlsConfig)
+	tlsConn := tls.Server(conn, r.tlsConfig)
 	defer tlsConn.Close()
 
 	// Set handshake timeout to avoid hanging on slow/malicious connections
@@ -416,10 +416,10 @@ func (p *Proxy) handleTLSClient(conn net.Conn) {
 	// Clear deadline for actual data transfer
 	tlsConn.SetDeadline(time.Time{})
 
-	p.handleClient(tlsConn)
+	r.handleClient(tlsConn)
 }
 
-func (p *Proxy) handleClient(tlsConn *tls.Conn) {
+func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	var gatewayId string
 	state := tlsConn.ConnectionState()
 
@@ -432,10 +432,10 @@ func (p *Proxy) handleClient(tlsConn *tls.Conn) {
 		return
 	}
 
-	// Get the SSH connection for this agent
-	p.mu.RLock()
-	conn, exists := p.tunnels[gatewayId]
-	p.mu.RUnlock()
+	// Get the SSH connection for this gateway
+	r.mu.RLock()
+	conn, exists := r.tunnels[gatewayId]
+	r.mu.RUnlock()
 
 	if !exists {
 		log.Warn().Msgf("Gateway '%s' not connected", gatewayId)
@@ -447,8 +447,8 @@ func (p *Proxy) handleClient(tlsConn *tls.Conn) {
 
 	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
-		log.Error().Msgf("Failed to connect to agent: %v", err)
-		tlsConn.Write([]byte("ERROR: Failed to connect to agent\n"))
+		log.Error().Msgf("Failed to connect to gateway: %v", err)
+		tlsConn.Write([]byte("ERROR: Failed to connect to gateway\n"))
 		return
 	}
 	defer channel.Close()
@@ -463,21 +463,21 @@ func (p *Proxy) handleClient(tlsConn *tls.Conn) {
 	log.Info().Msgf("Client %s disconnected", tlsConn.RemoteAddr())
 }
 
-func (p *Proxy) cleanup() {
-	log.Info().Msg("Shutting down proxy server...")
+func (r *Relay) cleanup() {
+	log.Info().Msg("Shutting down relay server...")
 
-	if p.sshListener != nil {
-		p.sshListener.Close()
+	if r.sshListener != nil {
+		r.sshListener.Close()
 	}
-	if p.tlsListener != nil {
-		p.tlsListener.Close()
+	if r.tlsListener != nil {
+		r.tlsListener.Close()
 	}
 
-	log.Info().Msg("Proxy server shutdown complete")
+	log.Info().Msg("Relay server shutdown complete")
 }
 
 // startCertificateRenewal runs a background process to renew certificates every 24 hours
-func (p *Proxy) startCertificateRenewal(ctx context.Context) {
+func (r *Relay) startCertificateRenewal(ctx context.Context) {
 	log.Info().Msg("Starting certificate renewal goroutine")
 	ticker := time.NewTicker(10 * 24 * time.Hour)
 	defer ticker.Stop()
@@ -489,7 +489,7 @@ func (p *Proxy) startCertificateRenewal(ctx context.Context) {
 			return
 		case <-ticker.C:
 			log.Info().Msg("Renewing certificates...")
-			if err := p.renewCertificates(); err != nil {
+			if err := r.renewCertificates(); err != nil {
 				log.Error().Msgf("Failed to renew certificates: %v", err)
 			} else {
 				log.Info().Msg("Certificates renewed successfully")
@@ -499,19 +499,19 @@ func (p *Proxy) startCertificateRenewal(ctx context.Context) {
 }
 
 // renewCertificates fetches new certificates and updates the server configurations
-func (p *Proxy) renewCertificates() error {
-	// Re-register proxy to get fresh certificates
-	if err := p.registerProxy(); err != nil {
-		return fmt.Errorf("failed to register proxy: %v", err)
+func (r *Relay) renewCertificates() error {
+	// Re-register relay to get fresh certificates
+	if err := r.registerRelay(); err != nil {
+		return fmt.Errorf("failed to register relay: %v", err)
 	}
 
 	// Update SSH server configuration
-	if err := p.setupSSHServer(); err != nil {
+	if err := r.setupSSHServer(); err != nil {
 		return fmt.Errorf("failed to setup SSH server: %v", err)
 	}
 
 	// Update TLS server configuration
-	if err := p.setupTLSServer(); err != nil {
+	if err := r.setupTLSServer(); err != nil {
 		return fmt.Errorf("failed to setup TLS server: %v", err)
 	}
 

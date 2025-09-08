@@ -18,7 +18,7 @@ After=network.target
 Type=notify
 NotifyAccess=all
 EnvironmentFile=/etc/infisical/gateway.conf
-ExecStart=infisical network gateway
+ExecStart=infisical gateway start
 Restart=on-failure
 InaccessibleDirectories=/home
 PrivateTmp=yes
@@ -32,7 +32,7 @@ LimitRTTIME=7000000
 WantedBy=multi-user.target
 `
 
-func InstallGatewaySystemdService(token string, domain string, name string, proxyName string) error {
+func InstallGatewaySystemdService(token string, domain string, name string, relayName string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -56,8 +56,8 @@ func InstallGatewaySystemdService(token string, domain string, name string, prox
 	if name != "" {
 		configContent += fmt.Sprintf("%s=%s\n", GATEWAY_NAME_ENV_NAME, name)
 	}
-	if proxyName != "" {
-		configContent += fmt.Sprintf("%s=%s\n", PROXY_NAME_ENV_NAME, proxyName)
+	if relayName != "" {
+		configContent += fmt.Sprintf("%s=%s\n", RELAY_NAME_ENV_NAME, relayName)
 	}
 
 	configPath := filepath.Join(configDir, "gateway.conf")
