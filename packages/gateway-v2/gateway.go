@@ -344,6 +344,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping"},
 	}
 
 	return nil
@@ -467,10 +468,10 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	// Create reader for the TLS connection
 	reader := bufio.NewReader(tlsConn)
 
-	// Get the forward mode here
-	forwardConfig, err := g.parseForwardConfig(tlsConn, reader)
+	// Get the negotiated protocol from ALPN
+	forwardConfig, err := g.parseForwardConfigFromALPN(tlsConn, reader)
 	if err != nil {
-		log.Info().Msgf("Failed to parse forward command: %v", err)
+		log.Info().Msgf("Failed to parse forward config from ALPN: %v", err)
 		return
 	}
 
@@ -488,45 +489,58 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	}
 }
 
-func (g *Gateway) parseForwardConfig(tlsConn *tls.Conn, reader *bufio.Reader) (*ForwardConfig, error) {
+func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Reader) (*ForwardConfig, error) {
 	config := &ForwardConfig{}
 
+	// Parse routing information from the client certificate
 	if err := g.parseDetailsFromCertificate(tlsConn, config); err != nil {
 		return nil, fmt.Errorf("failed to parse routing info from certificate: %v", err)
 	}
 
-	for {
-		msg, err := reader.ReadBytes('\n')
-		if err != nil {
-			return nil, fmt.Errorf("failed to read command: %v", err)
+	// Get the negotiated ALPN protocol
+	state := tlsConn.ConnectionState()
+	negotiatedProtocol := state.NegotiatedProtocol
+
+	log.Info().Msgf("Negotiated ALPN protocol: %s", negotiatedProtocol)
+
+	// Map ALPN protocol to ForwardMode
+	switch negotiatedProtocol {
+	case "infisical-http-proxy":
+		config.Mode = ForwardModeHTTP
+		// For HTTP proxy, read additional parameters from the connection
+		if err := g.parseHTTPParametersFromConnection(reader, config); err != nil {
+			return nil, fmt.Errorf("failed to parse HTTP parameters: %v", err)
 		}
+		return config, nil
 
-		cmd := strings.ToUpper(strings.TrimSpace(string(strings.Split(string(msg), " ")[0])))
-		args := strings.TrimSpace(strings.TrimPrefix(string(msg), strings.Split(string(msg), " ")[0]))
+	case "infisical-tcp-proxy":
+		config.Mode = ForwardModeTCP
+		return config, nil
 
-		switch cmd {
-		case "FORWARD-TCP":
-			config.Mode = ForwardModeTCP
-			return config, nil
+	case "infisical-ping":
+		config.Mode = ForwardModePing
+		return config, nil
 
-		case "FORWARD-HTTP":
-			config.Mode = ForwardModeHTTP
-			if args != "" {
-				if err := g.parseForwardHTTPParams(args, config); err != nil {
-					return nil, fmt.Errorf("failed to parse HTTP parameters: %v", err)
-				}
-			}
+	default:
+		return nil, fmt.Errorf("unsupported ALPN protocol: %s", negotiatedProtocol)
+	}
+}
 
-			return config, nil
+func (g *Gateway) parseHTTPParametersFromConnection(reader *bufio.Reader, config *ForwardConfig) error {
+	// Read the first line which should contain HTTP parameters
+	msg, err := reader.ReadBytes('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read HTTP parameters: %v", err)
+	}
 
-		case "PING":
-			config.Mode = ForwardModePing
-			return config, nil
-
-		default:
-			return nil, fmt.Errorf("invalid forward command: %s", cmd)
+	params := strings.TrimSpace(string(msg))
+	if params != "" {
+		if err := g.parseForwardHTTPParams(params, config); err != nil {
+			return fmt.Errorf("failed to parse HTTP parameters: %v", err)
 		}
 	}
+
+	return nil
 }
 
 func (g *Gateway) parseForwardHTTPParams(params string, config *ForwardConfig) error {
