@@ -215,6 +215,10 @@ func handleTCPProxy(ctx context.Context, conn *tls.Conn, forwardConfig *ForwardC
 	}
 	defer localConn.Close()
 
+	log.Info().
+		Str("target", target).
+		Msg("TCP proxy connection established to local service")
+
 	// Create a context for this connection that gets cancelled when the parent context is cancelled
 	// or when either connection closes
 	connCtx, cancel := context.WithCancel(ctx)
@@ -226,7 +230,8 @@ func handleTCPProxy(ctx context.Context, conn *tls.Conn, forwardConfig *ForwardC
 	// Forward data from TLS connection to local service
 	go func() {
 		defer cancel()
-		_, err := io.Copy(localConn, conn)
+		bytesCopied, err := io.Copy(localConn, conn)
+		log.Info().Int64("bytes", bytesCopied).Msg("Copied from client to local service")
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				log.Debug().Msgf("TLS to local copy ended normally: %v", err)
@@ -240,7 +245,8 @@ func handleTCPProxy(ctx context.Context, conn *tls.Conn, forwardConfig *ForwardC
 	// Forward data from local service to TLS connection
 	go func() {
 		defer cancel()
-		_, err := io.Copy(conn, localConn)
+		bytesCopied, err := io.Copy(conn, localConn)
+		log.Info().Int64("bytes", bytesCopied).Msg("Copied from local service to client")
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				log.Debug().Msgf("Local to TLS copy ended normally: %v", err)

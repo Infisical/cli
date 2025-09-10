@@ -88,8 +88,7 @@ var gatewayCmd = &cobra.Command{
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		log.Warn().Msg("DEPRECATION WARNING: The 'infisical gateway' command is deprecated. Please use 'infisical gateway start'")
-		log.Warn().Msg("This legacy gateway will be removed in a future version.")
+		log.Info().Msg("DEPRECATION NOTICE: The 'infisical gateway' command will be deprecated in a future version. Please use 'infisical gateway start'.\nNOTE: This requires manually updating your existing resources to point to the new gateway.")
 
 		infisicalClient, cancelSdk, err := getInfisicalSdkInstance(cmd)
 		if err != nil {

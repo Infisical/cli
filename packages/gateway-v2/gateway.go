@@ -460,31 +460,56 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	tlsConn := tls.Server(virtualConn, tlsConfig)
 
 	// Perform TLS handshake
+	log.Info().Msg("Starting TLS handshake on incoming channel")
 	if err := tlsConn.Handshake(); err != nil {
 		log.Info().Msgf("TLS handshake failed: %v", err)
 		return
 	}
+	log.Info().Msg("TLS handshake completed successfully")
 
 	// Create reader for the TLS connection
 	reader := bufio.NewReader(tlsConn)
 
 	// Get the negotiated protocol from ALPN
+	log.Info().Msg("Parsing forwarding configuration from ALPN and client certificate")
 	forwardConfig, err := g.parseForwardConfigFromALPN(tlsConn, reader)
 	if err != nil {
 		log.Info().Msgf("Failed to parse forward config from ALPN: %v", err)
 		return
 	}
 
-	log.Info().Msgf("Forward config: %+v", forwardConfig)
-
 	if forwardConfig.Mode == ForwardModeHTTP {
-		handleHTTPProxy(g.ctx, tlsConn, reader, forwardConfig)
+		log.Info().
+			Str("mode", string(forwardConfig.Mode)).
+			Str("target", fmt.Sprintf("%s:%d", forwardConfig.TargetHost, forwardConfig.TargetPort)).
+			Str("actorType", string(forwardConfig.ActorType)).
+			Bool("verifyTLS", forwardConfig.VerifyTLS).
+			Msg("Starting HTTP proxy handler")
+		if err := handleHTTPProxy(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Error().Err(err).Msg("HTTP proxy handler ended with error")
+		} else {
+			log.Info().Msg("HTTP proxy handler completed")
+		}
 		return
 	} else if forwardConfig.Mode == ForwardModeTCP {
-		handleTCPProxy(g.ctx, tlsConn, forwardConfig)
+		log.Info().
+			Str("mode", string(forwardConfig.Mode)).
+			Str("target", fmt.Sprintf("%s:%d", forwardConfig.TargetHost, forwardConfig.TargetPort)).
+			Str("actorType", string(forwardConfig.ActorType)).
+			Msg("Starting TCP proxy handler")
+		if err := handleTCPProxy(g.ctx, tlsConn, forwardConfig); err != nil {
+			log.Error().Err(err).Msg("TCP proxy handler ended with error")
+		} else {
+			log.Info().Msg("TCP proxy handler completed")
+		}
 		return
 	} else if forwardConfig.Mode == ForwardModePing {
-		handlePing(g.ctx, tlsConn, reader)
+		log.Info().Msg("Starting ping handler")
+		if err := handlePing(g.ctx, tlsConn, reader); err != nil {
+			log.Error().Err(err).Msg("Ping handler ended with error")
+		} else {
+			log.Info().Msg("Ping handler completed")
+		}
 		return
 	}
 }

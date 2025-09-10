@@ -421,12 +421,14 @@ func (r *Relay) handleTLSClient(conn net.Conn) {
 
 func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	var gatewayId string
+	var orgDetails string
 	state := tlsConn.ConnectionState()
 
 	if len(state.PeerCertificates) > 0 {
 		cert := state.PeerCertificates[0]
 		log.Info().Msgf("Client connected with certificate: %s", cert.Subject.CommonName)
 		gatewayId = cert.Subject.CommonName
+		orgDetails = cert.Subject.Organization[0]
 	} else {
 		log.Warn().Msg("No peer certificates found")
 		return
@@ -443,7 +445,7 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 		return
 	}
 
-	log.Info().Msgf("Routing TCP connection to gateway: %s", gatewayId)
+	log.Info().Msgf("Routing TCP connection from %s to Gateway with ID: %s", orgDetails, gatewayId)
 
 	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
@@ -478,7 +480,6 @@ func (r *Relay) cleanup() {
 
 // startCertificateRenewal runs a background process to renew certificates every 24 hours
 func (r *Relay) startCertificateRenewal(ctx context.Context) {
-	log.Info().Msg("Starting certificate renewal goroutine")
 	ticker := time.NewTicker(10 * 24 * time.Hour)
 	defer ticker.Stop()
 
