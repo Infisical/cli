@@ -460,7 +460,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	tlsConn := tls.Server(virtualConn, tlsConfig)
 
 	// Perform TLS handshake
-	log.Info().Msg("Starting TLS handshake on incoming channel")
+	log.Info().Msg("Received incoming connection, starting TLS handshake")
 	if err := tlsConn.Handshake(); err != nil {
 		log.Info().Msgf("TLS handshake failed: %v", err)
 		return
@@ -470,8 +470,6 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	// Create reader for the TLS connection
 	reader := bufio.NewReader(tlsConn)
 
-	// Get the negotiated protocol from ALPN
-	log.Info().Msg("Parsing forwarding configuration from ALPN and client certificate")
 	forwardConfig, err := g.parseForwardConfigFromALPN(tlsConn, reader)
 	if err != nil {
 		log.Info().Msgf("Failed to parse forward config from ALPN: %v", err)

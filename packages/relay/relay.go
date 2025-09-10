@@ -445,7 +445,7 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 		return
 	}
 
-	log.Info().Msgf("Routing TCP connection from %s to Gateway with ID: %s", orgDetails, gatewayId)
+	log.Info().Msgf("Routing connection from Organization %s to Gateway with ID: %s", orgDetails, gatewayId)
 
 	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
