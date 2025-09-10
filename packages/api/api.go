@@ -39,7 +39,11 @@ const (
 	operationCallRegisterGatewayIdentityV1         = "CallRegisterGatewayIdentityV1"
 	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
+	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
+	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
+	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
+	operationCallRegisterGateway                   = "CallRegisterGateway"
 )
 
 func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
@@ -652,6 +656,23 @@ func CallGatewayHeartBeatV1(httpClient *resty.Client) error {
 	return nil
 }
 
+func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/gateways/heartbeat", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallGatewayHeartBeatV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV2, response, nil)
+	}
+
+	return nil
+}
+
 func CallBootstrapInstance(httpClient *resty.Client, request BootstrapInstanceRequest) (BootstrapInstanceResponse, error) {
 	var resBody BootstrapInstanceResponse
 	response, err := httpClient.
@@ -667,6 +688,66 @@ func CallBootstrapInstance(httpClient *resty.Client, request BootstrapInstanceRe
 
 	if response.IsError() {
 		return BootstrapInstanceResponse{}, NewAPIErrorWithResponse(operationCallBootstrapInstance, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRegisterInstanceRelay(httpClient *resty.Client, request RegisterRelayRequest) (RegisterRelayResponse, error) {
+	var resBody RegisterRelayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/relays/register-instance-relay", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterRelayResponse{}, NewGenericRequestError(operationCallRegisterInstanceRelay, err)
+	}
+
+	if response.IsError() {
+		return RegisterRelayResponse{}, NewAPIErrorWithResponse(operationCallRegisterInstanceRelay, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRegisterRelay(httpClient *resty.Client, request RegisterRelayRequest) (RegisterRelayResponse, error) {
+	var resBody RegisterRelayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/relays/register-org-relay", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterRelayResponse{}, NewGenericRequestError(operationCallRegisterOrgRelay, err)
+	}
+
+	if response.IsError() {
+		return RegisterRelayResponse{}, NewAPIErrorWithResponse(operationCallRegisterOrgRelay, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayRequest) (RegisterGatewayResponse, error) {
+	var resBody RegisterGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/gateways", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterGatewayResponse{}, NewGenericRequestError(operationCallRegisterGateway, err)
+	}
+
+	if response.IsError() {
+		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallRegisterGateway, response, nil)
 	}
 
 	return resBody, nil
