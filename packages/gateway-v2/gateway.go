@@ -660,10 +660,10 @@ func (vc *virtualConnection) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// startCertificateRenewal runs a background process to renew certificates every 10 days
+// startCertificateRenewal runs a background process to renew certificates every 6 hours
 func (g *Gateway) startCertificateRenewal(ctx context.Context) {
 	log.Info().Msg("Starting gateway certificate renewal goroutine")
-	ticker := time.NewTicker(10 * 24 * time.Hour)
+	ticker := time.NewTicker(6 * 60 * time.Minute)
 	defer ticker.Stop()
 
 	for {

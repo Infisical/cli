@@ -478,9 +478,9 @@ func (r *Relay) cleanup() {
 	log.Info().Msg("Relay server shutdown complete")
 }
 
-// startCertificateRenewal runs a background process to renew certificates every 24 hours
+// startCertificateRenewal runs a background process to renew certificates every 6 hours
 func (r *Relay) startCertificateRenewal(ctx context.Context) {
-	ticker := time.NewTicker(10 * 24 * time.Hour)
+	ticker := time.NewTicker(6 * 60 * time.Minute)
 	defer ticker.Stop()
 
 	for {
