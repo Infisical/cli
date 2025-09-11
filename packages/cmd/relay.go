@@ -178,18 +178,27 @@ var relaySystemdInstallCmd = &cobra.Command{
 		}
 
 		name, err := cmd.Flags().GetString("name")
-		if err != nil || name == "" {
-			util.HandleError(err, "name is required")
+		if err != nil {
+			util.HandleError(err, "Unable to parse name flag")
+		}
+		if name == "" {
+			util.HandleError(fmt.Errorf("name flag is required"), "name is required")
 		}
 
 		host, err := cmd.Flags().GetString("host")
-		if err != nil || host == "" {
-			util.HandleError(err, "host is required")
+		if err != nil {
+			util.HandleError(err, "Unable to parse host flag")
+		}
+		if host == "" {
+			util.HandleError(fmt.Errorf("host flag is required"), "host is required")
 		}
 
 		instanceType, err := cmd.Flags().GetString("type")
-		if err != nil || instanceType == "" {
-			util.HandleError(err, "type is required")
+		if err != nil {
+			util.HandleError(err, "Unable to parse type flag")
+		}
+		if instanceType == "" {
+			util.HandleError(fmt.Errorf("type flag is required"), "type is required")
 		}
 
 		relayAuthSecret, err := cmd.Flags().GetString("relay-auth-secret")
