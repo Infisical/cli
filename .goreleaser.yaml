@@ -146,6 +146,7 @@ nfpms:
         dst: /usr/share/man/man1/infisical.1.gz
 
 scoop:
+  name: infisical
   bucket:
     owner: Infisical
     name: scoop-infisical
