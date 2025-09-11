@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -27,24 +29,24 @@ var relayStartCmd = &cobra.Command{
 	Use:                   "start",
 	Short:                 "Start the Infisical relay component",
 	Long:                  "Start the Infisical relay component",
-	Example:               "infisical relay start --type=instance --ip=<ip> --name=<name> --token=<token>",
+	Example:               "infisical relay start --type=instance --host=<host> --name=<name> --token=<token>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		relayName, err := cmd.Flags().GetString("name")
+		relayName, err := util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.RELAY_NAME_ENV_NAME})
 		if err != nil || relayName == "" {
-			util.HandleError(err, "unable to get name flag")
+			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.RELAY_NAME_ENV_NAME))
 		}
 
-		host, err := cmd.Flags().GetString("host")
+		host, err := util.GetCmdFlagOrEnv(cmd, "host", []string{gatewayv2.RELAY_HOST_ENV_NAME})
 		if err != nil || host == "" {
-			util.HandleError(err, "unable to get host flag")
+			util.HandleError(err, fmt.Sprintf("unable to get host flag or %s env", gatewayv2.RELAY_HOST_ENV_NAME))
 		}
 
-		instanceType, err := cmd.Flags().GetString("type")
+		instanceType, err := util.GetCmdFlagOrEnv(cmd, "type", []string{gatewayv2.RELAY_TYPE_ENV_NAME})
 		if err != nil {
-			util.HandleError(err, "unable to get type flag")
+			util.HandleError(err, fmt.Sprintf("unable to get type flag or %s env", gatewayv2.RELAY_TYPE_ENV_NAME))
 		}
 
 		relayInstance, err := relay.NewRelay(&relay.RelayConfig{
@@ -137,6 +139,107 @@ var relayStartCmd = &cobra.Command{
 	},
 }
 
+var relaySystemdCmd = &cobra.Command{
+	Use:   "systemd",
+	Short: "Manage systemd service for Infisical relay",
+	Long:  "Manage systemd service for Infisical relay. Use 'systemd install' to install and enable the service.",
+	Example: `sudo infisical relay systemd install --token=<token> --name=<name> --host=<host>
+  sudo infisical relay systemd install --type=instance --name=<name> --host=<host> --relay-auth-secret=<secret>
+  sudo infisical relay systemd uninstall`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var relaySystemdInstallCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install and enable systemd service for the relay (requires sudo)",
+	Long:  "Install and enable systemd service for the relay. Must be run with sudo on Linux.",
+	Example: `sudo infisical relay systemd install --token=<token> --name=<name> --host=<host>
+  sudo infisical relay systemd install --type=instance --name=<name> --host=<host> --relay-auth-secret=<secret>`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS != "linux" {
+			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
+		}
+
+		if os.Geteuid() != 0 {
+			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+		}
+
+		token, err := cmd.Flags().GetString("token")
+		if err != nil {
+			util.HandleError(err, "Unable to parse token flag")
+		}
+
+		domain, err := cmd.Flags().GetString("domain")
+		if err != nil {
+			util.HandleError(err, "Unable to parse domain flag")
+		}
+
+		name, err := cmd.Flags().GetString("name")
+		if err != nil || name == "" {
+			util.HandleError(err, "name is required")
+		}
+
+		host, err := cmd.Flags().GetString("host")
+		if err != nil || host == "" {
+			util.HandleError(err, "host is required")
+		}
+
+		instanceType, err := cmd.Flags().GetString("type")
+		if err != nil || instanceType == "" {
+			util.HandleError(err, "type is required")
+		}
+
+		relayAuthSecret, err := cmd.Flags().GetString("relay-auth-secret")
+		if err != nil {
+			util.HandleError(err, "Unable to parse relay-auth-secret flag")
+		}
+
+		if instanceType == "instance" && relayAuthSecret == "" && os.Getenv(gatewayv2.RELAY_AUTH_SECRET_ENV_NAME) == "" {
+			util.HandleError(fmt.Errorf("for type 'instance', --relay-auth-secret flag or %s env must be set", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
+		}
+		if instanceType != "instance" && token == "" {
+			util.HandleError(fmt.Errorf("for type '%s', --token is required", instanceType))
+		}
+
+		if err := relay.InstallRelaySystemdService(token, domain, name, host, instanceType, relayAuthSecret); err != nil {
+			util.HandleError(err, "Failed to install relay systemd service")
+		}
+
+		enableCmd := exec.Command("systemctl", "enable", "infisical-relay")
+		if err := enableCmd.Run(); err != nil {
+			util.HandleError(err, "Failed to enable relay systemd service")
+		}
+
+		log.Info().Msg("Successfully installed and enabled infisical-relay service")
+		log.Info().Msg("To start the service, run: sudo systemctl start infisical-relay")
+	},
+}
+
+var relaySystemdUninstallCmd = &cobra.Command{
+	Use:                   "uninstall",
+	Short:                 "Uninstall and remove systemd service for the relay (requires sudo)",
+	Long:                  "Uninstall and remove systemd service for the relay. Must be run with sudo on Linux.",
+	Example:               "sudo infisical relay systemd uninstall",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS != "linux" {
+			util.HandleError(fmt.Errorf("systemd service uninstallation is only supported on Linux"))
+		}
+
+		if os.Geteuid() != 0 {
+			util.HandleError(fmt.Errorf("systemd service uninstallation requires root/sudo privileges"))
+		}
+
+		if err := relay.UninstallRelaySystemdService(); err != nil {
+			util.HandleError(err, "Failed to uninstall relay systemd service")
+		}
+	},
+}
+
 func init() {
 	relayStartCmd.Flags().String("type", "org", "The type of relay to run. Must be either 'instance' or 'org'")
 	relayStartCmd.Flags().String("host", "", "The IP or hostname for the relay")
@@ -150,7 +253,19 @@ func init() {
 	relayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	relayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
+	// systemd install command flags
+	relaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token (org type)")
+	relaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
+	relaySystemdInstallCmd.Flags().String("name", "", "The name of the relay")
+	relaySystemdInstallCmd.Flags().String("host", "", "The IP or hostname for the relay")
+	relaySystemdInstallCmd.Flags().String("type", "org", "The type of relay to run. Must be either 'instance' or 'org'")
+	relaySystemdInstallCmd.Flags().String("relay-auth-secret", "", "Relay auth secret (required for type=instance if env not set)")
+
+	relaySystemdCmd.AddCommand(relaySystemdInstallCmd)
+	relaySystemdCmd.AddCommand(relaySystemdUninstallCmd)
+
 	relayCmd.AddCommand(relayStartCmd)
+	relayCmd.AddCommand(relaySystemdCmd)
 
 	rootCmd.AddCommand(relayCmd)
 }
