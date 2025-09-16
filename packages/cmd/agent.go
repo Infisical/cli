@@ -373,7 +373,7 @@ func getSingleSecretTemplateFunction(accessToken string, existingEtag string, cu
 	}
 }
 
-func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *DynamicSecretLeaseManager, templateId int) func(...string) (map[string]interface{}, error) {
+func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *DynamicSecretLeaseManager, templateId int, currentEtag *string) func(...string) (map[string]interface{}, error) {
 	return func(args ...string) (map[string]interface{}, error) {
 		argLength := len(args)
 		if argLength != 4 && argLength != 5 {
@@ -395,7 +395,11 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 			return nil, err
 		}
 
+		// we set an arbitrary etag to ensure that the template is re-rendered when a new lease is created
+		*currentEtag = util.GenerateRandomString(32)
+
 		dynamicSecretManager.Append(DynamicSecretLease{LeaseID: res.Lease.Id, ExpireAt: res.Lease.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: res.Data, TemplateIDs: []int{templateId}})
+
 		return res.Data, nil
 	}
 }
@@ -403,7 +407,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
 	// custom template function to fetch secrets from Infisical
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag)
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretManager, templateId)
+	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretManager, templateId, currentEtag)
 	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, existingEtag, currentEtag)
 	funcs := template.FuncMap{
 		"secret":          secretFunction, // depreciated
@@ -442,7 +446,7 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 	templateString := string(decoded)
 
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag) // TODO: Fix this
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId)
+	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId, currentEtag)
 	funcs := template.FuncMap{
 		"secret":         secretFunction,
 		"dynamic_secret": dynamicSecretFunction,
@@ -465,7 +469,7 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 func ProcessLiteralTemplate(templateId int, templateString string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretLeaser *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag) // TODO: Fix this
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId)
+	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId, currentEtag)
 	funcs := template.FuncMap{
 		"secret":         secretFunction,
 		"dynamic_secret": dynamicSecretFunction,
@@ -967,6 +971,7 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 						if (existingEtag != currentEtag) || firstRun {
 
 							tm.WriteTemplateToFile(processedTemplate, &secretTemplate)
+
 							existingEtag = currentEtag
 
 							if !firstRun && execCommand != "" {
