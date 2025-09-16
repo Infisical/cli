@@ -564,11 +564,11 @@ type UniversalAuthRefreshResponse struct {
 }
 
 type CreateDynamicSecretLeaseV1Request struct {
-	Environment string `json:"environment"`
-	ProjectSlug string `json:"projectSlug"`
-	SecretPath  string `json:"secretPath,omitempty"`
-	Slug        string `json:"slug"`
-	TTL         string `json:"ttl,omitempty"`
+	Environment       string `json:"environmentSlug"`
+	ProjectSlug       string `json:"projectSlug"`
+	SecretPath        string `json:"secretPath,omitempty"`
+	DynamicSecretName string `json:"dynamicSecretName"`
+	TTL               string `json:"ttl,omitempty"`
 }
 
 type CreateDynamicSecretLeaseV1Response struct {
