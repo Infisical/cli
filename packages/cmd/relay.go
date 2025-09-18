@@ -44,7 +44,7 @@ var relayStartCmd = &cobra.Command{
 			util.HandleError(err, fmt.Sprintf("unable to get host flag or %s env", gatewayv2.RELAY_HOST_ENV_NAME))
 		}
 
-		instanceType, err := util.GetCmdFlagOrEnv(cmd, "type", []string{gatewayv2.RELAY_TYPE_ENV_NAME})
+		instanceType, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "type", []string{gatewayv2.RELAY_TYPE_ENV_NAME}, "org")
 		if err != nil {
 			util.HandleError(err, fmt.Sprintf("unable to get type flag or %s env", gatewayv2.RELAY_TYPE_ENV_NAME))
 		}
@@ -250,7 +250,7 @@ var relaySystemdUninstallCmd = &cobra.Command{
 }
 
 func init() {
-	relayStartCmd.Flags().String("type", "", "The type of relay to run. Must be either 'instance' or 'org'")
+	relayStartCmd.Flags().String("type", "", "The type of relay to run. Defaults to 'org'")
 	relayStartCmd.Flags().String("host", "", "The IP or hostname for the relay")
 	relayStartCmd.Flags().String("name", "", "The name of the relay")
 	relayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
@@ -267,7 +267,7 @@ func init() {
 	relaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	relaySystemdInstallCmd.Flags().String("name", "", "The name of the relay")
 	relaySystemdInstallCmd.Flags().String("host", "", "The IP or hostname for the relay")
-	relaySystemdInstallCmd.Flags().String("type", "org", "The type of relay to run. Must be either 'instance' or 'org'")
+	relaySystemdInstallCmd.Flags().String("type", "org", "The type of relay to run. Defaults to 'org'")
 	relaySystemdInstallCmd.Flags().String("relay-auth-secret", "", "Relay auth secret (required for type=instance if env not set)")
 
 	relaySystemdCmd.AddCommand(relaySystemdInstallCmd)

@@ -316,6 +316,26 @@ func GetCmdFlagOrEnv(cmd *cobra.Command, flag string, envNames []string) (string
 	return value, nil
 }
 
+func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames []string, defaultValue string) (string, error) {
+	value, flagsErr := cmd.Flags().GetString(flag)
+	if flagsErr != nil {
+		return "", flagsErr
+	}
+	if value == "" {
+		for _, env := range envNames {
+			value = strings.TrimSpace(os.Getenv(env))
+			if value != "" {
+				break
+			}
+		}
+	}
+	if value == "" {
+		return defaultValue, nil
+	}
+
+	return value, nil
+}
+
 func GenerateRandomString(length int) string {
 	b := make([]byte, length)
 	for i := range b {
