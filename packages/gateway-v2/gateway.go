@@ -115,7 +115,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 }
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
-	sendHeartbeat := func() {
+	sendHeartbeat := func() error {
 		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
 			select {
@@ -123,27 +123,45 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			default:
 				log.Warn().Msg("Error channel full, skipping heartbeat error report")
 			}
+			return err
 		} else {
 			log.Info().Msg("Gateway is reachable by Infisical")
+			return nil
 		}
 	}
 
 	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(10 * time.Second):
-			sendHeartbeat()
-		}
+		defer func() {
+			log.Debug().Msg("Heartbeat goroutine exiting")
+		}()
 
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
+		// Phase 1: Keep trying every 10 seconds until first success
+		func() {
+			retryTicker := time.NewTicker(10 * time.Second)
+			defer retryTicker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-retryTicker.C:
+					if err := sendHeartbeat(); err == nil {
+						// First success! Exit retry phase
+						return
+					}
+				}
+			}
+		}()
+
+		// Phase 2: Regular heartbeat every 30 minutes
+		regularTicker := time.NewTicker(30 * time.Minute)
+		defer regularTicker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-regularTicker.C:
 				sendHeartbeat()
 			}
 		}
