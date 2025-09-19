@@ -115,7 +115,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 }
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
-	sendHeartbeat := func() {
+	sendHeartbeat := func() error {
 		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
 			select {
@@ -123,27 +123,45 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			default:
 				log.Warn().Msg("Error channel full, skipping heartbeat error report")
 			}
+			return err
 		} else {
 			log.Info().Msg("Gateway is reachable by Infisical")
+			return nil
 		}
 	}
 
 	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(10 * time.Second):
-			sendHeartbeat()
-		}
+		defer func() {
+			log.Debug().Msg("Heartbeat goroutine exiting")
+		}()
 
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
+		// Phase 1: Keep trying every 10 seconds until first success
+		func() {
+			retryTicker := time.NewTicker(10 * time.Second)
+			defer retryTicker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-retryTicker.C:
+					if err := sendHeartbeat(); err == nil {
+						// First success! Exit retry phase
+						return
+					}
+				}
+			}
+		}()
+
+		// Phase 2: Regular heartbeat every 30 minutes
+		regularTicker := time.NewTicker(30 * time.Minute)
+		defer regularTicker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-regularTicker.C:
 				sendHeartbeat()
 			}
 		}
@@ -218,20 +236,47 @@ func (g *Gateway) connectAndServe() error {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}
 
-	// Create SSH client config
-	sshConfig, err := g.createSSHConfig()
-	if err != nil {
-		return fmt.Errorf("failed to create SSH config: %v", err)
+	return g.connectWithRetry()
+}
+
+func (g *Gateway) connectWithRetry() error {
+	for attempt := 1; attempt <= 6; attempt++ {
+		// Re-register after 5 failed attempts to handle potential relay IP change
+		if attempt == 6 {
+			log.Info().Msg("Re-registering gateway to handle potential relay IP change...")
+			if err := g.registerGateway(); err != nil {
+				return fmt.Errorf("failed to re-register gateway: %v", err)
+			}
+		}
+
+		// Create SSH client config
+		sshConfig, err := g.createSSHConfig()
+		if err != nil {
+			return fmt.Errorf("failed to create SSH config: %v", err)
+		}
+
+		// Connect to Relay server
+		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/6)", g.config.RelayName, g.certificates.RelayHost, g.config.SSHPort, attempt)
+		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
+		if err != nil {
+			log.Warn().Msgf("SSH connection attempt %d/6 failed: %v", attempt, err)
+			if attempt < 6 {
+				retryDelay := time.Duration(attempt) * 2 * time.Second
+				log.Info().Msgf("Retrying in %v...", retryDelay)
+				time.Sleep(retryDelay)
+				continue
+			}
+			return fmt.Errorf("failed to connect to SSH server after 6 attempts: %v", err)
+		}
+
+		log.Info().Msgf("Relay connection established for gateway")
+		return g.handleConnection(client)
 	}
 
-	// Connect to Relay server
-	log.Info().Msgf("Connecting to relay server %s on %s:%d...", g.config.RelayName, g.certificates.RelayHost, g.config.SSHPort)
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
-	if err != nil {
-		return fmt.Errorf("failed to connect to SSH server: %v", err)
-	}
-	log.Info().Msgf("Relay connection established for gateway")
+	return fmt.Errorf("unexpected end of retry loop")
+}
 
+func (g *Gateway) handleConnection(client *ssh.Client) error {
 	g.mu.Lock()
 	g.sshClient = client
 	g.isConnected = true

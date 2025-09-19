@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -19,6 +20,12 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
+
+const RELAY_CONNECTING_GATEWAY_INFO_OID = "1.3.6.1.4.1.12345.100.3"
+
+type ConnectingGatewayInfo struct {
+	Name string `json:"name"`
+}
 
 type RelayConfig struct {
 	// API Configuration
@@ -180,8 +187,12 @@ func (r *Relay) setupSSHServer() error {
 			}
 
 			gatewayId := ""
+			gatewayName := ""
 			if len(cert.ValidPrincipals) > 0 {
 				gatewayId = cert.ValidPrincipals[0]
+			}
+			if len(cert.ValidPrincipals) > 1 {
+				gatewayName = cert.ValidPrincipals[1]
 			}
 
 			if gatewayId == "" {
@@ -197,12 +208,12 @@ func (r *Relay) setupSSHServer() error {
 
 			return &ssh.Permissions{
 				Extensions: map[string]string{
-					"gateway-id": gatewayId,
+					"gateway-id":   gatewayId,
+					"gateway-name": gatewayName,
 				},
 			}, nil
 		},
 	}
-
 	r.sshConfig.AddHostKey(certSigner)
 	return nil
 }
@@ -323,13 +334,14 @@ func (r *Relay) handleSSHAgent(conn net.Conn) {
 	}
 
 	gatewayId := sshConn.Permissions.Extensions["gateway-id"]
-	log.Info().Msgf("SSH handshake successful for gateway: %s", gatewayId)
+	gatewayName := sshConn.Permissions.Extensions["gateway-name"]
+	log.Info().Msgf("SSH handshake successful for gateway: %s (%s)", gatewayName, gatewayId)
 
 	// Store the connection (ensure only one connection per gateway)
 	r.mu.Lock()
 	if _, exists := r.tunnels[gatewayId]; exists {
 		r.mu.Unlock()
-		log.Warn().Msgf("Gateway '%s' already has an active connection, rejecting new connection", gatewayId)
+		log.Warn().Msgf("Gateway %s (%s) already has an active connection, rejecting new connection", gatewayName, gatewayId)
 		sshConn.Close()
 		return
 	}
@@ -342,13 +354,13 @@ func (r *Relay) handleSSHAgent(conn net.Conn) {
 		r.mu.Lock()
 		delete(r.tunnels, gatewayId)
 		r.mu.Unlock()
-		log.Info().Msgf("Gateway %s disconnected", gatewayId)
+		log.Info().Msgf("Gateway %s (%s) disconnected", gatewayName, gatewayId)
 	}()
 
 	// Handle global requests (reject all for security)
 	go func() {
 		for req := range reqs {
-			log.Debug().Msgf("Rejecting global request: %s from gateway %s", req.Type, gatewayId)
+			log.Debug().Msgf("Rejecting global request: %s from gateway %s (%s)", req.Type, gatewayName, gatewayId)
 			if req.WantReply {
 				req.Reply(false, nil)
 			}
@@ -359,19 +371,19 @@ func (r *Relay) handleSSHAgent(conn net.Conn) {
 	for newChannel := range chans {
 		switch newChannel.ChannelType() {
 		case "session":
-			log.Debug().Msgf("Rejecting session channel from gateway %s", gatewayId)
+			log.Debug().Msgf("Rejecting session channel from gateway %s (%s)", gatewayName, gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no shell access")
 		case "x11":
-			log.Debug().Msgf("Rejecting X11 forwarding from gateway %s", gatewayId)
+			log.Debug().Msgf("Rejecting X11 forwarding from gateway %s (%s)", gatewayName, gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no X11 forwarding")
 		case "auth-agent":
-			log.Debug().Msgf("Rejecting auth-agent forwarding from gateway %s", gatewayId)
+			log.Debug().Msgf("Rejecting auth-agent forwarding from gateway %s (%s)", gatewayName, gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no agent forwarding")
 		case "forwarded-tcpip":
-			log.Debug().Msgf("Rejecting forwarded-tcpip from gateway %s", gatewayId)
+			log.Debug().Msgf("Rejecting forwarded-tcpip from gateway %s (%s)", gatewayName, gatewayId)
 			newChannel.Reject(ssh.Prohibited, "no port forwarding")
 		default:
-			log.Warn().Msgf("Rejecting unknown channel type '%s' from gateway %s", newChannel.ChannelType(), gatewayId)
+			log.Warn().Msgf("Rejecting unknown channel type '%s' from gateway %s (%s)", newChannel.ChannelType(), gatewayName, gatewayId)
 			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 		}
 	}
@@ -421,14 +433,28 @@ func (r *Relay) handleTLSClient(conn net.Conn) {
 
 func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	var gatewayId string
+	var gatewayName string
 	var orgDetails string
 	state := tlsConn.ConnectionState()
 
 	if len(state.PeerCertificates) > 0 {
 		cert := state.PeerCertificates[0]
-		log.Info().Msgf("Client connected with certificate: %s", cert.Subject.CommonName)
 		gatewayId = cert.Subject.CommonName
 		orgDetails = cert.Subject.Organization[0]
+
+		for _, ext := range cert.Extensions {
+			if ext.Id.String() == RELAY_CONNECTING_GATEWAY_INFO_OID {
+				var connectingGatewayInfo ConnectingGatewayInfo
+				if err := json.Unmarshal(ext.Value, &connectingGatewayInfo); err != nil {
+					return
+				}
+
+				gatewayName = connectingGatewayInfo.Name
+			}
+		}
+
+		log.Info().Msgf("Client connected with certificate: %s (%s)", gatewayName, gatewayId)
+
 	} else {
 		log.Warn().Msg("No peer certificates found")
 		return
@@ -440,12 +466,12 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	r.mu.RUnlock()
 
 	if !exists {
-		log.Warn().Msgf("Gateway '%s' not connected", gatewayId)
+		log.Warn().Msgf("Gateway '%s' (%s) not connected", gatewayName, gatewayId)
 		tlsConn.Write([]byte("ERROR: Gateway not connected\n"))
 		return
 	}
 
-	log.Info().Msgf("Routing connection from Organization %s to Gateway with ID: %s", orgDetails, gatewayId)
+	log.Info().Msgf("Routing connection from Organization %s to Gateway: %s (%s)", orgDetails, gatewayName, gatewayId)
 
 	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
