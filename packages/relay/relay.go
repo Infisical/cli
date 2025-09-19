@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -19,6 +20,12 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
+
+const RELAY_CONNECTING_GATEWAY_INFO_OID = "1.3.6.1.4.1.12345.100.3"
+
+type ConnectingGatewayInfo struct {
+	Name string `json:"name"`
+}
 
 type RelayConfig struct {
 	// API Configuration
@@ -426,14 +433,28 @@ func (r *Relay) handleTLSClient(conn net.Conn) {
 
 func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	var gatewayId string
+	var gatewayName string
 	var orgDetails string
 	state := tlsConn.ConnectionState()
 
 	if len(state.PeerCertificates) > 0 {
 		cert := state.PeerCertificates[0]
-		log.Info().Msgf("Client connected with certificate: %s", cert.Subject.CommonName)
 		gatewayId = cert.Subject.CommonName
 		orgDetails = cert.Subject.Organization[0]
+
+		for _, ext := range cert.Extensions {
+			if ext.Id.String() == RELAY_CONNECTING_GATEWAY_INFO_OID {
+				var connectingGatewayInfo ConnectingGatewayInfo
+				if err := json.Unmarshal(ext.Value, &connectingGatewayInfo); err != nil {
+					return
+				}
+
+				gatewayName = connectingGatewayInfo.Name
+			}
+		}
+
+		log.Info().Msgf("Client connected with certificate: %s (%s)", gatewayName, gatewayId)
+
 	} else {
 		log.Warn().Msg("No peer certificates found")
 		return
@@ -445,12 +466,12 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	r.mu.RUnlock()
 
 	if !exists {
-		log.Warn().Msgf("Gateway '%s' not connected", gatewayId)
+		log.Warn().Msgf("Gateway '%s' (%s) not connected", gatewayName, gatewayId)
 		tlsConn.Write([]byte("ERROR: Gateway not connected\n"))
 		return
 	}
 
-	log.Info().Msgf("Routing connection from Organization %s to Gateway with ID: %s", orgDetails, gatewayId)
+	log.Info().Msgf("Routing connection from Organization %s to Gateway: %s (%s)", orgDetails, gatewayName, gatewayId)
 
 	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
