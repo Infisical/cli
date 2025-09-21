@@ -201,14 +201,15 @@ var relaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("type flag is required"), "type is required")
 		}
 
-		relayAuthSecret, err := cmd.Flags().GetString("relay-auth-secret")
+		relayAuthSecret, err := util.GetCmdFlagOrEnv(cmd, "relay-auth-secret", []string{gatewayv2.RELAY_AUTH_SECRET_ENV_NAME})
 		if err != nil {
 			util.HandleError(err, "Unable to parse relay-auth-secret flag")
 		}
 
-		if instanceType == "instance" && relayAuthSecret == "" && os.Getenv(gatewayv2.RELAY_AUTH_SECRET_ENV_NAME) == "" {
+		if instanceType == "instance" && relayAuthSecret == "" {
 			util.HandleError(fmt.Errorf("for type 'instance', --relay-auth-secret flag or %s env must be set", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
 		}
+
 		if instanceType != "instance" && token == "" {
 			util.HandleError(fmt.Errorf("for type '%s', --token is required", instanceType))
 		}
