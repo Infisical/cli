@@ -206,7 +206,7 @@ func RequireLocalWorkspaceFile() {
 		HandleError(err, "Unable to read your project configuration, please try initializing this project again.", "Run [infisical init]")
 	}
 
-	if workspaceFile.WorkspaceId == "" {
+	if workspaceFile.ProjectId == "" {
 		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
 	}
 }
@@ -217,7 +217,7 @@ func ValidateWorkspaceFile(projectConfigFilePath string) {
 		PrintErrorMessageAndExit(fmt.Sprintf("error reading your project config %v", err))
 	}
 
-	if workspaceFilePath.WorkspaceId == "" {
+	if workspaceFilePath.ProjectId == "" {
 		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
 	}
 }

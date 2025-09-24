@@ -80,7 +80,7 @@ var secretsCmd = &cobra.Command{
 
 		request := models.GetAllSecretsParameters{
 			Environment:            environmentName,
-			WorkspaceId:            projectId,
+			ProjectId:              projectId,
 			TagSlugs:               tagSlugs,
 			SecretsPath:            secretsPath,
 			IncludeImport:          includeImports,
@@ -231,7 +231,7 @@ var secretsSetCmd = &cobra.Command{
 					util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 				}
 
-				projectId = workspaceFile.WorkspaceId
+				projectId = workspaceFile.ProjectId
 			}
 
 			loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -313,7 +313,7 @@ var secretsDeleteCmd = &cobra.Command{
 			if err != nil {
 				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 			}
-			projectId = workspaceFile.WorkspaceId
+			projectId = workspaceFile.ProjectId
 		}
 
 		if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -334,15 +334,15 @@ var secretsDeleteCmd = &cobra.Command{
 		}
 
 		for _, secretName := range args {
-			request := api.DeleteSecretV3Request{
-				WorkspaceId: projectId,
+			request := api.DeleteSecretV4Request{
+				ProjectId:   projectId,
 				Environment: environmentName,
 				SecretName:  secretName,
 				Type:        secretType,
 				SecretPath:  secretsPath,
 			}
 
-			err = api.CallDeleteSecretsRawV3(httpClient, request)
+			err = api.CallDeleteSecretsRawV4(httpClient, request)
 			if err != nil {
 				util.HandleError(err, "Unable to complete your delete request")
 			}
@@ -416,7 +416,7 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 
 	request := models.GetAllSecretsParameters{
 		Environment:            environmentName,
-		WorkspaceId:            projectId,
+		ProjectId:              projectId,
 		TagSlugs:               tagSlugs,
 		SecretsPath:            secretsPath,
 		IncludeImport:          includeImports,
@@ -502,7 +502,7 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 
 	request := models.GetAllSecretsParameters{
 		Environment:   environmentName,
-		WorkspaceId:   projectId,
+		ProjectId:     projectId,
 		TagSlugs:      tagSlugs,
 		SecretsPath:   secretsPath,
 		IncludeImport: true,

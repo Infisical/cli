@@ -49,7 +49,7 @@ var getCmd = &cobra.Command{
 
 		request := models.GetAllFoldersParameters{
 			Environment: environmentName,
-			WorkspaceId: projectId,
+			ProjectId:   projectId,
 			FoldersPath: foldersPath,
 		}
 
@@ -115,14 +115,14 @@ var createCmd = &cobra.Command{
 				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 			}
 
-			projectId = workspaceFile.WorkspaceId
+			projectId = workspaceFile.ProjectId
 		}
 
 		params := models.CreateFolderParameters{
 			FolderName:  folderName,
 			Environment: environmentName,
 			FolderPath:  folderPath,
-			WorkspaceId: projectId,
+			ProjectId:   projectId,
 		}
 
 		if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -183,12 +183,12 @@ var deleteCmd = &cobra.Command{
 				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 			}
 
-			projectId = workspaceFile.WorkspaceId
+			projectId = workspaceFile.ProjectId
 		}
 
 		params := models.DeleteFolderParameters{
 			FolderName:  folderName,
-			WorkspaceId: projectId,
+			ProjectId:   projectId,
 			Environment: environmentName,
 			FolderPath:  folderPath,
 		}

@@ -48,8 +48,8 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 		}
 	}
 
-	rawSecrets, err := api.CallGetRawSecretsV3(httpClient, api.GetRawSecretsV3Request{
-		WorkspaceId:            serviceTokenDetails.Workspace,
+	rawSecrets, err := api.CallGetRawSecretsV4(httpClient, api.GetRawSecretsV3Request{
+		ProjectID:              serviceTokenDetails.Workspace,
 		Environment:            environment,
 		SecretPath:             secretPath,
 		IncludeImport:          includeImports,
@@ -65,7 +65,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, ProjectId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
 	}
 
 	if includeImports {
@@ -79,7 +79,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 }
 
-func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentName string, secretsPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool) (models.PlaintextSecretResult, error) {
+func GetPlainTextSecretsV3(accessToken string, projectId string, environmentName string, secretsPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool) (models.PlaintextSecretResult, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return models.PlaintextSecretResult{}, err
@@ -89,7 +89,7 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 		SetHeader("Accept", "application/json")
 
 	getSecretsRequest := api.GetRawSecretsV3Request{
-		WorkspaceId:            workspaceId,
+		ProjectID:              projectId,
 		Environment:            environmentName,
 		IncludeImport:          includeImports,
 		Recursive:              recursive,
@@ -101,7 +101,7 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 		getSecretsRequest.SecretPath = secretsPath
 	}
 
-	rawSecrets, err := api.CallGetRawSecretsV3(httpClient, getSecretsRequest)
+	rawSecrets, err := api.CallGetRawSecretsV4(httpClient, getSecretsRequest)
 
 	if err != nil {
 		return models.PlaintextSecretResult{}, err
@@ -110,7 +110,7 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, ProjectId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
 	}
 
 	if includeImports {
@@ -126,7 +126,7 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 	}, nil
 }
 
-func GetSinglePlainTextSecretByNameV3(accessToken string, workspaceId string, environmentName string, secretsPath string, secretName string) (models.SingleEnvironmentVariable, string, error) {
+func GetSinglePlainTextSecretByNameV4(accessToken string, projectId string, environmentName string, secretsPath string, secretName string) (models.SingleEnvironmentVariable, string, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return models.SingleEnvironmentVariable{}, "", err
@@ -135,14 +135,14 @@ func GetSinglePlainTextSecretByNameV3(accessToken string, workspaceId string, en
 	httpClient.SetAuthToken(accessToken).
 		SetHeader("Accept", "application/json")
 
-	getSecretsRequest := api.GetRawSecretV3ByNameRequest{
-		WorkspaceID: workspaceId,
+	getSecretsRequest := api.GetRawSecretV4ByNameRequest{
+		ProjectID:   projectId,
 		Environment: environmentName,
 		SecretName:  secretName,
 		SecretPath:  secretsPath,
 	}
 
-	rawSecret, err := api.CallFetchSingleSecretByName(httpClient, getSecretsRequest)
+	rawSecret, err := api.CallFetchSingleSecretByNameV4(httpClient, getSecretsRequest)
 
 	if err != nil {
 		return models.SingleEnvironmentVariable{}, "", err
@@ -150,7 +150,7 @@ func GetSinglePlainTextSecretByNameV3(accessToken string, workspaceId string, en
 
 	formattedSecrets := models.SingleEnvironmentVariable{
 		Key:                   rawSecret.Secret.SecretKey,
-		WorkspaceId:           rawSecret.Secret.Workspace,
+		ProjectId:             rawSecret.Secret.Workspace,
 		Value:                 rawSecret.Secret.SecretValue,
 		Type:                  rawSecret.Secret.Type,
 		ID:                    rawSecret.Secret.ID,
@@ -208,11 +208,11 @@ func InjectRawImportedSecret(secrets []models.SingleEnvironmentVariable, importe
 		for _, sec := range plainTextImportedSecrets {
 			if _, ok := hasOverriden[sec.SecretKey]; !ok {
 				secrets = append(secrets, models.SingleEnvironmentVariable{
-					Key:         sec.SecretKey,
-					WorkspaceId: sec.Workspace,
-					Value:       sec.SecretValue,
-					Type:        sec.Type,
-					ID:          sec.ID,
+					Key:       sec.SecretKey,
+					ProjectId: sec.Workspace,
+					Value:     sec.SecretValue,
+					Type:      sec.Type,
+					ID:        sec.ID,
 				})
 				hasOverriden[sec.SecretKey] = true
 			}
@@ -251,7 +251,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	var errorToReturn error
 
 	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
-		if params.WorkspaceId == "" {
+		if params.ProjectId == "" {
 			if projectConfigFilePath == "" {
 				_, err := GetWorkSpaceFromFile()
 				if err != nil {
@@ -281,7 +281,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			loggedInUserDetails = EstablishUserLoginSession()
 		}
 
-		if params.WorkspaceId == "" {
+		if params.ProjectId == "" {
 			var infisicalDotJson models.WorkspaceConfigFile
 
 			if projectConfigFilePath == "" {
@@ -299,10 +299,10 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 
 				infisicalDotJson = projectConfig
 			}
-			params.WorkspaceId = infisicalDotJson.WorkspaceId
+			params.ProjectId = infisicalDotJson.ProjectId
 		}
 
-		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
+		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, params.ProjectId,
 			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
@@ -311,7 +311,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			if err != nil {
 				return nil, err
 			}
-			WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, res.Secrets)
+			WriteBackupSecrets(params.ProjectId, params.Environment, params.SecretsPath, backupEncryptionKey, res.Secrets)
 		}
 
 		secretsToReturn = res.Secrets
@@ -320,7 +320,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		if !isConnected {
 			backupEncryptionKey, _ := GetBackupEncryptionKey()
 			if backupEncryptionKey != nil {
-				backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
+				backedUpSecrets, err := ReadBackupSecrets(params.ProjectId, params.Environment, params.SecretsPath, backupEncryptionKey)
 				if len(backedUpSecrets) > 0 {
 					PrintWarning("Unable to fetch the latest secret(s) due to connection error, serving secrets from last successful fetch. For more info, run with --debug")
 					secretsToReturn = backedUpSecrets
@@ -335,12 +335,12 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			secretsToReturn, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences)
 		} else if params.UniversalAuthAccessToken != "" {
 
-			if params.WorkspaceId == "" {
+			if params.ProjectId == "" {
 				PrintErrorMessageAndExit("Project ID is required when using machine identity")
 			}
 
 			log.Debug().Msg("Trying to fetch secrets using universal auth")
-			res, err := GetPlainTextSecretsV3(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences)
+			res, err := GetPlainTextSecretsV3(params.UniversalAuthAccessToken, params.ProjectId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences)
 
 			errorToReturn = err
 			secretsToReturn = res.Secrets
@@ -456,9 +456,9 @@ func WriteBackupSecrets(workspace string, environment string, secretsPath string
 	return nil
 }
 
-func ReadBackupSecrets(workspace string, environment string, secretsPath string, encryptionKey []byte) ([]models.SingleEnvironmentVariable, error) {
+func ReadBackupSecrets(projectId string, environment string, secretsPath string, encryptionKey []byte) ([]models.SingleEnvironmentVariable, error) {
 	formattedPath := strings.ReplaceAll(secretsPath, "/", "-")
-	fileName := fmt.Sprintf("project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
+	fileName := fmt.Sprintf("project_secrets_%s_%s_%s.json", projectId, environment, formattedPath)
 	secrets_backup_folder_name := "secrets-backup"
 
 	_, fullConfigFileDirPath, err := GetFullConfigFilePath()
@@ -640,7 +640,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 		return nil, fmt.Errorf("unable to process set secret operations, token details are missing")
 	}
 
-	getAllEnvironmentVariablesRequest := models.GetAllSecretsParameters{Environment: environmentName, SecretsPath: secretsPath, WorkspaceId: projectId}
+	getAllEnvironmentVariablesRequest := models.GetAllSecretsParameters{Environment: environmentName, SecretsPath: secretsPath, ProjectId: projectId}
 	if tokenDetails.Type == UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
 		getAllEnvironmentVariablesRequest.UniversalAuthAccessToken = tokenDetails.Token
 	}
@@ -743,32 +743,32 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	}
 
 	for _, secret := range secretsToCreate {
-		createSecretRequest := api.CreateRawSecretV3Request{
+		createSecretRequest := api.CreateRawSecretV4Request{
 			SecretName:  secret.SecretKey,
 			SecretValue: secret.SecretValue,
 			Type:        secret.Type,
 			SecretPath:  secretsPath,
-			WorkspaceID: projectId,
+			ProjectID:   projectId,
 			Environment: environmentName,
 		}
 
-		err = api.CallCreateRawSecretsV3(httpClient, createSecretRequest)
+		err = api.CallCreateRawSecretsV4(httpClient, createSecretRequest)
 		if err != nil {
 			return nil, fmt.Errorf("unable to process new secret creations [err=%v]", err)
 		}
 	}
 
 	for _, secret := range secretsToModify {
-		updateSecretRequest := api.UpdateRawSecretByNameV3Request{
+		updateSecretRequest := api.UpdateRawSecretByNameV4Request{
 			SecretName:  secret.SecretKey,
 			SecretValue: secret.SecretValue,
 			SecretPath:  secretsPath,
-			WorkspaceID: projectId,
+			ProjectID:   projectId,
 			Environment: environmentName,
 			Type:        secret.Type,
 		}
 
-		err = api.CallUpdateRawSecretsV3(httpClient, updateSecretRequest)
+		err = api.CallUpdateRawSecretsV4(httpClient, updateSecretRequest)
 		if err != nil {
 			return nil, fmt.Errorf("unable to process secret update request [err=%v]", err)
 		}
