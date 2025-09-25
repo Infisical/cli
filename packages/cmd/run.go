@@ -138,7 +138,7 @@ var runCmd = &cobra.Command{
 
 		request := models.GetAllSecretsParameters{
 			Environment:            environmentName,
-			ProjectId:              projectId,
+			WorkspaceId:            projectId,
 			TagSlugs:               tagSlugs,
 			SecretsPath:            secretsPath,
 			IncludeImport:          includeImports,

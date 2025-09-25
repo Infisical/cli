@@ -53,17 +53,17 @@ var tokensCreateCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		workspaceId, err := cmd.Flags().GetString("projectId")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		if projectId == "" {
+		if workspaceId == "" {
 			configFile, err := util.GetWorkSpaceFromFile()
 			if err != nil {
 				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 			}
-			projectId = configFile.ProjectId
+			workspaceId = configFile.WorkspaceId
 		}
 
 		serviceTokenName, err := cmd.Flags().GetString("name")
@@ -130,7 +130,7 @@ var tokensCreateCmd = &cobra.Command{
 
 		createServiceTokenResponse, err := api.CallCreateServiceToken(httpClient, api.CreateServiceTokenRequest{
 			Name:        serviceTokenName,
-			ProjectId:   projectId,
+			WorkspaceId: workspaceId,
 			Scopes:      permissions,
 			ExpiresIn:   expireSeconds,
 			Permissions: accessLevels,
@@ -158,7 +158,7 @@ var tokensCreateCmd = &cobra.Command{
 
 			fmt.Printf("New service token created\n")
 			fmt.Printf("Name: %v\n", serviceTokenName)
-			fmt.Printf("Project ID: %v\n", projectId)
+			fmt.Printf("Project ID: %v\n", workspaceId)
 			fmt.Printf("Access type: [%v]\n", strings.Join(accessLevels, ", "))
 			fmt.Printf("Permission(s): %v\n", strings.Join(printablePermission, ", "))
 			fmt.Printf("Service Token: %v\n", serviceToken)

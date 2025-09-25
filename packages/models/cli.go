@@ -33,7 +33,7 @@ type Tag struct {
 
 type SingleEnvironmentVariable struct {
 	Key                   string `json:"key"`
-	ProjectId             string `json:"workspace"`
+	WorkspaceId           string `json:"workspace"`
 	Value                 string `json:"value"`
 	Type                  string `json:"type"`
 	ID                    string `json:"_id"`
@@ -95,7 +95,6 @@ type Workspace struct {
 
 type WorkspaceConfigFile struct {
 	WorkspaceId                   string            `json:"workspaceId"`
-	ProjectId                     string            `json:"projectId"`
 	DefaultEnvironment            string            `json:"defaultEnvironment"`
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 }
@@ -112,7 +111,7 @@ type GetAllSecretsParameters struct {
 	InfisicalToken           string
 	UniversalAuthAccessToken string
 	TagSlugs                 string
-	ProjectId                string
+	WorkspaceId              string
 	SecretsPath              string
 	IncludeImport            bool
 	Recursive                bool
@@ -126,7 +125,7 @@ type InjectableEnvironmentResult struct {
 }
 
 type GetAllFoldersParameters struct {
-	ProjectId                string
+	WorkspaceId              string
 	Environment              string
 	FoldersPath              string
 	InfisicalToken           string
@@ -135,7 +134,7 @@ type GetAllFoldersParameters struct {
 
 type CreateFolderParameters struct {
 	FolderName     string
-	ProjectId      string
+	WorkspaceId    string
 	Environment    string
 	FolderPath     string
 	InfisicalToken string
@@ -143,7 +142,7 @@ type CreateFolderParameters struct {
 
 type DeleteFolderParameters struct {
 	FolderName     string
-	ProjectId      string
+	WorkspaceId    string
 	Environment    string
 	FolderPath     string
 	InfisicalToken string

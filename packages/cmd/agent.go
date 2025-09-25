@@ -360,7 +360,7 @@ func secretTemplateFunction(accessToken string, existingEtag string, currentEtag
 
 func getSingleSecretTemplateFunction(accessToken string, existingEtag string, currentEtag *string) func(string, string, string, string) (models.SingleEnvironmentVariable, error) {
 	return func(projectID, envSlug, secretPath, secretName string) (models.SingleEnvironmentVariable, error) {
-		secret, requestEtag, err := util.GetSinglePlainTextSecretByNameV4(accessToken, projectID, envSlug, secretPath, secretName)
+		secret, requestEtag, err := util.GetSinglePlainTextSecretByNameV3(accessToken, projectID, envSlug, secretPath, secretName)
 		if err != nil {
 			return models.SingleEnvironmentVariable{}, err
 		}
@@ -447,11 +447,9 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag) // TODO: Fix this
 	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId, currentEtag)
-	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, existingEtag, currentEtag)
 	funcs := template.FuncMap{
-		"secret":          secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
+		"secret":         secretFunction,
+		"dynamic_secret": dynamicSecretFunction,
 	}
 
 	templateName := "base64Template"
@@ -472,11 +470,9 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 func ProcessLiteralTemplate(templateId int, templateString string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretLeaser *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag) // TODO: Fix this
 	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId, currentEtag)
-	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, existingEtag, currentEtag)
 	funcs := template.FuncMap{
-		"secret":          secretFunction,
-		"getSecretByName": getSingleSecretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
+		"secret":         secretFunction,
+		"dynamic_secret": dynamicSecretFunction,
 	}
 
 	templateName := "literalTemplate"
