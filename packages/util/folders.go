@@ -27,40 +27,40 @@ func GetAllFolders(params models.GetAllFoldersParameters) ([]models.SingleFolder
 			loggedInUserDetails = EstablishUserLoginSession()
 		}
 
-		if params.WorkspaceId == "" {
+		if params.ProjectId == "" {
 			workspaceFile, err := GetWorkSpaceFromFile()
 			if err != nil {
 				PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 			}
-			params.WorkspaceId = workspaceFile.WorkspaceId
+			params.ProjectId = workspaceFile.ProjectId
 		}
 
-		folders, err := GetFoldersViaJTW(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId, params.Environment, params.FoldersPath)
+		folders, err := GetFoldersViaJTW(loggedInUserDetails.UserCredentials.JTWToken, params.ProjectId, params.Environment, params.FoldersPath)
 		folderErr = err
 		foldersToReturn = folders
 	} else if params.InfisicalToken != "" {
 		log.Debug().Msg("GetAllFolders: Trying to fetch folders using service token")
 
 		// get folders via service token
-		folders, err := GetFoldersViaServiceToken(params.InfisicalToken, params.WorkspaceId, params.Environment, params.FoldersPath)
+		folders, err := GetFoldersViaServiceToken(params.InfisicalToken, params.ProjectId, params.Environment, params.FoldersPath)
 		folderErr = err
 		foldersToReturn = folders
 	} else if params.UniversalAuthAccessToken != "" {
 		log.Debug().Msg("GetAllFolders: Trying to fetch folders using universal auth")
 
-		if params.WorkspaceId == "" {
+		if params.ProjectId == "" {
 			PrintErrorMessageAndExit("Project ID is required when using machine identity")
 		}
 
 		// get folders via machine identity
-		folders, err := GetFoldersViaMachineIdentity(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.FoldersPath)
+		folders, err := GetFoldersViaMachineIdentity(params.UniversalAuthAccessToken, params.ProjectId, params.Environment, params.FoldersPath)
 		folderErr = err
 		foldersToReturn = folders
 	}
 	return foldersToReturn, folderErr
 }
 
-func GetFoldersViaJTW(JTWToken string, workspaceId string, environmentName string, foldersPath string) ([]models.SingleFolder, error) {
+func GetFoldersViaJTW(JTWToken string, projectId string, environmentName string, foldersPath string) ([]models.SingleFolder, error) {
 	// set up resty client
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
@@ -70,13 +70,13 @@ func GetFoldersViaJTW(JTWToken string, workspaceId string, environmentName strin
 	httpClient.SetAuthToken(JTWToken).
 		SetHeader("Accept", "application/json")
 
-	getFoldersRequest := api.GetFoldersV1Request{
-		WorkspaceId: workspaceId,
+	getFoldersRequest := api.GetFoldersV2Request{
+		ProjectID:   projectId,
 		Environment: environmentName,
 		FoldersPath: foldersPath,
 	}
 
-	apiResponse, err := api.CallGetFoldersV1(httpClient, getFoldersRequest)
+	apiResponse, err := api.CallGetFoldersV2(httpClient, getFoldersRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func GetFoldersViaJTW(JTWToken string, workspaceId string, environmentName strin
 	return folders, nil
 }
 
-func GetFoldersViaServiceToken(fullServiceToken string, workspaceId string, environmentName string, foldersPath string) ([]models.SingleFolder, error) {
+func GetFoldersViaServiceToken(fullServiceToken string, projectId string, environmentName string, foldersPath string) ([]models.SingleFolder, error) {
 	serviceTokenParts := strings.SplitN(fullServiceToken, ".", 4)
 	if len(serviceTokenParts) < 4 {
 		return nil, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
@@ -123,13 +123,13 @@ func GetFoldersViaServiceToken(fullServiceToken string, workspaceId string, envi
 		}
 	}
 
-	getFoldersRequest := api.GetFoldersV1Request{
-		WorkspaceId: serviceTokenDetails.Workspace,
+	getFoldersRequest := api.GetFoldersV2Request{
+		ProjectID:   serviceTokenDetails.Workspace,
 		Environment: environmentName,
 		FoldersPath: foldersPath,
 	}
 
-	apiResponse, err := api.CallGetFoldersV1(httpClient, getFoldersRequest)
+	apiResponse, err := api.CallGetFoldersV2(httpClient, getFoldersRequest)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get folders. [err=%v]", err)
 	}
@@ -146,7 +146,7 @@ func GetFoldersViaServiceToken(fullServiceToken string, workspaceId string, envi
 	return folders, nil
 }
 
-func GetFoldersViaMachineIdentity(accessToken string, workspaceId string, envSlug string, foldersPath string) ([]models.SingleFolder, error) {
+func GetFoldersViaMachineIdentity(accessToken string, projectId string, envSlug string, foldersPath string) ([]models.SingleFolder, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return nil, err
@@ -155,13 +155,13 @@ func GetFoldersViaMachineIdentity(accessToken string, workspaceId string, envSlu
 	httpClient.SetAuthToken(accessToken).
 		SetHeader("Accept", "application/json")
 
-	getFoldersRequest := api.GetFoldersV1Request{
-		WorkspaceId: workspaceId,
+	getFoldersRequest := api.GetFoldersV2Request{
+		ProjectID:   projectId,
 		Environment: envSlug,
 		FoldersPath: foldersPath,
 	}
 
-	apiResponse, err := api.CallGetFoldersV1(httpClient, getFoldersRequest)
+	apiResponse, err := api.CallGetFoldersV2(httpClient, getFoldersRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -207,14 +207,14 @@ func CreateFolder(params models.CreateFolderParameters) (models.SingleFolder, er
 		SetHeader("Accept", "application/json").
 		SetHeader("Content-Type", "application/json")
 
-	createFolderRequest := api.CreateFolderV1Request{
-		WorkspaceId: params.WorkspaceId,
+	createFolderRequest := api.CreateFolderV2Request{
+		ProjectId:   params.ProjectId,
 		Environment: params.Environment,
 		FolderName:  params.FolderName,
 		Path:        params.FolderPath,
 	}
 
-	apiResponse, err := api.CallCreateFolderV1(httpClient, createFolderRequest)
+	apiResponse, err := api.CallCreateFolderV2(httpClient, createFolderRequest)
 	if err != nil {
 		return models.SingleFolder{}, err
 	}
@@ -256,14 +256,14 @@ func DeleteFolder(params models.DeleteFolderParameters) ([]models.SingleFolder, 
 		SetHeader("Accept", "application/json").
 		SetHeader("Content-Type", "application/json")
 
-	deleteFolderRequest := api.DeleteFolderV1Request{
-		WorkspaceId: params.WorkspaceId,
+	deleteFolderRequest := api.DeleteFolderV2Request{
+		ProjectId:   params.ProjectId,
 		Environment: params.Environment,
 		FolderName:  params.FolderName,
 		Directory:   params.FolderPath,
 	}
 
-	apiResponse, err := api.CallDeleteFolderV1(httpClient, deleteFolderRequest)
+	apiResponse, err := api.CallDeleteFolderV2(httpClient, deleteFolderRequest)
 	if err != nil {
 		return nil, err
 	}

@@ -13,7 +13,7 @@ import (
 const USER_AGENT = "cli"
 
 const (
-	operationCallGetRawSecretsV3                   = "CallGetRawSecretsV3"
+	operationCallGetRawSecretsV4                   = "CallGetRawSecretsV4"
 	operationCallGetEncryptedWorkspaceKey          = "CallGetEncryptedWorkspaceKey"
 	operationCallGetServiceTokenDetails            = "CallGetServiceTokenDetails"
 	operationCallLogin1V3                          = "CallLogin1V3"
@@ -26,16 +26,16 @@ const (
 	operationCallGetProjectById                    = "CallGetProjectById"
 	operationCallIsAuthenticated                   = "CallIsAuthenticated"
 	operationCallGetNewAccessTokenWithRefreshToken = "CallGetNewAccessTokenWithRefreshToken"
-	operationCallGetFoldersV1                      = "CallGetFoldersV1"
-	operationCallCreateFolderV1                    = "CallCreateFolderV1"
-	operationCallDeleteFolderV1                    = "CallDeleteFolderV1"
+	operationCallGetFoldersV2                      = "CallGetFoldersV2"
+	operationCallCreateFolderV2                    = "CallCreateFolderV2"
+	operationCallDeleteFolderV2                    = "CallDeleteFolderV2"
 	operationCallDeleteSecretsV3                   = "CallDeleteSecretsV3"
 	operationCallCreateServiceToken                = "CallCreateServiceToken"
 	operationCallUniversalAuthLogin                = "CallUniversalAuthLogin"
 	operationCallMachineIdentityRefreshAccessToken = "CallMachineIdentityRefreshAccessToken"
 	operationCallFetchSingleSecretByName           = "CallFetchSingleSecretByName"
-	operationCallCreateRawSecretsV3                = "CallCreateRawSecretsV3"
-	operationCallUpdateRawSecretsV3                = "CallUpdateRawSecretsV3"
+	operationCallCreateRawSecretsV4                = "CallCreateRawSecretsV4"
+	operationCallUpdateRawSecretsV4                = "CallUpdateRawSecretsV4"
 	operationCallRegisterGatewayIdentityV1         = "CallRegisterGatewayIdentityV1"
 	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
@@ -45,26 +45,6 @@ const (
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 )
-
-func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
-	endpoint := fmt.Sprintf("%v/v2/workspace/%v/encrypted-key", config.INFISICAL_URL, request.WorkspaceId)
-	var result GetEncryptedWorkspaceKeyResponse
-	response, err := httpClient.
-		R().
-		SetResult(&result).
-		SetHeader("User-Agent", USER_AGENT).
-		Get(endpoint)
-
-	if err != nil {
-		return GetEncryptedWorkspaceKeyResponse{}, NewGenericRequestError(operationCallGetEncryptedWorkspaceKey, err)
-	}
-
-	if response.IsError() {
-		return GetEncryptedWorkspaceKeyResponse{}, NewAPIErrorWithResponse(operationCallGetEncryptedWorkspaceKey, response, nil)
-	}
-
-	return result, nil
-}
 
 func CallGetServiceTokenDetailsV2(httpClient *resty.Client) (GetServiceTokenDetailsResponse, error) {
 	var tokenDetailsResponse GetServiceTokenDetailsResponse
@@ -321,51 +301,51 @@ func CallGetNewAccessTokenWithRefreshToken(httpClient *resty.Client, refreshToke
 	return newAccessToken, nil
 }
 
-func CallGetFoldersV1(httpClient *resty.Client, request GetFoldersV1Request) (GetFoldersV1Response, error) {
+func CallGetFoldersV2(httpClient *resty.Client, request GetFoldersV2Request) (GetFoldersV1Response, error) {
 	var foldersResponse GetFoldersV1Response
 	httpRequest := httpClient.
 		R().
 		SetResult(&foldersResponse).
 		SetHeader("User-Agent", USER_AGENT).
 		SetQueryParam("environment", request.Environment).
-		SetQueryParam("workspaceId", request.WorkspaceId).
-		SetQueryParam("directory", request.FoldersPath)
+		SetQueryParam("projectId", request.ProjectID).
+		SetQueryParam("path", request.FoldersPath)
 
-	response, err := httpRequest.Get(fmt.Sprintf("%v/v1/folders", config.INFISICAL_URL))
+	response, err := httpRequest.Get(fmt.Sprintf("%v/v2/folders", config.INFISICAL_URL))
 
 	if err != nil {
-		return GetFoldersV1Response{}, NewGenericRequestError(operationCallGetFoldersV1, err)
+		return GetFoldersV1Response{}, NewGenericRequestError(operationCallGetFoldersV2, err)
 	}
 
 	if response.IsError() {
-		return GetFoldersV1Response{}, NewAPIErrorWithResponse(operationCallGetFoldersV1, response, nil)
+		return GetFoldersV1Response{}, NewAPIErrorWithResponse(operationCallGetFoldersV2, response, nil)
 	}
 
 	return foldersResponse, nil
 }
 
-func CallCreateFolderV1(httpClient *resty.Client, request CreateFolderV1Request) (CreateFolderV1Response, error) {
-	var folderResponse CreateFolderV1Response
+func CallCreateFolderV2(httpClient *resty.Client, request CreateFolderV2Request) (CreateFolderV2Response, error) {
+	var folderResponse CreateFolderV2Response
 	httpRequest := httpClient.
 		R().
 		SetResult(&folderResponse).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request)
 
-	response, err := httpRequest.Post(fmt.Sprintf("%v/v1/folders", config.INFISICAL_URL))
+	response, err := httpRequest.Post(fmt.Sprintf("%v/v2/folders", config.INFISICAL_URL))
 	if err != nil {
-		return CreateFolderV1Response{}, NewGenericRequestError(operationCallCreateFolderV1, err)
+		return CreateFolderV2Response{}, NewGenericRequestError(operationCallCreateFolderV2, err)
 	}
 
 	if response.IsError() {
-		return CreateFolderV1Response{}, NewAPIErrorWithResponse(operationCallCreateFolderV1, response, nil)
+		return CreateFolderV2Response{}, NewAPIErrorWithResponse(operationCallCreateFolderV2, response, nil)
 	}
 
 	return folderResponse, nil
 }
 
-func CallDeleteFolderV1(httpClient *resty.Client, request DeleteFolderV1Request) (DeleteFolderV1Response, error) {
-	var folderResponse DeleteFolderV1Response
+func CallDeleteFolderV2(httpClient *resty.Client, request DeleteFolderV2Request) (DeleteFolderV2Response, error) {
+	var folderResponse DeleteFolderV2Response
 
 	httpRequest := httpClient.
 		R().
@@ -373,19 +353,19 @@ func CallDeleteFolderV1(httpClient *resty.Client, request DeleteFolderV1Request)
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request)
 
-	response, err := httpRequest.Delete(fmt.Sprintf("%v/v1/folders/%v", config.INFISICAL_URL, request.FolderName))
+	response, err := httpRequest.Delete(fmt.Sprintf("%v/v2/folders/%v", config.INFISICAL_URL, request.FolderName))
 	if err != nil {
-		return DeleteFolderV1Response{}, NewGenericRequestError(operationCallDeleteFolderV1, err)
+		return DeleteFolderV2Response{}, NewGenericRequestError(operationCallDeleteFolderV2, err)
 	}
 
 	if response.IsError() {
-		return DeleteFolderV1Response{}, NewAPIErrorWithResponse(operationCallDeleteFolderV1, response, nil)
+		return DeleteFolderV2Response{}, NewAPIErrorWithResponse(operationCallDeleteFolderV2, response, nil)
 	}
 
 	return folderResponse, nil
 }
 
-func CallDeleteSecretsRawV3(httpClient *resty.Client, request DeleteSecretV3Request) error {
+func CallDeleteSecretsRawV4(httpClient *resty.Client, request DeleteSecretV4Request) error {
 
 	var secretsResponse GetEncryptedSecretsV3Response
 	response, err := httpClient.
@@ -393,7 +373,7 @@ func CallDeleteSecretsRawV3(httpClient *resty.Client, request DeleteSecretV3Requ
 		SetResult(&secretsResponse).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Delete(fmt.Sprintf("%v/v3/secrets/raw/%s", config.INFISICAL_URL, request.SecretName))
+		Delete(fmt.Sprintf("%v/v4/secrets/%s", config.INFISICAL_URL, request.SecretName))
 
 	if err != nil {
 		return NewGenericRequestError(operationCallDeleteSecretsV3, err)
@@ -467,14 +447,15 @@ func CallMachineIdentityRefreshAccessToken(httpClient *resty.Client, request Uni
 	return universalAuthRefreshResponse, nil
 }
 
-func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Request) (GetRawSecretsV3Response, error) {
+func CallGetRawSecretsV4(httpClient *resty.Client, request GetRawSecretsV3Request) (GetRawSecretsV3Response, error) {
+
 	var getRawSecretsV3Response GetRawSecretsV3Response
 	req := httpClient.
 		R().
 		SetResult(&getRawSecretsV3Response).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		SetQueryParam("workspaceId", request.WorkspaceId).
+		SetQueryParam("projectId", request.ProjectID).
 		SetQueryParam("environment", request.Environment).
 		SetQueryParam("secretPath", request.SecretPath)
 
@@ -493,22 +474,22 @@ func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Reques
 		req.SetQueryParam("expandSecretReferences", "true")
 	}
 
-	response, err := req.Get(fmt.Sprintf("%v/v3/secrets/raw", config.INFISICAL_URL))
+	response, err := req.Get(fmt.Sprintf("%v/v4/secrets", config.INFISICAL_URL))
 
 	if err != nil {
-		return GetRawSecretsV3Response{}, NewGenericRequestError(operationCallGetRawSecretsV3, err)
+		return GetRawSecretsV3Response{}, NewGenericRequestError(operationCallGetRawSecretsV4, err)
 	}
 
 	if response.IsError() &&
 		(strings.Contains(response.String(), "bot_not_found_error") ||
 			strings.Contains(strings.ToLower(response.String()), "failed to find bot key") ||
 			strings.Contains(strings.ToLower(response.String()), "bot is not active")) {
-		additionalContext := fmt.Sprintf(`Project with id %s is incompatible with your current CLI version. Upgrade your project by visiting the project settings page. If you're self-hosting and project upgrade option isn't yet available, contact your administrator to upgrade your Infisical instance to the latest release.`, request.WorkspaceId)
-		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, &additionalContext)
+		additionalContext := fmt.Sprintf(`Project with id %s is incompatible with your current CLI version. Upgrade your project by visiting the project settings page. If you're self-hosting and project upgrade option isn't yet available, contact your administrator to upgrade your Infisical instance to the latest release.`, request.ProjectID)
+		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV4, response, &additionalContext)
 	}
 
 	if response.IsError() {
-		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
+		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV4, response, nil)
 	}
 
 	getRawSecretsV3Response.ETag = response.Header().Get(("etag"))
@@ -516,8 +497,8 @@ func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Reques
 	return getRawSecretsV3Response, nil
 }
 
-func CallFetchSingleSecretByName(httpClient *resty.Client, request GetRawSecretV3ByNameRequest) (GetRawSecretV3ByNameResponse, error) {
-	var getRawSecretV3ByNameResponse GetRawSecretV3ByNameResponse
+func CallFetchSingleSecretByNameV4(httpClient *resty.Client, request GetRawSecretV4ByNameRequest) (GetRawSecretV4ByNameResponse, error) {
+	var getRawSecretV3ByNameResponse GetRawSecretV4ByNameResponse
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
@@ -527,16 +508,16 @@ func CallFetchSingleSecretByName(httpClient *resty.Client, request GetRawSecretV
 		SetQueryParam("include_imports", "true").
 		SetQueryParam("environment", request.Environment).
 		SetQueryParam("secretPath", request.SecretPath).
-		SetQueryParam("workspaceId", request.WorkspaceID).
+		SetQueryParam("projectId", request.ProjectID).
 		SetQueryParam("type", "shared").
-		Get(fmt.Sprintf("%v/v3/secrets/raw/%s", config.INFISICAL_URL, request.SecretName))
+		Get(fmt.Sprintf("%v/v4/secrets/%s", config.INFISICAL_URL, request.SecretName))
 
 	if err != nil {
-		return GetRawSecretV3ByNameResponse{}, NewGenericRequestError(operationCallFetchSingleSecretByName, err)
+		return GetRawSecretV4ByNameResponse{}, NewGenericRequestError(operationCallFetchSingleSecretByName, err)
 	}
 
 	if response.IsError() {
-		return GetRawSecretV3ByNameResponse{}, NewAPIErrorWithResponse(operationCallFetchSingleSecretByName, response, nil)
+		return GetRawSecretV4ByNameResponse{}, NewAPIErrorWithResponse(operationCallFetchSingleSecretByName, response, nil)
 	}
 
 	getRawSecretV3ByNameResponse.ETag = response.Header().Get(("etag"))
@@ -564,37 +545,37 @@ func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDyna
 	return createDynamicSecretLeaseResponse, nil
 }
 
-func CallCreateRawSecretsV3(httpClient *resty.Client, request CreateRawSecretV3Request) error {
+func CallCreateRawSecretsV4(httpClient *resty.Client, request CreateRawSecretV4Request) error {
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v3/secrets/raw/%s", config.INFISICAL_URL, request.SecretName))
+		Post(fmt.Sprintf("%v/v4/secrets/%s", config.INFISICAL_URL, request.SecretName))
 
 	if err != nil {
-		return NewGenericRequestError(operationCallCreateRawSecretsV3, err)
+		return NewGenericRequestError(operationCallCreateRawSecretsV4, err)
 	}
 
 	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallCreateRawSecretsV3, response, nil)
+		return NewAPIErrorWithResponse(operationCallCreateRawSecretsV4, response, nil)
 	}
 
 	return nil
 }
 
-func CallUpdateRawSecretsV3(httpClient *resty.Client, request UpdateRawSecretByNameV3Request) error {
+func CallUpdateRawSecretsV4(httpClient *resty.Client, request UpdateRawSecretByNameV4Request) error {
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Patch(fmt.Sprintf("%v/v3/secrets/raw/%s", config.INFISICAL_URL, request.SecretName))
+		Patch(fmt.Sprintf("%v/v4/secrets/%s", config.INFISICAL_URL, request.SecretName))
 
 	if err != nil {
-		return NewGenericRequestError(operationCallUpdateRawSecretsV3, err)
+		return NewGenericRequestError(operationCallUpdateRawSecretsV4, err)
 	}
 
 	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallUpdateRawSecretsV3, response, nil)
+		return NewAPIErrorWithResponse(operationCallUpdateRawSecretsV4, response, nil)
 	}
 
 	return nil

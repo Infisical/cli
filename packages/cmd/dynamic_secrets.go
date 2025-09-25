@@ -70,7 +70,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
 		}
-		projectId = workspaceFile.WorkspaceId
+		projectId = workspaceFile.ProjectId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -195,7 +195,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project id with --projectId flag, or pass in project slug with --project-slug flag")
 		}
-		projectId = workspaceFile.WorkspaceId
+		projectId = workspaceFile.ProjectId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -346,7 +346,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
 		}
-		projectId = workspaceFile.WorkspaceId
+		projectId = workspaceFile.ProjectId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -461,7 +461,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
 		}
-		projectId = workspaceFile.WorkspaceId
+		projectId = workspaceFile.ProjectId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -576,7 +576,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
 		}
-		projectId = workspaceFile.WorkspaceId
+		projectId = workspaceFile.ProjectId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
