@@ -96,37 +96,13 @@ func WorkspaceConfigFileExistsInCurrentPath() bool {
 	}
 }
 
-func updateWorkspaceConfigFileProjectId(workspaceConfigFile *models.WorkspaceConfigFile, cfgFilePath string) error {
-	if workspaceConfigFile.ProjectId == "" && workspaceConfigFile.WorkspaceId != "" {
-
-		if workspaceConfigFile == nil {
-			return fmt.Errorf("workspaceConfigFile is nil")
-		}
-
-		workspaceConfigFile.ProjectId = workspaceConfigFile.WorkspaceId
-		// workspaceConfigFile.WorkspaceId = "" // keeping commented out to avoid destructive changes for now
-
-		workspaceConfigFileAsBytes, err := json.MarshalIndent(workspaceConfigFile, "", "    ")
-
-		if err != nil {
-			return err
-		}
-		err = os.WriteFile(cfgFilePath, workspaceConfigFileAsBytes, 0600)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
-	cfgFilePath, err := FindWorkspaceConfigFile()
+	cfgFile, err := FindWorkspaceConfigFile()
 	if err != nil {
 		return models.WorkspaceConfigFile{}, err
 	}
 
-	configFileAsBytes, err := os.ReadFile(cfgFilePath)
+	configFileAsBytes, err := os.ReadFile(cfgFile)
 	if err != nil {
 		return models.WorkspaceConfigFile{}, err
 	}
@@ -134,10 +110,6 @@ func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
 	var workspaceConfigFile models.WorkspaceConfigFile
 	err = json.Unmarshal(configFileAsBytes, &workspaceConfigFile)
 	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	if err := updateWorkspaceConfigFileProjectId(&workspaceConfigFile, cfgFilePath); err != nil {
 		return models.WorkspaceConfigFile{}, err
 	}
 
@@ -160,10 +132,6 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 	var workspaceConfigFile models.WorkspaceConfigFile
 	err = json.Unmarshal(configFileAsBytes, &workspaceConfigFile)
 	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	if err := updateWorkspaceConfigFileProjectId(&workspaceConfigFile, configFilePath); err != nil {
 		return models.WorkspaceConfigFile{}, err
 	}
 
@@ -223,10 +191,6 @@ func GetWorkspaceConfigByPath(path string) (workspaceConfig models.WorkspaceConf
 	err = json.Unmarshal(workspaceConfigFileAsBytes, &workspaceConfigFile)
 	if err != nil {
 		return models.WorkspaceConfigFile{}, fmt.Errorf("GetWorkspaceConfigByPath: Unable to unmarshal workspace config file because [%s]", err)
-	}
-
-	if err := updateWorkspaceConfigFileProjectId(&workspaceConfigFile, path); err != nil {
-		return models.WorkspaceConfigFile{}, err
 	}
 
 	return workspaceConfigFile, nil
