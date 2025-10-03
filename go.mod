@@ -16,6 +16,7 @@ require (
 	github.com/h2non/filetype v1.1.3
 	github.com/infisical/go-sdk v0.5.99
 	github.com/infisical/infisical-kmip v0.3.5
+	github.com/jackc/pgx/v5 v5.7.6
 	github.com/mattn/go-isatty v0.0.20
 	github.com/muesli/ansi v0.0.0-20221106050444-61f0cd9a192a
 	github.com/muesli/mango-cobra v1.2.0
@@ -34,10 +35,10 @@ require (
 	github.com/spf13/viper v1.8.1
 	github.com/stretchr/testify v1.10.0
 	github.com/wasilibs/go-re2 v1.10.0
-	golang.org/x/crypto v0.36.0
+	golang.org/x/crypto v0.37.0
 	golang.org/x/exp v0.0.0-20250228200357-dead58393ab7
-	golang.org/x/sys v0.31.0
-	golang.org/x/term v0.30.0
+	golang.org/x/sys v0.32.0
+	golang.org/x/term v0.31.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.31.4
@@ -152,8 +153,8 @@ require (
 	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.27.0 // indirect
-	golang.org/x/sync v0.12.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/sync v0.13.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	golang.org/x/tools v0.30.0 // indirect
 	google.golang.org/api v0.188.0 // indirect

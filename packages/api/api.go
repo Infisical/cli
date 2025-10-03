@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -44,6 +45,11 @@ const (
 	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
+	operationCallPAMAccess                         = "CallPAMAccess"
+	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
+	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
+	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
+	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
 )
 
 func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
@@ -751,4 +757,95 @@ func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayReques
 	}
 
 	return resBody, nil
+}
+
+func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAccessResponse, error) {
+	var pamAccessResponse PAMAccessResponse
+	response, err := httpClient.
+		R().
+		SetResult(&pamAccessResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/pam/accounts/access", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMAccessResponse{}, NewGenericRequestError(operationCallPAMAccess, err)
+	}
+
+	if response.IsError() {
+		return PAMAccessResponse{}, NewAPIErrorWithResponse(operationCallPAMAccess, response, nil)
+	}
+
+	return pamAccessResponse, nil
+}
+
+func CallPAMSessionCredentials(httpClient *resty.Client, sessionId string) (PAMSessionCredentialsResponse, error) {
+	var pamSessionCredentialsResponse PAMSessionCredentialsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&pamSessionCredentialsResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/pam/sessions/%s/credentials", config.INFISICAL_URL, sessionId))
+
+	if err != nil {
+		return PAMSessionCredentialsResponse{}, NewGenericRequestError(operationCallPAMSessionCredentials, err)
+	}
+
+	if response.IsError() {
+		return PAMSessionCredentialsResponse{}, NewAPIErrorWithResponse(operationCallPAMSessionCredentials, response, nil)
+	}
+
+	return pamSessionCredentialsResponse, nil
+}
+
+func CallGetPamSessionKey(httpClient *resty.Client) (string, error) {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v2/gateways/pam-session-key", config.INFISICAL_URL))
+
+	if err != nil {
+		return "", NewGenericRequestError(operationCallGetPamSessionKey, err)
+	}
+
+	if response.IsError() {
+		return "", NewAPIErrorWithResponse(operationCallGetPamSessionKey, response, nil)
+	}
+
+	return base64.StdEncoding.EncodeToString(response.Body()), nil
+}
+
+func CallUploadPamSessionLogs(httpClient *resty.Client, sessionId string, request UploadPAMSessionLogsRequest) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/logs", config.INFISICAL_URL, sessionId))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallUploadPamSessionLog, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallUploadPamSessionLog, response, nil)
+	}
+
+	return nil
+}
+
+func CallPAMSessionTermination(httpClient *resty.Client, sessionId string) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/end", config.INFISICAL_URL, sessionId))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallPAMSessionTermination, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallPAMSessionTermination, response, nil)
+	}
+
+	return nil
 }

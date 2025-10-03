@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/pam"
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -27,9 +29,11 @@ import (
 type ForwardMode string
 
 const (
-	ForwardModeHTTP ForwardMode = "HTTP"
-	ForwardModeTCP  ForwardMode = "TCP"
-	ForwardModePing ForwardMode = "PING"
+	ForwardModeHTTP            ForwardMode = "HTTP"
+	ForwardModeTCP             ForwardMode = "TCP"
+	ForwardModePAM             ForwardMode = "PAM"
+	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
+	ForwardModePing            ForwardMode = "PING"
 )
 
 type ActorType string
@@ -41,6 +45,7 @@ const (
 
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
+const PAM_INFO_OID = "1.3.6.1.4.1.12345.100.3"
 
 // ForwardConfig contains the configuration for forwarding
 type ForwardConfig struct {
@@ -50,12 +55,18 @@ type ForwardConfig struct {
 	TargetHost    string
 	TargetPort    int
 	ActorType     ActorType
+	PAMConfig     pam.GatewayPAMConfig
 }
 
 // RoutingInfo represents the routing information embedded in client certificates
 type RoutingInfo struct {
 	TargetHost string `json:"targetHost"`
 	TargetPort int    `json:"targetPort"`
+}
+
+type PAMInfo struct {
+	SessionId    string `json:"sessionId"`
+	ResourceType string `json:"resourceType"`
 }
 
 type ActorDetails struct {
@@ -177,6 +188,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start certificate renewal goroutine
 	go g.startCertificateRenewal(ctx)
 
+	// Start session uploader goroutine for PAM
+	session.StartSessionUploader()
+
 	go func() {
 		for {
 			select {
@@ -217,6 +231,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 func (g *Gateway) SetToken(token string) {
 	g.httpClient.SetAuthToken(token)
+	session.SetUploaderConfig(g.httpClient)
 }
 
 func (g *Gateway) Stop() {
@@ -389,7 +404,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping"},
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation"},
 	}
 
 	return nil
@@ -546,6 +561,16 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("TCP proxy handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePAM {
+		if err := pam.HandlePAMProxy(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+			log.Error().Err(err).Msg("PAM proxy handler ended with error")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModePAMCancellation {
+		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModePing {
 		log.Info().Msg("Starting ping handler")
 		if err := handlePing(g.ctx, tlsConn, reader); err != nil {
@@ -565,7 +590,6 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 		return nil, fmt.Errorf("failed to parse routing info from certificate: %v", err)
 	}
 
-	// Get the negotiated ALPN protocol
 	state := tlsConn.ConnectionState()
 	negotiatedProtocol := state.NegotiatedProtocol
 
@@ -583,6 +607,14 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-tcp-proxy":
 		config.Mode = ForwardModeTCP
+		return config, nil
+
+	case "infisical-pam-proxy":
+		config.Mode = ForwardModePAM
+		return config, nil
+
+	case "infisical-pam-session-cancellation":
+		config.Mode = ForwardModePAMCancellation
 		return config, nil
 
 	case "infisical-ping":
@@ -662,6 +694,18 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 				return fmt.Errorf("failed to parse actor details JSON: %v", err)
 			}
 			config.ActorType = ActorType(actorDetails.Type)
+		}
+		// Extract PAM info from client certificate custom extension
+		if ext.Id.String() == PAM_INFO_OID {
+			var pamInfo PAMInfo
+			if err := json.Unmarshal(ext.Value, &pamInfo); err != nil {
+				return fmt.Errorf("failed to parse PAM info JSON: %v", err)
+			}
+			config.PAMConfig = pam.GatewayPAMConfig{
+				SessionId:    pamInfo.SessionId,
+				ResourceType: pamInfo.ResourceType,
+				ExpiryTime:   clientCert.NotAfter,
+			}
 		}
 	}
 
