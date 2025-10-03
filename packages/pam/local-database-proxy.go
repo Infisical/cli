@@ -22,6 +22,7 @@ import (
 )
 
 type DatabaseProxyServer struct {
+	httpClient             *resty.Client
 	server                 net.Listener
 	port                   int
 	relayHost              string
@@ -77,6 +78,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	ctx, cancel := context.WithCancel(context.Background())
 
 	proxy := &DatabaseProxyServer{
+		httpClient:             httpClient,
 		relayHost:              pamResponse.RelayHost,
 		relayClientCert:        pamResponse.RelayClientCertificate,
 		relayClientKey:         pamResponse.RelayClientPrivateKey,
@@ -176,9 +178,12 @@ func (p *DatabaseProxyServer) gracefulShutdown() {
 func (p *DatabaseProxyServer) notifySessionTermination() {
 	log.Info().Msgf("Notifying session termination for session ID: %s", p.sessionId)
 
+	// Try to notify via gateway connection first
 	relayConn, err := p.createRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay for termination notification")
+		// Fallback to API call if relay connection fails
+		p.fallbackToAPITermination()
 		return
 	}
 	defer relayConn.Close()
@@ -186,10 +191,21 @@ func (p *DatabaseProxyServer) notifySessionTermination() {
 	gatewayConn, err := p.createGatewayConnection(relayConn, ALPNInfisicalPAMCancellation)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway for termination notification")
+		// Fallback to API call if gateway connection fails
+		p.fallbackToAPITermination()
 		return
 	}
 	defer gatewayConn.Close()
 	log.Info().Msg("Session termination notification sent successfully")
+}
+
+func (p *DatabaseProxyServer) fallbackToAPITermination() {
+	err := api.CallPAMSessionTermination(p.httpClient, p.sessionId)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to terminate session via API fallback")
+	} else {
+		log.Info().Msg("Session terminated successfully via API fallback")
+	}
 }
 
 func (p *DatabaseProxyServer) Run() {
