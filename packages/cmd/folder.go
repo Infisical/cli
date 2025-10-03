@@ -46,6 +46,10 @@ var getCmd = &cobra.Command{
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
+		outputFormat, err := cmd.Flags().GetString("output")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
 
 		request := models.GetAllFoldersParameters{
 			Environment: environmentName,
@@ -64,7 +68,27 @@ var getCmd = &cobra.Command{
 			util.HandleError(err, "Unable to get folders")
 		}
 
-		visualize.PrintAllFoldersDetails(folders, foldersPath)
+		if outputFormat != "" {
+
+			var outputStructure []map[string]any
+			for _, folder := range folders {
+				outputStructure = append(outputStructure, map[string]any{
+					"folderName": folder.Name,
+					"folderPath": foldersPath,
+					"folderId":   folder.ID,
+				})
+			}
+
+			output, err := util.FormatOutput(outputFormat, outputStructure, nil)
+
+			if err != nil {
+				util.HandleError(err, "Unable to format output")
+			}
+
+			fmt.Print(output)
+		} else {
+			visualize.PrintAllFoldersDetails(folders, foldersPath)
+		}
 		Telemetry.CaptureEvent("cli-command:folders get", posthog.NewProperties().Set("folderCount", len(folders)).Set("version", util.CLI_VERSION))
 	},
 }
@@ -101,6 +125,11 @@ var createCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse name flag")
 		}
 
+		outputFormat, err := cmd.Flags().GetString("output")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
 		if folderName == "" {
 			util.HandleError(errors.New("invalid folder name, folder name cannot be empty"))
 		}
@@ -129,12 +158,28 @@ var createCmd = &cobra.Command{
 			params.InfisicalToken = token.Token
 		}
 
-		_, err = util.CreateFolder(params)
+		folder, err := util.CreateFolder(params)
 		if err != nil {
 			util.HandleError(err, "Unable to create folder")
 		}
 
-		util.PrintSuccessMessage(fmt.Sprintf("folder named `%s` created in path %s", folderName, folderPath))
+		if outputFormat != "" {
+
+			var outputStructure []map[string]any
+			outputStructure = append(outputStructure, map[string]any{
+				"folderName": folder.Name,
+				"folderPath": folderPath,
+				"folderId":   folder.ID,
+			})
+
+			output, err := util.FormatOutput(outputFormat, outputStructure, nil)
+			if err != nil {
+				util.HandleError(err, "Unable to format output")
+			}
+			fmt.Print(output)
+		} else {
+			util.PrintSuccessMessage(fmt.Sprintf("folder named `%s` created in path %s", folderName, folderPath))
+		}
 
 		Telemetry.CaptureEvent("cli-command:folders create", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
@@ -173,6 +218,11 @@ var deleteCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse name flag")
 		}
 
+		outputFormat, err := cmd.Flags().GetString("output")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
 		if folderName == "" {
 			util.HandleError(errors.New("invalid folder name, folder name cannot be empty"))
 		}
@@ -202,7 +252,21 @@ var deleteCmd = &cobra.Command{
 			util.HandleError(err, "Unable to delete folder")
 		}
 
-		util.PrintSuccessMessage(fmt.Sprintf("folder named `%s` deleted in path %s", folderName, folderPath))
+		if outputFormat != "" {
+			outputStructure := map[string]any{
+				"folderName": folderName,
+				"folderPath": folderPath,
+			}
+
+			output, err := util.FormatOutput(outputFormat, outputStructure, nil)
+			if err != nil {
+				util.HandleError(err, "Unable to format output")
+			}
+			fmt.Print(output)
+		} else {
+
+			util.PrintSuccessMessage(fmt.Sprintf("folder named `%s` deleted in path %s", folderName, folderPath))
+		}
 
 		Telemetry.CaptureEvent("cli-command:folders delete", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
