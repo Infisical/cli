@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -411,7 +410,7 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 	}
 
 	// Step 1: Generate client nonce and create initial message
-	clientNonce := p.generateNonce()
+	clientNonce := session.GenerateNonce()
 	username := p.config.InjectUsername
 
 	// Create client-first-message: n,,n=username,r=clientNonce
@@ -458,11 +457,11 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 	clientFinalMessageWithoutProof := fmt.Sprintf("c=biws,r=%s", serverNonce) // biws = base64("n,,")
 
 	saltedPassword := pbkdf2.Key([]byte(password), salt, iterations, 32, sha256.New)
-	clientKey := p.hmacSHA256(saltedPassword, []byte("Client Key"))
-	storedKey := p.sha256Hash(clientKey)
+	clientKey := session.HmacSHA256(saltedPassword, []byte("Client Key"))
+	storedKey := session.SHA256Hash(clientKey)
 
 	authMessage := fmt.Sprintf("%s,%s,%s", clientFirstMessageBare, serverFirstMessage, clientFinalMessageWithoutProof)
-	clientSignature := p.hmacSHA256(storedKey, []byte(authMessage))
+	clientSignature := session.HmacSHA256(storedKey, []byte(authMessage))
 
 	clientProof := make([]byte, len(clientKey))
 	for i := range clientKey {
@@ -531,11 +530,6 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 }
 
 // Helper functions for SCRAM-SHA-256
-func (p *PostgresProxy) generateNonce() string {
-	nonce := make([]byte, 18)
-	rand.Read(nonce)
-	return base64.StdEncoding.EncodeToString(nonce)
-}
 
 func (p *PostgresProxy) parseServerFirstMessage(serverFirstMessage, clientNonce string) (serverNonce string, salt []byte, iterations int, err error) {
 	parts := strings.Split(serverFirstMessage, ",")
@@ -573,18 +567,6 @@ func (p *PostgresProxy) parseServerFirstMessage(serverFirstMessage, clientNonce 
 	return serverNonce, salt, iterations, nil
 }
 
-func (p *PostgresProxy) hmacSHA256(key, data []byte) []byte {
-	h := hmac.New(sha256.New, key)
-	h.Write(data)
-	return h.Sum(nil)
-}
-
-func (p *PostgresProxy) sha256Hash(data []byte) []byte {
-	h := sha256.New()
-	h.Write(data)
-	return h.Sum(nil)
-}
-
 func (p *PostgresProxy) verifyServerSignature(serverFinalMessage string, saltedPassword []byte, authMessage string) bool {
 	// Parse v=serverSignature
 	if !strings.HasPrefix(serverFinalMessage, "v=") {
@@ -597,8 +579,8 @@ func (p *PostgresProxy) verifyServerSignature(serverFinalMessage string, saltedP
 	}
 
 	// Calculate expected server signature
-	serverKey := p.hmacSHA256(saltedPassword, []byte("Server Key"))
-	expectedSignature := p.hmacSHA256(serverKey, []byte(authMessage))
+	serverKey := session.HmacSHA256(saltedPassword, []byte("Server Key"))
+	expectedSignature := session.HmacSHA256(serverKey, []byte(authMessage))
 
 	// Compare signatures
 	return hmac.Equal(receivedSignature, expectedSignature)

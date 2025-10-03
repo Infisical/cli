@@ -21,7 +21,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type ProxyServer struct {
+type DatabaseProxyServer struct {
 	server                 net.Listener
 	port                   int
 	relayHost              string
@@ -47,8 +47,8 @@ const (
 	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
 )
 
-func StartLocalProxy(accessToken string, accountID string, durationStr string, port int) {
-	log.Info().Msgf("Starting PAM proxy for account ID: %s", accountID)
+func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr string, port int) {
+	log.Info().Msgf("Starting database proxy for account ID: %s", accountID)
 	log.Info().Msgf("Session duration: %s", durationStr)
 
 	httpClient := resty.New()
@@ -66,7 +66,7 @@ func StartLocalProxy(accessToken string, accountID string, durationStr string, p
 		return
 	}
 
-	log.Info().Msgf("PAM session created with ID: %s", pamResponse.SessionId)
+	log.Info().Msgf("Database session created with ID: %s", pamResponse.SessionId)
 
 	duration, err := time.ParseDuration(durationStr)
 	if err != nil {
@@ -76,7 +76,7 @@ func StartLocalProxy(accessToken string, accountID string, durationStr string, p
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	proxy := &ProxyServer{
+	proxy := &DatabaseProxyServer{
 		relayHost:              pamResponse.RelayHost,
 		relayClientCert:        pamResponse.RelayClientCertificate,
 		relayClientKey:         pamResponse.RelayClientPrivateKey,
@@ -98,13 +98,13 @@ func StartLocalProxy(accessToken string, accountID string, durationStr string, p
 	}
 
 	if port == 0 {
-		fmt.Printf("PAM proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountID, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("PAM proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
 	}
 
-	log.Info().Msgf("Proxy server listening on port %d", proxy.port)
-	log.Info().Msgf("Connect to your PAM resource using: localhost:%d", proxy.port)
+	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
+	log.Info().Msgf("Connect to your database using: localhost:%d", proxy.port)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -118,7 +118,7 @@ func StartLocalProxy(accessToken string, accountID string, durationStr string, p
 	proxy.Run()
 }
 
-func (p *ProxyServer) Start(port int) error {
+func (p *DatabaseProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
 		p.server, err = net.Listen("tcp", ":0")
@@ -136,9 +136,9 @@ func (p *ProxyServer) Start(port int) error {
 	return nil
 }
 
-func (p *ProxyServer) gracefulShutdown() {
+func (p *DatabaseProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
-		log.Info().Msg("Starting graceful shutdown of PAM proxy...")
+		log.Info().Msg("Starting graceful shutdown of database proxy...")
 
 		// Send session termination notification before cancelling context
 		p.notifySessionTermination()
@@ -167,13 +167,13 @@ func (p *ProxyServer) gracefulShutdown() {
 			log.Warn().Msg("Timeout waiting for connections to close, forcing shutdown")
 		}
 
-		log.Info().Msg("PAM proxy shutdown complete")
+		log.Info().Msg("Database proxy shutdown complete")
 		os.Exit(0)
 	})
 }
 
 // notifySessionTermination sends a termination notification through the gateway
-func (p *ProxyServer) notifySessionTermination() {
+func (p *DatabaseProxyServer) notifySessionTermination() {
 	log.Info().Msgf("Notifying session termination for session ID: %s", p.sessionId)
 
 	relayConn, err := p.createRelayConnection()
@@ -192,7 +192,7 @@ func (p *ProxyServer) notifySessionTermination() {
 	log.Info().Msg("Session termination notification sent successfully")
 }
 
-func (p *ProxyServer) Run() {
+func (p *DatabaseProxyServer) Run() {
 	defer p.server.Close()
 
 	for {
@@ -206,7 +206,7 @@ func (p *ProxyServer) Run() {
 		default:
 			// Check if session has expired
 			if time.Now().After(p.sessionExpiry) {
-				log.Warn().Msg("PAM session expired, shutting down proxy")
+				log.Warn().Msg("Database session expired, shutting down proxy")
 				p.gracefulShutdown()
 				return
 			}
@@ -238,7 +238,7 @@ func (p *ProxyServer) Run() {
 	}
 }
 
-func (p *ProxyServer) handleConnection(clientConn net.Conn) {
+func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 	defer func() {
 		clientConn.Close()
 		p.activeConnections.Done()
@@ -267,7 +267,7 @@ func (p *ProxyServer) handleConnection(clientConn net.Conn) {
 	}
 	defer gatewayConn.Close()
 
-	log.Info().Msg("Established connection to PAM resource")
+	log.Info().Msg("Established connection to database resource")
 
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
@@ -310,7 +310,7 @@ func (p *ProxyServer) handleConnection(clientConn net.Conn) {
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }
 
-func (p *ProxyServer) createRelayConnection() (net.Conn, error) {
+func (p *DatabaseProxyServer) createRelayConnection() (net.Conn, error) {
 	var host string
 	var port int = 8443
 
@@ -356,7 +356,7 @@ func (p *ProxyServer) createRelayConnection() (net.Conn, error) {
 	return conn, nil
 }
 
-func (p *ProxyServer) createGatewayConnection(relayConn net.Conn, alpn ALPN) (net.Conn, error) {
+func (p *DatabaseProxyServer) createGatewayConnection(relayConn net.Conn, alpn ALPN) (net.Conn, error) {
 	// Load gateway certificates
 	cert, err := tls.X509KeyPair([]byte(p.gatewayClientCert), []byte(p.gatewayClientKey))
 	if err != nil {

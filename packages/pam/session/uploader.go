@@ -157,9 +157,13 @@ func SetUploaderConfig(httpClient *resty.Client) {
 
 func startSessionUploaderRoutine() {
 	log.Info().Msg("Starting PAM session uploader routine")
+
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
+
+		// call once immediately
+		uploadExpiredSessionFiles()
 
 		for range ticker.C {
 			uploadExpiredSessionFiles()

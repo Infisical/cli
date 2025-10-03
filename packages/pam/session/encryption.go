@@ -3,7 +3,9 @@ package session
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -73,4 +75,22 @@ func EncryptData(data []byte, keyBase64 string) ([]byte, error) {
 	// Encrypt the data
 	ciphertext := gcm.Seal(nonce, nonce, data, nil)
 	return ciphertext, nil
+}
+
+func GenerateNonce() string {
+	nonce := make([]byte, 18)
+	rand.Read(nonce)
+	return base64.StdEncoding.EncodeToString(nonce)
+}
+
+func HmacSHA256(key, data []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+func SHA256Hash(data []byte) []byte {
+	h := sha256.New()
+	h.Write(data)
+	return h.Sum(nil)
 }

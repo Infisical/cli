@@ -18,11 +18,19 @@ var pamCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
-var pamAccessCmd = &cobra.Command{
-	Use:                   "access <account-id>",
-	Short:                 "Access PAM accounts",
-	Long:                  "Access PAM accounts for Infisical. This starts a local proxy server that you can use to access PAM accounts directly.",
-	Example:               "infisical pam access f55e5610-0c3c-42e0-bccf-fc526f68a990 --duration 4h --port 8080",
+var pamDbCmd = &cobra.Command{
+	Use:                   "db",
+	Short:                 "Database-related PAM commands",
+	Long:                  "Database-related PAM commands for Infisical",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var pamDbAccessAccountCmd = &cobra.Command{
+	Use:                   "access-account <account-name-or-id>",
+	Short:                 "Access PAM database accounts",
+	Long:                  "Access PAM database accounts for Infisical. This starts a local database proxy server that you can use to connect to databases directly.",
+	Example:               "infisical pam db access-account my-postgres-account --duration 4h --port 5432",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -46,13 +54,13 @@ var pamAccessCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse port flag")
 		}
 
-		log.Debug().Msg("PAM Access: Trying to fetch secrets using logged in details")
+		log.Debug().Msg("PAM Database Access: Trying to fetch secrets using logged in details")
 
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
 		isConnected := util.ValidateInfisicalAPIConnection()
 
 		if isConnected {
-			log.Debug().Msg("PAM Access: Connected to Infisical instance, checking logged in creds")
+			log.Debug().Msg("PAM Database Access: Connected to Infisical instance, checking logged in creds")
 		}
 
 		if err != nil {
@@ -63,13 +71,15 @@ var pamAccessCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountID, durationStr, port)
+		pam.StartDatabaseLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountID, durationStr, port)
 	},
 }
 
 func init() {
-	pamCmd.AddCommand(pamAccessCmd)
-	pamAccessCmd.Flags().String("duration", "1h", "Duration for PAM access session (e.g., '1h', '30m', '2h30m')")
-	pamAccessCmd.Flags().Int("port", 0, "Port for the local proxy server (0 for auto-assign)")
+	pamDbCmd.AddCommand(pamDbAccessAccountCmd)
+	pamDbAccessAccountCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
+	pamDbAccessAccountCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
+
+	pamCmd.AddCommand(pamDbCmd)
 	rootCmd.AddCommand(pamCmd)
 }

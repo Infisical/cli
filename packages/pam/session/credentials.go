@@ -54,11 +54,8 @@ func GetPAMSessionCredentials(sessionId string, expiryTime time.Time, httpClient
 	cacheMutex.RUnlock()
 
 	if exists && time.Now().Before(cached.expiresAt) {
-		log.Info().Str("sessionId", sessionId).Msg("Using cached PAM session credentials")
 		return cached.credentials, nil
 	}
-
-	log.Info().Str("sessionId", sessionId).Msg("Retrieving PAM session credentials from API")
 
 	response, err := api.CallPAMSessionCredentials(httpClient, sessionId)
 	if err != nil {
@@ -82,8 +79,6 @@ func GetPAMSessionCredentials(sessionId string, expiryTime time.Time, httpClient
 		expiresAt:   expiryTime,
 	}
 	cacheMutex.Unlock()
-
-	log.Info().Str("sessionId", sessionId).Str("username", credentials.Username).Str("database", credentials.Database).Msg("Successfully retrieved and cached PAM session credentials")
 
 	return credentials, nil
 }
