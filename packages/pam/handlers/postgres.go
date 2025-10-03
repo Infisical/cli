@@ -410,7 +410,11 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 	}
 
 	// Step 1: Generate client nonce and create initial message
-	clientNonce := session.GenerateNonce()
+	clientNonce, err := session.GenerateNonce()
+	if err != nil {
+		return fmt.Errorf("failed to generate client nonce: %w", err)
+	}
+
 	username := p.config.InjectUsername
 
 	// Create client-first-message: n,,n=username,r=clientNonce
@@ -425,7 +429,7 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 
 	log.Debug().Str("sessionID", p.config.SessionID).Msg("→ SERVER: SASLInitialResponse with SCRAM-SHA-256")
 	serverFrontend.Send(initialResponse)
-	err := serverFrontend.Flush()
+	err = serverFrontend.Flush()
 	if err != nil {
 		return fmt.Errorf("failed to send SASL initial response: %w", err)
 	}

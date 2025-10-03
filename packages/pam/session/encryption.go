@@ -77,10 +77,14 @@ func EncryptData(data []byte, keyBase64 string) ([]byte, error) {
 	return ciphertext, nil
 }
 
-func GenerateNonce() string {
+func GenerateNonce() (string, error) {
 	nonce := make([]byte, 18)
-	rand.Read(nonce)
-	return base64.StdEncoding.EncodeToString(nonce)
+	_, err := rand.Read(nonce)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(nonce), nil
 }
 
 func HmacSHA256(key, data []byte) []byte {

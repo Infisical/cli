@@ -13,15 +13,17 @@ import (
 )
 
 type GatewayPAMConfig struct {
-	SessionId    string
-	ResourceType string
-	ExpiryTime   time.Time
+	SessionId          string
+	ResourceType       string
+	ExpiryTime         time.Time
+	CredentialsManager *session.CredentialsManager
+	SessionUploader    *session.SessionUploader
 }
 
 func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
 	log.Info().Str("sessionId", pamConfig.SessionId).Msg("Received session termination message")
 
-	if err := session.CleanupPAMSession(pamConfig.SessionId, httpClient, "cancellation"); err != nil {
+	if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
 	}
 
@@ -31,7 +33,7 @@ func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *Gatew
 }
 
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
-	credentials, err := session.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime, httpClient)
+	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to retrieve PAM session credentials")
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
@@ -52,7 +54,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 					Time("expiryTime", pamConfig.ExpiryTime).
 					Msg("PAM session expired, closing connection")
 
-				if err := session.CleanupPAMSession(pamConfig.SessionId, httpClient, "expiry"); err != nil {
+				if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "expiry"); err != nil {
 					log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session on expiry")
 				}
 
@@ -68,7 +70,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 				Time("expiryTime", pamConfig.ExpiryTime).
 				Msg("PAM session already expired, closing connection immediately")
 
-			if err := session.CleanupPAMSession(pamConfig.SessionId, httpClient, "already_expired"); err != nil {
+			if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "already_expired"); err != nil {
 				log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup already expired PAM session")
 			}
 
@@ -81,7 +83,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	}
 
 	if pamConfig.ResourceType == "postgres" {
-		encryptionKey, err := session.GetPAMSessionEncryptionKey(httpClient)
+		encryptionKey, err := pamConfig.CredentialsManager.GetPAMSessionEncryptionKey()
 		if err != nil {
 			return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 		}
@@ -108,8 +110,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", proxyConfig.TargetAddr).
-			Str("username", credentials.Username).
-			Str("database", credentials.Database).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting PostgreSQL PAM proxy")
 

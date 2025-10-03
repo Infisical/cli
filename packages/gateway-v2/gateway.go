@@ -91,6 +91,12 @@ type Gateway struct {
 	// Certificate storage
 	certificates *api.RegisterGatewayResponse
 
+	// PAM credentials manager
+	pamCredentialsManager *session.CredentialsManager
+
+	// PAM session uploader
+	pamSessionUploader *session.SessionUploader
+
 	// mTLS server components
 	tlsConfig *tls.Config
 
@@ -117,11 +123,15 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		config.SSHPort = 2222
 	}
 
+	pamCredentialsManager := session.NewCredentialsManager(httpClient)
+
 	return &Gateway{
-		httpClient: httpClient,
-		config:     config,
-		ctx:        ctx,
-		cancel:     cancel,
+		httpClient:            httpClient,
+		config:                config,
+		ctx:                   ctx,
+		cancel:                cancel,
+		pamCredentialsManager: pamCredentialsManager,
+		pamSessionUploader:    session.NewSessionUploader(httpClient, pamCredentialsManager),
 	}, nil
 }
 
@@ -189,7 +199,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	go g.startCertificateRenewal(ctx)
 
 	// Start session uploader goroutine for PAM
-	session.StartSessionUploader()
+	g.pamSessionUploader.Start()
 
 	go func() {
 		for {
@@ -231,7 +241,6 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 func (g *Gateway) SetToken(token string) {
 	g.httpClient.SetAuthToken(token)
-	session.SetUploaderConfig(g.httpClient)
 }
 
 func (g *Gateway) Stop() {
@@ -244,6 +253,14 @@ func (g *Gateway) Stop() {
 	}
 	g.isConnected = false
 	g.mu.Unlock()
+
+	// Shutdown PAM session uploader and credentials manager
+	if g.pamSessionUploader != nil {
+		g.pamSessionUploader.Stop()
+	}
+	if g.pamCredentialsManager != nil {
+		g.pamCredentialsManager.Shutdown()
+	}
 }
 
 func (g *Gateway) connectAndServe() error {
@@ -702,9 +719,11 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 				return fmt.Errorf("failed to parse PAM info JSON: %v", err)
 			}
 			config.PAMConfig = pam.GatewayPAMConfig{
-				SessionId:    pamInfo.SessionId,
-				ResourceType: pamInfo.ResourceType,
-				ExpiryTime:   clientCert.NotAfter,
+				SessionId:          pamInfo.SessionId,
+				ResourceType:       pamInfo.ResourceType,
+				ExpiryTime:         clientCert.NotAfter,
+				CredentialsManager: g.pamCredentialsManager,
+				SessionUploader:    g.pamSessionUploader,
 			}
 		}
 	}

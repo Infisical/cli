@@ -23,10 +23,21 @@ type SessionFileInfo struct {
 	Filename  string
 }
 
-var (
-	uploaderCleanupOnce sync.Once
-	globalHttpClient    *resty.Client
-)
+type SessionUploader struct {
+	httpClient         *resty.Client
+	credentialsManager *CredentialsManager
+	ticker             *time.Ticker
+	stopChan           chan struct{}
+	startOnce          sync.Once
+}
+
+func NewSessionUploader(httpClient *resty.Client, credentialsManager *CredentialsManager) *SessionUploader {
+	return &SessionUploader{
+		httpClient:         httpClient,
+		credentialsManager: credentialsManager,
+		stopChan:           make(chan struct{}),
+	}
+}
 
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	regex := regexp.MustCompile(`^pam_session_(.+)_expires_(\d+)\.enc$`)
@@ -151,31 +162,33 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 	return entries, nil
 }
 
-func SetUploaderConfig(httpClient *resty.Client) {
-	globalHttpClient = httpClient
+func (su *SessionUploader) Start() {
+	su.startOnce.Do(su.startUploadRoutine)
 }
 
-func startSessionUploaderRoutine() {
+func (su *SessionUploader) startUploadRoutine() {
 	log.Info().Msg("Starting PAM session uploader routine")
 
+	su.ticker = time.NewTicker(5 * time.Minute)
+
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
+		defer su.ticker.Stop()
 
 		// call once immediately
-		uploadExpiredSessionFiles()
+		su.uploadExpiredSessionFiles()
 
-		for range ticker.C {
-			uploadExpiredSessionFiles()
+		for {
+			select {
+			case <-su.ticker.C:
+				su.uploadExpiredSessionFiles()
+			case <-su.stopChan:
+				return
+			}
 		}
 	}()
 }
 
-func uploadExpiredSessionFiles() {
-	if globalHttpClient == nil {
-		return
-	}
-
+func (su *SessionUploader) uploadExpiredSessionFiles() {
 	expiredFiles, err := GetExpiredSessionFiles()
 	if err != nil {
 		log.Error().Err(err).Msg("Error getting expired session files")
@@ -189,7 +202,7 @@ func uploadExpiredSessionFiles() {
 			Time("expiresAt", fileInfo.ExpiresAt).
 			Msg("Processing expired session file")
 
-		if err := CleanupPAMSession(fileInfo.SessionID, globalHttpClient, "orphaned_file"); err != nil {
+		if err := su.CleanupPAMSession(fileInfo.SessionID, "orphaned_file"); err != nil {
 			log.Error().Err(err).
 				Str("sessionId", fileInfo.SessionID).
 				Str("filename", fileInfo.Filename).
@@ -204,8 +217,8 @@ func uploadExpiredSessionFiles() {
 	}
 }
 
-func uploadSessionFile(fileInfo *SessionFileInfo) error {
-	encryptionKey, err := GetPAMSessionEncryptionKey(globalHttpClient)
+func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
+	encryptionKey, err := su.credentialsManager.GetPAMSessionEncryptionKey()
 	if err != nil {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
@@ -228,7 +241,7 @@ func uploadSessionFile(fileInfo *SessionFileInfo) error {
 		Logs: logs,
 	}
 
-	return api.CallUploadPamSessionLogs(globalHttpClient, fileInfo.SessionID, request)
+	return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
 }
 
 func FindSessionFileBySessionID(sessionID string) (*SessionFileInfo, error) {
@@ -246,11 +259,7 @@ func FindSessionFileBySessionID(sessionID string) (*SessionFileInfo, error) {
 	return nil, fmt.Errorf("session file not found for session ID: %s", sessionID)
 }
 
-func UploadSessionLogsBySessionID(sessionID string) error {
-	if globalHttpClient == nil {
-		return fmt.Errorf("http client not configured")
-	}
-
+func (su *SessionUploader) UploadSessionLogsBySessionID(sessionID string) error {
 	fileInfo, err := FindSessionFileBySessionID(sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to find session file: %w", err)
@@ -258,7 +267,7 @@ func UploadSessionLogsBySessionID(sessionID string) error {
 
 	log.Info().Str("sessionId", sessionID).Str("filename", fileInfo.Filename).Msg("Uploading session logs for terminating session")
 
-	if err := uploadSessionFile(fileInfo); err != nil {
+	if err := su.uploadSessionFile(fileInfo); err != nil {
 		return fmt.Errorf("failed to upload session logs: %w", err)
 	}
 
@@ -275,11 +284,11 @@ func UploadSessionLogsBySessionID(sessionID string) error {
 }
 
 // CleanupPAMSession handles the complete cleanup process for a PAM session
-func CleanupPAMSession(sessionID string, httpClient *resty.Client, reason string) error {
+func (su *SessionUploader) CleanupPAMSession(sessionID string, reason string) error {
 	log.Info().Str("sessionId", sessionID).Str("reason", reason).Msg("Starting PAM session cleanup")
 
 	// Upload session logs
-	if err := UploadSessionLogsBySessionID(sessionID); err != nil {
+	if err := su.UploadSessionLogsBySessionID(sessionID); err != nil {
 		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to upload session logs")
 	} else {
 		log.Info().Str("sessionId", sessionID).Msg("Successfully uploaded session logs")
@@ -287,9 +296,9 @@ func CleanupPAMSession(sessionID string, httpClient *resty.Client, reason string
 
 	// Cleanup session resources
 	CleanupSessionMutex(sessionID)
-	CleanupSessionCredentials(sessionID)
+	su.credentialsManager.CleanupSessionCredentials(sessionID)
 
-	if err := api.CallPAMSessionTermination(httpClient, sessionID); err != nil {
+	if err := api.CallPAMSessionTermination(su.httpClient, sessionID); err != nil {
 		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to notify session termination via API")
 		return err
 	} else {
@@ -299,6 +308,6 @@ func CleanupPAMSession(sessionID string, httpClient *resty.Client, reason string
 	return nil
 }
 
-func StartSessionUploader() {
-	uploaderCleanupOnce.Do(startSessionUploaderRoutine)
+func (su *SessionUploader) Stop() {
+	close(su.stopChan)
 }

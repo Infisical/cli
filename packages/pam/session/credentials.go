@@ -26,38 +26,55 @@ type cachedCredentials struct {
 	expiresAt   time.Time
 }
 
-var (
-	credentialsCache = make(map[string]*cachedCredentials)
-	cacheMutex       sync.RWMutex
-	cleanupOnce      sync.Once
-)
+// CredentialsManager encapsulates credential caching with proper lifecycle management
+type CredentialsManager struct {
+	httpClient           *resty.Client
+	credentialsCache     map[string]*cachedCredentials
+	cacheMutex           sync.RWMutex
+	sessionEncryptionKey string
+	cleanupOnce          sync.Once
+	cleanupTicker        *time.Ticker
+	stopCleanup          chan struct{}
+}
 
-var sessionEncryptionKey string
+func NewCredentialsManager(httpClient *resty.Client) *CredentialsManager {
+	return &CredentialsManager{
+		httpClient:       httpClient,
+		credentialsCache: make(map[string]*cachedCredentials),
+		stopCleanup:      make(chan struct{}),
+	}
+}
 
-func startCleanupRoutine() {
+// startCleanupRoutine starts the background cleanup routine for expired credentials
+func (cm *CredentialsManager) startCleanupRoutine() {
+	cm.cleanupTicker = time.NewTicker(1 * time.Minute)
 	go func() {
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
+		defer cm.cleanupTicker.Stop()
 
-		for range ticker.C {
-			cleanupExpiredCredentials()
+		for {
+			select {
+			case <-cm.cleanupTicker.C:
+				cm.cleanupExpiredCredentials()
+			case <-cm.stopCleanup:
+				return
+			}
 		}
 	}()
 	log.Debug().Msg("Started PAM credentials cleanup routine")
 }
 
-func GetPAMSessionCredentials(sessionId string, expiryTime time.Time, httpClient *resty.Client) (*PAMCredentials, error) {
-	cleanupOnce.Do(startCleanupRoutine)
+func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryTime time.Time) (*PAMCredentials, error) {
+	cm.cleanupOnce.Do(cm.startCleanupRoutine)
 
-	cacheMutex.RLock()
-	cached, exists := credentialsCache[sessionId]
-	cacheMutex.RUnlock()
+	cm.cacheMutex.RLock()
+	cached, exists := cm.credentialsCache[sessionId]
+	cm.cacheMutex.RUnlock()
 
 	if exists && time.Now().Before(cached.expiresAt) {
 		return cached.credentials, nil
 	}
 
-	response, err := api.CallPAMSessionCredentials(httpClient, sessionId)
+	response, err := api.CallPAMSessionCredentials(cm.httpClient, sessionId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call PAM session credentials API: %w", err)
 	}
@@ -73,50 +90,73 @@ func GetPAMSessionCredentials(sessionId string, expiryTime time.Time, httpClient
 		SSLCertificate:        response.Credentials.SSLCertificate,
 	}
 
-	cacheMutex.Lock()
-	credentialsCache[sessionId] = &cachedCredentials{
+	cm.cacheMutex.Lock()
+	cm.credentialsCache[sessionId] = &cachedCredentials{
 		credentials: credentials,
 		expiresAt:   expiryTime,
 	}
-	cacheMutex.Unlock()
+	cm.cacheMutex.Unlock()
 
 	return credentials, nil
 }
 
-func cleanupExpiredCredentials() {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
+func (cm *CredentialsManager) cleanupExpiredCredentials() {
+	cm.cacheMutex.Lock()
+	defer cm.cacheMutex.Unlock()
 
 	now := time.Now()
-	for sessionId, cached := range credentialsCache {
+	for sessionId, cached := range cm.credentialsCache {
 		if now.After(cached.expiresAt) {
-			delete(credentialsCache, sessionId)
+			delete(cm.credentialsCache, sessionId)
 			log.Debug().Str("sessionId", sessionId).Msg("Removed expired PAM session credentials from cache")
 		}
 	}
 }
 
-func CleanupSessionCredentials(sessionID string) {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
+func (cm *CredentialsManager) CleanupSessionCredentials(sessionID string) {
+	cm.cacheMutex.Lock()
+	defer cm.cacheMutex.Unlock()
 
-	if _, exists := credentialsCache[sessionID]; exists {
-		delete(credentialsCache, sessionID)
+	if _, exists := cm.credentialsCache[sessionID]; exists {
+		delete(cm.credentialsCache, sessionID)
 		log.Debug().Str("sessionId", sessionID).Msg("Cleaned up cached PAM session credentials")
 	}
 }
 
-func GetPAMSessionEncryptionKey(httpClient *resty.Client) (string, error) {
-	if sessionEncryptionKey != "" {
-		return sessionEncryptionKey, nil
+func (cm *CredentialsManager) GetPAMSessionEncryptionKey() (string, error) {
+	cm.cacheMutex.RLock()
+	if cm.sessionEncryptionKey != "" {
+		key := cm.sessionEncryptionKey
+		cm.cacheMutex.RUnlock()
+		return key, nil
 	}
+	cm.cacheMutex.RUnlock()
 
-	key, err := api.CallGetPamSessionKey(httpClient)
+	key, err := api.CallGetPamSessionKey(cm.httpClient)
 	if err != nil {
 		return "", fmt.Errorf("failed to get PAM session encryption key: %w", err)
 	}
 
-	sessionEncryptionKey = key
+	cm.cacheMutex.Lock()
+	cm.sessionEncryptionKey = key
+	cm.cacheMutex.Unlock()
 
-	return sessionEncryptionKey, nil
+	return key, nil
+}
+
+func (cm *CredentialsManager) Shutdown() {
+	close(cm.stopCleanup)
+
+	// Clear all cached credentials
+	cm.cacheMutex.Lock()
+	defer cm.cacheMutex.Unlock()
+
+	for sessionId := range cm.credentialsCache {
+		delete(cm.credentialsCache, sessionId)
+	}
+
+	// Clear encryption key
+	cm.sessionEncryptionKey = ""
+
+	log.Debug().Msg("PAM credentials manager shutdown complete")
 }

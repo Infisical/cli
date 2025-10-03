@@ -146,7 +146,7 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 	fullPath := filepath.Join(recordingDir, filename)
 
 	// Open file in append mode to support multiple connections per session
-	file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session file: %w", err)
 	}
