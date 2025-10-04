@@ -165,12 +165,11 @@ var createCmd = &cobra.Command{
 
 		if outputFormat != "" {
 
-			var outputStructure []map[string]any
-			outputStructure = append(outputStructure, map[string]any{
+			outputStructure := map[string]any{
 				"folderName": folder.Name,
 				"folderPath": folderPath,
 				"folderId":   folder.ID,
-			})
+			}
 
 			output, err := util.FormatOutput(outputFormat, outputStructure, nil)
 			if err != nil {

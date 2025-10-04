@@ -294,7 +294,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 
 		output, err := util.FormatOutput(outputFormat, leaseCredentials, nil)
 		if err != nil {
-			util.HandleError(err)
+			util.HandleError(err, "Unable to format output")
 		}
 		fmt.Print(output)
 	} else {

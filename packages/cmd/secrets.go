@@ -315,11 +315,9 @@ var secretsSetCmd = &cobra.Command{
 			}
 			fmt.Print(output)
 		} else {
-
 			visualize.Table(headers, rows)
-
-			Telemetry.CaptureEvent("cli-command:secrets set", posthog.NewProperties().Set("version", util.CLI_VERSION))
 		}
+		Telemetry.CaptureEvent("cli-command:secrets set", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
 }
 
