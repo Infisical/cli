@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/md5"
-	"crypto/pbkdf2"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -20,6 +19,7 @@ import (
 	session "github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -451,10 +451,7 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 	password := p.config.InjectPassword
 	clientFinalMessageWithoutProof := fmt.Sprintf("c=biws,r=%s", serverNonce) // biws = base64("n,,")
 
-	saltedPassword, err := pbkdf2.Key(sha256.New, password, salt, iterations, 32)
-	if err != nil {
-		return fmt.Errorf("failed to generate salted password: %w", err)
-	}
+	saltedPassword := pbkdf2.Key([]byte(password), salt, iterations, 32, sha256.New)
 
 	clientKey := session.HmacSHA256(saltedPassword, []byte("Client Key"))
 	storedKey := session.SHA256Hash(clientKey)
