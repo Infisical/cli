@@ -580,7 +580,11 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	} else if forwardConfig.Mode == ForwardModePAM {
 		if err := pam.HandlePAMProxy(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
-			log.Error().Err(err).Msg("PAM proxy handler ended with error")
+			if err.Error() == "unexpected EOF" {
+				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
+			} else {
+				log.Error().Err(err).Msg("PAM proxy handler ended with error")
+			}
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
