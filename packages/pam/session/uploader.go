@@ -66,6 +66,9 @@ func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 
 func ListSessionFiles() ([]*SessionFileInfo, error) {
 	recordingDir := GetSessionRecordingDir()
+	if err := os.MkdirAll(recordingDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create session recording directory: %w", err)
+	}
 
 	entries, err := os.ReadDir(recordingDir)
 	if err != nil {
