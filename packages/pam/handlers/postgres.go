@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/md5"
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -18,7 +20,6 @@ import (
 	session "github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -122,9 +123,16 @@ func (p *PostgresProxy) HandleConnection(ctx context.Context, clientConn net.Con
 	select {
 	case err = <-errChan:
 		if err != nil && err != io.EOF {
-			log.Error().Err(err).
-				Str("sessionID", sessionID).
-				Msg("Connection error")
+			// Check if it's an unexpected EOF (connection terminated abruptly)
+			if err.Error() == "unexpected EOF" {
+				log.Debug().Err(err).
+					Str("sessionID", sessionID).
+					Msg("Connection terminated unexpectedly")
+			} else {
+				log.Error().Err(err).
+					Str("sessionID", sessionID).
+					Msg("Connection error")
+			}
 		}
 	case <-ctx.Done():
 		log.Info().
@@ -167,11 +175,6 @@ func (p *PostgresProxy) connectToServer() (net.Conn, error) {
 	}
 
 	if response[0] == 'S' {
-		// Server supports SSL, upgrade the connection
-		log.Info().
-			Str("sessionID", p.config.SessionID).
-			Msg("PostgreSQL server supports SSL, upgrading connection")
-
 		tlsConn := tls.Client(serverConn, p.config.TLSConfig)
 		err = tlsConn.Handshake()
 		if err != nil {
@@ -185,21 +188,19 @@ func (p *PostgresProxy) connectToServer() (net.Conn, error) {
 		return tlsConn, nil
 
 	} else if response[0] == 'N' {
-		// Server doesn't support SSL
 		if p.config.EnableTLS {
-			log.Info().
-				Str("sessionID", p.config.SessionID).
-				Msg("PostgreSQL server does not support SSL, but TLS was requested")
+			return nil, fmt.Errorf("PostgreSQL server does not support SSL, but TLS was requested")
 		}
+
 		log.Info().
 			Str("sessionID", p.config.SessionID).
 			Msg("Connected to PostgreSQL server without TLS")
-		return serverConn, nil
 
-	} else {
-		serverConn.Close()
-		return nil, fmt.Errorf("unexpected SSL response from server: %c", response[0])
+		return serverConn, nil
 	}
+
+	serverConn.Close()
+	return nil, fmt.Errorf("unexpected SSL response from server: %c", response[0])
 }
 
 func (p *PostgresProxy) handleStartup(clientConn net.Conn, clientBackend *pgproto3.Backend, serverFrontend *pgproto3.Frontend) error {
@@ -301,25 +302,15 @@ func (p *PostgresProxy) handleAuthentication(clientBackend *pgproto3.Backend, se
 
 		case *pgproto3.AuthenticationCleartextPassword:
 			// Server wants cleartext password
-			log.Debug().Str("sessionID", p.config.SessionID).Msg("→ CLIENT: AuthenticationCleartextPassword")
-			clientBackend.Send(authMsg)
-			err = clientBackend.Flush()
-			if err != nil {
-				return fmt.Errorf("failed to flush auth cleartext: %w", err)
-			}
-
-			return p.handlePasswordResponse(clientBackend, serverFrontend)
+			// The proxy will handle this authentication using injected credentials
+			// The client will NOT participate in the password exchange
+			return p.handleCleartextPasswordAsProxy(clientBackend, serverFrontend)
 
 		case *pgproto3.AuthenticationMD5Password:
 			// Server wants MD5 encrypted password
-			log.Debug().Str("sessionID", p.config.SessionID).Str("salt", fmt.Sprintf("%x", authMsg.Salt)).Msg("→ CLIENT: AuthenticationMD5Password")
-			clientBackend.Send(authMsg)
-			err = clientBackend.Flush()
-			if err != nil {
-				return fmt.Errorf("failed to flush auth MD5: %w", err)
-			}
-
-			return p.handlePasswordResponse(clientBackend, serverFrontend)
+			// The proxy will handle this authentication using injected credentials
+			// The client will NOT participate in the password exchange
+			return p.handleMD5PasswordAsProxy(clientBackend, serverFrontend, authMsg)
 
 		case *pgproto3.AuthenticationSASL:
 			// Server wants SASL authentication (SCRAM-SHA-256)
@@ -460,7 +451,11 @@ func (p *PostgresProxy) handleSASLAuthenticationAsProxy(clientBackend *pgproto3.
 	password := p.config.InjectPassword
 	clientFinalMessageWithoutProof := fmt.Sprintf("c=biws,r=%s", serverNonce) // biws = base64("n,,")
 
-	saltedPassword := pbkdf2.Key([]byte(password), salt, iterations, 32, sha256.New)
+	saltedPassword, err := pbkdf2.Key(sha256.New, password, salt, iterations, 32)
+	if err != nil {
+		return fmt.Errorf("failed to generate salted password: %w", err)
+	}
+
 	clientKey := session.HmacSHA256(saltedPassword, []byte("Client Key"))
 	storedKey := session.SHA256Hash(clientKey)
 
@@ -588,6 +583,108 @@ func (p *PostgresProxy) verifyServerSignature(serverFinalMessage string, saltedP
 
 	// Compare signatures
 	return hmac.Equal(receivedSignature, expectedSignature)
+}
+
+func (p *PostgresProxy) handleCleartextPasswordAsProxy(clientBackend *pgproto3.Backend, serverFrontend *pgproto3.Frontend) error {
+	// Send the injected password directly to the server
+	passwordMsg := &pgproto3.PasswordMessage{
+		Password: p.config.InjectPassword,
+	}
+
+	log.Debug().Str("sessionID", p.config.SessionID).Msg("→ SERVER: PasswordMessage with injected credentials")
+	serverFrontend.Send(passwordMsg)
+	err := serverFrontend.Flush()
+	if err != nil {
+		return fmt.Errorf("failed to send password to server: %w", err)
+	}
+
+	// Wait for server response
+	serverMsg, err := serverFrontend.Receive()
+	if err != nil {
+		return fmt.Errorf("failed to receive server response: %w", err)
+	}
+
+	switch responseMsg := serverMsg.(type) {
+	case *pgproto3.AuthenticationOk:
+		// Send AuthenticationOk to client (client never participated in password exchange)
+		clientBackend.Send(responseMsg)
+		err = clientBackend.Flush()
+		if err != nil {
+			return fmt.Errorf("failed to send auth ok to client: %w", err)
+		}
+		return nil
+
+	case *pgproto3.ErrorResponse:
+		log.Error().Str("sessionID", p.config.SessionID).Str("error", responseMsg.Message).Msg("← SERVER: Cleartext password authentication failed")
+		// Forward error to client
+		clientBackend.Send(responseMsg)
+		err = clientBackend.Flush()
+		if err != nil {
+			return fmt.Errorf("failed to send error to client: %w", err)
+		}
+		return fmt.Errorf("cleartext password authentication failed: %s", responseMsg.Message)
+
+	default:
+		return fmt.Errorf("unexpected response after cleartext password: %T", responseMsg)
+	}
+}
+
+func (p *PostgresProxy) handleMD5PasswordAsProxy(clientBackend *pgproto3.Backend, serverFrontend *pgproto3.Frontend, authMD5 *pgproto3.AuthenticationMD5Password) error {
+	// Calculate MD5 hash: md5(md5(password + username) + salt)
+	username := p.config.InjectUsername
+	password := p.config.InjectPassword
+	salt := authMD5.Salt
+
+	// First hash: md5(password + username)
+	firstHash := md5.Sum([]byte(password + username))
+	firstHashHex := fmt.Sprintf("%x", firstHash)
+
+	// Second hash: md5(firstHashHex + salt)
+	secondInput := append([]byte(firstHashHex), salt[:]...)
+	secondHash := md5.Sum(secondInput)
+	finalHash := fmt.Sprintf("md5%x", secondHash)
+
+	// Send the MD5 hashed password to the server
+	passwordMsg := &pgproto3.PasswordMessage{
+		Password: finalHash,
+	}
+
+	log.Debug().Str("sessionID", p.config.SessionID).Msg("→ SERVER: PasswordMessage with MD5 hashed injected credentials")
+	serverFrontend.Send(passwordMsg)
+	err := serverFrontend.Flush()
+	if err != nil {
+		return fmt.Errorf("failed to send MD5 password to server: %w", err)
+	}
+
+	// Wait for server response
+	serverMsg, err := serverFrontend.Receive()
+	if err != nil {
+		return fmt.Errorf("failed to receive server response: %w", err)
+	}
+
+	switch responseMsg := serverMsg.(type) {
+	case *pgproto3.AuthenticationOk:
+		// Send AuthenticationOk to client (client never participated in password exchange)
+		clientBackend.Send(responseMsg)
+		err = clientBackend.Flush()
+		if err != nil {
+			return fmt.Errorf("failed to send auth ok to client: %w", err)
+		}
+		return nil
+
+	case *pgproto3.ErrorResponse:
+		log.Error().Str("sessionID", p.config.SessionID).Str("error", responseMsg.Message).Msg("← SERVER: MD5 password authentication failed")
+		// Forward error to client
+		clientBackend.Send(responseMsg)
+		err = clientBackend.Flush()
+		if err != nil {
+			return fmt.Errorf("failed to send error to client: %w", err)
+		}
+		return fmt.Errorf("MD5 password authentication failed: %s", responseMsg.Message)
+
+	default:
+		return fmt.Errorf("unexpected response after MD5 password: %T", responseMsg)
+	}
 }
 
 func (p *PostgresProxy) proxyClientToServer(clientBackend *pgproto3.Backend, serverFrontend *pgproto3.Frontend, errChan chan error) {

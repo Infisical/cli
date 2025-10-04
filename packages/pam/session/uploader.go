@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
+
+var ErrSessionFileNotFound = errors.New("session file not found")
 
 type SessionFileInfo struct {
 	SessionID string
@@ -256,12 +259,16 @@ func FindSessionFileBySessionID(sessionID string) (*SessionFileInfo, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("session file not found for session ID: %s", sessionID)
+	return nil, ErrSessionFileNotFound
 }
 
 func (su *SessionUploader) UploadSessionLogsBySessionID(sessionID string) error {
 	fileInfo, err := FindSessionFileBySessionID(sessionID)
 	if err != nil {
+		if errors.Is(err, ErrSessionFileNotFound) {
+			log.Debug().Str("sessionId", sessionID).Msg("Session file not found, skipping upload")
+			return nil
+		}
 		return fmt.Errorf("failed to find session file: %w", err)
 	}
 

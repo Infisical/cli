@@ -3,6 +3,7 @@ package pam
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"time"
 
@@ -88,18 +89,36 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 		}
 
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: !credentials.SSLRejectUnauthorized,
+			ServerName:         credentials.Host,
+		}
+
+		// If a server certificate is provided, add it to the root CA pool
+		if credentials.SSLCertificate != "" {
+			certPool := x509.NewCertPool()
+			if certPool.AppendCertsFromPEM([]byte(credentials.SSLCertificate)) {
+				tlsConfig.RootCAs = certPool
+				log.Debug().
+					Str("sessionId", pamConfig.SessionId).
+					Msg("Using provided server certificate for TLS connection")
+			} else {
+				log.Warn().
+					Str("sessionId", pamConfig.SessionId).
+					Msg("Failed to parse provided server certificate, falling back to default behavior")
+			}
+		}
+
 		proxyConfig := handlers.PostgresProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
 			InjectPassword: credentials.Password,
 			InjectDatabase: credentials.Database,
 			EnableTLS:      credentials.SSLEnabled,
-			TLSConfig: &tls.Config{
-				InsecureSkipVerify: !credentials.SSLRejectUnauthorized,
-			},
-			SessionID:     pamConfig.SessionId,
-			EncryptionKey: encryptionKey,
-			ExpiresAt:     pamConfig.ExpiryTime,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			EncryptionKey:  encryptionKey,
+			ExpiresAt:      pamConfig.ExpiryTime,
 		}
 
 		proxy, err := handlers.NewPostgresProxy(proxyConfig)
