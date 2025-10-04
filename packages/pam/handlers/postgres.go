@@ -19,7 +19,7 @@ import (
 	session "github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/pbkdf2"
+	"golang.org/x/crypto/pbkdf2" // TODO: Remove this once we update to go 1.25.1 or later where it's already in the standard library
 )
 
 const (
