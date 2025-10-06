@@ -15,6 +15,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/gateway"
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/pkg/errors"
@@ -217,6 +218,11 @@ var gatewayStartCmd = &cobra.Command{
 		gatewayName, err := util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
 		if err != nil {
 			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
+		}
+
+		pamSessionRecordingPath, err := util.GetCmdFlagOrEnv(cmd, "pam-session-recording-path", []string{gatewayv2.INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME})
+		if err == nil && pamSessionRecordingPath != "" {
+			session.SetSessionRecordingPath(pamSessionRecordingPath)
 		}
 
 		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
@@ -508,6 +514,7 @@ func init() {
 	gatewayStartCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	gatewayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	gatewayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
+	gatewayStartCmd.Flags().String("pam-session-recording-path", "", "directory path for PAM session recordings (defaults to /var/lib/infisical/session_recordings)")
 
 	// Legacy install command flags (v1)
 	gatewayInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
