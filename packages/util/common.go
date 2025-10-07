@@ -11,7 +11,7 @@ import (
 	"unicode"
 
 	"github.com/Infisical/infisical-merge/packages/config"
-	"github.com/agnivade/levenshtein"
+	"github.com/Infisical/infisical-merge/packages/util/levenshtein"
 	"github.com/go-resty/resty/v2"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
