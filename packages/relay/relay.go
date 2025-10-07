@@ -536,6 +536,12 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 		return
 	}
 
+	// Handle heartbeats
+	if gatewayId == "00000000-0000-0000-0000-000000000000" && gatewayName == "heartbeat" {
+		log.Debug().Msg("Heartbeat check successful, closing connection.")
+		return
+	}
+
 	// Get the SSH connection for this gateway
 	r.mu.RLock()
 	conn, exists := r.tunnels[gatewayId]
