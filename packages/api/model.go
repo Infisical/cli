@@ -783,3 +783,7 @@ type UploadSessionLogEntry struct {
 type UploadPAMSessionLogsRequest struct {
 	Logs []UploadSessionLogEntry `json:"logs"`
 }
+
+type RelayHeartbeatRequest struct {
+	Name string `json:"name"`
+}

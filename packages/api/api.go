@@ -681,10 +681,11 @@ func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
 	return nil
 }
 
-func CallOrgRelayHeartBeat(httpClient *resty.Client) error {
+func CallOrgRelayHeartBeat(httpClient *resty.Client, request RelayHeartbeatRequest) error {
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
 		Post(fmt.Sprintf("%v/v1/relays/heartbeat-org-relay", config.INFISICAL_URL))
 
 	if err != nil {
@@ -698,10 +699,11 @@ func CallOrgRelayHeartBeat(httpClient *resty.Client) error {
 	return nil
 }
 
-func CallInstanceRelayHeartBeat(httpClient *resty.Client) error {
+func CallInstanceRelayHeartBeat(httpClient *resty.Client, request RelayHeartbeatRequest) error {
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
 		Post(fmt.Sprintf("%v/v1/relays/heartbeat-instance-relay", config.INFISICAL_URL))
 
 	if err != nil {

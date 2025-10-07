@@ -89,10 +89,11 @@ func (r *Relay) SetToken(token string) {
 func (r *Relay) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
 		var err error
+		heartbeatBody := api.RelayHeartbeatRequest{Name: r.config.RelayName}
 		if r.config.Type == "instance" {
-			err = api.CallInstanceRelayHeartBeat(r.httpClient)
+			err = api.CallInstanceRelayHeartBeat(r.httpClient, heartbeatBody)
 		} else {
-			err = api.CallOrgRelayHeartBeat(r.httpClient)
+			err = api.CallOrgRelayHeartBeat(r.httpClient, heartbeatBody)
 		}
 
 		if err != nil {
