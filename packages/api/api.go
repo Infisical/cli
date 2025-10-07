@@ -50,6 +50,8 @@ const (
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
+	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
+	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
 )
 
 func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
@@ -674,6 +676,40 @@ func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
 
 	if response.IsError() {
 		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV2, response, nil)
+	}
+
+	return nil
+}
+
+func CallOrgRelayHeartBeat(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/relays/heartbeat-org-relay", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallOrgRelayHeartBeat, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallOrgRelayHeartBeat, response, nil)
+	}
+
+	return nil
+}
+
+func CallInstanceRelayHeartBeat(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/relays/heartbeat-instance-relay", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallInstanceRelayHeartBeat, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallInstanceRelayHeartBeat, response, nil)
 	}
 
 	return nil

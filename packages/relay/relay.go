@@ -86,10 +86,85 @@ func (r *Relay) SetToken(token string) {
 	r.httpClient.SetAuthToken(token)
 }
 
+func (r *Relay) registerHeartBeat(ctx context.Context, errCh chan error) {
+	sendHeartbeat := func() error {
+		var err error
+		if r.config.Type == "instance" {
+			err = api.CallInstanceRelayHeartBeat(r.httpClient)
+		} else {
+			err = api.CallOrgRelayHeartBeat(r.httpClient)
+		}
+
+		if err != nil {
+			log.Warn().Msgf("Heartbeat failed: %v", err)
+			select {
+			case errCh <- err:
+			default:
+				log.Warn().Msg("Error channel full, skipping heartbeat error report")
+			}
+			return err
+		} else {
+			log.Info().Msg("Relay is reachable by Infisical")
+			return nil
+		}
+	}
+
+	go func() {
+		defer func() {
+			log.Debug().Msg("Heartbeat goroutine exiting")
+		}()
+
+		// Phase 1: Keep trying every 10 seconds until first success
+		func() {
+			retryTicker := time.NewTicker(10 * time.Second)
+			defer retryTicker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-retryTicker.C:
+					if err := sendHeartbeat(); err == nil {
+						// First success! Exit retry phase
+						return
+					}
+				}
+			}
+		}()
+
+		// Phase 2: Regular heartbeat every 30 minutes
+		regularTicker := time.NewTicker(30 * time.Minute)
+		defer regularTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-regularTicker.C:
+				sendHeartbeat()
+			}
+		}
+	}()
+}
+
 func (r *Relay) Start(ctx context.Context) error {
 	if err := r.registerRelay(); err != nil {
 		return fmt.Errorf("failed to register relay: %v", err)
 	}
+
+	errCh := make(chan error, 1)
+	r.registerHeartBeat(ctx, errCh)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case err := <-errCh:
+				log.Warn().Msgf("Heartbeat error received: %v", err)
+			}
+		}
+	}()
 
 	// Setup SSH server
 	if err := r.setupSSHServer(); err != nil {
