@@ -508,33 +508,39 @@ func (r *Relay) handleTLSClient(conn net.Conn) {
 }
 
 func (r *Relay) handleClient(tlsConn *tls.Conn) {
-	var gatewayId string
-	var gatewayName string
-	var orgDetails string
 	state := tlsConn.ConnectionState()
-
-	if len(state.PeerCertificates) > 0 {
-		cert := state.PeerCertificates[0]
-		gatewayId = cert.Subject.CommonName
-		orgDetails = cert.Subject.Organization[0]
-
-		for _, ext := range cert.Extensions {
-			if ext.Id.String() == RELAY_CONNECTING_GATEWAY_INFO_OID {
-				var connectingGatewayInfo ConnectingGatewayInfo
-				if err := json.Unmarshal(ext.Value, &connectingGatewayInfo); err != nil {
-					return
-				}
-
-				gatewayName = connectingGatewayInfo.Name
-			}
-		}
-
-		log.Info().Msgf("Client connected with certificate: %s (%s)", gatewayName, gatewayId)
-
-	} else {
+	if len(state.PeerCertificates) == 0 {
 		log.Warn().Msg("No peer certificates found")
 		return
 	}
+
+	cert := state.PeerCertificates[0]
+	gatewayId := cert.Subject.CommonName
+
+	if gatewayId == "00000000-0000-0000-0000-000000000000" {
+		log.Debug().Msg("Heartbeat check successful, closing connection.")
+		return
+	}
+
+	var gatewayName string
+	var orgDetails string
+
+	if len(cert.Subject.Organization) > 0 {
+		orgDetails = cert.Subject.Organization[0]
+	}
+
+	for _, ext := range cert.Extensions {
+		if ext.Id.String() == RELAY_CONNECTING_GATEWAY_INFO_OID {
+			var connectingGatewayInfo ConnectingGatewayInfo
+			if err := json.Unmarshal(ext.Value, &connectingGatewayInfo); err != nil {
+				log.Warn().Msgf("Failed to unmarshal connecting gateway info for %s: %v", gatewayId, err)
+				continue
+			}
+			gatewayName = connectingGatewayInfo.Name
+		}
+	}
+
+	log.Info().Msgf("Client connected with certificate: %s (%s)", gatewayName, gatewayId)
 
 	// Get the SSH connection for this gateway
 	r.mu.RLock()
