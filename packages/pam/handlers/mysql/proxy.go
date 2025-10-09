@@ -35,6 +35,7 @@ type MysqlProxyConfig struct {
 
 type MysqlProxy struct {
 	config        MysqlProxyConfig
+	relayHandler  *RelayHandler
 	sessionLogger *session.SessionLogger
 	mutex         sync.Mutex
 	// TODO:
@@ -89,13 +90,16 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	).NewCustomizedConn(
 		clientConn,
 		&AnyUserCredentialProvider{},
-		EmptyHandler{},
+		// the UseDB method will be used during the auth process.
+		UseDBHandler{conn: selfServerConn},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
 	}
 
-	clientSelfConn.HandleCommand()
+	p.relayHandler = NewRelayHandler(clientSelfConn, selfServerConn)
+
+	p.relayHandler.HandleCommand()
 
 	// TODO:
 	return nil
