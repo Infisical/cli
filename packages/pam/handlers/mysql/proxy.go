@@ -1,4 +1,4 @@
-package handlers
+package mysql
 
 import (
 	"context"
@@ -74,18 +74,22 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	}
 	defer selfServerConn.Close()
 
+	// TODO: the server we are connecting to from self might have different cap flags
+	//		 find a way to forward those
 	clientSelfConn, err := server.NewServer(
-		// TODO: should be coming from the client
-		"8.0.11",
-		// TODO: should be coming from the client
+		selfServerConn.GetServerVersion(),
 		mysql.DEFAULT_COLLATION_ID,
+		// TODO: not sure if this is the right way to go,
+		// 		 but we probably only want to support a very few auth methods
+		//		 since this server is only for forwarding purpose and we don't
+		//		 care about auth now
 		mysql.AUTH_NATIVE_PASSWORD,
 		nil,
 		nil,
 	).NewCustomizedConn(
 		clientConn,
-		server.NewInMemoryProvider(),
-		server.EmptyHandler{},
+		&AnyUserCredentialProvider{},
+		EmptyHandler{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
@@ -97,19 +101,18 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	return nil
 }
 
-func (p *MysqlProxy) connectToServer() (net.Conn, error) {
+func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	// TODO: psql implemented it with lower level api, but do we really need low level?
 	// 		 let's try it with higher level and see if we need lower level
-	conn, err := client.Connect(p.config.TargetAddr, p.config.InjectUsername, p.config.InjectPassword, p.config.InjectDatabase)
+	conn, err := client.Connect(
+		p.config.TargetAddr,
+		p.config.InjectUsername,
+		p.config.InjectPassword,
+		p.config.InjectDatabase,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
 	// TODO: handle TLS conn
-
-	err = conn.Ping()
-	if err != nil {
-		panic(err)
-	}
-
-	return nil, nil
+	return conn, nil
 }
