@@ -59,6 +59,11 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse path flag")
 	}
 
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
@@ -123,7 +128,15 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "To fetch dynamic secret root credentials details")
 	}
 
-	visualize.PrintAllDynamicRootCredentials(dynamicSecretRootCredentials)
+	if outputFormat != "" {
+		output, err := util.FormatOutput(outputFormat, dynamicSecretRootCredentials, nil)
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
+		}
+		fmt.Print(output)
+	} else {
+		visualize.PrintAllDynamicRootCredentials(dynamicSecretRootCredentials)
+	}
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets", posthog.NewProperties().Set("count", len(dynamicSecretRootCredentials)).Set("version", util.CLI_VERSION))
 }
 
@@ -180,6 +193,11 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	}
 
 	plainOutput, err := cmd.Flags().GetBool("plain")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -272,19 +290,29 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "To lease dynamic secret")
 	}
 
-	if plainOutput {
-		for key, value := range leaseCredentials {
-			if cred, ok := value.(string); ok {
-				fmt.Printf("%s=%s\n", key, cred)
-			}
+	if outputFormat != "" {
+
+		output, err := util.FormatOutput(outputFormat, leaseCredentials, nil)
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
 		}
+		fmt.Print(output)
 	} else {
-		fmt.Println("Dynamic Secret Leasing")
-		fmt.Printf("Name: %s\n", dynamicSecretRootCredential.Name)
-		fmt.Printf("Provider: %s\n", dynamicSecretRootCredential.Type)
-		fmt.Printf("Lease ID: %s\n", leaseDetails.Id)
-		fmt.Printf("Expire At: %s\n", leaseDetails.ExpireAt.Local().Format("02-Jan-2006 03:04:05 PM"))
-		visualize.PrintAllDyamicSecretLeaseCredentials(leaseCredentials)
+		// plain output is deprecated is replaced by output=dotenv format, but remains for backwards compatibility
+		if plainOutput {
+			for key, value := range leaseCredentials {
+				if cred, ok := value.(string); ok {
+					fmt.Printf("%s=%s\n", key, cred)
+				}
+			}
+		} else {
+			fmt.Println("Dynamic Secret Leasing")
+			fmt.Printf("Name: %s\n", dynamicSecretRootCredential.Name)
+			fmt.Printf("Provider: %s\n", dynamicSecretRootCredential.Type)
+			fmt.Printf("Lease ID: %s\n", leaseDetails.Id)
+			fmt.Printf("Expire At: %s\n", leaseDetails.ExpireAt.Local().Format("02-Jan-2006 03:04:05 PM"))
+			visualize.PrintAllDyamicSecretLeaseCredentials(leaseCredentials)
+		}
 	}
 
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease", posthog.NewProperties().Set("type", dynamicSecretRootCredential.Type).Set("version", util.CLI_VERSION))
@@ -333,6 +361,11 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	secretsPath, err := cmd.Flags().GetString("path")
 	if err != nil {
 		util.HandleError(err, "Unable to parse path flag")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
 	}
 
 	var infisicalToken string
@@ -404,8 +437,18 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "To renew dynamic secret lease")
 	}
 
-	fmt.Println("Successfully renewed dynamic secret lease")
-	visualize.PrintAllDynamicSecretLeases([]infisicalSdkModels.DynamicSecretLease{leaseDetails})
+	if outputFormat != "" {
+
+		output, err := util.FormatOutput(outputFormat, leaseDetails, nil)
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
+		}
+		fmt.Print(output)
+	} else {
+
+		fmt.Println("Successfully renewed dynamic secret lease")
+		visualize.PrintAllDynamicSecretLeases([]infisicalSdkModels.DynamicSecretLease{leaseDetails})
+	}
 
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease renew", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
@@ -448,6 +491,11 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	secretsPath, err := cmd.Flags().GetString("path")
 	if err != nil {
 		util.HandleError(err, "Unable to parse path flag")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
 	}
 
 	var infisicalToken string
@@ -514,13 +562,21 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		EnvironmentSlug: environmentName,
 		LeaseId:         dynamicSecretLeaseId,
 	})
-
 	if err != nil {
 		util.HandleError(err, "To revoke  dynamic secret lease")
 	}
 
-	fmt.Println("Successfully revoked dynamic secret lease")
-	visualize.PrintAllDynamicSecretLeases([]infisicalSdkModels.DynamicSecretLease{leaseDetails})
+	if outputFormat != "" {
+		output, err := util.FormatOutput(outputFormat, leaseDetails, nil)
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
+		}
+		fmt.Print(output)
+	} else {
+
+		fmt.Println("Successfully revoked dynamic secret lease")
+		visualize.PrintAllDynamicSecretLeases([]infisicalSdkModels.DynamicSecretLease{leaseDetails})
+	}
 
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease revoke", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
@@ -563,6 +619,11 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	secretsPath, err := cmd.Flags().GetString("path")
 	if err != nil {
 		util.HandleError(err, "Unable to parse path flag")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
 	}
 
 	var infisicalToken string
@@ -629,7 +690,16 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "To fetch dynamic secret leases list")
 	}
 
-	visualize.PrintAllDynamicSecretLeases(dynamicSecretLeases)
+	if outputFormat != "" {
+		output, err := util.FormatOutput(outputFormat, dynamicSecretLeases, nil)
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
+		}
+		fmt.Print(output)
+	} else {
+		visualize.PrintAllDynamicSecretLeases(dynamicSecretLeases)
+	}
+
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease list", posthog.NewProperties().Set("lease-count", len(dynamicSecretLeases)).Set("version", util.CLI_VERSION))
 }
 
@@ -641,6 +711,9 @@ func init() {
 	dynamicSecretLeaseCreateCmd.Flags().String("ttl", "", "The lease lifetime TTL. If not provided the default TTL of dynamic secret will be used.")
 	dynamicSecretLeaseCreateCmd.Flags().Bool("plain", false, "Print leased credentials without formatting, one per line")
 
+	// Add output flags
+	util.AddOutputFlagsToCmd(dynamicSecretLeaseCreateCmd, "The output to format the leased credentials in.")
+
 	// Kubernetes specific flags
 	dynamicSecretLeaseCreateCmd.Flags().String("kubernetes-namespace", "", "The namespace to create the lease in. Only used for Kubernetes dynamic secrets.")
 
@@ -650,6 +723,7 @@ func init() {
 	dynamicSecretLeaseListCmd.Flags().String("token", "", "Fetch dynamic secret leases machine identity access token")
 	dynamicSecretLeaseListCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
 	dynamicSecretLeaseListCmd.Flags().String("project-slug", "", "Manually set the project-slug to list leases from")
+	util.AddOutputFlagsToCmd(dynamicSecretLeaseListCmd, "The output to format the dynamic secret leases in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseListCmd)
 
 	dynamicSecretLeaseRenewCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
@@ -657,12 +731,14 @@ func init() {
 	dynamicSecretLeaseRenewCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
 	dynamicSecretLeaseRenewCmd.Flags().String("project-slug", "", "Manually set the project-slug to renew lease in")
 	dynamicSecretLeaseRenewCmd.Flags().String("ttl", "", "The lease lifetime TTL. If not provided the default TTL of dynamic secret will be used.")
+	util.AddOutputFlagsToCmd(dynamicSecretLeaseRenewCmd, "The output to format the dynamic secret lease renewal in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseRenewCmd)
 
 	dynamicSecretLeaseRevokeCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseRevokeCmd.Flags().String("token", "", "Delete dynamic secrets using machine identity access token")
 	dynamicSecretLeaseRevokeCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
 	dynamicSecretLeaseRevokeCmd.Flags().String("project-slug", "", "Manually set the project-slug to revoke lease from")
+	util.AddOutputFlagsToCmd(dynamicSecretLeaseRevokeCmd, "The output to format the dynamic secret lease revocation in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseRevokeCmd)
 
 	dynamicSecretCmd.AddCommand(dynamicSecretLeaseCmd)
@@ -672,5 +748,6 @@ func init() {
 	dynamicSecretCmd.Flags().String("project-slug", "", "Manually set the project-slug to fetch dynamic-secret from")
 	dynamicSecretCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	dynamicSecretCmd.Flags().String("path", "/", "get dynamic secret within a folder path")
+	util.AddOutputFlagsToCmd(dynamicSecretCmd, "The output to format the dynamic secrets in.")
 	rootCmd.AddCommand(dynamicSecretCmd)
 }
