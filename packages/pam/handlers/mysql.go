@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
-	"github.com/go-mysql-org/go-mysql/packet"
+	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/rs/zerolog/log"
 	"net"
 	"sync"
@@ -77,13 +77,18 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 }
 
 func (p *MysqlProxy) connectToServer() (net.Conn, error) {
-	serverConn, err := net.Dial("tcp", p.config.TargetAddr)
+	// TODO: psql implemented it with lower level api, but do we really need low level?
+	// 		 let's try it with higher level and see if we need lower level
+	conn, err := client.Connect(p.config.TargetAddr, p.config.InjectUsername, p.config.InjectPassword, p.config.InjectDatabase)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial server: %w", err)
+		fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
-
-	packetConn := packet.NewConnWithTimeout(serverConn, p.config.ReadTimeout, p.config.WriteTimeout, p.config.BufferSize)
 	// TODO: handle TLS conn
 
-	return serverConn, nil
+	err = conn.Ping()
+	if err != nil {
+		panic(err)
+	}
+
+	return nil, nil
 }
