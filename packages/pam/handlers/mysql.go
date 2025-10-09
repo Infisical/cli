@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
+	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"net"
 	"sync"
@@ -62,15 +64,34 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		Str("sessionID", sessionID).
 		Msg("New MySQL connection for PAM session")
 
-	// Connect to real MySQL server
-	serverConn, err := p.connectToServer()
+	// Initiate the connection from self to the actual server
+	selfServerConn, err := p.connectToServer()
 	if err != nil {
 		log.Error().Err(err).
 			Str("sessionID", sessionID).
 			Msg("Failed to connect to MySQL server")
 		return fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
-	defer serverConn.Close()
+	defer selfServerConn.Close()
+
+	clientSelfConn, err := server.NewServer(
+		// TODO: should be coming from the client
+		"8.0.11",
+		// TODO: should be coming from the client
+		mysql.DEFAULT_COLLATION_ID,
+		mysql.AUTH_NATIVE_PASSWORD,
+		nil,
+		nil,
+	).NewCustomizedConn(
+		clientConn,
+		server.NewInMemoryProvider(),
+		server.EmptyHandler{},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to accet MySQL client: %w", err)
+	}
+
+	clientSelfConn.HandleCommand()
 
 	// TODO:
 	return nil
@@ -81,7 +102,7 @@ func (p *MysqlProxy) connectToServer() (net.Conn, error) {
 	// 		 let's try it with higher level and see if we need lower level
 	conn, err := client.Connect(p.config.TargetAddr, p.config.InjectUsername, p.config.InjectPassword, p.config.InjectDatabase)
 	if err != nil {
-		fmt.Errorf("failed to connect to MySQL server: %w", err)
+		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
 	// TODO: handle TLS conn
 
