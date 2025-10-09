@@ -9,8 +9,8 @@ import (
 )
 
 type RelayHandler struct {
-	clientToSelfConn *server.Conn
-	selfToServerConn *client.Conn
+	clientSelfConn *server.Conn
+	selfServerConn *client.Conn
 }
 
 // Originally defined for internal use in go-mysql. We took it and add our own special
@@ -24,14 +24,14 @@ type (
 	forwardRequestResponse struct{}
 )
 
-func NewRelayHandler(clientToSelfConn *server.Conn, selfToServerConn *client.Conn) *RelayHandler {
-	return &RelayHandler{clientToSelfConn, selfToServerConn}
+func NewRelayHandler(clientSelfConn *server.Conn, selfServerConn *client.Conn) *RelayHandler {
+	return &RelayHandler{clientSelfConn, selfServerConn}
 }
 
 // mostly identical to the go-mysql's implementation for their Handler
 // ref: https://github.com/go-mysql-org/go-mysql/blob/558ed11751bc82177944e5d411f46b76f9c64102/server/command.go#L46-L71
 func (h *RelayHandler) HandleCommand() error {
-	c := h.clientToSelfConn
+	c := h.clientSelfConn
 	if c.Conn == nil {
 		return fmt.Errorf("connection closed")
 	}
@@ -70,8 +70,8 @@ func (h *RelayHandler) HandleCommand() error {
 }
 
 func (h *RelayHandler) forwardRequestResponse(data []byte) error {
-	c := h.clientToSelfConn
-	s := h.selfToServerConn
+	c := h.clientSelfConn
+	s := h.selfServerConn
 
 	// Forward the packet to the server
 	err := s.WritePacket(data)
@@ -103,7 +103,7 @@ func (h *RelayHandler) forwardRequestResponse(data []byte) error {
 }
 
 func (h *RelayHandler) dispatch(data []byte) interface{} {
-	c := h.clientToSelfConn
+	c := h.clientSelfConn
 	cmd := data[0]
 	data = data[1:]
 
