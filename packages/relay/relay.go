@@ -534,7 +534,7 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 			var connectingGatewayInfo ConnectingGatewayInfo
 			if err := json.Unmarshal(ext.Value, &connectingGatewayInfo); err != nil {
 				log.Warn().Msgf("Failed to unmarshal connecting gateway info for %s: %v", gatewayId, err)
-				continue
+				return
 			}
 			gatewayName = connectingGatewayInfo.Name
 		}
