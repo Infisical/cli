@@ -115,9 +115,10 @@ func (c *Conn) readDb(data []byte, pos int) (int, error) {
 		db := string(data[pos : pos+bytes.IndexByte(data[pos:], 0x00)])
 		pos += len(db) + 1
 
-		if err := c.h.UseDB(db); err != nil {
-			return 0, err
-		}
+		// FIXME: forward use db req to the server
+		//if err := c.h.UseDB(db); err != nil {
+		//	return 0, err
+		//}
 	}
 	return pos, nil
 }
