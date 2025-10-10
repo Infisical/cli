@@ -13,7 +13,7 @@ import (
 type RelayHandler struct {
 	clientSelfConn *server.Conn
 	selfServerConn *client.Conn
-	sessionLogger  *session.SessionLogger
+	sessionLogger  session.SessionLogger
 }
 
 func (r RelayHandler) UseDB(dbName string) error {
@@ -78,7 +78,7 @@ func (r RelayHandler) HandleOtherCommand(cmd byte, data []byte) error {
 	return fmt.Errorf("not supported now")
 }
 
-func NewRelayHandler(clientSelfConn *server.Conn, selfServerConn *client.Conn, sessionLogger *session.SessionLogger) *RelayHandler {
+func NewRelayHandler(clientSelfConn *server.Conn, selfServerConn *client.Conn, sessionLogger session.SessionLogger) *RelayHandler {
 	return &RelayHandler{clientSelfConn, selfServerConn, sessionLogger}
 }
 
