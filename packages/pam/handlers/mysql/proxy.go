@@ -84,7 +84,7 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		nil,
 		nil,
 	)
-	p.relayHandler = NewRelayHandler(nil, selfServerConn)
+	p.relayHandler = NewRelayHandler(nil, selfServerConn, p.sessionLogger)
 	clientSelfConn, err := actualServer.NewCustomizedConn(
 		clientConn,
 		&AnyUserCredentialProvider{},
