@@ -32,6 +32,7 @@ func NewRelayHandler(clientSelfConn *server.Conn, selfServerConn *client.Conn) *
 // ref: https://github.com/go-mysql-org/go-mysql/blob/558ed11751bc82177944e5d411f46b76f9c64102/server/command.go#L46-L71
 func (h *RelayHandler) HandleCommand() error {
 	c := h.clientSelfConn
+	s := h.selfServerConn
 	if c.Conn == nil {
 		return fmt.Errorf("connection closed")
 	}
@@ -61,6 +62,9 @@ func (h *RelayHandler) HandleCommand() error {
 	if c.Conn != nil {
 		c.ResetSequence()
 	}
+	if s.Conn != nil {
+		s.ResetSequence()
+	}
 
 	if err != nil {
 		c.Close()
@@ -72,7 +76,6 @@ func (h *RelayHandler) HandleCommand() error {
 func (h *RelayHandler) forwardRequestResponse(data []byte) error {
 	c := h.clientSelfConn
 	s := h.selfServerConn
-	s.ResetSequence()
 
 	// Forward the packet to the server
 	err := s.WritePacket(prependPacketHeader(data))
@@ -87,7 +90,8 @@ func (h *RelayHandler) forwardRequestResponse(data []byte) error {
 			log.Error().Err(err).Msgf("Failed to read server-to-relay response from the server")
 			return err
 		}
-		header := data[0]
+		header := resp[0]
+		// TODO: we should check the resp, for some
 
 		// Forward the server's response back to the client
 		err = c.WritePacket(prependPacketHeader(resp))
