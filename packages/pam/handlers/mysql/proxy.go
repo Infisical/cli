@@ -10,7 +10,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"net"
-	"strings"
 	"sync"
 	"time"
 )
@@ -77,7 +76,7 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	defer selfServerConn.Close()
 
 	actualServer := server.NewServer(
-		// Let's use a consertive version to let the client not to throw
+		// Let's use a conservative version to let the client not to throw
 		// many too fancy stuff at us to get the V1 out of door fast
 		"8.0.11",
 		mysql.DEFAULT_COLLATION_ID,
@@ -94,9 +93,10 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
 	}
+	defer clientSelfConn.Close()
 	p.relayHandler.SetClientSelfConn(clientSelfConn)
 
-	for true {
+	for {
 		err = clientSelfConn.HandleCommand()
 		if err != nil {
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to handle command")
@@ -122,91 +122,4 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	}
 	// TODO: handle TLS conn
 	return conn, nil
-}
-
-func parseCapabilityString(capStr string) (uint32, error) {
-	if capStr == "" {
-		return 0, nil
-	}
-
-	var capability uint32
-	caps := strings.Split(capStr, "|")
-
-	for _, cap := range caps {
-		switch cap {
-		case "CLIENT_LONG_PASSWORD":
-			capability |= mysql.CLIENT_LONG_PASSWORD
-		case "CLIENT_FOUND_ROWS":
-			capability |= mysql.CLIENT_FOUND_ROWS
-		case "CLIENT_LONG_FLAG":
-			capability |= mysql.CLIENT_LONG_FLAG
-		case "CLIENT_CONNECT_WITH_DB":
-			capability |= mysql.CLIENT_CONNECT_WITH_DB
-		case "CLIENT_NO_SCHEMA":
-			capability |= mysql.CLIENT_NO_SCHEMA
-		case "CLIENT_COMPRESS":
-			capability |= mysql.CLIENT_COMPRESS
-		case "CLIENT_ODBC":
-			capability |= mysql.CLIENT_ODBC
-		case "CLIENT_LOCAL_FILES":
-			capability |= mysql.CLIENT_LOCAL_FILES
-		case "CLIENT_IGNORE_SPACE":
-			capability |= mysql.CLIENT_IGNORE_SPACE
-		case "CLIENT_PROTOCOL_41":
-			capability |= mysql.CLIENT_PROTOCOL_41
-		case "CLIENT_INTERACTIVE":
-			capability |= mysql.CLIENT_INTERACTIVE
-		case "CLIENT_SSL":
-			capability |= mysql.CLIENT_SSL
-		case "CLIENT_IGNORE_SIGPIPE":
-			capability |= mysql.CLIENT_IGNORE_SIGPIPE
-		case "CLIENT_TRANSACTIONS":
-			capability |= mysql.CLIENT_TRANSACTIONS
-		case "CLIENT_RESERVED":
-			capability |= mysql.CLIENT_RESERVED
-		case "CLIENT_SECURE_CONNECTION":
-			capability |= mysql.CLIENT_SECURE_CONNECTION
-		case "CLIENT_MULTI_STATEMENTS":
-			capability |= mysql.CLIENT_MULTI_STATEMENTS
-		case "CLIENT_MULTI_RESULTS":
-			capability |= mysql.CLIENT_MULTI_RESULTS
-		case "CLIENT_PS_MULTI_RESULTS":
-			capability |= mysql.CLIENT_PS_MULTI_RESULTS
-		case "CLIENT_PLUGIN_AUTH":
-			capability |= mysql.CLIENT_PLUGIN_AUTH
-		case "CLIENT_CONNECT_ATTRS":
-			capability |= mysql.CLIENT_CONNECT_ATTRS
-		case "CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA":
-			capability |= mysql.CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
-		case "CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS":
-			capability |= mysql.CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS
-		case "CLIENT_SESSION_TRACK":
-			capability |= mysql.CLIENT_SESSION_TRACK
-		case "CLIENT_DEPRECATE_EOF":
-			capability |= mysql.CLIENT_DEPRECATE_EOF
-		case "CLIENT_OPTIONAL_RESULTSET_METADATA":
-			capability |= mysql.CLIENT_OPTIONAL_RESULTSET_METADATA
-		case "CLIENT_ZSTD_COMPRESSION_ALGORITHM":
-			capability |= mysql.CLIENT_ZSTD_COMPRESSION_ALGORITHM
-		case "CLIENT_QUERY_ATTRIBUTES":
-			capability |= mysql.CLIENT_QUERY_ATTRIBUTES
-		case "MULTI_FACTOR_AUTHENTICATION":
-			capability |= mysql.MULTI_FACTOR_AUTHENTICATION
-		case "CLIENT_CAPABILITY_EXTENSION":
-			capability |= mysql.CLIENT_CAPABILITY_EXTENSION
-		case "CLIENT_SSL_VERIFY_SERVER_CERT":
-			capability |= mysql.CLIENT_SSL_VERIFY_SERVER_CERT
-		case "CLIENT_REMEMBER_OPTIONS":
-			capability |= mysql.CLIENT_REMEMBER_OPTIONS
-		default:
-			var field uint32
-			_, err := fmt.Sscanf(cap, "(%d)", &field)
-			if err != nil {
-				return 0, fmt.Errorf("invalid capability: %s", cap)
-			}
-			capability |= field
-		}
-	}
-
-	return capability, nil
 }
