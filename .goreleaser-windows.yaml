@@ -40,3 +40,13 @@ dockers:
     build_flag_templates:
       - "--pull"
       - "--platform=windows/arm64"
+docker_manifests:
+  - name_template: "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows"
+    image_templates:
+      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-amd64"
+      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-arm64"
+
+  - name_template: "infisical/cli:latest-windows"
+    image_templates:
+      - "infisical/cli:latest-windows-amd64"
+      - "infisical/cli:latest-windows-arm64"
