@@ -1,7 +1,3 @@
-// The following code is modified from go-mysql. Original LICENSE MIT or BSD
-// Since it has capability value fixed and there's no easy way to change it, therefore we implement our own
-// based on their code
-// ref: https://github.com/go-mysql-org/go-mysql/blob/558ed11751bc82177944e5d411f46b76f9c64102/server/server_conf.go
 package server
 
 import "github.com/go-mysql-org/go-mysql/mysql"
