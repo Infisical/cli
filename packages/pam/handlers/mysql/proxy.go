@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql/server"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"net"
 	"strings"
@@ -76,40 +76,28 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	}
 	defer selfServerConn.Close()
 
-	// TODO: this is a bit silly that we need to parse the cap flags
-	//	     we should create PR in the upstream to expose the Capability uint32 value
-	//	     directly
-	capFlagsString := selfServerConn.CapabilityString()
-	log.Info().Str("sessionID", sessionID).Msgf("Connected to target server %s, server_version=%s, capability=%s", p.config.TargetAddr, selfServerConn.GetServerVersion(), capFlagsString)
-	capFlags, err := parseCapabilityString(capFlagsString)
-	if err != nil {
-		log.Error().Err(err).
-			Str("sessionID", sessionID).
-			Msgf("Failed to parse CapabilityString %s from MySQL server", selfServerConn.CapabilityString())
-		return fmt.Errorf("failed to connect to MySQL server: %w", err)
-	}
-	// TODO: the server we are connecting to from self might have different cap flags
-	//		 find a way to forward those
 	actualServer := server.NewServer(
-		selfServerConn.GetServerVersion(),
-		// TODO: pass in the collation id from the server?
+		// Let's use a consertive version to let the client not to throw
+		// many too fancy stuff at us to get the V1 out of door fast
+		"8.0.11",
 		mysql.DEFAULT_COLLATION_ID,
-		// flags with some unwanted ones disabled, like upgrade to SSL connection
-		capFlags&^(mysql.CLIENT_SSL|mysql.CLIENT_SSL_VERIFY_SERVER_CERT),
+		mysql.AUTH_NATIVE_PASSWORD,
+		nil,
+		nil,
 	)
-	clientSelfConn, err := actualServer.NewConn(
+	p.relayHandler = NewRelayHandler(nil, selfServerConn)
+	clientSelfConn, err := actualServer.NewCustomizedConn(
 		clientConn,
+		&AnyUserCredentialProvider{},
+		p.relayHandler,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
 	}
-	// TODO: where did the original code do this? why we need this?
-	selfServerConn.ResetSequence()
-
-	p.relayHandler = NewRelayHandler(clientSelfConn, selfServerConn)
+	p.relayHandler.SetClientSelfConn(clientSelfConn)
 
 	for true {
-		err = p.relayHandler.HandleCommand()
+		err = clientSelfConn.HandleCommand()
 		if err != nil {
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to handle command")
 			return err
