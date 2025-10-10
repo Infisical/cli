@@ -2,9 +2,9 @@ package mysql
 
 import (
 	"fmt"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql/server"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 )
 
