@@ -87,7 +87,11 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
 	}
-	defer clientSelfConn.Close()
+	defer func() {
+		if !clientSelfConn.Closed() {
+			clientSelfConn.Close()
+		}
+	}()
 	p.relayHandler.SetClientSelfConn(clientSelfConn)
 
 	// TODO: check if server conn closed or not
