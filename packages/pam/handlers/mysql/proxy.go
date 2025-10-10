@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql/server"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"net"
 	"sync"
@@ -75,23 +75,23 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	}
 	defer selfServerConn.Close()
 
+	// TODO: this is a bit silly that we need to iterate over all the possible bits.
+	//	     we should create PR in the upstream to expose the Capability uint32 value
+	//	     directly
+	capFlags := getCapabilities(func(flag uint32) bool {
+		return selfServerConn.HasCapability(flag)
+	})
 	// TODO: the server we are connecting to from self might have different cap flags
 	//		 find a way to forward those
-	clientSelfConn, err := server.NewServer(
+	actualServer := server.NewServer(
 		selfServerConn.GetServerVersion(),
+		// TODO: pass in the collation id from the server?
 		mysql.DEFAULT_COLLATION_ID,
-		// TODO: not sure if this is the right way to go,
-		// 		 but we probably only want to support a very few auth methods
-		//		 since this server is only for forwarding purpose and we don't
-		//		 care about auth now
-		mysql.AUTH_NATIVE_PASSWORD,
-		nil,
-		nil,
-	).NewCustomizedConn(
+		// flags with some unwanted ones disabled, like upgrade to SSL connection
+		capFlags&^(mysql.CLIENT_SSL|mysql.CLIENT_SSL_VERIFY_SERVER_CERT),
+	)
+	clientSelfConn, err := actualServer.NewConn(
 		clientConn,
-		&AnyUserCredentialProvider{},
-		// the UseDB method will be used during the auth process.
-		UseDBHandler{conn: selfServerConn},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
@@ -125,4 +125,15 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	}
 	// TODO: handle TLS conn
 	return conn, nil
+}
+
+func getCapabilities(hasCapability func(uint32) bool) uint32 {
+	var capabilities uint32
+	for i := uint32(0); i < 32; i++ {
+		flag := uint32(1 << i)
+		if hasCapability(flag) {
+			capabilities |= flag
+		}
+	}
+	return capabilities
 }

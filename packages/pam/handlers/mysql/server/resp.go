@@ -93,13 +93,6 @@ func (c *Conn) readAuthSwitchRequestResponse() ([]byte, error) {
 	return data, nil
 }
 
-func (c *Conn) writeAuthMoreDataPubkey() error {
-	data := make([]byte, 4)
-	data = append(data, mysql.MORE_DATE_HEADER)
-	data = append(data, c.serverConf.pubKey...)
-	return c.WritePacket(data)
-}
-
 func (c *Conn) writeAuthMoreDataFullAuth() error {
 	data := make([]byte, 4)
 	data = append(data, mysql.MORE_DATE_HEADER)
@@ -244,8 +237,6 @@ func (c *Conn) WriteValue(value interface{}) error {
 		return c.writeFieldValues(v)
 	case *replication.BinlogStreamer:
 		return c.writeBinlogEvents(v)
-	case *Stmt:
-		return c.writePrepare(v)
 	default:
 		return fmt.Errorf("invalid response type %T", value)
 	}

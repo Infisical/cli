@@ -23,10 +23,8 @@ type Conn struct {
 	warnings       uint16
 	salt           []byte // should be 8 + 12 for auth-plugin-data-part-1 and auth-plugin-data-part-2
 
-	//credentialProvider  CredentialProvider
-	user                string
-	password            string
-	cachingSha2FullAuth bool
+	user     string
+	password string
 
 	//h Handler
 
