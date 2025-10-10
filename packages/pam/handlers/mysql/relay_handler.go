@@ -31,6 +31,11 @@ func (r RelayHandler) HandleQuery(query string) (*mysql.Result, error) {
 		})
 		return nil, err
 	}
+	r.writeLogEntry(session.SessionLogEntry{
+		Timestamp: time.Now(),
+		Input:     query,
+		Output:    formatResult(result),
+	})
 	return result, nil
 }
 
@@ -62,8 +67,7 @@ func (r RelayHandler) HandleStmtExecute(context interface{}, query string, args 
 	r.writeLogEntry(session.SessionLogEntry{
 		Timestamp: time.Now(),
 		Input:     query,
-		// TODO: parse the resp and log it
-		Output: "FIXME",
+		Output:    formatResult(result),
 	})
 	return result, err
 }
@@ -93,4 +97,8 @@ func (r RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Resul
 		return nil, err
 	}
 	return nil, nil
+}
+
+func formatResult(result *mysql.Result) string {
+	return "FIXME"
 }
