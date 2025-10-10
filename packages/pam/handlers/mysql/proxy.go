@@ -99,7 +99,13 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 
 	p.relayHandler = NewRelayHandler(clientSelfConn, selfServerConn)
 
-	p.relayHandler.HandleCommand()
+	for true {
+		err = p.relayHandler.HandleCommand()
+		if err != nil {
+			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to handle command")
+			return err
+		}
+	}
 
 	// TODO:
 	return nil

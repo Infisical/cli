@@ -72,9 +72,10 @@ func (h *RelayHandler) HandleCommand() error {
 func (h *RelayHandler) forwardRequestResponse(data []byte) error {
 	c := h.clientSelfConn
 	s := h.selfServerConn
+	s.ResetSequence()
 
 	// Forward the packet to the server
-	err := s.WritePacket(data)
+	err := s.WritePacket(prependPacketHeader(data))
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to forward client-to-relay request to the server")
 		return err
@@ -86,16 +87,15 @@ func (h *RelayHandler) forwardRequestResponse(data []byte) error {
 			log.Error().Err(err).Msgf("Failed to read server-to-relay response from the server")
 			return err
 		}
-		cmd := data[0]
-		eof := cmd == mysql.EOF_HEADER
+		header := data[0]
 
 		// Forward the server's response back to the client
-		err = c.WritePacket(resp)
+		err = c.WritePacket(prependPacketHeader(resp))
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to write server-to-relay response to the client")
 			return err
 		}
-		if eof {
+		if header == mysql.OK_HEADER || header == mysql.ERR_HEADER || header == mysql.EOF_HEADER {
 			break
 		}
 	}
@@ -148,4 +148,14 @@ func (h *RelayHandler) dispatch(data []byte) interface{} {
 		return forwardRequestResponse{}
 	}
 	return nil
+}
+
+func prependPacketHeader(data []byte) []byte {
+	// TODO: ideally, should use memory pool instead?
+	packet := make([]byte, 4+len(data))
+	n := copy(packet[4:], data)
+	if n != len(data) {
+		panic("invalid packet length")
+	}
+	return packet
 }
