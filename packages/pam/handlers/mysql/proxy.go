@@ -10,6 +10,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/rs/zerolog/log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -75,12 +76,18 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	}
 	defer selfServerConn.Close()
 
-	// TODO: this is a bit silly that we need to iterate over all the possible bits.
+	// TODO: this is a bit silly that we need to parse the cap flags
 	//	     we should create PR in the upstream to expose the Capability uint32 value
 	//	     directly
-	capFlags := getCapabilities(func(flag uint32) bool {
-		return selfServerConn.HasCapability(flag)
-	})
+	capFlagsString := selfServerConn.CapabilityString()
+	log.Info().Str("sessionID", sessionID).Msgf("Connected to target server %s, server_version=%s, capability=%s", p.config.TargetAddr, selfServerConn.GetServerVersion(), capFlagsString)
+	capFlags, err := parseCapabilityString(capFlagsString)
+	if err != nil {
+		log.Error().Err(err).
+			Str("sessionID", sessionID).
+			Msgf("Failed to parse CapabilityString %s from MySQL server", selfServerConn.CapabilityString())
+		return fmt.Errorf("failed to connect to MySQL server: %w", err)
+	}
 	// TODO: the server we are connecting to from self might have different cap flags
 	//		 find a way to forward those
 	actualServer := server.NewServer(
@@ -127,13 +134,89 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	return conn, nil
 }
 
-func getCapabilities(hasCapability func(uint32) bool) uint32 {
-	var capabilities uint32
-	for i := uint32(0); i < 32; i++ {
-		flag := uint32(1 << i)
-		if hasCapability(flag) {
-			capabilities |= flag
+func parseCapabilityString(capStr string) (uint32, error) {
+	if capStr == "" {
+		return 0, nil
+	}
+
+	var capability uint32
+	caps := strings.Split(capStr, "|")
+
+	for _, cap := range caps {
+		switch cap {
+		case "CLIENT_LONG_PASSWORD":
+			capability |= mysql.CLIENT_LONG_PASSWORD
+		case "CLIENT_FOUND_ROWS":
+			capability |= mysql.CLIENT_FOUND_ROWS
+		case "CLIENT_LONG_FLAG":
+			capability |= mysql.CLIENT_LONG_FLAG
+		case "CLIENT_CONNECT_WITH_DB":
+			capability |= mysql.CLIENT_CONNECT_WITH_DB
+		case "CLIENT_NO_SCHEMA":
+			capability |= mysql.CLIENT_NO_SCHEMA
+		case "CLIENT_COMPRESS":
+			capability |= mysql.CLIENT_COMPRESS
+		case "CLIENT_ODBC":
+			capability |= mysql.CLIENT_ODBC
+		case "CLIENT_LOCAL_FILES":
+			capability |= mysql.CLIENT_LOCAL_FILES
+		case "CLIENT_IGNORE_SPACE":
+			capability |= mysql.CLIENT_IGNORE_SPACE
+		case "CLIENT_PROTOCOL_41":
+			capability |= mysql.CLIENT_PROTOCOL_41
+		case "CLIENT_INTERACTIVE":
+			capability |= mysql.CLIENT_INTERACTIVE
+		case "CLIENT_SSL":
+			capability |= mysql.CLIENT_SSL
+		case "CLIENT_IGNORE_SIGPIPE":
+			capability |= mysql.CLIENT_IGNORE_SIGPIPE
+		case "CLIENT_TRANSACTIONS":
+			capability |= mysql.CLIENT_TRANSACTIONS
+		case "CLIENT_RESERVED":
+			capability |= mysql.CLIENT_RESERVED
+		case "CLIENT_SECURE_CONNECTION":
+			capability |= mysql.CLIENT_SECURE_CONNECTION
+		case "CLIENT_MULTI_STATEMENTS":
+			capability |= mysql.CLIENT_MULTI_STATEMENTS
+		case "CLIENT_MULTI_RESULTS":
+			capability |= mysql.CLIENT_MULTI_RESULTS
+		case "CLIENT_PS_MULTI_RESULTS":
+			capability |= mysql.CLIENT_PS_MULTI_RESULTS
+		case "CLIENT_PLUGIN_AUTH":
+			capability |= mysql.CLIENT_PLUGIN_AUTH
+		case "CLIENT_CONNECT_ATTRS":
+			capability |= mysql.CLIENT_CONNECT_ATTRS
+		case "CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA":
+			capability |= mysql.CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
+		case "CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS":
+			capability |= mysql.CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS
+		case "CLIENT_SESSION_TRACK":
+			capability |= mysql.CLIENT_SESSION_TRACK
+		case "CLIENT_DEPRECATE_EOF":
+			capability |= mysql.CLIENT_DEPRECATE_EOF
+		case "CLIENT_OPTIONAL_RESULTSET_METADATA":
+			capability |= mysql.CLIENT_OPTIONAL_RESULTSET_METADATA
+		case "CLIENT_ZSTD_COMPRESSION_ALGORITHM":
+			capability |= mysql.CLIENT_ZSTD_COMPRESSION_ALGORITHM
+		case "CLIENT_QUERY_ATTRIBUTES":
+			capability |= mysql.CLIENT_QUERY_ATTRIBUTES
+		case "MULTI_FACTOR_AUTHENTICATION":
+			capability |= mysql.MULTI_FACTOR_AUTHENTICATION
+		case "CLIENT_CAPABILITY_EXTENSION":
+			capability |= mysql.CLIENT_CAPABILITY_EXTENSION
+		case "CLIENT_SSL_VERIFY_SERVER_CERT":
+			capability |= mysql.CLIENT_SSL_VERIFY_SERVER_CERT
+		case "CLIENT_REMEMBER_OPTIONS":
+			capability |= mysql.CLIENT_REMEMBER_OPTIONS
+		default:
+			var field uint32
+			_, err := fmt.Sscanf(cap, "(%d)", &field)
+			if err != nil {
+				return 0, fmt.Errorf("invalid capability: %s", cap)
+			}
+			capability |= field
 		}
 	}
-	return capabilities
+
+	return capability, nil
 }
