@@ -50,7 +50,7 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 
 	// Ensure session logger cleanup
 	defer func() {
-		if err := p.sessionLogger.Close(); err != nil {
+		if err := p.config.SessionLogger.Close(); err != nil {
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to close session logger")
 		}
 	}()
