@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
@@ -100,5 +101,22 @@ func (r RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Resul
 }
 
 func formatResult(result *mysql.Result) string {
-	return "FIXME"
+	dataRows := []map[string]interface{}{}
+	for i := 0; i < len(result.Values); i += 1 {
+		row := make(map[string]interface{})
+		for j := 0; j < len(result.Values[i]); j += 1 {
+			field := result.Fields[j]
+			row[string(field.Name)] = result.Values[i][j]
+		}
+	}
+
+	outputData := map[string]interface{}{
+		"total_rows": len(result.Values),
+		"data_rows":  dataRows,
+	}
+	if jsonBytes, err := json.Marshal(outputData); err == nil {
+		return string(jsonBytes)
+	} else {
+		return fmt.Sprintf("query (returned %d rows, JSON error: %v)", len(result.Values), err)
+	}
 }
