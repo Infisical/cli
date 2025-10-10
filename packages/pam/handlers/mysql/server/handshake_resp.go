@@ -170,24 +170,6 @@ func (c *Conn) readAuthData(data []byte, pos int) (auth []byte, authLen int, new
 	return auth, authLen, pos, nil
 }
 
-// Public Key Retrieval
-// See: https://dev.mysql.com/doc/internals/en/public-key-retrieval.html
-func (c *Conn) handlePublicKeyRetrieval(authData []byte) (bool, error) {
-	// if the client use 'sha256_password' auth method, and request for a public key
-	// we send back a keyfile with Protocol::AuthMoreData
-	if c.authPluginName == mysql.AUTH_SHA256_PASSWORD && len(authData) == 1 && authData[0] == 0x01 {
-		if c.serverConf.capability&mysql.CLIENT_SSL == 0 {
-			return false, errors.New("server does not support SSL: CLIENT_SSL not enabled")
-		}
-		if err := c.writeAuthMoreDataPubkey(); err != nil {
-			return false, err
-		}
-
-		return false, c.handleAuthSwitchResponse()
-	}
-	return true, nil
-}
-
 func (c *Conn) handleAuthMatch() (bool, error) {
 	// if the client responds the handshake with a different auth method, the server will send the AuthSwitchRequest packet
 	// to the client to ask the client to switch.
