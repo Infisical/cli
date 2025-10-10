@@ -101,13 +101,14 @@ func (r RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Resul
 }
 
 func formatResult(result *mysql.Result) string {
-	dataRows := []map[string]interface{}{}
+	dataRows := make([]map[string]interface{}, 0, len(result.Values))
 	for i := 0; i < len(result.Values); i += 1 {
-		row := make(map[string]interface{})
+		row := make(map[string]interface{}, len(result.Fields))
 		for j := 0; j < len(result.Values[i]); j += 1 {
 			field := result.Fields[j]
-			row[string(field.Name)] = result.Values[i][j]
+			row[string(field.Name)] = result.Values[i][j].String()
 		}
+		dataRows = append(dataRows, row)
 	}
 
 	outputData := map[string]interface{}{
