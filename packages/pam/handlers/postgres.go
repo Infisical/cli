@@ -58,12 +58,12 @@ type PendingRequest struct {
 	PortalName     string
 }
 
-func NewPostgresProxy(config PostgresProxyConfig) (*PostgresProxy, error) {
+func NewPostgresProxy(config PostgresProxyConfig) *PostgresProxy {
 	return &PostgresProxy{
 		config:             config,
 		pendingRequests:    make(map[string]*PendingRequest),
 		preparedStatements: make(map[string]string),
-	}, nil
+	}
 }
 
 // HandleConnection handles a single client connection using the provided connection
