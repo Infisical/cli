@@ -2,9 +2,9 @@ package mysql
 
 import (
 	"fmt"
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql/server"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 )
 
@@ -13,153 +13,47 @@ type RelayHandler struct {
 	selfServerConn *client.Conn
 }
 
-// Originally defined for internal use in go-mysql. We took it and add our own special
-// response like forward resp from the server
-type (
-	// Do not send anything to the client
-	noResponse struct{}
-	// Forward the request to the server only
-	forwardRequestOnly struct{}
-	// Forward the request to server and the response to the client
-	forwardRequestResponse struct{}
-)
+func (r RelayHandler) UseDB(dbName string) error {
+	return r.selfServerConn.UseDB(dbName)
+}
+
+func (r RelayHandler) HandleQuery(query string) (*mysql.Result, error) {
+	return r.selfServerConn.Execute(query)
+}
+
+func (r RelayHandler) HandleFieldList(table string, fieldWildcard string) ([]*mysql.Field, error) {
+	// Note that COM_FIELD_LIST has been deprecated since MySQL 5.7.11. Now need to support it right now
+	// ref: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_field_list.html
+	return nil, fmt.Errorf("not supported now")
+}
+
+func (r RelayHandler) HandleStmtPrepare(query string) (params int, columns int, context interface{}, err error) {
+	stmt, err := r.selfServerConn.Prepare(query)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	return stmt.ParamNum(), stmt.ColumnNum(), stmt, nil
+}
+
+func (r RelayHandler) HandleStmtExecute(context interface{}, query string, args []interface{}) (*mysql.Result, error) {
+	stmt := context.(*client.Stmt)
+	return stmt.Execute(args...)
+}
+
+func (r RelayHandler) HandleStmtClose(context interface{}) error {
+	stmt := context.(*client.Stmt)
+	return stmt.Close()
+}
+
+func (r RelayHandler) HandleOtherCommand(cmd byte, data []byte) error {
+	log.Info().Str("command", string(cmd)).Msg("Received unsupported command")
+	return fmt.Errorf("not supported now")
+}
 
 func NewRelayHandler(clientSelfConn *server.Conn, selfServerConn *client.Conn) *RelayHandler {
 	return &RelayHandler{clientSelfConn, selfServerConn}
 }
 
-// mostly identical to the go-mysql's implementation for their Handler
-// ref: https://github.com/go-mysql-org/go-mysql/blob/558ed11751bc82177944e5d411f46b76f9c64102/server/command.go#L46-L71
-func (h *RelayHandler) HandleCommand() error {
-	c := h.clientSelfConn
-	s := h.selfServerConn
-	if c.Conn == nil {
-		return fmt.Errorf("connection closed")
-	}
-
-	data, err := c.ReadPacket()
-	if err != nil {
-		c.Close()
-		c.Conn = nil
-		return err
-	}
-
-	resp := h.dispatch(data)
-	switch v := resp.(type) {
-	case noResponse:
-		// Do nothing
-		{
-		}
-	case forwardRequestResponse:
-		err := h.forwardRequestResponse(data)
-		if err != nil {
-			return err
-		}
-	default:
-		c.WriteValue(v)
-	}
-
-	if c.Conn != nil {
-		c.ResetSequence()
-	}
-	if s.Conn != nil {
-		s.ResetSequence()
-	}
-
-	if err != nil {
-		c.Close()
-		c.Conn = nil
-	}
-	return err
-}
-
-func (h *RelayHandler) forwardRequestResponse(data []byte) error {
-	c := h.clientSelfConn
-	s := h.selfServerConn
-
-	// Forward the packet to the server
-	err := s.WritePacket(prependPacketHeader(data))
-	if err != nil {
-		log.Error().Err(err).Msgf("Failed to forward client-to-relay request to the server")
-		return err
-	}
-	// Read the resp from the server and forward them to the client until EOF
-	for true {
-		resp, err := s.ReadPacket()
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to read server-to-relay response from the server")
-			return err
-		}
-		header := resp[0]
-		// TODO: we should check the resp, for some
-
-		// Forward the server's response back to the client
-		err = c.WritePacket(prependPacketHeader(resp))
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to write server-to-relay response to the client")
-			return err
-		}
-		if header == mysql.OK_HEADER || header == mysql.ERR_HEADER || header == mysql.EOF_HEADER {
-			break
-		}
-	}
-	return nil
-}
-
-func (h *RelayHandler) dispatch(data []byte) interface{} {
-	c := h.clientSelfConn
-	cmd := data[0]
-	data = data[1:]
-
-	switch cmd {
-	case mysql.COM_QUIT:
-		c.Close()
-		c.Conn = nil
-		// TODO: handle server side shutdown as well
-		return noResponse{}
-	case mysql.COM_QUERY:
-		// TODO: track the query
-		return forwardRequestResponse{}
-	case mysql.COM_PING:
-	case mysql.COM_INIT_DB:
-	case mysql.COM_FIELD_LIST:
-		return forwardRequestResponse{}
-	case mysql.COM_STMT_PREPARE:
-		// TODO: track the query
-		return forwardRequestResponse{}
-	case mysql.COM_STMT_EXECUTE:
-		// TODO: track the query
-		return forwardRequestResponse{}
-	case mysql.COM_STMT_CLOSE:
-		// TODO: track the query
-		return forwardRequestResponse{}
-	case mysql.COM_STMT_SEND_LONG_DATA:
-		// TODO: track the query
-		return forwardRequestOnly{}
-	case mysql.COM_STMT_RESET:
-		// TODO: track the query
-		return forwardRequestResponse{}
-	case mysql.COM_SET_OPTION:
-		// TODO: track the query
-		return forwardRequestResponse{}
-	case mysql.COM_REGISTER_SLAVE:
-		return forwardRequestResponse{}
-	case mysql.COM_BINLOG_DUMP:
-		return forwardRequestResponse{}
-	case mysql.COM_BINLOG_DUMP_GTID:
-		return forwardRequestResponse{}
-	default:
-		return forwardRequestResponse{}
-	}
-	return nil
-}
-
-func prependPacketHeader(data []byte) []byte {
-	// TODO: ideally, should use memory pool instead?
-	packet := make([]byte, 4+len(data))
-	n := copy(packet[4:], data)
-	if n != len(data) {
-		panic("invalid packet length")
-	}
-	return packet
+func (r *RelayHandler) SetClientSelfConn(clientSelfConn *server.Conn) {
+	r.clientSelfConn = clientSelfConn
 }
