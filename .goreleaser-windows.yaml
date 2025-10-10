@@ -12,41 +12,13 @@ builds:
       - windows
     goarch:
       - amd64
-      - arm64
 
 dockers:
   - dockerfile: docker/windows
     goos: windows
     goarch: amd64
-    use: buildx
     ids:
       - windows-build
     image_templates:
       - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-amd64"
       - "infisical/cli:latest-windows-amd64"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=windows/amd64"
-
-  - dockerfile: docker/windows
-    goos: windows
-    goarch: arm64
-    use: buildx
-    ids:
-      - windows-build
-    image_templates:
-      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-arm64"
-      - "infisical/cli:latest-windows-arm64"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=windows/arm64"
-docker_manifests:
-  - name_template: "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows"
-    image_templates:
-      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-amd64"
-      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-arm64"
-
-  - name_template: "infisical/cli:latest-windows"
-    image_templates:
-      - "infisical/cli:latest-windows-amd64"
-      - "infisical/cli:latest-windows-arm64"
