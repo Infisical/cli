@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"net"
-	"sync"
 	"sync/atomic"
 
 	"github.com/go-mysql-org/go-mysql/mysql"
