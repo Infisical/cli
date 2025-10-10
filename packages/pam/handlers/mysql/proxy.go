@@ -103,6 +103,8 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	if err != nil {
 		return fmt.Errorf("failed to accet MySQL client: %w", err)
 	}
+	// TODO: where did the original code do this? why we need this?
+	selfServerConn.ResetSequence()
 
 	p.relayHandler = NewRelayHandler(clientSelfConn, selfServerConn)
 
