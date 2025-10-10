@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/binary"
 
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -92,18 +91,9 @@ func (c *Conn) decodeFirstPart(data []byte) (newData []byte, pos int, err error)
 
 	// is this a SSLRequest packet?
 	if len(data) == (4 + 4 + 1 + 23) {
-		if c.serverConf.capability&mysql.CLIENT_SSL == 0 {
-			return nil, 0, errors.Errorf("The host '%s' does not support SSL connections", c.RemoteAddr().String())
-		}
-		// switch to TLS
-		tlsConn := tls.Server(c.Conn.Conn, c.serverConf.tlsConfig)
-		if err := tlsConn.Handshake(); err != nil {
-			return nil, 0, err
-		}
-		c.Conn.Conn = tlsConn
-
-		// mysql handshake again
-		return c.readFirstPart()
+		// Our connection will be coming via the SSH tunnel.
+		// We don't support client-to-relay TLS connection, so just return error
+		return nil, 0, errors.Errorf("The host '%s' does not support SSL connections", c.RemoteAddr().String())
 	}
 	return data, pos, nil
 }
@@ -200,12 +190,8 @@ func (c *Conn) handlePublicKeyRetrieval(authData []byte) (bool, error) {
 func (c *Conn) handleAuthMatch() (bool, error) {
 	// if the client responds the handshake with a different auth method, the server will send the AuthSwitchRequest packet
 	// to the client to ask the client to switch.
-	if err := c.acquirePassword(); err != nil {
-		return false, err
-	}
-
-	if c.authPluginName != c.credential.AuthPluginName {
-		if err := c.writeAuthSwitchRequest(c.credential.AuthPluginName); err != nil {
+	if c.authPluginName != c.serverConf.defaultAuthMethod {
+		if err := c.writeAuthSwitchRequest(c.serverConf.defaultAuthMethod); err != nil {
 			return false, err
 		}
 		// handle AuthSwitchResponse
