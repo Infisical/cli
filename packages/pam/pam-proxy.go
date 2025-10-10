@@ -109,6 +109,10 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			}
 		}
 
+		sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime)
+		if err != nil {
+			return fmt.Errorf("failed to create session logger: %w", err)
+		}
 		proxyConfig := handlers.PostgresProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
@@ -117,8 +121,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			EnableTLS:      credentials.SSLEnabled,
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,
-			EncryptionKey:  encryptionKey,
-			ExpiresAt:      pamConfig.ExpiryTime,
+			SessionLogger:  sessionLogger,
 		}
 
 		proxy, err := handlers.NewPostgresProxy(proxyConfig)

@@ -23,8 +23,7 @@ type MysqlProxyConfig struct {
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
-	EncryptionKey  string
-	ExpiresAt      time.Time
+	SessionLogger  session.SessionLogger
 
 	// Connection read and write timeouts to set on the connection
 	ReadTimeout  time.Duration
@@ -34,19 +33,14 @@ type MysqlProxyConfig struct {
 }
 
 type MysqlProxy struct {
-	config        MysqlProxyConfig
-	relayHandler  *RelayHandler
-	sessionLogger *session.SessionLogger
-	mutex         sync.Mutex
+	config       MysqlProxyConfig
+	relayHandler *RelayHandler
+	mutex        sync.Mutex
 	// TODO:
 }
 
-func NewMysqlProxy(config MysqlProxyConfig, sessionLogger *session.SessionLogger) *MysqlProxy {
-	// TODO:
-	return &MysqlProxy{
-		config:        config,
-		sessionLogger: sessionLogger,
-	}
+func NewMysqlProxy(config MysqlProxyConfig) *MysqlProxy {
+	return &MysqlProxy{config: config}
 }
 
 func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
@@ -84,7 +78,7 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		nil,
 		nil,
 	)
-	p.relayHandler = NewRelayHandler(nil, selfServerConn, p.sessionLogger)
+	p.relayHandler = NewRelayHandler(nil, selfServerConn, p.config.SessionLogger)
 	clientSelfConn, err := actualServer.NewCustomizedConn(
 		clientConn,
 		&AnyUserCredentialProvider{},

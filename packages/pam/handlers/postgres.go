@@ -35,13 +35,11 @@ type PostgresProxyConfig struct {
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
-	EncryptionKey  string
-	ExpiresAt      time.Time
+	SessionLogger  session.SessionLogger
 }
 
 type PostgresProxy struct {
 	config             PostgresProxyConfig
-	sessionLogger      *session.SessionLogger
 	mutex              sync.Mutex
 	pendingRequests    map[string]*PendingRequest
 	preparedStatements map[string]string
@@ -61,14 +59,8 @@ type PendingRequest struct {
 }
 
 func NewPostgresProxy(config PostgresProxyConfig) (*PostgresProxy, error) {
-	sessionLogger, err := session.NewSessionLogger(config.SessionID, config.EncryptionKey, config.ExpiresAt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session logger: %w", err)
-	}
-
 	return &PostgresProxy{
 		config:             config,
-		sessionLogger:      sessionLogger,
 		pendingRequests:    make(map[string]*PendingRequest),
 		preparedStatements: make(map[string]string),
 	}, nil
@@ -82,7 +74,7 @@ func (p *PostgresProxy) HandleConnection(ctx context.Context, clientConn net.Con
 
 	// Ensure session logger cleanup
 	defer func() {
-		if err := p.sessionLogger.Close(); err != nil {
+		if err := p.config.SessionLogger.Close(); err != nil {
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to close session logger")
 		}
 	}()
@@ -1078,5 +1070,5 @@ func (p *PostgresProxy) writePairToFile(pair session.RequestResponsePair) error 
 		Output:    pair.Output,
 	}
 
-	return p.sessionLogger.LogEntry(entry)
+	return p.config.SessionLogger.LogEntry(entry)
 }
