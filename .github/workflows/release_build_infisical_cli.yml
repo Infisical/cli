@@ -71,7 +71,7 @@ jobs:
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
-    needs: [goreleaser-windows] # For quick iteration, we're releasing Windows images first
+    # needs: [cli-integration-tests]
     steps:
       - uses: actions/checkout@v3
         with:
