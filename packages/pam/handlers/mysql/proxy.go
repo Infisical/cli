@@ -10,7 +10,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"net"
-	"sync"
 	"time"
 )
 
@@ -35,8 +34,6 @@ type MysqlProxyConfig struct {
 type MysqlProxy struct {
 	config       MysqlProxyConfig
 	relayHandler *RelayHandler
-	mutex        sync.Mutex
-	// TODO:
 }
 
 func NewMysqlProxy(config MysqlProxyConfig) *MysqlProxy {
@@ -97,6 +94,8 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	// TODO: check if selfServerConn closed or no
 	// TODO: check if clientSelfConn closed or not, somehow the read in HandleCommand doesn't raise error even
 	//	     when the connection is closed.
+	// Notice: for now it seems like we only upload the session after it expires, so it's okay if we cannot detect
+	//		   disconnection in the real-time
 	for !clientSelfConn.Closed() {
 		err = clientSelfConn.HandleCommand()
 		if err != nil {
@@ -104,23 +103,27 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 			return err
 		}
 	}
-
-	// TODO:
 	return nil
 }
 
 func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
-	// TODO: psql implemented it with lower level api, but do we really need low level?
-	// 		 let's try it with higher level and see if we need lower level
 	conn, err := client.Connect(
 		p.config.TargetAddr,
 		p.config.InjectUsername,
 		p.config.InjectPassword,
 		p.config.InjectDatabase,
+		func(conn *client.Conn) error {
+			if p.config.EnableTLS {
+				if p.config.TLSConfig == nil {
+					return fmt.Errorf("TLS configuration is required when TLS is enabled")
+				}
+				conn.SetTLSConfig(p.config.TLSConfig)
+			}
+			return nil
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
-	// TODO: handle TLS conn
 	return conn, nil
 }
