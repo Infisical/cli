@@ -94,7 +94,9 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	}()
 	p.relayHandler.SetClientSelfConn(clientSelfConn)
 
-	// TODO: check if server conn closed or not
+	// TODO: check if selfServerConn closed or no
+	// TODO: check if clientSelfConn closed or not, somehow the read in HandleCommand doesn't raise error even
+	//	     when the connection is closed.
 	for !clientSelfConn.Closed() {
 		err = clientSelfConn.HandleCommand()
 		if err != nil {
