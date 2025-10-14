@@ -151,3 +151,38 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.INFISICAL_CLI_REPO_CLOUDFRONT_DISTRIBUTION_ID }}
+
+  # Currently only supports Windows amd64
+  goreleaser-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --force --tags
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: ">=1.19.3"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: 🐋 Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
