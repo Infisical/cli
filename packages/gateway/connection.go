@@ -22,7 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func handleConnection(ctx context.Context, quicConn quic.Connection) {
+func handleConnection(ctx context.Context, quicConn *quic.Conn) {
 	log.Info().Msgf("New connection from: %s", quicConn.RemoteAddr().String())
 	// Use WaitGroup to track all streams
 	var wg sync.WaitGroup
@@ -38,7 +38,7 @@ func handleConnection(ctx context.Context, quicConn quic.Connection) {
 			break
 		}
 		wg.Add(1)
-		go func(stream quic.Stream) {
+		go func(stream *quic.Stream) {
 			defer wg.Done()
 			defer stream.Close()
 
@@ -50,7 +50,7 @@ func handleConnection(ctx context.Context, quicConn quic.Connection) {
 	log.Printf("All streams closed for connection: %s", quicConn.RemoteAddr().String())
 }
 
-func handleStream(stream quic.Stream, quicConn quic.Connection) {
+func handleStream(stream *quic.Stream, quicConn *quic.Conn) {
 	streamID := stream.StreamID()
 	log.Printf("New stream %d from: %s", streamID, quicConn.RemoteAddr().String())
 
@@ -150,7 +150,7 @@ func handleStream(stream quic.Stream, quicConn quic.Connection) {
 		}
 	}
 }
-func handleHTTPProxy(stream quic.Stream, reader *bufio.Reader, targetURL string, caCertB64 string, verifyParam string) error {
+func handleHTTPProxy(stream *quic.Stream, reader *bufio.Reader, targetURL string, caCertB64 string, verifyParam string) error {
 	transport := &http.Transport{
 		DisableKeepAlives: false,
 		MaxIdleConns:      10,
@@ -321,7 +321,7 @@ func isValidURL(str string) bool {
 	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
-func CopyDataFromQuicToTcp(quicStream quic.Stream, tcpConn net.Conn) {
+func CopyDataFromQuicToTcp(quicStream *quic.Stream, tcpConn net.Conn) {
 	// Create a WaitGroup to wait for both copy operations
 	var wg sync.WaitGroup
 	wg.Add(2)
