@@ -82,7 +82,7 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		p.relayHandler,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to accet MySQL client: %w", err)
+		return fmt.Errorf("failed to accept MySQL client: %w", err)
 	}
 	defer func() {
 		if !clientSelfConn.Closed() {
