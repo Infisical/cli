@@ -83,7 +83,7 @@ func (g *Gateway) ConnectWithRelay() error {
 
 	turnAddr, err := net.ResolveUDPAddr("udp4", relayDetails.TurnServerAddress)
 	if err != nil {
-		return fmt.Errorf("Failed to parse turn server address: %w", err)
+		return fmt.Errorf("failed to parse turn server address: %w", err)
 	}
 
 	// Dial TURN Server
@@ -93,14 +93,14 @@ func (g *Gateway) ConnectWithRelay() error {
 			ServerName: relayAddress,
 		})
 		if err != nil {
-			return fmt.Errorf("Failed to connect with relay server: %w", err)
+			return fmt.Errorf("failed to connect with relay server: %w", err)
 		}
 		turnClientCfg.Conn = turn.NewSTUNConn(conn)
 	} else {
 		log.Info().Msgf("Provided relay port %s. Using non TLS connection.", relayPort)
 		conn, err := net.ListenPacket("udp4", "0.0.0.0:0")
 		if err != nil {
-			return fmt.Errorf("Failed to connect with relay server: %w", err)
+			return fmt.Errorf("failed to connect with relay server: %w", err)
 		}
 
 		turnClientCfg.Conn = conn
@@ -108,7 +108,7 @@ func (g *Gateway) ConnectWithRelay() error {
 
 	client, err := turn.NewClient(turnClientCfg)
 	if err != nil {
-		return fmt.Errorf("Failed to create relay client: %w", err)
+		return fmt.Errorf("failed to create relay client: %w", err)
 	}
 
 	g.config = &GatewayConfig{
@@ -126,7 +126,7 @@ func (g *Gateway) Listen(ctx context.Context) error {
 	defer g.client.Close()
 	err := g.client.Listen()
 	if err != nil {
-		return fmt.Errorf("Failed to listen to relay server: %w", err)
+		return fmt.Errorf("failed to listen to relay server: %w", err)
 	}
 
 	log.Info().Msg("Connected with relay")
@@ -136,13 +136,13 @@ func (g *Gateway) Listen(ctx context.Context) error {
 	// socket.
 	relayUdpConnection, err := g.client.Allocate()
 	if err != nil {
-		return fmt.Errorf("Failed to allocate relay connection: %w", err)
+		return fmt.Errorf("failed to allocate relay connection: %w", err)
 	}
 
 	log.Info().Msg(relayUdpConnection.LocalAddr().String())
 	defer func() {
 		if closeErr := relayUdpConnection.Close(); closeErr != nil {
-			log.Error().Msgf("Failed to close connection: %s", closeErr)
+			log.Error().Msgf("failed to close connection: %s", closeErr)
 		}
 	}()
 
@@ -169,7 +169,7 @@ func (g *Gateway) Listen(ctx context.Context) error {
 
 	cert, err := tls.X509KeyPair([]byte(gatewayCert.Certificate), []byte(gatewayCert.PrivateKey))
 	if err != nil {
-		return fmt.Errorf("failed to parse cert: %w", err)
+		return fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
 	caCertPool := x509.NewCertPool()
@@ -192,7 +192,7 @@ func (g *Gateway) Listen(ctx context.Context) error {
 
 	quicListener, err := quic.Listen(relayUdpConnection, tlsConfig, quicConfig)
 	if err != nil {
-		return fmt.Errorf("Failed to listen for QUIC: %w", err)
+		return fmt.Errorf("failed to listen for QUIC: %w", err)
 	}
 	defer quicListener.Close()
 
@@ -233,7 +233,7 @@ func (g *Gateway) Listen(ctx context.Context) error {
 
 				// Handle the connection in a goroutine
 				wg.Add(1)
-				go func(c quic.Connection) {
+				go func(c *quic.Conn) {
 					defer wg.Done()
 					defer c.CloseWithError(0, "connection closed")
 
@@ -305,7 +305,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 
 func (g *Gateway) createPermissionForStaticIps(staticIps string) error {
 	if staticIps == "" {
-		return fmt.Errorf("Missing Infisical static ips for permission")
+		return fmt.Errorf("missing Infisical static ips for permission")
 	}
 
 	splittedIps := strings.Split(staticIps, ",")
@@ -323,14 +323,14 @@ func (g *Gateway) createPermissionForStaticIps(staticIps string) error {
 
 		peerAddr, err := net.ResolveUDPAddr("udp", ip)
 		if err != nil {
-			return fmt.Errorf("Failed to resolve static ip for permission: %w", err)
+			return fmt.Errorf("failed to resolve static ip for permission: %w", err)
 		}
 
 		resolvedIps = append(resolvedIps, peerAddr)
 	}
 
 	if err := g.client.CreatePermission(resolvedIps...); err != nil {
-		return fmt.Errorf("Failed to set ip permission: %w", err)
+		return fmt.Errorf("failed to set ip permission: %w", err)
 	}
 	return nil
 }

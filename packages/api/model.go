@@ -741,3 +741,49 @@ type RegisterGatewayResponse struct {
 		ServerCAPublicKey string `json:"serverCAPublicKey"`
 	} `json:"ssh"`
 }
+
+type PAMAccessRequest struct {
+	Duration  string `json:"duration,omitempty"`
+	AccountId string `json:"accountId,omitempty"`
+}
+
+type PAMAccessResponse struct {
+	SessionId                     string `json:"sessionId"`
+	ResourceType                  string `json:"resourceType"`
+	RelayClientCertificate        string `json:"relayClientCertificate"`
+	RelayClientPrivateKey         string `json:"relayClientPrivateKey"`
+	RelayServerCertificateChain   string `json:"relayServerCertificateChain"`
+	GatewayClientCertificate      string `json:"gatewayClientCertificate"`
+	GatewayClientPrivateKey       string `json:"gatewayClientPrivateKey"`
+	GatewayServerCertificateChain string `json:"gatewayServerCertificateChain"`
+	RelayHost                     string `json:"relayHost"`
+}
+
+type PAMSessionCredentialsResponse struct {
+	Credentials PAMSessionCredentials `json:"credentials"`
+}
+
+type PAMSessionCredentials struct {
+	Host                  string `json:"host"`
+	Port                  int    `json:"port"`
+	Database              string `json:"database"`
+	SSLEnabled            bool   `json:"sslEnabled"`
+	SSLRejectUnauthorized bool   `json:"sslRejectUnauthorized"`
+	SSLCertificate        string `json:"sslCertificate,omitempty"`
+	Username              string `json:"username"`
+	Password              string `json:"password"`
+}
+
+type UploadSessionLogEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Input     string    `json:"input"`
+	Output    string    `json:"output"`
+}
+
+type UploadPAMSessionLogsRequest struct {
+	Logs []UploadSessionLogEntry `json:"logs"`
+}
+
+type RelayHeartbeatRequest struct {
+	Name string `json:"name"`
+}
