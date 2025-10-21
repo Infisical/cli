@@ -34,19 +34,10 @@ import (
 	"github.com/rs/cors"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/term"
 
 	infisicalSdk "github.com/infisical/go-sdk"
 )
-
-type params struct {
-	memory      uint32
-	iterations  uint32
-	parallelism uint8
-	saltLength  uint32
-	keyLength   uint32
-}
 
 func formatAuthMethod(authMethod string) string {
 	return strings.ReplaceAll(authMethod, "-", " ")
@@ -56,6 +47,9 @@ const ADD_USER = "Add a new account login"
 const REPLACE_USER = "Override current logged in user"
 const EXIT_USER_MENU = "Exit"
 const QUIT_BROWSER_LOGIN = "q"
+
+const INFISICAL_CLOUD_US_FLAG_VALUE = "infisical-cloud-us"
+const INFISICAL_CLOUD_EU_FLAG_VALUE = "infisical-cloud-eu"
 
 // loginCmd represents the login command
 var loginCmd = &cobra.Command{
@@ -176,29 +170,43 @@ var loginCmd = &cobra.Command{
 
 			}
 
+			isDirectUserLoginFlagsAndEnvsSet := isDirectUserLoginFlagsAndEnvsSet(cmd)
+
 			//prompt user to select domain between Infisical cloud and self-hosting
 			if domainQuery && !usePresetDomain {
-				err = askForDomain()
-				if err != nil {
-					util.HandleError(err, "Unable to parse domain url")
+				if isDirectUserLoginFlagsAndEnvsSet {
+					err = setDirectUserLoginDomain(cmd)
+					if err != nil {
+						util.HandleError(err)
+					}
+				} else {
+					err = askForDomain()
+					if err != nil {
+						util.HandleError(err, "Unable to parse domain url")
+					}
 				}
 			}
+
 			var userCredentialsToBeStored models.UserCredentials
 
-			interactiveLogin := false
-			if cmd.Flags().Changed("interactive") {
-				interactiveLogin = true
-				cliDefaultLogin(&userCredentialsToBeStored)
-			}
+			interactiveLogin := cmd.Flags().Changed("interactive")
+			useBrowserLogin := !interactiveLogin && !isDirectUserLoginFlagsAndEnvsSet
 
-			//call browser login function
-			if !interactiveLogin {
+			if useBrowserLogin {
 				userCredentialsToBeStored, err = browserCliLogin()
 				if err != nil {
-					fmt.Printf("Login via browser failed. %s", err.Error())
-					//default to cli login on error
-					cliDefaultLogin(&userCredentialsToBeStored)
+					fmt.Printf("Login via browser failed. %s\n", err.Error())
+					useBrowserLogin = false
 				}
+			}
+
+			if !useBrowserLogin {
+				email, password, err := getLoginCredentials(cmd, isDirectUserLoginFlagsAndEnvsSet)
+				if err != nil {
+					util.HandleError(err)
+				}
+
+				cliDefaultLogin(&userCredentialsToBeStored, email, password)
 			}
 
 			err = util.StoreUserCredsInKeyRing(&userCredentialsToBeStored)
@@ -231,7 +239,6 @@ var loginCmd = &cobra.Command{
 			fmt.Println("- Stuck? Join our slack for quick support https://infisical.com/slack")
 			Telemetry.CaptureEvent("cli-command:login", posthog.NewProperties().Set("infisical-backend", config.INFISICAL_URL).Set("version", util.CLI_VERSION))
 		} else {
-
 			sdkAuthenticator := util.NewSdkAuthenticator(infisicalClient, cmd)
 
 			authStrategies := map[util.AuthStrategyType]func() (credential infisicalSdk.MachineIdentityCredential, e error){
@@ -273,12 +280,7 @@ var loginCmd = &cobra.Command{
 	},
 }
 
-func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials) {
-	email, password, err := askForLoginCredentials()
-	if err != nil {
-		util.HandleError(err, "Unable to parse email and password for authentication")
-	}
-
+func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email string, password string) {
 	loginV3Response, err := getFreshUserCredentials(email, password)
 	if err == nil {
 		userCredentialsToBeStored.Email = email
@@ -361,6 +363,11 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials) {
 	userCredentialsToBeStored.JTWToken = newJwtToken
 }
 
+func setDomainConfig(domain string) {
+	config.INFISICAL_URL = fmt.Sprintf("%s/api", domain)
+	config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", domain)
+}
+
 func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().Bool("clear-domains", false, "clear all self-hosting domains from the config file")
@@ -369,11 +376,14 @@ func init() {
 	loginCmd.Flags().String("method", "user", "login method [user, universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]")
 	loginCmd.Flags().String("client-id", "", "client id for universal auth")
 	loginCmd.Flags().String("client-secret", "", "client secret for universal auth")
-	loginCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
+	loginCmd.Flags().String("machine-identity-id", "", "machine identity id for these login methods [kubernetes, azure, gcp-id-token, gcp-iam, aws-iam]")
 	loginCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	loginCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
-	loginCmd.Flags().String("jwt", "", "jwt for jwt-based auth methods [oidc-auth, jwt-auth]")
+	loginCmd.Flags().String("jwt", "", "jwt for jwt-based login methods [oidc-auth, jwt-auth]")
 	loginCmd.Flags().String("oidc-jwt", "", "JWT for OIDC authentication. Deprecated, use --jwt instead")
+	loginCmd.Flags().String("email", "", "email for 'user' login method")
+	loginCmd.Flags().String("password", "", "password for 'user' login method")
+	loginCmd.Flags().String("hosting", "", fmt.Sprintf("hosting option for 'user' login method [%s, %s, custom domain URL]", INFISICAL_CLOUD_US_FLAG_VALUE, INFISICAL_CLOUD_EU_FLAG_VALUE))
 
 	loginCmd.Flags().MarkDeprecated("oidc-jwt", "use --jwt instead")
 
@@ -442,7 +452,6 @@ func usePresetDomain(presetDomain string) (bool, error) {
 }
 
 func askForDomain() error {
-
 	// query user to choose between Infisical cloud or self-hosting
 	const (
 		INFISICAL_CLOUD_US = "Infisical Cloud (US Region)"
@@ -464,14 +473,10 @@ func askForDomain() error {
 	}
 
 	if selectedHostingOption == INFISICAL_CLOUD_US {
-		// US cloud option
-		config.INFISICAL_URL = fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL)
-		config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", util.INFISICAL_DEFAULT_US_URL)
+		setDomainConfig(util.INFISICAL_DEFAULT_US_URL)
 		return nil
 	} else if selectedHostingOption == INFISICAL_CLOUD_EU {
-		// EU cloud option
-		config.INFISICAL_URL = fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_EU_URL)
-		config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", util.INFISICAL_DEFAULT_EU_URL)
+		setDomainConfig(util.INFISICAL_DEFAULT_EU_URL)
 		return nil
 	}
 
@@ -480,7 +485,7 @@ func askForDomain() error {
 		return fmt.Errorf("askForDomain: unable to get config file because [err=%s]", err)
 	}
 
-	if infisicalConfig.Domains != nil && len(infisicalConfig.Domains) > 0 {
+	if len(infisicalConfig.Domains) > 0 {
 		// If domains are present in the config, let the user select from the list or select to add a new domain
 
 		items := append(infisicalConfig.Domains, ADD_NEW_DOMAIN)
@@ -497,25 +502,16 @@ func askForDomain() error {
 		}
 
 		if selectedOption != ADD_NEW_DOMAIN {
-			config.INFISICAL_URL = fmt.Sprintf("%s/api", selectedOption)
-			config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", selectedOption)
+			setDomainConfig(selectedOption)
 			return nil
 
 		}
 
 	}
 
-	urlValidation := func(input string) error {
-		_, err := url.ParseRequestURI(input)
-		if err != nil {
-			return errors.New("this is an invalid url")
-		}
-		return nil
-	}
-
 	domainPrompt := promptui.Prompt{
 		Label:    "Domain",
-		Validate: urlValidation,
+		Validate: validateURLInput,
 		Default:  "Example - https://my-self-hosted-instance.com",
 	}
 
@@ -524,38 +520,46 @@ func askForDomain() error {
 		return err
 	}
 
-	// Trimmed the '/' from the end of the self-hosting url, and set the api & login url
-	domain = strings.TrimRight(domain, "/")
-	config.INFISICAL_URL = fmt.Sprintf("%s/api", domain)
-	config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", domain)
-
-	// Write the new domain to the config file, to allow the user to select it in the future if needed
-	// First check if infiscialConfig.Domains already includes the domain, if it does, do not add it again
-	if !slices.Contains(infisicalConfig.Domains, domain) {
-		infisicalConfig.Domains = append(infisicalConfig.Domains, domain)
-		err = util.WriteConfigFile(&infisicalConfig)
-
-		if err != nil {
-			return fmt.Errorf("askForDomain: unable to write domains to config file because [err=%s]", err)
-		}
+	err = trimAndWriteCustomDomainToConfig(domain, &infisicalConfig)
+	if err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func askForLoginCredentials() (email string, password string, err error) {
-	validateEmail := func(input string) error {
-		matched, err := regexp.MatchString("^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$", input)
-		if err != nil || !matched {
-			return errors.New("this doesn't look like an email address")
+func getLoginCredentials(cmd *cobra.Command, directUserLoginFlags bool) (email string, password string, err error) {
+	if directUserLoginFlags {
+		email, err = util.GetCmdFlagOrEnv(cmd, "email", []string{"INFISICAL_EMAIL"})
+		if err != nil {
+			return "", "", err
 		}
-		return nil
+
+		err = validateEmailInput(email)
+		if err != nil {
+			return "", "", err
+		}
+
+		password, err = util.GetCmdFlagOrEnv(cmd, "password", []string{"INFISICAL_PASSWORD"})
+		if err != nil {
+			return "", "", err
+		}
+
+		return email, password, nil
 	}
 
+	email, password, err = askForLoginCredentials()
+	if err != nil {
+		return "", "", fmt.Errorf("unable to parse email and password for authentication: %w", err)
+	}
+	return email, password, nil
+}
+
+func askForLoginCredentials() (email string, password string, err error) {
 	fmt.Println("Enter Credentials...")
 	emailPrompt := promptui.Prompt{
 		Label:    "Email",
-		Validate: validateEmail,
+		Validate: validateEmailInput,
 	}
 
 	userEmail, err := emailPrompt.Run()
@@ -564,16 +568,9 @@ func askForLoginCredentials() (email string, password string, err error) {
 		return "", "", err
 	}
 
-	validatePassword := func(input string) error {
-		if len(input) < 1 {
-			return errors.New("please enter a valid password")
-		}
-		return nil
-	}
-
 	passwordPrompt := promptui.Prompt{
 		Label:    "Password",
-		Validate: validatePassword,
+		Validate: validatePasswordInput,
 		Mask:     '*',
 	}
 
@@ -755,11 +752,6 @@ func userLoginMenu(currentLoggedInUserEmail string) (bool, error) {
 		return false, err
 	}
 	return result != EXIT_USER_MENU, err
-}
-
-func generateFromPassword(password string, salt []byte, p *params) (hash []byte, err error) {
-	hash = argon2.IDKey([]byte(password), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
-	return hash, nil
 }
 
 func askForMFACode(mfaMethod string) string {
@@ -960,4 +952,94 @@ func browserLoginHandler(success chan models.UserCredentials, failure chan error
 		success <- loginResponse
 
 	}
+}
+
+// check if one of the flag or all the envs are set
+func isDirectUserLoginFlagsAndEnvsSet(cmd *cobra.Command) bool {
+	email := os.Getenv("INFISICAL_EMAIL")
+	password := os.Getenv("INFISICAL_PASSWORD")
+	hosting := os.Getenv("INFISICAL_HOSTING")
+
+	if email != "" && password != "" && hosting != "" {
+		return true
+	}
+
+	if cmd.Flags().Changed("email") || cmd.Flags().Changed("password") || cmd.Flags().Changed("hosting") {
+		return true
+	}
+
+	return false
+}
+
+func setDirectUserLoginDomain(cmd *cobra.Command) error {
+	domain, err := util.GetCmdFlagOrEnv(cmd, "hosting", []string{"INFISICAL_HOSTING"})
+	if err != nil {
+		return err
+	}
+
+	switch domain {
+	case INFISICAL_CLOUD_US_FLAG_VALUE:
+		setDomainConfig(util.INFISICAL_DEFAULT_US_URL)
+	case INFISICAL_CLOUD_EU_FLAG_VALUE:
+		setDomainConfig(util.INFISICAL_DEFAULT_EU_URL)
+	default:
+		err = validateURLInput(domain)
+		if err != nil {
+			return err
+		}
+
+		infisicalConfig, err := util.GetConfigFile()
+		if err != nil {
+			return err
+		}
+
+		err = trimAndWriteCustomDomainToConfig(domain, &infisicalConfig)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func trimAndWriteCustomDomainToConfig(domain string, infisicalConfig *models.ConfigFile) error {
+	// Trimmed the '/' from the end of the self-hosting url, and set the api & login url
+	domain = strings.TrimRight(domain, "/")
+	setDomainConfig(domain)
+
+	// Write the new domain to the config file, to allow the user to select it in the future if needed
+	// First check if infiscialConfig.Domains already includes the domain, if it does, do not add it again
+	if !slices.Contains(infisicalConfig.Domains, domain) {
+		infisicalConfig.Domains = append(infisicalConfig.Domains, domain)
+		err := util.WriteConfigFile(infisicalConfig)
+
+		if err != nil {
+			return fmt.Errorf("askForDomain: unable to write domains to config file because [err=%s]", err)
+		}
+	}
+
+	return nil
+}
+
+func validateURLInput(input string) error {
+	_, err := url.ParseRequestURI(input)
+	if err != nil {
+		return errors.New("please provide a valid hosting domain url")
+	}
+	return nil
+}
+
+func validateEmailInput(input string) error {
+	matched, err := regexp.MatchString("^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$", input)
+	if err != nil || !matched {
+		return errors.New("please provide a valid email address")
+	}
+	return nil
+}
+
+func validatePasswordInput(input string) error {
+	if len(input) < 1 {
+		return errors.New("please provide a valid password")
+	}
+	return nil
 }
