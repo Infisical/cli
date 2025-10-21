@@ -226,6 +226,11 @@ var loginCmd = &cobra.Command{
 			// clear backed up secrets from prev account
 			util.DeleteBackupSecrets()
 
+			if plainOutput {
+				fmt.Println(userCredentialsToBeStored.JTWToken)
+				return
+			}
+
 			whilte := color.New(color.FgGreen)
 			boldWhite := whilte.Add(color.Bold)
 			time.Sleep(time.Second * 1)
@@ -237,6 +242,11 @@ var loginCmd = &cobra.Command{
 			plainBold.Println("\nQuick links")
 			fmt.Println("- Learn to inject secrets into your application at https://infisical.com/docs/cli/usage")
 			fmt.Println("- Stuck? Join our slack for quick support https://infisical.com/slack")
+
+			// Display JWT token similar to other login methods
+			boldPlain := color.New(color.Bold)
+			boldPlain.Printf("\nUser Token:\n%v\n", userCredentialsToBeStored.JTWToken)
+
 			Telemetry.CaptureEvent("cli-command:login", posthog.NewProperties().Set("infisical-backend", config.INFISICAL_URL).Set("version", util.CLI_VERSION))
 		} else {
 			sdkAuthenticator := util.NewSdkAuthenticator(infisicalClient, cmd)
