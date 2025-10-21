@@ -178,7 +178,6 @@ var loginCmd = &cobra.Command{
 			if !usePresetDomain {
 				// if the command is being executed directly with --email and --password, use the preset domain without prompting
 				if isDirectUserLoginFlagsAndEnvsSet {
-					fmt.Println(strings.TrimSuffix(presetDomain, "/api"))
 					setDomainConfig(strings.TrimSuffix(presetDomain, "/api"))
 				} else if domainQuery {
 					//prompt user to select domain between Infisical cloud and self-hosting

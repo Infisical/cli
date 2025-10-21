@@ -64,6 +64,7 @@ func init() {
 				util.PrintWarning(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source))
 			}
 		}
+
 	}
 
 	// if config.INFISICAL_URL is set to the default value, check if INFISICAL_URL is set in the environment
