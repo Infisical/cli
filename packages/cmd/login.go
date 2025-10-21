@@ -48,9 +48,6 @@ const REPLACE_USER = "Override current logged in user"
 const EXIT_USER_MENU = "Exit"
 const QUIT_BROWSER_LOGIN = "q"
 
-const INFISICAL_CLOUD_US_FLAG_VALUE = "infisical-cloud-us"
-const INFISICAL_CLOUD_EU_FLAG_VALUE = "infisical-cloud-eu"
-
 // loginCmd represents the login command
 var loginCmd = &cobra.Command{
 	Use:                   "login",
@@ -69,6 +66,7 @@ var loginCmd = &cobra.Command{
 				return err
 			}
 		}
+
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -124,6 +122,12 @@ var loginCmd = &cobra.Command{
 
 		// standalone user auth
 		if loginMethod == "user" {
+			isDirectUserLoginFlagsAndEnvsSet, err := validateDirectUserLoginFlagsAndEnvsSet(cmd, presetDomain)
+
+			if err != nil {
+				util.HandleError(err)
+			}
+
 			currentLoggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
 			// if the key can't be found or there is an error getting current credentials from key ring, allow them to override
 			if err != nil && (strings.Contains(err.Error(), "we couldn't find your logged in details")) {
@@ -154,7 +158,8 @@ var loginCmd = &cobra.Command{
 			if config.INFISICAL_URL_MANUAL_OVERRIDE != "" &&
 				config.INFISICAL_URL_MANUAL_OVERRIDE != fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_EU_URL) &&
 				config.INFISICAL_URL_MANUAL_OVERRIDE != fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL) &&
-				!usePresetDomain {
+				!usePresetDomain &&
+				!isDirectUserLoginFlagsAndEnvsSet {
 				overrideDomain, err := DomainOverridePrompt()
 				if err != nil {
 					util.HandleError(err)
@@ -170,16 +175,13 @@ var loginCmd = &cobra.Command{
 
 			}
 
-			isDirectUserLoginFlagsAndEnvsSet := isDirectUserLoginFlagsAndEnvsSet(cmd)
-
-			//prompt user to select domain between Infisical cloud and self-hosting
-			if domainQuery && !usePresetDomain {
+			if !usePresetDomain {
+				// if the command is being executed directly with --email and --password, use the preset domain without prompting
 				if isDirectUserLoginFlagsAndEnvsSet {
-					err = setDirectUserLoginDomain(cmd)
-					if err != nil {
-						util.HandleError(err)
-					}
-				} else {
+					fmt.Println(strings.TrimSuffix(presetDomain, "/api"))
+					setDomainConfig(strings.TrimSuffix(presetDomain, "/api"))
+				} else if domainQuery {
+					//prompt user to select domain between Infisical cloud and self-hosting
 					err = askForDomain()
 					if err != nil {
 						util.HandleError(err, "Unable to parse domain url")
@@ -198,9 +200,7 @@ var loginCmd = &cobra.Command{
 					fmt.Printf("Login via browser failed. %s\n", err.Error())
 					useBrowserLogin = false
 				}
-			}
-
-			if !useBrowserLogin {
+			} else {
 				email, password, err := getLoginCredentials(cmd, isDirectUserLoginFlagsAndEnvsSet)
 				if err != nil {
 					util.HandleError(err)
@@ -393,7 +393,6 @@ func init() {
 	loginCmd.Flags().String("oidc-jwt", "", "JWT for OIDC authentication. Deprecated, use --jwt instead")
 	loginCmd.Flags().String("email", "", "email for 'user' login method")
 	loginCmd.Flags().String("password", "", "password for 'user' login method")
-	loginCmd.Flags().String("hosting", "", fmt.Sprintf("hosting option for 'user' login method [%s, %s, custom domain URL]", INFISICAL_CLOUD_US_FLAG_VALUE, INFISICAL_CLOUD_EU_FLAG_VALUE))
 
 	loginCmd.Flags().MarkDeprecated("oidc-jwt", "use --jwt instead")
 
@@ -788,7 +787,7 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 	fmt.Println("\n\nOnce login is completed via browser, the CLI should be authenticated automatically.")
 	fmt.Println("However, if browser fails to communicate with the CLI, please paste the token from the browser below.")
 
-	fmt.Print("\n\nToken: ")
+	fmt.Print("\n\nPaste your browser token here: ")
 	bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		failure <- err
@@ -901,7 +900,7 @@ func browserCliLogin() (models.UserCredentials, error) {
 		select {
 		case loginResponse := <-success:
 			_ = closeListener(&listener)
-			fmt.Println("Browser login successful")
+			fmt.Println("\n\nBrowser login successful")
 			return loginResponse, nil
 
 		case err := <-failure:
@@ -965,51 +964,34 @@ func browserLoginHandler(success chan models.UserCredentials, failure chan error
 }
 
 // check if one of the flag or all the envs are set
-func isDirectUserLoginFlagsAndEnvsSet(cmd *cobra.Command) bool {
-	email := os.Getenv("INFISICAL_EMAIL")
-	password := os.Getenv("INFISICAL_PASSWORD")
-	hosting := os.Getenv("INFISICAL_HOSTING")
-
-	if email != "" && password != "" && hosting != "" {
-		return true
+func validateDirectUserLoginFlagsAndEnvsSet(cmd *cobra.Command, domain string) (isDirectUserLogin bool, err error) {
+	requiredFlagsEnvs := map[string]string{
+		"email":    "INFISICAL_EMAIL",
+		"password": "INFISICAL_PASSWORD",
 	}
 
-	if cmd.Flags().Changed("email") || cmd.Flags().Changed("password") || cmd.Flags().Changed("hosting") {
-		return true
-	}
+	var missingFlagsEnvs []string
 
-	return false
-}
-
-func setDirectUserLoginDomain(cmd *cobra.Command) error {
-	domain, err := util.GetCmdFlagOrEnv(cmd, "hosting", []string{"INFISICAL_HOSTING"})
-	if err != nil {
-		return err
-	}
-
-	switch domain {
-	case INFISICAL_CLOUD_US_FLAG_VALUE:
-		setDomainConfig(util.INFISICAL_DEFAULT_US_URL)
-	case INFISICAL_CLOUD_EU_FLAG_VALUE:
-		setDomainConfig(util.INFISICAL_DEFAULT_EU_URL)
-	default:
-		err = validateURLInput(domain)
-		if err != nil {
-			return err
-		}
-
-		infisicalConfig, err := util.GetConfigFile()
-		if err != nil {
-			return err
-		}
-
-		err = trimAndWriteCustomDomainToConfig(domain, &infisicalConfig)
-		if err != nil {
-			return err
+	for flag, env := range requiredFlagsEnvs {
+		if !cmd.Flags().Changed(flag) && os.Getenv(env) == "" {
+			missingFlagsEnvs = append(missingFlagsEnvs, fmt.Sprintf("--%s", flag))
 		}
 	}
 
-	return nil
+	if len(missingFlagsEnvs) == 0 {
+		if domain != "" {
+			return true, nil
+		}
+
+		missingFlagsEnvs = append(missingFlagsEnvs, "--domain")
+		requiredFlagsEnvs["domain"] = "INFISICAL_DOMAIN"
+	}
+
+	if len(missingFlagsEnvs) == len(requiredFlagsEnvs) {
+		return false, nil
+	}
+
+	return true, fmt.Errorf("missing flags for the user login method: %v.\nPlease set the required flags or environment variables and try again", missingFlagsEnvs)
 }
 
 func trimAndWriteCustomDomainToConfig(domain string, infisicalConfig *models.ConfigFile) error {
@@ -1034,7 +1016,7 @@ func trimAndWriteCustomDomainToConfig(domain string, infisicalConfig *models.Con
 func validateURLInput(input string) error {
 	_, err := url.ParseRequestURI(input)
 	if err != nil {
-		return errors.New("please provide a valid hosting domain url")
+		return errors.New("please provide a valid domain url (e.g., https://your-instance.com)")
 	}
 	return nil
 }

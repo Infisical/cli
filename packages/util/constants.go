@@ -38,11 +38,6 @@ const (
 	INFISICAL_LDAP_USERNAME = "INFISICAL_LDAP_USERNAME"
 	INFISICAL_LDAP_PASSWORD = "INFISICAL_LDAP_PASSWORD"
 
-	// User Auth
-	INFISICAL_EMAIL    = "INFISICAL_EMAIL"
-	INFISICAL_PASSWORD = "INFISICAL_PASSWORD"
-	INFISICAL_HOSTING  = "INFISICAL_HOSTING"
-
 	INFISICAL_GATEWAY_TOKEN_NAME_LEGACY = "TOKEN" // backwards compatibility with gateway helm chart, where token was the only supported auth method
 
 	// Generic env variable used for auth methods that require a machine identity ID
