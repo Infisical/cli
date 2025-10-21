@@ -16,6 +16,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -306,6 +307,7 @@ func GetCmdFlagOrEnv(cmd *cobra.Command, flag string, envNames []string) (string
 		for _, env := range envNames {
 			value = strings.TrimSpace(os.Getenv(env))
 			if value != "" {
+				log.Debug().Str("env", env).Str("flag", flag).Msg("Using value from environment variable for flag")
 				break
 			}
 		}
