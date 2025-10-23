@@ -359,12 +359,12 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email st
 					loginTwoResponse.Token = verifyMFAresponse.Token
 					loginTwoResponse.EncryptionVersion = verifyMFAresponse.EncryptionVersion
 
-					getOrganizationIdAccessToken = verifyMFAresponse.Token
-
 					break
 				}
 			}
 		}
+
+		getOrganizationIdAccessToken = loginTwoResponse.Token
 	}
 
 	// TODO(daniel): At a later time we should re-add this check, but we don't want to break older Infisical instances that doesn't have the latest SRP removal initiative on them.
