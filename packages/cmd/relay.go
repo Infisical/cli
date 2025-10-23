@@ -211,7 +211,7 @@ var relaySystemdInstallCmd = &cobra.Command{
 		}
 
 		if instanceType != "instance" && token == "" {
-			util.HandleError(fmt.Errorf("for type '%s', --token is required", instanceType))
+			util.HandleError(fmt.Errorf("for type '%s', --token flag or %s env must be set", instanceType, gatewayv2.INFISICAL_TOKEN_ENV_NAME))
 		}
 
 		if err := relay.InstallRelaySystemdService(token, domain, name, host, instanceType, relayAuthSecret); err != nil {
