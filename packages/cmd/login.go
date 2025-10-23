@@ -199,13 +199,25 @@ var loginCmd = &cobra.Command{
 					fmt.Printf("Login via browser failed. %s\n", err.Error())
 					useBrowserLogin = false
 				}
-			} else {
+			}
+
+			// if not using browser login or if the browser login failed, get login credentials from command line or environment variables
+			if !useBrowserLogin {
 				email, password, err := getLoginCredentials(cmd, isDirectUserLoginFlagsAndEnvsSet)
 				if err != nil {
 					util.HandleError(err)
 				}
 
-				cliDefaultLogin(&userCredentialsToBeStored, email, password)
+				var organizationId string
+
+				if isDirectUserLoginFlagsAndEnvsSet {
+					organizationId, err = util.GetCmdFlagOrEnv(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"})
+					if err != nil {
+						util.HandleError(err)
+					}
+				}
+
+				cliDefaultLogin(&userCredentialsToBeStored, email, password, organizationId)
 			}
 
 			err = util.StoreUserCredsInKeyRing(&userCredentialsToBeStored)
@@ -285,13 +297,74 @@ var loginCmd = &cobra.Command{
 	},
 }
 
-func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email string, password string) {
+func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email string, password string, organizationId string) {
 	loginV3Response, err := getFreshUserCredentials(email, password)
+	var getOrganizationIdAccessToken string
+
 	if err == nil {
-		userCredentialsToBeStored.Email = email
-		userCredentialsToBeStored.PrivateKey = ""
-		userCredentialsToBeStored.JTWToken = loginV3Response.AccessToken
-		return
+		getOrganizationIdAccessToken = loginV3Response.AccessToken
+	} else {
+		log.Info().Msg("Unable to authenticate with the provided credentials, falling back to SRP authentication")
+
+		_, loginTwoResponse, err := getFreshUserCredentialsWithSrp(email, password)
+		if err != nil {
+			fmt.Println("Unable to authenticate with the provided credentials, please try again")
+			log.Debug().Err(err)
+			//return here
+			util.HandleError(err)
+		}
+
+		if loginTwoResponse.MfaEnabled {
+			i := 1
+			for i < 6 {
+				mfaVerifyCode := askForMFACode("email")
+
+				httpClient, err := util.GetRestyClientWithCustomHeaders()
+				if err != nil {
+					util.HandleError(err, "Unable to get resty client with custom headers")
+				}
+				httpClient.SetAuthToken(loginTwoResponse.Token)
+				verifyMFAresponse, mfaErrorResponse, requestError := api.CallVerifyMfaToken(httpClient, api.VerifyMfaTokenRequest{
+					Email:    email,
+					MFAToken: mfaVerifyCode,
+				})
+
+				if requestError != nil {
+					util.HandleError(err)
+					break
+				} else if mfaErrorResponse != nil {
+					if mfaErrorResponse.Context.Code == "mfa_invalid" {
+						msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
+						fmt.Println(msg)
+						if i == 5 {
+							util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
+							break
+						}
+					}
+
+					if mfaErrorResponse.Context.Code == "mfa_expired" {
+						util.PrintErrorMessageAndExit("Your 2FA verification code has expired, please try logging in again")
+						break
+					}
+					i++
+				} else {
+					loginTwoResponse.EncryptedPrivateKey = verifyMFAresponse.EncryptedPrivateKey
+					loginTwoResponse.EncryptionVersion = verifyMFAresponse.EncryptionVersion
+					loginTwoResponse.Iv = verifyMFAresponse.Iv
+					loginTwoResponse.ProtectedKey = verifyMFAresponse.ProtectedKey
+					loginTwoResponse.ProtectedKeyIV = verifyMFAresponse.ProtectedKeyIV
+					loginTwoResponse.ProtectedKeyTag = verifyMFAresponse.ProtectedKeyTag
+					loginTwoResponse.PublicKey = verifyMFAresponse.PublicKey
+					loginTwoResponse.Tag = verifyMFAresponse.Tag
+					loginTwoResponse.Token = verifyMFAresponse.Token
+					loginTwoResponse.EncryptionVersion = verifyMFAresponse.EncryptionVersion
+
+					break
+				}
+			}
+		}
+
+		getOrganizationIdAccessToken = loginTwoResponse.Token
 	}
 
 	// TODO(daniel): At a later time we should re-add this check, but we don't want to break older Infisical instances that doesn't have the latest SRP removal initiative on them.
@@ -299,68 +372,8 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email st
 	// 	util.HandleError(err)
 	// }
 
-	log.Info().Msg("Unable to authenticate with the provided credentials, falling back to SRP authentication")
-
-	_, loginTwoResponse, err := getFreshUserCredentialsWithSrp(email, password)
-	if err != nil {
-		fmt.Println("Unable to authenticate with the provided credentials, please try again")
-		log.Debug().Err(err)
-		//return here
-		util.HandleError(err)
-	}
-
-	if loginTwoResponse.MfaEnabled {
-		i := 1
-		for i < 6 {
-			mfaVerifyCode := askForMFACode("email")
-
-			httpClient, err := util.GetRestyClientWithCustomHeaders()
-			if err != nil {
-				util.HandleError(err, "Unable to get resty client with custom headers")
-			}
-			httpClient.SetAuthToken(loginTwoResponse.Token)
-			verifyMFAresponse, mfaErrorResponse, requestError := api.CallVerifyMfaToken(httpClient, api.VerifyMfaTokenRequest{
-				Email:    email,
-				MFAToken: mfaVerifyCode,
-			})
-
-			if requestError != nil {
-				util.HandleError(err)
-				break
-			} else if mfaErrorResponse != nil {
-				if mfaErrorResponse.Context.Code == "mfa_invalid" {
-					msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
-					fmt.Println(msg)
-					if i == 5 {
-						util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
-						break
-					}
-				}
-
-				if mfaErrorResponse.Context.Code == "mfa_expired" {
-					util.PrintErrorMessageAndExit("Your 2FA verification code has expired, please try logging in again")
-					break
-				}
-				i++
-			} else {
-				loginTwoResponse.EncryptedPrivateKey = verifyMFAresponse.EncryptedPrivateKey
-				loginTwoResponse.EncryptionVersion = verifyMFAresponse.EncryptionVersion
-				loginTwoResponse.Iv = verifyMFAresponse.Iv
-				loginTwoResponse.ProtectedKey = verifyMFAresponse.ProtectedKey
-				loginTwoResponse.ProtectedKeyIV = verifyMFAresponse.ProtectedKeyIV
-				loginTwoResponse.ProtectedKeyTag = verifyMFAresponse.ProtectedKeyTag
-				loginTwoResponse.PublicKey = verifyMFAresponse.PublicKey
-				loginTwoResponse.Tag = verifyMFAresponse.Tag
-				loginTwoResponse.Token = verifyMFAresponse.Token
-				loginTwoResponse.EncryptionVersion = verifyMFAresponse.EncryptionVersion
-
-				break
-			}
-		}
-	}
-
 	// Login is successful so ask user to choose organization
-	newJwtToken := GetJwtTokenWithOrganizationId(loginTwoResponse.Token, email)
+	newJwtToken := GetJwtTokenWithOrganizationId(getOrganizationIdAccessToken, email, organizationId)
 
 	//updating usercredentials
 	userCredentialsToBeStored.Email = email
@@ -388,6 +401,7 @@ func init() {
 	loginCmd.Flags().String("oidc-jwt", "", "JWT for OIDC authentication. Deprecated, use --jwt instead")
 	loginCmd.Flags().String("email", "", "email for 'user' login method")
 	loginCmd.Flags().String("password", "", "password for 'user' login method")
+	loginCmd.Flags().String("organization-id", "", "organization id for 'user' login method")
 
 	loginCmd.Flags().MarkDeprecated("oidc-jwt", "use --jwt instead")
 
@@ -659,7 +673,7 @@ func getFreshUserCredentialsWithSrp(email string, password string) (*api.GetLogi
 	return &loginOneResponseResult, &loginTwoResponseResult, nil
 }
 
-func GetJwtTokenWithOrganizationId(oldJwtToken string, email string) string {
+func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizationId string) string {
 	log.Debug().Msg(fmt.Sprint("GetJwtTokenWithOrganizationId: ", "oldJwtToken", oldJwtToken))
 
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -668,29 +682,33 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string) string {
 	}
 	httpClient.SetAuthToken(oldJwtToken)
 
-	organizationResponse, err := api.CallGetAllOrganizations(httpClient)
+	selectedOrganizationId := organizationId
 
-	if err != nil {
-		util.HandleError(err, "Unable to pull organizations that belong to you")
+	if selectedOrganizationId == "" {
+		organizationResponse, err := api.CallGetAllOrganizations(httpClient)
+
+		if err != nil {
+			util.HandleError(err, "Unable to pull organizations that belong to you")
+		}
+
+		organizations := organizationResponse.Organizations
+
+		organizationNames := util.GetOrganizationsNameList(organizationResponse)
+
+		prompt := promptui.Select{
+			Label: "Which Infisical organization would you like to log into?",
+			Items: organizationNames,
+		}
+
+		index, _, err := prompt.Run()
+		if err != nil {
+			util.HandleError(err)
+		}
+
+		selectedOrganizationId = organizations[index].ID
 	}
 
-	organizations := organizationResponse.Organizations
-
-	organizationNames := util.GetOrganizationsNameList(organizationResponse)
-
-	prompt := promptui.Select{
-		Label: "Which Infisical organization would you like to log into?",
-		Items: organizationNames,
-	}
-
-	index, _, err := prompt.Run()
-	if err != nil {
-		util.HandleError(err)
-	}
-
-	selectedOrganization := organizations[index]
-
-	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganization.ID})
+	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganizationId})
 	if err != nil {
 		util.HandleError(err)
 	}
@@ -730,7 +748,7 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string) string {
 				i++
 			} else {
 				httpClient.SetAuthToken(verifyMFAresponse.Token)
-				selectedOrgRes, err = api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganization.ID})
+				selectedOrgRes, err = api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganizationId})
 				break
 			}
 		}
@@ -961,8 +979,9 @@ func browserLoginHandler(success chan models.UserCredentials, failure chan error
 // check if one of the flag or all the envs are set
 func validateDirectUserLoginFlagsAndEnvsSet(cmd *cobra.Command, domain string) (isDirectUserLogin bool, err error) {
 	requiredFlagsEnvs := map[string]string{
-		"email":    "INFISICAL_EMAIL",
-		"password": "INFISICAL_PASSWORD",
+		"email":           "INFISICAL_EMAIL",
+		"password":        "INFISICAL_PASSWORD",
+		"organization-id": "INFISICAL_ORGANIZATION_ID",
 	}
 
 	var missingFlagsEnvs []string
