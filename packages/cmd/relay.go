@@ -167,9 +167,9 @@ var relaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
 		}
 
-		token, err := cmd.Flags().GetString("token")
+		token, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "token", []string{gatewayv2.INFISICAL_TOKEN_ENV_NAME}, "")
 		if err != nil {
-			util.HandleError(err, "Unable to parse token flag")
+			util.HandleError(err, "Unable to parse token flag or env")
 		}
 
 		domain, err := cmd.Flags().GetString("domain")
@@ -211,7 +211,7 @@ var relaySystemdInstallCmd = &cobra.Command{
 		}
 
 		if instanceType != "instance" && token == "" {
-			util.HandleError(fmt.Errorf("for type '%s', --token is required", instanceType))
+			util.HandleError(fmt.Errorf("for type '%s', --token flag or %s env must be set", instanceType, gatewayv2.INFISICAL_TOKEN_ENV_NAME))
 		}
 
 		if err := relay.InstallRelaySystemdService(token, domain, name, host, instanceType, relayAuthSecret); err != nil {
