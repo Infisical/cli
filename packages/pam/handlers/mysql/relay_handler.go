@@ -6,13 +6,11 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"time"
 )
 
 type RelayHandler struct {
-	clientSelfConn *server.Conn
 	selfServerConn *client.Conn
 	sessionLogger  session.SessionLogger
 }
@@ -83,12 +81,8 @@ func (r RelayHandler) HandleOtherCommand(cmd byte, data []byte) error {
 	return fmt.Errorf("not supported now")
 }
 
-func NewRelayHandler(clientSelfConn *server.Conn, selfServerConn *client.Conn, sessionLogger session.SessionLogger) *RelayHandler {
-	return &RelayHandler{clientSelfConn, selfServerConn, sessionLogger}
-}
-
-func (r *RelayHandler) SetClientSelfConn(clientSelfConn *server.Conn) {
-	r.clientSelfConn = clientSelfConn
+func NewRelayHandler(selfServerConn *client.Conn, sessionLogger session.SessionLogger) *RelayHandler {
+	return &RelayHandler{selfServerConn, sessionLogger}
 }
 
 func (r RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Result, error) {
