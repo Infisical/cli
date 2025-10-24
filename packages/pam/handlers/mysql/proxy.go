@@ -88,13 +88,12 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		if !clientSelfConn.Closed() {
 			clientSelfConn.Close()
 		}
+		if !p.relayHandler.Closed() {
+			selfServerConn.Close()
+		}
 	}()
 
-	// TODO: check if clientSelfConn closed or not, somehow the read in HandleCommand doesn't raise error even
-	//	     when the connection is closed.
-	// Notice: for now it seems like we only upload the session after it expires, so it's okay if we cannot detect
-	//		   disconnection in the real-time
-	for !clientSelfConn.Closed() {
+	for !clientSelfConn.Closed() && !p.relayHandler.Closed() {
 		err = clientSelfConn.HandleCommand()
 		if err != nil {
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to handle command")

@@ -7,20 +7,33 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/rs/zerolog/log"
+	"sync/atomic"
 	"time"
 )
 
 type RelayHandler struct {
 	selfServerConn *client.Conn
 	sessionLogger  session.SessionLogger
+	closed         atomic.Bool
+}
+
+func NewRelayHandler(selfServerConn *client.Conn, sessionLogger session.SessionLogger) *RelayHandler {
+	return &RelayHandler{selfServerConn, sessionLogger, atomic.Bool{}}
+}
+
+func (r RelayHandler) Closed() bool {
+	return r.closed.Load()
 }
 
 func (r RelayHandler) UseDB(dbName string) error {
-	return r.selfServerConn.UseDB(dbName)
+	err := r.selfServerConn.UseDB(dbName)
+	r.checkConnLostError(err)
+	return err
 }
 
 func (r RelayHandler) HandleQuery(query string) (*mysql.Result, error) {
 	result, err := r.selfServerConn.Execute(query)
+	r.checkConnLostError(err)
 	if err != nil {
 		r.writeLogEntry(session.SessionLogEntry{
 			Timestamp: time.Now(),
@@ -46,6 +59,7 @@ func (r RelayHandler) HandleFieldList(table string, fieldWildcard string) ([]*my
 
 func (r RelayHandler) HandleStmtPrepare(query string) (params int, columns int, context interface{}, err error) {
 	stmt, err := r.selfServerConn.Prepare(query)
+	r.checkConnLostError(err)
 	if err != nil {
 		return 0, 0, nil, err
 	}
@@ -55,6 +69,7 @@ func (r RelayHandler) HandleStmtPrepare(query string) (params int, columns int, 
 func (r RelayHandler) HandleStmtExecute(context interface{}, query string, args []interface{}) (*mysql.Result, error) {
 	stmt := context.(*client.Stmt)
 	result, err := stmt.Execute(args...)
+	r.checkConnLostError(err)
 	if err != nil {
 		r.writeLogEntry(session.SessionLogEntry{
 			Timestamp: time.Now(),
@@ -81,8 +96,12 @@ func (r RelayHandler) HandleOtherCommand(cmd byte, data []byte) error {
 	return fmt.Errorf("not supported now")
 }
 
-func NewRelayHandler(selfServerConn *client.Conn, sessionLogger session.SessionLogger) *RelayHandler {
-	return &RelayHandler{selfServerConn, sessionLogger}
+func (r RelayHandler) checkConnLostError(err error) {
+	if err == mysql.ErrBadConn {
+		r.closed.Store(true)
+		r.selfServerConn.Close()
+		r.selfServerConn = nil
+	}
 }
 
 func (r RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Result, error) {
