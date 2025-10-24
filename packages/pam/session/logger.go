@@ -23,7 +23,12 @@ type SessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-type SessionLogger struct {
+type SessionLogger interface {
+	LogEntry(entry SessionLogEntry) error
+	Close() error
+}
+
+type EncryptedSessionLogger struct {
 	sessionID     string
 	encryptionKey string
 	expiresAt     time.Time
@@ -128,7 +133,7 @@ func CleanupSessionMutex(sessionID string) {
 	}
 }
 
-func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time) (*SessionLogger, error) {
+func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time) (*EncryptedSessionLogger, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
 	}
@@ -151,7 +156,7 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 		return nil, fmt.Errorf("failed to open session file: %w", err)
 	}
 
-	return &SessionLogger{
+	return &EncryptedSessionLogger{
 		sessionID:     sessionID,
 		encryptionKey: encryptionKey,
 		expiresAt:     expiresAt,
@@ -159,7 +164,7 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 	}, nil
 }
 
-func (sl *SessionLogger) LogEntry(entry SessionLogEntry) error {
+func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
 	sl.mutex.Lock()
 	defer sl.mutex.Unlock()
 
@@ -201,7 +206,7 @@ func (sl *SessionLogger) LogEntry(entry SessionLogEntry) error {
 	return nil
 }
 
-func (sl *SessionLogger) Close() error {
+func (sl *EncryptedSessionLogger) Close() error {
 	sl.mutex.Lock()
 	defer sl.mutex.Unlock()
 

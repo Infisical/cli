@@ -5,12 +5,18 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	ResourceTypePostgres = "postgres"
+	ResourceTypeMysql    = "mysql"
 )
 
 type GatewayPAMConfig struct {
@@ -79,36 +85,36 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 	}()
 
-	if pamConfig.ResourceType != "postgres" {
-		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
+	encryptionKey, err := pamConfig.CredentialsManager.GetPAMSessionEncryptionKey()
+	if err != nil {
+		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
+	}
+	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime)
+	if err != nil {
+		return fmt.Errorf("failed to create session logger: %w", err)
 	}
 
-	if pamConfig.ResourceType == "postgres" {
-		encryptionKey, err := pamConfig.CredentialsManager.GetPAMSessionEncryptionKey()
-		if err != nil {
-			return fmt.Errorf("failed to get PAM session encryption key: %w", err)
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: !credentials.SSLRejectUnauthorized,
+		ServerName:         credentials.Host,
+	}
+	// If a server certificate is provided, add it to the root CA pool
+	if credentials.SSLCertificate != "" {
+		certPool := x509.NewCertPool()
+		if certPool.AppendCertsFromPEM([]byte(credentials.SSLCertificate)) {
+			tlsConfig.RootCAs = certPool
+			log.Debug().
+				Str("sessionId", pamConfig.SessionId).
+				Msg("Using provided server certificate for TLS connection")
+		} else {
+			log.Warn().
+				Str("sessionId", pamConfig.SessionId).
+				Msg("Failed to parse provided server certificate, falling back to default behavior")
 		}
+	}
 
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: !credentials.SSLRejectUnauthorized,
-			ServerName:         credentials.Host,
-		}
-
-		// If a server certificate is provided, add it to the root CA pool
-		if credentials.SSLCertificate != "" {
-			certPool := x509.NewCertPool()
-			if certPool.AppendCertsFromPEM([]byte(credentials.SSLCertificate)) {
-				tlsConfig.RootCAs = certPool
-				log.Debug().
-					Str("sessionId", pamConfig.SessionId).
-					Msg("Using provided server certificate for TLS connection")
-			} else {
-				log.Warn().
-					Str("sessionId", pamConfig.SessionId).
-					Msg("Failed to parse provided server certificate, falling back to default behavior")
-			}
-		}
-
+	switch pamConfig.ResourceType {
+	case ResourceTypePostgres:
 		proxyConfig := handlers.PostgresProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
@@ -117,23 +123,35 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			EnableTLS:      credentials.SSLEnabled,
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,
-			EncryptionKey:  encryptionKey,
-			ExpiresAt:      pamConfig.ExpiryTime,
+			SessionLogger:  sessionLogger,
 		}
-
-		proxy, err := handlers.NewPostgresProxy(proxyConfig)
-		if err != nil {
-			return fmt.Errorf("failed to create PostgreSQL proxy: %w", err)
-		}
-
+		proxy := handlers.NewPostgresProxy(proxyConfig)
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", proxyConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting PostgreSQL PAM proxy")
-
 		return proxy.HandleConnection(ctx, conn)
-	}
+	case ResourceTypeMysql:
+		mysqlConfig := mysql.MysqlProxyConfig{
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
 
-	return nil
+		proxy := mysql.NewMysqlProxy(mysqlConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", mysqlConfig.TargetAddr).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting MySQL PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	default:
+		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
+	}
 }
