@@ -6,6 +6,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"sync/atomic"
 	"time"
@@ -21,17 +22,17 @@ func NewRelayHandler(selfServerConn *client.Conn, sessionLogger session.SessionL
 	return &RelayHandler{selfServerConn, sessionLogger, atomic.Bool{}}
 }
 
-func (r RelayHandler) Closed() bool {
+func (r *RelayHandler) Closed() bool {
 	return r.closed.Load()
 }
 
-func (r RelayHandler) UseDB(dbName string) error {
+func (r *RelayHandler) UseDB(dbName string) error {
 	err := r.selfServerConn.UseDB(dbName)
 	r.checkConnLostError(err)
 	return err
 }
 
-func (r RelayHandler) HandleQuery(query string) (*mysql.Result, error) {
+func (r *RelayHandler) HandleQuery(query string) (*mysql.Result, error) {
 	result, err := r.selfServerConn.Execute(query)
 	r.checkConnLostError(err)
 	if err != nil {
@@ -51,13 +52,13 @@ func (r RelayHandler) HandleQuery(query string) (*mysql.Result, error) {
 	return result, nil
 }
 
-func (r RelayHandler) HandleFieldList(table string, fieldWildcard string) ([]*mysql.Field, error) {
+func (r *RelayHandler) HandleFieldList(table string, fieldWildcard string) ([]*mysql.Field, error) {
 	// Note that COM_FIELD_LIST has been deprecated since MySQL 5.7.11. Now need to support it right now
 	// ref: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_field_list.html
 	return nil, fmt.Errorf("not supported now")
 }
 
-func (r RelayHandler) HandleStmtPrepare(query string) (params int, columns int, context interface{}, err error) {
+func (r *RelayHandler) HandleStmtPrepare(query string) (params int, columns int, context interface{}, err error) {
 	stmt, err := r.selfServerConn.Prepare(query)
 	r.checkConnLostError(err)
 	if err != nil {
@@ -66,7 +67,7 @@ func (r RelayHandler) HandleStmtPrepare(query string) (params int, columns int, 
 	return stmt.ParamNum(), stmt.ColumnNum(), stmt, nil
 }
 
-func (r RelayHandler) HandleStmtExecute(context interface{}, query string, args []interface{}) (*mysql.Result, error) {
+func (r *RelayHandler) HandleStmtExecute(context interface{}, query string, args []interface{}) (*mysql.Result, error) {
 	stmt := context.(*client.Stmt)
 	result, err := stmt.Execute(args...)
 	r.checkConnLostError(err)
@@ -86,25 +87,25 @@ func (r RelayHandler) HandleStmtExecute(context interface{}, query string, args 
 	return result, err
 }
 
-func (r RelayHandler) HandleStmtClose(context interface{}) error {
+func (r *RelayHandler) HandleStmtClose(context interface{}) error {
 	stmt := context.(*client.Stmt)
 	return stmt.Close()
 }
 
-func (r RelayHandler) HandleOtherCommand(cmd byte, data []byte) error {
+func (r *RelayHandler) HandleOtherCommand(cmd byte, data []byte) error {
 	log.Info().Str("command", string(cmd)).Msg("Received unsupported command")
 	return fmt.Errorf("not supported now")
 }
 
-func (r RelayHandler) checkConnLostError(err error) {
-	if err == mysql.ErrBadConn {
+func (r *RelayHandler) checkConnLostError(err error) {
+	if errors.Cause(err) == mysql.ErrBadConn {
 		r.closed.Store(true)
 		r.selfServerConn.Close()
 		r.selfServerConn = nil
 	}
 }
 
-func (r RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Result, error) {
+func (r *RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Result, error) {
 	err := r.sessionLogger.LogEntry(entry)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to write log entry to file")
