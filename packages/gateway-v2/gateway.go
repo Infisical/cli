@@ -101,10 +101,12 @@ type Gateway struct {
 	tlsConfig *tls.Config
 
 	// Connection management
-	mu          sync.RWMutex
-	isConnected bool
-	ctx         context.Context
-	cancel      context.CancelFunc
+	mu               sync.RWMutex
+	isConnected      bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	heartbeatStarted bool
+	heartbeatMu      sync.Mutex
 }
 
 // NewGateway creates a new gateway instance
@@ -193,7 +195,6 @@ func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
 
 	errCh := make(chan error, 1)
-	g.registerHeartBeat(ctx, errCh)
 
 	// Start certificate renewal goroutine
 	go g.startCertificateRenewal(ctx)
@@ -218,7 +219,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
 		default:
-			if err := g.connectAndServe(); err != nil {
+			if err := g.connectAndServe(ctx, errCh); err != nil {
 				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
 				select {
 				case <-ctx.Done():
@@ -263,15 +264,24 @@ func (g *Gateway) Stop() {
 	}
 }
 
-func (g *Gateway) connectAndServe() error {
+func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
+	g.heartbeatMu.Lock()
+	defer g.heartbeatMu.Unlock()
+	if !g.heartbeatStarted {
+		g.registerHeartBeat(ctx, errCh)
+		g.heartbeatStarted = true
+	}
+}
+
+func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
 	if err := g.registerGateway(); err != nil {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}
 
-	return g.connectWithRetry()
+	return g.connectWithRetry(ctx, errCh)
 }
 
-func (g *Gateway) connectWithRetry() error {
+func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
 	for attempt := 1; attempt <= 6; attempt++ {
 		// Re-register after 5 failed attempts to handle potential relay IP change
 		if attempt == 6 {
@@ -300,6 +310,8 @@ func (g *Gateway) connectWithRetry() error {
 			}
 			return fmt.Errorf("failed to connect to SSH server after 6 attempts: %v", err)
 		}
+
+		g.startHeartbeatOnce(ctx, errCh)
 
 		log.Info().Msgf("Relay connection established for gateway")
 		return g.handleConnection(client)
