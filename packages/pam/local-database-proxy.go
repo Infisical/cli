@@ -106,7 +106,18 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	}
 
 	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
-	log.Info().Msgf("Connect to your database using: localhost:%d", proxy.port)
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("                  Database Proxy Session Started!                  \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("You can now connect to your database resource using your preferred\ndatabase client.\n")
+	fmt.Printf("\n")
+	fmt.Printf("Host: localhost\n")
+	fmt.Printf("Port: %d\n", proxy.port)
+	fmt.Printf("\n")
+	fmt.Printf("You can use *any* username/password values.\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
