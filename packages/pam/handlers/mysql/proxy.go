@@ -90,7 +90,6 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		}
 	}()
 
-	// TODO: check if selfServerConn closed or no
 	// TODO: check if clientSelfConn closed or not, somehow the read in HandleCommand doesn't raise error even
 	//	     when the connection is closed.
 	// Notice: for now it seems like we only upload the session after it expires, so it's okay if we cannot detect
