@@ -115,7 +115,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	fmt.Printf("Host: localhost\n")
 	fmt.Printf("Port: %d\n", proxy.port)
 	fmt.Printf("\n")
-	fmt.Printf("You can use *any* username/password values.\n")
+	fmt.Printf("For authentication, you can use *any* username/password values.\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
 
