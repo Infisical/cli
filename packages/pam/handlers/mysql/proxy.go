@@ -10,7 +10,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
 	"net"
-	"time"
 )
 
 // TODO: DRY with psql?
@@ -23,12 +22,6 @@ type MysqlProxyConfig struct {
 	TLSConfig      *tls.Config
 	SessionID      string
 	SessionLogger  session.SessionLogger
-
-	// Connection read and write timeouts to set on the connection
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	// The buffer size to use in the packet connection
-	BufferSize int
 }
 
 type MysqlProxy struct {
