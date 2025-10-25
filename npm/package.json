@@ -19,7 +19,7 @@
     "preinstall": "node src/index.cjs"
   },
   "dependencies": {
-    "tar": "^6.2.0",
+    "tar": "^6.2.1",
     "yauzl": "^3.2.0"
   }
 }
