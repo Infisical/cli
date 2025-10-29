@@ -5,8 +5,8 @@ on:
 
   push:
     # run only against tags
-    tags:
-      - "v*.*.*"
+    # tags:
+    # - "v*.*.*"
 
 permissions:
   contents: write
@@ -84,7 +84,7 @@ jobs:
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
-    # needs: [cli-integration-tests]
+    needs: [goreleaser-windows] # TODO: Remove this once done with testing
     steps:
       - uses: actions/checkout@v3
         with:
@@ -180,8 +180,10 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          args: release --clean --config .goreleaser-windows.yaml --skip-validate
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate --skip-publish --snapshot # TODO Remove --snapshot and --skip-publish once done with testing
         env:
+          GORELEASER_CURRENT_TAG: "v0.0.1" # TODO: Remove this once done with testing
+
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
