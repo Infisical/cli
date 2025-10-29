@@ -14,11 +14,32 @@ builds:
       - amd64
 
 dockers:
-  - dockerfile: docker/windows
+  - dockerfile: docker/windows/windows-server-2022
     goos: windows
     goarch: amd64
     ids:
       - windows-build
     image_templates:
-      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-amd64"
-      - "infisical/cli:latest-windows-amd64"
+      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-server-2022-amd64"
+      - "infisical/cli:latest-windows-server-2022-amd64"
+  - dockerfile: docker/windows/windows-server-2019
+    goos: windows
+    goarch: amd64
+    ids:
+      - windows-build
+    image_templates:
+      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-server-2019-amd64"
+      - "infisical/cli:latest-windows-server-2019-amd64"
+
+docker_manifests:
+  # Versioned
+  - name_template: "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-amd64"
+    image_templates:
+      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-server-2022-amd64"
+      - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-windows-server-2019-amd64"
+
+  # Latest
+  - name_template: "infisical/cli:latest-windows-amd64"
+    image_templates:
+      - "infisical/cli:latest-windows-server-2022-amd64"
+      - "infisical/cli:latest-windows-server-2019-amd64"
