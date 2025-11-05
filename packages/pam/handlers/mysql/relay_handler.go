@@ -1,15 +1,15 @@
 package mysql
 
 import (
-	"encoding/json"
 	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"sync/atomic"
-	"time"
 )
 
 type RelayHandler struct {
@@ -115,23 +115,8 @@ func (r *RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Resu
 }
 
 func formatResult(result *mysql.Result) string {
-	dataRows := make([]map[string]interface{}, 0, len(result.Values))
-	for i := 0; i < len(result.Values); i += 1 {
-		row := make(map[string]interface{}, len(result.Fields))
-		for j := 0; j < len(result.Values[i]); j += 1 {
-			field := result.Fields[j]
-			row[string(field.Name)] = result.Values[i][j].String()
-		}
-		dataRows = append(dataRows, row)
+	if result.Resultset != nil {
+		return fmt.Sprintf("SUCCESS (%d rows affected)", len(result.Resultset.Values))
 	}
-
-	outputData := map[string]interface{}{
-		"total_rows": len(result.Values),
-		"data_rows":  dataRows,
-	}
-	if jsonBytes, err := json.Marshal(outputData); err == nil {
-		return string(jsonBytes)
-	} else {
-		return fmt.Sprintf("query (returned %d rows, JSON error: %v)", len(result.Values), err)
-	}
+	return fmt.Sprintf("SUCCESS (%d rows affected)", result.AffectedRows)
 }

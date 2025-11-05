@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -20,11 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/pbkdf2" // TODO: Remove this once we update to go 1.25.1 or later where it's already in the standard library
-)
-
-const (
-	// MaxDataRowsToStore limits the number of data rows stored per query for storage efficiency
-	MaxDataRowsToStore = 10
 )
 
 type PostgresProxyConfig struct {
@@ -50,9 +44,7 @@ type PendingRequest struct {
 	Timestamp      time.Time
 	Request        string
 	RequestType    string
-	DataRows       []map[string]interface{}
 	RowDescription []string
-	RowCount       int
 	PreparedSQL    string
 	BoundParams    []string
 	PortalName     string
@@ -786,15 +778,6 @@ func (p *PostgresProxy) trackClientMessage(msg pgproto3.FrontendMessage) {
 
 func (p *PostgresProxy) trackServerMessage(msg pgproto3.BackendMessage) {
 	switch m := msg.(type) {
-	case *pgproto3.RowDescription:
-		// Start of query results - capture column information
-		log.Debug().Str("sessionID", p.config.SessionID).Int("fields", len(m.Fields)).Msg("→ SERVER RowDescription")
-		p.handleRowDescription(m)
-
-	case *pgproto3.DataRow:
-		// Data row - collect the actual data
-		log.Debug().Str("sessionID", p.config.SessionID).Int("columns", len(m.Values)).Msg("→ SERVER DataRow")
-		p.handleDataRow(m)
 
 	case *pgproto3.CommandComplete:
 		// End of query - finalize and record the complete response
@@ -835,98 +818,6 @@ func (p *PostgresProxy) trackServerMessage(msg pgproto3.BackendMessage) {
 	}
 }
 
-// Handle RowDescription - capture column names for pending queries
-func (p *PostgresProxy) handleRowDescription(rowDesc *pgproto3.RowDescription) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	// Extract column names
-	columnNames := make([]string, len(rowDesc.Fields))
-	for i, field := range rowDesc.Fields {
-		columnNames[i] = string(field.Name)
-	}
-
-	// Find the appropriate pending request
-	var targetReq *PendingRequest
-
-	// First, check if we have an active portal (prepared statement)
-	if p.activePortal != "" {
-		portalKey := fmt.Sprintf("portal-%s", p.activePortal)
-		if req, exists := p.pendingRequests[portalKey]; exists {
-			targetReq = req
-		}
-	}
-
-	// If no active portal, find the most recent Query request
-	if targetReq == nil {
-		for _, req := range p.pendingRequests {
-			if req.RequestType == "Query" {
-				targetReq = req
-				break
-			}
-		}
-	}
-
-	if targetReq != nil {
-		targetReq.RowDescription = columnNames
-		targetReq.DataRows = []map[string]interface{}{} // Initialize data rows slice
-	}
-}
-
-// Handle DataRow - collect actual row data
-func (p *PostgresProxy) handleDataRow(dataRow *pgproto3.DataRow) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	// Find the appropriate pending request
-	var targetReq *PendingRequest
-
-	// First, check if we have an active portal (prepared statement)
-	if p.activePortal != "" {
-		portalKey := fmt.Sprintf("portal-%s", p.activePortal)
-		if req, exists := p.pendingRequests[portalKey]; exists && req.RowDescription != nil {
-			targetReq = req
-		}
-	}
-
-	// If no active portal, find the most recent Query request
-	if targetReq == nil {
-		for _, req := range p.pendingRequests {
-			if req.RequestType == "Query" && req.RowDescription != nil {
-				targetReq = req
-				break
-			}
-		}
-	}
-
-	if targetReq != nil {
-		// Convert raw bytes to readable values
-		rowData := make(map[string]interface{})
-
-		for i, value := range dataRow.Values {
-			columnName := ""
-			if i < len(targetReq.RowDescription) {
-				columnName = targetReq.RowDescription[i]
-			} else {
-				columnName = fmt.Sprintf("column_%d", i)
-			}
-
-			if value == nil {
-				rowData[columnName] = nil
-			} else {
-				// Convert bytes to string (PostgreSQL sends all data as text over the wire)
-				rowData[columnName] = string(value)
-			}
-		}
-
-		// Only store up to MaxDataRowsToStore data rows for storage efficiency
-		if len(targetReq.DataRows) < MaxDataRowsToStore {
-			targetReq.DataRows = append(targetReq.DataRows, rowData)
-		}
-		targetReq.RowCount++
-	}
-}
-
 // Helper function to build executable SQL from prepared statement and parameters
 func (p *PostgresProxy) buildExecutableSQL(preparedSQL string, params []string) string {
 	if len(params) == 0 {
@@ -956,34 +847,12 @@ func (p *PostgresProxy) buildExecutableSQL(preparedSQL string, params []string) 
 }
 
 // Helper function to build output string that represents what the client sees
-func (p *PostgresProxy) buildOutputString(response string, responseType string, req *PendingRequest) string {
+func (p *PostgresProxy) buildOutputString(response, responseType string) string {
 	if responseType == "ErrorResponse" {
 		return fmt.Sprintf("ERROR: %s", response)
 	}
 
-	if req.RowCount > 0 && len(req.DataRows) > 0 {
-		// Query returned data - include the actual data rows in the output
-		outputData := map[string]interface{}{
-			"command":    response,
-			"total_rows": req.RowCount,
-			"data_rows":  req.DataRows,
-		}
-
-		if req.RowCount > MaxDataRowsToStore {
-			outputData["note"] = fmt.Sprintf("Showing first %d of %d rows", len(req.DataRows), req.RowCount)
-		}
-
-		// Convert to JSON string for the output
-		if jsonBytes, err := json.Marshal(outputData); err == nil {
-			return string(jsonBytes)
-		} else {
-			// Fallback if JSON marshaling fails
-			return fmt.Sprintf("%s (returned %d rows, JSON error: %v)", response, req.RowCount, err)
-		}
-	} else {
-		// Command without data (INSERT, UPDATE, DELETE, etc.) or no results
-		return response
-	}
+	return response
 }
 
 // New method that includes collected data rows
@@ -1027,7 +896,7 @@ func (p *PostgresProxy) matchAndRecordResponseWithData(preferredType string, res
 	}
 
 	if matchedRequest != nil {
-		output := p.buildOutputString(response, responseType, matchedRequest)
+		output := p.buildOutputString(response, responseType)
 
 		pair := session.RequestResponsePair{
 			Timestamp: matchedRequest.Timestamp,
@@ -1039,8 +908,6 @@ func (p *PostgresProxy) matchAndRecordResponseWithData(preferredType string, res
 			log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to write request-response pair to file")
 		}
 		delete(p.pendingRequests, matchedKey)
-
-		log.Debug().Str("sessionID", p.config.SessionID).Int("rowCount", matchedRequest.RowCount).Msg("Recorded query with data rows")
 	}
 }
 
