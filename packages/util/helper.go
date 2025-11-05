@@ -6,19 +6,237 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math/rand"
+	"net"
 	"os"
 	"os/exec"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"encoding/json"
+	"net/http"
+	"path/filepath"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
+
+const (
+	RELAY_CACHE_FILE = "/var/lib/infisical/cached_relay"
+)
+
+type Relay struct {
+	Name      string    `json:"name"`
+	Host      string    `json:"host"`
+	Heartbeat time.Time `json:"heartbeat"`
+	OrgId     *string   `json:"orgId"`
+}
+
+func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (string, error) {
+	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+	if err != nil {
+		return "", fmt.Errorf("unable to parse relay flag: %v", err)
+	}
+	if relayName != "" {
+		return relayName, nil
+	}
+
+	domain, err := cmd.Flags().GetString("domain")
+	if err != nil {
+		return "", fmt.Errorf("unable to parse domain flag: %v", err)
+	}
+
+	relaysURL := fmt.Sprintf("%s/v1/relays", domain)
+
+	// fetch all relays from Infisical
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", relaysURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("unable to create request to fetch relays: %v", err)
+	}
+
+	req.Header.Add("Authorization", "Bearer "+accessToken)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("unable to fetch relays: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("unable to fetch relays: status code %d, body: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var allRelays []Relay
+	if err := json.NewDecoder(resp.Body).Decode(&allRelays); err != nil {
+		return "", fmt.Errorf("unable to parse relays response: %v", err)
+	}
+
+	if len(allRelays) == 0 {
+		return "", fmt.Errorf("no relays available from the platform")
+	}
+
+	// filter for healthy relays
+	var healthyRelays []Relay
+	for _, relay := range allRelays {
+		if time.Since(relay.Heartbeat) < time.Hour {
+			healthyRelays = append(healthyRelays, relay)
+		}
+	}
+
+	if len(healthyRelays) == 0 {
+		return "", fmt.Errorf("no healthy relays available")
+	}
+
+	// check if a cached relay is still healthy
+	if !forceRefetch {
+		cachedRelayNameBytes, err := os.ReadFile(RELAY_CACHE_FILE)
+		if err == nil {
+			cachedRelayName := string(cachedRelayNameBytes)
+			if cachedRelayName != "" {
+				var cachedRelayInfo *Relay
+				for i := range healthyRelays {
+					if healthyRelays[i].Name == cachedRelayName {
+						cachedRelayInfo = &healthyRelays[i]
+						break
+					}
+				}
+
+				if cachedRelayInfo != nil {
+					// ping the cached relay to confirm it's reachable
+					address := fmt.Sprintf("%s:8443", cachedRelayInfo.Host)
+					conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+					if err == nil {
+						conn.Close()
+						log.Debug().Str("relay", cachedRelayName).Msg("Using valid and responsive cached relay")
+						return cachedRelayName, nil
+					}
+					log.Debug().Str("relay", cachedRelayName).Err(err).Msg("Cached relay is healthy but failed to respond to ping, finding a new one")
+				} else {
+					log.Debug().Str("relay", cachedRelayName).Msg("Cached relay is no longer healthy, finding a new one")
+				}
+			}
+		}
+	}
+
+	var healthyOrgRelays []Relay
+	var healthyInstanceRelays []Relay
+	for _, r := range healthyRelays {
+		if r.OrgId != nil {
+			healthyOrgRelays = append(healthyOrgRelays, r)
+		} else {
+			healthyInstanceRelays = append(healthyInstanceRelays, r)
+		}
+	}
+
+	type pingResult struct {
+		relay   Relay
+		latency time.Duration
+		err     error
+	}
+
+	findBestByPing := func(relaysToPing []Relay) (*Relay, time.Duration) {
+		if len(relaysToPing) == 0 {
+			return nil, 0
+		}
+
+		resultsChan := make(chan pingResult, len(relaysToPing))
+		var wg sync.WaitGroup
+
+		for _, relay := range relaysToPing {
+			wg.Add(1)
+			go func(r Relay) {
+				defer wg.Done()
+				address := fmt.Sprintf("%s:8443", r.Host)
+				start := time.Now()
+
+				conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+				latency := time.Since(start)
+
+				if err == nil {
+					conn.Close()
+				}
+				resultsChan <- pingResult{relay: r, latency: latency, err: err}
+			}(relay)
+		}
+
+		go func() {
+			wg.Wait()
+			close(resultsChan)
+		}()
+
+		var bestRelay *Relay
+		minLatency := time.Duration(1<<63 - 1)
+
+		for result := range resultsChan {
+			if result.err != nil {
+				log.Debug().Err(result.err).Str("relay", result.relay.Name).Msg("Failed to ping relay")
+				continue
+			}
+			log.Debug().Str("relay", result.relay.Name).Dur("latency", result.latency).Msg("Successfully pinged relay")
+			if result.latency < minLatency {
+				minLatency = result.latency
+				currentRelay := result.relay
+				bestRelay = &currentRelay
+			}
+		}
+		return bestRelay, minLatency
+	}
+
+	var bestRelay *Relay
+	var minLatency time.Duration
+
+	if len(healthyOrgRelays) > 0 {
+		log.Debug().Msg("Prioritizing healthy organization relays by pinging")
+		bestRelay, minLatency = findBestByPing(healthyOrgRelays)
+	}
+
+	if bestRelay == nil && len(healthyInstanceRelays) > 0 {
+		if len(healthyOrgRelays) > 0 {
+			log.Debug().Msg("All organization relays failed to respond, falling back to instance relays")
+		} else {
+			log.Debug().Msg("No healthy organization relays available, using instance relays")
+		}
+		bestRelay, minLatency = findBestByPing(healthyInstanceRelays)
+	}
+
+	var chosenRelay Relay
+	if bestRelay == nil {
+		log.Warn().Msg("Could not determine best relay by ping, selecting a random healthy relay")
+		log.Debug().Int("healthy_relays", len(healthyRelays)).Msg("All pings to healthy relays failed. Check network connectivity.")
+
+		if len(healthyOrgRelays) > 0 {
+			log.Debug().Msg("Selecting a random healthy organization relay")
+			chosenRelay = healthyOrgRelays[rand.Intn(len(healthyOrgRelays))]
+		} else {
+			log.Debug().Msg("No healthy organization relays available, selecting a random healthy instance relay")
+			chosenRelay = healthyInstanceRelays[rand.Intn(len(healthyInstanceRelays))]
+		}
+	} else {
+		chosenRelay = *bestRelay
+		log.Debug().Str("relay", chosenRelay.Name).Dur("latency", minLatency).Msg("Selected best relay by ping")
+	}
+
+	// cache the chosen relay
+	err = os.MkdirAll(filepath.Dir(RELAY_CACHE_FILE), 0755)
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to create cache directory for relay")
+	} else {
+		err = os.WriteFile(RELAY_CACHE_FILE, []byte(chosenRelay.Name), 0644)
+		if err != nil {
+			log.Error().Err(err).Str("relayName", chosenRelay.Name).Msg("Failed to cache relay name")
+		}
+	}
+
+	return chosenRelay.Name, nil
+}
 
 type DecodedSymmetricEncryptionDetails = struct {
 	Cipher []byte
