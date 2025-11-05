@@ -115,12 +115,24 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'database'"), "Failed to start proxy server")
 		return
 	}
+	accountName, ok := pamResponse.Metadata["accountName"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
+		return
+	}
+	accountPath, ok := pamResponse.Metadata["accountPath"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
+		return
+	}
 
 	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Database Proxy Session Started!                  \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
+	fmt.Printf("\n")
 	fmt.Printf("You can now connect to your database using this connection string:\n")
 
 	switch pamResponse.ResourceType {
