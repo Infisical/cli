@@ -105,18 +105,33 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
 	}
 
+	username, ok := pamResponse.Metadata["username"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
+		return
+	}
+	database, ok := pamResponse.Metadata["database"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'database'"), "Failed to start proxy server")
+		return
+	}
+
 	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Database Proxy Session Started!                  \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("You can now connect to your database resource using your preferred\ndatabase client.\n")
-	fmt.Printf("\n")
-	fmt.Printf("Host: localhost\n")
-	fmt.Printf("Port: %d\n", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("For authentication, you can use *any* username/password values.\n")
-	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("You can now connect to your database using this connection string:\n")
+
+	switch pamResponse.ResourceType {
+	case ResourceTypePostgres:
+		fmt.Printf("postgres://%s@localhost:%d/%s", username, proxy.port, database)
+	case ResourceTypeMysql:
+		fmt.Printf("mysql://%s@localhost:%d/%s", username, proxy.port, database)
+	default:
+		fmt.Printf("localhost:%d", proxy.port)
+	}
+	fmt.Printf("\n**********************************************************************\n")
 	fmt.Printf("\n")
 
 	sigChan := make(chan os.Signal, 1)

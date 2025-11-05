@@ -748,15 +748,16 @@ type PAMAccessRequest struct {
 }
 
 type PAMAccessResponse struct {
-	SessionId                     string `json:"sessionId"`
-	ResourceType                  string `json:"resourceType"`
-	RelayClientCertificate        string `json:"relayClientCertificate"`
-	RelayClientPrivateKey         string `json:"relayClientPrivateKey"`
-	RelayServerCertificateChain   string `json:"relayServerCertificateChain"`
-	GatewayClientCertificate      string `json:"gatewayClientCertificate"`
-	GatewayClientPrivateKey       string `json:"gatewayClientPrivateKey"`
-	GatewayServerCertificateChain string `json:"gatewayServerCertificateChain"`
-	RelayHost                     string `json:"relayHost"`
+	SessionId                     string            `json:"sessionId"`
+	ResourceType                  string            `json:"resourceType"`
+	RelayClientCertificate        string            `json:"relayClientCertificate"`
+	RelayClientPrivateKey         string            `json:"relayClientPrivateKey"`
+	RelayServerCertificateChain   string            `json:"relayServerCertificateChain"`
+	GatewayClientCertificate      string            `json:"gatewayClientCertificate"`
+	GatewayClientPrivateKey       string            `json:"gatewayClientPrivateKey"`
+	GatewayServerCertificateChain string            `json:"gatewayServerCertificateChain"`
+	RelayHost                     string            `json:"relayHost"`
+	Metadata                      map[string]string `json:"metadata,omitempty"`
 }
 
 type PAMSessionCredentialsResponse struct {
