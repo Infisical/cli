@@ -16,6 +16,7 @@ import (
 	"path"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"text/template"
@@ -44,9 +45,15 @@ type Config struct {
 	Templates []Template      `yaml:"templates"`
 }
 
+type TemplateWithID struct {
+	ID       int
+	Template Template
+}
+
 type InfisicalConfig struct {
-	Address       string `yaml:"address"`
-	ExitAfterAuth bool   `yaml:"exit-after-auth"`
+	Address                     string `yaml:"address"`
+	ExitAfterAuth               bool   `yaml:"exit-after-auth"`
+	RevokeCredentialsOnShutdown bool   `yaml:"revoke-credentials-on-shutdown"`
 }
 
 type AuthConfig struct {
@@ -143,7 +150,7 @@ func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
 	defer d.mutex.Unlock()
 
 	index := slices.IndexFunc(d.leases, func(s DynamicSecretLease) bool {
-		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug {
+		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID {
 			return true
 		}
 		return false
@@ -161,7 +168,7 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	defer d.mutex.Unlock()
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLease) bool {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && slices.Contains(lease.TemplateIDs, templateId) {
 			return true
 		}
 		return false
@@ -172,12 +179,12 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	}
 }
 
-func (d *DynamicSecretLeaseManager) GetLease(projectSlug, environment, secretPath, slug string) *DynamicSecretLease {
+func (d *DynamicSecretLeaseManager) GetLease(projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	for _, lease := range d.leases {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && slices.Contains(lease.TemplateIDs, templateId) {
 			return &lease
 		}
 	}
@@ -384,7 +391,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		if argLength == 5 {
 			ttl = args[4]
 		}
-		dynamicSecretData := dynamicSecretManager.GetLease(projectSlug, envSlug, secretPath, slug)
+		dynamicSecretData := dynamicSecretManager.GetLease(projectSlug, envSlug, secretPath, slug, templateId)
 		if dynamicSecretData != nil {
 			dynamicSecretManager.RegisterTemplate(projectSlug, envSlug, secretPath, slug, templateId)
 			return dynamicSecretData.Data, nil
@@ -498,16 +505,18 @@ type AgentManager struct {
 	accessTokenRefreshedTime time.Time
 	mutex                    sync.Mutex
 	filePaths                []Sink // Store file paths if needed
-	templates                []Template
+	templates                []TemplateWithID
 	dynamicSecretLeases      *DynamicSecretLeaseManager
 
 	authConfigBytes []byte
 	authStrategy    util.AuthStrategyType
 
-	newAccessTokenNotificationChan        chan bool
-	removeUniversalAuthClientSecretOnRead bool
-	cachedUniversalAuthClientSecret       string
-	exitAfterAuth                         bool
+	newAccessTokenNotificationChan  chan bool
+	cachedUniversalAuthClientSecret string
+	exitAfterAuth                   bool
+	revokeCredentialsOnShutdown     bool
+
+	isShuttingDown bool
 
 	infisicalClient infisicalSdk.InfisicalClientInterface
 }
@@ -521,6 +530,7 @@ type NewAgentMangerOptions struct {
 
 	NewAccessTokenNotificationChan chan bool
 	ExitAfterAuth                  bool
+	RevokeCredentialsOnShutdown    bool
 }
 
 func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
@@ -528,15 +538,22 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 	if err != nil {
 		util.HandleError(err, "Unable to get custom headers")
 	}
+
+	templates := make([]TemplateWithID, len(options.Templates))
+	for i, template := range options.Templates {
+		templates[i] = TemplateWithID{ID: i + 1, Template: template}
+	}
+
 	return &AgentManager{
 		filePaths: options.FileDeposits,
-		templates: options.Templates,
+		templates: templates,
 
 		authConfigBytes: options.AuthConfigBytes,
 		authStrategy:    options.AuthStrategy,
 
 		newAccessTokenNotificationChan: options.NewAccessTokenNotificationChan,
 		exitAfterAuth:                  options.ExitAfterAuth,
+		revokeCredentialsOnShutdown:    options.RevokeCredentialsOnShutdown,
 
 		infisicalClient: infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
 			SiteUrl:          config.INFISICAL_URL,
@@ -755,6 +772,145 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 	return nil
 }
 
+func (tm *AgentManager) RevokeCredentials() error {
+	var token string
+
+	log.Info().Msg("revoking credentials...")
+
+	token = tm.GetToken()
+
+	if token == "" {
+		return fmt.Errorf("no access token found")
+	}
+	// lock the dynamic secret leases to prevent renewals during the revoke process
+	tm.dynamicSecretLeases.mutex.Lock()
+	defer tm.dynamicSecretLeases.mutex.Unlock()
+
+	dynamicSecretLeases := tm.dynamicSecretLeases.leases
+
+	customHeaders, err := util.GetInfisicalCustomHeadersMap()
+	if err != nil {
+		return fmt.Errorf("unable to get custom headers: %v", err)
+	}
+
+	for _, lease := range dynamicSecretLeases {
+
+		temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
+			SiteUrl:          config.INFISICAL_URL,
+			UserAgent:        api.USER_AGENT,
+			AutoTokenRefresh: false,
+			CustomHeaders:    customHeaders,
+		})
+
+		temporaryInfisicalClient.Auth().SetAccessToken(token)
+
+		_, err = temporaryInfisicalClient.DynamicSecrets().Leases().DeleteById(infisicalSdk.DeleteDynamicSecretLeaseOptions{
+			LeaseId:         lease.LeaseID,
+			ProjectSlug:     lease.ProjectSlug,
+			SecretPath:      lease.SecretPath,
+			EnvironmentSlug: lease.Environment,
+		})
+
+		if err != nil {
+
+			if strings.Contains(err.Error(), "status-code=404") {
+				log.Info().Msgf("dynamic secret lease %s not found, skipping", lease.LeaseID)
+				continue
+			}
+
+			log.Error().Msgf("unable to revoke dynamic secret lease %s: %v", lease.LeaseID, err)
+			continue
+		}
+
+		// write to the lease file, and make it an empty file
+
+		// find the template that this lease is associated with
+		templateIndex := slices.IndexFunc(tm.templates, func(t TemplateWithID) bool {
+			for _, templateID := range lease.TemplateIDs {
+				if t.ID == templateID {
+					return true
+				}
+			}
+			return false
+		})
+
+		if templateIndex != -1 {
+			template := tm.templates[templateIndex]
+			if _, err := os.Stat(template.Template.DestinationPath); !os.IsNotExist(err) {
+				if err := os.WriteFile(template.Template.DestinationPath, []byte(""), 0644); err != nil {
+					log.Warn().Msgf("unable to erase lease from file '%s' because %v", template.Template.DestinationPath, err)
+				}
+			}
+		}
+
+		log.Info().Msgf("successfully revoked dynamic secret lease [id=%s] [project-slug=%s]", lease.LeaseID, lease.ProjectSlug)
+	}
+
+	var deletedTokens []string
+
+	for _, sink := range tm.filePaths {
+		if sink.Type == "file" {
+			tokenBytes, err := os.ReadFile(sink.Config.Path)
+			if err != nil {
+				log.Error().Msgf("unable to read token from file '%s' because %v", sink.Config.Path, err)
+				continue
+			}
+
+			token := string(tokenBytes)
+			if token != "" {
+				log.Info().Msgf("revoking token from file '%s'", sink.Config.Path)
+
+				temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
+					SiteUrl:          config.INFISICAL_URL,
+					UserAgent:        api.USER_AGENT,
+					AutoTokenRefresh: false,
+					CustomHeaders:    customHeaders,
+				})
+
+				temporaryInfisicalClient.Auth().SetAccessToken(token)
+				err := temporaryInfisicalClient.Auth().RevokeAccessToken()
+				if err != nil {
+					log.Error().Msgf("unable to revoke access token from file '%s' because %v", sink.Config.Path, err)
+					continue
+				}
+
+				if _, err := os.Stat(sink.Config.Path); !os.IsNotExist(err) {
+					if err := os.WriteFile(sink.Config.Path, []byte(""), 0644); err != nil {
+						log.Warn().Msgf("unable to erase access token from file '%s' because %v", sink.Config.Path, err)
+						continue
+					}
+				}
+
+				log.Info().Msgf("successfully revoked access token from file '%s'", sink.Config.Path)
+
+				deletedTokens = append(deletedTokens, token)
+			}
+		}
+	}
+
+	// check to see if the active token was already deleted, if not, delete it
+	if !slices.Contains(deletedTokens, token) {
+		temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
+			SiteUrl:          config.INFISICAL_URL,
+			UserAgent:        api.USER_AGENT,
+			AutoTokenRefresh: false,
+			CustomHeaders:    customHeaders,
+		})
+		temporaryInfisicalClient.Auth().SetAccessToken(token)
+		err := temporaryInfisicalClient.Auth().RevokeAccessToken()
+		if err != nil {
+			log.Error().Msgf("unable to revoke token because %v", err)
+		}
+
+		log.Info().Msgf("successfully revoked active access token")
+		deletedTokens = append(deletedTokens, token)
+	}
+
+	log.Info().Msgf("successfully revoked %d access tokens", len(deletedTokens))
+
+	return nil
+}
+
 // Refreshes the existing access token
 func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -782,6 +938,11 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 
 func (tm *AgentManager) ManageTokenLifecycle() {
 	for {
+
+		if tm.isShuttingDown {
+			return
+		}
+
 		accessTokenMaxTTLExpiresInTime := tm.accessTokenFetchedTime.Add(tm.accessTokenMaxTTL - (5 * time.Second))
 		accessTokenRefreshedTime := tm.accessTokenRefreshedTime
 
@@ -945,6 +1106,10 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 			return
 		default:
 			{
+				if tm.isShuttingDown {
+					return
+				}
+
 				tm.dynamicSecretLeases.Prune()
 				token := tm.GetToken()
 				if token != "" {
@@ -1068,7 +1233,7 @@ var agentCmd = &cobra.Command{
 
 		tokenRefreshNotifier := make(chan bool)
 		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
 		filePaths := agentConfig.Sinks
 
@@ -1085,15 +1250,16 @@ var agentCmd = &cobra.Command{
 			NewAccessTokenNotificationChan: tokenRefreshNotifier,
 			ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
 			AuthStrategy:                   authStrategy,
+			RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
 		})
 
 		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(sigChan)
 
 		go tm.ManageTokenLifecycle()
 
-		for i, template := range agentConfig.Templates {
-			log.Info().Msgf("template engine started for template %v...", i+1)
-			go tm.MonitorSecretChanges(template, i, sigChan)
+		for _, template := range tm.templates {
+			log.Info().Msgf("template engine started for template %v...", template.ID)
+			go tm.MonitorSecretChanges(template.Template, template.ID, sigChan)
 		}
 
 		for {
@@ -1101,9 +1267,34 @@ var agentCmd = &cobra.Command{
 			case <-tokenRefreshNotifier:
 				go tm.WriteTokenToFiles()
 			case <-sigChan:
-				log.Info().Msg("agent is gracefully shutting...")
-				// TODO: check if we are in the middle of writing files to disk
-				os.Exit(1)
+				tm.isShuttingDown = true
+				log.Info().Msg("agent is gracefully shutting down...")
+
+				exitCode := 0
+
+				if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
+
+					done := make(chan error, 1)
+
+					go func() {
+						done <- tm.RevokeCredentials()
+					}()
+
+					select {
+					case err := <-done:
+						if err != nil {
+							log.Error().Msgf("unable to revoke credentials [err=%v]", err)
+							exitCode = 1
+						}
+					// 5 minute timeout to prevent any hanging edge cases
+					case <-time.After(5 * time.Minute):
+						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
+						exitCode = 1
+					}
+
+				}
+
+				os.Exit(exitCode)
 			}
 		}
 
