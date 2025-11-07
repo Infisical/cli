@@ -1290,13 +1290,25 @@ var agentCmd = &cobra.Command{
 				exitCode := 0
 
 				if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
-					tm.RevokeCredentials()
 
-					if err != nil {
-						log.Error().Msgf("unable to revoke credentials [err=%v]", err)
+					done := make(chan error, 1)
+
+					go func() {
+						done <- tm.RevokeCredentials()
+					}()
+
+					select {
+					case err := <-done:
+						if err != nil {
+							log.Error().Msgf("unable to revoke credentials [err=%v]", err)
+							exitCode = 1
+						}
+					// 5 minute timeout to prevent any hanging edge cases
+					case <-time.After(5 * time.Minute):
+						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
 						exitCode = 1
-
 					}
+
 				}
 
 				os.Exit(exitCode)
