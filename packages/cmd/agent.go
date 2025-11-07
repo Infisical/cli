@@ -777,16 +777,7 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 	log.Info().Msg("revoking credentials...")
 
-	for i := 0; i < 20; i++ {
-		token = tm.GetToken()
-
-		if token == "" {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		break
-	}
+	token = tm.GetToken()
 
 	if token == "" {
 		return fmt.Errorf("no access token found")
@@ -1242,7 +1233,7 @@ var agentCmd = &cobra.Command{
 
 		tokenRefreshNotifier := make(chan bool)
 		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, os.Interrupt)
 
 		filePaths := agentConfig.Sinks
 
