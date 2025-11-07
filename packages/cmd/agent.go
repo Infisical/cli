@@ -192,13 +192,6 @@ func (d *DynamicSecretLeaseManager) GetLease(projectSlug, environment, secretPat
 	return nil
 }
 
-func (d *DynamicSecretLeaseManager) GetAllLeases() []DynamicSecretLease {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	return d.leases
-}
-
 // for a given template find the first expiring lease
 // The bool indicates whether it contains valid expiry list
 func (d *DynamicSecretLeaseManager) GetFirstExpiringLeaseTime(templateId int) (time.Time, bool) {
@@ -798,12 +791,11 @@ func (tm *AgentManager) RevokeCredentials() error {
 	if token == "" {
 		return fmt.Errorf("no access token found")
 	}
-
-	dynamicSecretLeases := tm.dynamicSecretLeases.GetAllLeases()
-
 	// lock the dynamic secret leases to prevent renewals during the revoke process
 	tm.dynamicSecretLeases.mutex.Lock()
 	defer tm.dynamicSecretLeases.mutex.Unlock()
+
+	dynamicSecretLeases := tm.dynamicSecretLeases.leases
 
 	customHeaders, err := util.GetInfisicalCustomHeadersMap()
 	if err != nil {
