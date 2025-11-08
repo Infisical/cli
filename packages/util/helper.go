@@ -196,33 +196,6 @@ func RequireServiceToken() {
 	}
 }
 
-func RequireLocalWorkspaceFile() {
-	workspaceFilePath, _ := FindWorkspaceConfigFile()
-	if workspaceFilePath == "" {
-		PrintErrorMessageAndExit("It looks you have not yet connected this project to Infisical", "To do so, run [infisical init] then run your command again")
-	}
-
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		HandleError(err, "Unable to read your project configuration, please try initializing this project again.", "Run [infisical init]")
-	}
-
-	if workspaceFile.WorkspaceId == "" {
-		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
-	}
-}
-
-func ValidateWorkspaceFile(projectConfigFilePath string) {
-	workspaceFilePath, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
-	if err != nil {
-		PrintErrorMessageAndExit(fmt.Sprintf("error reading your project config %v", err))
-	}
-
-	if workspaceFilePath.WorkspaceId == "" {
-		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
-	}
-}
-
 func GetHashFromStringList(list []string) string {
 	hash := sha256.New()
 

@@ -96,46 +96,30 @@ func WorkspaceConfigFileExistsInCurrentPath() bool {
 	}
 }
 
-func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
-	cfgFile, err := FindWorkspaceConfigFile()
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
+func GetWorkspaceConfigFromFile(workspaceConfigFilePath string, workspaceConfig *models.WorkspaceConfig) {
+	if workspaceConfigFilePath == "" {
+		defaultConfigFilePath, err := FindWorkspaceConfigFile()
+		if err != nil {
+			// Operation cannot continue if we don't have a workspace ID from args or and we don't have a config file
+			if workspaceConfig.WorkspaceId == "" {
+				PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
+			}
+
+			// Work without a config file
+			return
+		}
+
+		getWorkspaceConfigByPath(defaultConfigFilePath, workspaceConfig)
 	}
 
-	configFileAsBytes, err := os.ReadFile(cfgFile)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	var workspaceConfigFile models.WorkspaceConfigFile
-	err = json.Unmarshal(configFileAsBytes, &workspaceConfigFile)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	return workspaceConfigFile, nil
-}
-
-func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile, error) {
-	configFilePath := filepath.Join(configFileDir, ".infisical.json")
-
+	configFilePath := filepath.Join(workspaceConfigFilePath, ".infisical.json")
 	_, configFileStatusError := os.Stat(configFilePath)
 	if os.IsNotExist(configFileStatusError) {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("file %s does not exist", configFilePath)
+		// The user explicitly provided the path, it must exist
+		PrintErrorMessageAndExit(fmt.Sprintf("file %s does not exist", configFilePath))
 	}
 
-	configFileAsBytes, err := os.ReadFile(configFilePath)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	var workspaceConfigFile models.WorkspaceConfigFile
-	err = json.Unmarshal(configFileAsBytes, &workspaceConfigFile)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	return workspaceConfigFile, nil
+	getWorkspaceConfigByPath(configFilePath, workspaceConfig)
 }
 
 // FindWorkspaceConfigFile searches for a .infisical.json file in the current directory and all parent directories.
@@ -181,19 +165,56 @@ func GetFullConfigFilePath() (fullPathToFile string, fullPathToDirectory string,
 }
 
 // Given a path to a workspace config, unmarshal workspace config
-func GetWorkspaceConfigByPath(path string) (workspaceConfig models.WorkspaceConfigFile, err error) {
+func getWorkspaceConfigByPath(path string, workspaceConfig *models.WorkspaceConfig) {
 	workspaceConfigFileAsBytes, err := os.ReadFile(path)
 	if err != nil {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("GetWorkspaceConfigByPath: Unable to read workspace config file because [%s]", err)
+		log.Debug().Msgf("GetWorkspaceConfigByPath: Unable to read workspace config file because [%s]", err)
+		PrintErrorMessageAndExit(fmt.Sprintf("Unable to read workspace config file %s", path))
 	}
 
-	var workspaceConfigFile models.WorkspaceConfigFile
+	workspaceConfigFile := models.WorkspaceConfigFile{}
 	err = json.Unmarshal(workspaceConfigFileAsBytes, &workspaceConfigFile)
 	if err != nil {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("GetWorkspaceConfigByPath: Unable to unmarshal workspace config file because [%s]", err)
+		log.Debug().Msgf("GetWorkspaceConfigByPath: Unable to unmarshal workspace config file because [%s]", err)
+		PrintErrorMessageAndExit(fmt.Sprintf("Unable to read workspace config file %s", path))
 	}
 
-	return workspaceConfigFile, nil
+	// We have no project to work with from args or the file
+	if workspaceConfig.WorkspaceId == "" && workspaceConfigFile.WorkspaceId == "" {
+		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
+	}
+
+	// Only override values that weren't set by default on the config
+	if workspaceConfig.WorkspaceId == "" {
+		workspaceConfig.WorkspaceId = workspaceConfigFile.WorkspaceId
+	}
+	if workspaceConfig.TagSlugs == "" {
+		workspaceConfig.TagSlugs = workspaceConfigFile.TagSlugs
+	}
+	if workspaceConfig.SecretsPath == "" {
+		workspaceConfig.SecretsPath = workspaceConfigFile.SecretsPath
+	}
+	if workspaceConfig.Environment == "" {
+		workspaceConfig.Environment = getEnvelopmentBasedOnGitBranch(workspaceConfigFile)
+	}
+}
+
+func getEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
+	branch, err := getCurrentBranch()
+	if err != nil {
+		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
+	}
+
+	envBasedOnGitBranch, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
+
+	log.Debug().Msgf("GetEnvelopmentBasedOnGitBranch: [envBasedOnGitBranch=%s] [ok=%t]", envBasedOnGitBranch, ok)
+
+	if err == nil && ok {
+		return envBasedOnGitBranch
+	} else {
+		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
+		return workspaceFile.DefaultEnvironment
+	}
 }
 
 // Get the infisical config file and if it doesn't exist, return empty config model, otherwise raise error

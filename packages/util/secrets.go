@@ -250,18 +250,16 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	// var serviceTokenDetails api.GetServiceTokenDetailsResponse
 	var errorToReturn error
 
-	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
-		if params.WorkspaceId == "" {
-			if projectConfigFilePath == "" {
-				_, err := GetWorkSpaceFromFile()
-				if err != nil {
-					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-				}
-			} else {
-				ValidateWorkspaceFile(projectConfigFilePath)
-			}
-		}
+	projectConfig := models.WorkspaceConfig{
+		WorkspaceId: params.WorkspaceId,
+		TagSlugs:    params.TagSlugs,
+		SecretsPath: params.SecretsPath,
+		Environment: params.Environment,
+	}
 
+	GetWorkspaceConfigFromFile(projectConfigFilePath, &projectConfig)
+
+	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
 		RequireLogin()
 
 		log.Debug().Msg("GetAllEnvironmentVariables: Trying to fetch secrets using logged in details")
@@ -281,29 +279,8 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			loggedInUserDetails = EstablishUserLoginSession()
 		}
 
-		if params.WorkspaceId == "" {
-			var infisicalDotJson models.WorkspaceConfigFile
-
-			if projectConfigFilePath == "" {
-				projectConfig, err := GetWorkSpaceFromFile()
-				if err != nil {
-					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-				}
-
-				infisicalDotJson = projectConfig
-			} else {
-				projectConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
-				if err != nil {
-					return nil, err
-				}
-
-				infisicalDotJson = projectConfig
-			}
-			params.WorkspaceId = infisicalDotJson.WorkspaceId
-		}
-
-		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
-			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true)
+		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, projectConfig.WorkspaceId,
+			projectConfig.Environment, projectConfig.SecretsPath, params.IncludeImport, params.Recursive, projectConfig.TagSlugs, true)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
 		if err == nil {
@@ -311,7 +288,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			if err != nil {
 				return nil, err
 			}
-			WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, res.Secrets)
+			WriteBackupSecrets(projectConfig.WorkspaceId, projectConfig.Environment, projectConfig.SecretsPath, backupEncryptionKey, res.Secrets)
 		}
 
 		secretsToReturn = res.Secrets
@@ -508,38 +485,6 @@ func DeleteBackupSecrets() error {
 	DeleteValueInKeyring(INFISICAL_BACKUP_SECRET_ENCRYPTION_KEY)
 
 	return os.RemoveAll(fullPathToSecretsBackupFolder)
-}
-
-func GetEnvFromWorkspaceFile() string {
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		log.Debug().Msgf("getEnvFromWorkspaceFile: [err=%s]", err)
-		return ""
-	}
-
-	if env := GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
-		return env
-	}
-
-	return workspaceFile.DefaultEnvironment
-}
-
-func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
-	branch, err := getCurrentBranch()
-	if err != nil {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
-	}
-
-	envBasedOnGitBranch, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
-
-	log.Debug().Msgf("GetEnvelopmentBasedOnGitBranch: [envBasedOnGitBranch=%s] [ok=%t]", envBasedOnGitBranch, ok)
-
-	if err == nil && ok {
-		return envBasedOnGitBranch
-	} else {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
-		return ""
-	}
 }
 
 func parseSecrets(fileName string, content string) (map[string]string, error) {
