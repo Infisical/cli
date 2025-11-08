@@ -331,3 +331,21 @@ func GenerateETagFromSecrets(secrets []models.SingleEnvironmentVariable) string 
 	hash := sha256.Sum256(content)
 	return fmt.Sprintf(`"%s"`, hex.EncodeToString(hash[:]))
 }
+
+func GetStringArgument(cmd *cobra.Command, argument string, errorMessage string) string {
+	value, flagsErr := cmd.Flags().GetString(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}
+
+func GetBooleanArgument(cmd *cobra.Command, argument string, errorMessage string) bool {
+	value, flagsErr := cmd.Flags().GetBool(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}

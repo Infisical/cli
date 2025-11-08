@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/spf13/cobra"
 	"os"
 	"strings"
 	"unicode"
@@ -720,5 +721,49 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	}
 
 	return secretOperations, nil
+}
 
+func GetTokenAndProjectConfigFromCommand(cmd *cobra.Command) (*models.TokenDetails, *models.WorkspaceConfig) {
+	projectId := GetStringArgument(cmd, "projectId", "Unable to parse argument --projectId")
+
+	token, tokenErr := GetInfisicalToken(cmd)
+	if tokenErr != nil {
+		HandleError(tokenErr, "Unable to parse flag --token")
+	}
+
+	if projectId == "" && token != nil && (token.Type == SERVICE_TOKEN_IDENTIFIER || token.Type == UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+		PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
+	}
+
+	tags := ""
+	if cmd.Flag("tags") != nil {
+		tags = GetStringArgument(cmd, "tags", "Unable to parse argument --tags")
+	}
+
+	path := ""
+	if cmd.Flag("path") != nil {
+		path = GetStringArgument(cmd, "path", "Unable to parse argument --path")
+	}
+
+	env := ""
+	if cmd.Flag("env") != nil {
+		env = GetStringArgument(cmd, "env", "Unable to parse argument --env")
+	}
+
+	projectConfig := models.WorkspaceConfig{
+		WorkspaceId: projectId,
+		TagSlugs:    tags,
+		SecretsPath: path,
+		Environment: env,
+	}
+
+	projectConfigDir := ""
+
+	if cmd.Flag("project-config-dir") != nil {
+		projectConfigDir = GetStringArgument(cmd, "project-config-dir", "Unable to parse argument --project-config-dir")
+	}
+
+	GetWorkspaceConfigFromFile(projectConfigDir, &projectConfig)
+
+	return token, &projectConfig
 }

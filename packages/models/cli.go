@@ -95,7 +95,7 @@ type Workspace struct {
 
 type WorkspaceConfigFile struct {
 	WorkspaceId                   string            `json:"workspaceId"`
-	TagSlugs                      string            `json:"tags"`
+	TagSlugs                      []string          `json:"tags"`
 	SecretsPath                   string            `json:"path"`
 	DefaultEnvironment            string            `json:"defaultEnvironment"`
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`

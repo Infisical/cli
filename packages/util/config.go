@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -188,8 +189,8 @@ func getWorkspaceConfigByPath(path string, workspaceConfig *models.WorkspaceConf
 	if workspaceConfig.WorkspaceId == "" {
 		workspaceConfig.WorkspaceId = workspaceConfigFile.WorkspaceId
 	}
-	if workspaceConfig.TagSlugs == "" {
-		workspaceConfig.TagSlugs = workspaceConfigFile.TagSlugs
+	if workspaceConfig.TagSlugs == "" && workspaceConfigFile.TagSlugs != nil {
+		workspaceConfig.TagSlugs = strings.Join(workspaceConfigFile.TagSlugs, ",")
 	}
 	if workspaceConfig.SecretsPath == "" {
 		workspaceConfig.SecretsPath = workspaceConfigFile.SecretsPath
