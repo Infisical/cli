@@ -48,38 +48,15 @@ var tokensCreateCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		tokenOnly, err := cmd.Flags().GetBool("token-only")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		tokenOnly := util.GetBooleanArgument(cmd, "token-only", "Unable to parse flag --token-only")
 
-		workspaceId, err := cmd.Flags().GetString("projectId")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		projectConfig := util.GetWorkspaceConfigFromCommandOrFile(cmd)
 
-		if workspaceId == "" {
-			configFile, err := util.GetWorkSpaceFromFile()
-			if err != nil {
-				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-			}
-			workspaceId = configFile.WorkspaceId
-		}
+		serviceTokenName := util.GetStringArgument(cmd, "name", "Unable to parse flag --name")
 
-		serviceTokenName, err := cmd.Flags().GetString("name")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		expireSeconds := util.GetIntArgument(cmd, "expiry-seconds", "Unable to parse flag --expiry-seconds")
 
-		expireSeconds, err := cmd.Flags().GetInt("expiry-seconds")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		scopes, err := cmd.Flags().GetStringSlice("scope")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		scopes := util.GetStringSliceArgument(cmd, "scope", "Unable to parse flag --scope")
 
 		if len(scopes) == 0 {
 			util.PrintErrorMessageAndExit("You must define the environments and paths your service token should have access to via the --scope flag")
@@ -98,10 +75,7 @@ var tokensCreateCmd = &cobra.Command{
 			permissions = append(permissions, api.ScopePermission{Environment: parts[0], SecretPath: parts[1]})
 		}
 
-		accessLevels, err := cmd.Flags().GetStringSlice("access-level")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag accessLevels")
-		}
+		accessLevels := util.GetStringSliceArgument(cmd, "access-level", "Unable to parse flag --access-level")
 
 		if len(accessLevels) == 0 {
 			util.PrintErrorMessageAndExit("You must define whether your service token can be used to read and or write via the --access-level flag")
@@ -130,7 +104,7 @@ var tokensCreateCmd = &cobra.Command{
 
 		createServiceTokenResponse, err := api.CallCreateServiceToken(httpClient, api.CreateServiceTokenRequest{
 			Name:        serviceTokenName,
-			WorkspaceId: workspaceId,
+			WorkspaceId: projectConfig.WorkspaceId,
 			Scopes:      permissions,
 			ExpiresIn:   expireSeconds,
 			Permissions: accessLevels,
@@ -158,7 +132,7 @@ var tokensCreateCmd = &cobra.Command{
 
 			fmt.Printf("New service token created\n")
 			fmt.Printf("Name: %v\n", serviceTokenName)
-			fmt.Printf("Project ID: %v\n", workspaceId)
+			fmt.Printf("Project ID: %v\n", projectConfig.WorkspaceId)
 			fmt.Printf("Access type: [%v]\n", strings.Join(accessLevels, ", "))
 			fmt.Printf("Permission(s): %v\n", strings.Join(printablePermission, ", "))
 			fmt.Printf("Service Token: %v\n", serviceToken)

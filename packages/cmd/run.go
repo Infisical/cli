@@ -59,42 +59,11 @@ var runCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
+		token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		command := util.GetStringArgument(cmd, "command", "Unable to parse flag --command")
 
-		projectConfigDir, err := cmd.Flags().GetString("project-config-dir")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		projectId, err := cmd.Flags().GetString("projectId")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		command, err := cmd.Flags().GetString("command")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		secretOverriding := util.GetBooleanArgument(cmd, "secret-overriding", "Unable to parse flag --secret-overriding")
 
 		watchMode, err := cmd.Flags().GetBool("watch")
 		if err != nil {
@@ -116,16 +85,6 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		tagSlugs, err := cmd.Flags().GetString("tags")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretsPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
 		includeImports, err := cmd.Flags().GetBool("include-imports")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -137,16 +96,16 @@ var runCmd = &cobra.Command{
 		}
 
 		request := models.GetAllSecretsParameters{
-			Environment:            environmentName,
-			WorkspaceId:            projectId,
-			TagSlugs:               tagSlugs,
-			SecretsPath:            secretsPath,
+			Environment:            projectConfig.Environment,
+			WorkspaceId:            projectConfig.WorkspaceId,
+			TagSlugs:               projectConfig.TagSlugs,
+			SecretsPath:            projectConfig.SecretsPath,
 			IncludeImport:          includeImports,
 			Recursive:              recursive,
 			ExpandSecretReferences: shouldExpandSecrets,
 		}
 
-		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, secretOverriding, token)
 		if err != nil {
 			util.HandleError(err, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
 		}
@@ -154,7 +113,7 @@ var runCmd = &cobra.Command{
 		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
 
 		if watchMode {
-			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
+			executeCommandWithWatchMode(command, args, watchModeInterval, request, secretOverriding, token)
 		} else {
 			if cmd.Flags().Changed("command") {
 				command := cmd.Flag("command").Value.String()
@@ -307,8 +266,7 @@ func waitForExitCommand(cmd *exec.Cmd) (int, error) {
 	return waitStatus.ExitStatus(), nil
 }
 
-func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInterval int, request models.GetAllSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) {
-
+func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInterval int, request models.GetAllSecretsParameters, secretOverriding bool, token *models.TokenDetails) {
 	var cmd *exec.Cmd
 	var err error
 	var lastSecretsFetch time.Time
@@ -423,7 +381,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 			watchMutex.Lock()
 			defer watchMutex.Unlock()
 
-			newEnvironmentVariables, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+			newEnvironmentVariables, err := fetchAndFormatSecretsForShell(request, secretOverriding, token)
 			if err != nil {
 				log.Error().Err(err).Msg("[HOT RELOAD] Failed to fetch secrets")
 				return
@@ -439,7 +397,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 	}
 }
 
-func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) (models.InjectableEnvironmentResult, error) {
+func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, secretOverriding bool, token *models.TokenDetails) (models.InjectableEnvironmentResult, error) {
 
 	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
 		request.InfisicalToken = token.Token
@@ -447,7 +405,7 @@ func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, proje
 		request.UniversalAuthAccessToken = token.Token
 	}
 
-	secrets, err := util.GetAllEnvironmentVariables(request, projectConfigDir)
+	secrets, err := util.GetAllEnvironmentVariables(request)
 
 	if err != nil {
 		return models.InjectableEnvironmentResult{}, err

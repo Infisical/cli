@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/spf13/cobra"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,30 +98,61 @@ func WorkspaceConfigFileExistsInCurrentPath() bool {
 	}
 }
 
-func GetWorkspaceConfigFromFile(workspaceConfigFilePath string, workspaceConfig *models.WorkspaceConfig) {
-	if workspaceConfigFilePath == "" {
-		defaultConfigFilePath, err := FindWorkspaceConfigFile()
-		if err != nil {
-			// Operation cannot continue if we don't have a workspace ID from args or and we don't have a config file
-			if workspaceConfig.WorkspaceId == "" {
-				PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-			}
+func GetWorkspaceConfigFromCommandOrFile(cmd *cobra.Command) models.WorkspaceConfig {
+	var configFilePath string
+	if cmd.Flag("project-config-dir").Changed {
+		configFileDir := GetStringArgument(cmd, "project-config-dir", "Unable to parse flag --project-config-dir")
+		configFilePath = filepath.Join(configFileDir, ".infisical.json")
 
-			// Work without a config file
-			return
+		_, err := os.Stat(configFilePath)
+		if os.IsNotExist(err) {
+			// The user explicitly provided the path, it must exist
+			PrintErrorMessageAndExit(fmt.Sprintf("file %s does not exist", configFilePath))
 		}
-
-		getWorkspaceConfigByPath(defaultConfigFilePath, workspaceConfig)
+	} else {
+		configFilePath, _ = FindWorkspaceConfigFile()
 	}
 
-	configFilePath := filepath.Join(workspaceConfigFilePath, ".infisical.json")
-	_, configFileStatusError := os.Stat(configFilePath)
-	if os.IsNotExist(configFileStatusError) {
-		// The user explicitly provided the path, it must exist
-		PrintErrorMessageAndExit(fmt.Sprintf("file %s does not exist", configFilePath))
+	workspaceConfig := models.WorkspaceConfig{}
+	var workspaceConfigFile models.WorkspaceConfigFile
+
+	if configFilePath != "" {
+		workspaceConfigFile = getWorkspaceConfigByPath(configFilePath)
 	}
 
-	getWorkspaceConfigByPath(configFilePath, workspaceConfig)
+	if cmd.Flag("projectId") != nil && cmd.Flag("projectId").Changed {
+		workspaceConfig.WorkspaceId = GetStringArgument(cmd, "projectId", "Unable to parse argument --projectId")
+	} else {
+		workspaceConfig.WorkspaceId = workspaceConfigFile.WorkspaceId
+	}
+
+	if workspaceConfig.WorkspaceId == "" {
+		// We have no project to work with from args or the file
+		if configFilePath == "" {
+			PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
+		}
+		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
+	}
+
+	if cmd.Flag("tags") != nil && cmd.Flag("tags").Changed {
+		workspaceConfig.TagSlugs = GetStringArgument(cmd, "tags", "Unable to parse argument --tags")
+	} else {
+		workspaceConfig.TagSlugs = strings.Join(workspaceConfigFile.TagSlugs, ",")
+	}
+
+	if cmd.Flag("path") != nil && cmd.Flag("path").Changed {
+		workspaceConfig.SecretsPath = GetStringArgument(cmd, "path", "Unable to parse argument --path")
+	} else {
+		workspaceConfig.SecretsPath = workspaceConfigFile.SecretsPath
+	}
+
+	if cmd.Flag("environment") != nil && cmd.Flag("environment").Changed {
+		workspaceConfig.Environment = GetStringArgument(cmd, "environment", "Unable to parse argument --environment")
+	} else {
+		workspaceConfig.Environment = getEnvelopmentBasedOnGitBranch(workspaceConfigFile)
+	}
+
+	return workspaceConfig
 }
 
 // FindWorkspaceConfigFile searches for a .infisical.json file in the current directory and all parent directories.
@@ -166,7 +198,7 @@ func GetFullConfigFilePath() (fullPathToFile string, fullPathToDirectory string,
 }
 
 // Given a path to a workspace config, unmarshal workspace config
-func getWorkspaceConfigByPath(path string, workspaceConfig *models.WorkspaceConfig) {
+func getWorkspaceConfigByPath(path string) models.WorkspaceConfigFile {
 	workspaceConfigFileAsBytes, err := os.ReadFile(path)
 	if err != nil {
 		log.Debug().Msgf("GetWorkspaceConfigByPath: Unable to read workspace config file because [%s]", err)
@@ -180,24 +212,7 @@ func getWorkspaceConfigByPath(path string, workspaceConfig *models.WorkspaceConf
 		PrintErrorMessageAndExit(fmt.Sprintf("Unable to read workspace config file %s", path))
 	}
 
-	// We have no project to work with from args or the file
-	if workspaceConfig.WorkspaceId == "" && workspaceConfigFile.WorkspaceId == "" {
-		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
-	}
-
-	// Only override values that weren't set by default on the config
-	if workspaceConfig.WorkspaceId == "" {
-		workspaceConfig.WorkspaceId = workspaceConfigFile.WorkspaceId
-	}
-	if workspaceConfig.TagSlugs == "" && workspaceConfigFile.TagSlugs != nil {
-		workspaceConfig.TagSlugs = strings.Join(workspaceConfigFile.TagSlugs, ",")
-	}
-	if workspaceConfig.SecretsPath == "" {
-		workspaceConfig.SecretsPath = workspaceConfigFile.SecretsPath
-	}
-	if workspaceConfig.Environment == "" {
-		workspaceConfig.Environment = getEnvelopmentBasedOnGitBranch(workspaceConfigFile)
-	}
+	return workspaceConfigFile
 }
 
 func getEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {

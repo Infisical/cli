@@ -349,3 +349,21 @@ func GetBooleanArgument(cmd *cobra.Command, argument string, errorMessage string
 
 	return value
 }
+
+func GetIntArgument(cmd *cobra.Command, argument string, errorMessage string) int {
+	value, flagsErr := cmd.Flags().GetInt(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}
+
+func GetStringSliceArgument(cmd *cobra.Command, argument string, errorMessage string) []string {
+	value, flagsErr := cmd.Flags().GetStringSlice(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}

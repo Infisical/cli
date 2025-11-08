@@ -24,36 +24,15 @@ var getCmd = &cobra.Command{
 	Use:   "get",
 	Short: "Get folders in a directory",
 	Run: func(cmd *cobra.Command, args []string) {
+		token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
+		foldersPath := util.GetStringArgument(cmd, "path", "Unable to parse flag --path")
 
-		projectId, err := cmd.Flags().GetString("projectId")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-		foldersPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-		outputFormat, err := cmd.Flags().GetString("output")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 		request := models.GetAllFoldersParameters{
-			Environment: environmentName,
-			WorkspaceId: projectId,
+			Environment: projectConfig.Environment,
+			WorkspaceId: projectConfig.WorkspaceId,
 			FoldersPath: foldersPath,
 		}
 
@@ -97,61 +76,23 @@ var createCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a folder",
 	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
+		token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		folderPath := util.GetStringArgument(cmd, "path", "Unable to parse flag --path")
 
-		projectId, err := cmd.Flags().GetString("projectId")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		folderName := util.GetStringArgument(cmd, "name", "Unable to parse flag --name")
 
-		folderPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		folderName, err := cmd.Flags().GetString("name")
-		if err != nil {
-			util.HandleError(err, "Unable to parse name flag")
-		}
-
-		outputFormat, err := cmd.Flags().GetString("output")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 		if folderName == "" {
 			util.HandleError(errors.New("invalid folder name, folder name cannot be empty"))
 		}
 
-		if err != nil {
-			util.HandleError(err, "Unable to get workspace file")
-		}
-
-		if projectId == "" {
-			workspaceFile, err := util.GetWorkSpaceFromFile()
-			if err != nil {
-				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-			}
-
-			projectId = workspaceFile.WorkspaceId
-		}
-
 		params := models.CreateFolderParameters{
 			FolderName:  folderName,
-			Environment: environmentName,
+			Environment: projectConfig.Environment,
 			FolderPath:  folderPath,
-			WorkspaceId: projectId,
+			WorkspaceId: projectConfig.WorkspaceId,
 		}
 
 		if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -188,57 +129,22 @@ var deleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "Delete a folder",
 	Run: func(cmd *cobra.Command, args []string) {
+		token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
+		folderPath := util.GetStringArgument(cmd, "path", "Unable to parse flag --path")
 
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		folderName := util.GetStringArgument(cmd, "name", "Unable to parse flag --name")
 
-		projectId, err := cmd.Flags().GetString("projectId")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		folderPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		folderName, err := cmd.Flags().GetString("name")
-		if err != nil {
-			util.HandleError(err, "Unable to parse name flag")
-		}
-
-		outputFormat, err := cmd.Flags().GetString("output")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 		if folderName == "" {
 			util.HandleError(errors.New("invalid folder name, folder name cannot be empty"))
 		}
 
-		if projectId == "" {
-			workspaceFile, err := util.GetWorkSpaceFromFile()
-			if err != nil {
-				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-			}
-
-			projectId = workspaceFile.WorkspaceId
-		}
-
 		params := models.DeleteFolderParameters{
 			FolderName:  folderName,
-			WorkspaceId: projectId,
-			Environment: environmentName,
+			WorkspaceId: projectConfig.WorkspaceId,
+			Environment: projectConfig.Environment,
 			FolderPath:  folderPath,
 		}
 
@@ -246,7 +152,7 @@ var deleteCmd = &cobra.Command{
 			params.InfisicalToken = token.Token
 		}
 
-		_, err = util.DeleteFolder(params)
+		_, err := util.DeleteFolder(params)
 		if err != nil {
 			util.HandleError(err, "Unable to delete folder")
 		}

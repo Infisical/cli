@@ -246,19 +246,10 @@ func FilterSecretsByTag(plainTextSecrets []models.SingleEnvironmentVariable, tag
 	return filteredSecrets
 }
 
-func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectConfigFilePath string) ([]models.SingleEnvironmentVariable, error) {
+func GetAllEnvironmentVariables(params models.GetAllSecretsParameters) ([]models.SingleEnvironmentVariable, error) {
 	var secretsToReturn []models.SingleEnvironmentVariable
 	// var serviceTokenDetails api.GetServiceTokenDetailsResponse
 	var errorToReturn error
-
-	projectConfig := models.WorkspaceConfig{
-		WorkspaceId: params.WorkspaceId,
-		TagSlugs:    params.TagSlugs,
-		SecretsPath: params.SecretsPath,
-		Environment: params.Environment,
-	}
-
-	GetWorkspaceConfigFromFile(projectConfigFilePath, &projectConfig)
 
 	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
 		RequireLogin()
@@ -280,8 +271,8 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			loggedInUserDetails = EstablishUserLoginSession()
 		}
 
-		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, projectConfig.WorkspaceId,
-			projectConfig.Environment, projectConfig.SecretsPath, params.IncludeImport, params.Recursive, projectConfig.TagSlugs, true)
+		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
+			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
 		if err == nil {
@@ -289,7 +280,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			if err != nil {
 				return nil, err
 			}
-			WriteBackupSecrets(projectConfig.WorkspaceId, projectConfig.Environment, projectConfig.SecretsPath, backupEncryptionKey, res.Secrets)
+			WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, res.Secrets)
 		}
 
 		secretsToReturn = res.Secrets
@@ -603,7 +594,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	httpClient.SetHeader("Accept", "application/json")
 
 	// pull current secrets
-	secrets, err := GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest, "")
+	secrets, err := GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest)
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
 	}
@@ -724,46 +715,18 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 }
 
 func GetTokenAndProjectConfigFromCommand(cmd *cobra.Command) (*models.TokenDetails, *models.WorkspaceConfig) {
-	projectId := GetStringArgument(cmd, "projectId", "Unable to parse argument --projectId")
-
 	token, tokenErr := GetInfisicalToken(cmd)
 	if tokenErr != nil {
 		HandleError(tokenErr, "Unable to parse flag --token")
 	}
 
+	projectId := GetStringArgument(cmd, "projectId", "Unable to parse argument --projectId")
+
 	if projectId == "" && token != nil && (token.Type == SERVICE_TOKEN_IDENTIFIER || token.Type == UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
 		PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 	}
 
-	tags := ""
-	if cmd.Flag("tags") != nil {
-		tags = GetStringArgument(cmd, "tags", "Unable to parse argument --tags")
-	}
-
-	path := ""
-	if cmd.Flag("path") != nil {
-		path = GetStringArgument(cmd, "path", "Unable to parse argument --path")
-	}
-
-	env := ""
-	if cmd.Flag("env") != nil {
-		env = GetStringArgument(cmd, "env", "Unable to parse argument --env")
-	}
-
-	projectConfig := models.WorkspaceConfig{
-		WorkspaceId: projectId,
-		TagSlugs:    tags,
-		SecretsPath: path,
-		Environment: env,
-	}
-
-	projectConfigDir := ""
-
-	if cmd.Flag("project-config-dir") != nil {
-		projectConfigDir = GetStringArgument(cmd, "project-config-dir", "Unable to parse argument --project-config-dir")
-	}
-
-	GetWorkspaceConfigFromFile(projectConfigDir, &projectConfig)
+	projectConfig := GetWorkspaceConfigFromCommandOrFile(cmd)
 
 	return token, &projectConfig
 }

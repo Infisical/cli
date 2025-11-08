@@ -55,7 +55,7 @@ var secretsCmd = &cobra.Command{
 			request.UniversalAuthAccessToken = token.Token
 		}
 
-		secrets, err := util.GetAllEnvironmentVariables(request, "")
+		secrets, err := util.GetAllEnvironmentVariables(request)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -342,7 +342,7 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 		request.UniversalAuthAccessToken = token.Token
 	}
 
-	secrets, err := util.GetAllEnvironmentVariables(request, "")
+	secrets, err := util.GetAllEnvironmentVariables(request)
 	if err != nil {
 		util.HandleError(err, "To fetch all secrets")
 	}
@@ -422,7 +422,7 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 		request.UniversalAuthAccessToken = token.Token
 	}
 
-	secrets, err := util.GetAllEnvironmentVariables(request, "")
+	secrets, err := util.GetAllEnvironmentVariables(request)
 	if err != nil {
 		util.HandleError(err, "To fetch all secrets")
 	}
@@ -611,8 +611,6 @@ func getSecretsByKeys(secrets []models.SingleEnvironmentVariable) map[string]mod
 }
 
 func init() {
-	secretsSetCmd.PersistentFlags().String("project-config-dir", "", "The directory where the .infisical.json resides")
-
 	// not doing this one
 	secretsGenerateExampleEnvCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsGenerateExampleEnvCmd.Flags().String("projectId", "", "manually set the projectId when using machine identity based auth")
