@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
 	"os"
@@ -17,8 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"encoding/json"
-	"net/http"
 	"path/filepath"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -31,14 +28,13 @@ const (
 	RELAY_CACHE_FILE = "/var/lib/infisical/cached_relay"
 )
 
-type Relay struct {
-	Name      string    `json:"name"`
-	Host      string    `json:"host"`
-	Heartbeat time.Time `json:"heartbeat"`
-	OrgId     *string   `json:"orgId"`
-}
-
 func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (string, error) {
+	httpClient, err := GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return "", err
+	}
+	httpClient.SetAuthToken(accessToken)
+
 	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
 	if err != nil {
 		return "", fmt.Errorf("unable to parse relay flag: %v", err)
@@ -47,44 +43,17 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 		return relayName, nil
 	}
 
-	domain, err := cmd.Flags().GetString("domain")
+	allRelays, err := api.CallGetRelays(httpClient)
 	if err != nil {
-		return "", fmt.Errorf("unable to parse domain flag: %v", err)
+		log.Debug().Err(err).Msg("Failed to call GetRelays API")
+		return "", fmt.Errorf("failed to fetch relays from platform: %w", err)
 	}
-
-	relaysURL := fmt.Sprintf("%s/v1/relays", domain)
-
-	// fetch all relays from Infisical
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", relaysURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("unable to create request to fetch relays: %v", err)
-	}
-
-	req.Header.Add("Authorization", "Bearer "+accessToken)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("unable to fetch relays: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("unable to fetch relays: status code %d, body: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var allRelays []Relay
-	if err := json.NewDecoder(resp.Body).Decode(&allRelays); err != nil {
-		return "", fmt.Errorf("unable to parse relays response: %v", err)
-	}
-
 	if len(allRelays) == 0 {
 		return "", fmt.Errorf("no relays available from the platform")
 	}
 
 	// filter for healthy relays
-	var healthyRelays []Relay
+	var healthyRelays []api.Relay
 	for _, relay := range allRelays {
 		if time.Since(relay.Heartbeat) < time.Hour {
 			healthyRelays = append(healthyRelays, relay)
@@ -101,7 +70,7 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 		if err == nil {
 			cachedRelayName := string(cachedRelayNameBytes)
 			if cachedRelayName != "" {
-				var cachedRelayInfo *Relay
+				var cachedRelayInfo *api.Relay
 				for i := range healthyRelays {
 					if healthyRelays[i].Name == cachedRelayName {
 						cachedRelayInfo = &healthyRelays[i]
@@ -126,8 +95,8 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 		}
 	}
 
-	var healthyOrgRelays []Relay
-	var healthyInstanceRelays []Relay
+	var healthyOrgRelays []api.Relay
+	var healthyInstanceRelays []api.Relay
 	for _, r := range healthyRelays {
 		if r.OrgId != nil {
 			healthyOrgRelays = append(healthyOrgRelays, r)
@@ -137,12 +106,12 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 	}
 
 	type pingResult struct {
-		relay   Relay
+		relay   api.Relay
 		latency time.Duration
 		err     error
 	}
 
-	findBestByPing := func(relaysToPing []Relay) (*Relay, time.Duration) {
+	findBestByPing := func(relaysToPing []api.Relay) (*api.Relay, time.Duration) {
 		if len(relaysToPing) == 0 {
 			return nil, 0
 		}
@@ -152,7 +121,7 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 
 		for _, relay := range relaysToPing {
 			wg.Add(1)
-			go func(r Relay) {
+			go func(r api.Relay) {
 				defer wg.Done()
 				address := fmt.Sprintf("%s:8443", r.Host)
 				start := time.Now()
@@ -172,7 +141,7 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 			close(resultsChan)
 		}()
 
-		var bestRelay *Relay
+		var bestRelay *api.Relay
 		minLatency := time.Duration(1<<63 - 1)
 
 		for result := range resultsChan {
@@ -190,7 +159,7 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 		return bestRelay, minLatency
 	}
 
-	var bestRelay *Relay
+	var bestRelay *api.Relay
 	var minLatency time.Duration
 
 	if len(healthyOrgRelays) > 0 {
@@ -207,7 +176,7 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 		bestRelay, minLatency = findBestByPing(healthyInstanceRelays)
 	}
 
-	var chosenRelay Relay
+	var chosenRelay api.Relay
 	if bestRelay == nil {
 		log.Warn().Msg("Could not determine best relay by ping, selecting a random healthy relay")
 		log.Debug().Int("healthy_relays", len(healthyRelays)).Msg("All pings to healthy relays failed. Check network connectivity.")
