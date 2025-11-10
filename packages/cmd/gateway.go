@@ -206,15 +206,10 @@ var gatewayStartCmd = &cobra.Command{
 	Use:                   "start",
 	Short:                 "Start the new Infisical gateway",
 	Long:                  "Start the new Infisical gateway component.",
-	Example:               "infisical gateway start --relay=<relay-name> --name=<name> --token=<token>",
+	Example:               "infisical gateway start --name=<name> --token=<token>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		relayName, err := util.GetCmdFlagOrEnv(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME})
-		if err != nil {
-			util.HandleError(err, fmt.Sprintf("unable to get relay flag or %s env", gatewayv2.RELAY_NAME_ENV_NAME))
-		}
-
 		gatewayName, err := util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
 		if err != nil {
 			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
@@ -223,16 +218,6 @@ var gatewayStartCmd = &cobra.Command{
 		pamSessionRecordingPath, err := util.GetCmdFlagOrEnv(cmd, "pam-session-recording-path", []string{gatewayv2.INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME})
 		if err == nil && pamSessionRecordingPath != "" {
 			session.SetSessionRecordingPath(pamSessionRecordingPath)
-		}
-
-		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
-			Name:           gatewayName,
-			RelayName:      relayName,
-			ReconnectDelay: 10 * time.Second,
-		})
-
-		if err != nil {
-			util.HandleError(err, "unable to create gateway instance")
 		}
 
 		infisicalClient, cancelSdk, err := getInfisicalSdkInstance(cmd)
@@ -246,6 +231,21 @@ var gatewayStartCmd = &cobra.Command{
 
 		if accessToken.Load().(string) == "" {
 			util.HandleError(errors.New("no access token found"))
+		}
+
+		relayName, err := util.GetRelayName(cmd, false, accessToken.Load().(string))
+		if err != nil {
+			util.HandleError(err, "unable to get relay name")
+		}
+
+		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
+			Name:           gatewayName,
+			RelayName:      relayName,
+			ReconnectDelay: 10 * time.Second,
+		})
+
+		if err != nil {
+			util.HandleError(err, "unable to create gateway instance")
 		}
 
 		gatewayInstance.SetToken(accessToken.Load().(string))
@@ -376,7 +376,7 @@ var gatewaySystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd service for Infisical gateway",
 	Long:  "Manage systemd service for Infisical gateway. Use 'systemd install' to install and enable the service.",
-	Example: `sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name> --relay=<relay>
+	Example: `sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name>
   sudo infisical gateway systemd uninstall`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
@@ -386,7 +386,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 	Use:                   "install",
 	Short:                 "Install and enable systemd service for the gateway (v2) (requires sudo)",
 	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux.",
-	Example:               "sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name> --relay=<relay>",
+	Example:               "sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -420,12 +420,9 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(errors.New("Gateway name is required"))
 		}
 
-		relayName, err := cmd.Flags().GetString("relay")
+		relayName, err := util.GetRelayName(cmd, false, token.Token)
 		if err != nil {
-			util.HandleError(err, "Unable to parse relay flag")
-		}
-		if relayName == "" {
-			util.HandleError(errors.New("Relay is required"))
+			util.HandleError(err, "unable to get relay name")
 		}
 
 		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName)

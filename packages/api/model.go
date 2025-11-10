@@ -722,6 +722,20 @@ type RegisterRelayResponse struct {
 	} `json:"ssh"`
 }
 
+type Relay struct {
+	ID              string    `json:"id"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	OrgId           *string   `json:"orgId"`
+	IdentityId      *string   `json:"identityId"`
+	Name            string    `json:"name"`
+	Host            string    `json:"host"`
+	Heartbeat       time.Time `json:"heartbeat"`
+	HealthAlertedAt time.Time `json:"healthAlertedAt"`
+}
+
+type GetRelaysResponse []Relay
+
 type RegisterGatewayRequest struct {
 	RelayName string `json:"relayName"`
 	Name      string `json:"name"`
