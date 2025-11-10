@@ -142,6 +142,9 @@ func GetWorkspaceConfigFromCommandOrFile(cmd *cobra.Command) models.WorkspaceCon
 
 	if cmd.Flag("path") != nil && cmd.Flag("path").Changed {
 		workspaceConfig.SecretsPath = GetStringArgument(cmd, "path", "Unable to parse argument --path")
+	} else if cmd.Flag("path") != nil && workspaceConfigFile.SecretsPath == "" {
+		// Use root path as default
+		workspaceConfig.SecretsPath = "/"
 	} else {
 		workspaceConfig.SecretsPath = workspaceConfigFile.SecretsPath
 	}
