@@ -140,19 +140,18 @@ func GetWorkspaceConfigFromCommandOrFile(cmd *cobra.Command) models.WorkspaceCon
 		workspaceConfig.TagSlugs = strings.Join(workspaceConfigFile.TagSlugs, ",")
 	}
 
-	if cmd.Flag("path") != nil && cmd.Flag("path").Changed {
+	if cmd.Flag("path") != nil && (cmd.Flag("path").Changed || workspaceConfigFile.SecretsPath == "") {
 		workspaceConfig.SecretsPath = GetStringArgument(cmd, "path", "Unable to parse argument --path")
-	} else if cmd.Flag("path") != nil && workspaceConfigFile.SecretsPath == "" {
-		// Use root path as default
-		workspaceConfig.SecretsPath = "/"
 	} else {
 		workspaceConfig.SecretsPath = workspaceConfigFile.SecretsPath
 	}
 
-	if cmd.Flag("environment") != nil && cmd.Flag("environment").Changed {
+	configFileBranch := getEnvelopmentBasedOnGitBranch(workspaceConfigFile)
+
+	if cmd.Flag("environment") != nil && (cmd.Flag("environment").Changed || configFileBranch == "") {
 		workspaceConfig.Environment = GetStringArgument(cmd, "environment", "Unable to parse argument --environment")
 	} else {
-		workspaceConfig.Environment = getEnvelopmentBasedOnGitBranch(workspaceConfigFile)
+		workspaceConfig.Environment = configFileBranch
 	}
 
 	return workspaceConfig
