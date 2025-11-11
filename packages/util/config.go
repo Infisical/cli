@@ -148,8 +148,8 @@ func GetWorkspaceConfigFromCommandOrFile(cmd *cobra.Command) models.WorkspaceCon
 
 	configFileBranch := getEnvelopmentBasedOnGitBranch(workspaceConfigFile)
 
-	if cmd.Flag("environment") != nil && (cmd.Flag("environment").Changed || configFileBranch == "") {
-		workspaceConfig.Environment = GetStringArgument(cmd, "environment", "Unable to parse argument --environment")
+	if cmd.Flag("env") != nil && (cmd.Flag("env").Changed || configFileBranch == "") {
+		workspaceConfig.Environment = GetStringArgument(cmd, "env", "Unable to parse argument --env")
 	} else {
 		workspaceConfig.Environment = configFileBranch
 	}
