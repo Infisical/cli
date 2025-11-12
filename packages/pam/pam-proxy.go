@@ -5,10 +5,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -17,6 +18,7 @@ import (
 const (
 	ResourceTypePostgres = "postgres"
 	ResourceTypeMysql    = "mysql"
+	ResourceTypeSSH      = "ssh"
 )
 
 type GatewayPAMConfig struct {
@@ -150,6 +152,21 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mysqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MySQL PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case ResourceTypeSSH:
+		sshConfig := ssh.SSHProxyConfig{
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+		proxy := ssh.NewSSHProxy(sshConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", sshConfig.TargetAddr).
+			Msg("Starting SSH PAM proxy")
+
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
