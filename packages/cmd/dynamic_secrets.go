@@ -349,15 +349,9 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 
 	token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	projectSlug := util.GetStringArgument(cmd, "project-slug", "Unable to parse flag --project-slug")
 
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
