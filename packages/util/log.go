@@ -2,6 +2,7 @@ package util
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,10 @@ import (
 
 func HandleError(err error, messages ...string) {
 	PrintErrorAndExit(1, err, messages...)
+}
+
+func IsTestRun() bool {
+	return flag.Lookup("test.v") != nil
 }
 
 func PrintErrorAndExit(exitCode int, err error, messages ...string) {
@@ -36,6 +41,10 @@ func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 
 	}
 
+	if IsTestRun() {
+		// Panic to allow for recovery and assertion in tests
+		panic(messages[0])
+	}
 	os.Exit(exitCode)
 }
 
@@ -54,6 +63,10 @@ func PrintErrorMessageAndExit(messages ...string) {
 		}
 	}
 
+	if IsTestRun() {
+		// Panic to allow for recovery and assertion in tests
+		panic(messages[0])
+	}
 	os.Exit(1)
 }
 

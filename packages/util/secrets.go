@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/spf13/cobra"
 	"os"
 	"strings"
 	"unicode"
@@ -245,23 +246,12 @@ func FilterSecretsByTag(plainTextSecrets []models.SingleEnvironmentVariable, tag
 	return filteredSecrets
 }
 
-func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectConfigFilePath string) ([]models.SingleEnvironmentVariable, error) {
+func GetAllEnvironmentVariables(params models.GetAllSecretsParameters) ([]models.SingleEnvironmentVariable, error) {
 	var secretsToReturn []models.SingleEnvironmentVariable
 	// var serviceTokenDetails api.GetServiceTokenDetailsResponse
 	var errorToReturn error
 
 	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
-		if params.WorkspaceId == "" {
-			if projectConfigFilePath == "" {
-				_, err := GetWorkSpaceFromFile()
-				if err != nil {
-					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-				}
-			} else {
-				ValidateWorkspaceFile(projectConfigFilePath)
-			}
-		}
-
 		RequireLogin()
 
 		log.Debug().Msg("GetAllEnvironmentVariables: Trying to fetch secrets using logged in details")
@@ -279,27 +269,6 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 
 		if isConnected && loggedInUserDetails.LoginExpired {
 			loggedInUserDetails = EstablishUserLoginSession()
-		}
-
-		if params.WorkspaceId == "" {
-			var infisicalDotJson models.WorkspaceConfigFile
-
-			if projectConfigFilePath == "" {
-				projectConfig, err := GetWorkSpaceFromFile()
-				if err != nil {
-					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-				}
-
-				infisicalDotJson = projectConfig
-			} else {
-				projectConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
-				if err != nil {
-					return nil, err
-				}
-
-				infisicalDotJson = projectConfig
-			}
-			params.WorkspaceId = infisicalDotJson.WorkspaceId
 		}
 
 		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
@@ -510,38 +479,6 @@ func DeleteBackupSecrets() error {
 	return os.RemoveAll(fullPathToSecretsBackupFolder)
 }
 
-func GetEnvFromWorkspaceFile() string {
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		log.Debug().Msgf("getEnvFromWorkspaceFile: [err=%s]", err)
-		return ""
-	}
-
-	if env := GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
-		return env
-	}
-
-	return workspaceFile.DefaultEnvironment
-}
-
-func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
-	branch, err := getCurrentBranch()
-	if err != nil {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
-	}
-
-	envBasedOnGitBranch, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
-
-	log.Debug().Msgf("GetEnvelopmentBasedOnGitBranch: [envBasedOnGitBranch=%s] [ok=%t]", envBasedOnGitBranch, ok)
-
-	if err == nil && ok {
-		return envBasedOnGitBranch
-	} else {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
-		return ""
-	}
-}
-
 func parseSecrets(fileName string, content string) (map[string]string, error) {
 	secrets := make(map[string]string)
 
@@ -657,7 +594,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	httpClient.SetHeader("Accept", "application/json")
 
 	// pull current secrets
-	secrets, err := GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest, "")
+	secrets, err := GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest)
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
 	}
@@ -775,5 +712,21 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	}
 
 	return secretOperations, nil
+}
 
+func GetTokenAndProjectConfigFromCommand(cmd *cobra.Command) (*models.TokenDetails, *models.WorkspaceConfig) {
+	token, tokenErr := GetInfisicalToken(cmd)
+	if tokenErr != nil {
+		HandleError(tokenErr, "Unable to parse flag --token")
+	}
+
+	projectId := GetStringArgument(cmd, "projectId", "Unable to parse argument --projectId")
+
+	if projectId == "" && token != nil && (token.Type == SERVICE_TOKEN_IDENTIFIER || token.Type == UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+		PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
+	}
+
+	projectConfig := GetWorkspaceConfigFromCommandOrFile(cmd)
+
+	return token, &projectConfig
 }

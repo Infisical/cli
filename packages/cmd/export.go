@@ -34,69 +34,25 @@ var exportCmd = &cobra.Command{
 	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
+		token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-		shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
-		if err != nil {
-			util.HandleError(err)
-		}
+		shouldExpandSecrets := util.GetBooleanArgument(cmd, "expand", "Unable to parse flag --expand")
 
-		includeImports, err := cmd.Flags().GetBool("include-imports")
-		if err != nil {
-			util.HandleError(err)
-		}
+		includeImports := util.GetBooleanArgument(cmd, "include-imports", "Unable to parse flag --include-imports")
 
-		projectId, err := cmd.Flags().GetString("projectId")
-		if err != nil {
-			util.HandleError(err)
-		}
+		format := util.GetStringArgument(cmd, "format", "Unable to parse flag --format")
 
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		templatePath := util.GetStringArgument(cmd, "template", "Unable to parse flag --template")
 
-		format, err := cmd.Flags().GetString("format")
-		if err != nil {
-			util.HandleError(err)
-		}
+		secretOverriding := util.GetBooleanArgument(cmd, "secret-overriding", "Unable to parse flag --secret-overriding")
 
-		templatePath, err := cmd.Flags().GetString("template")
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		tagSlugs, err := cmd.Flags().GetString("tags")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretsPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		outputFile, err := cmd.Flags().GetString("output-file")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+		outputFile := util.GetStringArgument(cmd, "output-file", "Unable to parse flag --output-file")
 
 		request := models.GetAllSecretsParameters{
-			Environment:            environmentName,
-			TagSlugs:               tagSlugs,
-			WorkspaceId:            projectId,
-			SecretsPath:            secretsPath,
+			Environment:            projectConfig.Environment,
+			TagSlugs:               projectConfig.TagSlugs,
+			WorkspaceId:            projectConfig.WorkspaceId,
+			SecretsPath:            projectConfig.SecretsPath,
 			IncludeImport:          includeImports,
 			ExpandSecretReferences: shouldExpandSecrets,
 		}
@@ -132,7 +88,7 @@ var exportCmd = &cobra.Command{
 			return
 		}
 
-		secrets, err := util.GetAllEnvironmentVariables(request, "")
+		secrets, err := util.GetAllEnvironmentVariables(request)
 		if err != nil {
 			util.HandleError(err, "Unable to fetch secrets")
 		}
@@ -144,7 +100,7 @@ var exportCmd = &cobra.Command{
 		}
 
 		var output string
-		secrets = util.FilterSecretsByTag(secrets, tagSlugs)
+		secrets = util.FilterSecretsByTag(secrets, projectConfig.TagSlugs)
 		secrets = util.SortSecretsByKeys(secrets)
 
 		output, err = formatEnvs(secrets, format)
@@ -207,7 +163,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 			defaultFilename := getDefaultFilename(format)
 			return filepath.Join(absPath, defaultFilename), nil
 		}
-		
+
 		// Ensure the parent directory exists
 		parentDir := filepath.Dir(absPath)
 		if _, err := os.Stat(parentDir); os.IsNotExist(err) {
@@ -216,7 +172,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 				return "", fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 		}
-		
+
 		// If no extension provided, add default extension based on format
 		if filepath.Ext(absPath) == "" {
 			ext := getDefaultExtension(format)

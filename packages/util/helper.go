@@ -383,33 +383,6 @@ func RequireServiceToken() {
 	}
 }
 
-func RequireLocalWorkspaceFile() {
-	workspaceFilePath, _ := FindWorkspaceConfigFile()
-	if workspaceFilePath == "" {
-		PrintErrorMessageAndExit("It looks you have not yet connected this project to Infisical", "To do so, run [infisical init] then run your command again")
-	}
-
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		HandleError(err, "Unable to read your project configuration, please try initializing this project again.", "Run [infisical init]")
-	}
-
-	if workspaceFile.WorkspaceId == "" {
-		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
-	}
-}
-
-func ValidateWorkspaceFile(projectConfigFilePath string) {
-	workspaceFilePath, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
-	if err != nil {
-		PrintErrorMessageAndExit(fmt.Sprintf("error reading your project config %v", err))
-	}
-
-	if workspaceFilePath.WorkspaceId == "" {
-		PrintErrorMessageAndExit("Your project id is missing in your local config file. Please add it or run again [infisical init]")
-	}
-}
-
 func GetHashFromStringList(list []string) string {
 	hash := sha256.New()
 
@@ -544,4 +517,40 @@ func GenerateETagFromSecrets(secrets []models.SingleEnvironmentVariable) string 
 
 	hash := sha256.Sum256(content)
 	return fmt.Sprintf(`"%s"`, hex.EncodeToString(hash[:]))
+}
+
+func GetStringArgument(cmd *cobra.Command, argument string, errorMessage string) string {
+	value, flagsErr := cmd.Flags().GetString(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}
+
+func GetBooleanArgument(cmd *cobra.Command, argument string, errorMessage string) bool {
+	value, flagsErr := cmd.Flags().GetBool(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}
+
+func GetIntArgument(cmd *cobra.Command, argument string, errorMessage string) int {
+	value, flagsErr := cmd.Flags().GetInt(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
+}
+
+func GetStringSliceArgument(cmd *cobra.Command, argument string, errorMessage string) []string {
+	value, flagsErr := cmd.Flags().GetStringSlice(argument)
+	if flagsErr != nil {
+		HandleError(flagsErr, errorMessage)
+	}
+
+	return value
 }

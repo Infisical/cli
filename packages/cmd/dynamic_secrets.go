@@ -31,51 +31,16 @@ var dynamicSecretCmd = &cobra.Command{
 }
 
 func getDynamicSecretList(cmd *cobra.Command, args []string) {
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	projectSlug := util.GetStringArgument(cmd, "project-slug", "Unable to parse flag --project-slug")
 
-	projectId, err := cmd.Flags().GetString("projectId")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
-
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		util.HandleError(err, "Unable to get resty client with custom headers")
-	}
-
-	if projectId == "" && projectSlug == "" {
-		workspaceFile, err := util.GetWorkSpaceFromFile()
-		if err != nil {
-			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
-		}
-		projectId = workspaceFile.WorkspaceId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -111,7 +76,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 	infisicalClient.Auth().SetAccessToken(infisicalToken)
 
 	if projectSlug == "" {
-		projectDetails, err := api.CallGetProjectById(httpClient, projectId)
+		projectDetails, err := api.CallGetProjectById(httpClient, projectConfig.WorkspaceId)
 		if err != nil {
 			util.HandleError(err, "To fetch project details")
 		}
@@ -120,8 +85,8 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 
 	dynamicSecretRootCredentials, err := infisicalClient.DynamicSecrets().List(infisicalSdk.ListDynamicSecretsRootCredentialsOptions{
 		ProjectSlug:     projectSlug,
-		SecretPath:      secretsPath,
-		EnvironmentSlug: environmentName,
+		SecretPath:      projectConfig.SecretsPath,
+		EnvironmentSlug: projectConfig.Environment,
 	})
 
 	if err != nil {
@@ -159,61 +124,19 @@ var dynamicSecretLeaseCreateCmd = &cobra.Command{
 func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredentialName := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
+	projectSlug := util.GetStringArgument(cmd, "project-slug", "Unable to parse flag --project-slug")
 
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	ttl := util.GetStringArgument(cmd, "ttl", "Unable to parse flag --ttl")
 
-	projectId, err := cmd.Flags().GetString("projectId")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	plainOutput := util.GetBooleanArgument(cmd, "plain", "Unable to parse flag --plain")
 
-	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	ttl, err := cmd.Flags().GetString("ttl")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
-
-	plainOutput, err := cmd.Flags().GetBool("plain")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		util.HandleError(err, "Unable to get resty client with custom headers")
-	}
-
-	if projectId == "" && projectSlug == "" {
-		workspaceFile, err := util.GetWorkSpaceFromFile()
-		if err != nil {
-			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project id with --projectId flag, or pass in project slug with --project-slug flag")
-		}
-		projectId = workspaceFile.WorkspaceId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -248,7 +171,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	infisicalClient.Auth().SetAccessToken(infisicalToken)
 
 	if projectSlug == "" {
-		projectDetails, err := api.CallGetProjectById(httpClient, projectId)
+		projectDetails, err := api.CallGetProjectById(httpClient, projectConfig.WorkspaceId)
 		if err != nil {
 			util.HandleError(err, "To fetch project details")
 		}
@@ -258,8 +181,8 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredential, err := infisicalClient.DynamicSecrets().GetByName(infisicalSdk.GetDynamicSecretRootCredentialByNameOptions{
 		DynamicSecretName: dynamicSecretRootCredentialName,
 		ProjectSlug:       projectSlug,
-		SecretPath:        secretsPath,
-		EnvironmentSlug:   environmentName,
+		SecretPath:        projectConfig.SecretsPath,
+		EnvironmentSlug:   projectConfig.Environment,
 	})
 
 	if err != nil {
@@ -267,10 +190,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	}
 
 	// for Kubernetes dynamic secrets only
-	kubernetesNamespace, err := cmd.Flags().GetString("kubernetes-namespace")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	kubernetesNamespace := util.GetStringArgument(cmd, "kubernetes-namespace", "Unable to parse flag --kubernetes-namespace")
 
 	config := map[string]any{}
 	if kubernetesNamespace != "" {
@@ -281,8 +201,8 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		DynamicSecretName: dynamicSecretRootCredential.Name,
 		ProjectSlug:       projectSlug,
 		TTL:               ttl,
-		SecretPath:        secretsPath,
-		EnvironmentSlug:   environmentName,
+		SecretPath:        projectConfig.SecretsPath,
+		EnvironmentSlug:   projectConfig.Environment,
 		Config:            config,
 	})
 
@@ -330,56 +250,18 @@ var dynamicSecretLeaseRenewCmd = &cobra.Command{
 func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeaseId := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	projectSlug := util.GetStringArgument(cmd, "project-slug", "Unable to parse flag --project-slug")
 
-	projectId, err := cmd.Flags().GetString("projectId")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	ttl := util.GetStringArgument(cmd, "ttl", "Unable to parse flag --ttl")
 
-	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	ttl, err := cmd.Flags().GetString("ttl")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
-
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		util.HandleError(err, "Unable to get resty client with custom headers")
-	}
-
-	if projectId == "" && projectSlug == "" {
-		workspaceFile, err := util.GetWorkSpaceFromFile()
-		if err != nil {
-			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
-		}
-		projectId = workspaceFile.WorkspaceId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -415,7 +297,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	infisicalClient.Auth().SetAccessToken(infisicalToken)
 
 	if projectSlug == "" {
-		projectDetails, err := api.CallGetProjectById(httpClient, projectId)
+		projectDetails, err := api.CallGetProjectById(httpClient, projectConfig.WorkspaceId)
 		if err != nil {
 			util.HandleError(err, "To fetch project details")
 		}
@@ -429,8 +311,8 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	leaseDetails, err := infisicalClient.DynamicSecrets().Leases().RenewById(infisicalSdk.RenewDynamicSecretLeaseOptions{
 		ProjectSlug:     projectSlug,
 		TTL:             ttl,
-		SecretPath:      secretsPath,
-		EnvironmentSlug: environmentName,
+		SecretPath:      projectConfig.SecretsPath,
+		EnvironmentSlug: projectConfig.Environment,
 		LeaseId:         dynamicSecretLeaseId,
 	})
 	if err != nil {
@@ -465,51 +347,16 @@ var dynamicSecretLeaseRevokeCmd = &cobra.Command{
 func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeaseId := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	projectSlug := util.GetStringArgument(cmd, "project-slug", "Unable to parse flag --project-slug")
 
-	projectId, err := cmd.Flags().GetString("projectId")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
-
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		util.HandleError(err, "Unable to get resty client with custom headers")
-	}
-
-	if projectId == "" && projectSlug == "" {
-		workspaceFile, err := util.GetWorkSpaceFromFile()
-		if err != nil {
-			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
-		}
-		projectId = workspaceFile.WorkspaceId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -545,7 +392,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	infisicalClient.Auth().SetAccessToken(infisicalToken)
 
 	if projectSlug == "" {
-		projectDetails, err := api.CallGetProjectById(httpClient, projectId)
+		projectDetails, err := api.CallGetProjectById(httpClient, projectConfig.WorkspaceId)
 		if err != nil {
 			util.HandleError(err, "To fetch project details")
 		}
@@ -558,8 +405,8 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 
 	leaseDetails, err := infisicalClient.DynamicSecrets().Leases().DeleteById(infisicalSdk.DeleteDynamicSecretLeaseOptions{
 		ProjectSlug:     projectSlug,
-		SecretPath:      secretsPath,
-		EnvironmentSlug: environmentName,
+		SecretPath:      projectConfig.SecretsPath,
+		EnvironmentSlug: projectConfig.Environment,
 		LeaseId:         dynamicSecretLeaseId,
 	})
 	if err != nil {
@@ -593,51 +440,16 @@ var dynamicSecretLeaseListCmd = &cobra.Command{
 func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredentialName := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	token, projectConfig := util.GetTokenAndProjectConfigFromCommand(cmd)
 
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	projectSlug := util.GetStringArgument(cmd, "project-slug", "Unable to parse flag --project-slug")
 
-	projectId, err := cmd.Flags().GetString("projectId")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
-
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
-
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := util.GetStringArgument(cmd, "output", "Unable to parse flag --output")
 
 	var infisicalToken string
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		util.HandleError(err, "Unable to get resty client with custom headers")
-	}
-
-	if projectId == "" && projectSlug == "" {
-		workspaceFile, err := util.GetWorkSpaceFromFile()
-		if err != nil {
-			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, pass in project slug with --project-slug flag, or pass in project id with --projectId flag")
-		}
-		projectId = workspaceFile.WorkspaceId
 	}
 
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
@@ -672,7 +484,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	infisicalClient.Auth().SetAccessToken(infisicalToken)
 
 	if projectSlug == "" {
-		projectDetails, err := api.CallGetProjectById(httpClient, projectId)
+		projectDetails, err := api.CallGetProjectById(httpClient, projectConfig.WorkspaceId)
 		if err != nil {
 			util.HandleError(err, "To fetch project details")
 		}
@@ -682,8 +494,8 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeases, err := infisicalClient.DynamicSecrets().Leases().List(infisicalSdk.ListDynamicSecretLeasesOptions{
 		DynamicSecretName: dynamicSecretRootCredentialName,
 		ProjectSlug:       projectSlug,
-		SecretPath:        secretsPath,
-		EnvironmentSlug:   environmentName,
+		SecretPath:        projectConfig.SecretsPath,
+		EnvironmentSlug:   projectConfig.Environment,
 	})
 
 	if err != nil {

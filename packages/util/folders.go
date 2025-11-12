@@ -27,14 +27,6 @@ func GetAllFolders(params models.GetAllFoldersParameters) ([]models.SingleFolder
 			loggedInUserDetails = EstablishUserLoginSession()
 		}
 
-		if params.WorkspaceId == "" {
-			workspaceFile, err := GetWorkSpaceFromFile()
-			if err != nil {
-				PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-			}
-			params.WorkspaceId = workspaceFile.WorkspaceId
-		}
-
 		folders, err := GetFoldersViaJTW(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId, params.Environment, params.FoldersPath)
 		folderErr = err
 		foldersToReturn = folders
