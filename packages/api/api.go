@@ -44,6 +44,7 @@ const (
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
 	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
+	operationCallGetOrgRelays                      = "CallGetOrgRelays"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
@@ -772,6 +773,25 @@ func CallRegisterRelay(httpClient *resty.Client, request RegisterRelayRequest) (
 
 	if response.IsError() {
 		return RegisterRelayResponse{}, NewAPIErrorWithResponse(operationCallRegisterOrgRelay, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallGetRelays(httpClient *resty.Client) (GetRelaysResponse, error) {
+	var resBody GetRelaysResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/relays", config.INFISICAL_URL))
+
+	if err != nil {
+		return GetRelaysResponse{}, NewGenericRequestError(operationCallGetOrgRelays, err)
+	}
+
+	if response.IsError() {
+		return GetRelaysResponse{}, NewAPIErrorWithResponse(operationCallGetOrgRelays, response, nil)
 	}
 
 	return resBody, nil
