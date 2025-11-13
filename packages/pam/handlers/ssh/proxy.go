@@ -15,21 +15,21 @@ import (
 
 // SSHProxyConfig holds configuration for the SSH proxy
 type SSHProxyConfig struct {
-	TargetAddr     string // e.g., "target-host:22"
-	InjectUsername string
-	InjectPassword string
-	// For key-based auth (future):
-	// InjectPrivateKey []byte
-	SessionID     string
-	SessionLogger session.SessionLogger
+	TargetAddr       string // e.g., "target-host:22"
+	AuthMethod       string
+	InjectUsername   string
+	InjectPassword   string
+	InjectPrivateKey string
+	SessionID        string
+	SessionLogger    session.SessionLogger
 }
 
 // SSHProxy handles proxying SSH connections with credential injection
 type SSHProxy struct {
-	config        SSHProxyConfig
-	mutex         sync.Mutex
-	sessionData   []byte // Store session data for logging
-	commandBuffer string // Buffer for commands being typed
+	config      SSHProxyConfig
+	mutex       sync.Mutex
+	sessionData []byte // Store session data for logging
+	inputBuffer []byte // Buffer for input data to batch keystrokes
 }
 
 // NewSSHProxy creates a new SSH proxy instance
@@ -120,14 +120,32 @@ func (p *SSHProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 
 // connectToTargetServer establishes connection to the actual SSH server with injected credentials
 func (p *SSHProxy) connectToTargetServer() (*ssh.Client, error) {
+	var authMethods []ssh.AuthMethod
+
+	switch p.config.AuthMethod {
+	case "public-key":
+		// Parse private key (convert PEM string to bytes)
+		signer, err := ssh.ParsePrivateKey([]byte(p.config.InjectPrivateKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse private key: %w", err)
+		}
+		authMethods = append(authMethods, ssh.PublicKeys(signer))
+		log.Debug().
+			Str("sessionID", p.config.SessionID).
+			Msg("Using public key authentication")
+	case "password":
+		authMethods = append(authMethods, ssh.Password(p.config.InjectPassword))
+		log.Debug().
+			Str("sessionID", p.config.SessionID).
+			Msg("Using password authentication")
+	default:
+		return nil, fmt.Errorf("invalid or unspecified auth method: %s (must be 'public-key' or 'password')", p.config.AuthMethod)
+	}
+
 	// Configure SSH client (proxy acts as client to the target server)
 	clientConfig := &ssh.ClientConfig{
-		User: p.config.InjectUsername,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(p.config.InjectPassword),
-			// Future: add key-based auth
-			// ssh.PublicKeys(signer),
-		},
+		User:            p.config.InjectUsername,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Add proper host key verification in production
 		Timeout:         10 * time.Second,
 	}
@@ -232,7 +250,21 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						Str("sessionID", sessionID).
 						Str("command", command).
 						Msg("SSH exec command")
-					p.logCommand(command)
+
+					// Log the exec command to the session recording
+					// Format it similar to how it would appear in a shell
+					commandWithPrompt := fmt.Sprintf("$ %s\n", command)
+					event := session.TerminalEvent{
+						Timestamp: time.Now(),
+						EventType: session.TerminalEventInput,
+						Data:      []byte(commandWithPrompt),
+					}
+					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+						log.Error().Err(err).
+							Str("sessionID", sessionID).
+							Str("command", command).
+							Msg("Failed to log exec command to session recording")
+					}
 				}
 			}
 		case "shell":
@@ -268,14 +300,34 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool) error {
 	buf := make([]byte, 32*1024) // 32KB buffer
 
+	// Flush any remaining input buffer on exit
+	defer func() {
+		if logInput && len(p.inputBuffer) > 0 {
+			p.flushInputBuffer(sessionID)
+		}
+	}()
+
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
-			// Log the data if it's from client (input)
+			// For input, buffer until we see newline or control chars
 			if logInput {
-				p.logInput(buf[:n])
+				p.bufferInput(buf[:n], sessionID)
 			} else {
-				p.logOutput(buf[:n])
+				// For output, log immediately as before
+				event := session.TerminalEvent{
+					Timestamp: time.Now(),
+					EventType: session.TerminalEventOutput,
+					Data:      make([]byte, n),
+				}
+				copy(event.Data, buf[:n])
+
+				if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+					log.Error().Err(err).
+						Str("sessionID", sessionID).
+						Str("eventType", string(session.TerminalEventOutput)).
+						Msg("Failed to log terminal event")
+				}
 			}
 
 			// Write to destination
@@ -297,67 +349,51 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 	}
 }
 
-// logCommand logs an executed command
-func (p *SSHProxy) logCommand(command string) {
-	timestamp := time.Now()
-	entry := session.SessionLogEntry{
-		Timestamp: timestamp,
-		Input:     command,
-		Output:    "", // Output will be captured separately
-	}
-
-	if err := p.config.SessionLogger.LogEntry(entry); err != nil {
-		log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to log command")
-	}
-}
-
-// logInput logs input data (from client)
-func (p *SSHProxy) logInput(data []byte) {
-	// For interactive sessions, we could buffer and log on newlines
-	// For now, log raw data in chunks
-	if len(data) == 0 {
-		return
-	}
-
-	// Simple logging - could be enhanced to parse terminal control sequences
+// bufferInput accumulates input data and logs only when newline or control chars are encountered
+func (p *SSHProxy) bufferInput(data []byte, sessionID string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	p.commandBuffer += string(data)
+	for _, b := range data {
+		p.inputBuffer = append(p.inputBuffer, b)
 
-	// Log when we see a newline or carriage return
-	if len(p.commandBuffer) > 0 && (p.commandBuffer[len(p.commandBuffer)-1] == '\n' || p.commandBuffer[len(p.commandBuffer)-1] == '\r') {
-		command := p.commandBuffer
-		p.commandBuffer = ""
-
-		entry := session.SessionLogEntry{
-			Timestamp: time.Now(),
-			Input:     command,
-			Output:    "",
-		}
-
-		if err := p.config.SessionLogger.LogEntry(entry); err != nil {
-			log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to log input")
+		// Check if we should flush the buffer
+		// CR (0x0D), LF (0x0A), or if buffer gets too large
+		if b == 0x0D || b == 0x0A || len(p.inputBuffer) >= 1024 {
+			p.flushInputBufferUnsafe(sessionID)
 		}
 	}
 }
 
-// logOutput logs output data (from server)
-func (p *SSHProxy) logOutput(data []byte) {
-	// Log output in chunks
-	if len(data) == 0 {
+// flushInputBuffer flushes the input buffer with locking
+func (p *SSHProxy) flushInputBuffer(sessionID string) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.flushInputBufferUnsafe(sessionID)
+}
+
+// flushInputBufferUnsafe flushes the input buffer without locking (caller must hold lock)
+func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
+	if len(p.inputBuffer) == 0 {
 		return
 	}
 
-	entry := session.SessionLogEntry{
+	event := session.TerminalEvent{
 		Timestamp: time.Now(),
-		Input:     "",
-		Output:    string(data),
+		EventType: session.TerminalEventInput,
+		Data:      make([]byte, len(p.inputBuffer)),
+	}
+	copy(event.Data, p.inputBuffer)
+
+	if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+		log.Error().Err(err).
+			Str("sessionID", sessionID).
+			Str("eventType", string(session.TerminalEventInput)).
+			Msg("Failed to log terminal event")
 	}
 
-	if err := p.config.SessionLogger.LogEntry(entry); err != nil {
-		log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to log output")
-	}
+	// Clear the buffer
+	p.inputBuffer = p.inputBuffer[:0]
 }
 
 // generateHostKey generates a temporary RSA key for the SSH server

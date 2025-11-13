@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/pam"
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -44,7 +44,7 @@ func StartSSHLocalProxy(accessToken string, accountID string, durationStr string
 	}
 
 	// Verify this is an SSH resource
-	if pamResponse.ResourceType != pam.ResourceTypeSSH {
+	if pamResponse.ResourceType != session.ResourceTypeSSH {
 		util.HandleError(fmt.Errorf("account is not an SSH resource, got: %s", pamResponse.ResourceType), "Invalid resource type")
 		return
 	}

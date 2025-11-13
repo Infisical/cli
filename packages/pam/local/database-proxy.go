@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/pam"
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -120,9 +120,9 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	fmt.Printf("You can now connect to your database using this connection string:\n")
 
 	switch pamResponse.ResourceType {
-	case pam.ResourceTypePostgres:
+	case session.ResourceTypePostgres:
 		fmt.Printf("postgres://%s@localhost:%d/%s", username, proxy.port, database)
-	case pam.ResourceTypeMysql:
+	case session.ResourceTypeMysql:
 		fmt.Printf("mysql://%s@localhost:%d/%s", username, proxy.port, database)
 	default:
 		fmt.Printf("localhost:%d", proxy.port)

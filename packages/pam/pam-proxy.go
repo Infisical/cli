@@ -15,12 +15,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	ResourceTypePostgres = "postgres"
-	ResourceTypeMysql    = "mysql"
-	ResourceTypeSSH      = "ssh"
-)
-
 type GatewayPAMConfig struct {
 	SessionId          string
 	ResourceType       string
@@ -91,7 +85,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 	}
-	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime)
+	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType)
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
@@ -116,7 +110,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	}
 
 	switch pamConfig.ResourceType {
-	case ResourceTypePostgres:
+	case session.ResourceTypePostgres:
 		proxyConfig := handlers.PostgresProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
@@ -134,7 +128,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting PostgreSQL PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
-	case ResourceTypeMysql:
+	case session.ResourceTypeMysql:
 		mysqlConfig := mysql.MysqlProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
@@ -153,13 +147,15 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MySQL PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
-	case ResourceTypeSSH:
+	case session.ResourceTypeSSH:
 		sshConfig := ssh.SSHProxyConfig{
-			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
-			InjectUsername: credentials.Username,
-			InjectPassword: credentials.Password,
-			SessionID:      pamConfig.SessionId,
-			SessionLogger:  sessionLogger,
+			TargetAddr:       fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			AuthMethod:       credentials.AuthMethod,
+			InjectUsername:   credentials.Username,
+			InjectPassword:   credentials.Password,
+			InjectPrivateKey: credentials.PrivateKey,
+			SessionID:        pamConfig.SessionId,
+			SessionLogger:    sessionLogger,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
 		log.Info().
