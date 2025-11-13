@@ -146,7 +146,7 @@ func (p *SSHProxy) connectToTargetServer() (*ssh.Client, error) {
 	clientConfig := &ssh.ClientConfig{
 		User:            p.config.InjectUsername,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Add proper host key verification in production
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: add support for passing in host key
 		Timeout:         10 * time.Second,
 	}
 
@@ -398,7 +398,12 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 
 // generateHostKey generates a temporary RSA key for the SSH server
 func (p *SSHProxy) generateHostKey() (ssh.Signer, error) {
-	privateKey, err := ssh.NewSignerFromSigner(generateRSAKey())
+	rsaKey, err := generateRSAKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
+	}
+
+	privateKey, err := ssh.NewSignerFromSigner(rsaKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create signer: %w", err)
 	}
