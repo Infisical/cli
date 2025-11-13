@@ -787,6 +787,8 @@ type PAMSessionCredentials struct {
 	SSLCertificate        string `json:"sslCertificate,omitempty"`
 	Username              string `json:"username"`
 	Password              string `json:"password"`
+	AuthMethod            string `json:"authMethod,omitempty"`
+	PrivateKey            string `json:"privateKey,omitempty"`
 }
 
 type UploadSessionLogEntry struct {
@@ -795,8 +797,16 @@ type UploadSessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
+// UploadTerminalEvent represents a terminal session event for upload
+type UploadTerminalEvent struct {
+	Timestamp   time.Time `json:"timestamp"`
+	EventType   string    `json:"eventType"`
+	Data        []byte    `json:"data"`
+	ElapsedTime float64   `json:"elapsedTime"`
+}
+
 type UploadPAMSessionLogsRequest struct {
-	Logs []UploadSessionLogEntry `json:"logs"`
+	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadTerminalEvent
 }
 
 type RelayHeartbeatRequest struct {

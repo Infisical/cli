@@ -20,10 +20,18 @@ import (
 
 var ErrSessionFileNotFound = errors.New("session file not found")
 
+// Resource type constants
+const (
+	ResourceTypePostgres = "postgres"
+	ResourceTypeMysql    = "mysql"
+	ResourceTypeSSH      = "ssh"
+)
+
 type SessionFileInfo struct {
-	SessionID string
-	ExpiresAt time.Time
-	Filename  string
+	SessionID    string
+	ExpiresAt    time.Time
+	Filename     string
+	ResourceType string // ResourceTypeSSH, ResourceTypePostgres, ResourceTypeMysql (empty for legacy files)
 }
 
 type SessionUploader struct {
@@ -43,10 +51,35 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 }
 
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
-	regex := regexp.MustCompile(`^pam_session_(.+)_expires_(\d+)\.enc$`)
-	matches := regex.FindStringSubmatch(filename)
+	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
+	// Build regex pattern using constants
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeMysql)
+	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
+	matches := newFormatRegex.FindStringSubmatch(filename)
+
+	if len(matches) == 4 {
+		sessionID := matches[1]
+		resourceType := matches[2]
+		timestampStr := matches[3]
+
+		timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid timestamp in filename %s: %w", filename, err)
+		}
+
+		return &SessionFileInfo{
+			SessionID:    sessionID,
+			ExpiresAt:    time.Unix(timestamp, 0),
+			Filename:     filename,
+			ResourceType: resourceType,
+		}, nil
+	}
+
+	// Fall back to legacy format for backwards compatibility: pam_session_{sessionID}_expires_{timestamp}.enc
+	legacyFormatRegex := regexp.MustCompile(`^pam_session_(.+)_expires_(\d+)\.enc$`)
+	matches = legacyFormatRegex.FindStringSubmatch(filename)
 	if len(matches) != 3 {
-		return nil, fmt.Errorf("filename %s does not match expected format: pam_session_{sessionID}_expires_{timestamp}.enc", filename)
+		return nil, fmt.Errorf("filename %s does not match expected format", filename)
 	}
 
 	sessionID := matches[1]
@@ -58,9 +91,10 @@ func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	}
 
 	return &SessionFileInfo{
-		SessionID: sessionID,
-		ExpiresAt: time.Unix(timestamp, 0),
-		Filename:  filename,
+		SessionID:    sessionID,
+		ExpiresAt:    time.Unix(timestamp, 0),
+		Filename:     filename,
+		ResourceType: "", // Empty for legacy files (assume database format)
 	}, nil
 }
 
@@ -168,6 +202,60 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 	return entries, nil
 }
 
+// ReadEncryptedTerminalEventsFromFile reads terminal events from an encrypted session file
+func ReadEncryptedTerminalEventsFromFile(filename string, encryptionKey string) ([]TerminalEvent, error) {
+	recordingDir := GetSessionRecordingDir()
+	fullPath := filepath.Join(recordingDir, filename)
+
+	file, err := os.Open(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open session file: %w", err)
+	}
+	defer file.Close()
+
+	var events []TerminalEvent
+
+	for {
+		// Read length prefix (4 bytes)
+		lengthBytes := make([]byte, 4)
+		n, err := file.Read(lengthBytes)
+		if err == io.EOF {
+			break // End of file
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read length prefix: %w", err)
+		}
+		if n != 4 {
+			return nil, fmt.Errorf("incomplete length prefix read")
+		}
+
+		length := binary.BigEndian.Uint32(lengthBytes)
+
+		encryptedData := make([]byte, length)
+		n, err = io.ReadFull(file, encryptedData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read encrypted data: %w", err)
+		}
+		if uint32(n) != length {
+			return nil, fmt.Errorf("incomplete encrypted data read")
+		}
+
+		decryptedData, err := DecryptData(encryptedData, encryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt session data: %w", err)
+		}
+
+		var event TerminalEvent
+		if err := json.Unmarshal(decryptedData, &event); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal terminal event: %w", err)
+		}
+
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
 func (su *SessionUploader) Start() {
 	su.startOnce.Do(su.startUploadRoutine)
 }
@@ -229,10 +317,53 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
+	// Use resource type to determine how to read the file
+	if fileInfo.ResourceType == ResourceTypeSSH {
+		// SSH session - read as terminal events
+		terminalEvents, err := ReadEncryptedTerminalEventsFromFile(fileInfo.Filename, encryptionKey)
+		if err != nil {
+			return fmt.Errorf("failed to read SSH session file: %w", err)
+		}
+
+		log.Debug().
+			Str("sessionId", fileInfo.SessionID).
+			Str("resourceType", fileInfo.ResourceType).
+			Int("eventCount", len(terminalEvents)).
+			Msg("Uploading terminal session events")
+
+		var logs []api.UploadTerminalEvent
+		for _, event := range terminalEvents {
+			logs = append(logs, api.UploadTerminalEvent{
+				Timestamp:   event.Timestamp,
+				EventType:   string(event.EventType),
+				Data:        event.Data,
+				ElapsedTime: event.ElapsedTime,
+			})
+		}
+
+		request := api.UploadPAMSessionLogsRequest{
+			Logs: logs,
+		}
+
+		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
+	}
+
+	// Database session (postgres, mysql, or legacy format) - read as request/response logs
 	entries, err := ReadEncryptedSessionLogByFilename(fileInfo.Filename, encryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to read session file: %w", err)
 	}
+
+	resourceTypeMsg := fileInfo.ResourceType
+	if resourceTypeMsg == "" {
+		resourceTypeMsg = "legacy"
+	}
+
+	log.Debug().
+		Str("sessionId", fileInfo.SessionID).
+		Str("resourceType", resourceTypeMsg).
+		Int("entryCount", len(entries)).
+		Msg("Uploading database session logs")
 
 	var logs []api.UploadSessionLogEntry
 	for _, entry := range entries {

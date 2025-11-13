@@ -3,11 +3,10 @@ package cmd
 import (
 	"time"
 
+	pam "github.com/Infisical/infisical-merge/packages/pam/local"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-
-	"github.com/Infisical/infisical-merge/packages/pam"
 )
 
 var pamCmd = &cobra.Command{
@@ -75,11 +74,58 @@ var pamDbAccessAccountCmd = &cobra.Command{
 	},
 }
 
+var pamSshCmd = &cobra.Command{
+	Use:                   "ssh <account-name-or-id>",
+	Short:                 "Start SSH session to PAM account",
+	Long:                  "Start an SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
+	Example:               "infisical pam ssh my-server --duration 2h",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		util.RequireLogin()
+
+		accountID := args[0]
+
+		durationStr, err := cmd.Flags().GetString("duration")
+		if err != nil {
+			util.HandleError(err, "Unable to parse duration flag")
+		}
+
+		// Parse duration
+		_, err = time.ParseDuration(durationStr)
+		if err != nil {
+			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+		}
+
+		log.Debug().Msg("PAM SSH Access: Trying to fetch credentials using logged in details")
+
+		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
+		isConnected := util.ValidateInfisicalAPIConnection()
+
+		if isConnected {
+			log.Debug().Msg("PAM SSH Access: Connected to Infisical instance, checking logged in creds")
+		}
+
+		if err != nil {
+			util.HandleError(err, "Unable to get logged in user details")
+		}
+
+		if isConnected && loggedInUserDetails.LoginExpired {
+			loggedInUserDetails = util.EstablishUserLoginSession()
+		}
+
+		pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountID, durationStr)
+	},
+}
+
 func init() {
 	pamDbCmd.AddCommand(pamDbAccessAccountCmd)
 	pamDbAccessAccountCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
 	pamDbAccessAccountCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
 
+	pamSshCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
+
 	pamCmd.AddCommand(pamDbCmd)
+	pamCmd.AddCommand(pamSshCmd)
 	rootCmd.AddCommand(pamCmd)
 }
