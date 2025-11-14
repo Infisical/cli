@@ -44,10 +44,11 @@ func parseRateLimitSeconds(body []byte) int {
 }
 
 func handleResyncResponse(cache *Cache, cacheKey string, requestURI string, resp *http.Response) (refetched bool, evicted bool, rateLimited bool, retryAfterSeconds int) {
+	defer resp.Body.Close()
+
 	switch resp.StatusCode {
 	case http.StatusOK:
 		bodyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		if err != nil {
 			log.Error().
 				Err(err).
@@ -67,7 +68,6 @@ func handleResyncResponse(cache *Cache, cacheKey string, requestURI string, resp
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
 		// Evict entry on 401/403/404
 		cache.EvictEntry(cacheKey)
-		resp.Body.Close()
 
 		log.Info().
 			Str("hash", cacheKey).
@@ -75,7 +75,6 @@ func handleResyncResponse(cache *Cache, cacheKey string, requestURI string, resp
 		return false, true, false, 0
 	case http.StatusTooManyRequests:
 		bodyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		if err != nil {
 			log.Error().
 				Err(err).
@@ -94,7 +93,6 @@ func handleResyncResponse(cache *Cache, cacheKey string, requestURI string, resp
 		return false, false, true, retryAfter
 	default:
 		// Other error status codes - keep stale entry
-		resp.Body.Close()
 		log.Debug().
 			Str("cacheKey", cacheKey).
 			Str("requestURI", requestURI).

@@ -40,7 +40,7 @@ type CacheEntry struct {
 type Cache struct {
 	entries           map[string]*CacheEntry                                          // main store: cacheKey -> cache entry (request + response)
 	tokenIndex        map[string]map[string]IndexEntry                                // secondary index: token -> map[cacheKey]IndexEntry, used for token invalidation
-	compoundPathIndex map[string]map[string]map[string]map[string]map[string]struct{} // token -> projectID -> envSlug -> secretPath -> cacheKey -> struct{}, used for evictions after mutation calls
+	compoundPathIndex map[string]map[string]map[string]map[string]map[string]struct{} // token -> projectID -> envSlug -> secretPath -> cacheKey -> struct{}, used for purging after mutation calls
 	mu                sync.RWMutex                                                    // for thread-safe access
 }
 
@@ -352,8 +352,8 @@ func (c *Cache) GetAllTokens() []string {
 
 // GetFirstRequestForToken gets the first request (any, regardless of expiration) for a token
 func (c *Cache) GetFirstRequestForToken(token string) (cacheKey string, request *CachedRequest, found bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	tokenEntries, exists := c.tokenIndex[token]
 	if !exists || len(tokenEntries) == 0 {
@@ -403,6 +403,9 @@ func (c *Cache) EvictAllEntriesForToken(token string) int {
 	// Delete token from token index
 	delete(c.tokenIndex, token)
 
+	// Delete token from compound path index
+	delete(c.compoundPathIndex, token)
+
 	return evictedCount
 }
 
@@ -411,6 +414,8 @@ func (c *Cache) RemoveTokenFromIndex(token string) {
 	defer c.mu.Unlock()
 
 	delete(c.tokenIndex, token)
+
+	delete(c.compoundPathIndex, token)
 }
 
 // PurgeByMutation purges cache entries across ALL tokens that match the mutation path
