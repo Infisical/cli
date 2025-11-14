@@ -46,121 +46,6 @@ var proxyDebugCmd = &cobra.Command{
 	Run:                   printCacheDebug,
 }
 
-func startResyncLoop(ctx context.Context, cache *proxy.Cache, domainURL *url.URL, httpClient *http.Client, resyncInterval int, cacheTTL int) {
-	ticker := time.NewTicker(time.Duration(resyncInterval) * time.Minute)
-	defer ticker.Stop()
-
-	log.Info().
-		Int("resyncInterval", resyncInterval).
-		Int("cacheTTL", cacheTTL).
-		Msg("Resync loop started")
-
-	for {
-		select {
-		case <-ticker.C:
-			log.Info().Msg("Starting resync cycle")
-			cacheTTLDuration := time.Duration(cacheTTL) * time.Minute
-			requests := cache.GetExpiredRequests(cacheTTLDuration)
-
-			refetched := 0
-			evicted := 0
-
-			for cacheKey, request := range requests {
-				// --- Reconstruct the request --
-
-				targetURL := *domainURL
-				parsedURI, err := url.Parse(request.RequestURI)
-				if err != nil {
-					log.Error().
-						Err(err).
-						Str("cacheKey", cacheKey).
-						Str("requestURI", request.RequestURI).
-						Msg("Failed to parse requestURI during resync")
-					continue
-				}
-
-				targetURL.Path = domainURL.Path + parsedURI.Path
-				targetURL.RawQuery = parsedURI.RawQuery
-
-				proxyReq, err := http.NewRequest(request.Method, targetURL.String(), nil)
-				if err != nil {
-					log.Error().
-						Err(err).
-						Str("cacheKey", cacheKey).
-						Str("targetURL", targetURL.String()).
-						Msg("Failed to create proxy request during resync")
-					continue
-				}
-
-				proxy.CopyHeaders(proxyReq.Header, request.Headers)
-
-				resp, err := httpClient.Do(proxyReq)
-				if err != nil {
-					log.Error().
-						Err(err).
-						Str("cacheKey", cacheKey).
-						Str("requestURI", request.RequestURI).
-						Msg("Network error during resync - keeping stale entry")
-					// Keep stale entry for high availability
-					continue
-				}
-
-				// --- Handle response --
-
-				if resp.StatusCode == http.StatusOK {
-					bodyBytes, err := io.ReadAll(resp.Body)
-					resp.Body.Close()
-					if err != nil {
-						log.Error().
-							Err(err).
-							Str("cacheKey", cacheKey).
-							Msg("Failed to read response body during resync")
-						continue
-					}
-
-					// Update only response data (IndexEntry doesn't change during resync)
-					cache.UpdateResponse(cacheKey, resp.StatusCode, resp.Header, bodyBytes)
-					refetched++
-
-					log.Debug().
-						Str("cacheKey", cacheKey).
-						Str("requestURI", request.RequestURI).
-						Msg("Successfully refetched and updated cache entry")
-				} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-					// Evict entry on 401/403
-					cache.EvictEntry(cacheKey)
-					evicted++
-					resp.Body.Close()
-
-					log.Info().
-						Str("cacheKey", cacheKey).
-						Str("requestURI", request.RequestURI).
-						Int("statusCode", resp.StatusCode).
-						Msg("Evicted cache entry due to authorization failure")
-				} else {
-					// Other error status codes - keep stale entry
-					resp.Body.Close()
-					log.Warn().
-						Str("cacheKey", cacheKey).
-						Str("requestURI", request.RequestURI).
-						Int("statusCode", resp.StatusCode).
-						Msg("Unexpected status code during resync - keeping stale entry")
-				}
-			}
-
-			log.Info().
-				Int("expiredEntries", len(requests)).
-				Int("refetched", refetched).
-				Int("evicted", evicted).
-				Msg("Resync cycle completed")
-
-		case <-ctx.Done():
-			log.Info().Msg("Resync loop stopped")
-			return
-		}
-	}
-}
-
 func startProxyServer(cmd *cobra.Command, args []string) {
 	domain, err := cmd.Flags().GetString("domain")
 	if err != nil {
@@ -199,6 +84,11 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		Timeout: 30 * time.Second,
 	}
 
+	// Create a separate client for streaming endpoints (no timeout for long-lived connections)
+	streamingClient := &http.Client{
+		Timeout: 0,
+	}
+
 	cache := proxy.NewCache()
 	devMode := util.CLI_VERSION == "devel"
 	mux := http.NewServeMux()
@@ -232,6 +122,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		token := proxy.ExtractTokenFromRequest(r)
 
 		isCacheable := proxy.IsCacheableRequest(r.URL.Path, r.Method)
+		isStreaming := isStreamingEndpoint(r.URL.Path)
 
 		// -- Cache Check --
 
@@ -240,10 +131,8 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 			if cachedResp, found := cache.Get(cacheKey); found {
 				log.Info().
-					Str("method", r.Method).
-					Str("path", r.URL.Path).
-					Str("cacheKey", cacheKey).
-					Msg("Cache hit - serving from cache")
+					Str("hash", cacheKey).
+					Msg("Cache hit")
 
 				proxy.CopyHeaders(w.Header(), cachedResp.Header)
 				w.WriteHeader(cachedResp.StatusCode)
@@ -255,20 +144,34 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 				return
 			}
 
-			log.Debug().
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Str("cacheKey", cacheKey).
-				Msg("Cache miss - forwarding request")
+			log.Info().
+				Str("hash", cacheKey).
+				Msg("Cache miss")
 		}
 
 		// -- Proxy Request --
+
+		// Read request body for mutation eviction (PATCH/DELETE) or restore for forwarding
+		var requestBodyBytes []byte
+		if r.Body != nil {
+			requestBodyBytes, err = io.ReadAll(r.Body)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to read request body")
+				http.Error(w, fmt.Sprintf("Failed to read request body: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
 
 		targetURL := *domainURL
 		targetURL.Path = domainURL.Path + r.URL.Path
 		targetURL.RawQuery = r.URL.RawQuery
 
-		proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
+		var bodyReader io.Reader
+		if requestBodyBytes != nil {
+			bodyReader = bytes.NewReader(requestBodyBytes)
+		}
+
+		proxyReq, err := http.NewRequest(r.Method, targetURL.String(), bodyReader)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create proxy request")
 			http.Error(w, fmt.Sprintf("Failed to create proxy request: %v", err), http.StatusInternalServerError)
@@ -277,13 +180,19 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 		proxy.CopyHeaders(proxyReq.Header, r.Header)
 
-		log.Info().
+		log.Debug().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Str("target", targetURL.String()).
 			Msg("Forwarding request")
 
-		resp, err := httpClient.Do(proxyReq)
+		// Use streaming client for SSE/streaming endpoints, regular client for others
+		clientToUse := httpClient
+		if isStreaming {
+			clientToUse = streamingClient
+		}
+
+		resp, err := clientToUse.Do(proxyReq)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to forward request")
 			http.Error(w, fmt.Sprintf("Failed to forward request: %v", err), http.StatusBadGateway)
@@ -291,7 +200,44 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		}
 		defer resp.Body.Close()
 
-		// Read response body into memory for caching (if needed) and serving
+		// -- Proxy Response --
+
+		proxy.CopyHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+
+		// For streaming endpoints, stream directly instead of buffering
+		if isStreaming {
+			// Flush headers immediately for SSE
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+
+			// Stream with periodic flushing for SSE events
+			buf := make([]byte, 1024)
+			for {
+				n, err := resp.Body.Read(buf)
+				if n > 0 {
+					if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+						log.Error().Err(writeErr).Msg("Failed to write streaming response")
+						return
+					}
+					// Flush after each write to send SSE events immediately
+					if flusher, ok := w.(http.Flusher); ok {
+						flusher.Flush()
+					}
+				}
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to read streaming response")
+					return
+				}
+			}
+			return
+		}
+
+		// For non-streaming endpoints, read into memory for caching and serving
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to read response body")
@@ -299,16 +245,63 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 			return
 		}
 
-		// -- Proxy Response --
-
-		proxy.CopyHeaders(w.Header(), resp.Header)
-
-		w.WriteHeader(resp.StatusCode)
-
 		_, err = w.Write(bodyBytes)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to write response body")
 			return
+		}
+
+		// -- Secret Mutation Purging --
+
+		if (r.Method == http.MethodPatch || r.Method == http.MethodDelete) &&
+			proxy.IsSecretsEndpoint(r.URL.Path) &&
+			resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			var projectId, environment, secretPath string
+
+			if len(requestBodyBytes) > 0 {
+				var bodyData map[string]interface{}
+				if err := json.Unmarshal(requestBodyBytes, &bodyData); err == nil {
+					// Support both v3 (workspaceId/workspaceSlug) and v4 (projectId)
+					if projId, ok := bodyData["projectId"].(string); ok {
+						projectId = projId
+					} else if workspaceId, ok := bodyData["workspaceId"].(string); ok {
+						projectId = workspaceId
+					} else if workspaceSlug, ok := bodyData["workspaceSlug"].(string); ok {
+						projectId = workspaceSlug
+					}
+					if env, ok := bodyData["environment"].(string); ok {
+						environment = env
+					}
+					if path, ok := bodyData["secretPath"].(string); ok {
+						secretPath = path
+					}
+				}
+			}
+
+			if secretPath == "" {
+				secretPath = "/"
+			}
+
+			log.Debug().
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("projectId", projectId).
+				Str("environment", environment).
+				Str("secretPath", secretPath).
+				Msg("Attempting mutation purging across all tokens")
+
+			purgedCount := cache.PurgeByMutation(projectId, environment, secretPath)
+
+			if purgedCount == 1 {
+				log.Info().
+					Str("mutationPath", secretPath).
+					Msg("Entry purged")
+			} else {
+				log.Info().
+					Int("purgedCount", purgedCount).
+					Str("mutationPath", secretPath).
+					Msg("Entries purged")
+			}
 		}
 
 		// -- Cache Set --
@@ -317,11 +310,26 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 			cacheKey := proxy.GenerateCacheKey(r.Method, r.URL.Path, r.URL.RawQuery, token)
 
 			queryParams := r.URL.Query()
+			// Support both v3 (workspaceId/workspaceSlug) and v4 (projectId)
 			projectId := queryParams.Get("projectId")
+			if projectId == "" {
+				projectId = queryParams.Get("workspaceId")
+			}
+			if projectId == "" {
+				projectId = queryParams.Get("workspaceSlug")
+			}
 			environment := queryParams.Get("environment")
 			secretPath := queryParams.Get("secretPath")
 			if secretPath == "" {
 				secretPath = "/"
+			}
+
+			if r.URL.Path == "/api/v3/secrets" || r.URL.Path == "/api/v4/secrets" ||
+				r.URL.Path == "/api/v3/secrets/raw" || r.URL.Path == "/api/v4/secrets/raw" {
+				recursive := queryParams.Get("recursive")
+				if recursive == "true" {
+					secretPath = secretPath + "*"
+				}
 			}
 
 			indexEntry := proxy.IndexEntry{
@@ -341,14 +349,14 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 			cache.Set(cacheKey, r, cachedResp, token, indexEntry)
 
-			log.Info().
+			log.Debug().
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Str("cacheKey", cacheKey).
 				Msg("Response cached successfully")
 		}
 
-		log.Info().
+		log.Debug().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", resp.StatusCode).
@@ -366,7 +374,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	resyncCtx, resyncCancel := context.WithCancel(context.Background())
 	defer resyncCancel()
 
-	go startResyncLoop(resyncCtx, cache, domainURL, httpClient, resyncInterval, cacheTTL)
+	go proxy.StartResyncLoop(resyncCtx, cache, domainURL, httpClient, resyncInterval, cacheTTL)
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -442,6 +450,10 @@ func printCacheDebug(cmd *cobra.Command, args []string) {
 
 	fmt.Println("Cache Debug Information:")
 	fmt.Println(string(output))
+}
+
+func isStreamingEndpoint(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/events/")
 }
 
 func init() {
