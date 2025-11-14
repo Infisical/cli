@@ -275,6 +275,12 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 					if path, ok := bodyData["secretPath"].(string); ok {
 						secretPath = path
 					}
+				} else {
+					log.Error().
+						Err(err).
+						Str("method", r.Method).
+						Str("path", r.URL.Path).
+						Msg("Failed to parse mutation request body for cache purging - cache may serve stale data")
 				}
 			}
 
