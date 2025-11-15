@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -53,6 +54,8 @@ const (
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
 )
+
+var ErrNotFound = errors.New("resource not found")
 
 func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
 	endpoint := fmt.Sprintf("%v/v2/workspace/%v/encrypted-key", config.INFISICAL_URL, request.WorkspaceId)
@@ -570,6 +573,31 @@ func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDyna
 	}
 
 	return createDynamicSecretLeaseResponse, nil
+}
+
+func CallGetDynamicSecretLeaseV1(httpClient *resty.Client, request GetDynamicSecretLeaseV1Request) (GetDynamicSecretLeaseV1Response, error) {
+	var getDynamicSecretLeaseResponse GetDynamicSecretLeaseV1Response
+	response, err := httpClient.
+		R().
+		SetResult(&getDynamicSecretLeaseResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("environmentSlug", request.Environment).
+		SetQueryParam("projectSlug", request.ProjectSlug).
+		SetQueryParam("secretPath", request.SecretPath).
+		Get(fmt.Sprintf("%v/v1/dynamic-secrets/leases/%s", config.INFISICAL_URL, request.LeaseID))
+
+	if err != nil {
+		return GetDynamicSecretLeaseV1Response{}, fmt.Errorf("CallGetDynamicSecretLeaseV1: Unable to complete api request [err=%w]", err)
+	}
+
+	if response.IsError() {
+		if response.StatusCode() == http.StatusNotFound {
+			return GetDynamicSecretLeaseV1Response{}, ErrNotFound
+		}
+		return GetDynamicSecretLeaseV1Response{}, fmt.Errorf("CallGetDynamicSecretLeaseV1: Unsuccessful response [status-code=%v] [response=%v]", response.StatusCode(), response.String())
+	}
+
+	return getDynamicSecretLeaseResponse, nil
 }
 
 func CallCreateRawSecretsV3(httpClient *resty.Client, request CreateRawSecretV3Request) error {

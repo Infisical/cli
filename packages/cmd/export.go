@@ -109,7 +109,7 @@ var exportCmd = &cobra.Command{
 
 		if templatePath != "" {
 			sigChan := make(chan os.Signal, 1)
-			dynamicSecretLeases := NewDynamicSecretLeaseManager(sigChan)
+			dynamicSecretLeases := NewDynamicSecretLeaseManager(sigChan, nil)
 			newEtag := ""
 
 			accessToken := ""
@@ -207,7 +207,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 			defaultFilename := getDefaultFilename(format)
 			return filepath.Join(absPath, defaultFilename), nil
 		}
-		
+
 		// Ensure the parent directory exists
 		parentDir := filepath.Dir(absPath)
 		if _, err := os.Stat(parentDir); os.IsNotExist(err) {
@@ -216,7 +216,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 				return "", fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 		}
-		
+
 		// If no extension provided, add default extension based on format
 		if filepath.Ext(absPath) == "" {
 			ext := getDefaultExtension(format)
