@@ -293,6 +293,8 @@ func (d *DynamicSecretLeaseManager) WriteLeaseToCache(lease *DynamicSecretLease,
 
 	ttl := lease.ExpireAt.Sub(time.Now())
 
+	log.Info().Msgf("[cache]: writing dynamic secret lease to cache: [cache-key=%s] [entry-ttl=%s]", cacheKey, ttl.String())
+
 	if err := d.cacheManager.WriteToCache(cacheKey, lease, &ttl); err != nil {
 		log.Error().Msgf("[cache]: unable to write dynamic secret lease to cache because %v", err)
 	} else {
