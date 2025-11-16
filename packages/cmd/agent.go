@@ -50,7 +50,7 @@ const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
 
 // duration remove leases from the cache before they expire when the agent is first started with existing leases in the cache.
 // if a lease is expired, or expires in 2 minutes or less, it will be deleted from the cache and a new lease will be created.
-var CACHE_LEASE_EXPIRE_BUFFER = 2 * time.Minute
+var CACHE_LEASE_EXPIRE_BUFFER = 30 * time.Second
 
 type PersistentCacheConfig struct {
 	Type                    string `yaml:"type"`                       // file or kubernetes
@@ -494,12 +494,22 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	}
 }
 
-func (d *DynamicSecretLeaseManager) GetCachedLease(accessToken, projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
+func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, templateId)
+	// first try to get from in-memory storage
 
+	for _, lease := range d.leases {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
+			return &lease
+		}
+	}
+
+	// if no lease is found in in-memory storage, try to get from cache
+
+	log.Info().Msgf("[cache]: no lease found, fetching from cache")
+	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, templateId)
 	log.Debug().Msgf("[cache]: lease from cache: %+v", leaseFromCache)
 
 	if leaseFromCache != nil {
@@ -558,19 +568,6 @@ func (d *DynamicSecretLeaseManager) GetCachedLease(accessToken, projectSlug, env
 		d.appendUnsafe(*leaseFromCache)
 
 		return leaseFromCache
-	}
-
-	return nil
-}
-
-func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	for _, lease := range d.leases {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
-			return &lease
-		}
 	}
 
 	return nil
@@ -755,7 +752,11 @@ func getSingleSecretTemplateFunction(accessToken string, existingEtag string, cu
 }
 
 func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *DynamicSecretLeaseManager, templateId int, currentEtag *string) func(...string) (map[string]interface{}, error) {
+
 	return func(args ...string) (map[string]interface{}, error) {
+		dynamicSecretManager.mutex.Lock()
+		defer dynamicSecretManager.mutex.Unlock()
+
 		argLength := len(args)
 		if argLength != 4 && argLength != 5 {
 			return nil, fmt.Errorf("invalid arguments found for dynamic-secret function. Check template %d", templateId)
@@ -766,12 +767,6 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 			ttl = args[4]
 		}
 		dynamicSecretData := dynamicSecretManager.GetLease(accessToken, projectSlug, envSlug, secretPath, slug, templateId)
-
-		// if no lease is found in memory, we check the cache
-		if dynamicSecretData == nil {
-			log.Info().Msgf("[cache]: no lease found, fetching from cache")
-			dynamicSecretData = dynamicSecretManager.GetCachedLease(accessToken, projectSlug, envSlug, secretPath, slug, templateId)
-		}
 
 		// if a lease is found (either in memory or in cache), we register the template and return the data
 		if dynamicSecretData != nil {
