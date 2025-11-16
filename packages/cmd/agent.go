@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/template"
 	"time"
@@ -46,6 +47,10 @@ const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%d"
 
 // duration to reduce from expiry of dynamic leases so that it gets triggered before expiry
 const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
+
+// duration remove leases from the cache before they expire when the agent is first started with existing leases in the cache.
+// if a lease is expired, or expires in 2 minutes or less, it will be deleted from the cache and a new lease will be created.
+var CACHE_LEASE_EXPIRE_BUFFER = 2 * time.Minute
 
 type PersistentCacheConfig struct {
 	Type                    string `yaml:"type"`                       // file or kubernetes
@@ -161,7 +166,7 @@ type DynamicSecretLease struct {
 	Slug        string
 	ProjectSlug string
 	Data        map[string]interface{}
-	TemplateIDs []int
+	TemplateID  int
 }
 
 func (c *CacheManager) WriteToCache(key string, value interface{}, ttl *time.Duration) error {
@@ -186,6 +191,19 @@ func (c *CacheManager) WriteToCache(key string, value interface{}, ttl *time.Dur
 	return nil
 }
 
+func (c *CacheManager) GetAllCacheEntries() (map[string]interface{}, error) {
+
+	if c.cacheStorage == nil || !c.IsEnabled {
+		return nil, nil
+	}
+
+	response, err := c.cacheStorage.GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("unable to get all cache keys: %v", err)
+	}
+	return response, nil
+}
+
 func (c *CacheManager) ReadFromCache(key string, destination interface{}) error {
 	err := c.cacheStorage.Get(key, destination)
 	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
@@ -200,13 +218,13 @@ func (c *CacheManager) DeleteFromCache(key string) error {
 		return nil
 	}
 	err := c.cacheStorage.Delete(key)
-	if err != nil {
+	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 		return fmt.Errorf("unable to delete from cache: %v", err)
 	}
 	return nil
 }
 
-func NewCacheManager(cacheConfig *CacheConfig) (*CacheManager, error) {
+func NewCacheManager(ctx context.Context, cacheConfig *CacheConfig) (*CacheManager, error) {
 
 	if cacheConfig == nil || cacheConfig.Persistent == nil {
 		log.Info().Msg("caching is disabled, continuing without caching.")
@@ -235,7 +253,7 @@ func NewCacheManager(cacheConfig *CacheConfig) (*CacheManager, error) {
 		InMemory:      false,
 	})
 
-	go cacheStorage.StartPeriodicGarbageCollection()
+	go cacheStorage.StartPeriodicGarbageCollection(ctx)
 
 	if err != nil {
 		return nil, fmt.Errorf("unable to create cache storage: %v", err)
@@ -301,13 +319,17 @@ func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment,
 	return lease
 }
 
-func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug string, templateId int) {
+func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug string, templateId int) error {
 	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
-		return
+		return nil
 	}
 
 	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, templateId)
-	d.cacheManager.DeleteFromCache(cacheKey)
+	err := d.cacheManager.DeleteFromCache(cacheKey)
+	if err != nil {
+		return fmt.Errorf("unable to delete lease from cache: %v", err)
+	}
+	return nil
 }
 
 func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
@@ -317,10 +339,15 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	allCacheKeys, err := d.cacheManager.cacheStorage.GetAll()
+	allCacheKeys, err := d.cacheManager.GetAllCacheEntries()
 
 	if err != nil {
-		return fmt.Errorf("unable to get all cache keys: %v", err)
+		return fmt.Errorf("unable to get all cache entries: %v", err)
+	}
+
+	if allCacheKeys == nil {
+		log.Debug().Msgf("[cache]: no cache entries found")
+		return nil
 	}
 
 	var cachedLeases []DynamicSecretLease
@@ -348,8 +375,14 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 
 	// now we need to check if any of the cached leases are not in the d.leases list. If they are not, we need to delete them from the cache.
 	for _, cachedLease := range cachedLeases {
-		log.Debug().Msgf("[cache]: checking cached lease: project=%s, env=%s, path=%s, slug=%s, templateIDs=%v",
-			cachedLease.ProjectSlug, cachedLease.Environment, cachedLease.SecretPath, cachedLease.Slug, cachedLease.TemplateIDs)
+		log.Debug().Msgf(
+			"[cache]: checking cached lease: [project=%s], [env=%s], [path=%s], [slug=%s], [template-id=%d]",
+			cachedLease.ProjectSlug,
+			cachedLease.Environment,
+			cachedLease.SecretPath,
+			cachedLease.Slug,
+			cachedLease.TemplateID,
+		)
 
 		// check if a lease with the same configuration exists (not comparing LeaseID since that changes on refresh)
 		found := slices.ContainsFunc(d.leases, func(s DynamicSecretLease) bool {
@@ -357,21 +390,39 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 				s.Environment == cachedLease.Environment &&
 				s.SecretPath == cachedLease.SecretPath &&
 				s.Slug == cachedLease.Slug &&
-				len(s.TemplateIDs) > 0 &&
-				len(cachedLease.TemplateIDs) > 0 &&
-				cachedLease.TemplateIDs[0] == s.TemplateIDs[0]
+				s.TemplateID == cachedLease.TemplateID
 
 			if match {
-				log.Debug().Msgf("[cache]: found matching active lease: project=%s, env=%s, path=%s, slug=%s, templateIDs=%v",
-					s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.TemplateIDs)
+				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s], [template-id=%d]",
+					s.ProjectSlug,
+					s.Environment,
+					s.SecretPath,
+					s.Slug,
+					s.TemplateID,
+				)
 			}
 			return match
 		})
 
 		if !found {
-			log.Info().Msgf("[cache]: no matching active lease found, deleting cached lease: [lease-id=%s, project=%s, env=%s, path=%s, slug=%s]",
-				cachedLease.LeaseID, cachedLease.ProjectSlug, cachedLease.Environment, cachedLease.SecretPath, cachedLease.Slug)
-			d.DeleteLeaseFromCache(cachedLease.ProjectSlug, cachedLease.Environment, cachedLease.SecretPath, cachedLease.Slug, cachedLease.TemplateIDs[0])
+			log.Info().Msgf(
+				"[cache]: no matching active lease found, deleting cached lease: [lease-id=%s], [project=%s], [env=%s], [path=%s], [slug=%s]",
+				cachedLease.LeaseID,
+				cachedLease.ProjectSlug,
+				cachedLease.Environment,
+				cachedLease.SecretPath,
+				cachedLease.Slug,
+			)
+
+			if err := d.DeleteLeaseFromCache(
+				cachedLease.ProjectSlug,
+				cachedLease.Environment,
+				cachedLease.SecretPath,
+				cachedLease.Slug,
+				cachedLease.TemplateID,
+			); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
 		}
 	}
 
@@ -387,24 +438,16 @@ func (d *DynamicSecretLeaseManager) Prune() {
 		shouldDelete := time.Now().After(s.ExpireAt.Add(DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER * time.Second))
 
 		if shouldDelete {
-			d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.TemplateIDs[0])
+			if err := d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.TemplateID); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
 		}
 		return shouldDelete
 	})
 }
 
-func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
-
-	fmt.Printf("APPENDING LEASE: %+v\n", lease)
-
-	d.mutex.Lock()
-
-	defer func() {
-		fmt.Printf("MUTEX IS UNLOCKED\n")
-		d.mutex.Unlock()
-	}()
-
-	fmt.Printf("MUTEX IS LOCKED\n")
+// appendUnsafe can be used if you already hold the lock
+func (d *DynamicSecretLeaseManager) appendUnsafe(lease DynamicSecretLease) {
 
 	index := slices.IndexFunc(d.leases, func(s DynamicSecretLease) bool {
 		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID {
@@ -413,21 +456,23 @@ func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
 		return false
 	})
 
-	fmt.Printf("INDEX: %d\n", index)
-
 	if index != -1 {
-		d.leases[index].TemplateIDs = append(d.leases[index].TemplateIDs, lease.TemplateIDs...)
+		d.leases[index].TemplateID = lease.TemplateID
 		return
 	}
 
-	fmt.Printf("APPENDING LEASE TO SLICES\n")
 	d.leases = append(d.leases, lease)
 
-	fmt.Printf("LEASE APPENDED: %+v\n", d.leases)
+	d.WriteLeaseToCache(&lease, lease.TemplateID)
 
-	d.WriteLeaseToCache(&lease, lease.TemplateIDs[0])
+}
 
-	fmt.Printf("LEASE WRITTEN TO CACHE: %+v\n", lease)
+func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	d.appendUnsafe(lease)
 }
 
 func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, secretPath, slug string, templateId int) {
@@ -435,7 +480,7 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	defer d.mutex.Unlock()
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLease) bool {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && slices.Contains(lease.TemplateIDs, templateId) {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
 			return true
 		}
 
@@ -443,7 +488,7 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	})
 
 	if index != -1 {
-		d.leases[index].TemplateIDs = append(d.leases[index].TemplateIDs, templateId)
+		d.leases[index].TemplateID = templateId
 	}
 }
 
@@ -458,6 +503,10 @@ func (d *DynamicSecretLeaseManager) GetCachedLease(accessToken, projectSlug, env
 	if leaseFromCache != nil {
 
 		// try to get the lease from the API
+
+		// ? question(daniel): should we trust the cache more, and avoid calling the API to see if the lease still exists?
+		// ? we do this to ensure that the lease wasn't deleted while the agent was not running
+
 		dynamicSecretLease, err := util.GetDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID)
 		if err != nil {
 
@@ -465,15 +514,20 @@ func (d *DynamicSecretLeaseManager) GetCachedLease(accessToken, projectSlug, env
 
 			// lease not found in API, delete it from cache and return nil
 			if errors.Is(err, api.ErrNotFound) {
-				log.Warn().Msgf("dynamic secret lease does not exist, deleting from cache: [lease-id=%s", leaseFromCache.LeaseID)
-				d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateIDs[0])
+				log.Warn().Msgf("dynamic secret lease does not exist, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
+				if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
+					log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+				}
+
 				return nil
 			}
 
 			// lease is found in cache but not in the the API, and the API returned a non 404-error. We should attempt to revoke it
 			// at this point we know that we should be able to reach the API because we've done authentication successfully
 			log.Warn().Msgf("unable to get dynamic secret lease from API. Revoking lease from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-			d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateIDs[0])
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
 
 			if err := revokeDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID); err != nil {
 				log.Warn().Msgf("unable to revoke dynamic secret lease %s: %v", leaseFromCache.LeaseID, err)
@@ -486,7 +540,9 @@ func (d *DynamicSecretLeaseManager) GetCachedLease(accessToken, projectSlug, env
 		// lease is expired or about to expire, delete from cache and attempt to revoke it
 		if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(2 * time.Minute)) {
 			log.Warn().Msgf("dynamic secret lease is expired or about to expire, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-			d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateIDs[0])
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
 
 			if err := revokeDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID); err != nil {
 				log.Warn().Msgf("unable to revoke expired dynamic secret lease %s: %v. Non-critical, the lease is already expired or will expire automatically within the next 2 minutes.", leaseFromCache.LeaseID, err)
@@ -496,10 +552,9 @@ func (d *DynamicSecretLeaseManager) GetCachedLease(accessToken, projectSlug, env
 			return nil
 		}
 
-		fmt.Printf("appending lease to memory: %+v\n", leaseFromCache)
-		d.Append(*leaseFromCache)
+		// we call appendUnsafe because we already hold the lock, and if we call Append directly we'll get a deadlock
+		d.appendUnsafe(*leaseFromCache)
 
-		fmt.Printf("RETURNED LEASE FROM CACHE")
 		return leaseFromCache
 	}
 
@@ -511,59 +566,9 @@ func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environme
 	defer d.mutex.Unlock()
 
 	for _, lease := range d.leases {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && slices.Contains(lease.TemplateIDs, templateId) {
-			fmt.Println("lease found in memory", lease)
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
 			return &lease
 		}
-
-		leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, templateId)
-		if leaseFromCache != nil {
-
-			// try to get the lease from the API
-
-			dynamicSecretLease, err := util.GetDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID)
-			if err != nil {
-
-				// lease not found, delete it from cache and return nil
-				if errors.Is(err, api.ErrNotFound) {
-					log.Warn().Msgf("dynamic secret lease does not exist, deleting from cache: [lease-id=%s", leaseFromCache.LeaseID)
-					d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateIDs[0])
-					return nil
-				}
-
-				// lease is found in cache but not in the the API, and the API returned a non 404-error. We should attempt to revoke it
-				// at this point we know that we should be able to reach the API because we've done authentication successfully
-				log.Warn().Msgf("unable to get dynamic secret lease from API. Revoking lease from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-				d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateIDs[0])
-
-				if err := revokeDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID); err != nil {
-					log.Warn().Msgf("unable to revoke dynamic secret lease %s: %v", leaseFromCache.LeaseID, err)
-					return nil
-				}
-
-				return nil
-			}
-
-			// lease is expired or about to expire, delete from cache and attempt to revoke it
-			if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(2 * time.Minute)) {
-				log.Warn().Msgf("dynamic secret lease is expired, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-				d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateIDs[0])
-
-				if err := revokeDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID); err != nil {
-					log.Warn().Msgf("unable to revoke expired dynamic secret lease %s: %v", leaseFromCache.LeaseID, err)
-					return nil
-				}
-
-				return nil
-			}
-
-			log.Debug().Msgf("[cache]: appending lease to memory: %+v", leaseFromCache)
-			d.Append(*leaseFromCache)
-			return leaseFromCache
-		}
-
-		log.Debug().Msgf("[cache]: lease not found in cache")
-
 	}
 
 	return nil
@@ -760,19 +765,19 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		}
 		dynamicSecretData := dynamicSecretManager.GetLease(accessToken, projectSlug, envSlug, secretPath, slug, templateId)
 
+		// if no lease is found in memory, we check the cache
 		if dynamicSecretData == nil {
 			log.Info().Msgf("[cache]: no lease found, fetching from cache")
 			dynamicSecretData = dynamicSecretManager.GetCachedLease(accessToken, projectSlug, envSlug, secretPath, slug, templateId)
 		}
 
-		fmt.Printf("DYNAMIC SECRET DATA: %+v\n", dynamicSecretData)
-
+		// if a lease is found (either in memory or in cache), we register the template and return the data
 		if dynamicSecretData != nil {
 			dynamicSecretManager.RegisterTemplate(projectSlug, envSlug, secretPath, slug, templateId)
 			return dynamicSecretData.Data, nil
 		}
 
-		fmt.Printf("CREATING NEW LEASE")
+		// if there's no lease (either in memory or in cache), we create a new lease
 		res, err := util.CreateDynamicSecretLease(accessToken, projectSlug, envSlug, secretPath, slug, ttl)
 		if err != nil {
 			return nil, err
@@ -781,7 +786,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		// we set an arbitrary etag to ensure that the template is re-rendered when a new lease is created
 		*currentEtag = util.GenerateRandomString(32)
 
-		dynamicSecretManager.Append(DynamicSecretLease{LeaseID: res.Lease.Id, ExpireAt: res.Lease.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: res.Data, TemplateIDs: []int{templateId}})
+		dynamicSecretManager.Append(DynamicSecretLease{LeaseID: res.Lease.Id, ExpireAt: res.Lease.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: res.Data, TemplateID: templateId})
 
 		return res.Data, nil
 	}
@@ -1223,12 +1228,7 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 		// find the template that this lease is associated with
 		templateIndex := slices.IndexFunc(tm.templates, func(t TemplateWithID) bool {
-			for _, templateID := range lease.TemplateIDs {
-				if t.ID == templateID {
-					return true
-				}
-			}
-			return false
+			return t.ID == lease.TemplateID
 		})
 
 		if templateIndex != -1 {
@@ -1636,6 +1636,8 @@ var agentCmd = &cobra.Command{
 			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
 		}
 
+		ctx, cancel := context.WithCancel(context.Background())
+
 		tokenRefreshNotifier := make(chan bool)
 		monitoringChan := make(chan bool, len(agentConfig.Templates))
 		sigChan := make(chan os.Signal, 1)
@@ -1646,6 +1648,7 @@ var agentCmd = &cobra.Command{
 		configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
 		if err != nil {
 			log.Error().Msgf("unable to marshal auth config because %v", err)
+			cancel()
 			return
 		}
 
@@ -1659,15 +1662,16 @@ var agentCmd = &cobra.Command{
 			RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
 		})
 
-		tm.cacheManager, err = NewCacheManager(&agentConfig.Cache)
+		tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
 		if err != nil {
 			log.Error().Msgf("unable to setup cache manager: %v", err)
+			cancel()
 			return
 		}
 		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(sigChan, tm.cacheManager)
 
 		// start a http server that returns a json object of the whole cache
-		if util.CLI_VERSION == "devel" {
+		if util.IsDevelopmentMode() {
 
 			go func() {
 				http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
@@ -1688,13 +1692,15 @@ var agentCmd = &cobra.Command{
 
 		go tm.ManageTokenLifecycle()
 
-		monitoredTemplatesFinished := 0
+		var monitoredTemplatesFinished atomic.Int32
+
+		// when all templates have finished rendering once, we delete the unused leases from the cache.
 		go func() {
 			for {
 				select {
 				case <-monitoringChan:
-					monitoredTemplatesFinished++
-					if monitoredTemplatesFinished == len(tm.templates) {
+					monitoredTemplatesFinished.Add(1)
+					if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
 						if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
 							log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
 						}
@@ -1713,11 +1719,11 @@ var agentCmd = &cobra.Command{
 		for {
 			select {
 			case <-tokenRefreshNotifier:
-
 				go tm.WriteTokenToFiles()
 			case <-sigChan:
 				tm.isShuttingDown = true
 				log.Info().Msg("agent is gracefully shutting down...")
+				cancel()
 
 				exitCode := 0
 

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -188,7 +189,7 @@ func (s *EncryptedStorage) ManualGarbageCollection() error {
 	return s.db.RunValueLogGC(0.5) // 50% of the value log will be garbage collected
 }
 
-func (s *EncryptedStorage) StartPeriodicGarbageCollection() {
+func (s *EncryptedStorage) StartPeriodicGarbageCollection(context context.Context) {
 
 	// always run the garbage collection once on call
 	err := s.ManualGarbageCollection()
@@ -198,10 +199,16 @@ func (s *EncryptedStorage) StartPeriodicGarbageCollection() {
 
 	ticker := time.NewTicker(15 * time.Minute)
 	go func() {
-		for range ticker.C {
-			err := s.db.RunValueLogGC(0.5) // 50% of the value log will be garbage collected
-			if err != nil && err != badger.ErrNoRewrite {
-				log.Warn().Msgf("failed to run caching garbage collection: %v", err)
+
+		for {
+			select {
+			case <-context.Done():
+				return
+			case <-ticker.C:
+				err := s.db.RunValueLogGC(0.5) // 50% of the value log will be garbage collected
+				if err != nil && err != badger.ErrNoRewrite {
+					log.Warn().Msgf("failed to run caching garbage collection: %v", err)
+				}
 			}
 		}
 	}()
