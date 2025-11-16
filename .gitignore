@@ -8,3 +8,6 @@ agent-config.test.yaml
 infisical-merge
 test/infisical-merge
 .DS_Store
+
+
+/agent-testing

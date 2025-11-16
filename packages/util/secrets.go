@@ -162,6 +162,32 @@ func GetSinglePlainTextSecretByNameV3(accessToken string, workspaceId string, en
 	return formattedSecrets, rawSecret.ETag, nil
 }
 
+func GetDynamicSecretLease(accessToken string, projectSlug string, environmentSlug string, secretsPath string, leaseID string) (models.DynamicSecretLeaseWithoutData, error) {
+	httpClient, err := GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return models.DynamicSecretLeaseWithoutData{}, err
+	}
+
+	httpClient.SetAuthToken(accessToken).
+		SetHeader("Accept", "application/json")
+
+	dynamicSecret, err := api.CallGetDynamicSecretLeaseV1(httpClient, api.GetDynamicSecretLeaseV1Request{
+		LeaseID:     leaseID,
+		Environment: environmentSlug,
+		ProjectSlug: projectSlug,
+		SecretPath:  secretsPath,
+	})
+
+	if err != nil {
+		return models.DynamicSecretLeaseWithoutData{}, err
+	}
+
+	return models.DynamicSecretLeaseWithoutData{
+		Lease:         dynamicSecret.Lease,
+		DynamicSecret: dynamicSecret.DynamicSecret,
+	}, nil
+}
+
 func CreateDynamicSecretLease(accessToken string, projectSlug string, environmentSlug string, secretsPath string, dynamicSecretName string, ttl string) (models.DynamicSecretLease, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {

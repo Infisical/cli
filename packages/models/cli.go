@@ -64,6 +64,14 @@ type DynamicSecret struct {
 	Type       string `json:"type"`
 }
 
+type DynamicSecretLeaseWithoutData struct {
+	Lease struct {
+		Id       string    `json:"id"`
+		ExpireAt time.Time `json:"expireAt"`
+	} `json:"lease"`
+	DynamicSecret DynamicSecret `json:"dynamicSecret"`
+}
+
 type DynamicSecretLease struct {
 	Lease struct {
 		Id       string    `json:"id"`

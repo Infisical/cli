@@ -38,7 +38,7 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initLog)
-	rootCmd.PersistentFlags().StringP("log-level", "l", "info", "log level (trace, debug, info, warn, error, fatal)")
+	rootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	rootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
 	rootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your own backend [can also set via environment variable name: INFISICAL_API_URL]")
 	rootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
@@ -85,6 +85,15 @@ func initLog() {
 	if err != nil {
 		log.Fatal().Msg(err.Error())
 	}
+
+	if ll == "" {
+		ll = os.Getenv("LOG_LEVEL")
+
+		if ll == "" {
+			ll = "info"
+		}
+	}
+
 	switch strings.ToLower(ll) {
 	case "trace":
 		zerolog.SetGlobalLevel(zerolog.TraceLevel)
