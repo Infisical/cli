@@ -28,6 +28,18 @@ func main() {
 		"panic": "\033[31m", // red
 	}
 
+	// map full level names to abbreviated forms (default zerolog behavior)
+	// see consoleDefaultFormatLevel, in zerolog for example
+	levelAbbrev := map[string]string{
+		"trace": "TRC",
+		"debug": "DBG",
+		"info":  "INF",
+		"warn":  "WRN",
+		"error": "ERR",
+		"fatal": "FTL",
+		"panic": "PNC",
+	}
+
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339,
@@ -37,7 +49,11 @@ func main() {
 			if color == "" {
 				color = "\033[0m" // no color for unknown levels
 			}
-			return color + strings.ToUpper(level) + "\033[0m"
+			abbrev := levelAbbrev[level]
+			if abbrev == "" {
+				abbrev = strings.ToUpper(level) // fallback to uppercase if unknown
+			}
+			return color + abbrev + "\033[0m"
 		},
 	})
 	cmd.Execute()
