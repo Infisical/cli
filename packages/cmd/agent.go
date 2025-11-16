@@ -754,9 +754,6 @@ func getSingleSecretTemplateFunction(accessToken string, existingEtag string, cu
 func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *DynamicSecretLeaseManager, templateId int, currentEtag *string) func(...string) (map[string]interface{}, error) {
 
 	return func(args ...string) (map[string]interface{}, error) {
-		dynamicSecretManager.mutex.Lock()
-		defer dynamicSecretManager.mutex.Unlock()
-
 		argLength := len(args)
 		if argLength != 4 && argLength != 5 {
 			return nil, fmt.Errorf("invalid arguments found for dynamic-secret function. Check template %d", templateId)
