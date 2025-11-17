@@ -336,7 +336,9 @@ func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environmen
 
 func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 
-	log.Info().Msgf("[cache]: deleting unused dynamic secret leases from cache")
+	if d.cacheManager.IsEnabled {
+		log.Info().Msgf("[cache]: deleting unused dynamic secret leases from cache")
+	}
 
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
