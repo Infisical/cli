@@ -5,8 +5,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"time"
+
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -124,6 +125,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,
 			SessionLogger:  sessionLogger,
+			ReadOnlyMode:   credentials.ReadOnlyMode,
 		}
 		proxy := handlers.NewPostgresProxy(proxyConfig)
 		log.Info().
@@ -142,6 +144,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,
 			SessionLogger:  sessionLogger,
+			ReadOnlyMode:   credentials.ReadOnlyMode,
 		}
 
 		proxy := mysql.NewMysqlProxy(mysqlConfig)
