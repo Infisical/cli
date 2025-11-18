@@ -49,7 +49,7 @@ const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%d"
 const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
 
 // duration remove leases from the cache before they expire when the agent is first started with existing leases in the cache.
-// if a lease is expired, or expires in 2 minutes or less, it will be deleted from the cache and a new lease will be created.
+// if a lease is expired, or expires in 30 seconds or less, it will be deleted from the cache and a new lease will be created.
 var CACHE_LEASE_EXPIRE_BUFFER = 30 * time.Second
 
 type PersistentCacheConfig struct {
@@ -552,7 +552,7 @@ func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environme
 		}
 
 		// lease is expired or about to expire, delete from cache and attempt to revoke it
-		if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(2 * time.Minute)) {
+		if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(CACHE_LEASE_EXPIRE_BUFFER)) {
 			log.Warn().Msgf("dynamic secret lease is expired or about to expire, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
 			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
@@ -1516,13 +1516,26 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 					}
 
 					if err != nil {
-						log.Error().Msgf("unable to process template because %v", err)
+						log.Error().Msgf("unable to process template because %v [template-id=%d]", err, templateId)
 
 						// case: if exit-after-auth is true, it should exit the agent once an error on secret fetching occurs with the appropriate exit code (1)
 						// previous behavior would exit after 25 sec with status code 0, even if this step errors
 						if tm.exitAfterAuth {
 							os.Exit(1)
 						}
+
+						// if polling interval is less than 1 minute, we sleep for the polling interval, otherwise we sleep for 1 minute
+
+						sleepDuration := 1 * time.Minute
+
+						if pollingInterval < sleepDuration {
+							sleepDuration = pollingInterval
+						}
+
+						log.Info().Msgf("retrying in %s [template-id=%d]", sleepDuration.String(), templateId)
+						time.Sleep(sleepDuration)
+						continue
+
 					} else {
 						if (existingEtag != currentEtag) || firstRun {
 
