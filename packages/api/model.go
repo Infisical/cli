@@ -585,6 +585,21 @@ type CreateDynamicSecretLeaseV1Response struct {
 	Data map[string]interface{} `json:"data"`
 }
 
+type GetDynamicSecretLeaseV1Request struct {
+	LeaseID     string
+	Environment string
+	ProjectSlug string
+	SecretPath  string
+}
+
+type GetDynamicSecretLeaseV1Response struct {
+	Lease struct {
+		Id       string    `json:"id"`
+		ExpireAt time.Time `json:"expireAt"`
+	} `json:"lease"`
+	DynamicSecret models.DynamicSecret `json:"dynamicSecret"`
+}
+
 type GetLoginV3Request struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`

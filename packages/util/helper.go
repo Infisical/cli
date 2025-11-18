@@ -545,3 +545,7 @@ func GenerateETagFromSecrets(secrets []models.SingleEnvironmentVariable) string 
 	hash := sha256.Sum256(content)
 	return fmt.Sprintf(`"%s"`, hex.EncodeToString(hash[:]))
 }
+
+func IsDevelopmentMode() bool {
+	return CLI_VERSION == "devel"
+}

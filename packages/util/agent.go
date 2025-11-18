@@ -23,7 +23,7 @@ func ConvertPollingIntervalToTime(pollingInterval string) (time.Duration, error)
 
 	switch unit {
 	case "s":
-		if number < 60 {
+		if number < 60 && !IsDevelopmentMode() {
 			return 0, fmt.Errorf("polling interval must be at least 60 seconds")
 		}
 		return time.Duration(number) * time.Second, nil
