@@ -75,10 +75,18 @@ var pamDbAccessAccountCmd = &cobra.Command{
 }
 
 var pamSshCmd = &cobra.Command{
-	Use:                   "ssh <account-name-or-id>",
+	Use:                   "ssh",
+	Short:                 "SSH-related PAM commands",
+	Long:                  "SSH-related PAM commands for Infisical",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var pamSshAccessAccountCmd = &cobra.Command{
+	Use:                   "access-account <account-name-or-id>",
 	Short:                 "Start SSH session to PAM account",
 	Long:                  "Start an SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
-	Example:               "infisical pam ssh my-server --duration 2h",
+	Example:               "infisical pam ssh access-account <account-id> --duration 2h",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -123,7 +131,8 @@ func init() {
 	pamDbAccessAccountCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
 	pamDbAccessAccountCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
 
-	pamSshCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
+	pamSshCmd.AddCommand(pamSshAccessAccountCmd)
+	pamSshAccessAccountCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
 
 	pamCmd.AddCommand(pamDbCmd)
 	pamCmd.AddCommand(pamSshCmd)
