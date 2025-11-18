@@ -504,6 +504,7 @@ func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environme
 
 	for _, lease := range d.leases {
 		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
+			log.Debug().Msgf("[cache]: lease found in in-memory storage: [project=%s], [env=%s], [path=%s], [slug=%s], [template-id=%d]", projectSlug, environment, secretPath, slug, templateId)
 			return &lease
 		}
 	}
@@ -1459,12 +1460,16 @@ func (tm *AgentManager) FetchTokenFromFiles() string {
 	return ""
 }
 
-func (tm *AgentManager) WriteTemplateToFile(bytes *bytes.Buffer, template *Template) {
+func (tm *AgentManager) WriteTemplateToFile(bytes *bytes.Buffer, template *Template, templateId int) {
 	if err := WriteBytesToFile(bytes, template.DestinationPath); err != nil {
 		log.Error().Msgf("template engine: unable to write secrets to path because %s. Will try again on next cycle", err)
 		return
 	}
-	log.Info().Msgf("template engine: secret template at path %s has been rendered and saved to path %s", template.SourcePath, template.DestinationPath)
+	if template.SourcePath != "" {
+		log.Info().Msgf("template engine: secret template at path %s has been rendered and saved to path %s [template-id=%d]", template.SourcePath, template.DestinationPath, templateId)
+	} else {
+		log.Info().Msgf("template engine: secret template has been rendered and saved to path %s [template-id=%d]", template.DestinationPath, templateId)
+	}
 }
 
 func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId int, sigChan chan os.Signal, monitoringChan chan bool) {
@@ -1532,14 +1537,14 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 							sleepDuration = pollingInterval
 						}
 
-						log.Info().Msgf("retrying in %s [template-id=%d]", sleepDuration.String(), templateId)
+						log.Info().Msgf("template engine: retrying in %s [template-id=%d]", sleepDuration.String(), templateId)
 						time.Sleep(sleepDuration)
 						continue
 
 					} else {
 						if (existingEtag != currentEtag) || firstRun {
 
-							tm.WriteTemplateToFile(processedTemplate, &secretTemplate)
+							tm.WriteTemplateToFile(processedTemplate, &secretTemplate, templateId)
 
 							existingEtag = currentEtag
 
@@ -1675,7 +1680,7 @@ var agentCmd = &cobra.Command{
 		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(sigChan, tm.cacheManager)
 
 		// start a http server that returns a json object of the whole cache
-		if util.IsDevelopmentMode() {
+		if util.IsDevelopmentMode() && tm.cacheManager != nil && tm.cacheManager.IsEnabled {
 
 			go func() {
 				http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
@@ -1688,6 +1693,7 @@ var agentCmd = &cobra.Command{
 					}
 
 					json.NewEncoder(w).Encode(all)
+
 				})
 				log.Info().Msg("starting cache http server on port 9000")
 				http.ListenAndServe(":9000", nil)
