@@ -1401,11 +1401,6 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 			}
 		}
 
-		if tm.exitAfterAuth {
-			time.Sleep(25 * time.Second)
-			os.Exit(0)
-		}
-
 		if accessTokenRefreshedTime.IsZero() {
 			accessTokenRefreshedTime = tm.accessTokenFetchedTime
 		} else {
@@ -1699,6 +1694,10 @@ var agentCmd = &cobra.Command{
 					if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
 						if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
 							log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
+						}
+
+						if tm.exitAfterAuth {
+							os.Exit(0)
 						}
 					}
 				case <-sigChan:
