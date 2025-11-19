@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -169,4 +171,45 @@ func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 	case <-time.After(timeout):
 		log.Warn().Msg("Timeout waiting for connections to close, forcing shutdown")
 	}
+}
+
+// CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required
+// This is a shared function used by both database and SSH proxies
+func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequest) (api.PAMAccessResponse, error) {
+	// Initial request
+	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
+	if err != nil {
+		// Check if MFA is required
+		if apiErr, ok := err.(*api.APIError); ok {
+			if apiErr.Name == "SESSION_MFA_REQUIRED" {
+				// Extract MFA details from error
+				if details, ok := apiErr.Details.(map[string]interface{}); ok {
+					mfaSessionId, _ := details["mfaSessionId"].(string)
+					mfaMethod, _ := details["mfaMethod"].(string)
+
+					if mfaSessionId != "" {
+						// Handle MFA flow
+						err := util.HandleMFASession(httpClient, mfaSessionId, mfaMethod, config.INFISICAL_URL)
+						if err != nil {
+							return api.PAMAccessResponse{}, fmt.Errorf("MFA verification failed: %w", err)
+						}
+
+						// Retry request with MFA session ID
+						log.Debug().Msg("Retrying PAM access with MFA session...")
+						pamRequest.MfaSessionId = mfaSessionId
+						pamResponse, err = api.CallPAMAccess(httpClient, pamRequest)
+						if err != nil {
+							return api.PAMAccessResponse{}, fmt.Errorf("failed to access PAM account after MFA: %w", err)
+						}
+
+						return pamResponse, nil
+					}
+				}
+			}
+		}
+		// Return original error if not MFA-related
+		return api.PAMAccessResponse{}, err
+	}
+
+	return pamResponse, nil
 }

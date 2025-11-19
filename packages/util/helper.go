@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -548,4 +550,67 @@ func GenerateETagFromSecrets(secrets []models.SingleEnvironmentVariable) string 
 
 func IsDevelopmentMode() bool {
 	return CLI_VERSION == "devel"
+
+}
+
+// HandleMFASession opens a browser for MFA verification and polls until completion
+func HandleMFASession(httpClient *resty.Client, mfaSessionId string, mfaMethod string, infisicalURL string) error {
+	// Construct MFA URL
+	mfaURL := fmt.Sprintf("%s/mfa-session/%s", strings.TrimSuffix(infisicalURL, "/api"), mfaSessionId)
+
+	// Display MFA message
+	fmt.Printf("\n🔐 MFA Verification Required (%s)\n", mfaMethod)
+	fmt.Printf("→ %s\n", mfaURL)
+
+	// Try to open browser
+	if err := OpenBrowser(mfaURL); err != nil {
+		log.Debug().Err(err).Msg("Failed to open browser automatically")
+	} else {
+		fmt.Println("✓ Browser opened automatically")
+	}
+
+	fmt.Println("⏳ Waiting for MFA verification...\n")
+
+	// Poll for MFA completion
+	maxAttempts := 150 // 5 minutes at 2s intervals
+	pollInterval := 2 * time.Second
+
+	for i := 0; i < maxAttempts; i++ {
+		time.Sleep(pollInterval)
+
+		status, err := api.CallGetMFASessionStatus(httpClient, mfaSessionId)
+		if err != nil {
+			// Check if it's a 404 (session expired)
+			if apiErr, ok := err.(*api.APIError); ok {
+				if apiErr.StatusCode == 404 {
+					return fmt.Errorf("MFA session expired. Please try again")
+				}
+			}
+			// Continue polling on other errors
+			log.Debug().Err(err).Msg("Error polling MFA status, will retry")
+			continue
+		}
+
+		if status.Status == api.MFASessionStatusActive {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("MFA verification timeout. Please try again")
+}
+
+// OpenBrowser attempts to open a URL in the user's default browser
+func OpenBrowser(url string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	default: // linux and others
+		cmd = exec.Command("xdg-open", url)
+	}
+
+	return cmd.Start()
 }

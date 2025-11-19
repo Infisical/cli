@@ -43,7 +43,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 		AccountId: accountID,
 	}
 
-	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
 		util.HandleError(err, "Failed to access PAM account")
 		return
