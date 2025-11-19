@@ -35,10 +35,19 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 	}
 	httpClient.SetAuthToken(accessToken)
 
-	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 	if err != nil {
-		return "", fmt.Errorf("unable to parse relay flag: %v", err)
+		return "", fmt.Errorf("unable to parse target-relay-name flag: %v", err)
 	}
+
+	// --relay flag is deprecated in favor of --target-relay-name flag but still supported
+	if relayName == "" {
+		relayName, err = GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+		if err != nil {
+			return "", fmt.Errorf("unable to parse relay flag: %v", err)
+		}
+	}
+
 	if relayName != "" {
 		return relayName, nil
 	}
