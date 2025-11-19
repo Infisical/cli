@@ -10,14 +10,11 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
-)
-
-const (
-	ResourceTypePostgres = "postgres"
-	ResourceTypeMysql    = "mysql"
 )
 
 type GatewayPAMConfig struct {
@@ -90,7 +87,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 	}
-	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime)
+	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType)
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
@@ -115,7 +112,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	}
 
 	switch pamConfig.ResourceType {
-	case ResourceTypePostgres:
+	case session.ResourceTypePostgres:
 		proxyConfig := handlers.PostgresProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
@@ -134,7 +131,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting PostgreSQL PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
-	case ResourceTypeMysql:
+	case session.ResourceTypeMysql:
 		mysqlConfig := mysql.MysqlProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
@@ -153,6 +150,23 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mysqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MySQL PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeSSH:
+		sshConfig := ssh.SSHProxyConfig{
+			TargetAddr:       fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			AuthMethod:       credentials.AuthMethod,
+			InjectUsername:   credentials.Username,
+			InjectPassword:   credentials.Password,
+			InjectPrivateKey: credentials.PrivateKey,
+			SessionID:        pamConfig.SessionId,
+			SessionLogger:    sessionLogger,
+		}
+		proxy := ssh.NewSSHProxy(sshConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", sshConfig.TargetAddr).
+			Msg("Starting SSH PAM proxy")
+
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)

@@ -585,6 +585,21 @@ type CreateDynamicSecretLeaseV1Response struct {
 	Data map[string]interface{} `json:"data"`
 }
 
+type GetDynamicSecretLeaseV1Request struct {
+	LeaseID     string
+	Environment string
+	ProjectSlug string
+	SecretPath  string
+}
+
+type GetDynamicSecretLeaseV1Response struct {
+	Lease struct {
+		Id       string    `json:"id"`
+		ExpireAt time.Time `json:"expireAt"`
+	} `json:"lease"`
+	DynamicSecret models.DynamicSecret `json:"dynamicSecret"`
+}
+
 type GetLoginV3Request struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -788,6 +803,8 @@ type PAMSessionCredentials struct {
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	ReadOnlyMode          bool   `json:"readOnlyMode"`
+	AuthMethod            string `json:"authMethod,omitempty"`
+	PrivateKey            string `json:"privateKey,omitempty"`
 }
 
 type UploadSessionLogEntry struct {
@@ -796,8 +813,16 @@ type UploadSessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
+// UploadTerminalEvent represents a terminal session event for upload
+type UploadTerminalEvent struct {
+	Timestamp   time.Time `json:"timestamp"`
+	EventType   string    `json:"eventType"`
+	Data        []byte    `json:"data"`
+	ElapsedTime float64   `json:"elapsedTime"`
+}
+
 type UploadPAMSessionLogsRequest struct {
-	Logs []UploadSessionLogEntry `json:"logs"`
+	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadTerminalEvent
 }
 
 type RelayHeartbeatRequest struct {

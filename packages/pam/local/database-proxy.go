@@ -2,43 +2,25 @@ package pam
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
 type DatabaseProxyServer struct {
-	httpClient             *resty.Client
-	server                 net.Listener
-	port                   int
-	relayHost              string
-	relayClientCert        string
-	relayClientKey         string
-	relayServerCertChain   string
-	gatewayClientCert      string
-	gatewayClientKey       string
-	gatewayServerCertChain string
-	sessionExpiry          time.Time
-	sessionId              string
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	activeConnections      sync.WaitGroup
-	shutdownOnce           sync.Once
-	shutdownCh             chan struct{}
+	BaseProxyServer // Embed common functionality
+	server          net.Listener
+	port            int
 }
 
 type ALPN string
@@ -78,19 +60,21 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	ctx, cancel := context.WithCancel(context.Background())
 
 	proxy := &DatabaseProxyServer{
-		httpClient:             httpClient,
-		relayHost:              pamResponse.RelayHost,
-		relayClientCert:        pamResponse.RelayClientCertificate,
-		relayClientKey:         pamResponse.RelayClientPrivateKey,
-		relayServerCertChain:   pamResponse.RelayServerCertificateChain,
-		gatewayClientCert:      pamResponse.GatewayClientCertificate,
-		gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
-		gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
-		sessionExpiry:          time.Now().Add(duration),
-		sessionId:              pamResponse.SessionId,
-		ctx:                    ctx,
-		cancel:                 cancel,
-		shutdownCh:             make(chan struct{}),
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			relayHost:              pamResponse.RelayHost,
+			relayClientCert:        pamResponse.RelayClientCertificate,
+			relayClientKey:         pamResponse.RelayClientPrivateKey,
+			relayServerCertChain:   pamResponse.RelayServerCertificateChain,
+			gatewayClientCert:      pamResponse.GatewayClientCertificate,
+			gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
+			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
+			sessionExpiry:          time.Now().Add(duration),
+			sessionId:              pamResponse.SessionId,
+			ctx:                    ctx,
+			cancel:                 cancel,
+			shutdownCh:             make(chan struct{}),
+		},
 	}
 
 	err = proxy.Start(port)
@@ -136,9 +120,9 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	fmt.Printf("You can now connect to your database using this connection string:\n")
 
 	switch pamResponse.ResourceType {
-	case ResourceTypePostgres:
+	case session.ResourceTypePostgres:
 		fmt.Printf("postgres://%s@localhost:%d/%s", username, proxy.port, database)
-	case ResourceTypeMysql:
+	case session.ResourceTypeMysql:
 		fmt.Printf("mysql://%s@localhost:%d/%s", username, proxy.port, database)
 	default:
 		fmt.Printf("localhost:%d", proxy.port)
@@ -181,7 +165,7 @@ func (p *DatabaseProxyServer) gracefulShutdown() {
 		log.Info().Msg("Starting graceful shutdown of database proxy...")
 
 		// Send session termination notification before cancelling context
-		p.notifySessionTermination()
+		p.NotifySessionTermination()
 
 		// Signal the accept loop to stop
 		close(p.shutdownCh)
@@ -194,56 +178,12 @@ func (p *DatabaseProxyServer) gracefulShutdown() {
 		// Cancel context to signal all goroutines to stop
 		p.cancel()
 
-		done := make(chan struct{})
-		go func() {
-			p.activeConnections.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			log.Info().Msg("All connections closed gracefully")
-		case <-time.After(10 * time.Second):
-			log.Warn().Msg("Timeout waiting for connections to close, forcing shutdown")
-		}
+		// Wait for connections to close
+		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("Database proxy shutdown complete")
 		os.Exit(0)
 	})
-}
-
-// notifySessionTermination sends a termination notification through the gateway
-func (p *DatabaseProxyServer) notifySessionTermination() {
-	log.Info().Msgf("Notifying session termination for session ID: %s", p.sessionId)
-
-	// Try to notify via gateway connection first
-	relayConn, err := p.createRelayConnection()
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to connect to relay for termination notification")
-		// Fallback to API call if relay connection fails
-		p.fallbackToAPITermination()
-		return
-	}
-	defer relayConn.Close()
-
-	gatewayConn, err := p.createGatewayConnection(relayConn, ALPNInfisicalPAMCancellation)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to connect to gateway for termination notification")
-		// Fallback to API call if gateway connection fails
-		p.fallbackToAPITermination()
-		return
-	}
-	defer gatewayConn.Close()
-	log.Info().Msg("Session termination notification sent successfully")
-}
-
-func (p *DatabaseProxyServer) fallbackToAPITermination() {
-	err := api.CallPAMSessionTermination(p.httpClient, p.sessionId)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to terminate session via API fallback")
-	} else {
-		log.Info().Msg("Session terminated successfully via API fallback")
-	}
 }
 
 func (p *DatabaseProxyServer) Run() {
@@ -307,14 +247,14 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 	default:
 	}
 
-	relayConn, err := p.createRelayConnection()
+	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
 		return
 	}
 	defer relayConn.Close()
 
-	gatewayConn, err := p.createGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
+	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway")
 		return
@@ -362,87 +302,4 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 	}
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
-}
-
-func (p *DatabaseProxyServer) createRelayConnection() (net.Conn, error) {
-	var host string
-	var port int = 8443
-
-	if strings.Contains(p.relayHost, ":") {
-		var portStr string
-		var err error
-		host, portStr, err = net.SplitHostPort(p.relayHost)
-		if err != nil {
-			return nil, fmt.Errorf("invalid relay host format: %w", err)
-		}
-		port, err = strconv.Atoi(portStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid port in relay host: %w", err)
-		}
-	} else {
-		host = p.relayHost
-	}
-
-	// Load relay certificates
-	cert, err := tls.X509KeyPair([]byte(p.relayClientCert), []byte(p.relayClientKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load relay client certificate: %w", err)
-	}
-
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM([]byte(p.relayServerCertChain)) {
-		return nil, fmt.Errorf("failed to parse relay server certificate chain")
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caCertPool,
-		ServerName:   host,
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", host, port), tlsConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to relay: %w", err)
-	}
-
-	log.Debug().Msg("Relay TLS connection established")
-	return conn, nil
-}
-
-func (p *DatabaseProxyServer) createGatewayConnection(relayConn net.Conn, alpn ALPN) (net.Conn, error) {
-	// Load gateway certificates
-	cert, err := tls.X509KeyPair([]byte(p.gatewayClientCert), []byte(p.gatewayClientKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load gateway client certificate: %w", err)
-	}
-
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM([]byte(p.gatewayServerCertChain)) {
-		return nil, fmt.Errorf("failed to parse gateway server certificate chain")
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caCertPool,
-		MinVersion:   tls.VersionTLS12,
-		MaxVersion:   tls.VersionTLS13,
-		NextProtos:   []string{string(alpn)},
-		ServerName:   "localhost",
-	}
-
-	gatewayConn := tls.Client(relayConn, tlsConfig)
-
-	err = gatewayConn.Handshake()
-	if err != nil {
-		return nil, fmt.Errorf("failed to establish gateway mTLS: %w", err)
-	}
-
-	state := gatewayConn.ConnectionState()
-	if !state.HandshakeComplete {
-		return nil, fmt.Errorf("gateway TLS handshake not complete")
-	}
-
-	log.Debug().Msg("Gateway mTLS connection established")
-	return gatewayConn, nil
 }

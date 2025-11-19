@@ -6,10 +6,13 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,10 +21,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/template"
 	"time"
 
+	"github.com/dgraph-io/badger/v3"
 	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
@@ -30,18 +35,51 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/Infisical/infisical-merge/packages/util/cache"
 	"github.com/spf13/cobra"
 )
 
 const DEFAULT_INFISICAL_CLOUD_URL = "https://app.infisical.com"
 
+const CACHE_TYPE_KUBERNETES = "kubernetes"
+
+const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%d"
+
 // duration to reduce from expiry of dynamic leases so that it gets triggered before expiry
 const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
+
+// duration remove leases from the cache before they expire when the agent is first started with existing leases in the cache.
+// if a lease is expired, or expires in 30 seconds or less, it will be deleted from the cache and a new lease will be created.
+var CACHE_LEASE_EXPIRE_BUFFER = 30 * time.Second
+
+type PersistentCacheConfig struct {
+	Type                    string `yaml:"type"`                       // file or kubernetes
+	ServiceAccountTokenPath string `yaml:"service-account-token-path"` // relevant if type is kubernetes
+	Path                    string `yaml:"path"`                       // where to store the cache
+}
+
+type CacheConfig struct {
+	Persistent *PersistentCacheConfig `yaml:"persistent,omitempty"`
+}
+
+type DecryptedCache struct {
+	Type        string `json:"type"` // currently only "access_token" is supported
+	AccessToken string `json:"access_token"`
+}
+
+type CacheManager struct {
+	cacheConfig  *CacheConfig
+	cacheStorage *cache.EncryptedStorage
+
+	IsEnabled      bool
+	DecryptedCache DecryptedCache
+}
 
 type Config struct {
 	Infisical InfisicalConfig `yaml:"infisical"`
 	Auth      AuthConfig      `yaml:"auth"`
 	Sinks     []Sink          `yaml:"sinks"`
+	Cache     CacheConfig     `yaml:"cache,omitempty"`
 	Templates []Template      `yaml:"templates"`
 }
 
@@ -128,12 +166,272 @@ type DynamicSecretLease struct {
 	Slug        string
 	ProjectSlug string
 	Data        map[string]interface{}
-	TemplateIDs []int
+	TemplateID  int
+}
+
+func (c *CacheManager) WriteToCache(key string, value interface{}, ttl *time.Duration) error {
+
+	if !c.IsEnabled {
+		return nil
+	}
+
+	var err error
+
+	if ttl != nil {
+		if *ttl <= 0 {
+			return fmt.Errorf("ttl must be greater than 0")
+		}
+		err = c.cacheStorage.SetWithTTL(key, value, *ttl)
+	} else {
+		err = c.cacheStorage.Set(key, value)
+	}
+	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		return fmt.Errorf("unable to write to cache: %v", err)
+	}
+	return nil
+}
+
+func (c *CacheManager) GetAllCacheEntries() (map[string]interface{}, error) {
+
+	if c.cacheStorage == nil || !c.IsEnabled {
+		return nil, nil
+	}
+
+	response, err := c.cacheStorage.GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("unable to get all cache keys: %v", err)
+	}
+	return response, nil
+}
+
+func (c *CacheManager) ReadFromCache(key string, destination interface{}) error {
+	err := c.cacheStorage.Get(key, destination)
+	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		return fmt.Errorf("unable to read from cache: %v", err)
+	}
+
+	return nil
+}
+
+func (c *CacheManager) DeleteFromCache(key string) error {
+	if !c.IsEnabled {
+		return nil
+	}
+	err := c.cacheStorage.Delete(key)
+	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		return fmt.Errorf("unable to delete from cache: %v", err)
+	}
+	return nil
+}
+
+func NewCacheManager(ctx context.Context, cacheConfig *CacheConfig) (*CacheManager, error) {
+
+	if cacheConfig == nil || cacheConfig.Persistent == nil {
+		log.Info().Msg("caching is disabled, continuing without caching.")
+		return &CacheManager{
+			IsEnabled:      false,
+			DecryptedCache: DecryptedCache{},
+			cacheConfig:    cacheConfig,
+		}, nil
+	}
+
+	if cacheConfig.Persistent.Type != CACHE_TYPE_KUBERNETES {
+		return &CacheManager{}, fmt.Errorf("unsupported cache type: %s", cacheConfig.Persistent.Type)
+	}
+
+	// try to read the service account token file
+	serviceAccountToken, err := ReadFile(cacheConfig.Persistent.ServiceAccountTokenPath)
+	if err != nil || len(serviceAccountToken) == 0 {
+		return &CacheManager{}, fmt.Errorf("unable to read service account token: %v. Please ensure the file exists and is not empty", err)
+	}
+
+	encryptionKey := sha256.Sum256(serviceAccountToken)
+
+	cacheStorage, err := cache.NewEncryptedStorage(cache.EncryptedStorageOptions{
+		DBPath:        cacheConfig.Persistent.Path,
+		EncryptionKey: encryptionKey,
+		InMemory:      false,
+	})
+
+	go cacheStorage.StartPeriodicGarbageCollection(ctx)
+
+	if err != nil {
+		return nil, fmt.Errorf("unable to create cache storage: %v", err)
+	}
+
+	return &CacheManager{
+		IsEnabled:    true,
+		cacheConfig:  cacheConfig,
+		cacheStorage: cacheStorage,
+	}, nil
 }
 
 type DynamicSecretLeaseManager struct {
-	leases []DynamicSecretLease
-	mutex  sync.Mutex
+	leases       []DynamicSecretLease
+	mutex        sync.Mutex
+	cacheManager *CacheManager
+}
+
+func (d *DynamicSecretLeaseManager) WriteLeaseToCache(lease *DynamicSecretLease, templateId int) {
+
+	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
+		return
+	}
+
+	if lease == nil {
+		return
+	}
+
+	cacheKey := fmt.Sprintf(
+		DYNAMIC_SECRET_LEASE_TEMPLATE,
+		lease.ProjectSlug,
+		lease.Environment,
+		lease.SecretPath,
+		lease.Slug,
+		templateId,
+	)
+
+	ttl := lease.ExpireAt.Sub(time.Now())
+
+	log.Info().Msgf("[cache]: writing dynamic secret lease to cache: [cache-key=%s] [entry-ttl=%s]", cacheKey, ttl.String())
+
+	if err := d.cacheManager.WriteToCache(cacheKey, lease, &ttl); err != nil {
+		log.Error().Msgf("[cache]: unable to write dynamic secret lease to cache because %v", err)
+	} else {
+		log.Info().Msgf("[cache]: dynamic secret lease written to cache: %s", cacheKey)
+	}
+}
+
+func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
+
+	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
+		return nil
+	}
+
+	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, templateId)
+	var lease *DynamicSecretLease
+	err := d.cacheManager.ReadFromCache(cacheKey, &lease)
+	if err != nil {
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil
+		}
+		log.Error().Msgf("[cache]: unable to read dynamic secret lease from cache because %v", err)
+		return nil
+	}
+	return lease
+}
+
+func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug string, templateId int) error {
+	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
+		return nil
+	}
+
+	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, templateId)
+	err := d.cacheManager.DeleteFromCache(cacheKey)
+	if err != nil {
+		return fmt.Errorf("unable to delete lease from cache: %v", err)
+	}
+	return nil
+}
+
+func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
+
+	if d.cacheManager.IsEnabled {
+		log.Info().Msgf("[cache]: deleting unused dynamic secret leases from cache")
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	allCacheKeys, err := d.cacheManager.GetAllCacheEntries()
+
+	if err != nil {
+		return fmt.Errorf("unable to get all cache entries: %v", err)
+	}
+
+	if allCacheKeys == nil {
+		log.Debug().Msgf("[cache]: no cache entries found")
+		return nil
+	}
+
+	var cachedLeases []DynamicSecretLease
+	for cacheKey, leaseData := range allCacheKeys {
+		if strings.HasPrefix(cacheKey, "dynamic-secret-lease-") {
+			// Marshal back to JSON and unmarshal into the correct type
+			jsonData, err := json.Marshal(leaseData)
+			if err != nil {
+				log.Warn().Msgf("[cache]: failed to marshal cached lease data for key %s: %v", cacheKey, err)
+				continue
+			}
+
+			var lease DynamicSecretLease
+			if err := json.Unmarshal(jsonData, &lease); err != nil {
+				log.Warn().Msgf("[cache]: failed to unmarshal cached lease data for key %s: %v", cacheKey, err)
+				continue
+			}
+
+			cachedLeases = append(cachedLeases, lease)
+		}
+	}
+
+	log.Debug().Msgf("[cache]: found %d cached leases", len(cachedLeases))
+	log.Debug().Msgf("[cache]: current active leases count: %d", len(d.leases))
+
+	// now we need to check if any of the cached leases are not in the d.leases list. If they are not, we need to delete them from the cache.
+	for _, cachedLease := range cachedLeases {
+		log.Debug().Msgf(
+			"[cache]: checking cached lease: [project=%s], [env=%s], [path=%s], [slug=%s], [template-id=%d]",
+			cachedLease.ProjectSlug,
+			cachedLease.Environment,
+			cachedLease.SecretPath,
+			cachedLease.Slug,
+			cachedLease.TemplateID,
+		)
+
+		// check if a lease with the same configuration exists (not comparing LeaseID since that changes on refresh)
+		found := slices.ContainsFunc(d.leases, func(s DynamicSecretLease) bool {
+			match := s.ProjectSlug == cachedLease.ProjectSlug &&
+				s.Environment == cachedLease.Environment &&
+				s.SecretPath == cachedLease.SecretPath &&
+				s.Slug == cachedLease.Slug &&
+				s.TemplateID == cachedLease.TemplateID
+
+			if match {
+				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s], [template-id=%d]",
+					s.ProjectSlug,
+					s.Environment,
+					s.SecretPath,
+					s.Slug,
+					s.TemplateID,
+				)
+			}
+			return match
+		})
+
+		if !found {
+			log.Info().Msgf(
+				"[cache]: no matching active lease found, deleting cached lease: [lease-id=%s], [project=%s], [env=%s], [path=%s], [slug=%s]",
+				cachedLease.LeaseID,
+				cachedLease.ProjectSlug,
+				cachedLease.Environment,
+				cachedLease.SecretPath,
+				cachedLease.Slug,
+			)
+
+			if err := d.DeleteLeaseFromCache(
+				cachedLease.ProjectSlug,
+				cachedLease.Environment,
+				cachedLease.SecretPath,
+				cachedLease.Slug,
+				cachedLease.TemplateID,
+			); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
+		}
+	}
+
+	return nil
+
 }
 
 func (d *DynamicSecretLeaseManager) Prune() {
@@ -141,13 +439,19 @@ func (d *DynamicSecretLeaseManager) Prune() {
 	defer d.mutex.Unlock()
 
 	d.leases = slices.DeleteFunc(d.leases, func(s DynamicSecretLease) bool {
-		return time.Now().After(s.ExpireAt.Add(DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER * time.Second))
+		shouldDelete := time.Now().After(s.ExpireAt.Add(DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER * time.Second))
+
+		if shouldDelete {
+			if err := d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.TemplateID); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
+		}
+		return shouldDelete
 	})
 }
 
-func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
+// appendUnsafe can be used if you already hold the lock
+func (d *DynamicSecretLeaseManager) appendUnsafe(lease DynamicSecretLease) {
 
 	index := slices.IndexFunc(d.leases, func(s DynamicSecretLease) bool {
 		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID {
@@ -157,10 +461,22 @@ func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
 	})
 
 	if index != -1 {
-		d.leases[index].TemplateIDs = append(d.leases[index].TemplateIDs, lease.TemplateIDs...)
+		d.leases[index].TemplateID = lease.TemplateID
 		return
 	}
+
 	d.leases = append(d.leases, lease)
+
+	d.WriteLeaseToCache(&lease, lease.TemplateID)
+
+}
+
+func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLease) {
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	d.appendUnsafe(lease)
 }
 
 func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, secretPath, slug string, templateId int) {
@@ -168,25 +484,93 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	defer d.mutex.Unlock()
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLease) bool {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && slices.Contains(lease.TemplateIDs, templateId) {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
 			return true
 		}
+
 		return false
 	})
 
 	if index != -1 {
-		d.leases[index].TemplateIDs = append(d.leases[index].TemplateIDs, templateId)
+		d.leases[index].TemplateID = templateId
 	}
 }
 
-func (d *DynamicSecretLeaseManager) GetLease(projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
+func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environment, secretPath, slug string, templateId int) *DynamicSecretLease {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
+	// first try to get from in-memory storage
+
 	for _, lease := range d.leases {
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && slices.Contains(lease.TemplateIDs, templateId) {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.TemplateID == templateId {
+			log.Debug().Msgf("[cache]: lease found in in-memory storage: [project=%s], [env=%s], [path=%s], [slug=%s], [template-id=%d]", projectSlug, environment, secretPath, slug, templateId)
 			return &lease
 		}
+	}
+
+	// if no lease is found in in-memory storage, try to get from cache
+
+	log.Info().Msgf("[cache]: no lease found, fetching from cache")
+	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, templateId)
+	log.Debug().Msgf("[cache]: lease from cache: %+v", leaseFromCache)
+
+	if leaseFromCache != nil {
+
+		// try to get the lease from the API
+
+		// ? question(daniel): should we trust the cache more, and avoid calling the API to see if the lease still exists?
+		// ? we do this to ensure that the lease wasn't deleted while the agent was not running
+
+		dynamicSecretLease, err := util.GetDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID)
+		if err != nil {
+
+			log.Warn().Msgf("[cache]: error: %+v", err)
+
+			// lease not found in API, delete it from cache and return nil
+			if errors.Is(err, api.ErrNotFound) {
+				log.Warn().Msgf("dynamic secret lease does not exist, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
+				if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
+					log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+				}
+
+				return nil
+			}
+
+			// lease is found in cache but not in the the API, and the API returned a non 404-error. We should attempt to revoke it
+			// at this point we know that we should be able to reach the API because we've done authentication successfully
+			log.Warn().Msgf("unable to get dynamic secret lease from API. Revoking lease from cache: [lease-id=%s]", leaseFromCache.LeaseID)
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
+
+			if err := revokeDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID); err != nil {
+				log.Warn().Msgf("unable to revoke dynamic secret lease %s: %v", leaseFromCache.LeaseID, err)
+				return nil
+			}
+
+			return nil
+		}
+
+		// lease is expired or about to expire, delete from cache and attempt to revoke it
+		if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(CACHE_LEASE_EXPIRE_BUFFER)) {
+			log.Warn().Msgf("dynamic secret lease is expired or about to expire, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.TemplateID); err != nil {
+				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
+			}
+
+			if err := revokeDynamicSecretLease(accessToken, leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.LeaseID); err != nil {
+				log.Warn().Msgf("unable to revoke expired dynamic secret lease %s: %v. Non-critical, the lease is already expired or will expire automatically within the next 2 minutes.", leaseFromCache.LeaseID, err)
+				return nil
+			}
+
+			return nil
+		}
+
+		// we call appendUnsafe because we already hold the lock, and if we call Append directly we'll get a deadlock
+		d.appendUnsafe(*leaseFromCache)
+
+		return leaseFromCache
 	}
 
 	return nil
@@ -194,7 +578,7 @@ func (d *DynamicSecretLeaseManager) GetLease(projectSlug, environment, secretPat
 
 // for a given template find the first expiring lease
 // The bool indicates whether it contains valid expiry list
-func (d *DynamicSecretLeaseManager) GetFirstExpiringLeaseTime(templateId int) (time.Time, bool) {
+func (d *DynamicSecretLeaseManager) GetFirstExpiringLeaseTime() (time.Time, bool) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
@@ -215,8 +599,10 @@ func (d *DynamicSecretLeaseManager) GetFirstExpiringLeaseTime(templateId int) (t
 	return firstExpiry, true
 }
 
-func NewDynamicSecretLeaseManager(sigChan chan os.Signal) *DynamicSecretLeaseManager {
-	manager := &DynamicSecretLeaseManager{}
+func NewDynamicSecretLeaseManager(sigChan chan os.Signal, cacheManager *CacheManager) *DynamicSecretLeaseManager {
+	manager := &DynamicSecretLeaseManager{
+		cacheManager: cacheManager,
+	}
 	return manager
 }
 
@@ -289,15 +675,7 @@ func ParseAuthConfig(authConfigFile []byte, destination interface{}) error {
 }
 
 func ParseAgentConfig(configFile []byte) (*Config, error) {
-	var rawConfig struct {
-		Infisical InfisicalConfig `yaml:"infisical"`
-		Auth      struct {
-			Type   string                 `yaml:"type"`
-			Config map[string]interface{} `yaml:"config"`
-		} `yaml:"auth"`
-		Sinks     []Sink     `yaml:"sinks"`
-		Templates []Template `yaml:"templates"`
-	}
+	var rawConfig Config
 
 	if err := yaml.Unmarshal(configFile, &rawConfig); err != nil {
 		return nil, err
@@ -308,21 +686,17 @@ func ParseAgentConfig(configFile []byte) (*Config, error) {
 		rawConfig.Infisical.Address = DEFAULT_INFISICAL_CLOUD_URL
 	}
 
+	if rawConfig.Cache.Persistent != nil && rawConfig.Cache.Persistent.Type == CACHE_TYPE_KUBERNETES {
+		if rawConfig.Cache.Persistent.ServiceAccountTokenPath == "" {
+			rawConfig.Cache.Persistent.ServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+		}
+	}
+
 	config.INFISICAL_URL = util.AppendAPIEndpoint(rawConfig.Infisical.Address)
 
 	log.Info().Msgf("Infisical instance address set to %s", rawConfig.Infisical.Address)
 
-	config := &Config{
-		Infisical: rawConfig.Infisical,
-		Auth: AuthConfig{
-			Type:   rawConfig.Auth.Type,
-			Config: rawConfig.Auth.Config,
-		},
-		Sinks:     rawConfig.Sinks,
-		Templates: rawConfig.Templates,
-	}
-
-	return config, nil
+	return &rawConfig, nil
 }
 
 type secretArguments struct {
@@ -381,6 +755,7 @@ func getSingleSecretTemplateFunction(accessToken string, existingEtag string, cu
 }
 
 func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *DynamicSecretLeaseManager, templateId int, currentEtag *string) func(...string) (map[string]interface{}, error) {
+
 	return func(args ...string) (map[string]interface{}, error) {
 		argLength := len(args)
 		if argLength != 4 && argLength != 5 {
@@ -391,12 +766,15 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		if argLength == 5 {
 			ttl = args[4]
 		}
-		dynamicSecretData := dynamicSecretManager.GetLease(projectSlug, envSlug, secretPath, slug, templateId)
+		dynamicSecretData := dynamicSecretManager.GetLease(accessToken, projectSlug, envSlug, secretPath, slug, templateId)
+
+		// if a lease is found (either in memory or in cache), we register the template and return the data
 		if dynamicSecretData != nil {
 			dynamicSecretManager.RegisterTemplate(projectSlug, envSlug, secretPath, slug, templateId)
 			return dynamicSecretData.Data, nil
 		}
 
+		// if there's no lease (either in memory or in cache), we create a new lease
 		res, err := util.CreateDynamicSecretLease(accessToken, projectSlug, envSlug, secretPath, slug, ttl)
 		if err != nil {
 			return nil, err
@@ -405,13 +783,14 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		// we set an arbitrary etag to ensure that the template is re-rendered when a new lease is created
 		*currentEtag = util.GenerateRandomString(32)
 
-		dynamicSecretManager.Append(DynamicSecretLease{LeaseID: res.Lease.Id, ExpireAt: res.Lease.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: res.Data, TemplateIDs: []int{templateId}})
+		dynamicSecretManager.Append(DynamicSecretLease{LeaseID: res.Lease.Id, ExpireAt: res.Lease.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: res.Data, TemplateID: templateId})
 
 		return res.Data, nil
 	}
 }
 
 func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
+
 	// custom template function to fetch secrets from Infisical
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag)
 	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretManager, templateId, currentEtag)
@@ -443,7 +822,7 @@ func ProcessTemplate(templateId int, templatePath string, data interface{}, acce
 	return &buf, nil
 }
 
-func ProcessBase64Template(templateId int, encodedTemplate string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretLeaser *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
+func ProcessBase64Template(templateId int, encodedTemplate string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretLeaseManager *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
 	// custom template function to fetch secrets from Infisical
 	decoded, err := base64.StdEncoding.DecodeString(encodedTemplate)
 	if err != nil {
@@ -453,7 +832,7 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 	templateString := string(decoded)
 
 	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag) // TODO: Fix this
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId, currentEtag)
+	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaseManager, templateId, currentEtag)
 	funcs := template.FuncMap{
 		"secret":         secretFunction,
 		"dynamic_secret": dynamicSecretFunction,
@@ -474,9 +853,10 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 	return &buf, nil
 }
 
-func ProcessLiteralTemplate(templateId int, templateString string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretLeaser *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
-	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag) // TODO: Fix this
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaser, templateId, currentEtag)
+func ProcessLiteralTemplate(templateId int, templateString string, data interface{}, accessToken string, existingEtag string, currentEtag *string, dynamicSecretLeaseManager *DynamicSecretLeaseManager) (*bytes.Buffer, error) {
+
+	secretFunction := secretTemplateFunction(accessToken, existingEtag, currentEtag)
+	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaseManager, templateId, currentEtag)
 	funcs := template.FuncMap{
 		"secret":         secretFunction,
 		"dynamic_secret": dynamicSecretFunction,
@@ -507,12 +887,13 @@ type AgentManager struct {
 	filePaths                []Sink // Store file paths if needed
 	templates                []TemplateWithID
 	dynamicSecretLeases      *DynamicSecretLeaseManager
-
-	authConfigBytes []byte
-	authStrategy    util.AuthStrategyType
+	cacheManager             *CacheManager
+	authConfigBytes          []byte
+	authStrategy             util.AuthStrategyType
 
 	newAccessTokenNotificationChan  chan bool
 	cachedUniversalAuthClientSecret string
+	templateFirstRenderOnce         map[int]*sync.Once // Track first render per template
 	exitAfterAuth                   bool
 	revokeCredentialsOnShutdown     bool
 
@@ -540,8 +921,10 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 	}
 
 	templates := make([]TemplateWithID, len(options.Templates))
+	templateFirstRenderOnce := make(map[int]*sync.Once)
 	for i, template := range options.Templates {
 		templates[i] = TemplateWithID{ID: i + 1, Template: template}
+		templateFirstRenderOnce[i+1] = &sync.Once{}
 	}
 
 	return &AgentManager{
@@ -554,6 +937,7 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 		newAccessTokenNotificationChan: options.NewAccessTokenNotificationChan,
 		exitAfterAuth:                  options.ExitAfterAuth,
 		revokeCredentialsOnShutdown:    options.RevokeCredentialsOnShutdown,
+		templateFirstRenderOnce:        templateFirstRenderOnce,
 
 		infisicalClient: infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
 			SiteUrl:          config.INFISICAL_URL,
@@ -772,6 +1156,35 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 	return nil
 }
 
+func revokeDynamicSecretLease(accessToken, projectSlug, environment, secretPath, leaseID string) error {
+	customHeaders, err := util.GetInfisicalCustomHeadersMap()
+	if err != nil {
+		return fmt.Errorf("unable to get custom headers: %v", err)
+	}
+
+	temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
+		SiteUrl:          config.INFISICAL_URL,
+		UserAgent:        api.USER_AGENT,
+		AutoTokenRefresh: false,
+		CustomHeaders:    customHeaders,
+	})
+
+	temporaryInfisicalClient.Auth().SetAccessToken(accessToken)
+
+	_, err = temporaryInfisicalClient.DynamicSecrets().Leases().DeleteById(infisicalSdk.DeleteDynamicSecretLeaseOptions{
+		LeaseId:         leaseID,
+		ProjectSlug:     projectSlug,
+		SecretPath:      secretPath,
+		EnvironmentSlug: environment,
+	})
+	if err != nil {
+		return fmt.Errorf("unable to revoke dynamic secret lease: %v", err)
+	}
+
+	return nil
+
+}
+
 func (tm *AgentManager) RevokeCredentials() error {
 	var token string
 
@@ -795,21 +1208,7 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 	for _, lease := range dynamicSecretLeases {
 
-		temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
-			SiteUrl:          config.INFISICAL_URL,
-			UserAgent:        api.USER_AGENT,
-			AutoTokenRefresh: false,
-			CustomHeaders:    customHeaders,
-		})
-
-		temporaryInfisicalClient.Auth().SetAccessToken(token)
-
-		_, err = temporaryInfisicalClient.DynamicSecrets().Leases().DeleteById(infisicalSdk.DeleteDynamicSecretLeaseOptions{
-			LeaseId:         lease.LeaseID,
-			ProjectSlug:     lease.ProjectSlug,
-			SecretPath:      lease.SecretPath,
-			EnvironmentSlug: lease.Environment,
-		})
+		err = revokeDynamicSecretLease(token, lease.ProjectSlug, lease.Environment, lease.SecretPath, lease.LeaseID)
 
 		if err != nil {
 
@@ -826,12 +1225,7 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 		// find the template that this lease is associated with
 		templateIndex := slices.IndexFunc(tm.templates, func(t TemplateWithID) bool {
-			for _, templateID := range lease.TemplateIDs {
-				if t.ID == templateID {
-					return true
-				}
-			}
-			return false
+			return t.ID == lease.TemplateID
 		})
 
 		if templateIndex != -1 {
@@ -959,14 +1353,16 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 			isSavedTokenValid := false
 			token := tm.FetchTokenFromFiles()
 			if token != "" {
-				log.Info().Msg("found existing token in file, attempting to refresh...")
+
+				log.Info().Msg("found existing token in cache, attempting to refresh...")
 				err := tm.RefreshAccessToken(token)
 				isSavedTokenValid = err == nil
+
 				if isSavedTokenValid {
-					log.Info().Msg("token refreshed successfully from saved file")
+					log.Info().Msg("token refreshed successfully from saved cache")
 					tm.accessTokenFetchedTime = time.Now()
 				} else {
-					log.Error().Msg("unable to refresh token from saved file")
+					log.Error().Msg("unable to refresh token from saved cache")
 				}
 			}
 
@@ -1006,11 +1402,6 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 			}
 		}
 
-		if tm.exitAfterAuth {
-			time.Sleep(25 * time.Second)
-			os.Exit(0)
-		}
-
 		if accessTokenRefreshedTime.IsZero() {
 			accessTokenRefreshedTime = tm.accessTokenFetchedTime
 		} else {
@@ -1035,6 +1426,7 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 
 func (tm *AgentManager) WriteTokenToFiles() {
 	token := tm.GetToken()
+
 	for _, sinkFile := range tm.filePaths {
 		if sinkFile.Type == "file" {
 			err := ioutil.WriteFile(sinkFile.Config.Path, []byte(token), 0644)
@@ -1068,15 +1460,19 @@ func (tm *AgentManager) FetchTokenFromFiles() string {
 	return ""
 }
 
-func (tm *AgentManager) WriteTemplateToFile(bytes *bytes.Buffer, template *Template) {
+func (tm *AgentManager) WriteTemplateToFile(bytes *bytes.Buffer, template *Template, templateId int) {
 	if err := WriteBytesToFile(bytes, template.DestinationPath); err != nil {
 		log.Error().Msgf("template engine: unable to write secrets to path because %s. Will try again on next cycle", err)
 		return
 	}
-	log.Info().Msgf("template engine: secret template at path %s has been rendered and saved to path %s", template.SourcePath, template.DestinationPath)
+	if template.SourcePath != "" {
+		log.Info().Msgf("template engine: secret template at path %s has been rendered and saved to path %s [template-id=%d]", template.SourcePath, template.DestinationPath, templateId)
+	} else {
+		log.Info().Msgf("template engine: secret template has been rendered and saved to path %s [template-id=%d]", template.DestinationPath, templateId)
+	}
 }
 
-func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId int, sigChan chan os.Signal) {
+func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId int, sigChan chan os.Signal, monitoringChan chan bool) {
 
 	pollingInterval := time.Duration(5 * time.Minute)
 
@@ -1125,17 +1521,30 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 					}
 
 					if err != nil {
-						log.Error().Msgf("unable to process template because %v", err)
+						log.Error().Msgf("unable to process template because %v [template-id=%d]", err, templateId)
 
 						// case: if exit-after-auth is true, it should exit the agent once an error on secret fetching occurs with the appropriate exit code (1)
 						// previous behavior would exit after 25 sec with status code 0, even if this step errors
 						if tm.exitAfterAuth {
 							os.Exit(1)
 						}
+
+						// if polling interval is less than 1 minute, we sleep for the polling interval, otherwise we sleep for 1 minute
+
+						sleepDuration := 1 * time.Minute
+
+						if pollingInterval < sleepDuration {
+							sleepDuration = pollingInterval
+						}
+
+						log.Info().Msgf("template engine: retrying in %s [template-id=%d]", sleepDuration.String(), templateId)
+						time.Sleep(sleepDuration)
+						continue
+
 					} else {
 						if (existingEtag != currentEtag) || firstRun {
 
-							tm.WriteTemplateToFile(processedTemplate, &secretTemplate)
+							tm.WriteTemplateToFile(processedTemplate, &secretTemplate, templateId)
 
 							existingEtag = currentEtag
 
@@ -1150,6 +1559,10 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 							}
 							if firstRun {
 								firstRun = false
+								// Signal that this template has completed its first render
+								tm.templateFirstRenderOnce[templateId].Do(func() {
+									monitoringChan <- true
+								})
 							}
 						}
 					}
@@ -1157,11 +1570,12 @@ func (tm *AgentManager) MonitorSecretChanges(secretTemplate Template, templateId
 					// now the idea is we pick the next sleep time in which the one shorter out of
 					// - polling time
 					// - first lease that's gonna get expired in the template
-					firstLeaseExpiry, isValid := tm.dynamicSecretLeases.GetFirstExpiringLeaseTime(templateId)
+					firstLeaseExpiry, isValid := tm.dynamicSecretLeases.GetFirstExpiringLeaseTime()
 					var waitTime = pollingInterval
 					if isValid && firstLeaseExpiry.Sub(time.Now()) < pollingInterval {
 						waitTime = firstLeaseExpiry.Sub(time.Now())
 					}
+
 					time.Sleep(waitTime)
 				} else {
 					// It fails to get the access token. So we will re-try in 3 seconds. We do this because if we don't, the user will have to wait for the next polling interval to get the first secret render.
@@ -1200,7 +1614,7 @@ var agentCmd = &cobra.Command{
 					log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
 					return
 				}
-			}
+			} // pgrep -f "dev-agent"
 			agentConfigInBytes = data
 		}
 
@@ -1231,7 +1645,10 @@ var agentCmd = &cobra.Command{
 			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
 		}
 
+		ctx, cancel := context.WithCancel(context.Background())
+
 		tokenRefreshNotifier := make(chan bool)
+		monitoringChan := make(chan bool, len(agentConfig.Templates))
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
@@ -1240,6 +1657,7 @@ var agentCmd = &cobra.Command{
 		configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
 		if err != nil {
 			log.Error().Msgf("unable to marshal auth config because %v", err)
+			cancel()
 			return
 		}
 
@@ -1253,13 +1671,63 @@ var agentCmd = &cobra.Command{
 			RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
 		})
 
-		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(sigChan)
+		tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
+		if err != nil {
+			log.Error().Msgf("unable to setup cache manager: %v", err)
+			cancel()
+			return
+		}
+		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(sigChan, tm.cacheManager)
+
+		// start a http server that returns a json object of the whole cache
+		if util.IsDevelopmentMode() && tm.cacheManager != nil && tm.cacheManager.IsEnabled {
+
+			go func() {
+				http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
+
+					all, err := tm.cacheManager.cacheStorage.GetAll()
+					if err != nil {
+						log.Error().Msgf("unable to get all cache: %v", err)
+						json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+						return
+					}
+
+					json.NewEncoder(w).Encode(all)
+
+				})
+				log.Info().Msg("starting cache http server on port 9000")
+				http.ListenAndServe(":9000", nil)
+			}()
+		}
 
 		go tm.ManageTokenLifecycle()
 
+		var monitoredTemplatesFinished atomic.Int32
+
+		// when all templates have finished rendering once, we delete the unused leases from the cache.
+		go func() {
+			for {
+				select {
+				case <-monitoringChan:
+					monitoredTemplatesFinished.Add(1)
+					if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
+						if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
+							log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
+						}
+
+						if tm.exitAfterAuth {
+							os.Exit(0)
+						}
+					}
+				case <-sigChan:
+					return
+				}
+			}
+		}()
+
 		for _, template := range tm.templates {
 			log.Info().Msgf("template engine started for template %v...", template.ID)
-			go tm.MonitorSecretChanges(template.Template, template.ID, sigChan)
+			go tm.MonitorSecretChanges(template.Template, template.ID, sigChan, monitoringChan)
 		}
 
 		for {
@@ -1269,6 +1737,7 @@ var agentCmd = &cobra.Command{
 			case <-sigChan:
 				tm.isShuttingDown = true
 				log.Info().Msg("agent is gracefully shutting down...")
+				cancel()
 
 				exitCode := 0
 

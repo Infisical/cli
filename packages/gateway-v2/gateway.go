@@ -374,7 +374,7 @@ func (g *Gateway) registerGateway() error {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}
 
-	if util.CLI_VERSION == "devel" && certResp.RelayHost == "host.docker.internal" {
+	if util.IsDevelopmentMode() && certResp.RelayHost == "host.docker.internal" {
 		certResp.RelayHost = "127.0.0.1"
 	}
 
@@ -510,7 +510,7 @@ func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
 		}
 
 		// no host cert check when in dev mode
-		if util.CLI_VERSION == "devel" {
+		if util.IsDevelopmentMode() {
 			fmt.Println("Gateway running in development mode, skipping host certificate validation")
 			return nil
 		}

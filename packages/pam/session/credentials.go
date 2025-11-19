@@ -11,9 +11,11 @@ import (
 )
 
 type PAMCredentials struct {
+	AuthMethod            string
 	Username              string
 	Password              string
 	Database              string
+	PrivateKey            string
 	Host                  string
 	Port                  int
 	SSLEnabled            bool
@@ -81,9 +83,11 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 	}
 
 	credentials := &PAMCredentials{
+		AuthMethod:            response.Credentials.AuthMethod,
 		Username:              response.Credentials.Username,
 		Password:              response.Credentials.Password,
 		Database:              response.Credentials.Database,
+		PrivateKey:            response.Credentials.PrivateKey,
 		Host:                  response.Credentials.Host,
 		Port:                  response.Credentials.Port,
 		SSLEnabled:            response.Credentials.SSLEnabled,
