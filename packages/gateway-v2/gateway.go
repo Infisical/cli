@@ -19,6 +19,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -212,6 +213,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 			}
 		}
 	}()
+
+	systemd.SdNotify(false, systemd.SdNotifyReady)
 
 	for {
 		select {
