@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
-
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
