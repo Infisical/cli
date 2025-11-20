@@ -505,7 +505,8 @@ func init() {
 	gatewayCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
 	// Gateway start command flags (v2)
-	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to")
+	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway")
 	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
@@ -525,7 +526,8 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
-	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay")
+	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
 
 	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")
