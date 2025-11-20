@@ -108,6 +108,7 @@ type Gateway struct {
 	cancel           context.CancelFunc
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
+	notifyOnce       sync.Once
 }
 
 // NewGateway creates a new gateway instance
@@ -214,8 +215,6 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}()
 
-	systemd.SdNotify(false, systemd.SdNotifyReady)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -315,6 +314,10 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 		}
 
 		g.startHeartbeatOnce(ctx, errCh)
+
+		g.notifyOnce.Do(func() {
+			systemd.SdNotify(false, systemd.SdNotifyReady)
+		})
 
 		log.Info().Msgf("Relay connection established for gateway")
 		return g.handleConnection(client)
