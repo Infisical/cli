@@ -412,6 +412,10 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse domain flag")
 		}
 
+		if domain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
+		}
+
 		gatewayName, err := cmd.Flags().GetString("name")
 		if err != nil {
 			util.HandleError(err, "Unable to parse name flag")

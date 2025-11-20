@@ -19,6 +19,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -107,6 +108,7 @@ type Gateway struct {
 	cancel           context.CancelFunc
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
+	notifyOnce       sync.Once
 }
 
 // NewGateway creates a new gateway instance
@@ -312,6 +314,10 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 		}
 
 		g.startHeartbeatOnce(ctx, errCh)
+
+		g.notifyOnce.Do(func() {
+			systemd.SdNotify(false, systemd.SdNotifyReady)
+		})
 
 		log.Info().Msgf("Relay connection established for gateway")
 		return g.handleConnection(client)
