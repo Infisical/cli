@@ -62,21 +62,28 @@ func printError(e error) {
 }
 
 func printPrettyAPIError(apiErr api.APIError) {
-	// Using ANSI color codes
-	red := lipgloss.Color("196")    // Bright red
-	yellow := lipgloss.Color("184") // Bright yellow/gold
-	gray := lipgloss.Color("245")   // Light gray
-	white := lipgloss.Color("255")  // White
+	isDark := lipgloss.HasDarkBackground()
+
+	var (
+		labelColor       lipgloss.Color = lipgloss.Color("196") // Bright Red
+		primaryTextColor lipgloss.Color = lipgloss.Color("235") // Dark Gray
+		accentColor      lipgloss.Color = lipgloss.Color("17")  // Dark Blue
+	)
+
+	if isDark {
+		primaryTextColor = lipgloss.Color("245") // Light Gray
+		accentColor = lipgloss.Color("27")       // Light Blue
+	}
 
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(red)
+		Foreground(labelColor)
 
 	valueStyle := lipgloss.NewStyle().
-		Foreground(white)
+		Foreground(primaryTextColor)
 
 	detailStyle := lipgloss.NewStyle().
-		Foreground(yellow).
+		Foreground(accentColor).
 		MarginLeft(2)
 
 	// Build the error content
@@ -181,11 +188,11 @@ func printPrettyAPIError(apiErr api.APIError) {
 
 	// Support message with styled link
 	supportStyle := lipgloss.NewStyle().
-		Foreground(gray).
+		Foreground(primaryTextColor).
 		MarginTop(1)
 
 	linkStyle := lipgloss.NewStyle().
-		Foreground(yellow).
+		Foreground(accentColor).
 		Underline(true)
 
 	supportMsg := supportStyle.Render("If this issue continues, get support at ") + linkStyle.Render("https://infisical.com/slack")
