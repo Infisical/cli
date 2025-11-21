@@ -25,6 +25,9 @@ import (
 var ErrManualSignalInterrupt = errors.New("signal: interrupt")
 var watcherWaitGroup = new(sync.WaitGroup)
 
+// getAllEnvironmentVariablesFunc is a variable that can be overridden in tests for mocking
+var getAllEnvironmentVariablesFunc = util.GetAllEnvironmentVariables
+
 // runCmd represents the run command
 var runCmd = &cobra.Command{
 	Example: `
@@ -447,7 +450,7 @@ func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, proje
 		request.UniversalAuthAccessToken = token.Token
 	}
 
-	secrets, err := util.GetAllEnvironmentVariables(request, projectConfigDir)
+	secrets, err := getAllEnvironmentVariablesFunc(request, projectConfigDir)
 
 	if err != nil {
 		return models.InjectableEnvironmentResult{}, err
@@ -475,7 +478,9 @@ func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, proje
 
 	// now add infisical secrets
 	for k, v := range secretsByKey {
-		environmentVariables[k] = v.Value
+		// Convert hyphens to underscores in secret key names for environment variable compatibility
+		envVarKey := strings.ReplaceAll(k, "-", "_")
+		environmentVariables[envVarKey] = v.Value
 	}
 
 	env := make([]string, 0, len(environmentVariables))
