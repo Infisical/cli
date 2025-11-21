@@ -494,16 +494,20 @@ func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLeaseWithTTL) {
 }
 
 // Expects a lock is already held before this function is called
-func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, secretPath, slug string, templateId int) {
+func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) {
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLeaseWithTTL) bool {
 		// find lease by configuration, not by template ID
 		// this allows us to register new template IDs to existing leases
-		return lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug
+		return lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL
 	})
 
 	log.Debug().Msgf("\n[cache]: registering template [template-id=%d] for lease [project=%s], [env=%s], [path=%s], [slug=%s]\nIndex: %d", templateId, projectSlug, environment, secretPath, slug, index)
-	log.Debug().Msgf("Lease: %+v", d.leases[index])
+	if index != -1 {
+		log.Debug().Msgf("Lease: %+v", d.leases[index])
+	} else {
+		log.Debug().Msgf("No lease found for the given configuration")
+	}
 
 	if index != -1 {
 		// only add template ID if it's not already present
@@ -787,8 +791,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 
 		// if a lease is found (either in memory or in cache), we register the template and return the data
 		if dynamicSecretData != nil {
-			dynamicSecretManager.RegisterTemplate(projectSlug, envSlug, secretPath, slug, templateId)
-			// stringify dynamicSecretData.data so we can use it as an etag. Convert it to a yaml object and then hash it.
+			dynamicSecretManager.RegisterTemplate(projectSlug, envSlug, secretPath, slug, templateId, ttl)
 			return dynamicSecretData.Data, nil
 		}
 
