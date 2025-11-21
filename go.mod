@@ -15,7 +15,7 @@ require (
 	github.com/gitleaks/go-gitdiff v0.9.1
 	github.com/go-mysql-org/go-mysql v1.13.0
 	github.com/h2non/filetype v1.1.3
-	github.com/infisical/go-sdk v0.5.99
+	github.com/infisical/go-sdk v0.6.1
 	github.com/infisical/infisical-kmip v0.3.17
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/mattn/go-isatty v0.0.20
