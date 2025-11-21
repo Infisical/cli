@@ -143,7 +143,7 @@ func TryParseErrorBody(res *resty.Response) (string, any, string) {
 	err := json.Unmarshal([]byte(body), &errorResponse)
 
 	if err != nil {
-		return "", details, errorResponse.Name
+		return "", details, ""
 	}
 
 	// Check if details is empty and return nil if so
