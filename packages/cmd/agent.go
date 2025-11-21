@@ -443,8 +443,11 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 
 }
 
-// Expects a lock is already held before this function is called
 func (d *DynamicSecretLeaseManager) Prune() {
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
 	d.leases = slices.DeleteFunc(d.leases, func(s DynamicSecretLeaseWithTTL) bool {
 		shouldDelete := time.Now().After(s.ExpireAt.Add(DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER * time.Second))
 
