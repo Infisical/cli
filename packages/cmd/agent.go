@@ -493,8 +493,10 @@ func (d *DynamicSecretLeaseManager) Append(lease DynamicSecretLeaseWithTTL) {
 	d.appendUnsafe(lease)
 }
 
-// Expects a lock is already held before this function is called
 func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) {
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLeaseWithTTL) bool {
 		// find lease by configuration, not by template ID
@@ -521,9 +523,11 @@ func (d *DynamicSecretLeaseManager) RegisterTemplate(projectSlug, environment, s
 	}
 }
 
-// Expects a lock is already held before this function is called
 func (d *DynamicSecretLeaseManager) GetLease(accessToken, projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) *DynamicSecretLeaseWithTTL {
 	// first try to get from in-memory storage
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
 
 	// find lease by configuration (project, env, path, slug, TTL) regardless of template IDs
 	// this allows multiple templates to share the same lease
@@ -773,11 +777,6 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 
 	return func(args ...string) (map[string]interface{}, error) {
 
-		dynamicSecretManager.mutex.Lock()
-		defer dynamicSecretManager.mutex.Unlock()
-
-		dynamicSecretManager.Prune()
-
 		argLength := len(args)
 		if argLength != 4 && argLength != 5 {
 			return nil, fmt.Errorf("invalid arguments found for dynamic-secret function. Check template %d", templateId)
@@ -787,6 +786,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		if argLength == 5 {
 			ttl = args[4]
 		}
+
 		dynamicSecretData := dynamicSecretManager.GetLease(accessToken, projectSlug, envSlug, secretPath, slug, templateId, ttl)
 
 		// if a lease is found (either in memory or in cache), we register the template and return the data
@@ -817,7 +817,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 			return nil, err
 		}
 
-		dynamicSecretManager.appendUnsafe(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl})
+		dynamicSecretManager.Append(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl})
 
 		return leaseData, nil
 	}
@@ -1637,6 +1637,7 @@ func (tm *AgentManager) MonitorSecretChanges(ctx context.Context, secretTemplate
 		default:
 			{
 
+				tm.dynamicSecretLeases.Prune()
 				token := tm.GetToken()
 
 				if token != "" {
