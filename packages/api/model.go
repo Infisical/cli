@@ -772,8 +772,9 @@ type RegisterGatewayResponse struct {
 }
 
 type PAMAccessRequest struct {
-	Duration  string `json:"duration,omitempty"`
-	AccountId string `json:"accountId,omitempty"`
+	Duration     string `json:"duration,omitempty"`
+	AccountId    string `json:"accountId,omitempty"`
+	MfaSessionId string `json:"mfaSessionId,omitempty"`
 }
 
 type PAMAccessResponse struct {
@@ -804,6 +805,18 @@ type PAMSessionCredentials struct {
 	Password              string `json:"password"`
 	AuthMethod            string `json:"authMethod,omitempty"`
 	PrivateKey            string `json:"privateKey,omitempty"`
+}
+
+type MFASessionStatus string
+
+const (
+	MFASessionStatusPending MFASessionStatus = "PENDING"
+	MFASessionStatusActive  MFASessionStatus = "ACTIVE"
+)
+
+type MFASessionStatusResponse struct {
+	Status    MFASessionStatus `json:"status"`
+	MfaMethod string           `json:"mfaMethod"`
 }
 
 type UploadSessionLogEntry struct {
