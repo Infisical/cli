@@ -122,7 +122,8 @@ var exportCmd = &cobra.Command{
 				accessToken = loggedInUserDetails.UserCredentials.JTWToken
 			}
 
-			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, dynamicSecretLeases, nil)
+			currentEtag := ""
+			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
 			if err != nil {
 				util.HandleError(err)
 			}
