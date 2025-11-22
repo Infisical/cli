@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
+
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
-	"net"
 )
 
 // TODO: DRY with psql?
@@ -22,6 +23,7 @@ type MysqlProxyConfig struct {
 	TLSConfig      *tls.Config
 	SessionID      string
 	SessionLogger  session.SessionLogger
+	ReadOnlyMode   bool
 }
 
 type MysqlProxy struct {
@@ -60,15 +62,14 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	defer selfServerConn.Close()
 
 	actualServer := server.NewServer(
-		// Let's use a conservative version to let the client not to throw
-		// many too fancy stuff at us to get the V1 out of door fast
+		// smaller version to prevent complex errors
 		"8.0.11",
 		mysql.DEFAULT_COLLATION_ID,
 		mysql.AUTH_NATIVE_PASSWORD,
 		nil,
 		nil,
 	)
-	p.relayHandler = NewRelayHandler(selfServerConn, p.config.SessionLogger)
+	p.relayHandler = NewRelayHandler(selfServerConn, p.config.SessionLogger, p.config)
 	clientSelfConn, err := actualServer.NewCustomizedConn(
 		clientConn,
 		&AnyUserCredentialProvider{},
@@ -85,6 +86,13 @@ func (p *MysqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 			selfServerConn.Close()
 		}
 	}()
+
+	// if in read-only mode, set the session to be a read-only transaction
+	if p.config.ReadOnlyMode {
+		if err := p.setSessionReadOnly(selfServerConn); err != nil {
+			return err
+		}
+	}
 
 	for !clientSelfConn.Closed() && !p.relayHandler.Closed() {
 		err = clientSelfConn.HandleCommand()
@@ -116,4 +124,17 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
 	return conn, nil
+}
+
+func (p *MysqlProxy) setSessionReadOnly(serverConn *client.Conn) error {
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Setting session to read-only transaction mode")
+
+	_, err := serverConn.Execute("SET SESSION TRANSACTION READ ONLY;")
+	if err != nil {
+		log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to set session to read-only mode")
+		return fmt.Errorf("failed to set session to read-only: %w", err)
+	}
+
+	log.Debug().Str("sessionID", p.config.SessionID).Msg("Session set to read-only successfully")
+	return nil
 }

@@ -6,11 +6,13 @@ toolchain go1.23.5
 
 require (
 	github.com/BobuSumisu/aho-corasick v1.0.3
+	github.com/Infisical/sql-query-identifier v0.0.0-20251118234314-f02b443269f4
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/bradleyjkemp/cupaloy/v2 v2.8.0
 	github.com/charmbracelet/lipgloss v0.9.1
 	github.com/creack/pty v1.1.21
 	github.com/denisbrodbeck/machineid v1.0.1
+	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/fatih/semgroup v1.2.0
 	github.com/gitleaks/go-gitdiff v0.9.1
 	github.com/go-mysql-org/go-mysql v1.13.0
@@ -77,7 +79,6 @@ require (
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/danieljoos/wincred v1.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/dgraph-io/badger/v3 v3.2103.5 // indirect
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/dvsekhvalnov/jose2go v1.6.0 // indirect

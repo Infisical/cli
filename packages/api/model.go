@@ -802,6 +802,7 @@ type PAMSessionCredentials struct {
 	SSLCertificate        string `json:"sslCertificate,omitempty"`
 	Username              string `json:"username"`
 	Password              string `json:"password"`
+	ReadOnlyMode          bool   `json:"readOnlyMode"`
 	AuthMethod            string `json:"authMethod,omitempty"`
 	PrivateKey            string `json:"privateKey,omitempty"`
 }

@@ -19,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/pbkdf2" // TODO: Remove this once we update to go 1.25.1 or later where it's already in the standard library
+
+	sqi "github.com/Infisical/sql-query-identifier"
 )
 
 type PostgresProxyConfig struct {
@@ -30,6 +32,7 @@ type PostgresProxyConfig struct {
 	TLSConfig      *tls.Config
 	SessionID      string
 	SessionLogger  session.SessionLogger
+	ReadOnlyMode   bool
 }
 
 type PostgresProxy struct {
@@ -95,6 +98,13 @@ func (p *PostgresProxy) HandleConnection(ctx context.Context, clientConn net.Con
 			Str("sessionID", sessionID).
 			Msg("Startup failed")
 		return fmt.Errorf("startup failed: %w", err)
+	}
+
+	// if in read-only mode, set the session to be a read-only transaction
+	if p.config.ReadOnlyMode {
+		if err := p.setSessionReadOnly(clientBackend, serverFrontend); err != nil {
+			return err
+		}
 	}
 
 	// Proxy messages bidirectionally
@@ -668,11 +678,143 @@ func (p *PostgresProxy) handleMD5PasswordAsProxy(clientBackend *pgproto3.Backend
 	}
 }
 
+func (p *PostgresProxy) setSessionReadOnly(clientBackend *pgproto3.Backend, serverFrontend *pgproto3.Frontend) error {
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Setting session to read-only transaction mode")
+
+	readOnlyQuery := &pgproto3.Query{String: "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;"}
+	serverFrontend.Send(readOnlyQuery)
+	if err := serverFrontend.Flush(); err != nil {
+		log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to send read-only session command")
+		return fmt.Errorf("flushing read-only command: %w", err)
+	}
+
+	var sawCommandComplete, sawReadyForQuery bool
+
+	for {
+		msg, err := serverFrontend.Receive()
+		if err != nil {
+			log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Error receiving response for read-only command")
+			return fmt.Errorf("receiving response for read-only command: %w", err)
+		}
+
+		log.Debug().
+			Str("sessionID", p.config.SessionID).
+			Str("msgType", fmt.Sprintf("%T", msg)).
+			Msg("← SERVER (read-only setup)")
+
+		switch m := msg.(type) {
+		case *pgproto3.CommandComplete:
+			sawCommandComplete = true
+		case *pgproto3.ReadyForQuery:
+			sawReadyForQuery = true
+		case *pgproto3.ParameterStatus:
+			continue
+		case *pgproto3.BackendKeyData:
+			continue
+		case *pgproto3.ErrorResponse:
+			log.Error().
+				Str("sessionID", p.config.SessionID).
+				Str("code", m.Code).
+				Str("message", m.Message).
+				Msg("Server returned an error when setting session to read-only mode")
+
+			clientBackend.Send(m)
+			if err := clientBackend.Flush(); err != nil {
+				log.Warn().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to flush error response to client during read-only setup")
+			}
+
+			return fmt.Errorf("server error on setting read-only mode: %s", m.Message)
+		default:
+			log.Warn().
+				Str("sessionID", p.config.SessionID).
+				Str("msgType", fmt.Sprintf("%T", m)).
+				Msg("Received unexpected message during read-only setup")
+
+			return fmt.Errorf("unexpected message type %T during read-only setup", m)
+		}
+
+		if sawCommandComplete && sawReadyForQuery {
+			return nil
+		}
+	}
+}
+
+func getQueryContentFromMessage(msg pgproto3.FrontendMessage) string {
+	switch m := msg.(type) {
+	case *pgproto3.Query:
+		return m.String
+	case *pgproto3.Parse:
+		return m.Query
+	default:
+		return ""
+	}
+}
+
+func (p *PostgresProxy) handleReadOnlyCheck(msg pgproto3.FrontendMessage, clientBackend *pgproto3.Backend, errChan chan error) bool {
+	queryContent := getQueryContentFromMessage(msg)
+	if queryContent == "" {
+		return true
+	}
+
+	dialect := sqi.DialectPSQL
+	strict := false
+	options := sqi.IdentifyOptions{
+		Dialect: &dialect,
+		Strict:  &strict,
+	}
+
+	identifiedQueries, err := sqi.Identify(queryContent, options)
+	if err != nil {
+		log.Error().
+			Str("sessionID", p.config.SessionID).
+			Str("query", queryContent).
+			Err(err).
+			Msg("Failed to identify query; blocking in read-only mode.")
+
+		errorResponse := &pgproto3.ErrorResponse{
+			Severity: "ERROR",
+			Code:     "XX000", // internal_error
+			Message:  "Failed to analyze query in read-only mode.",
+		}
+		clientBackend.Send(errorResponse)
+		_ = clientBackend.Flush()
+		errChan <- fmt.Errorf("failed to identify query, blocking: %s", queryContent)
+		return false
+	}
+
+	// verify that every statement in the query is read-only
+	for _, identifiedQuery := range identifiedQueries {
+		if identifiedQuery.ExecutionType != sqi.ExecutionListing && identifiedQuery.ExecutionType != sqi.ExecutionInformation {
+			log.Warn().
+				Str("sessionID", p.config.SessionID).
+				Str("query", queryContent).
+				Str("executionType", string(identifiedQuery.ExecutionType)).
+				Msg("Write query blocked in read-only mode.")
+
+			errorResponse := &pgproto3.ErrorResponse{
+				Severity: "ERROR",
+				Code:     "42803", // insufficient_privilege
+				Message:  "Operation not allowed by policy in read-only mode.",
+			}
+			clientBackend.Send(errorResponse)
+			_ = clientBackend.Flush()
+			errChan <- fmt.Errorf("write query blocked: %s (type: %s)", queryContent, identifiedQuery.ExecutionType)
+			return false
+		}
+	}
+
+	return true
+}
+
 func (p *PostgresProxy) proxyClientToServer(clientBackend *pgproto3.Backend, serverFrontend *pgproto3.Frontend, errChan chan error) {
 	for {
 		msg, err := clientBackend.Receive()
 		if err != nil {
 			errChan <- err
+			return
+		}
+
+		if p.config.ReadOnlyMode && !p.handleReadOnlyCheck(msg, clientBackend, errChan) {
 			return
 		}
 
