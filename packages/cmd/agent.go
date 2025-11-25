@@ -1203,7 +1203,7 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 	accessTokenMaxTTL := time.Duration(credential.AccessTokenMaxTTL * int64(time.Second))
 
 	if accessTokenTTL <= time.Duration(30)*time.Second {
-		util.PrintErrorMessageAndExit("At this time, agent does not support refresh of tokens with 5 seconds or less ttl. Please increase access token ttl and try again")
+		util.PrintErrorMessageAndExit("At this time, agent does not support refresh of tokens with 30 seconds or less ttl. Please increase access token ttl and try again")
 	}
 
 	tm.accessTokenFetchedTime = time.Now()
