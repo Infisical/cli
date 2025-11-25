@@ -40,7 +40,7 @@ func init() {
 	cobra.OnInitialize(initLog)
 	rootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	rootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
-	rootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your own backend [can also set via environment variable name: INFISICAL_API_URL]")
+	rootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU region, or https://your-instance.com for self-hosted). Can also set via INFISICAL_API_URL environment variable. Required for non-US users.")
 	rootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		silent, err := cmd.Flags().GetBool("silent")
@@ -71,7 +71,7 @@ func init() {
 	// this is used to allow overrides of the default value
 	if !rootCmd.Flag("domain").Changed {
 		if envInfisicalBackendUrl, ok := os.LookupEnv("INFISICAL_API_URL"); ok {
-			config.INFISICAL_URL = envInfisicalBackendUrl
+			config.INFISICAL_URL = util.AppendAPIEndpoint(envInfisicalBackendUrl)
 		}
 	}
 
