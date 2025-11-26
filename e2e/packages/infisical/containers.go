@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,12 +40,19 @@ func (c *Containers) Up() {
 	project := &types.Project{
 		Services: types.Services{
 			"db": types.ServiceConfig{
-				Image: "postgres:14-alpine",
+				Image: "redis",
 				Ports: []types.ServicePortConfig{{Published: "5432", Target: 5432}},
 				Environment: types.NewMappingWithEquals([]string{
 					"POSTGRES_DB=infisical",
 					"POSTGRES_USER=infisical",
 					"POSTGRES_PASSWORD=infisical",
+				}),
+			},
+			"redis": types.ServiceConfig{
+				Image: "redis:8.4.0",
+				Ports: []types.ServicePortConfig{{Published: "6379", Target: 6379}},
+				Environment: types.NewMappingWithEquals([]string{
+					"ALLOW_EMPTY_PASSWORD=yes",
 				}),
 			},
 		},
@@ -63,9 +71,16 @@ func (c *Containers) Up() {
 	//if err != nil {
 	//	panic(err)
 	//}
-	dc, err := compose.NewDockerComposeWith(
+	stack, err := compose.NewDockerComposeWith(
 		compose.WithStackReaders(bytes.NewReader(data)),
 	)
-	dc.WithEnv(map[string]string{"POSTGRES_PASSWORD": "infisical"})
-	dc.Up(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+	err = stack.WithEnv(map[string]string{"POSTGRES_PASSWORD": "infisical"}).
+		WaitForService("db", wait.ForListeningPort("5432/tcp")).
+		Up(context.TODO())
+	if err != nil {
+		panic(err)
+	}
 }
