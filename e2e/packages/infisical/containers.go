@@ -36,15 +36,16 @@ func NewContainers() *Containers {
 }
 
 func (c *Containers) Up() {
-	// Create a Project (root struct for Docker Compose)
 	project := &types.Project{
 		Services: types.Services{
-			"web": types.ServiceConfig{
-				Image:         "nginx:alpine",
-				ContainerName: "myapp_web_1",
-				Ports:         []types.ServicePortConfig{{Published: "8080", Target: 80}},
-				Environment:   types.NewMappingWithEquals([]string{"ENV=production"}),
-				Restart:       "unless-stopped",
+			"db": types.ServiceConfig{
+				Image: "postgres:14-alpine",
+				Ports: []types.ServicePortConfig{{Published: "5432", Target: 5432}},
+				Environment: types.NewMappingWithEquals([]string{
+					"POSTGRES_DB=infisical",
+					"POSTGRES_USER=infisical",
+					"POSTGRES_PASSWORD=infisical",
+				}),
 			},
 		},
 	}
