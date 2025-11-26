@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -394,6 +395,9 @@ func (r *Relay) startSSHServer() {
 
 	for {
 		conn, err := listener.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			break
+		}
 		if err != nil {
 			log.Error().Msgf("Failed to accept SSH connection: %v", err)
 			continue
@@ -479,6 +483,9 @@ func (r *Relay) startTLSServer() {
 
 	for {
 		conn, err := listener.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			break
+		}
 		if err != nil {
 			log.Error().Msgf("Failed to accept TLS connection: %v", err)
 			continue
