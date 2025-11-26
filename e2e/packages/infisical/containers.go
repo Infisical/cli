@@ -45,6 +45,15 @@ func (c *Containers) Up() {
 					{Published: "4000", Target: 4000},
 					{Published: "9229", Target: 9229},
 				},
+				Environment: types.NewMappingWithEquals([]string{
+					"ENCRYPTION_KEY=VVHnGZ0w98WLgISK4XSJcagezuG6EWRFTk48KE4Y5Mw=",
+					"AUTH_SECRET=5lrMXKKWCVocS/uerPsl7V+TX/aaUaI7iDkgl3tSmLE=",
+					"DB_CONNECTION_URI=postgres://infisical:infisical@db:5432/infisical",
+					"REDIS_URL=redis://redis:6379",
+					"SITE_URL=http://localhost:8080",
+					"OTEL_TELEMETRY_COLLECTION_ENABLED=false",
+					"ENABLE_MSSQL_SECRET_ROTATION_ENCRYPT=true",
+				}),
 				DependsOn: types.DependsOnConfig{
 					"db":    types.ServiceDependency{Condition: "service_started"},
 					"redis": types.ServiceDependency{Condition: "service_started"},
