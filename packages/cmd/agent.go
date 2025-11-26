@@ -531,9 +531,14 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 	}
 
 	// if no lease is found in in-memory storage, try to get from cache
-
-	log.Info().Msgf("[cache]: no lease found, fetching from cache")
 	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+
+	if leaseFromCache == nil {
+		log.Info().Msgf("[cache]: cache miss, no lease found [template-id=%d]", templateId)
+	} else {
+		log.Debug().Msgf("[cache]: cache hit, lease found [template-id=%d]", templateId)
+	}
+
 	log.Debug().Msgf("[cache]: lease from cache: %+v", leaseFromCache)
 
 	if leaseFromCache != nil {
