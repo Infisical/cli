@@ -54,6 +54,9 @@ func (c *Containers) Up() {
 					"OTEL_TELEMETRY_COLLECTION_ENABLED=false",
 					"ENABLE_MSSQL_SECRET_ROTATION_ENCRYPT=true",
 				}),
+				Volumes: []types.ServiceVolumeConfig{
+					{Source: "/Users/fangpenlin/workspace/infisical/backend/src", Target: "/app/src"},
+				},
 				DependsOn: types.DependsOnConfig{
 					"db":    types.ServiceDependency{Condition: "service_started"},
 					"redis": types.ServiceDependency{Condition: "service_started"},
