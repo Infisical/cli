@@ -7,7 +7,6 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"gopkg.in/yaml.v3"
 )
 
 type Containers struct {
@@ -65,7 +64,8 @@ func (c *Containers) Up() {
 		},
 	}
 
-	data, err := yaml.Marshal(&project)
+	data, err := project.MarshalYAML()
+	//data, err := yaml.Marshal(&project)
 	if err != nil {
 		panic(err)
 	}
