@@ -10,25 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const tmpl = `
-services:
-  db:
-    image: postgres:14-alpine
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_PASSWORD: infisical
-      POSTGRES_USER: infisical
-      POSTGRES_DB: infisical
-
-  redis:
-    image: redis
-    environment:
-      - ALLOW_EMPTY_PASSWORD=yes
-    ports:
-      - 6379:6379
-`
-
 type Containers struct {
 }
 
@@ -55,6 +36,20 @@ func (c *Containers) Up() {
 					"ALLOW_EMPTY_PASSWORD=yes",
 				}),
 			},
+			"backend": types.ServiceConfig{
+				Build: &types.BuildConfig{
+					Context:    "/Users/fangpenlin/workspace/infisical/backend",
+					Dockerfile: "Dockerfile.dev.fips",
+				},
+				Ports: []types.ServicePortConfig{
+					{Published: "4000", Target: 4000},
+					{Published: "9229", Target: 9229},
+				},
+				DependsOn: types.DependsOnConfig{
+					"db":    types.ServiceDependency{Condition: "service_started"},
+					"redis": types.ServiceDependency{Condition: "service_started"},
+				},
+			},
 		},
 	}
 
@@ -78,7 +73,7 @@ func (c *Containers) Up() {
 		panic(err)
 	}
 	err = stack.WithEnv(map[string]string{"POSTGRES_PASSWORD": "infisical"}).
-		WaitForService("db", wait.ForListeningPort("5432/tcp")).
+		WaitForService("backend", wait.ForListeningPort("4000/tcp")).
 		Up(context.TODO())
 	if err != nil {
 		panic(err)
