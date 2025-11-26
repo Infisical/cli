@@ -21,7 +21,7 @@ func (c *Containers) Up() {
 	project := &types.Project{
 		Services: types.Services{
 			"db": types.ServiceConfig{
-				Image: "redis",
+				Image: "postgres:14-alpine",
 				Ports: []types.ServicePortConfig{{Published: "5432", Target: 5432}},
 				Environment: types.NewMappingWithEquals([]string{
 					"POSTGRES_DB=infisical",
