@@ -47,7 +47,7 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 		return nil, fmt.Errorf("expected status code 200, got %v", resp.StatusCode())
 	}
 	slog.Info("Signed up Admin account successfully, id=%s", resp.JSON200.User.Id)
-	cookies := resp.HTTPResponse.Cookies()
+	signupCookies := resp.HTTPResponse.Cookies()
 
 	slog.Info("Selecting organization with id=%s", resp.JSON200.Organization.Id)
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(resp.JSON200.Token)
@@ -60,6 +60,13 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 			OrganizationId: resp.JSON200.Organization.Id.String(),
 		},
 		bearerAuth.Intercept,
+		// TODO: DRY this
+		func(ctx context.Context, req *http.Request) error {
+			for _, cookie := range signupCookies {
+				req.AddCookie(cookie)
+			}
+			return nil
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -67,6 +74,7 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 	if selectOrgResp.StatusCode() != 200 {
 		return nil, fmt.Errorf("expected status code 200, got %v", resp.StatusCode())
 	}
+	orgCookies := selectOrgResp.HTTPResponse.Cookies()
 	slog.Info("Selected organization with id=%s", resp.JSON200.Organization.Id)
 
 	slog.Info("Creating Auth token ...")
@@ -80,7 +88,7 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 		// Notice: we need to pass in cookies from sign-up for the token creation to work
 		// ref: https://github.com/Infisical/infisical/blob/c39673e25a5914ad914b08da68ac621fb7c1a0f8/backend/src/server/routes/v1/auth-router.ts#L89
 		func(ctx context.Context, req *http.Request) error {
-			for _, cookie := range cookies {
+			for _, cookie := range orgCookies {
 				req.AddCookie(cookie)
 			}
 			return nil
