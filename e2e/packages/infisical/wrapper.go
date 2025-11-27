@@ -66,5 +66,5 @@ func (c ComposeWrapper) ApiUrl(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("http://%s:%d", host, port.Port()), nil
+	return fmt.Sprintf("http://%s:%s", host, port.Port()), nil
 }
