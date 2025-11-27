@@ -7,6 +7,7 @@ import (
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	. "github.com/onsi/ginkgo/v2"
 	"github.com/stretchr/testify/require"
+	dockercompose "github.com/testcontainers/testcontainers-go/modules/compose"
 	"log/slog"
 	"net/http"
 )
@@ -36,7 +37,7 @@ func (h *InfisicalService) Up(ctx context.Context) {
 	provisioningClient, err := client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
 	provisioner := client.NewProvisioner(client.WithClient(provisioningClient))
 	token, err := provisioner.Bootstrap(ctx)
-	require.NoError(currentT, err)
+	require.NoError(t, err)
 	slog.Info("Infisical service bootstrapped successfully", "token", token)
 
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(*token)
@@ -46,6 +47,17 @@ func (h *InfisicalService) Up(ctx context.Context) {
 		client.WithRequestEditorFn(bearerAuth.Intercept),
 	)
 	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err = compose.Down(
+			ctx,
+			dockercompose.RemoveOrphans(true),
+			dockercompose.RemoveVolumes(true),
+		)
+		if err != nil {
+			slog.Error("Failed to clean up Infisical service", "err", err)
+		}
+	})
 }
 
 func (h *InfisicalService) Compose() infisical.Compose {
