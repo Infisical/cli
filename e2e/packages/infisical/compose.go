@@ -1,7 +1,10 @@
 package infisical
 
 import (
+	"bytes"
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/testcontainers/testcontainers-go/modules/compose"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"os"
 	"path/filepath"
 )
@@ -13,6 +16,29 @@ type Stack struct {
 type BackendOptions struct {
 	BackendDir string
 	Dockerfile string
+}
+
+func (s *Stack) ToCompose() (*compose.DockerCompose, error) {
+	data, err := s.Project.MarshalYAML()
+	if err != nil {
+		return nil, err
+	}
+	dockerCompose, err := compose.NewDockerComposeWith(
+		compose.WithStackReaders(bytes.NewReader(data)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return dockerCompose, nil
+}
+
+func (s *Stack) ToComposeAndWait() (*compose.ComposeStack, error) {
+	dockerCompose, err := s.ToCompose()
+	if err != nil {
+		return nil, err
+	}
+	waited := dockerCompose.WaitForService("backend", wait.ForListeningPort("4000/tcp"))
+	return &waited, nil
 }
 
 type Option func(*Stack)
