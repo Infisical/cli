@@ -31,8 +31,28 @@ var _ = Describe("Relay", func() {
 		Expect(err).To(BeNil())
 		Expect(identityResp.StatusCode()).To(Equal(http.StatusOK))
 
-		// Create auth token for relay CLI
+		// Update the identity to allow token auth
 		identityId := identityResp.JSON200.Identity.Id
+		ttl := 2592000
+		useLimit := 0
+		updateResp, err := c.PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(
+			ctx, identityId.String(),
+			client.PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody{
+				AccessTokenTTL:          &ttl,
+				AccessTokenMaxTTL:       &ttl,
+				AccessTokenNumUsesLimit: &useLimit,
+				AccessTokenTrustedIps: &[]struct {
+					IpAddress string `json:"ipAddress"`
+				}{
+					{IpAddress: "0.0.0.0/0"},
+					{IpAddress: "::/0"},
+				},
+			},
+		)
+		Expect(err).To(BeNil())
+		Expect(updateResp.StatusCode()).To(Equal(http.StatusOK))
+
+		// Create auth token for relay CLI
 		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
 			ctx,
 			identityId.String(),
