@@ -2,6 +2,7 @@ package infisical
 
 import (
 	"github.com/compose-spec/compose-go/v2/types"
+	"os"
 	"path/filepath"
 )
 
@@ -16,22 +17,26 @@ type BackendOptions struct {
 
 type Option func(*Stack)
 
+func BackendOptionsFromEnv() BackendOptions {
+	backendDir, found := os.LookupEnv("INFISICAL_BACKEND_DIR")
+	if !found {
+		panic("INFISICAL_BACKEND_DIR not set")
+	}
+	dockerfile, found := os.LookupEnv("INFISICAL_BACKEND_DOCKERFILE")
+	if !found {
+		dockerfile = "Dockerfile.dev.fips"
+	}
+	return BackendOptions{
+		BackendDir: backendDir,
+		Dockerfile: dockerfile,
+	}
+}
+
 func NewStack(options ...Option) *Stack {
 	s := &Stack{
 		Project: &types.Project{},
 	}
 	for _, o := range options {
-		o(s)
-	}
-	return s
-}
-
-func NewDefaultStack(backendOptions BackendOptions, options ...Option) *Stack {
-	s := &Stack{
-		Project: &types.Project{},
-	}
-	combined := append([]Option{WithDefaultStack(backendOptions)}, options...)
-	for _, o := range combined {
 		o(s)
 	}
 	return s
@@ -107,10 +112,18 @@ func WithBackendService(options BackendOptions) Option {
 	}
 }
 
+func WithBackendServiceFromEnv() Option {
+	return WithBackendService(BackendOptionsFromEnv())
+}
+
 func WithDefaultStack(backendOptions BackendOptions) Option {
 	return func(s *Stack) {
 		for _, o := range []Option{WithDbService(), WithRedisService(), WithBackendService(backendOptions)} {
 			o(s)
 		}
 	}
+}
+
+func WithDefaultStackFromEnv() Option {
+	return WithDefaultStack(BackendOptionsFromEnv())
 }
