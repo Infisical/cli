@@ -115,7 +115,7 @@ func WithBackendService(options BackendOptions) Option {
 				Dockerfile: dockerfile,
 			},
 			Ports: []types.ServicePortConfig{
-				{Published: "4000", Target: 4000},
+				{Published: "8080", Target: 4000},
 				{Published: "9229", Target: 9229},
 			},
 			Environment: types.NewMappingWithEquals([]string{
