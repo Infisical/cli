@@ -7,6 +7,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type Stack struct {
@@ -39,7 +40,11 @@ func (s *Stack) ToComposeWithWaitingForService() (Compose, error) {
 	if err != nil {
 		return nil, err
 	}
-	waited := dockerCompose.WaitForService("backend", wait.ForListeningPort("4000/tcp"))
+	waited := dockerCompose.WaitForService(
+		"backend",
+		wait.ForListeningPort("4000/tcp").
+			WithStartupTimeout(120*time.Second),
+	)
 	return NewComposeWrapper(waited), nil
 }
 
