@@ -7,6 +7,7 @@ import (
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	. "github.com/onsi/ginkgo/v2"
 	"github.com/stretchr/testify/require"
+	"log/slog"
 	"net/http"
 )
 
@@ -30,11 +31,13 @@ func (h *InfisicalService) Up(ctx context.Context) {
 	apiUrl, err := h.compose.ApiUrl(ctx)
 	require.NoError(t, err)
 
+	slog.Info("Bootstrapping Infisical service", "apiUrl", apiUrl)
 	hc := http.Client{}
 	provisioningClient, err := client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
 	provisioner := client.NewProvisioner(client.WithClient(provisioningClient))
 	token, err := provisioner.Bootstrap(ctx)
 	require.NoError(currentT, err)
+	slog.Info("Infisical service bootstrapped successfully", "token", token)
 
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(*token)
 	h.apiClient, err = client.NewClientWithResponses(

@@ -75,7 +75,7 @@ func WithDbService() StackOption {
 		}
 		s.Project.Services["db"] = types.ServiceConfig{
 			Image: "postgres:14-alpine",
-			Ports: []types.ServicePortConfig{{Published: "5432", Target: 5432}},
+			Ports: []types.ServicePortConfig{{Published: "", Target: 5432}},
 			Environment: types.NewMappingWithEquals([]string{
 				"POSTGRES_DB=infisical",
 				"POSTGRES_USER=infisical",
@@ -92,7 +92,7 @@ func WithRedisService() StackOption {
 		}
 		s.Project.Services["redis"] = types.ServiceConfig{
 			Image: "redis:8.4.0",
-			Ports: []types.ServicePortConfig{{Published: "6379", Target: 6379}},
+			Ports: []types.ServicePortConfig{{Published: "", Target: 6379}},
 			Environment: types.NewMappingWithEquals([]string{
 				"ALLOW_EMPTY_PASSWORD=yes",
 			}),
@@ -115,7 +115,7 @@ func WithBackendService(options BackendOptions) StackOption {
 				Dockerfile: dockerfile,
 			},
 			Ports: []types.ServicePortConfig{
-				{Published: "8080", Target: 4000},
+				{Published: "", Target: 4000},
 				{Published: "9229", Target: 9229},
 			},
 			Environment: types.NewMappingWithEquals([]string{
@@ -123,6 +123,8 @@ func WithBackendService(options BackendOptions) StackOption {
 				"AUTH_SECRET=5lrMXKKWCVocS/uerPsl7V+TX/aaUaI7iDkgl3tSmLE=",
 				"DB_CONNECTION_URI=postgres://infisical:infisical@db:5432/infisical",
 				"REDIS_URL=redis://redis:6379",
+				// TODO: maybe we should generate a random port before passing in so that we can know the port number in
+				// 		 the site url ahead?
 				"SITE_URL=http://localhost:8080",
 				"OTEL_TELEMETRY_COLLECTION_ENABLED=false",
 				"ENABLE_MSSQL_SECRET_ROTATION_ENCRYPT=true",

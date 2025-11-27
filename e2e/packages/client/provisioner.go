@@ -55,9 +55,9 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 	if signUpResp.StatusCode() != 200 {
 		return nil, fmt.Errorf("expected status code 200, got %v", signUpResp.StatusCode())
 	}
-	slog.Info("Signed up Admin account successfully, id=%s", signUpResp.JSON200.User.Id)
+	slog.Info("Signed up Admin account successfully", "userId", signUpResp.JSON200.User.Id)
 
-	slog.Info("Selecting organization with id=%s", signUpResp.JSON200.Organization.Id)
+	slog.Info("Selecting organization with", "id", signUpResp.JSON200.Organization.Id)
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(signUpResp.JSON200.Token)
 	if err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 	if selectOrgResp.StatusCode() != 200 {
 		return nil, fmt.Errorf("expected status code 200, got %v", signUpResp.StatusCode())
 	}
-	slog.Info("Selected organization with id=%s", signUpResp.JSON200.Organization.Id)
+	slog.Info("Selected organization", "orgId", signUpResp.JSON200.Organization.Id)
 
 	slog.Info("Creating Auth token ...")
 	orgBearerAuth, err := securityprovider.NewSecurityProviderBearerToken(selectOrgResp.JSON200.Token)
