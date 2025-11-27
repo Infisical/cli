@@ -35,7 +35,7 @@ func WithClient(client *ClientWithResponses) ProvisionerOption {
 
 func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 	slog.Info("Signing up Admin account ...")
-	res, err := p.Client.PostApiV1AdminSignupWithResponse(ctx, PostApiV1AdminSignupJSONRequestBody{
+	resp, err := p.Client.PostApiV1AdminSignupWithResponse(ctx, PostApiV1AdminSignupJSONRequestBody{
 		Email:     openapi_types.Email(faker.Email()),
 		FirstName: faker.FirstName(),
 		Password:  faker.Password(),
@@ -43,38 +43,38 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode() != 200 {
-		return nil, fmt.Errorf("expected status code 200, got %v", res.StatusCode())
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("expected status code 200, got %v", resp.StatusCode())
 	}
-	slog.Info("Signed up Admin account successfully, id=%s", res.JSON200.User.Id)
-	cookies := res.HTTPResponse.Cookies()
+	slog.Info("Signed up Admin account successfully, id=%s", resp.JSON200.User.Id)
+	cookies := resp.HTTPResponse.Cookies()
 
-	slog.Info("Selecting organization with id=%s", res.JSON200.Organization.Id)
-	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(res.JSON200.Token)
+	slog.Info("Selecting organization with id=%s", resp.JSON200.Organization.Id)
+	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(resp.JSON200.Token)
 	if err != nil {
 		return nil, err
 	}
-	selectOrgRes, err := p.Client.PostApiV3AuthSelectOrganizationWithResponse(
+	selectOrgResp, err := p.Client.PostApiV3AuthSelectOrganizationWithResponse(
 		ctx,
 		PostApiV3AuthSelectOrganizationJSONRequestBody{
-			OrganizationId: res.JSON200.Organization.Id.String(),
+			OrganizationId: resp.JSON200.Organization.Id.String(),
 		},
 		bearerAuth.Intercept,
 	)
 	if err != nil {
 		return nil, err
 	}
-	if selectOrgRes.StatusCode() != 200 {
-		return nil, fmt.Errorf("expected status code 200, got %v", res.StatusCode())
+	if selectOrgResp.StatusCode() != 200 {
+		return nil, fmt.Errorf("expected status code 200, got %v", resp.StatusCode())
 	}
-	slog.Info("Selected organization with id=%s", res.JSON200.Organization.Id)
+	slog.Info("Selected organization with id=%s", resp.JSON200.Organization.Id)
 
 	slog.Info("Creating Auth token ...")
-	orgBearerAuth, err := securityprovider.NewSecurityProviderBearerToken(selectOrgRes.JSON200.Token)
+	orgBearerAuth, err := securityprovider.NewSecurityProviderBearerToken(selectOrgResp.JSON200.Token)
 	if err != nil {
 		return nil, err
 	}
-	authTokenRes, err := p.Client.PostApiV1AuthTokenWithResponse(
+	authTokenResp, err := p.Client.PostApiV1AuthTokenWithResponse(
 		ctx,
 		orgBearerAuth.Intercept,
 		// Notice: we need to pass in cookies from sign-up for the token creation to work
@@ -89,9 +89,9 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if authTokenRes.StatusCode() != 200 {
-		return nil, fmt.Errorf("expected status code 200, got %v", authTokenRes.StatusCode())
+	if authTokenResp.StatusCode() != 200 {
+		return nil, fmt.Errorf("expected status code 200, got %v", authTokenResp.StatusCode())
 	}
 	slog.Info("Token successfully created")
-	return &authTokenRes.JSON200.Token, nil
+	return &authTokenResp.JSON200.Token, nil
 }

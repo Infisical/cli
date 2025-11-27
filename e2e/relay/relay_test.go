@@ -2,12 +2,11 @@ package relay_test
 
 import (
 	"context"
-	"fmt"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
+	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"net/http"
 )
@@ -27,22 +26,23 @@ var _ = Describe("Relay", func() {
 		require.NoError(currentT, err)
 
 		hc := http.Client{}
-		apiClient, err = client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
-		provisioner := client.NewProvisioner(client.WithClient(apiClient))
+		provisioningClient, err := client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
+		provisioner := client.NewProvisioner(client.WithClient(provisioningClient))
 		token, err := provisioner.Bootstrap(ctx)
 		require.NoError(currentT, err)
 
-		fmt.Printf("@@@ token = %v", token)
+		bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(*token)
+		apiClient, err = client.NewClientWithResponses(
+			apiUrl,
+			client.WithHTTPClient(&hc),
+			client.WithRequestEditorFn(bearerAuth.Intercept),
+		)
 	})
 
-	It("works as I want", func() {
-		rdb := redis.NewClient(&redis.Options{
-			Addr:     "localhost:6379",
-			Password: "", // no password set
-			DB:       0,  // use default DB
-		})
-		err := rdb.Ping(context.Background()).Err()
-		//Expect("foo").To(Equal("foo"))
+	It("lists projects", func() {
+		ctx := context.TODO()
+		resp, err := apiClient.GetApiV1ProjectsWithResponse(ctx, &client.GetApiV1ProjectsParams{})
 		Expect(err).To(BeNil())
+		Expect(resp.StatusCode()).To(Equal(http.StatusOK))
 	})
 })
