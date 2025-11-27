@@ -35,9 +35,9 @@ var _ = Describe("Relay", func() {
 		identityId := identityResp.JSON200.Identity.Id
 		ttl := 2592000
 		useLimit := 0
-		updateResp, err := c.PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(
+		updateResp, err := c.AttachTokenAuthWithResponse(
 			ctx, identityId.String(),
-			client.PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody{
+			client.AttachTokenAuthJSONRequestBody{
 				AccessTokenTTL:          &ttl,
 				AccessTokenMaxTTL:       &ttl,
 				AccessTokenNumUsesLimit: &useLimit,
