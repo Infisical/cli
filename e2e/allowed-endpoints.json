@@ -2,5 +2,7 @@
   "/api/v1/admin/signup",
   "/api/v3/auth/select-organization",
   "/api/v1/auth/token",
+  "/api/v1/identities",
+  "/api/v1/auth/token-auth/identities/{identityId}/tokens",
   "/api/v1/projects"
 ]
