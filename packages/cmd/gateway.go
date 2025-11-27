@@ -533,7 +533,7 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
 	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
-	gatewaySystemdInstallCmd.Flags().String("service-log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log")
+	gatewaySystemdInstallCmd.Flags().String("service-log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
 
 	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")

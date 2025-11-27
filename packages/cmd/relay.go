@@ -270,7 +270,7 @@ func init() {
 
 	// systemd install command flags
 	relaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token (org type)")
-	relaySystemdInstallCmd.Flags().String("service-log-file", "", "The file to write the service logs to. Defaults to /var/log/infisical/relay.log")
+	relaySystemdInstallCmd.Flags().String("service-log-file", "", "The file to write the service logs to. Example: /var/log/infisical/relay.log. If not provided, logs will not be written to a file.")
 	relaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	relaySystemdInstallCmd.Flags().String("name", "", "The name of the relay")
 	relaySystemdInstallCmd.Flags().String("host", "", "The IP or hostname for the relay")

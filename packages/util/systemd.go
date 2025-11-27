@@ -37,7 +37,7 @@ func WriteSystemdServiceFile(
 	}
 
 	// create the log file if it doesn't exist
-	logFile, err := os.Create(serviceLogFile)
+	logFile, err := os.OpenFile(serviceLogFile, os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to create log file %s: %w", serviceLogFile, err)
 	}
