@@ -1,16 +1,14 @@
 package relay
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"text/template"
 
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
-	"github.com/Infisical/infisical-merge/packages/templates"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 )
 
@@ -56,55 +54,19 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 		}
 	}
 
-	configPath := filepath.Join(configDir, "relay.conf")
-	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %v", err)
+	environmentFilePath := filepath.Join(configDir, "relay.conf")
+	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	tmpl, err := template.ParseFS(templates.TemplatesFS, "infisical-service.tmpl")
-	if err != nil {
-		return fmt.Errorf("failed to parse template: %v", err)
-	}
+	serviceName := "infisical-relay"
 
-	data := map[string]string{
-		"Description":     "Infisical Relay Service",
-		"EnvironmentFile": configPath,
-		"ServiceType":     "relay",
-	}
-
-	if serviceLogFile != "" {
-
-		serviceLogFile = filepath.Clean(serviceLogFile)
-
-		if !filepath.IsAbs(serviceLogFile) {
-			return fmt.Errorf("service-log-file must be an absolute path: %s", serviceLogFile)
-		}
-
-		logDir := filepath.Dir(serviceLogFile)
-
-		// create the directory structure with appropriate permissions
-		if err := os.MkdirAll(logDir, 0755); err != nil {
-			return fmt.Errorf("failed to create log directory %s: %w", logDir, err)
-		}
-
-		// create the log file if it doesn't exist
-		logFile, err := os.Create(serviceLogFile)
-		if err != nil {
-			return fmt.Errorf("failed to create log file %s: %w", serviceLogFile, err)
-		}
-		logFile.Close()
-
-		data["ServiceLogFile"] = serviceLogFile
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %v", err)
-	}
-
-	servicePath := "/etc/systemd/system/infisical-relay.service"
-	if err := os.WriteFile(servicePath, buf.Bytes(), 0644); err != nil {
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, serviceName); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
+	}
+
+	if err := util.WriteLogrotateFile(serviceLogFile, serviceName); err != nil {
+		return fmt.Errorf("failed to write logrotate file: %v", err)
 	}
 
 	reloadCmd := exec.Command("systemctl", "daemon-reload")

@@ -1,0 +1,12 @@
+{{ .LogFilePath }} {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+    postrotate
+        systemctl reload {{ .ServiceName }} > /dev/null 2>&1 || true
+    endscript
+}
