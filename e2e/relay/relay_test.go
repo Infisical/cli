@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"net/http"
 )
 
@@ -20,19 +20,19 @@ var _ = Describe("Relay", func() {
 
 		stack := infisical.NewStack(infisical.WithDefaultStackFromEnv())
 		compose, err := stack.ToComposeWithWaitingForService()
-		assert.NoError(currentT, err)
+		require.NoError(currentT, err)
 		err = compose.Up(ctx)
-		assert.NoError(currentT, err)
+		require.NoError(currentT, err)
 		apiUrl, err := compose.ApiUrl(ctx)
-		assert.NoError(currentT, err)
+		require.NoError(currentT, err)
 
 		hc := http.Client{}
 		apiClient, err = client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
 		provisioner := client.NewProvisioner(client.WithClient(apiClient))
 		token, err := provisioner.Bootstrap(ctx)
-		assert.NoError(currentT, err)
+		require.NoError(currentT, err)
 
-		fmt.Printf("@@@ token = %s", token)
+		fmt.Printf("@@@ token = %v", token)
 
 		/*
 			hc := http.Client{}
