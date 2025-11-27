@@ -13,6 +13,8 @@ type Stack struct {
 	Project *types.Project
 }
 
+type StackOption func(*Stack)
+
 type BackendOptions struct {
 	BackendDir string
 	Dockerfile string
@@ -41,8 +43,6 @@ func (s *Stack) ToComposeWithWaitingForService() (compose.ComposeStack, error) {
 	return waited, nil
 }
 
-type Option func(*Stack)
-
 func BackendOptionsFromEnv() BackendOptions {
 	backendDir, found := os.LookupEnv("INFISICAL_BACKEND_DIR")
 	if !found {
@@ -58,7 +58,7 @@ func BackendOptionsFromEnv() BackendOptions {
 	}
 }
 
-func NewStack(options ...Option) *Stack {
+func NewStack(options ...StackOption) *Stack {
 	s := &Stack{
 		Project: &types.Project{},
 	}
@@ -68,7 +68,7 @@ func NewStack(options ...Option) *Stack {
 	return s
 }
 
-func WithDbService() Option {
+func WithDbService() StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
 			s.Project.Services = types.Services{}
@@ -85,7 +85,7 @@ func WithDbService() Option {
 	}
 }
 
-func WithRedisService() Option {
+func WithRedisService() StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
 			s.Project.Services = types.Services{}
@@ -100,7 +100,7 @@ func WithRedisService() Option {
 	}
 }
 
-func WithBackendService(options BackendOptions) Option {
+func WithBackendService(options BackendOptions) StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
 			s.Project.Services = types.Services{}
@@ -138,18 +138,18 @@ func WithBackendService(options BackendOptions) Option {
 	}
 }
 
-func WithBackendServiceFromEnv() Option {
+func WithBackendServiceFromEnv() StackOption {
 	return WithBackendService(BackendOptionsFromEnv())
 }
 
-func WithDefaultStack(backendOptions BackendOptions) Option {
+func WithDefaultStack(backendOptions BackendOptions) StackOption {
 	return func(s *Stack) {
-		for _, o := range []Option{WithDbService(), WithRedisService(), WithBackendService(backendOptions)} {
+		for _, o := range []StackOption{WithDbService(), WithRedisService(), WithBackendService(backendOptions)} {
 			o(s)
 		}
 	}
 }
 
-func WithDefaultStackFromEnv() Option {
+func WithDefaultStackFromEnv() StackOption {
 	return WithDefaultStack(BackendOptionsFromEnv())
 }
