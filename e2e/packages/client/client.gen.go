@@ -78,8 +78,8 @@ type PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody struct {
 	} `json:"accessTokenTrustedIps,omitempty"`
 }
 
-// PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody defines parameters for PostApiV1AuthTokenAuthIdentitiesIdentityId.
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody struct {
+// AttachTokenAuthJSONBody defines parameters for AttachTokenAuth.
+type AttachTokenAuthJSONBody struct {
 	// AccessTokenMaxTTL The maximum lifetime for an access token in seconds.
 	AccessTokenMaxTTL *int `json:"accessTokenMaxTTL,omitempty"`
 
@@ -185,8 +185,8 @@ type PostApiV1AdminSignupJSONRequestBody PostApiV1AdminSignupJSONBody
 // PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody defines body for PatchApiV1AuthTokenAuthIdentitiesIdentityId for application/json ContentType.
 type PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody
 
-// PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody defines body for PostApiV1AuthTokenAuthIdentitiesIdentityId for application/json ContentType.
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody
+// AttachTokenAuthJSONRequestBody defines body for AttachTokenAuth for application/json ContentType.
+type AttachTokenAuthJSONRequestBody AttachTokenAuthJSONBody
 
 // PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody defines body for PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens for application/json ContentType.
 type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONBody
@@ -292,10 +292,10 @@ type ClientInterface interface {
 
 	PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody request with any body
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// AttachTokenAuthWithBody request with any body
+	AttachTokenAuthWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	PostApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	AttachTokenAuth(ctx context.Context, identityId string, body AttachTokenAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens request
 	GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -411,8 +411,8 @@ func (c *Client) PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(c.Server, identityId, contentType, body)
+func (c *Client) AttachTokenAuthWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAttachTokenAuthRequestWithBody(c.Server, identityId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -423,8 +423,8 @@ func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId, body)
+func (c *Client) AttachTokenAuth(ctx context.Context, identityId string, body AttachTokenAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAttachTokenAuthRequest(c.Server, identityId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -749,19 +749,19 @@ func NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server string
 	return req, nil
 }
 
-// NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequest calls the generic PostApiV1AuthTokenAuthIdentitiesIdentityId builder with application/json body
-func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody) (*http.Request, error) {
+// NewAttachTokenAuthRequest calls the generic AttachTokenAuth builder with application/json body
+func NewAttachTokenAuthRequest(server string, identityId string, body AttachTokenAuthJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server, identityId, "application/json", bodyReader)
+	return NewAttachTokenAuthRequestWithBody(server, identityId, "application/json", bodyReader)
 }
 
-// NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody generates requests for PostApiV1AuthTokenAuthIdentitiesIdentityId with any type of body
-func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
+// NewAttachTokenAuthRequestWithBody generates requests for AttachTokenAuth with any type of body
+func NewAttachTokenAuthRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1207,10 +1207,10 @@ type ClientWithResponsesInterface interface {
 
 	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
 
-	// PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with any body
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+	// AttachTokenAuthWithBodyWithResponse request with any body
+	AttachTokenAuthWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachTokenAuthResponse, error)
 
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+	AttachTokenAuthWithResponse(ctx context.Context, identityId string, body AttachTokenAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachTokenAuthResponse, error)
 
 	// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse request
 	GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error)
@@ -1666,7 +1666,7 @@ func (r PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
 	return 0
 }
 
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
+type AttachTokenAuthResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
@@ -1683,52 +1683,52 @@ type PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
 		} `json:"identityTokenAuth"`
 	}
 	JSON400 *struct {
-		Error      string                                                  `json:"error"`
-		Message    string                                                  `json:"message"`
-		ReqId      string                                                  `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode AttachTokenAuth400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                                                  `json:"error"`
-		Message    string                                                  `json:"message"`
-		ReqId      string                                                  `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode AttachTokenAuth401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                                             `json:"details,omitempty"`
-		Error      string                                                  `json:"error"`
-		Message    string                                                  `json:"message"`
-		ReqId      string                                                  `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+		Details    interface{}                  `json:"details,omitempty"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode AttachTokenAuth403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                                                  `json:"error"`
-		Message    string                                                  `json:"message"`
-		ReqId      string                                                  `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode AttachTokenAuth404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                                                  `json:"error"`
-		Message    interface{}                                             `json:"message,omitempty"`
-		ReqId      string                                                  `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    interface{}                  `json:"message,omitempty"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode AttachTokenAuth422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                                                  `json:"error"`
-		Message    string                                                  `json:"message"`
-		ReqId      string                                                  `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode AttachTokenAuth500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
+type AttachTokenAuth400StatusCode float32
+type AttachTokenAuth401StatusCode float32
+type AttachTokenAuth403StatusCode float32
+type AttachTokenAuth404StatusCode float32
+type AttachTokenAuth422StatusCode float32
+type AttachTokenAuth500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
+func (r AttachTokenAuthResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1736,7 +1736,7 @@ func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
+func (r AttachTokenAuthResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2414,21 +2414,21 @@ func (c *ClientWithResponses) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithRes
 	return ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
 }
 
-// PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with arbitrary body returning *PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse
-func (c *ClientWithResponses) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	rsp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx, identityId, contentType, body, reqEditors...)
+// AttachTokenAuthWithBodyWithResponse request with arbitrary body returning *AttachTokenAuthResponse
+func (c *ClientWithResponses) AttachTokenAuthWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachTokenAuthResponse, error) {
+	rsp, err := c.AttachTokenAuthWithBody(ctx, identityId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+	return ParseAttachTokenAuthResponse(rsp)
 }
 
-func (c *ClientWithResponses) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	rsp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, body, reqEditors...)
+func (c *ClientWithResponses) AttachTokenAuthWithResponse(ctx context.Context, identityId string, body AttachTokenAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachTokenAuthResponse, error) {
+	rsp, err := c.AttachTokenAuth(ctx, identityId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+	return ParseAttachTokenAuthResponse(rsp)
 }
 
 // GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse request returning *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse
@@ -3120,15 +3120,15 @@ func ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response
 	return response, nil
 }
 
-// ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a PostApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
-func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+// ParseAttachTokenAuthResponse parses an HTTP response from a AttachTokenAuthWithResponse call
+func ParseAttachTokenAuthResponse(rsp *http.Response) (*AttachTokenAuthResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
+	response := &AttachTokenAuthResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3155,10 +3155,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response)
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                                                  `json:"error"`
-			Message    string                                                  `json:"message"`
-			ReqId      string                                                  `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode AttachTokenAuth400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3167,10 +3167,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response)
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                                                  `json:"error"`
-			Message    string                                                  `json:"message"`
-			ReqId      string                                                  `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode AttachTokenAuth401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3179,11 +3179,11 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response)
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                                             `json:"details,omitempty"`
-			Error      string                                                  `json:"error"`
-			Message    string                                                  `json:"message"`
-			ReqId      string                                                  `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+			Details    interface{}                  `json:"details,omitempty"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode AttachTokenAuth403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3192,10 +3192,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response)
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                                                  `json:"error"`
-			Message    string                                                  `json:"message"`
-			ReqId      string                                                  `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode AttachTokenAuth404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3204,10 +3204,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response)
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                                                  `json:"error"`
-			Message    interface{}                                             `json:"message,omitempty"`
-			ReqId      string                                                  `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    interface{}                  `json:"message,omitempty"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode AttachTokenAuth422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3216,10 +3216,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response)
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                                                  `json:"error"`
-			Message    string                                                  `json:"message"`
-			ReqId      string                                                  `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode AttachTokenAuth500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

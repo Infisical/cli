@@ -249,6 +249,7 @@
     },
     "/api/v1/auth/token-auth/identities/{identityId}": {
       "post": {
+        "operationId": "attachTokenAuth",
         "tags": [
           "Token Auth"
         ],
