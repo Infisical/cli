@@ -27,7 +27,10 @@ var _ = Describe("Relay", func() {
 		apiPort, err := backend.MappedPort(context.TODO(), "4000")
 		assert.NoError(currentT, err)
 
-		fmt.Printf("!!!! port = %s", apiPort)
+		host, err := backend.Host(context.TODO())
+		assert.NoError(currentT, err)
+
+		fmt.Printf("!!!! host= %s, port = %s", host, apiPort)
 
 		/*
 			hc := http.Client{}
