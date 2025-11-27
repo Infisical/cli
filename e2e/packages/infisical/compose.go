@@ -32,13 +32,13 @@ func (s *Stack) ToCompose() (*compose.DockerCompose, error) {
 	return dockerCompose, nil
 }
 
-func (s *Stack) ToComposeAndWait() (*compose.ComposeStack, error) {
+func (s *Stack) ToComposeWithWaitingForService() (compose.ComposeStack, error) {
 	dockerCompose, err := s.ToCompose()
 	if err != nil {
 		return nil, err
 	}
 	waited := dockerCompose.WaitForService("backend", wait.ForListeningPort("4000/tcp"))
-	return &waited, nil
+	return waited, nil
 }
 
 type Option func(*Stack)
