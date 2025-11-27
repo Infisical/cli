@@ -1,42 +1,23 @@
 package relay
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"text/template"
 
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
+	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/rs/zerolog/log"
 )
-
-const relaySystemdServiceTemplate = `[Unit]
-Description=Infisical Relay Service
-After=network.target
-
-[Service]
-Type=notify
-NotifyAccess=all
-EnvironmentFile=/etc/infisical/relay.conf
-ExecStart=infisical relay start
-Restart=on-failure
-InaccessibleDirectories=/home
-PrivateTmp=yes
-LimitCORE=infinity
-LimitNOFILE=1000000
-LimitNPROC=60000
-LimitRTPRIO=infinity
-LimitRTTIME=7000000
-
-[Install]
-WantedBy=multi-user.target
-`
 
 // InstallRelaySystemdService installs the systemd unit and writes configuration for the relay.
 // token is used for org-type relays (written as INFISICAL_TOKEN). For instance-type relays,
 // relayAuthSecret is written as INFISICAL_RELAY_AUTH_SECRET.
-func InstallRelaySystemdService(token string, domain string, name string, host string, instanceType string, relayAuthSecret string) error {
+func InstallRelaySystemdService(token string, domain string, name string, host string, instanceType string, relayAuthSecret string, serviceLogFile string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -80,8 +61,49 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 		return fmt.Errorf("failed to write config file: %v", err)
 	}
 
+	tmpl, err := template.ParseFS(templates.TemplatesFS, "infisical-service.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %v", err)
+	}
+
+	data := map[string]string{
+		"Description":     "Infisical Relay Service",
+		"EnvironmentFile": configPath,
+		"ServiceType":     "relay",
+	}
+
+	if serviceLogFile != "" {
+
+		serviceLogFile = filepath.Clean(serviceLogFile)
+
+		if !filepath.IsAbs(serviceLogFile) {
+			return fmt.Errorf("service-log-file must be an absolute path: %s", serviceLogFile)
+		}
+
+		logDir := filepath.Dir(serviceLogFile)
+
+		// create the directory structure with appropriate permissions
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("failed to create log directory %s: %w", logDir, err)
+		}
+
+		// create the log file if it doesn't exist
+		logFile, err := os.Create(serviceLogFile)
+		if err != nil {
+			return fmt.Errorf("failed to create log file %s: %w", serviceLogFile, err)
+		}
+		logFile.Close()
+
+		data["ServiceLogFile"] = serviceLogFile
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute template: %v", err)
+	}
+
 	servicePath := "/etc/systemd/system/infisical-relay.service"
-	if err := os.WriteFile(servicePath, []byte(relaySystemdServiceTemplate), 0644); err != nil {
+	if err := os.WriteFile(servicePath, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
 	}
 

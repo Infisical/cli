@@ -1,0 +1,24 @@
+[Unit]
+Description={{ .Description }}
+After=network.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+EnvironmentFile={{ .EnvironmentFile }}
+{{ if .ServiceLogFile }}
+StandardOutput=append:{{ .ServiceLogFile }}
+StandardError=append:{{ .ServiceLogFile }}
+{{end}}
+ExecStart=infisical {{ .ServiceType }} start
+Restart=on-failure
+InaccessibleDirectories=/home
+PrivateTmp=yes
+LimitCORE=infinity
+LimitNOFILE=1000000
+LimitNPROC=60000
+LimitRTPRIO=infinity
+LimitRTTIME=7000000
+
+[Install]
+WantedBy=multi-user.target

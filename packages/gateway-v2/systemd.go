@@ -1,38 +1,19 @@
 package gatewayv2
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"text/template"
 
+	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/rs/zerolog/log"
 )
 
-const systemdServiceTemplate = `[Unit]
-Description=Infisical Gateway Service
-After=network.target
-
-[Service]
-Type=notify
-NotifyAccess=all
-EnvironmentFile=/etc/infisical/gateway.conf
-ExecStart=infisical gateway start
-Restart=on-failure
-InaccessibleDirectories=/home
-PrivateTmp=yes
-LimitCORE=infinity
-LimitNOFILE=1000000
-LimitNPROC=60000
-LimitRTPRIO=infinity
-LimitRTTIME=7000000
-
-[Install]
-WantedBy=multi-user.target
-`
-
-func InstallGatewaySystemdService(token string, domain string, name string, relayName string) error {
+func InstallGatewaySystemdService(token string, domain string, name string, relayName string, serviceLogFile string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -65,8 +46,50 @@ func InstallGatewaySystemdService(token string, domain string, name string, rela
 		return fmt.Errorf("failed to write config file: %v", err)
 	}
 
+	tmpl, err := template.ParseFS(templates.TemplatesFS, "infisical-service.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %v", err)
+	}
+
+	data := map[string]string{
+		"Description":     "Infisical Gateway Service",
+		"EnvironmentFile": configPath,
+		"ServiceType":     "gateway",
+	}
+
+	if serviceLogFile != "" {
+
+		serviceLogFile = filepath.Clean(serviceLogFile)
+
+		if !filepath.IsAbs(serviceLogFile) {
+			return fmt.Errorf("service-log-file must be an absolute path: %s", serviceLogFile)
+		}
+
+		logDir := filepath.Dir(serviceLogFile)
+
+		// create the directory structure with appropriate permissions
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("failed to create log directory %s: %w", logDir, err)
+		}
+
+		// create the log file if it doesn't exist
+		logFile, err := os.Create(serviceLogFile)
+		if err != nil {
+			return fmt.Errorf("failed to create log file %s: %w", serviceLogFile, err)
+		}
+		logFile.Close()
+
+		data["ServiceLogFile"] = serviceLogFile
+
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute template: %v", err)
+	}
+
 	servicePath := "/etc/systemd/system/infisical-gateway.service"
-	if err := os.WriteFile(servicePath, []byte(systemdServiceTemplate), 0644); err != nil {
+	if err := os.WriteFile(servicePath, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
 	}
 
