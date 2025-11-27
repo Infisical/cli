@@ -13,35 +13,37 @@ import (
 )
 
 type InfisicalService struct {
-	Stack     *infisical.Stack
-	compose   infisical.Compose
-	apiClient client.ClientWithResponsesInterface
+	Stack           *infisical.Stack
+	compose         infisical.Compose
+	apiClient       client.ClientWithResponsesInterface
+	provisionResult *client.ProvisionResult
 }
 
 func NewInfisicalService() *InfisicalService {
 	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
 }
 
-func (h *InfisicalService) Up(ctx context.Context) {
+func (s *InfisicalService) Up(ctx context.Context) {
 	t := GinkgoT()
-	compose, err := h.Stack.ToComposeWithWaitingForService()
-	h.compose = compose
+	compose, err := s.Stack.ToComposeWithWaitingForService()
+	s.compose = compose
 	require.NoError(t, err)
-	err = h.compose.Up(ctx)
+	err = s.compose.Up(ctx)
 	require.NoError(t, err)
-	apiUrl, err := h.compose.ApiUrl(ctx)
+	apiUrl, err := s.compose.ApiUrl(ctx)
 	require.NoError(t, err)
 
 	slog.Info("Bootstrapping Infisical service", "apiUrl", apiUrl)
 	hc := http.Client{}
 	provisioningClient, err := client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
 	provisioner := client.NewProvisioner(client.WithClient(provisioningClient))
-	token, err := provisioner.Bootstrap(ctx)
+	result, err := provisioner.Bootstrap(ctx)
 	require.NoError(t, err)
-	slog.Info("Infisical service bootstrapped successfully", "token", token)
+	slog.Info("Infisical service bootstrapped successfully", "result", result)
+	s.provisionResult = result
 
-	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(*token)
-	h.apiClient, err = client.NewClientWithResponses(
+	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(result.Token)
+	s.apiClient, err = client.NewClientWithResponses(
 		apiUrl,
 		client.WithHTTPClient(&hc),
 		client.WithRequestEditorFn(bearerAuth.Intercept),
@@ -60,10 +62,14 @@ func (h *InfisicalService) Up(ctx context.Context) {
 	})
 }
 
-func (h *InfisicalService) Compose() infisical.Compose {
-	return h.compose
+func (s *InfisicalService) Compose() infisical.Compose {
+	return s.compose
 }
 
-func (h *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
-	return h.apiClient
+func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
+	return s.apiClient
+}
+
+func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
+	return s.provisionResult
 }

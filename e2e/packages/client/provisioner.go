@@ -14,6 +14,12 @@ type Provisioner struct {
 	Client *ClientWithResponses
 }
 
+type ProvisionResult struct {
+	UserId string
+	OrgId  string
+	Token  string
+}
+
 type ProvisionerOption func(*Provisioner)
 
 func NewProvisioner(opts ...ProvisionerOption) *Provisioner {
@@ -42,7 +48,7 @@ func WithCookies(cookies ...*http.Cookie) RequestEditorFn {
 	}
 }
 
-func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
+func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	slog.Info("Signing up Admin account ...")
 	signUpResp, err := p.Client.PostApiV1AdminSignupWithResponse(ctx, PostApiV1AdminSignupJSONRequestBody{
 		Email:     types.Email(faker.Email()),
@@ -97,5 +103,9 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*string, error) {
 		return nil, fmt.Errorf("expected status code 200, got %v", authTokenResp.StatusCode())
 	}
 	slog.Info("Token successfully created")
-	return &authTokenResp.JSON200.Token, nil
+	return &ProvisionResult{
+		UserId: signUpResp.JSON200.User.Id.String(),
+		OrgId:  signUpResp.JSON200.Organization.Id.String(),
+		Token:  authTokenResp.JSON200.Token,
+	}, nil
 }
