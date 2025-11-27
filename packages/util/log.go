@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -95,10 +96,19 @@ func printPrettyAPIError(apiErr api.APIError) {
 		Bold(true).
 		Foreground(lipgloss.Color(statusColor))
 
+	domain := extractDomainFromURL(apiErr.URL)
+
 	// Request details
 	content.WriteString(labelStyle.Render("Request: "))
 	content.WriteString(valueStyle.Render(fmt.Sprintf("%s %s", apiErr.Method, apiErr.URL)))
 	content.WriteString("\n")
+
+	// Show which instance is being used
+	if domain != "" {
+		content.WriteString(labelStyle.Render("Instance: "))
+		content.WriteString(valueStyle.Render(domain))
+		content.WriteString("\n")
+	}
 
 	// Request ID if available
 	if apiErr.ReqId != "" {
@@ -210,4 +220,16 @@ func getStatusCodeColor(statusCode int) string {
 	default:
 		return "255" // White for unknown
 	}
+}
+
+func extractDomainFromURL(urlStr string) string {
+	if urlStr == "" {
+		return ""
+	}
+
+	if parsedURL, err := url.Parse(urlStr); err == nil && parsedURL.Host != "" {
+		return parsedURL.Scheme + "://" + parsedURL.Host
+	}
+
+	return ""
 }
