@@ -20,7 +20,7 @@ type BackendOptions struct {
 	Dockerfile string
 }
 
-func (s *Stack) ToCompose() (*compose.DockerCompose, error) {
+func (s *Stack) ToCompose() (Compose, error) {
 	data, err := s.Project.MarshalYAML()
 	if err != nil {
 		return nil, err
@@ -31,16 +31,16 @@ func (s *Stack) ToCompose() (*compose.DockerCompose, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dockerCompose, nil
+	return NewComposeWrapper(dockerCompose), nil
 }
 
-func (s *Stack) ToComposeWithWaitingForService() (compose.ComposeStack, error) {
+func (s *Stack) ToComposeWithWaitingForService() (Compose, error) {
 	dockerCompose, err := s.ToCompose()
 	if err != nil {
 		return nil, err
 	}
 	waited := dockerCompose.WaitForService("backend", wait.ForListeningPort("4000/tcp"))
-	return waited, nil
+	return NewComposeWrapper(waited), nil
 }
 
 func BackendOptionsFromEnv() BackendOptions {
