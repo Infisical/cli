@@ -10,27 +10,24 @@ import (
 	"net/http"
 )
 
-type ComposeService struct {
+type InfisicalService struct {
 	Stack     *infisical.Stack
-	Compose   infisical.Compose
-	ApiClient client.ClientWithResponsesInterface
+	compose   infisical.Compose
+	apiClient client.ClientWithResponsesInterface
 }
 
-func NewComposeService(stack *infisical.Stack) *ComposeService {
-	if stack == nil {
-		stack = infisical.NewStack(infisical.WithDefaultStackFromEnv())
-	}
-	return &ComposeService{Stack: stack}
+func NewInfisicalService() *InfisicalService {
+	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
 }
 
-func (h *ComposeService) Up(ctx context.Context) {
+func (h *InfisicalService) Up(ctx context.Context) {
 	t := GinkgoT()
 	compose, err := h.Stack.ToComposeWithWaitingForService()
-	h.Compose = compose
+	h.compose = compose
 	require.NoError(t, err)
-	err = h.Compose.Up(ctx)
+	err = h.compose.Up(ctx)
 	require.NoError(t, err)
-	apiUrl, err := h.Compose.ApiUrl(ctx)
+	apiUrl, err := h.compose.ApiUrl(ctx)
 	require.NoError(t, err)
 
 	hc := http.Client{}
@@ -40,10 +37,18 @@ func (h *ComposeService) Up(ctx context.Context) {
 	require.NoError(currentT, err)
 
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(*token)
-	h.ApiClient, err = client.NewClientWithResponses(
+	h.apiClient, err = client.NewClientWithResponses(
 		apiUrl,
 		client.WithHTTPClient(&hc),
 		client.WithRequestEditorFn(bearerAuth.Intercept),
 	)
 	require.NoError(t, err)
+}
+
+func (h *InfisicalService) Compose() infisical.Compose {
+	return h.compose
+}
+
+func (h *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
+	return h.apiClient
 }
