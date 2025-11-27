@@ -3,34 +3,36 @@ package relay_test
 import (
 	"context"
 	"fmt"
+	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"net/http"
 )
 
 var _ = Describe("Relay", func() {
+	var apiClient *client.ClientWithResponses
+
 	BeforeEach(func() {
-		//ctx := context.Background()
+		ctx := context.TODO()
+
 		stack := infisical.NewStack(infisical.WithDefaultStackFromEnv())
-		dockerCompose, err := stack.ToComposeWithWaitingForService()
+		compose, err := stack.ToComposeWithWaitingForService()
+		assert.NoError(currentT, err)
+		err = compose.Up(ctx)
+		assert.NoError(currentT, err)
+		apiUrl, err := compose.ApiUrl(ctx)
 		assert.NoError(currentT, err)
 
-		fmt.Println(dockerCompose)
-		err = dockerCompose.Up(context.TODO())
+		hc := http.Client{}
+		apiClient, err = client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
+		provisioner := client.NewProvisioner(client.WithClient(apiClient))
+		token, err := provisioner.Bootstrap(ctx)
 		assert.NoError(currentT, err)
 
-		backend, err := dockerCompose.ServiceContainer(context.TODO(), "backend")
-		assert.NoError(currentT, err)
-
-		apiPort, err := backend.MappedPort(context.TODO(), "4000")
-		assert.NoError(currentT, err)
-
-		host, err := backend.Host(context.TODO())
-		assert.NoError(currentT, err)
-
-		fmt.Printf("!!!! host= %s, port = %s", host, apiPort)
+		fmt.Printf("@@@ token = %s", token)
 
 		/*
 			hc := http.Client{}
