@@ -424,12 +424,17 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(errors.New("Gateway name is required"))
 		}
 
+		serviceLogFile, err := cmd.Flags().GetString("service-log-file")
+		if err != nil {
+			util.HandleError(err, "Unable to parse service-log-file flag")
+		}
+
 		relayName, err := util.GetRelayName(cmd, false, token.Token)
 		if err != nil {
 			util.HandleError(err, "unable to get relay name")
 		}
 
-		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName)
+		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile)
 		if err != nil {
 			util.HandleError(err, "Unable to install systemd service")
 		}
@@ -528,6 +533,7 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
 	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
+	gatewaySystemdInstallCmd.Flags().String("service-log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
 
 	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")
