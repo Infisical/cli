@@ -61,6 +61,40 @@ type PostApiV1AdminSignupJSONBody struct {
 	Password  string              `json:"password"`
 }
 
+// PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody defines parameters for PatchApiV1AuthTokenAuthIdentitiesIdentityId.
+type PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody struct {
+	// AccessTokenMaxTTL The new maximum lifetime for an access token in seconds.
+	AccessTokenMaxTTL *int `json:"accessTokenMaxTTL,omitempty"`
+
+	// AccessTokenNumUsesLimit The new maximum number of times that an access token can be used.
+	AccessTokenNumUsesLimit *int `json:"accessTokenNumUsesLimit,omitempty"`
+
+	// AccessTokenTTL The new lifetime for an access token in seconds.
+	AccessTokenTTL *int `json:"accessTokenTTL,omitempty"`
+
+	// AccessTokenTrustedIps The new IPs or CIDR ranges that access tokens can be used from.
+	AccessTokenTrustedIps *[]struct {
+		IpAddress string `json:"ipAddress"`
+	} `json:"accessTokenTrustedIps,omitempty"`
+}
+
+// PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody defines parameters for PostApiV1AuthTokenAuthIdentitiesIdentityId.
+type PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody struct {
+	// AccessTokenMaxTTL The maximum lifetime for an access token in seconds.
+	AccessTokenMaxTTL *int `json:"accessTokenMaxTTL,omitempty"`
+
+	// AccessTokenNumUsesLimit The maximum number of times that an access token can be used.
+	AccessTokenNumUsesLimit *int `json:"accessTokenNumUsesLimit,omitempty"`
+
+	// AccessTokenTTL The lifetime for an access token in seconds.
+	AccessTokenTTL *int `json:"accessTokenTTL,omitempty"`
+
+	// AccessTokenTrustedIps The IPs or CIDR ranges that access tokens can be used from.
+	AccessTokenTrustedIps *[]struct {
+		IpAddress string `json:"ipAddress"`
+	} `json:"accessTokenTrustedIps,omitempty"`
+}
+
 // GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams defines parameters for GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens.
 type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams struct {
 	// Offset The offset to start from. If you enter 10, it will start from the 10th token.
@@ -147,6 +181,12 @@ type PostApiV3AuthSelectOrganizationJSONBodyUserAgent string
 
 // PostApiV1AdminSignupJSONRequestBody defines body for PostApiV1AdminSignup for application/json ContentType.
 type PostApiV1AdminSignupJSONRequestBody PostApiV1AdminSignupJSONBody
+
+// PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody defines body for PatchApiV1AuthTokenAuthIdentitiesIdentityId for application/json ContentType.
+type PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody
+
+// PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody defines body for PostApiV1AuthTokenAuthIdentitiesIdentityId for application/json ContentType.
+type PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody
 
 // PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody defines body for PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens for application/json ContentType.
 type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONBody
@@ -241,6 +281,22 @@ type ClientInterface interface {
 	// PostApiV1AuthToken request
 	PostApiV1AuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// DeleteApiV1AuthTokenAuthIdentitiesIdentityId request
+	DeleteApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetApiV1AuthTokenAuthIdentitiesIdentityId request
+	GetApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody request with any body
+	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody request with any body
+	PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens request
 	GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -297,6 +353,78 @@ func (c *Client) PostApiV1AdminSignup(ctx context.Context, body PostApiV1AdminSi
 
 func (c *Client) PostApiV1AuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostApiV1AuthTokenRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(c.Server, identityId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(c.Server, identityId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +630,168 @@ func NewPostApiV1AuthTokenRequest(server string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewDeleteApiV1AuthTokenAuthIdentitiesIdentityIdRequest generates requests for DeleteApiV1AuthTokenAuthIdentitiesIdentityId
+func NewDeleteApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetApiV1AuthTokenAuthIdentitiesIdentityIdRequest generates requests for GetApiV1AuthTokenAuthIdentitiesIdentityId
+func NewGetApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequest calls the generic PatchApiV1AuthTokenAuthIdentitiesIdentityId builder with application/json body
+func NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server, identityId, "application/json", bodyReader)
+}
+
+// NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody generates requests for PatchApiV1AuthTokenAuthIdentitiesIdentityId with any type of body
+func NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequest calls the generic PostApiV1AuthTokenAuthIdentitiesIdentityId builder with application/json body
+func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server, identityId, "application/json", bodyReader)
+}
+
+// NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody generates requests for PostApiV1AuthTokenAuthIdentitiesIdentityId with any type of body
+func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -906,6 +1196,22 @@ type ClientWithResponsesInterface interface {
 	// PostApiV1AuthTokenWithResponse request
 	PostApiV1AuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenResponse, error)
 
+	// DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request
+	DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+
+	// GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request
+	GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+
+	// PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with any body
+	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+
+	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+
+	// PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with any body
+	PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+
+	PostApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+
 	// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse request
 	GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error)
 
@@ -1123,6 +1429,314 @@ func (r PostApiV1AuthTokenResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PostApiV1AuthTokenResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		IdentityTokenAuth struct {
+			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+			CreatedAt               time.Time          `json:"createdAt"`
+			Id                      openapi_types.UUID `json:"id"`
+			IdentityId              openapi_types.UUID `json:"identityId"`
+			UpdatedAt               time.Time          `json:"updatedAt"`
+		} `json:"identityTokenAuth"`
+	}
+	JSON400 *struct {
+		Error      string                                                    `json:"error"`
+		Message    string                                                    `json:"message"`
+		ReqId      string                                                    `json:"reqId"`
+		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                                    `json:"error"`
+		Message    string                                                    `json:"message"`
+		ReqId      string                                                    `json:"reqId"`
+		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                               `json:"details,omitempty"`
+		Error      string                                                    `json:"error"`
+		Message    string                                                    `json:"message"`
+		ReqId      string                                                    `json:"reqId"`
+		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                                    `json:"error"`
+		Message    string                                                    `json:"message"`
+		ReqId      string                                                    `json:"reqId"`
+		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                                    `json:"error"`
+		Message    interface{}                                               `json:"message,omitempty"`
+		ReqId      string                                                    `json:"reqId"`
+		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                                    `json:"error"`
+		Message    string                                                    `json:"message"`
+		ReqId      string                                                    `json:"reqId"`
+		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+	}
+}
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
+type DeleteApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		IdentityTokenAuth struct {
+			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+			CreatedAt               time.Time          `json:"createdAt"`
+			Id                      openapi_types.UUID `json:"id"`
+			IdentityId              openapi_types.UUID `json:"identityId"`
+			UpdatedAt               time.Time          `json:"updatedAt"`
+		} `json:"identityTokenAuth"`
+	}
+	JSON400 *struct {
+		Error      string                                                 `json:"error"`
+		Message    string                                                 `json:"message"`
+		ReqId      string                                                 `json:"reqId"`
+		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                                 `json:"error"`
+		Message    string                                                 `json:"message"`
+		ReqId      string                                                 `json:"reqId"`
+		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                            `json:"details,omitempty"`
+		Error      string                                                 `json:"error"`
+		Message    string                                                 `json:"message"`
+		ReqId      string                                                 `json:"reqId"`
+		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                                 `json:"error"`
+		Message    string                                                 `json:"message"`
+		ReqId      string                                                 `json:"reqId"`
+		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                                 `json:"error"`
+		Message    interface{}                                            `json:"message,omitempty"`
+		ReqId      string                                                 `json:"reqId"`
+		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                                 `json:"error"`
+		Message    string                                                 `json:"message"`
+		ReqId      string                                                 `json:"reqId"`
+		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+	}
+}
+type GetApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
+type GetApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
+type GetApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
+type GetApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
+type GetApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
+type GetApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		IdentityTokenAuth struct {
+			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+			CreatedAt               time.Time          `json:"createdAt"`
+			Id                      openapi_types.UUID `json:"id"`
+			IdentityId              openapi_types.UUID `json:"identityId"`
+			UpdatedAt               time.Time          `json:"updatedAt"`
+		} `json:"identityTokenAuth"`
+	}
+	JSON400 *struct {
+		Error      string                                                   `json:"error"`
+		Message    string                                                   `json:"message"`
+		ReqId      string                                                   `json:"reqId"`
+		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                                   `json:"error"`
+		Message    string                                                   `json:"message"`
+		ReqId      string                                                   `json:"reqId"`
+		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                              `json:"details,omitempty"`
+		Error      string                                                   `json:"error"`
+		Message    string                                                   `json:"message"`
+		ReqId      string                                                   `json:"reqId"`
+		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                                   `json:"error"`
+		Message    string                                                   `json:"message"`
+		ReqId      string                                                   `json:"reqId"`
+		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                                   `json:"error"`
+		Message    interface{}                                              `json:"message,omitempty"`
+		ReqId      string                                                   `json:"reqId"`
+		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                                   `json:"error"`
+		Message    string                                                   `json:"message"`
+		ReqId      string                                                   `json:"reqId"`
+		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+	}
+}
+type PatchApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
+type PatchApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
+type PatchApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
+type PatchApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
+type PatchApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
+type PatchApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		IdentityTokenAuth struct {
+			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+			CreatedAt               time.Time          `json:"createdAt"`
+			Id                      openapi_types.UUID `json:"id"`
+			IdentityId              openapi_types.UUID `json:"identityId"`
+			UpdatedAt               time.Time          `json:"updatedAt"`
+		} `json:"identityTokenAuth"`
+	}
+	JSON400 *struct {
+		Error      string                                                  `json:"error"`
+		Message    string                                                  `json:"message"`
+		ReqId      string                                                  `json:"reqId"`
+		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                                  `json:"error"`
+		Message    string                                                  `json:"message"`
+		ReqId      string                                                  `json:"reqId"`
+		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                             `json:"details,omitempty"`
+		Error      string                                                  `json:"error"`
+		Message    string                                                  `json:"message"`
+		ReqId      string                                                  `json:"reqId"`
+		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                                  `json:"error"`
+		Message    string                                                  `json:"message"`
+		ReqId      string                                                  `json:"reqId"`
+		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                                  `json:"error"`
+		Message    interface{}                                             `json:"message,omitempty"`
+		ReqId      string                                                  `json:"reqId"`
+		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                                  `json:"error"`
+		Message    string                                                  `json:"message"`
+		ReqId      string                                                  `json:"reqId"`
+		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+	}
+}
+type PostApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
+type PostApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
+type PostApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
+type PostApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
+type PostApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
+type PostApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1765,6 +2379,58 @@ func (c *ClientWithResponses) PostApiV1AuthTokenWithResponse(ctx context.Context
 	return ParsePostApiV1AuthTokenResponse(rsp)
 }
 
+// DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request returning *DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse
+func (c *ClientWithResponses) DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	rsp, err := c.DeleteApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+}
+
+// GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request returning *GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse
+func (c *ClientWithResponses) GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	rsp, err := c.GetApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+}
+
+// PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with arbitrary body returning *PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse
+func (c *ClientWithResponses) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	rsp, err := c.PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx, identityId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+}
+
+func (c *ClientWithResponses) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	rsp, err := c.PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+}
+
+// PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with arbitrary body returning *PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse
+func (c *ClientWithResponses) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	rsp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx, identityId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	rsp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+}
+
 // GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse request returning *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse
 func (c *ClientWithResponses) GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error) {
 	rsp, err := c.GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx, identityId, params, reqEditors...)
@@ -2110,6 +2776,450 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 			Message    string                          `json:"message"`
 			ReqId      string                          `json:"reqId"`
 			StatusCode PostApiV1AuthToken500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
+func ParseDeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			IdentityTokenAuth struct {
+				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+				CreatedAt               time.Time          `json:"createdAt"`
+				Id                      openapi_types.UUID `json:"id"`
+				IdentityId              openapi_types.UUID `json:"identityId"`
+				UpdatedAt               time.Time          `json:"updatedAt"`
+			} `json:"identityTokenAuth"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Error      string                                                    `json:"error"`
+			Message    string                                                    `json:"message"`
+			ReqId      string                                                    `json:"reqId"`
+			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                                    `json:"error"`
+			Message    string                                                    `json:"message"`
+			ReqId      string                                                    `json:"reqId"`
+			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                               `json:"details,omitempty"`
+			Error      string                                                    `json:"error"`
+			Message    string                                                    `json:"message"`
+			ReqId      string                                                    `json:"reqId"`
+			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                                    `json:"error"`
+			Message    string                                                    `json:"message"`
+			ReqId      string                                                    `json:"reqId"`
+			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                                    `json:"error"`
+			Message    interface{}                                               `json:"message,omitempty"`
+			ReqId      string                                                    `json:"reqId"`
+			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                                    `json:"error"`
+			Message    string                                                    `json:"message"`
+			ReqId      string                                                    `json:"reqId"`
+			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
+func ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			IdentityTokenAuth struct {
+				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+				CreatedAt               time.Time          `json:"createdAt"`
+				Id                      openapi_types.UUID `json:"id"`
+				IdentityId              openapi_types.UUID `json:"identityId"`
+				UpdatedAt               time.Time          `json:"updatedAt"`
+			} `json:"identityTokenAuth"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Error      string                                                 `json:"error"`
+			Message    string                                                 `json:"message"`
+			ReqId      string                                                 `json:"reqId"`
+			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                                 `json:"error"`
+			Message    string                                                 `json:"message"`
+			ReqId      string                                                 `json:"reqId"`
+			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                            `json:"details,omitempty"`
+			Error      string                                                 `json:"error"`
+			Message    string                                                 `json:"message"`
+			ReqId      string                                                 `json:"reqId"`
+			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                                 `json:"error"`
+			Message    string                                                 `json:"message"`
+			ReqId      string                                                 `json:"reqId"`
+			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                                 `json:"error"`
+			Message    interface{}                                            `json:"message,omitempty"`
+			ReqId      string                                                 `json:"reqId"`
+			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                                 `json:"error"`
+			Message    string                                                 `json:"message"`
+			ReqId      string                                                 `json:"reqId"`
+			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
+func ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			IdentityTokenAuth struct {
+				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+				CreatedAt               time.Time          `json:"createdAt"`
+				Id                      openapi_types.UUID `json:"id"`
+				IdentityId              openapi_types.UUID `json:"identityId"`
+				UpdatedAt               time.Time          `json:"updatedAt"`
+			} `json:"identityTokenAuth"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Error      string                                                   `json:"error"`
+			Message    string                                                   `json:"message"`
+			ReqId      string                                                   `json:"reqId"`
+			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                                   `json:"error"`
+			Message    string                                                   `json:"message"`
+			ReqId      string                                                   `json:"reqId"`
+			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                              `json:"details,omitempty"`
+			Error      string                                                   `json:"error"`
+			Message    string                                                   `json:"message"`
+			ReqId      string                                                   `json:"reqId"`
+			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                                   `json:"error"`
+			Message    string                                                   `json:"message"`
+			ReqId      string                                                   `json:"reqId"`
+			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                                   `json:"error"`
+			Message    interface{}                                              `json:"message,omitempty"`
+			ReqId      string                                                   `json:"reqId"`
+			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                                   `json:"error"`
+			Message    string                                                   `json:"message"`
+			ReqId      string                                                   `json:"reqId"`
+			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a PostApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
+func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			IdentityTokenAuth struct {
+				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
+				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
+				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
+				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
+				CreatedAt               time.Time          `json:"createdAt"`
+				Id                      openapi_types.UUID `json:"id"`
+				IdentityId              openapi_types.UUID `json:"identityId"`
+				UpdatedAt               time.Time          `json:"updatedAt"`
+			} `json:"identityTokenAuth"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Error      string                                                  `json:"error"`
+			Message    string                                                  `json:"message"`
+			ReqId      string                                                  `json:"reqId"`
+			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                                  `json:"error"`
+			Message    string                                                  `json:"message"`
+			ReqId      string                                                  `json:"reqId"`
+			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                             `json:"details,omitempty"`
+			Error      string                                                  `json:"error"`
+			Message    string                                                  `json:"message"`
+			ReqId      string                                                  `json:"reqId"`
+			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                                  `json:"error"`
+			Message    string                                                  `json:"message"`
+			ReqId      string                                                  `json:"reqId"`
+			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                                  `json:"error"`
+			Message    interface{}                                             `json:"message,omitempty"`
+			ReqId      string                                                  `json:"reqId"`
+			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                                  `json:"error"`
+			Message    string                                                  `json:"message"`
+			ReqId      string                                                  `json:"reqId"`
+			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
