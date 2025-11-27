@@ -44,7 +44,7 @@ func InstallGatewaySystemdService(token string, domain string, name string, rela
 		return fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, "infisical-gateway"); err != nil {
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, "infisical-gateway", "gateway", "Infisical Gateway Service"); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
 	}
 

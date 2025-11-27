@@ -61,7 +61,7 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 
 	serviceName := "infisical-relay"
 
-	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, serviceName); err != nil {
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, serviceName, "relay", "Infisical Relay Service"); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
 	}
 

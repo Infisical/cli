@@ -15,12 +15,14 @@ func WriteSystemdServiceFile(
 	serviceLogFilePath string,
 	environmentFilePath string,
 	serviceName string, // service name (e.g. infisical-relay)
+	serviceType string, // service type (e.g. relay, gateway)
+	description string, // service description (e.g. Infisical Relay Service)
 ) error {
 
 	data := map[string]string{
-		"Description":     "Infisical Relay Service",
+		"Description":     description,
 		"EnvironmentFile": environmentFilePath,
-		"ServiceType":     "relay",
+		"ServiceType":     serviceType,
 	}
 
 	serviceLogFile := filepath.Clean(serviceLogFilePath)
