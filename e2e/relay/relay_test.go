@@ -21,6 +21,14 @@ var _ = Describe("Relay", func() {
 		err = dockerCompose.Up(context.TODO())
 		assert.NoError(currentT, err)
 
+		backend, err := dockerCompose.ServiceContainer(context.TODO(), "backend")
+		assert.NoError(currentT, err)
+
+		apiPort, err := backend.MappedPort(context.TODO(), "4000")
+		assert.NoError(currentT, err)
+
+		fmt.Printf("!!!! port = %s", apiPort)
+
 		/*
 			hc := http.Client{}
 			cc, err := client.NewClientWithResponses("http://localhost:4000", client.WithHTTPClient(&hc))
