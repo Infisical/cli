@@ -9,7 +9,16 @@ import (
 	. "github.com/onsi/gomega"
 	"net/http"
 	"os"
+	"strings"
 )
+
+func RandomSlug(numWords int) string {
+	var words []string
+	for i := 0; i < numWords; i++ {
+		words = append(words, strings.ToLower(faker.Word()))
+	}
+	return strings.Join(words, "-")
+}
 
 var _ = Describe("Relay", func() {
 	var infisical *InfisicalService
@@ -66,14 +75,14 @@ var _ = Describe("Relay", func() {
 		t := GinkgoT()
 		tempHomeDir := t.TempDir()
 
-		os.Args = []string{"infisical", "relay", "start"}
+		os.Args = []string{"infisical", "relay", "start", "--domain", infisical.ApiUrl()}
 
-		relayName := faker.Name()
+		relayName := RandomSlug(4)
 		// Need to set home in a temp dir to avoid it reading config file
 		t.Setenv("HOME", tempHomeDir)
 		t.Setenv("INFISICAL_API_URL", infisical.ApiUrl())
 		t.Setenv("INFISICAL_RELAY_NAME", relayName)
-		t.Setenv("INFISICAL_RELAY_HOST", "host-gateway")
+		t.Setenv("INFISICAL_RELAY_HOST", "host.docker.internal")
 		t.Setenv("INFISICAL_TOKEN", tokenResp.JSON200.AccessToken)
 
 		err = cmd.Execute()
