@@ -103,16 +103,19 @@ var _ = Describe("Relay", func() {
 		}()
 
 		require.Eventually(t, func() bool {
+			resp, err := c.GetRelaysWithResponse(ctx)
+			if err != nil {
+				return false
+			}
+			if resp.StatusCode() != http.StatusOK {
+				return false
+			}
+			for _, relay := range *resp.JSON200 {
+				if relay.Name == relayName && relay.Heartbeat != nil {
+					return true
+				}
+			}
 			return false
 		}, 20*time.Second, 5*time.Second)
-
-		Expect(err).To(BeNil())
-
-		// TODO: we can extract commonly used helper method, like creating a machine identity with auth token, so that
-		//		 we don't need to run the above manually here
-
-		//identityResp, err := c.GetApiV1ProjectsWithResponse(ctx, &client.GetApiV1ProjectsParams{})
-		//Expect(err).To(BeNil())
-		//Expect(identityResp.StatusCode()).To(Equal(http.StatusOK))
 	})
 })

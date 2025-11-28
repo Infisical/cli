@@ -321,6 +321,9 @@ type ClientInterface interface {
 
 	PostApiV1Projects(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetRelays request
+	GetRelays(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PostApiV3AuthSelectOrganizationWithBody request with any body
 	PostApiV3AuthSelectOrganizationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -533,6 +536,18 @@ func (c *Client) PostApiV1ProjectsWithBody(ctx context.Context, contentType stri
 
 func (c *Client) PostApiV1Projects(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostApiV1ProjectsRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetRelays(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetRelaysRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -1105,6 +1120,33 @@ func NewPostApiV1ProjectsRequestWithBody(server string, contentType string, body
 	return req, nil
 }
 
+// NewGetRelaysRequest generates requests for GetRelays
+func NewGetRelaysRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/relays")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewPostApiV3AuthSelectOrganizationRequest calls the generic PostApiV3AuthSelectOrganization builder with application/json body
 func NewPostApiV3AuthSelectOrganizationRequest(server string, body PostApiV3AuthSelectOrganizationJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -1235,6 +1277,9 @@ type ClientWithResponsesInterface interface {
 	PostApiV1ProjectsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1ProjectsResponse, error)
 
 	PostApiV1ProjectsWithResponse(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1ProjectsResponse, error)
+
+	// GetRelaysWithResponse request
+	GetRelaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetRelaysResponse, error)
 
 	// PostApiV3AuthSelectOrganizationWithBodyWithResponse request with any body
 	PostApiV3AuthSelectOrganizationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV3AuthSelectOrganizationResponse, error)
@@ -2284,6 +2329,81 @@ func (r PostApiV1ProjectsResponse) StatusCode() int {
 	return 0
 }
 
+type GetRelaysResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]struct {
+		CreatedAt       time.Time           `json:"createdAt"`
+		HealthAlertedAt *time.Time          `json:"healthAlertedAt"`
+		Heartbeat       *time.Time          `json:"heartbeat"`
+		Host            string              `json:"host"`
+		Id              openapi_types.UUID  `json:"id"`
+		IdentityId      *openapi_types.UUID `json:"identityId"`
+		Name            string              `json:"name"`
+		OrgId           *openapi_types.UUID `json:"orgId"`
+		UpdatedAt       time.Time           `json:"updatedAt"`
+	}
+	JSON400 *struct {
+		Error      string                 `json:"error"`
+		Message    string                 `json:"message"`
+		ReqId      string                 `json:"reqId"`
+		StatusCode GetRelays400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                 `json:"error"`
+		Message    string                 `json:"message"`
+		ReqId      string                 `json:"reqId"`
+		StatusCode GetRelays401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}            `json:"details,omitempty"`
+		Error      string                 `json:"error"`
+		Message    string                 `json:"message"`
+		ReqId      string                 `json:"reqId"`
+		StatusCode GetRelays403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                 `json:"error"`
+		Message    string                 `json:"message"`
+		ReqId      string                 `json:"reqId"`
+		StatusCode GetRelays404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                 `json:"error"`
+		Message    interface{}            `json:"message,omitempty"`
+		ReqId      string                 `json:"reqId"`
+		StatusCode GetRelays422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                 `json:"error"`
+		Message    string                 `json:"message"`
+		ReqId      string                 `json:"reqId"`
+		StatusCode GetRelays500StatusCode `json:"statusCode"`
+	}
+}
+type GetRelays400StatusCode float32
+type GetRelays401StatusCode float32
+type GetRelays403StatusCode float32
+type GetRelays404StatusCode float32
+type GetRelays422StatusCode float32
+type GetRelays500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r GetRelaysResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetRelaysResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type PostApiV3AuthSelectOrganizationResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2507,6 +2627,15 @@ func (c *ClientWithResponses) PostApiV1ProjectsWithResponse(ctx context.Context,
 		return nil, err
 	}
 	return ParsePostApiV1ProjectsResponse(rsp)
+}
+
+// GetRelaysWithResponse request returning *GetRelaysResponse
+func (c *ClientWithResponses) GetRelaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetRelaysResponse, error) {
+	rsp, err := c.GetRelays(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetRelaysResponse(rsp)
 }
 
 // PostApiV3AuthSelectOrganizationWithBodyWithResponse request with arbitrary body returning *PostApiV3AuthSelectOrganizationResponse
@@ -3964,6 +4093,115 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 			Message    string                         `json:"message"`
 			ReqId      string                         `json:"reqId"`
 			StatusCode PostApiV1Projects500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetRelaysResponse parses an HTTP response from a GetRelaysWithResponse call
+func ParseGetRelaysResponse(rsp *http.Response) (*GetRelaysResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetRelaysResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []struct {
+			CreatedAt       time.Time           `json:"createdAt"`
+			HealthAlertedAt *time.Time          `json:"healthAlertedAt"`
+			Heartbeat       *time.Time          `json:"heartbeat"`
+			Host            string              `json:"host"`
+			Id              openapi_types.UUID  `json:"id"`
+			IdentityId      *openapi_types.UUID `json:"identityId"`
+			Name            string              `json:"name"`
+			OrgId           *openapi_types.UUID `json:"orgId"`
+			UpdatedAt       time.Time           `json:"updatedAt"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Error      string                 `json:"error"`
+			Message    string                 `json:"message"`
+			ReqId      string                 `json:"reqId"`
+			StatusCode GetRelays400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                 `json:"error"`
+			Message    string                 `json:"message"`
+			ReqId      string                 `json:"reqId"`
+			StatusCode GetRelays401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}            `json:"details,omitempty"`
+			Error      string                 `json:"error"`
+			Message    string                 `json:"message"`
+			ReqId      string                 `json:"reqId"`
+			StatusCode GetRelays403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                 `json:"error"`
+			Message    string                 `json:"message"`
+			ReqId      string                 `json:"reqId"`
+			StatusCode GetRelays404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                 `json:"error"`
+			Message    interface{}            `json:"message,omitempty"`
+			ReqId      string                 `json:"reqId"`
+			StatusCode GetRelays422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                 `json:"error"`
+			Message    string                 `json:"message"`
+			ReqId      string                 `json:"reqId"`
+			StatusCode GetRelays500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
