@@ -6,7 +6,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
-	"github.com/infisical/cli/e2e-tests/packages/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/require"
@@ -40,48 +39,7 @@ var _ = Describe("Relay", func() {
 	It("registers a relay", func() {
 		ctx := context.Background()
 		c := infisical.ApiClient()
-
-		// TODO: the following machine identity creation code should be commonly used, we should extract them into
-		//	     the infisical service
-		// Create machine identity for the relay
-		role := "member"
-		identityResp, err := c.PostApiV1IdentitiesWithResponse(ctx, client.PostApiV1IdentitiesJSONRequestBody{
-			Name:           faker.Name(),
-			Role:           &role,
-			OrganizationId: infisical.ProvisionResult().OrgId,
-		})
-		Expect(err).To(BeNil())
-		Expect(identityResp.StatusCode()).To(Equal(http.StatusOK))
-
-		// Update the identity to allow token auth
-		identityId := identityResp.JSON200.Identity.Id
-		ttl := 2592000
-		useLimit := 0
-		updateResp, err := c.AttachTokenAuthWithResponse(
-			ctx, identityId.String(),
-			client.AttachTokenAuthJSONRequestBody{
-				AccessTokenTTL:          &ttl,
-				AccessTokenMaxTTL:       &ttl,
-				AccessTokenNumUsesLimit: &useLimit,
-				AccessTokenTrustedIps: &[]struct {
-					IpAddress string `json:"ipAddress"`
-				}{
-					{IpAddress: "0.0.0.0/0"},
-					{IpAddress: "::/0"},
-				},
-			},
-		)
-		Expect(err).To(BeNil())
-		Expect(updateResp.StatusCode()).To(Equal(http.StatusOK))
-
-		// Create auth token for relay CLI
-		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
-			ctx,
-			identityId.String(),
-			client.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody{},
-		)
-		Expect(err).To(BeNil())
-		Expect(tokenResp.StatusCode()).To(Equal(http.StatusOK))
+		identity := infisical.CreateMachineIdentity(ctx, WithTokenAuth())
 
 		t := GinkgoT()
 		tempHomeDir := t.TempDir()
@@ -94,7 +52,7 @@ var _ = Describe("Relay", func() {
 		t.Setenv("INFISICAL_API_URL", infisical.ApiUrl())
 		t.Setenv("INFISICAL_RELAY_NAME", relayName)
 		t.Setenv("INFISICAL_RELAY_HOST", "host.docker.internal")
-		t.Setenv("INFISICAL_TOKEN", tokenResp.JSON200.AccessToken)
+		t.Setenv("INFISICAL_TOKEN", *identity.TokenAuthToken)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
