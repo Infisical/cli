@@ -28,7 +28,7 @@ func WriteSystemdServiceFile(
 	serviceLogFile := filepath.Clean(serviceLogFilePath)
 
 	if !filepath.IsAbs(serviceLogFile) {
-		return fmt.Errorf("service-log-file must be an absolute path: %s", serviceLogFile)
+		return fmt.Errorf("log-file must be an absolute path: %s", serviceLogFile)
 	}
 
 	logDir := filepath.Dir(serviceLogFile)
