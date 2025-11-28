@@ -143,7 +143,7 @@ func WithTokenAuth() MachineIdentityOption {
 			},
 		)
 		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, updateResp.StatusCode)
+		require.Equal(t, http.StatusOK, updateResp.StatusCode())
 
 		// Create auth token for relay CLI
 		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
@@ -152,7 +152,7 @@ func WithTokenAuth() MachineIdentityOption {
 			client.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody{},
 		)
 		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, updateResp.StatusCode)
+		require.Equal(t, http.StatusOK, updateResp.StatusCode())
 
 		i.TokenAuthToken = &tokenResp.JSON200.AccessToken
 	}
