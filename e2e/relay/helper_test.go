@@ -120,7 +120,7 @@ func (s *InfisicalService) CreateMachineIdentity(ctx context.Context, options ..
 }
 
 func WithTokenAuth() MachineIdentityOption {
-	return func(ctx context.Context, s *InfisicalService, m *MachineIdentity) {
+	return func(ctx context.Context, s *InfisicalService, i *MachineIdentity) {
 		c := s.apiClient
 		t := GinkgoT()
 
@@ -129,7 +129,7 @@ func WithTokenAuth() MachineIdentityOption {
 		useLimit := 0
 		updateResp, err := c.AttachTokenAuthWithResponse(
 			ctx,
-			m.Id,
+			i.Id,
 			client.AttachTokenAuthJSONRequestBody{
 				AccessTokenTTL:          &ttl,
 				AccessTokenMaxTTL:       &ttl,
@@ -148,12 +148,12 @@ func WithTokenAuth() MachineIdentityOption {
 		// Create auth token for relay CLI
 		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
 			ctx,
-			identity.Id,
+			i.Id,
 			client.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody{},
 		)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, updateResp.StatusCode)
 
-		identity.TokenAuthToken = &tokenResp.JSON200.AccessToken
+		i.TokenAuthToken = &tokenResp.JSON200.AccessToken
 	}
 }
