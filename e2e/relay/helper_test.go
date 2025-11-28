@@ -73,3 +73,9 @@ func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
 	return s.provisionResult
 }
+
+func (s *InfisicalService) ApiUrl() string {
+	apiUrl, err := s.compose.ApiUrl(context.Background())
+	require.NoError(GinkgoT(), err)
+	return apiUrl
+}

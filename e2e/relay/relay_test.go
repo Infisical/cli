@@ -2,11 +2,13 @@ package relay_test
 
 import (
 	"context"
+	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/go-faker/faker/v4"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"net/http"
+	"os"
 )
 
 var _ = Describe("Relay", func() {
@@ -60,6 +62,23 @@ var _ = Describe("Relay", func() {
 		)
 		Expect(err).To(BeNil())
 		Expect(tokenResp.StatusCode()).To(Equal(http.StatusOK))
+
+		t := GinkgoT()
+		// Reset flags and args before each test
+		os.Args = []string{"infisical", "relay", "start"}
+
+		relayName := faker.Name()
+
+		t.Setenv("INFISICAL_API_URL", infisical.ApiUrl())
+		t.Setenv("INFISICAL_RELAY_NAME", relayName)
+		t.Setenv("INFISICAL_RELAY_HOST", "host-gateway")
+		t.Setenv("INFISICAL_TOKEN", tokenResp.JSON200.AccessToken)
+
+		err = cmd.Execute()
+		Expect(err).To(BeNil())
+
+		// TODO: we can extract commonly used helper method, like creating a machine identity with auth token, so that
+		//		 we don't need to run the above manually here
 
 		//identityResp, err := c.GetApiV1ProjectsWithResponse(ctx, &client.GetApiV1ProjectsParams{})
 		//Expect(err).To(BeNil())
