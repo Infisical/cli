@@ -2,15 +2,18 @@ package relay_test
 
 import (
 	"context"
+	"errors"
 	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 func RandomSlug(numWords int) string {
@@ -90,7 +93,19 @@ var _ = Describe("Relay", func() {
 		t.Setenv("INFISICAL_RELAY_HOST", "host.docker.internal")
 		t.Setenv("INFISICAL_TOKEN", tokenResp.JSON200.AccessToken)
 
-		err = cmd.Execute()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go func() {
+			if err := cmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				t.Error(err)
+			}
+		}()
+
+		require.Eventually(t, func() bool {
+			return false
+		}, 20*time.Second, 5*time.Second)
+
 		Expect(err).To(BeNil())
 
 		// TODO: we can extract commonly used helper method, like creating a machine identity with auth token, so that
