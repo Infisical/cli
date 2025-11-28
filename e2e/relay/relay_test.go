@@ -3,6 +3,7 @@ package relay_test
 import (
 	"context"
 	"github.com/Infisical/infisical-merge/packages/cmd"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	. "github.com/onsi/ginkgo/v2"
@@ -24,8 +25,12 @@ var _ = Describe("Relay", func() {
 	var infisical *InfisicalService
 
 	BeforeEach(func() {
-		infisical = NewInfisicalService()
-		infisical.Up(context.Background())
+		infisical = NewInfisicalService().
+			WithBackendEnvironment(types.NewMappingWithEquals([]string{
+				// This is needed for the private ip (current host) to be accepted for the relay server
+				"ALLOW_INTERNAL_IP_CONNECTIONS=true",
+			})).
+			Up(context.Background())
 	})
 
 	It("registers a relay", func() {

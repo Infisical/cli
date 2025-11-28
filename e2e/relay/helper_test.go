@@ -2,6 +2,8 @@ package relay_test
 
 import (
 	"context"
+	"fmt"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
@@ -23,7 +25,14 @@ func NewInfisicalService() *InfisicalService {
 	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
 }
 
-func (s *InfisicalService) Up(ctx context.Context) {
+func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithEquals) *InfisicalService {
+	backend := s.Stack.Project.Services["backend"]
+	backend.Environment = backend.Environment.OverrideBy(environment)
+	fmt.Print(s.Stack.Project.Services["backend"].Environment)
+	return s
+}
+
+func (s *InfisicalService) Up(ctx context.Context) *InfisicalService {
 	t := GinkgoT()
 	compose, err := s.Stack.ToComposeWithWaitingForService()
 	s.compose = compose
@@ -60,6 +69,7 @@ func (s *InfisicalService) Up(ctx context.Context) {
 			slog.Error("Failed to clean up Infisical service", "err", err)
 		}
 	})
+	return s
 }
 
 func (s *InfisicalService) Compose() infisical.Compose {
