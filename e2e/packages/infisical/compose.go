@@ -141,6 +141,11 @@ func WithBackendService(options BackendOptions) StackOption {
 				"db":    types.ServiceDependency{Condition: "service_started"},
 				"redis": types.ServiceDependency{Condition: "service_started"},
 			},
+			ExtraHosts: map[string][]string{
+				"host.docker.internal": {
+					"host-gateway",
+				},
+			},
 		}
 	}
 }
