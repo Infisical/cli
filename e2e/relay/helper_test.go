@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/go-faker/faker/v4"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
@@ -88,4 +89,71 @@ func (s *InfisicalService) ApiUrl() string {
 	apiUrl, err := s.compose.ApiUrl(context.Background())
 	require.NoError(GinkgoT(), err)
 	return apiUrl
+}
+
+type MachineIdentity struct {
+	Id             string
+	TokenAuthToken *string
+}
+
+type MachineIdentityOption func(context.Context, *InfisicalService, *MachineIdentity)
+
+func (s *InfisicalService) CreateMachineIdentity(ctx context.Context, options ...MachineIdentityOption) MachineIdentity {
+	c := s.apiClient
+	t := GinkgoT()
+
+	// Create machine identity for the relay
+	role := "member"
+	identityResp, err := c.PostApiV1IdentitiesWithResponse(ctx, client.PostApiV1IdentitiesJSONRequestBody{
+		Name:           faker.Name(),
+		Role:           &role,
+		OrganizationId: s.provisionResult.OrgId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, identityResp.StatusCode)
+
+	m := MachineIdentity{Id: identityResp.JSON200.Identity.Id.String()}
+	for _, o := range options {
+		o(ctx, s, &m)
+	}
+	return m
+}
+
+func WithTokenAuth() MachineIdentityOption {
+	return func(ctx context.Context, s *InfisicalService, m *MachineIdentity) {
+		c := s.apiClient
+		t := GinkgoT()
+
+		// Update the identity to allow token auth
+		ttl := 2592000
+		useLimit := 0
+		updateResp, err := c.AttachTokenAuthWithResponse(
+			ctx,
+			m.Id,
+			client.AttachTokenAuthJSONRequestBody{
+				AccessTokenTTL:          &ttl,
+				AccessTokenMaxTTL:       &ttl,
+				AccessTokenNumUsesLimit: &useLimit,
+				AccessTokenTrustedIps: &[]struct {
+					IpAddress string `json:"ipAddress"`
+				}{
+					{IpAddress: "0.0.0.0/0"},
+					{IpAddress: "::/0"},
+				},
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+		// Create auth token for relay CLI
+		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
+			ctx,
+			identity.Id,
+			client.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody{},
+		)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+		identity.TokenAuthToken = &tokenResp.JSON200.AccessToken
+	}
 }
