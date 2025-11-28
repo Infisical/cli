@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/require"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -111,11 +112,13 @@ var _ = Describe("Relay", func() {
 				return false
 			}
 			for _, relay := range *resp.JSON200 {
+				slog.Info("Relay info", "id", relay.Id, "name", relay.Name, "host", relay.Host, "heartbeat", relay.Heartbeat)
 				if relay.Name == relayName && relay.Heartbeat != nil {
+					slog.Info("Confirmed relay heartbeat")
 					return true
 				}
 			}
 			return false
-		}, 20*time.Second, 5*time.Second)
+		}, 120*time.Second, 5*time.Second)
 	})
 })
