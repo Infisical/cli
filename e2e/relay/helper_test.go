@@ -110,7 +110,7 @@ func (s *InfisicalService) CreateMachineIdentity(ctx context.Context, options ..
 		OrganizationId: s.provisionResult.OrgId,
 	})
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, identityResp.StatusCode)
+	require.Equal(t, http.StatusOK, identityResp.StatusCode())
 
 	m := MachineIdentity{Id: identityResp.JSON200.Identity.Id.String()}
 	for _, o := range options {
