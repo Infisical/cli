@@ -64,11 +64,13 @@ var _ = Describe("Relay", func() {
 		Expect(tokenResp.StatusCode()).To(Equal(http.StatusOK))
 
 		t := GinkgoT()
-		// Reset flags and args before each test
+		tempHomeDir := t.TempDir()
+
 		os.Args = []string{"infisical", "relay", "start"}
 
 		relayName := faker.Name()
-
+		// Need to set home in a temp dir to avoid it reading config file
+		t.Setenv("HOME", tempHomeDir)
 		t.Setenv("INFISICAL_API_URL", infisical.ApiUrl())
 		t.Setenv("INFISICAL_RELAY_NAME", relayName)
 		t.Setenv("INFISICAL_RELAY_HOST", "host-gateway")
