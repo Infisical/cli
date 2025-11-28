@@ -7,7 +7,6 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
 	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/require"
 	"log/slog"
 	"net/http"
@@ -37,15 +36,14 @@ var _ = Describe("Relay", func() {
 	})
 
 	It("registers a relay", func() {
+		t := GinkgoT()
 		ctx := context.Background()
 		c := infisical.ApiClient()
 		identity := infisical.CreateMachineIdentity(ctx, WithTokenAuth())
+		require.NotNil(t, identity)
 
-		t := GinkgoT()
 		tempHomeDir := t.TempDir()
-
 		os.Args = []string{"infisical", "relay", "start", "--domain", infisical.ApiUrl()}
-
 		relayName := RandomSlug(4)
 		// Need to set home in a temp dir to avoid it reading config file
 		t.Setenv("HOME", tempHomeDir)
