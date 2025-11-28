@@ -41,6 +41,8 @@ var _ = Describe("Relay", func() {
 		ctx := context.Background()
 		c := infisical.ApiClient()
 
+		// TODO: the following machine identity creation code should be commonly used, we should extract them into
+		//	     the infisical service
 		// Create machine identity for the relay
 		role := "member"
 		identityResp, err := c.PostApiV1IdentitiesWithResponse(ctx, client.PostApiV1IdentitiesJSONRequestBody{
@@ -112,7 +114,13 @@ var _ = Describe("Relay", func() {
 				return false
 			}
 			for _, relay := range *resp.JSON200 {
-				slog.Info("Relay info", "id", relay.Id, "name", relay.Name, "host", relay.Host, "heartbeat", relay.Heartbeat)
+				slog.Info(
+					"Relay info",
+					"id", relay.Id,
+					"name", relay.Name,
+					"host", relay.Host,
+					"heartbeat", relay.Heartbeat,
+				)
 				if relay.Name == relayName && relay.Heartbeat != nil {
 					slog.Info("Confirmed relay heartbeat")
 					return true
