@@ -25,27 +25,29 @@ func WriteSystemdServiceFile(
 		"ServiceType":     serviceType,
 	}
 
-	serviceLogFile := filepath.Clean(serviceLogFilePath)
+	if serviceLogFilePath != "" {
+		serviceLogFile := filepath.Clean(serviceLogFilePath)
 
-	if !filepath.IsAbs(serviceLogFile) {
-		return fmt.Errorf("log-file must be an absolute path: %s", serviceLogFile)
+		if !filepath.IsAbs(serviceLogFile) {
+			return fmt.Errorf("log-file must be an absolute path: %s", serviceLogFile)
+		}
+
+		logDir := filepath.Dir(serviceLogFile)
+
+		// create the directory structure with appropriate permissions
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("failed to create log directory %s: %w", logDir, err)
+		}
+
+		// create the log file if it doesn't exist
+		logFile, err := os.OpenFile(serviceLogFile, os.O_APPEND|os.O_CREATE, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to create log file %s: %w", serviceLogFile, err)
+		}
+		logFile.Close()
+
+		data["ServiceLogFile"] = serviceLogFile
 	}
-
-	logDir := filepath.Dir(serviceLogFile)
-
-	// create the directory structure with appropriate permissions
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return fmt.Errorf("failed to create log directory %s: %w", logDir, err)
-	}
-
-	// create the log file if it doesn't exist
-	logFile, err := os.OpenFile(serviceLogFile, os.O_APPEND|os.O_CREATE, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to create log file %s: %w", serviceLogFile, err)
-	}
-	logFile.Close()
-
-	data["ServiceLogFile"] = serviceLogFile
 
 	tmpl, err := template.ParseFS(templates.TemplatesFS, "infisical-service.tmpl")
 	if err != nil {
@@ -70,6 +72,10 @@ func WriteLogrotateFile(
 	serviceLogFilePath string,
 	serviceName string, // service name (e.g. infisical-relay)
 ) error {
+
+	if serviceLogFilePath == "" {
+		return nil
+	}
 
 	logrotateDirectory := "/etc/logrotate.d"
 
