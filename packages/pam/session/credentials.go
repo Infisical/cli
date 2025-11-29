@@ -21,6 +21,7 @@ type PAMCredentials struct {
 	SSLEnabled            bool
 	SSLRejectUnauthorized bool
 	SSLCertificate        string
+	ReadOnlyMode          bool
 }
 
 type cachedCredentials struct {
@@ -92,6 +93,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		SSLEnabled:            response.Credentials.SSLEnabled,
 		SSLRejectUnauthorized: response.Credentials.SSLRejectUnauthorized,
 		SSLCertificate:        response.Credentials.SSLCertificate,
+		ReadOnlyMode:          response.Credentials.ReadOnlyMode,
 	}
 
 	cm.cacheMutex.Lock()
