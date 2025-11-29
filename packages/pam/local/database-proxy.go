@@ -30,8 +30,8 @@ const (
 	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
 )
 
-func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr string, port int) {
-	log.Info().Msgf("Starting database proxy for account ID: %s", accountID)
+func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID string, durationStr string, port int) {
+	log.Info().Msgf("Starting database proxy for account: %s", accountPath)
 	log.Info().Msgf("Session duration: %s", durationStr)
 
 	httpClient := resty.New()
@@ -39,8 +39,9 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
 	pamRequest := api.PAMAccessRequest{
-		Duration:  durationStr,
-		AccountId: accountID,
+		Duration:    durationStr,
+		AccountPath: accountPath,
+		ProjectId:   projectID,
 	}
 
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
@@ -84,9 +85,9 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	}
 
 	if port == 0 {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
 	}
 
 	username, ok := pamResponse.Metadata["username"]
@@ -104,7 +105,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
 		return
 	}
-	accountPath, ok := pamResponse.Metadata["accountPath"]
+	accountPathMetadata, ok := pamResponse.Metadata["accountPath"]
 	if !ok {
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
 		return
@@ -115,7 +116,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Database Proxy Session Started!                  \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
+	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
 	fmt.Printf("\n")
 	fmt.Printf("You can now connect to your database using this connection string:\n")
 
