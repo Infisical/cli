@@ -7,7 +7,7 @@ Type=notify
 NotifyAccess=all
 EnvironmentFile={{ .EnvironmentFile }}
 {{ if .ServiceLogFile }}
-ExecStart=/bin/bash -c 'infisical {{ .ServiceType }} start 2>&1 | tee {{ .ServiceLogFile }}'
+ExecStart=/bin/bash -c 'infisical {{ .ServiceType }} start 2>&1 | tee {{ .ServiceLogFile | printf "%q" }}'
 {{ else }}
 ExecStart=infisical {{ .ServiceType }} start
 {{ end }}
