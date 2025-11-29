@@ -7,10 +7,10 @@ Type=notify
 NotifyAccess=all
 EnvironmentFile={{ .EnvironmentFile }}
 {{ if .ServiceLogFile }}
-ExecStart=/bin/bash -c 'infisical {{ .ServiceType }} start 2>&1 | tee {{ .ServiceLogFile | printf "%q" }}'
-{{ else }}
-ExecStart=infisical {{ .ServiceType }} start
+StandardOutput=append:{{ .ServiceLogFile }}
+StandardError=append:{{ .ServiceLogFile }}
 {{ end }}
+ExecStart=infisical {{ .ServiceType }} start
 Restart=on-failure
 InaccessibleDirectories=/home
 PrivateTmp=yes
