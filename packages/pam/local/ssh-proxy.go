@@ -27,14 +27,15 @@ type SSHProxyServer struct {
 	sshProcess      *exec.Cmd
 }
 
-func StartSSHLocalProxy(accessToken string, accountID string, durationStr string) {
+func StartSSHLocalProxy(accessToken string, accountPath string, projectID string, durationStr string) {
 	httpClient := resty.New()
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
 	pamRequest := api.PAMAccessRequest{
-		Duration:  durationStr,
-		AccountId: accountID,
+		Duration:    durationStr,
+		AccountPath: accountPath,
+		ProjectId:   projectID,
 	}
 
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)

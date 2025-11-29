@@ -772,8 +772,9 @@ type RegisterGatewayResponse struct {
 }
 
 type PAMAccessRequest struct {
-	Duration  string `json:"duration,omitempty"`
-	AccountId string `json:"accountId,omitempty"`
+	Duration    string `json:"duration,omitempty"`
+	AccountPath string `json:"accountPath,omitempty"`
+	ProjectId   string `json:"projectId,omitempty"`
 }
 
 type PAMAccessResponse struct {
