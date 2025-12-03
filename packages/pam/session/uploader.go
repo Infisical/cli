@@ -22,9 +22,10 @@ var ErrSessionFileNotFound = errors.New("session file not found")
 
 // Resource type constants
 const (
-	ResourceTypePostgres = "postgres"
-	ResourceTypeMysql    = "mysql"
-	ResourceTypeSSH      = "ssh"
+	ResourceTypePostgres   = "postgres"
+	ResourceTypeMysql      = "mysql"
+	ResourceTypeSSH        = "ssh"
+	ResourceTypeKubernetes = "kubernetes"
 )
 
 type SessionFileInfo struct {
