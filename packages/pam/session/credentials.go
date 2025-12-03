@@ -93,6 +93,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		SSLEnabled:            response.Credentials.SSLEnabled,
 		SSLRejectUnauthorized: response.Credentials.SSLRejectUnauthorized,
 		SSLCertificate:        response.Credentials.SSLCertificate,
+		ServiceAccountToken:   response.Credentials.ServiceAccountToken,
 	}
 
 	cm.cacheMutex.Lock()
