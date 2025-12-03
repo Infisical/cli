@@ -167,10 +167,10 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeKubernetes:
 		kubernetesConfig := kubernetes.KubernetesProxyConfig{
-			AuthMethod:      credentials.AuthMethod,
-			InjectAuthToken: credentials.AuthToken,
-			SessionID:       pamConfig.SessionId,
-			SessionLogger:   sessionLogger,
+			AuthMethod:                credentials.AuthMethod,
+			InjectServiceAccountToken: credentials.ServiceAccountToken,
+			SessionID:                 pamConfig.SessionId,
+			SessionLogger:             sessionLogger,
 		}
 		proxy := kubernetes.NewKubernetesProxy(kubernetesConfig)
 		log.Info().

@@ -21,7 +21,7 @@ type PAMCredentials struct {
 	SSLEnabled            bool
 	SSLRejectUnauthorized bool
 	SSLCertificate        string
-	AuthToken             string
+	ServiceAccountToken   string
 }
 
 type cachedCredentials struct {

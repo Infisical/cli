@@ -9,11 +9,11 @@ import (
 )
 
 type KubernetesProxyConfig struct {
-	TargetApiServer string
-	AuthMethod      string
-	InjectAuthToken string
-	SessionID       string
-	SessionLogger   session.SessionLogger
+	TargetApiServer           string
+	AuthMethod                string
+	InjectServiceAccountToken string
+	SessionID                 string
+	SessionLogger             session.SessionLogger
 }
 
 type KubernetesProxy struct {
