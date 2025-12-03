@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -163,6 +164,19 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", sshConfig.TargetAddr).
 			Msg("Starting SSH PAM proxy")
 
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeKubernetes:
+		kubernetesConfig := kubernetes.KubernetesProxyConfig{
+			AuthMethod:      credentials.AuthMethod,
+			InjectAuthToken: credentials.AuthToken,
+			SessionID:       pamConfig.SessionId,
+			SessionLogger:   sessionLogger,
+		}
+		proxy := kubernetes.NewKubernetesProxy(kubernetesConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", kubernetesConfig.TargetApiServer).
+			Msg("Starting Kubernetes PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
