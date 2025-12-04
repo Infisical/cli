@@ -110,7 +110,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			continue // Continue to next request
 		}
 		proxyReq.Header = req.Header.Clone()
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+		proxyReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
 
 		resp, err := selfServerClient.Do(proxyReq)
 		if err != nil {
