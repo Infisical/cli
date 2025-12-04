@@ -3,13 +3,12 @@ package kubernetes
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +20,7 @@ type KubernetesProxyConfig struct {
 	TargetApiServer           string
 	AuthMethod                string
 	InjectServiceAccountToken string
+	TLSConfig                 *tls.Config
 	SessionID                 string
 	SessionLogger             session.SessionLogger
 }
@@ -43,8 +43,16 @@ func buildHttpInternalServerError(message string) string {
 func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
 	defer clientConn.Close()
 	reader := bufio.NewReader(clientConn)
+
+	transport := &http.Transport{
+		DisableKeepAlives: false,
+		MaxIdleConns:      10,
+		IdleConnTimeout:   30 * time.Second,
+		TLSClientConfig:   p.config.TLSConfig,
+	}
 	selfServerClient := &http.Client{
-		Timeout: 10 * time.Second,
+		Transport: transport,
+		Timeout:   10 * time.Second,
 	}
 
 	// Loop to handle multiple HTTP requests on the same connection
@@ -90,20 +98,21 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		log.Info().Msgf("Received HTTP request: %s", req.URL.Path)
 
-		// If there's any authorization header, let's delete it
+		// create the request to the target
+		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.Path)
+		proxyReq, err := http.NewRequest(req.Method, newUrl, req.Body)
+		if err != nil {
+			log.Error().Msgf("Failed to create proxy request: %v", err)
+			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to create proxy request")))
+			if err != nil {
+				return err
+			}
+			continue // Continue to next request
+		}
+		proxyReq.Header = req.Header.Clone()
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
 
-		newUrl, err := url.Parse(fmt.Sprintf("%s/%s", strings.Trim(p.config.TargetApiServer, "/"), req.URL.Path))
-		if err != nil {
-			_, writeErr := clientConn.Write([]byte(buildHttpInternalServerError("Invalid target api server URL")))
-			if err != nil {
-				return writeErr
-			}
-			continue
-		}
-		req.URL = newUrl
-
-		resp, err := selfServerClient.Do(req)
+		resp, err := selfServerClient.Do(proxyReq)
 		if err != nil {
 			return err
 		}
@@ -115,7 +124,10 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		if err := resp.Write(clientConn); err != nil {
 			log.Error().Err(err).Msg("Failed to write response to connection")
-			resp.Body.Close()
+			err := resp.Body.Close()
+			if err != nil {
+				return err
+			}
 			return fmt.Errorf("failed to write response to connection: %w", err)
 		}
 
