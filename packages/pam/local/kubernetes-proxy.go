@@ -89,14 +89,25 @@ func StartKubernetesLocalProxy(accessToken string, accountID string, durationStr
 		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
 	}
 
+	accountName, ok := pamResponse.Metadata["accountName"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
+		return
+	}
+	accountPath, ok := pamResponse.Metadata["accountPath"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
+		return
+	}
+
+	// TODO: we should let the user decide whether if they want to update kubeconfig or not
 	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
 	config, err := configLoader.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load kubernetes config")
 		return
 	}
-
-	clusterName := fmt.Sprintf("infisical-k8s-%s.%s", accountID, pamResponse.SessionId)
+	clusterName := fmt.Sprintf("infisical-k8s-pam%s%s", accountPath, accountName)
 	config.Clusters[clusterName] = &k8sapi.Cluster{
 		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
 	}
@@ -118,7 +129,7 @@ func StartKubernetesLocalProxy(accessToken string, accountID string, durationStr
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Kubernetes Proxy Session Started!                   \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	//fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
+	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
 	fmt.Printf("\n")
 	// TODO: write kubectl config
 
