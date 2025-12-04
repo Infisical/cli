@@ -42,6 +42,19 @@ func buildHttpInternalServerError(message string) string {
 
 func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
 	defer clientConn.Close()
+
+	sessionID := p.config.SessionID
+	defer func() {
+		if err := p.config.SessionLogger.Close(); err != nil {
+			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to close session logger")
+		}
+	}()
+
+	log.Info().
+		Str("sessionID", sessionID).
+		Str("targetApiServer", p.config.TargetApiServer).
+		Msg("New Kubernetes connection for PAM session")
+
 	reader := bufio.NewReader(clientConn)
 
 	transport := &http.Transport{
@@ -98,6 +111,18 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		log.Info().Msgf("Received HTTP request: %s", req.URL.Path)
 
+		err := p.config.SessionLogger.LogHttpRequestEvent(session.HttpRequestEvent{
+			Timestamp: time.Now(),
+			URL:       req.URL.String(),
+			Method:    req.Method,
+			// TODO: filter out sensitive headers?
+			Headers: req.Header,
+			// TODO: log body as well?
+		})
+		if err != nil {
+			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log HTTP request event")
+		}
+
 		// create the request to the target
 		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.Path)
 		proxyReq, err := http.NewRequest(req.Method, newUrl, req.Body)
@@ -117,11 +142,18 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			return err
 		}
 
+		p.config.SessionLogger.LogHttpResponseEvent(session.HttpResponseEvent{
+			Timestamp: time.Now(),
+			Status:    resp.Status,
+			// TODO: remove sensitive stuff
+			Headers: resp.Header,
+			// TODO: log body as well
+		})
+
 		// Write the entire response (status line, headers, body) to the connection
 		resp.Header.Del("Connection")
-
 		log.Info().Msgf("Writing response to connection: %s", resp.Status)
-
+		// TODO: log the body
 		if err := resp.Write(clientConn); err != nil {
 			log.Error().Err(err).Msg("Failed to write response to connection")
 			err := resp.Body.Close()

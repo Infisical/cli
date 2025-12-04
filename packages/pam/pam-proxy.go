@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
@@ -91,9 +92,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
 
+	serverName := credentials.Host
+	if pamConfig.ResourceType == session.ResourceTypeKubernetes {
+		parsed, err := url.Parse(credentials.Url)
+		if err != nil {
+			return fmt.Errorf("failed to parse URL: %w", err)
+		}
+		serverName = parsed.Hostname()
+	}
+
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: !credentials.SSLRejectUnauthorized,
-		ServerName:         credentials.Host,
+		ServerName:         serverName,
 	}
 	// If a server certificate is provided, add it to the root CA pool
 	if credentials.SSLCertificate != "" {
@@ -170,6 +180,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			AuthMethod:                credentials.AuthMethod,
 			InjectServiceAccountToken: credentials.ServiceAccountToken,
 			TargetApiServer:           credentials.Url,
+			TLSConfig:                 tlsConfig,
 			SessionID:                 pamConfig.SessionId,
 			SessionLogger:             sessionLogger,
 		}

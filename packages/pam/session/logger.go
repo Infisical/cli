@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,9 +40,27 @@ type TerminalEvent struct {
 	ElapsedTime float64           `json:"elapsedTime"` // Seconds since session start (for replay)
 }
 
+type HttpRequestEvent struct {
+	Timestamp time.Time   `json:"timestamp"`
+	Method    string      `json:"method"`
+	URL       string      `json:"url"`
+	Headers   http.Header `json:"headers"`
+	Body      []byte      `json:"body"`
+}
+
+type HttpResponseEvent struct {
+	Timestamp time.Time   `json:"timestamp"`
+	Status    string      `json:"status"`
+	Headers   http.Header `json:"headers"`
+	Body      []byte      `json:"body"`
+	// TODO: find a way to support streaming resp efficiently
+}
+
 type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
 	LogTerminalEvent(event TerminalEvent) error
+	LogHttpRequestEvent(event HttpRequestEvent) error
+	LogHttpResponseEvent(event HttpResponseEvent) error
 	Close() error
 }
 
@@ -190,7 +209,7 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 	}, nil
 }
 
-func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
+func (sl *EncryptedSessionLogger) writeEvent(productEventData func() ([]byte, error)) error {
 	sl.mutex.Lock()
 	defer sl.mutex.Unlock()
 
@@ -198,56 +217,9 @@ func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
 		return fmt.Errorf("session logger not initialized")
 	}
 
-	jsonData, err := json.Marshal(entry)
+	jsonData, err := productEventData()
 	if err != nil {
-		return fmt.Errorf("failed to marshal entry: %w", err)
-	}
-
-	encryptedData, err := EncryptData(jsonData, sl.encryptionKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt data: %w", err)
-	}
-
-	// Use session-level mutex to ensure atomic writes across concurrent connections
-	sessionMutex := getSessionMutex(sl.sessionID, sl.expiresAt)
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-
-	// Write length-prefixed encrypted record (4 bytes length + encrypted data)
-	lengthBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(lengthBytes, uint32(len(encryptedData)))
-
-	if _, err := sl.file.Write(lengthBytes); err != nil {
-		return fmt.Errorf("failed to write length prefix: %w", err)
-	}
-
-	if _, err := sl.file.Write(encryptedData); err != nil {
-		return fmt.Errorf("failed to write encrypted data: %w", err)
-	}
-
-	if err := sl.file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
-	}
-
-	return nil
-}
-
-func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
-	sl.mutex.Lock()
-	defer sl.mutex.Unlock()
-
-	if sl.file == nil {
-		return fmt.Errorf("session logger not initialized")
-	}
-
-	// Calculate elapsed time if not already set
-	if event.ElapsedTime == 0 {
-		event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
-	}
-
-	jsonData, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal terminal event: %w", err)
+		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
 	encryptedData, err := EncryptData(jsonData, sl.encryptionKey)
@@ -277,8 +249,35 @@ func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
 	if err := sl.file.Sync(); err != nil {
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
-
 	return nil
+}
+
+func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		return json.Marshal(entry)
+	})
+}
+
+func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		// Calculate elapsed time if not already set
+		if event.ElapsedTime == 0 {
+			event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
+		}
+		return json.Marshal(event)
+	})
+}
+
+func (sl *EncryptedSessionLogger) LogHttpRequestEvent(event HttpRequestEvent) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		return json.Marshal(event)
+	})
+}
+
+func (sl *EncryptedSessionLogger) LogHttpResponseEvent(event HttpResponseEvent) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		return json.Marshal(event)
+	})
 }
 
 func (sl *EncryptedSessionLogger) Close() error {
