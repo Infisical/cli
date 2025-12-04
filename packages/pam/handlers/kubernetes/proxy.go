@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -109,10 +110,15 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			// Successfully received request
 		}
 
-		log.Info().Msgf("Received HTTP request: %s", req.URL.Path)
+		requestId := uuid.New()
+		log.Info().
+			Str("url", req.URL.String()).
+			Str("reqId", requestId.String()).
+			Msg("Received HTTP request")
 
 		err := p.config.SessionLogger.LogHttpRequestEvent(session.HttpRequestEvent{
 			Timestamp: time.Now(),
+			RequestId: requestId.String(),
 			URL:       req.URL.String(),
 			Method:    req.Method,
 			// TODO: filter out sensitive headers?
@@ -144,6 +150,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		p.config.SessionLogger.LogHttpResponseEvent(session.HttpResponseEvent{
 			Timestamp: time.Now(),
+			RequestId: requestId.String(),
 			Status:    resp.Status,
 			// TODO: remove sensitive stuff
 			Headers: resp.Header,

@@ -42,6 +42,7 @@ type TerminalEvent struct {
 
 type HttpRequestEvent struct {
 	Timestamp time.Time   `json:"timestamp"`
+	RequestId string      `json:"requestId"`
 	Method    string      `json:"method"`
 	URL       string      `json:"url"`
 	Headers   http.Header `json:"headers"`
@@ -50,6 +51,7 @@ type HttpRequestEvent struct {
 
 type HttpResponseEvent struct {
 	Timestamp time.Time   `json:"timestamp"`
+	RequestId string      `json:"requestId"`
 	Status    string      `json:"status"`
 	Headers   http.Header `json:"headers"`
 	Body      []byte      `json:"body"`
