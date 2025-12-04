@@ -14,6 +14,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
+	"k8s.io/client-go/tools/clientcmd"
+	k8sapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 type KubernetesProxyServer struct {
@@ -21,14 +23,6 @@ type KubernetesProxyServer struct {
 	server          net.Listener
 	port            int
 }
-
-//
-//type ALPN string
-//
-//const (
-//	ALPNInfisicalPAMProxy        ALPN = "infisical-pam-proxy"
-//	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
-//)
 
 func StartKubernetesLocalProxy(accessToken string, accountID string, durationStr string, port int) {
 	log.Info().Msgf("Starting kubernetes proxy for account ID: %s", accountID)
@@ -95,16 +89,29 @@ func StartKubernetesLocalProxy(accessToken string, accountID string, durationStr
 		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
 	}
 
-	//accountName, ok := pamResponse.Metadata["accountName"]
-	//if !ok {
-	//	util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
-	//	return
-	//}
-	//accountPath, ok := pamResponse.Metadata["accountPath"]
-	//if !ok {
-	//	util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
-	//	return
-	//}
+	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
+	config, err := configLoader.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to load kubernetes config")
+		return
+	}
+
+	clusterName := fmt.Sprintf("infisical-k8s-%s.%s", accountID, pamResponse.SessionId)
+	config.Clusters[clusterName] = &k8sapi.Cluster{
+		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
+	}
+	config.AuthInfos[clusterName] = &k8sapi.AuthInfo{}
+	config.Contexts[clusterName] = &k8sapi.Context{
+		Cluster:  clusterName,
+		AuthInfo: clusterName,
+	}
+	config.CurrentContext = clusterName
+	kubeconfig := configLoader.GetDefaultFilename()
+	if err = clientcmd.WriteToFile(*config, kubeconfig); err != nil {
+		log.Fatal().Err(err).Str("kubeconfig", kubeconfig).Msg("Failed to write kubernetes config")
+		return
+	}
+	log.Info().Str("kubeconfig", kubeconfig).Msg("Updated kubeconfig file")
 
 	log.Info().Msgf("Kubernetes proxy server listening on port %d", proxy.port)
 	fmt.Printf("\n")
