@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -104,7 +105,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 				log.Info().Msg("Client closed HTTP connection")
 				return nil
 			}
-			log.Error().Msgf("Failed to read HTTP request: %v", err)
+			log.Error().Err(err).Msg("Failed to read HTTP request")
 			return fmt.Errorf("failed to read HTTP request: %v", err)
 		case req = <-reqCh:
 			// Successfully received request
@@ -116,7 +117,17 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			Str("reqId", requestId.String()).
 			Msg("Received HTTP request")
 
-		err := p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
+		// TODO: what if this is a DOS attack? maybe limit the totally req body size?
+		reqBody, err := io.ReadAll(req.Body)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to read request body")
+			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to read request body")))
+			if err != nil {
+				return err
+			}
+			return err
+		}
+		err = p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
 			Timestamp: time.Now(),
 			RequestId: requestId.String(),
 			EventType: session.HttpEventRequest,
@@ -124,7 +135,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			Method:    req.Method,
 			// TODO: filter out sensitive headers?
 			Headers: req.Header,
-			// TODO: log body as well?
+			Body:    reqBody,
 		})
 		if err != nil {
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log HTTP request event")
@@ -134,7 +145,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.Path)
 		proxyReq, err := http.NewRequest(req.Method, newUrl, req.Body)
 		if err != nil {
-			log.Error().Msgf("Failed to create proxy request: %v", err)
+			log.Error().Err(err).Msg("Failed to create proxy request")
 			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to create proxy request")))
 			if err != nil {
 				return err
@@ -149,23 +160,18 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			return err
 		}
 
-		err = p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
-			Timestamp: time.Now(),
-			RequestId: requestId.String(),
-			EventType: session.HttpEventResponse,
-			Status:    resp.Status,
-			// TODO: remove sensitive stuff
-			Headers: resp.Header,
-			// TODO: log body as well
-		})
-		if err != nil {
-			return err
-		}
-
 		// Write the entire response (status line, headers, body) to the connection
 		resp.Header.Del("Connection")
 		log.Info().Msgf("Writing response to connection: %s", resp.Status)
-		// TODO: log the body
+
+		// Tee the body to a local buffer so that we can eventually log it
+		var bodyCopy bytes.Buffer
+		resp.Body = struct {
+			io.ReadCloser
+		}{
+			ReadCloser: io.NopCloser(io.TeeReader(resp.Body, &bodyCopy)),
+		}
+
 		if err := resp.Write(clientConn); err != nil {
 			log.Error().Err(err).Msg("Failed to write response to connection")
 			err := resp.Body.Close()
@@ -176,6 +182,23 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		}
 
 		err = resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		err = p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
+			Timestamp: time.Now(),
+			RequestId: requestId.String(),
+			EventType: session.HttpEventResponse,
+			Status:    resp.Status,
+			// TODO: remove sensitive stuff
+			Headers: resp.Header,
+			// TODO: well... this might be really really big for the case of `kubectl cp` or `kubectl logs`
+			// 		 instead of writing the data into a big chunk mem blob,
+			//		 we should break it down into smaller fixed size chunks and flush as resp event with seq numbers
+			//		 (like a respBodyPart event type?)
+			Body: bodyCopy.Bytes(),
+		})
 		if err != nil {
 			return err
 		}
