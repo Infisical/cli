@@ -40,29 +40,30 @@ type TerminalEvent struct {
 	ElapsedTime float64           `json:"elapsedTime"` // Seconds since session start (for replay)
 }
 
-type HttpRequestEvent struct {
-	Timestamp time.Time   `json:"timestamp"`
-	RequestId string      `json:"requestId"`
-	Method    string      `json:"method"`
-	URL       string      `json:"url"`
-	Headers   http.Header `json:"headers"`
-	Body      []byte      `json:"body"`
+type HttpEventType string
+
+type HttpEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	// TODO: ideally this should be different polymorphic structs determined by the event type,
+	// 		 just not sure what's the best way to do in go lang
+	EventType HttpEventType `json:"eventType"`
+	RequestId string        `json:"requestId"`
+	Headers   http.Header   `json:"headers"`
+	Method    string        `json:"method,omitempty"`
+	URL       string        `json:"url,omitempty"`
+	Status    string        `json:"status,omitempty"`
+	Body      []byte        `json:"body,omitempty"`
 }
 
-type HttpResponseEvent struct {
-	Timestamp time.Time   `json:"timestamp"`
-	RequestId string      `json:"requestId"`
-	Status    string      `json:"status"`
-	Headers   http.Header `json:"headers"`
-	Body      []byte      `json:"body"`
-	// TODO: find a way to support streaming resp efficiently
-}
+const (
+	HttpEventRequest  HttpEventType = "request"
+	HttpEventResponse HttpEventType = "response"
+)
 
 type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
 	LogTerminalEvent(event TerminalEvent) error
-	LogHttpRequestEvent(event HttpRequestEvent) error
-	LogHttpResponseEvent(event HttpResponseEvent) error
+	LogHttpEvent(event HttpEvent) error
 	Close() error
 }
 
@@ -270,13 +271,7 @@ func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
 	})
 }
 
-func (sl *EncryptedSessionLogger) LogHttpRequestEvent(event HttpRequestEvent) error {
-	return sl.writeEvent(func() ([]byte, error) {
-		return json.Marshal(event)
-	})
-}
-
-func (sl *EncryptedSessionLogger) LogHttpResponseEvent(event HttpResponseEvent) error {
+func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
 		return json.Marshal(event)
 	})

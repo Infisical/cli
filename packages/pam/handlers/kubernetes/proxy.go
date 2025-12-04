@@ -116,9 +116,10 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			Str("reqId", requestId.String()).
 			Msg("Received HTTP request")
 
-		err := p.config.SessionLogger.LogHttpRequestEvent(session.HttpRequestEvent{
+		err := p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
 			Timestamp: time.Now(),
 			RequestId: requestId.String(),
+			EventType: session.HttpEventRequest,
 			URL:       req.URL.String(),
 			Method:    req.Method,
 			// TODO: filter out sensitive headers?
@@ -148,14 +149,18 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			return err
 		}
 
-		p.config.SessionLogger.LogHttpResponseEvent(session.HttpResponseEvent{
+		err = p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
 			Timestamp: time.Now(),
 			RequestId: requestId.String(),
+			EventType: session.HttpEventResponse,
 			Status:    resp.Status,
 			// TODO: remove sensitive stuff
 			Headers: resp.Header,
 			// TODO: log body as well
 		})
+		if err != nil {
+			return err
+		}
 
 		// Write the entire response (status line, headers, body) to the connection
 		resp.Header.Del("Connection")
