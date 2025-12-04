@@ -306,8 +306,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
 	}
 	if fileInfo.ResourceType == ResourceTypeKubernetes {
-		// SSH session - read as terminal events
-		terminalEvents, err := ReadEncryptedTerminalEventsFromFile(fileInfo.Filename, encryptionKey)
+		httpEvents, err := ReadEncryptedHttpEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to read SSH session file: %w", err)
 		}
@@ -315,16 +314,20 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		log.Debug().
 			Str("sessionId", fileInfo.SessionID).
 			Str("resourceType", fileInfo.ResourceType).
-			Int("eventCount", len(terminalEvents)).
+			Int("eventCount", len(httpEvents)).
 			Msg("Uploading terminal session events")
 
-		var logs []api.UploadTerminalEvent
-		for _, event := range terminalEvents {
-			logs = append(logs, api.UploadTerminalEvent{
-				Timestamp:   event.Timestamp,
-				EventType:   string(event.EventType),
-				Data:        event.Data,
-				ElapsedTime: event.ElapsedTime,
+		var logs []api.UploadHttpEvent
+		for _, event := range httpEvents {
+			logs = append(logs, api.UploadHttpEvent{
+				Timestamp: event.Timestamp,
+				EventType: string(event.EventType),
+				RequestId: event.RequestId,
+				Method:    event.Method,
+				Url:       event.URL,
+				Status:    event.Status,
+				Headers:   event.Headers,
+				Body:      event.Body,
 			})
 		}
 
