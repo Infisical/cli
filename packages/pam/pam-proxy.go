@@ -169,6 +169,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		kubernetesConfig := kubernetes.KubernetesProxyConfig{
 			AuthMethod:                credentials.AuthMethod,
 			InjectServiceAccountToken: credentials.ServiceAccountToken,
+			TargetApiServer:           credentials.Url,
 			SessionID:                 pamConfig.SessionId,
 			SessionLogger:             sessionLogger,
 		}

@@ -21,6 +21,7 @@ type PAMCredentials struct {
 	SSLEnabled            bool
 	SSLRejectUnauthorized bool
 	SSLCertificate        string
+	Url                   string
 	ServiceAccountToken   string
 }
 
@@ -93,6 +94,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		SSLEnabled:            response.Credentials.SSLEnabled,
 		SSLRejectUnauthorized: response.Credentials.SSLRejectUnauthorized,
 		SSLCertificate:        response.Credentials.SSLCertificate,
+		Url:                   response.Credentials.Url,
 		ServiceAccountToken:   response.Credentials.ServiceAccountToken,
 	}
 
