@@ -254,7 +254,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	sb.WriteString(fmt.Sprintf("%s %s\r\n", req.Method, newUrl.RequestURI()))
 	headers := req.Header.Clone()
 	// Inject the auth header
-	//headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+	headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
 	for key, values := range headers {
 		for _, value := range values {
 			sb.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
@@ -317,14 +317,13 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	go forwardData(forwardingCtx, clientConn, clientDataCh, "client-to-server")
 
 	for {
-	loop:
 		select {
 		case <-ctx.Done():
 			log.Info().Msg("Context cancelled, closing HTTP proxy connection")
 			return ctx.Err()
 		case data, ok := <-serverDataCh:
 			if !ok {
-				break loop
+				return nil
 			}
 			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received server data")
 			_, err = clientConn.Write(data)
@@ -333,7 +332,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 			}
 		case data, ok := <-clientDataCh:
 			if !ok {
-				break loop
+				return nil
 			}
 			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received client data")
 			_, err = selfServerConn.Write(data)
@@ -342,5 +341,4 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 			}
 		}
 	}
-	return nil
 }
