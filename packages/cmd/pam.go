@@ -235,6 +235,7 @@ func init() {
 	pamKubernetesCmd.AddCommand(pamKubernetesAccessAccountCmd)
 	pamKubernetesAccessAccountCmd.Flags().String("duration", "1h", "Duration for kubernetes access session (e.g., '1h', '30m', '2h30m')")
 	pamKubernetesAccessAccountCmd.Flags().Int("port", 0, "Port for the local kubernetes proxy server (0 for auto-assign)")
+	pamKubernetesAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
 
 	pamCmd.AddCommand(pamDbCmd)
 	pamCmd.AddCommand(pamSshCmd)
