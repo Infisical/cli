@@ -93,7 +93,7 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, durationS
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
 		return
 	}
-	accountPath, ok := pamResponse.Metadata["accountPath"]
+	actualAccountPath, ok := pamResponse.Metadata["accountPath"]
 	if !ok {
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
 		return
@@ -106,7 +106,7 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, durationS
 		log.Fatal().Err(err).Msg("Failed to load kubernetes config")
 		return
 	}
-	clusterName := fmt.Sprintf("infisical-k8s-pam%s%s", accountPath, accountName)
+	clusterName := fmt.Sprintf("infisical-k8s-pam%s%s", actualAccountPath, accountName)
 	config.Clusters[clusterName] = &k8sapi.Cluster{
 		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
 	}
