@@ -162,13 +162,14 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 			// Write headers to the target server
 			var sb strings.Builder
-			headerLines := make([]string, 0)
-			headerLines = append(headerLines, fmt.Sprintf("%s %s", req.Method, newUrl.RequestURI()))
+			sb.WriteString(fmt.Sprintf("%s\r\n", req.Method, newUrl.RequestURI()))
 			headers := req.Header.Clone()
 			// Inject the auth header
 			headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
-			for line := range headerLines {
-				sb.WriteString(fmt.Sprintf("%s\r\n", line))
+			for key, values := range headers {
+				for _, value := range values {
+					sb.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
+				}
 			}
 			sb.WriteString("\r\n")
 			_, err = io.WriteString(selfServerConn, sb.String())
@@ -232,6 +233,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 					if !ok {
 						return nil
 					}
+					log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received server data")
 					_, err = clientConn.Write(data)
 					if err != nil {
 						log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
@@ -240,6 +242,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 					if !ok {
 						return nil
 					}
+					log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received client data")
 					_, err = selfServerConn.Write(data)
 					if err != nil {
 						log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
