@@ -19,9 +19,12 @@ import (
 )
 
 type KubernetesProxyServer struct {
-	BaseProxyServer // Embed common functionality
-	server          net.Listener
-	port            int
+	BaseProxyServer           // Embed common functionality
+	server                    net.Listener
+	port                      int
+	kubeConfigPath            string
+	kubeConfigClusterName     string
+	kubeConfigOriginalContext string
 }
 
 func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId, durationStr string, port int) {
@@ -104,6 +107,8 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	}
 
 	// TODO: we should let the user decide whether if they want to update kubeconfig or not
+	// TODO: ideally, lock the files to avoid others from writing to it
+	// TODO: use clientcmd.ModifyConfig instead?
 	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
 	config, err := configLoader.Load()
 	if err != nil {
@@ -111,6 +116,7 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 		return
 	}
 	clusterName := fmt.Sprintf("infisical-k8s-pam%s%s", actualAccountPath, accountName)
+
 	config.Clusters[clusterName] = &k8sapi.Cluster{
 		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
 	}
@@ -119,6 +125,7 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 		Cluster:  clusterName,
 		AuthInfo: clusterName,
 	}
+	proxy.kubeConfigOriginalContext = config.CurrentContext
 	config.CurrentContext = clusterName
 	kubeconfig := configLoader.GetDefaultFilename()
 	if err = clientcmd.WriteToFile(*config, kubeconfig); err != nil {
@@ -126,6 +133,8 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 		return
 	}
 	log.Info().Str("kubeconfig", kubeconfig).Msg("Updated kubeconfig file")
+	proxy.kubeConfigClusterName = clusterName
+	proxy.kubeConfigPath = kubeconfig
 
 	log.Info().Msgf("Kubernetes proxy server listening on port %d", proxy.port)
 	fmt.Printf("\n")
@@ -170,6 +179,31 @@ func (p *KubernetesProxyServer) Start(port int) error {
 func (p *KubernetesProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
 		log.Info().Msg("Starting graceful shutdown of kubernetes proxy...")
+
+		if p.kubeConfigPath != "" && p.kubeConfigClusterName != "" {
+			log.Info().
+				Str("kubeconfig", p.kubeConfigPath).
+				Str("clusterName", p.kubeConfigClusterName).
+				Msg("Reverting changes made to the kubeconfig file")
+			configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
+			config, err := configLoader.Load()
+			if err != nil {
+				log.Fatal().Err(err).Msg("Failed to load kubernetes config")
+				return
+			}
+
+			delete(config.Contexts, p.kubeConfigClusterName)
+			delete(config.AuthInfos, p.kubeConfigClusterName)
+			delete(config.Contexts, p.kubeConfigClusterName)
+			if p.kubeConfigOriginalContext != "" {
+				config.CurrentContext = p.kubeConfigOriginalContext
+			}
+			kubeconfig := configLoader.GetDefaultFilename()
+			if err = clientcmd.WriteToFile(*config, kubeconfig); err != nil {
+				log.Fatal().Err(err).Str("kubeconfig", kubeconfig).Msg("Failed to write kubernetes config")
+				return
+			}
+		}
 
 		// Send session termination notification before cancelling context
 		p.NotifySessionTermination()
