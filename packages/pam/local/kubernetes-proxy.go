@@ -133,7 +133,7 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	fmt.Printf("                  Kubernetes Proxy Session Started!                   \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
-	fmt.Printf("Your current kubectl context has been switched to %s, you can start using kubectl command to access your Kubernetes right now\n")
+	fmt.Printf("Your current kubectl context has been switched to %s, you can start using kubectl command to access your Kubernetes right now\n", clusterName)
 	fmt.Printf("\n")
 	// TODO: write kubectl config
 
