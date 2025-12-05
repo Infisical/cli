@@ -137,16 +137,12 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to parse URL")
 			return err
 		}
+
 		if req.Header.Get("Connection") == "Upgrade" && req.Header.Get("Upgrade") == "websocket" {
 			// This looks like a websocket request, most likely to be coming from exec cmd.
 			// Let's connect with raw socket instead as it's much easier that way
 			log.Info().Str("sessionID", sessionID).Msg("Upgrade to websocket connection")
-
-			err := p.forwardWebsocketConnection(ctx, clientConn, newUrl, sessionID, req)
-			if err != nil {
-				return err
-			}
-			continue
+			return p.forwardWebsocketConnection(ctx, clientConn, newUrl, sessionID, req)
 		}
 
 		transport := &http.Transport{
@@ -251,8 +247,9 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 
 	// Write headers to the target server
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s %s\r\n", req.Method, newUrl.RequestURI()))
+	sb.WriteString(fmt.Sprintf("%s %s HTTP/1.1\r\n", req.Method, newUrl.RequestURI()))
 	headers := req.Header.Clone()
+	headers.Set("Host", newUrl.Host)
 	// Inject the auth header
 	headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
 	for key, values := range headers {
@@ -304,9 +301,11 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 				return
 			}
 			select {
-			case dstCh <- buf[:n]:
+			// Notice: we need to copy it into a new buf to avoid the buffer got overwritten by the next read
+			// TODO: use a memory pool for better mem performance
+			case dstCh <- append([]byte(nil), buf[:n]...):
+				continue
 			case <-ctx.Done():
-				close(dstCh)
 				return
 			}
 		}
@@ -326,10 +325,12 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 				return nil
 			}
 			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received server data")
-			_, err = clientConn.Write(data)
+			n, err := clientConn.Write(data)
 			if err != nil {
 				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
+				return err
 			}
+			log.Info().Int("n", n).Msg("@@@@ Forwarded server data to client")
 		case data, ok := <-clientDataCh:
 			if !ok {
 				return nil
@@ -338,6 +339,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 			_, err = selfServerConn.Write(data)
 			if err != nil {
 				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
+				return err
 			}
 		}
 	}
