@@ -277,7 +277,7 @@ var loginCmd = &cobra.Command{
 				errMsg := err.Error()
 
 				if strings.Contains(errMsg, "status-code=401") || strings.Contains(errMsg, "status-code=403") {
-					domainHint = fmt.Sprintf("\n\nThis error often indicates you're using the wrong Infisical instance. Current request is to: %s\n\nTo fix this:\n• Verify you're using the correct domain with --domain flag or INFISICAL_API_URL environment variable\n• For EU region: use --domain https://eu.infisical.com\n• For self-hosted instances: use --domain https://your-instance.com", currentDomain)
+					domainHint = fmt.Sprintf("\n\nCheck your credentials or verify you're using the correct domain. Current domain: %s", currentDomain)
 				}
 
 				util.HandleError(fmt.Errorf("unable to authenticate with %s [err=%v].%s", formatAuthMethod(loginMethod), err, domainHint))
