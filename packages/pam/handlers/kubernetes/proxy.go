@@ -162,7 +162,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 			// Write headers to the target server
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("%s\r\n", req.Method, newUrl.RequestURI()))
+			sb.WriteString(fmt.Sprintf("%s %s\r\n", req.Method, newUrl.RequestURI()))
 			headers := req.Header.Clone()
 			// Inject the auth header
 			headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
@@ -172,6 +172,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 				}
 			}
 			sb.WriteString("\r\n")
+			log.Info().Msg(sb.String())
 			_, err = io.WriteString(selfServerConn, sb.String())
 			if err != nil {
 				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write headers	to target server")
