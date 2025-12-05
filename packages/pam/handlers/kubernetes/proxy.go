@@ -140,6 +140,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		if req.Header.Get("Connection") == "Upgrade" && req.Header.Get("Upgrade") == "websocket" {
 			// This looks like a websocket request, most likely to be coming from exec cmd.
 			// Let's connect with raw socket instead as it's much easier that way
+			log.Info().Str("sessionID", sessionID).Msg("Transitioning to websocket connection")
 
 			var tslConfig *tls.Config = nil
 			var selfServerConn net.Conn
@@ -179,29 +180,48 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			serverDataCh := make(chan []byte)
 			clientDataCh := make(chan []byte)
 
-			forwardData := func(ch <-chan []byte, conn net.Conn, direction string) {
+			forwardData := func(ctx context.Context, src net.Conn, dstCh chan<- []byte, direction string) {
 				buf := make([]byte, 1024)
-				n, err := conn.Read(buf)
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						log.Info().Str("direction", direction).Msg("Peer closed HTTP connection")
-						close(serverDataCh)
+				defer func() {
+					close(dstCh)
+				}()
+				for {
+					timeout := time.Now().Add(10 * time.Second)
+					if ctx.Err() != nil {
+						timeout = time.Time{}
+					}
+					if err := src.SetReadDeadline(timeout); err != nil {
+						log.Error().Err(err).Str("direction", direction).Msg("SetReadDeadline failed")
 						return
 					}
-					log.Error().
-						Err(err).
-						Str("direction", direction).
-						Str("sessionID", sessionID).
-						Msg("Failed to read peer data")
-					close(serverDataCh)
-					return
+
+					n, err := src.Read(buf)
+					if err != nil {
+						if ne, ok := err.(net.Error); ok && ne.Timeout() {
+							// It's just a timeout, let's do it again
+							continue
+						}
+						if ctx.Err() != nil {
+							log.Info().Str("direction", direction).Msg("Forwarding stopped due to context cancellation")
+						} else if errors.Is(err, io.EOF) {
+							log.Info().Str("direction", direction).Msg("Peer closed connection")
+						} else {
+							log.Error().Err(err).Str("direction", direction).Msg("Read error")
+						}
+						return
+					}
+					select {
+					case dstCh <- buf[:n]:
+					case <-ctx.Done():
+						close(dstCh)
+						return
+					}
 				}
-				serverDataCh <- buf[:n]
 			}
 			// Read data from the server
-			go forwardData(serverDataCh, selfServerConn, "server-to-client")
+			go forwardData(ctx, selfServerConn, serverDataCh, "server-to-client")
 			// Read data from the client
-			go forwardData(clientDataCh, clientConn, "client-to-server")
+			go forwardData(ctx, clientConn, clientDataCh, "client-to-server")
 
 			for {
 				select {
