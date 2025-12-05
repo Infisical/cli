@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -71,6 +72,11 @@ func (b *BaseProxyServer) CreateRelayConnection() (net.Conn, error) {
 		RootCAs:      caCertPool,
 		ServerName:   host,
 		MinVersion:   tls.VersionTLS12,
+	}
+
+	if util.IsDevelopmentMode() {
+		tlsConfig.InsecureSkipVerify = true
+		log.Debug().Msg("Development mode: skipping TLS certificate verification for relay connection")
 	}
 
 	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", host, port), tlsConfig)
