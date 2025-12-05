@@ -184,7 +184,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			ReadCloser: io.NopCloser(io.TeeReader(resp.Body, &bodyCopy)),
 		}
 
-		if err := resp.Write(clientConn); err != nil {
+		if err := resp.Write(clientConn); err != nil && !errors.Is(err, io.EOF) {
 			log.Error().Err(err).Msg("Failed to write response to connection")
 			err := resp.Body.Close()
 			if err != nil {
