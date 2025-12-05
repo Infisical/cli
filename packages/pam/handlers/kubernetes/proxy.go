@@ -263,7 +263,6 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 		}
 	}
 	sb.WriteString("\r\n")
-	l.Info().Msg(sb.String())
 	_, err = io.WriteString(selfServerConn, sb.String())
 	if err != nil {
 		l.Error().Err(err).Msg("Failed to write headers to target server")
