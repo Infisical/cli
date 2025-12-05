@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,15 +61,6 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 	reader := bufio.NewReader(clientConn)
 
-	transport := &http.Transport{
-		DisableKeepAlives: false,
-		MaxIdleConns:      10,
-		IdleConnTimeout:   30 * time.Second,
-		TLSClientConfig:   p.config.TLSConfig,
-	}
-	selfServerClient := &http.Client{
-		Transport: transport,
-	}
 	// Loop to handle multiple HTTP requests on the same connection
 	for {
 		select {
@@ -139,9 +132,113 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log HTTP request event")
 		}
 
+		newUrl, err := url.Parse(fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.RequestURI()))
+		if err != nil {
+			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to parse URL")
+			return err
+		}
+		if req.Header.Get("Connection") == "Upgrade" && req.Header.Get("Upgrade") == "websocket" {
+			// This looks like a websocket request, most likely to be coming from exec cmd.
+			// Let's connect with raw socket instead as it's much easier that way
+
+			var tslConfig *tls.Config = nil
+			var selfServerConn net.Conn
+			if newUrl.Scheme == "https" {
+				tslConfig = p.config.TLSConfig
+				selfServerConn, err = tls.Dial("tcp", newUrl.Host, tslConfig)
+				if err != nil {
+					log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
+					return err
+				}
+			} else {
+				selfServerConn, err = net.Dial("tcp", newUrl.Host)
+				if err != nil {
+					log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
+					return err
+				}
+			}
+			defer selfServerConn.Close()
+
+			// Write headers to the target server
+			var sb strings.Builder
+			headerLines := make([]string, 0)
+			headerLines = append(headerLines, fmt.Sprintf("%s %s", req.Method, newUrl.RequestURI()))
+			headers := req.Header.Clone()
+			// Inject the auth header
+			headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+			for line := range headerLines {
+				sb.WriteString(fmt.Sprintf("%s\r\n", line))
+			}
+			sb.WriteString("\r\n")
+			_, err = io.WriteString(selfServerConn, sb.String())
+			if err != nil {
+				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write headers	to target server")
+				return err
+			}
+
+			serverDataCh := make(chan []byte)
+			clientDataCh := make(chan []byte)
+
+			forwardData := func(ch <-chan []byte, conn net.Conn, direction string) {
+				buf := make([]byte, 1024)
+				n, err := conn.Read(buf)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						log.Info().Str("direction", direction).Msg("Peer closed HTTP connection")
+						close(serverDataCh)
+						return
+					}
+					log.Error().
+						Err(err).
+						Str("direction", direction).
+						Str("sessionID", sessionID).
+						Msg("Failed to read peer data")
+					close(serverDataCh)
+					return
+				}
+				serverDataCh <- buf[:n]
+			}
+			// Read data from the server
+			go forwardData(serverDataCh, selfServerConn, "server-to-client")
+			// Read data from the client
+			go forwardData(clientDataCh, clientConn, "client-to-server")
+
+			for {
+				select {
+				case <-ctx.Done():
+					log.Info().Msg("Context cancelled, closing HTTP proxy connection")
+					return ctx.Err()
+				case data, ok := <-serverDataCh:
+					if !ok {
+						return nil
+					}
+					_, err = clientConn.Write(data)
+					if err != nil {
+						log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
+					}
+				case data, ok := <-clientDataCh:
+					if !ok {
+						return nil
+					}
+					_, err = selfServerConn.Write(data)
+					if err != nil {
+						log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
+					}
+				}
+			}
+		}
+
+		transport := &http.Transport{
+			DisableKeepAlives: false,
+			MaxIdleConns:      10,
+			IdleConnTimeout:   30 * time.Second,
+			TLSClientConfig:   p.config.TLSConfig,
+		}
+		selfServerClient := &http.Client{
+			Transport: transport,
+		}
 		// create the request to the target
-		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.RequestURI())
-		proxyReq, err := http.NewRequest(req.Method, newUrl, bytes.NewReader(reqBody))
+		proxyReq, err := http.NewRequest(req.Method, newUrl.String(), bytes.NewReader(reqBody))
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create proxy request")
 			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to create proxy request")))
