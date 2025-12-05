@@ -54,8 +54,8 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		}
 	}()
 
-	log.Info().
-		Str("sessionID", sessionID).
+	l := log.With().Str("sessionID", sessionID).Logger()
+	l.Info().
 		Str("targetApiServer", p.config.TargetApiServer).
 		Msg("New Kubernetes connection for PAM session")
 
@@ -65,12 +65,12 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("Context cancelled, closing HTTP proxy connection")
+			l.Info().Msg("Context cancelled, closing HTTP proxy connection")
 			return ctx.Err()
 		default:
 		}
 
-		log.Info().Msg("Attempting to read HTTP request...")
+		l.Info().Msg("Attempting to read HTTP request...")
 
 		// Create a channel to receive the request or error
 		reqCh := make(chan *http.Request, 1)
@@ -89,21 +89,21 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		var req *http.Request
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("Context cancelled while reading HTTP request")
+			l.Info().Msg("Context cancelled while reading HTTP request")
 			return ctx.Err()
 		case err := <-errCh:
 			if errors.Is(err, io.EOF) {
-				log.Info().Msg("Client closed HTTP connection")
+				l.Info().Msg("Client closed HTTP connection")
 				return nil
 			}
-			log.Error().Err(err).Msg("Failed to read HTTP request")
+			l.Error().Err(err).Msg("Failed to read HTTP request")
 			return fmt.Errorf("failed to read HTTP request: %v", err)
 		case req = <-reqCh:
 			// Successfully received request
 		}
 
 		requestId := uuid.New()
-		log.Info().
+		l.Info().
 			Str("url", req.URL.String()).
 			Str("reqId", requestId.String()).
 			Msg("Received HTTP request")
@@ -111,7 +111,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		// TODO: what if this is a DOS attack? maybe limit the totally req body size?
 		reqBody, err := io.ReadAll(req.Body)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to read request body")
+			l.Error().Err(err).Msg("Failed to read request body")
 			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to read request body")))
 			if err != nil {
 				return err
@@ -129,19 +129,19 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			Body:    reqBody,
 		})
 		if err != nil {
-			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log HTTP request event")
+			l.Error().Err(err).Msg("Failed to log HTTP request event")
 		}
 
 		newUrl, err := url.Parse(fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.RequestURI()))
 		if err != nil {
-			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to parse URL")
+			l.Error().Err(err).Msg("Failed to parse URL")
 			return err
 		}
 
 		if req.Header.Get("Connection") == "Upgrade" && req.Header.Get("Upgrade") == "websocket" {
 			// This looks like a websocket request, most likely to be coming from exec cmd.
 			// Let's connect with raw socket instead as it's much easier that way
-			log.Info().Str("sessionID", sessionID).Msg("Upgrade to websocket connection")
+			l.Info().Msg("Upgrade to websocket connection")
 			return p.forwardWebsocketConnection(ctx, clientConn, newUrl, sessionID, req)
 		}
 
@@ -157,7 +157,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		// create the request to the target
 		proxyReq, err := http.NewRequest(req.Method, newUrl.String(), bytes.NewReader(reqBody))
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to create proxy request")
+			l.Error().Err(err).Msg("Failed to create proxy request")
 			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to create proxy request")))
 			if err != nil {
 				return err
@@ -174,7 +174,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		// Write the entire response (status line, headers, body) to the connection
 		resp.Header.Del("Connection")
-		log.Info().Str("status", resp.Status).Msgf("Writing response to connection")
+		l.Info().Str("status", resp.Status).Msgf("Writing response to connection")
 
 		// Tee the body to a local buffer so that we can eventually log it
 		var bodyCopy bytes.Buffer
@@ -184,13 +184,17 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			ReadCloser: io.NopCloser(io.TeeReader(resp.Body, &bodyCopy)),
 		}
 
-		if err := resp.Write(clientConn); err != nil && !errors.Is(err, io.EOF) {
-			log.Error().Err(err).Msg("Failed to write response to connection")
-			err := resp.Body.Close()
-			if err != nil {
-				return err
+		if err := resp.Write(clientConn); err != nil {
+			if errors.Is(err, io.EOF) {
+				l.Info().Msg("Client closed HTTP connection")
+			} else {
+				l.Error().Err(err).Msg("Failed to write response to connection")
+				err := resp.Body.Close()
+				if err != nil {
+					return err
+				}
+				return fmt.Errorf("failed to write response to connection: %w", err)
 			}
-			return fmt.Errorf("failed to write response to connection: %w", err)
 		}
 
 		err = resp.Body.Close()
@@ -226,6 +230,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	sessionID string,
 	req *http.Request,
 ) error {
+	l := log.With().Str("sessionID", sessionID).Logger()
 	var tslConfig *tls.Config = nil
 	var selfServerConn net.Conn
 	var err error
@@ -233,13 +238,13 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 		tslConfig = p.config.TLSConfig
 		selfServerConn, err = tls.Dial("tcp", newUrl.Host, tslConfig)
 		if err != nil {
-			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
+			l.Error().Err(err).Msg("Failed to connect to the target server")
 			return err
 		}
 	} else {
 		selfServerConn, err = net.Dial("tcp", newUrl.Host)
 		if err != nil {
-			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
+			l.Error().Err(err).Msg("Failed to connect to the target server")
 			return err
 		}
 	}
@@ -258,10 +263,10 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 		}
 	}
 	sb.WriteString("\r\n")
-	log.Info().Msg(sb.String())
+	l.Info().Msg(sb.String())
 	_, err = io.WriteString(selfServerConn, sb.String())
 	if err != nil {
-		log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write headers	to target server")
+		l.Error().Err(err).Msg("Failed to write headers to target server")
 		return err
 	}
 
@@ -271,6 +276,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	clientDataCh := make(chan []byte)
 
 	forwardData := func(ctx context.Context, src net.Conn, dstCh chan<- []byte, direction string) {
+		forwardLog := l.With().Str("direction", direction).Logger()
 		buf := make([]byte, 1024)
 		defer func() {
 			close(dstCh)
@@ -281,7 +287,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 				timeout = time.Time{}
 			}
 			if err := src.SetReadDeadline(timeout); err != nil {
-				log.Error().Err(err).Str("direction", direction).Msg("SetReadDeadline failed")
+				forwardLog.Error().Err(err).Msg("SetReadDeadline failed")
 				return
 			}
 
@@ -292,11 +298,11 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 					continue
 				}
 				if ctx.Err() != nil {
-					log.Info().Str("direction", direction).Msg("Forwarding stopped due to context cancellation")
+					forwardLog.Info().Msg("Forwarding stopped due to context cancellation")
 				} else if errors.Is(err, io.EOF) {
-					log.Info().Str("direction", direction).Msg("Peer closed connection")
+					forwardLog.Info().Msg("Peer closed connection")
 				} else {
-					log.Error().Err(err).Str("direction", direction).Msg("Read error")
+					forwardLog.Error().Err(err).Msg("Read error")
 				}
 				return
 			}
@@ -318,7 +324,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("Context cancelled, closing HTTP proxy connection")
+			l.Info().Msg("Context cancelled, closing HTTP proxy connection")
 			return ctx.Err()
 		case data, ok := <-serverDataCh:
 			if !ok {
@@ -326,7 +332,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 			}
 			_, err := clientConn.Write(data)
 			if err != nil {
-				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
+				l.Error().Err(err).Msg("Failed to write server data to client")
 				return err
 			}
 		case data, ok := <-clientDataCh:
@@ -335,7 +341,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 			}
 			_, err = selfServerConn.Write(data)
 			if err != nil {
-				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
+				l.Error().Err(err).Msg("Failed to write client data to server")
 				return err
 			}
 		}
