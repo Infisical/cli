@@ -83,9 +83,9 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, durationS
 	}
 
 	if port == 0 {
-		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
 	}
 
 	accountName, ok := pamResponse.Metadata["accountName"]
