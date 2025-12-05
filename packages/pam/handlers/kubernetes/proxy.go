@@ -67,9 +67,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 	}
 	selfServerClient := &http.Client{
 		Transport: transport,
-		Timeout:   10 * time.Second,
 	}
-
 	// Loop to handle multiple HTTP requests on the same connection
 	for {
 		select {
@@ -142,7 +140,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		}
 
 		// create the request to the target
-		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.Path)
+		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.RequestURI())
 		proxyReq, err := http.NewRequest(req.Method, newUrl, bytes.NewReader(reqBody))
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create proxy request")
@@ -162,7 +160,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		// Write the entire response (status line, headers, body) to the connection
 		resp.Header.Del("Connection")
-		log.Info().Msgf("Writing response to connection: %s", resp.Status)
+		log.Info().Str("status", resp.Status).Msgf("Writing response to connection")
 
 		// Tee the body to a local buffer so that we can eventually log it
 		var bodyCopy bytes.Buffer
