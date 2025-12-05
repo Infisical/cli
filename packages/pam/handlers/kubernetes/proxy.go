@@ -142,114 +142,11 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			// Let's connect with raw socket instead as it's much easier that way
 			log.Info().Str("sessionID", sessionID).Msg("Upgrade to websocket connection")
 
-			var tslConfig *tls.Config = nil
-			var selfServerConn net.Conn
-			if newUrl.Scheme == "https" {
-				tslConfig = p.config.TLSConfig
-				selfServerConn, err = tls.Dial("tcp", newUrl.Host, tslConfig)
-				if err != nil {
-					log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
-					return err
-				}
-			} else {
-				selfServerConn, err = net.Dial("tcp", newUrl.Host)
-				if err != nil {
-					log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
-					return err
-				}
-			}
-			defer selfServerConn.Close()
-
-			// Write headers to the target server
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("%s %s\r\n", req.Method, newUrl.RequestURI()))
-			headers := req.Header.Clone()
-			// Inject the auth header
-			headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
-			for key, values := range headers {
-				for _, value := range values {
-					sb.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
-				}
-			}
-			sb.WriteString("\r\n")
-			log.Info().Msg(sb.String())
-			_, err = io.WriteString(selfServerConn, sb.String())
+			err := p.forwardWebsocketConnection(ctx, clientConn, newUrl, sessionID, req)
 			if err != nil {
-				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write headers	to target server")
 				return err
 			}
-
-			serverDataCh := make(chan []byte)
-			clientDataCh := make(chan []byte)
-
-			forwardData := func(ctx context.Context, src net.Conn, dstCh chan<- []byte, direction string) {
-				buf := make([]byte, 1024)
-				defer func() {
-					close(dstCh)
-				}()
-				for {
-					timeout := time.Now().Add(10 * time.Second)
-					if ctx.Err() != nil {
-						timeout = time.Time{}
-					}
-					if err := src.SetReadDeadline(timeout); err != nil {
-						log.Error().Err(err).Str("direction", direction).Msg("SetReadDeadline failed")
-						return
-					}
-
-					n, err := src.Read(buf)
-					if err != nil {
-						if ne, ok := err.(net.Error); ok && ne.Timeout() {
-							// It's just a timeout, let's do it again
-							continue
-						}
-						if ctx.Err() != nil {
-							log.Info().Str("direction", direction).Msg("Forwarding stopped due to context cancellation")
-						} else if errors.Is(err, io.EOF) {
-							log.Info().Str("direction", direction).Msg("Peer closed connection")
-						} else {
-							log.Error().Err(err).Str("direction", direction).Msg("Read error")
-						}
-						return
-					}
-					select {
-					case dstCh <- buf[:n]:
-					case <-ctx.Done():
-						close(dstCh)
-						return
-					}
-				}
-			}
-			// Read data from the server
-			go forwardData(ctx, selfServerConn, serverDataCh, "server-to-client")
-			// Read data from the client
-			go forwardData(ctx, clientConn, clientDataCh, "client-to-server")
-
-			for {
-				select {
-				case <-ctx.Done():
-					log.Info().Msg("Context cancelled, closing HTTP proxy connection")
-					return ctx.Err()
-				case data, ok := <-serverDataCh:
-					if !ok {
-						return nil
-					}
-					log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received server data")
-					_, err = clientConn.Write(data)
-					if err != nil {
-						log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
-					}
-				case data, ok := <-clientDataCh:
-					if !ok {
-						return nil
-					}
-					log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received client data")
-					_, err = selfServerConn.Write(data)
-					if err != nil {
-						log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
-					}
-				}
-			}
+			continue
 		}
 
 		transport := &http.Transport{
@@ -323,5 +220,127 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		}
 	}
 
+	return nil
+}
+
+func (p *KubernetesProxy) forwardWebsocketConnection(
+	ctx context.Context,
+	clientConn net.Conn,
+	newUrl *url.URL,
+	sessionID string,
+	req *http.Request,
+) error {
+	var tslConfig *tls.Config = nil
+	var selfServerConn net.Conn
+	var err error
+	if newUrl.Scheme == "https" {
+		tslConfig = p.config.TLSConfig
+		selfServerConn, err = tls.Dial("tcp", newUrl.Host, tslConfig)
+		if err != nil {
+			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
+			return err
+		}
+	} else {
+		selfServerConn, err = net.Dial("tcp", newUrl.Host)
+		if err != nil {
+			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to connect to the target server")
+			return err
+		}
+	}
+	defer selfServerConn.Close()
+
+	// Write headers to the target server
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s %s\r\n", req.Method, newUrl.RequestURI()))
+	headers := req.Header.Clone()
+	// Inject the auth header
+	//headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+	for key, values := range headers {
+		for _, value := range values {
+			sb.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
+		}
+	}
+	sb.WriteString("\r\n")
+	log.Info().Msg(sb.String())
+	_, err = io.WriteString(selfServerConn, sb.String())
+	if err != nil {
+		log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write headers	to target server")
+		return err
+	}
+
+	forwardingCtx, cancelForwarding := context.WithCancel(ctx)
+	defer cancelForwarding()
+	serverDataCh := make(chan []byte)
+	clientDataCh := make(chan []byte)
+
+	forwardData := func(ctx context.Context, src net.Conn, dstCh chan<- []byte, direction string) {
+		buf := make([]byte, 1024)
+		defer func() {
+			close(dstCh)
+		}()
+		for {
+			timeout := time.Now().Add(10 * time.Second)
+			if ctx.Err() != nil {
+				timeout = time.Time{}
+			}
+			if err := src.SetReadDeadline(timeout); err != nil {
+				log.Error().Err(err).Str("direction", direction).Msg("SetReadDeadline failed")
+				return
+			}
+
+			n, err := src.Read(buf)
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					// It's just a timeout, let's do it again
+					continue
+				}
+				if ctx.Err() != nil {
+					log.Info().Str("direction", direction).Msg("Forwarding stopped due to context cancellation")
+				} else if errors.Is(err, io.EOF) {
+					log.Info().Str("direction", direction).Msg("Peer closed connection")
+				} else {
+					log.Error().Err(err).Str("direction", direction).Msg("Read error")
+				}
+				return
+			}
+			select {
+			case dstCh <- buf[:n]:
+			case <-ctx.Done():
+				close(dstCh)
+				return
+			}
+		}
+	}
+	// Read data from the server
+	go forwardData(forwardingCtx, selfServerConn, serverDataCh, "server-to-client")
+	// Read data from the client
+	go forwardData(forwardingCtx, clientConn, clientDataCh, "client-to-server")
+
+	for {
+	loop:
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("Context cancelled, closing HTTP proxy connection")
+			return ctx.Err()
+		case data, ok := <-serverDataCh:
+			if !ok {
+				break loop
+			}
+			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received server data")
+			_, err = clientConn.Write(data)
+			if err != nil {
+				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
+			}
+		case data, ok := <-clientDataCh:
+			if !ok {
+				break loop
+			}
+			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received client data")
+			_, err = selfServerConn.Write(data)
+			if err != nil {
+				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
+			}
+		}
+	}
 	return nil
 }
