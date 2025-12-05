@@ -270,6 +270,9 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 		return err
 	}
 
+	// TODO: before forwarding, we should probably read the headers from the server, then parse the
+	//		 websocket frames for audit logging purpose
+
 	forwardingCtx, cancelForwarding := context.WithCancel(ctx)
 	defer cancelForwarding()
 	serverDataCh := make(chan []byte)
