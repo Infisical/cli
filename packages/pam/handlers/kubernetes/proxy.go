@@ -140,7 +140,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		if req.Header.Get("Connection") == "Upgrade" && req.Header.Get("Upgrade") == "websocket" {
 			// This looks like a websocket request, most likely to be coming from exec cmd.
 			// Let's connect with raw socket instead as it's much easier that way
-			log.Info().Str("sessionID", sessionID).Msg("Transitioning to websocket connection")
+			log.Info().Str("sessionID", sessionID).Msg("Upgrade to websocket connection")
 
 			var tslConfig *tls.Config = nil
 			var selfServerConn net.Conn
