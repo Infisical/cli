@@ -115,7 +115,7 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 		log.Fatal().Err(err).Msg("Failed to load kubernetes config")
 		return
 	}
-	clusterName := fmt.Sprintf("infisical-k8s-pam%s%s", actualAccountPath, accountName)
+	clusterName := fmt.Sprintf("infisical-k8s-pam/%s", actualAccountPath)
 
 	config.Clusters[clusterName] = &k8sapi.Cluster{
 		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
