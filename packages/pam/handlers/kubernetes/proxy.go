@@ -48,13 +48,13 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 	defer clientConn.Close()
 
 	sessionID := p.config.SessionID
+	l := log.With().Str("sessionID", sessionID).Logger()
 	defer func() {
 		if err := p.config.SessionLogger.Close(); err != nil {
-			log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to close session logger")
+			l.Error().Err(err).Msg("Failed to close session logger")
 		}
 	}()
 
-	l := log.With().Str("sessionID", sessionID).Logger()
 	l.Info().
 		Str("targetApiServer", p.config.TargetApiServer).
 		Msg("New Kubernetes connection for PAM session")
