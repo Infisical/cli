@@ -218,7 +218,7 @@ var pamKubernetesAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, durationStr, port)
+		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr, port)
 	},
 }
 
