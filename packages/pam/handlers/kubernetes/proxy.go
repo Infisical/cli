@@ -143,7 +143,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 		// create the request to the target
 		newUrl := fmt.Sprintf("%s%s", p.config.TargetApiServer, req.URL.Path)
-		proxyReq, err := http.NewRequest(req.Method, newUrl, req.Body)
+		proxyReq, err := http.NewRequest(req.Method, newUrl, bytes.NewReader(reqBody))
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create proxy request")
 			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to create proxy request")))

@@ -831,7 +831,7 @@ type UploadHttpEvent struct {
 	Url       string              `json:"url,omitempty"`
 	Status    string              `json:"status,omitempty"`
 	Headers   map[string][]string `json:"headers,omitempty"`
-	Body      []byte              `json:"body"`
+	Body      []byte              `json:"body,omitempty"`
 }
 
 type UploadPAMSessionLogsRequest struct {
