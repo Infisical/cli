@@ -324,18 +324,15 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 			if !ok {
 				return nil
 			}
-			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received server data")
-			n, err := clientConn.Write(data)
+			_, err := clientConn.Write(data)
 			if err != nil {
 				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write server data to client")
 				return err
 			}
-			log.Info().Int("n", n).Msg("@@@@ Forwarded server data to client")
 		case data, ok := <-clientDataCh:
 			if !ok {
 				return nil
 			}
-			log.Info().Str("sessionID", sessionID).Bytes("data", data).Msg("@@@@ Received client data")
 			_, err = selfServerConn.Write(data)
 			if err != nil {
 				log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to write client data to server")
