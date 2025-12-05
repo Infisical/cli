@@ -161,16 +161,16 @@ var pamKubernetesCmd = &cobra.Command{
 }
 
 var pamKubernetesAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-name-or-id>",
+	Use:                   "access-account <account-path>",
 	Short:                 "Access Kubernetes PAM account",
 	Long:                  "Access Kubernetes via a PAM-managed Kubernetes account. This command automatically launches a proxy connected to your Kubernetes cluster through the Infisical Gateway.",
-	Example:               "infisical pam kubernetes access-account <account-id> --duration 2h",
+	Example:               "infisical pam kubernetes access-account prod/ssh/my-k8s-account --duration 2h",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountID := args[0]
+		accountPath := args[0]
 
 		durationStr, err := cmd.Flags().GetString("duration")
 		if err != nil {
@@ -186,6 +186,19 @@ var pamKubernetesAccessAccountCmd = &cobra.Command{
 		port, err := cmd.Flags().GetInt("port")
 		if err != nil {
 			util.HandleError(err, "Unable to parse port flag")
+		}
+
+		projectID, err := cmd.Flags().GetString("project-id")
+		if err != nil {
+			util.HandleError(err, "Unable to parse project-id flag")
+		}
+
+		if projectID == "" {
+			workspaceFile, err := util.GetWorkSpaceFromFile()
+			if err != nil {
+				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
+			}
+			projectID = workspaceFile.WorkspaceId
 		}
 
 		log.Debug().Msg("PAM Kubernetes Access: Trying to fetch credentials using logged in details")
@@ -205,7 +218,7 @@ var pamKubernetesAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountID, durationStr, port)
+		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, durationStr, port)
 	},
 }
 

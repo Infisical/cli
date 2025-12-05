@@ -24,17 +24,16 @@ type KubernetesProxyServer struct {
 	port            int
 }
 
-func StartKubernetesLocalProxy(accessToken string, accountID string, durationStr string, port int) {
-	log.Info().Msgf("Starting kubernetes proxy for account ID: %s", accountID)
-	log.Info().Msgf("Session duration: %s", durationStr)
+func StartKubernetesLocalProxy(accessToken string, accountPath string, durationStr string, port int) {
+	log.Info().Str("accountPath", accountPath).Str("duration", durationStr).Msg("Starting kubernetes proxy")
 
 	httpClient := resty.New()
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
 	pamRequest := api.PAMAccessRequest{
-		Duration:  durationStr,
-		AccountId: accountID,
+		Duration:    durationStr,
+		AccountPath: accountPath,
 		// TODO: pass in the desired resource type, and reject the req in backend if this is not the expected type
 	}
 
