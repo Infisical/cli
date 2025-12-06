@@ -22,9 +22,10 @@ var ErrSessionFileNotFound = errors.New("session file not found")
 
 // Resource type constants
 const (
-	ResourceTypePostgres = "postgres"
-	ResourceTypeMysql    = "mysql"
-	ResourceTypeSSH      = "ssh"
+	ResourceTypePostgres   = "postgres"
+	ResourceTypeMysql      = "mysql"
+	ResourceTypeSSH        = "ssh"
+	ResourceTypeKubernetes = "kubernetes"
 )
 
 type SessionFileInfo struct {
@@ -53,7 +54,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeMysql)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeMysql, ResourceTypeKubernetes)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 
@@ -149,7 +150,7 @@ func GetExpiredSessionFiles() ([]*SessionFileInfo, error) {
 	return expiredFiles, nil
 }
 
-func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([]SessionLogEntry, error) {
+func readEncryptedEntries[T any](filename, encryptionKey string) ([]T, error) {
 	recordingDir := GetSessionRecordingDir()
 	fullPath := filepath.Join(recordingDir, filename)
 
@@ -159,7 +160,7 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 	}
 	defer file.Close()
 
-	var entries []SessionLogEntry
+	var entries []T
 
 	for {
 		// Read length prefix (4 bytes)
@@ -178,8 +179,7 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 		length := binary.BigEndian.Uint32(lengthBytes)
 
 		encryptedData := make([]byte, length)
-		n, err = io.ReadFull(file, encryptedData)
-		if err != nil {
+		if n, err = io.ReadFull(file, encryptedData); err != nil {
 			return nil, fmt.Errorf("failed to read encrypted data: %w", err)
 		}
 		if uint32(n) != length {
@@ -188,12 +188,12 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 
 		decryptedData, err := DecryptData(encryptedData, encryptionKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt session data: %w", err)
+			return nil, fmt.Errorf("failed to decrypt data: %w", err)
 		}
 
-		var entry SessionLogEntry
+		var entry T
 		if err := json.Unmarshal(decryptedData, &entry); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal session data: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal entry: %w", err)
 		}
 
 		entries = append(entries, entry)
@@ -202,58 +202,16 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 	return entries, nil
 }
 
-// ReadEncryptedTerminalEventsFromFile reads terminal events from an encrypted session file
+func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([]SessionLogEntry, error) {
+	return readEncryptedEntries[SessionLogEntry](filename, encryptionKey)
+}
+
 func ReadEncryptedTerminalEventsFromFile(filename string, encryptionKey string) ([]TerminalEvent, error) {
-	recordingDir := GetSessionRecordingDir()
-	fullPath := filepath.Join(recordingDir, filename)
+	return readEncryptedEntries[TerminalEvent](filename, encryptionKey)
+}
 
-	file, err := os.Open(fullPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open session file: %w", err)
-	}
-	defer file.Close()
-
-	var events []TerminalEvent
-
-	for {
-		// Read length prefix (4 bytes)
-		lengthBytes := make([]byte, 4)
-		n, err := file.Read(lengthBytes)
-		if err == io.EOF {
-			break // End of file
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to read length prefix: %w", err)
-		}
-		if n != 4 {
-			return nil, fmt.Errorf("incomplete length prefix read")
-		}
-
-		length := binary.BigEndian.Uint32(lengthBytes)
-
-		encryptedData := make([]byte, length)
-		n, err = io.ReadFull(file, encryptedData)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read encrypted data: %w", err)
-		}
-		if uint32(n) != length {
-			return nil, fmt.Errorf("incomplete encrypted data read")
-		}
-
-		decryptedData, err := DecryptData(encryptedData, encryptionKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt session data: %w", err)
-		}
-
-		var event TerminalEvent
-		if err := json.Unmarshal(decryptedData, &event); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal terminal event: %w", err)
-		}
-
-		events = append(events, event)
-	}
-
-	return events, nil
+func ReadEncryptedHttpEventsFromFile(filename string, encryptionKey string) ([]HttpEvent, error) {
+	return readEncryptedEntries[HttpEvent](filename, encryptionKey)
 }
 
 func (su *SessionUploader) Start() {
@@ -338,6 +296,38 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 				EventType:   string(event.EventType),
 				Data:        event.Data,
 				ElapsedTime: event.ElapsedTime,
+			})
+		}
+
+		request := api.UploadPAMSessionLogsRequest{
+			Logs: logs,
+		}
+
+		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
+	}
+	if fileInfo.ResourceType == ResourceTypeKubernetes {
+		httpEvents, err := ReadEncryptedHttpEventsFromFile(fileInfo.Filename, encryptionKey)
+		if err != nil {
+			return fmt.Errorf("failed to read SSH session file: %w", err)
+		}
+
+		log.Debug().
+			Str("sessionId", fileInfo.SessionID).
+			Str("resourceType", fileInfo.ResourceType).
+			Int("eventCount", len(httpEvents)).
+			Msg("Uploading terminal session events")
+
+		var logs []api.UploadHttpEvent
+		for _, event := range httpEvents {
+			logs = append(logs, api.UploadHttpEvent{
+				Timestamp: event.Timestamp,
+				EventType: string(event.EventType),
+				RequestId: event.RequestId,
+				Method:    event.Method,
+				Url:       event.URL,
+				Status:    event.Status,
+				Headers:   event.Headers,
+				Body:      event.Body,
 			})
 		}
 
