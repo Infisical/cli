@@ -790,6 +790,24 @@ type PAMAccessResponse struct {
 	Metadata                      map[string]string `json:"metadata,omitempty"`
 }
 
+type PAMAccessApprovalRequestPayloadRequestData struct {
+	AccountPath    string `json:"accountPath"`
+	AccessDuration string `json:"accessDuration"`
+}
+
+type PAMAccessApprovalRequest struct {
+	ProjectId   string                                     `json:"projectId,"`
+	RequestData PAMAccessApprovalRequestPayloadRequestData `json:"requestData"`
+}
+
+type PAMAccessApprovalRequestResponse struct {
+	Request struct {
+		ID        string `json:"id"`
+		ProjectId string `json:"projectId"`
+		OrgId     string `json:"organizationId"`
+	} `json:"request"`
+}
+
 type PAMSessionCredentialsResponse struct {
 	Credentials PAMSessionCredentials `json:"credentials"`
 }
