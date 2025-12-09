@@ -869,21 +869,21 @@ type CertificateResponse struct {
 
 type RetrieveCertificateResponse struct {
 	Certificate struct {
-		ID                 string    `json:"id"`
-		CreatedAt          time.Time `json:"createdAt"`
-		UpdatedAt          time.Time `json:"updatedAt"`
-		Status             string    `json:"status"`
-		SerialNumber       string    `json:"serialNumber"`
-		CommonName         string    `json:"commonName"`
-		NotBefore          time.Time `json:"notBefore"`
-		NotAfter           time.Time `json:"notAfter"`
-		ProjectId          string    `json:"projectId"`
-		CaId               string    `json:"caId"`
-		KeyUsages          []string  `json:"keyUsages"`
-		ExtendedKeyUsages  []string  `json:"extendedKeyUsages"`
-		Certificate        string    `json:"certificate,omitempty"`
-		CertificateChain   string    `json:"certificateChain,omitempty"`
-		PrivateKey         string    `json:"privateKey,omitempty"`
+		ID                string    `json:"id"`
+		CreatedAt         time.Time `json:"createdAt"`
+		UpdatedAt         time.Time `json:"updatedAt"`
+		Status            string    `json:"status"`
+		SerialNumber      string    `json:"serialNumber"`
+		CommonName        string    `json:"commonName"`
+		NotBefore         time.Time `json:"notBefore"`
+		NotAfter          time.Time `json:"notAfter"`
+		ProjectId         string    `json:"projectId"`
+		CaId              string    `json:"caId"`
+		KeyUsages         []string  `json:"keyUsages"`
+		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
+		Certificate       string    `json:"certificate,omitempty"`
+		CertificateChain  string    `json:"certificateChain,omitempty"`
+		PrivateKey        string    `json:"privateKey,omitempty"`
 	} `json:"certificate"`
 }
 
@@ -901,17 +901,17 @@ type RenewCertificateResponse struct {
 }
 
 type GetCertificateRequestResponse struct {
-	Status       string    `json:"status"` // "pending", "issued", "failed"
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	CommonName   string    `json:"commonName,omitempty"`
-	ProjectID    string    `json:"projectId,omitempty"`
-	ProfileID    string    `json:"profileId,omitempty"`
-	Certificate          *string `json:"certificate,omitempty"`
-	IssuingCaCertificate *string `json:"issuingCaCertificate,omitempty"`
-	CertificateChain     *string `json:"certificateChain,omitempty"`
-	PrivateKey           *string `json:"privateKey,omitempty"`
-	SerialNumber         *string `json:"serialNumber,omitempty"`
-	CertificateID        *string `json:"certificateId,omitempty"`
-	ErrorMessage *string `json:"errorMessage,omitempty"`
+	Status               string    `json:"status"` // "pending", "issued", "failed"
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+	CommonName           string    `json:"commonName,omitempty"`
+	ProjectID            string    `json:"projectId,omitempty"`
+	ProfileID            string    `json:"profileId,omitempty"`
+	Certificate          *string   `json:"certificate,omitempty"`
+	IssuingCaCertificate *string   `json:"issuingCaCertificate,omitempty"`
+	CertificateChain     *string   `json:"certificateChain,omitempty"`
+	PrivateKey           *string   `json:"privateKey,omitempty"`
+	SerialNumber         *string   `json:"serialNumber,omitempty"`
+	CertificateID        *string   `json:"certificateId,omitempty"`
+	ErrorMessage         *string   `json:"errorMessage,omitempty"`
 }

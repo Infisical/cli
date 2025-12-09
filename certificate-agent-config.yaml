@@ -9,8 +9,7 @@ auth:
     remove_client_secret_on_read: false
 
 certificates:
-  - profile-id: "550e8400-e29b-41d4-a716-446655440000"
-    destination-path: "./certs/web-server"
+  - profile-id: "5882cac9-b182-4209-a311-64b7c12c4610"
 
     # Certificate parameters
     common-name: "api.mycompany.com"
@@ -25,12 +24,13 @@ certificates:
     extended-key-usages:
       - "server_auth"
 
-    # Lifecycle configuration
+    # Certificate lifecycle configuration
     ttl: "30d"
-    renew-before-expiry: "7d"
-    monitoring-interval: "6h"
-    max-retries: 3
-    retry-interval: "1h"
+    lifecycle:
+      renew-before-expiry: "7d"            # When to start checking for renewal before expiration
+      status-check-interval: "6h"          # How often to check certificate status and renewal needs
+      max-failure-retries: 3               # Maximum number of failed operation retries before giving up
+      failure-retry-interval: "1h"         # How long to wait between failed operation retry attempts
 
     # Post-hooks for automation
     post-hooks:
@@ -44,11 +44,9 @@ certificates:
         command: "logger 'Certificate failed for api.mycompany.com'"
         timeout: 10
 
-    file-config:
+    output-file-configuration:
+      private-key-path: "./certs/web-server/private.key"
+      certificate-path: "./certs/web-server/certificate.crt"
+      certificate-chain-path: "./certs/web-server/chain.crt"
       file-permissions: "0600"
       directory-permissions: "0755"
-
-sinks:
-  - type: "file"
-    config:
-      path: "access-token"

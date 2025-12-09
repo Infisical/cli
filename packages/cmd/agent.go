@@ -55,9 +55,8 @@ const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
 // if a lease is expired, or expires in 30 seconds or less, it will be deleted from the cache and a new lease will be created.
 var CACHE_LEASE_EXPIRE_BUFFER = 30 * time.Second
 
-const EXTERNAL_CA_POLLING_INTERVAL = 10 * time.Second
-const EXTERNAL_CA_MAX_POLLING_RETRIES = 20
-const EXTERNAL_CA_MAX_RENEWAL_ATTEMPTS = 30
+const EXTERNAL_CA_INITIAL_POLLING_INTERVAL = 10 * time.Second
+const EXTERNAL_CA_MAX_POLLING_INTERVAL = 1 * time.Hour
 const DEFAULT_MONITORING_INTERVAL = 10 * time.Second
 
 type PersistentCacheConfig struct {
@@ -90,12 +89,12 @@ type RetryConfig struct {
 }
 
 type Config struct {
-	Infisical     InfisicalConfig `yaml:"infisical"`
-	Auth          AuthConfig      `yaml:"auth"`
-	Sinks         []Sink          `yaml:"sinks"`
-	Cache         CacheConfig     `yaml:"cache,omitempty"`
-	Templates     []Template      `yaml:"templates"`
-	Certificates  []Certificate   `yaml:"certificates,omitempty"`
+	Infisical    InfisicalConfig          `yaml:"infisical"`
+	Auth         AuthConfig               `yaml:"auth"`
+	Sinks        []Sink                   `yaml:"sinks"`
+	Cache        CacheConfig              `yaml:"cache,omitempty"`
+	Templates    []Template               `yaml:"templates"`
+	Certificates []AgentCertificateConfig `yaml:"certificates,omitempty"`
 }
 
 type TemplateWithID struct {
@@ -105,21 +104,21 @@ type TemplateWithID struct {
 
 type CertificateWithID struct {
 	ID          int
-	Certificate Certificate
+	Certificate AgentCertificateConfig
 }
 
 type CertificateState struct {
-	CertificateID       string    `json:"certificate_id"`
-	CertificateRequestID string   `json:"certificate_request_id,omitempty"`
-	SerialNumber        string    `json:"serial_number"`
-	CommonName          string    `json:"common_name"`
-	IssuedAt            time.Time `json:"issued_at"`
-	ExpiresAt           time.Time `json:"expires_at"`
-	NextRenewalCheck    time.Time `json:"next_renewal_check"`
-	Status              string    `json:"status"`
-	LastError           string    `json:"last_error,omitempty"`
-	RetryCount          int       `json:"retry_count"`
-	LastRetry           time.Time `json:"last_retry,omitempty"`
+	CertificateID        string    `json:"certificate_id"`
+	CertificateRequestID string    `json:"certificate_request_id,omitempty"`
+	SerialNumber         string    `json:"serial_number"`
+	CommonName           string    `json:"common_name"`
+	IssuedAt             time.Time `json:"issued_at"`
+	ExpiresAt            time.Time `json:"expires_at"`
+	NextRenewalCheck     time.Time `json:"next_renewal_check"`
+	Status               string    `json:"status"`
+	LastError            string    `json:"last_error,omitempty"`
+	RetryCount           int       `json:"retry_count"`
+	LastRetry            time.Time `json:"last_retry,omitempty"`
 }
 
 type InfisicalConfig struct {
@@ -193,11 +192,18 @@ type Template struct {
 	} `yaml:"config"`
 }
 
-type Certificate struct {
-	ProfileID       string `yaml:"profile-id"`
-	DestinationPath string `yaml:"destination-path"`
-	CSR     string `yaml:"csr,omitempty"`
-	CSRPath string `yaml:"csr-path,omitempty"`
+type CertificateLifecycleConfig struct {
+	RenewBeforeExpiry string `yaml:"renew-before-expiry"`
+	StatusCheckInterval string `yaml:"status-check-interval"`
+	FailureRetryInterval string `yaml:"failure-retry-interval,omitempty"`
+	MaxFailureRetries int `yaml:"max-failure-retries,omitempty"`
+}
+
+type AgentCertificateConfig struct {
+	ProfileID            string   `yaml:"profile-id"`
+	DestinationPath      string   `yaml:"destination-path"`
+	CSR                  string   `yaml:"csr,omitempty"`
+	CSRPath              string   `yaml:"csr-path,omitempty"`
 	CommonName           string   `yaml:"common-name,omitempty"`
 	AltNames             []string `yaml:"alt-names,omitempty"`
 	KeyAlgorithm         string   `yaml:"key-algorithm,omitempty"`
@@ -207,11 +213,9 @@ type Certificate struct {
 	NotBefore            string   `yaml:"not-before,omitempty"`
 	NotAfter             string   `yaml:"not-after,omitempty"`
 	RemoveRootsFromChain bool     `yaml:"remove-roots-from-chain"`
-	TTL                 string `yaml:"ttl"`
-	RenewBeforeExpiry   string `yaml:"renew-before-expiry"`
-	MonitoringInterval  string `yaml:"monitoring-interval"`
-	RetryInterval       string `yaml:"retry-interval,omitempty"`
-	MaxRetries          int    `yaml:"max-retries,omitempty"`
+	TTL                  string   `yaml:"ttl"`
+	// Certificate lifecycle and monitoring configuration
+	Lifecycle CertificateLifecycleConfig `yaml:"lifecycle"`
 	PostHooks struct {
 		OnIssuance struct {
 			Command string `yaml:"command,omitempty"`
@@ -232,7 +236,7 @@ type Certificate struct {
 		CertificateChainPath string `yaml:"certificate-chain-path,omitempty"`
 		FilePermissions      string `yaml:"file-permissions,omitempty"`
 		DirectoryPermissions string `yaml:"directory-permissions,omitempty"`
-	} `yaml:"file-config,omitempty"`
+	} `yaml:"output-file-configuration,omitempty"`
 }
 
 type DynamicSecretLeaseWithTTL struct {
@@ -1027,7 +1031,7 @@ type AgentManager struct {
 type NewAgentMangerOptions struct {
 	FileDeposits []Sink
 	Templates    []Template
-	Certificates []Certificate
+	Certificates []AgentCertificateConfig
 	RetryConfig  *RetryConfig
 
 	AuthConfigBytes []byte
@@ -1855,12 +1859,14 @@ func parseDurationWithDays(s string) (time.Duration, error) {
 		days := strings.TrimSuffix(s, "d")
 		if daysInt, err := strconv.Atoi(days); err == nil {
 			return time.Duration(daysInt*24) * time.Hour, nil
+		} else {
+			return 0, fmt.Errorf("invalid days format: %s", s)
 		}
 	}
 	return time.ParseDuration(s)
 }
 
-func processCertificateCSRPaths(certificates *[]Certificate) error {
+func processCertificateCSRPaths(certificates *[]AgentCertificateConfig) error {
 	for i := range *certificates {
 		cert := &(*certificates)[i]
 
@@ -1880,7 +1886,7 @@ func processCertificateCSRPaths(certificates *[]Certificate) error {
 	return nil
 }
 
-func (tm *AgentManager) getCertificateDisplayName(certificateId int, certificate *Certificate) string {
+func (tm *AgentManager) getCertificateDisplayName(certificateId int, certificate *AgentCertificateConfig) string {
 	if certificate.CommonName != "" {
 		return certificate.CommonName
 	}
@@ -1893,7 +1899,7 @@ func (tm *AgentManager) getCertificateDisplayName(certificateId int, certificate
 	return fmt.Sprintf("certificate %d", certificateId)
 }
 
-func buildCertificateAttributes(certificate *Certificate) *api.CertificateAttributes {
+func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.CertificateAttributes {
 	attributes := &api.CertificateAttributes{}
 	hasAny := false
 
@@ -1953,9 +1959,9 @@ func (tm *AgentManager) createAuthenticatedClient() (*resty.Client, error) {
 	return httpClient, nil
 }
 
-func (tm *AgentManager) IssueCertificate(certificateId int, certificate *Certificate) error {
+func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCertificateConfig) error {
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	log.Info().Msgf("issuing certificate %s", displayName)
+	log.Info().Str("Certificate", displayName).Msg("issuing certificate")
 
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
@@ -1986,7 +1992,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *Certifi
 		state.RetryCount++
 		state.LastRetry = time.Now()
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Error().Msgf("failed to issue certificate %s: %v", displayName, err)
+		log.Error().Str("Certificate", displayName).Msgf("failed to issue certificate: %v", err)
 		return fmt.Errorf("failed to issue certificate: %v", err)
 	}
 
@@ -2020,28 +2026,28 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *Certifi
 		state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 	} else {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Warn().Msgf("unable to parse TTL %s for certificate %s", certificate.TTL, displayName)
+		log.Warn().Str("Certificate", displayName).Msg("unable to parse TTL")
 		state.ExpiresAt = state.IssuedAt.Add(24 * time.Hour)
 	}
 
-	if renewBeforeDuration, err := parseDurationWithDays(certificate.RenewBeforeExpiry); err == nil {
+	if renewBeforeDuration, err := parseDurationWithDays(certificate.Lifecycle.RenewBeforeExpiry); err == nil {
 		state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
 	} else {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Warn().Msgf("unable to parse renew-before-expiry %s for certificate %s", certificate.RenewBeforeExpiry, displayName)
+		log.Warn().Str("Certificate", displayName).Msg("unable to parse lifecycle.renew-before-expiry")
 		state.NextRenewalCheck = state.ExpiresAt.Add(-24 * time.Hour)
 	}
 
 	err = tm.WriteCertificateFiles(certificate, response)
 	if err != nil {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Error().Msgf("failed to write certificate files for certificate %s: %v", displayName, err)
+		log.Error().Str("Certificate", displayName).Msgf("failed to write certificate files: %v", err)
 		state.Status = "failed"
 		state.LastError = fmt.Sprintf("failed to write files: %v", err)
 		return err
 	}
 
-	log.Info().Msgf("certificate %s issued successfully (serial: %s)", displayName, response.Certificate.SerialNumber)
+	log.Info().Str("Certificate", displayName).Str("serial", response.Certificate.SerialNumber).Msg("certificate issued successfully")
 
 	if certificate.PostHooks.OnIssuance.Command != "" {
 		tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateId, certificate)
@@ -2050,47 +2056,55 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *Certifi
 	return nil
 }
 
-func (tm *AgentManager) PollCertificateRequest(certificateId int, certificate *Certificate) {
+func (tm *AgentManager) PollCertificateRequest(certificateId int, certificate *AgentCertificateConfig) {
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	pollingInterval := EXTERNAL_CA_POLLING_INTERVAL
-
-	maxRetries := EXTERNAL_CA_MAX_POLLING_RETRIES
-	retryCount := 0
+	pollingInterval := EXTERNAL_CA_INITIAL_POLLING_INTERVAL
 
 	for {
-		retryCount++
-		if retryCount > maxRetries {
-			log.Error().Msgf("certificate request polling timed out for certificate %s after %d attempts", displayName, maxRetries)
-			tm.handleFailedCertificateRequest(certificateId, "polling timeout after maximum attempts")
-			return
-		}
 		if err := tm.checkCertificateRequestStatus(certificateId, certificate); err != nil {
-			log.Error().Msgf("failed to check certificate request status for %s: %v", displayName, err)
+			log.Error().Str("Certificate", displayName).Msgf("failed to check certificate request status: %v", err)
 		}
 
-		tm.mutex.Lock()
-		state := tm.certificateStates[certificateId]
-		status := state.Status
-		tm.mutex.Unlock()
+		var status string
+		func() {
+			tm.mutex.Lock()
+			defer tm.mutex.Unlock()
+			state := tm.certificateStates[certificateId]
+			status = state.Status
+		}()
 
 		if status == "active" {
-			log.Info().Msgf("certificate %s issued successfully by external CA", displayName)
+			log.Info().Str("Certificate", displayName).Msg("certificate issued successfully by external CA")
 			return
 		} else if status == "failed" {
-			log.Error().Msgf("certificate %s issuance failed", displayName)
+			log.Error().Str("Certificate", displayName).Msg("certificate issuance failed")
 			return
 		}
 
+		log.Info().Str("Certificate", displayName).Msgf("waiting %s before next polling attempt", pollingInterval)
 		time.Sleep(pollingInterval)
+
+		pollingInterval *= 2
+		if pollingInterval > EXTERNAL_CA_MAX_POLLING_INTERVAL {
+			pollingInterval = EXTERNAL_CA_MAX_POLLING_INTERVAL
+		}
 	}
 }
 
-func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certificate *Certificate) error {
-	tm.mutex.Lock()
-	state := tm.certificateStates[certificateId]
-	tm.mutex.Unlock()
+func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certificate *AgentCertificateConfig) error {
+	var requestID string
+	func() {
+		tm.mutex.Lock()
+		defer tm.mutex.Unlock()
 
-	if state.CertificateRequestID == "" {
+		state := tm.certificateStates[certificateId]
+		if state.CertificateRequestID == "" {
+			return
+		}
+		requestID = state.CertificateRequestID
+	}()
+
+	if requestID == "" {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
 		return fmt.Errorf("no certificate request ID found for certificate %s", displayName)
 	}
@@ -2100,13 +2114,15 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 		return err
 	}
 
-	response, err := api.CallGetCertificateRequest(httpClient, state.CertificateRequestID)
+	response, err := api.CallGetCertificateRequest(httpClient, requestID)
 	if err != nil {
 		return fmt.Errorf("failed to get certificate request status: %v", err)
 	}
 
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
+
+	state := tm.certificateStates[certificateId]
 
 	switch response.Status {
 	case "issued":
@@ -2127,16 +2143,16 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 			state.ExpiresAt = state.IssuedAt.Add(24 * time.Hour)
 		}
 
-		if renewBeforeDuration, err := parseDurationWithDays(certificate.RenewBeforeExpiry); err == nil {
+		if renewBeforeDuration, err := parseDurationWithDays(certificate.Lifecycle.RenewBeforeExpiry); err == nil {
 			state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
 		} else {
 			state.NextRenewalCheck = state.ExpiresAt.Add(-24 * time.Hour)
 		}
 
 		certData := api.CertificateData{
-			Certificate:          *response.Certificate,
-			CertificateID:        state.CertificateRequestID,
-			SerialNumber:         *response.SerialNumber,
+			Certificate:   *response.Certificate,
+			CertificateID: state.CertificateRequestID,
+			SerialNumber:  *response.SerialNumber,
 		}
 		if response.IssuingCaCertificate != nil {
 			certData.IssuingCaCertificate = *response.IssuingCaCertificate
@@ -2154,14 +2170,14 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 
 		if err := tm.WriteCertificateFiles(certificate, certResponse); err != nil {
 			displayName := tm.getCertificateDisplayName(certificateId, certificate)
-			log.Error().Msgf("failed to write certificate files for certificate %s: %v", displayName, err)
+			log.Error().Str("Certificate", displayName).Msgf("failed to write certificate files: %v", err)
 			state.Status = "failed"
 			state.LastError = fmt.Sprintf("failed to write files: %v", err)
 			return err
 		}
 
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Info().Msgf("certificate %s issued successfully (serial: %s)", displayName, *response.SerialNumber)
+		log.Info().Str("Certificate", displayName).Str("serial", *response.SerialNumber).Msg("certificate issued successfully")
 
 		if certificate.PostHooks.OnIssuance.Command != "" {
 			tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateId, certificate)
@@ -2179,7 +2195,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 
 	default:
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Warn().Msgf("unknown certificate request status '%s' for certificate %s", response.Status, displayName)
+		log.Warn().Str("Certificate", displayName).Msg("unknown certificate request status")
 	}
 
 	return nil
@@ -2195,7 +2211,7 @@ func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorM
 	state.RetryCount++
 	state.LastRetry = time.Now()
 
-	var certificate *Certificate
+	var certificate *AgentCertificateConfig
 	for _, cert := range tm.certificates {
 		if cert.ID == certificateId {
 			certificate = &cert.Certificate
@@ -2204,19 +2220,14 @@ func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorM
 	}
 
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	log.Error().Msgf("certificate request failed for certificate %s: %s", displayName, errorMsg)
+	log.Error().Str("Certificate", displayName).Msgf("certificate request failed: %s", errorMsg)
 
 	if certificate != nil && certificate.PostHooks.OnFailure.Command != "" {
 		go tm.ExecutePostHook(certificate.PostHooks.OnFailure.Command, certificate.PostHooks.OnFailure.Timeout, "failure", certificateId, certificate)
 	}
 }
 
-func (tm *AgentManager) WriteCertificateFiles(certificate *Certificate, response *api.CertificateResponse) error {
-	destPath := certificate.DestinationPath
-	if err := os.MkdirAll(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %v", destPath, err)
-	}
-
+func (tm *AgentManager) WriteCertificateFiles(certificate *AgentCertificateConfig, response *api.CertificateResponse) error {
 	filePerms := os.FileMode(0600)
 	if certificate.FileConfig.FilePermissions != "" {
 		if perms, err := strconv.ParseInt(certificate.FileConfig.FilePermissions, 8, 32); err == nil {
@@ -2224,44 +2235,46 @@ func (tm *AgentManager) WriteCertificateFiles(certificate *Certificate, response
 		}
 	}
 
-	privateKeyPath := path.Join(destPath, "private.key")
-	if certificate.FileConfig.PrivateKeyPath != "" {
-		privateKeyPath = certificate.FileConfig.PrivateKeyPath
-	}
+	privateKeyPath := certificate.FileConfig.PrivateKeyPath
+	certificatePath := certificate.FileConfig.CertificatePath
+	chainPath := certificate.FileConfig.CertificateChainPath
 
-	certificatePath := path.Join(destPath, "certificate.crt")
-	if certificate.FileConfig.CertificatePath != "" {
-		certificatePath = certificate.FileConfig.CertificatePath
-	}
-
-	chainPath := path.Join(destPath, "chain.crt")
-	if certificate.FileConfig.CertificateChainPath != "" {
-		chainPath = certificate.FileConfig.CertificateChainPath
+	if certificatePath == "" {
+		return fmt.Errorf("certificate-path is required")
 	}
 
 	if response.Certificate.PrivateKey != "" {
+		if privateKeyPath == "" {
+			return fmt.Errorf("private-key-path is required when private key is present")
+		}
+		if err := os.MkdirAll(path.Dir(privateKeyPath), 0755); err != nil {
+			return fmt.Errorf("failed to create directory for private key %s: %v", privateKeyPath, err)
+		}
 		if err := ioutil.WriteFile(privateKeyPath, []byte(response.Certificate.PrivateKey), filePerms); err != nil {
 			return fmt.Errorf("failed to write private key to %s: %v", privateKeyPath, err)
 		}
-		log.Debug().Msgf("wrote private key to %s", privateKeyPath)
 	}
 
+	if err := os.MkdirAll(path.Dir(certificatePath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory for certificate %s: %v", certificatePath, err)
+	}
 	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), filePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
-	log.Debug().Msgf("wrote certificate to %s", certificatePath)
 
-	if response.Certificate.CertificateChain != "" {
+	if response.Certificate.CertificateChain != "" && chainPath != "" {
+		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
+			return fmt.Errorf("failed to create directory for certificate chain %s: %v", chainPath, err)
+		}
 		if err := ioutil.WriteFile(chainPath, []byte(response.Certificate.CertificateChain), filePerms); err != nil {
 			return fmt.Errorf("failed to write certificate chain to %s: %v", chainPath, err)
 		}
-		log.Debug().Msgf("wrote certificate chain to %s", chainPath)
 	}
 
 	return nil
 }
 
-func (tm *AgentManager) ExecutePostHook(command string, timeoutSecs int64, hookType string, certificateId int, certificate *Certificate) {
+func (tm *AgentManager) ExecutePostHook(command string, timeoutSecs int64, hookType string, certificateId int, certificate *AgentCertificateConfig) {
 	if command == "" {
 		return
 	}
@@ -2272,14 +2285,14 @@ func (tm *AgentManager) ExecutePostHook(command string, timeoutSecs int64, hookT
 	}
 
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	log.Info().Msgf("executing %s post-hook for certificate %s", hookType, displayName)
+	log.Info().Str("Certificate", displayName).Msg("executing post-hook")
 
 	go func() {
 		err := ExecuteCommandWithTimeout(command, int64(timeout.Seconds()))
 		if err != nil {
-			log.Error().Msgf("post-hook execution failed for certificate %s: %v", displayName, err)
+			log.Error().Str("Certificate", displayName).Msgf("post-hook execution failed: %v", err)
 		} else {
-			log.Info().Msgf("post-hook execution successful for certificate %s", displayName)
+			log.Info().Str("Certificate", displayName).Msg("post-hook execution successful")
 		}
 	}()
 }
@@ -2293,7 +2306,7 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 
 	var monitoringInterval time.Duration = DEFAULT_MONITORING_INTERVAL
 	for _, cert := range tm.certificates {
-		if interval, err := parseDurationWithDays(cert.Certificate.MonitoringInterval); err == nil {
+		if interval, err := parseDurationWithDays(cert.Certificate.Lifecycle.StatusCheckInterval); err == nil {
 			if monitoringInterval == 0 || interval < monitoringInterval {
 				monitoringInterval = interval
 			}
@@ -2303,14 +2316,15 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 	ticker := time.NewTicker(monitoringInterval)
 	defer ticker.Stop()
 
-	log.Debug().Msg("waiting for authentication to complete before issuing certificates")
 	for {
-		tm.mutex.Lock()
-		token := tm.getTokenUnsafe()
-		tm.mutex.Unlock()
+		var token string
+		func() {
+			tm.mutex.Lock()
+			defer tm.mutex.Unlock()
+			token = tm.getTokenUnsafe()
+		}()
 
 		if token != "" {
-			log.Debug().Msg("authentication complete, starting initial certificate issuance")
 			break
 		}
 
@@ -2321,7 +2335,7 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 		tm.certificateFirstIssueOnce[cert.ID].Do(func() {
 			if err := tm.IssueCertificate(cert.ID, &cert.Certificate); err != nil {
 				displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
-				log.Error().Msgf("initial certificate issuance failed for certificate %s: %v", displayName, err)
+				log.Error().Str("Certificate", displayName).Msgf("initial certificate issuance failed: %v", err)
 			}
 		})
 	}
@@ -2355,27 +2369,24 @@ func (tm *AgentManager) CheckCertificateRenewals() {
 		}
 
 		displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
-		log.Info().Msgf("checking certificate %s for renewal (expires: %s)", displayName, state.ExpiresAt.Format(time.RFC3339))
+		log.Info().Str("Certificate", displayName).Msg("checking certificate for renewal")
 
 		if state.CertificateID != "" {
+			tm.mutex.Unlock()
 			if err := tm.CheckCertificateStatus(cert.ID, state.CertificateID); err != nil {
-				log.Error().Msgf("failed to check status for certificate %s: %v", displayName, err)
+				log.Error().Str("Certificate", displayName).Msgf("failed to check status: %v", err)
 			}
+			tm.mutex.Lock()
 		}
-
 		if tm.ShouldRenewCertificate(cert.ID) {
-			log.Info().Msgf("renewing certificate %s", displayName)
+			log.Info().Str("Certificate", displayName).Msg("renewing certificate")
 			if err := tm.RenewCertificate(cert.ID, &cert.Certificate); err != nil {
-				log.Error().Msgf("failed to renew certificate %s: %v", displayName, err)
+				log.Error().Str("Certificate", displayName).Msgf("failed to renew certificate: %v", err)
 				state.Status = "failed"
 				state.LastError = err.Error()
 				state.RetryCount++
 				state.LastRetry = now
 			}
-		}
-
-		if monitoringInterval, err := time.ParseDuration(cert.Certificate.MonitoringInterval); err == nil {
-			state.NextRenewalCheck = now.Add(monitoringInterval)
 		}
 	}
 }
@@ -2392,6 +2403,9 @@ func (tm *AgentManager) CheckCertificateStatus(certificateId int, infisicalCertI
 		return fmt.Errorf("failed to retrieve certificate status: %v", err)
 	}
 
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
+
 	state := tm.certificateStates[certificateId]
 	previousStatus := state.Status
 
@@ -2399,7 +2413,7 @@ func (tm *AgentManager) CheckCertificateStatus(certificateId int, infisicalCertI
 	state.ExpiresAt = response.Certificate.NotAfter
 
 	if previousStatus != state.Status {
-		var certificate *Certificate
+		var certificate *AgentCertificateConfig
 		for _, cert := range tm.certificates {
 			if cert.ID == certificateId {
 				certificate = &cert.Certificate
@@ -2407,31 +2421,31 @@ func (tm *AgentManager) CheckCertificateStatus(certificateId int, infisicalCertI
 			}
 		}
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Info().Msgf("certificate %s status changed from %s to %s", displayName, previousStatus, state.Status)
+		log.Info().Str("Certificate", displayName).Msg("certificate status changed")
 
 		if state.Status == "revoked" {
-			log.Error().Msgf("certificate %s has been revoked - stopping renewal attempts", displayName)
+			log.Error().Str("Certificate", displayName).Msg("certificate has been revoked - stopping renewal attempts")
 			state.LastError = "certificate has been revoked"
 
 			for _, cert := range tm.certificates {
 				if cert.ID == certificateId {
 					if cert.Certificate.PostHooks.OnFailure.Command != "" {
 						displayName := tm.getCertificateDisplayName(certificateId, &cert.Certificate)
-						log.Info().Msgf("executing revocation post-hook for certificate %s: %s", displayName, cert.Certificate.PostHooks.OnFailure.Command)
+						log.Info().Str("Certificate", displayName).Msg("executing revocation post-hook")
 						go tm.ExecutePostHook(cert.Certificate.PostHooks.OnFailure.Command, cert.Certificate.PostHooks.OnFailure.Timeout, "revocation", certificateId, &cert.Certificate)
 					}
 					break
 				}
 			}
 		} else if state.Status == "expired" {
-			log.Error().Msgf("certificate %s has expired - stopping renewal attempts", displayName)
+			log.Error().Str("Certificate", displayName).Msg("certificate has expired - stopping renewal attempts")
 			state.LastError = "certificate has expired"
 
 			for _, cert := range tm.certificates {
 				if cert.ID == certificateId {
 					if cert.Certificate.PostHooks.OnFailure.Command != "" {
 						displayName := tm.getCertificateDisplayName(certificateId, &cert.Certificate)
-						log.Info().Msgf("executing expiration post-hook for certificate %s: %s", displayName, cert.Certificate.PostHooks.OnFailure.Command)
+						log.Info().Str("Certificate", displayName).Msg("executing expiration post-hook")
 						go tm.ExecutePostHook(cert.Certificate.PostHooks.OnFailure.Command, cert.Certificate.PostHooks.OnFailure.Timeout, "expiration", certificateId, &cert.Certificate)
 					}
 					break
@@ -2446,20 +2460,20 @@ func (tm *AgentManager) CheckCertificateStatus(certificateId int, infisicalCertI
 func (tm *AgentManager) ShouldRenewCertificate(certificateId int) bool {
 	state := tm.certificateStates[certificateId]
 
+	var cert *AgentCertificateConfig
+	for _, c := range tm.certificates {
+		if c.ID == certificateId {
+			cert = &c.Certificate
+			break
+		}
+	}
+
 	if state.Status != "active" {
 		return false
 	}
 
 	if state.CertificateID == "" {
 		return false
-	}
-
-	var cert *Certificate
-	for _, c := range tm.certificates {
-		if c.ID == certificateId {
-			cert = &c.Certificate
-			break
-		}
 	}
 
 	if cert == nil {
@@ -2472,7 +2486,7 @@ func (tm *AgentManager) ShouldRenewCertificate(certificateId int) bool {
 		return true
 	}
 
-	if renewBefore, err := parseDurationWithDays(cert.RenewBeforeExpiry); err == nil {
+	if renewBefore, err := parseDurationWithDays(cert.Lifecycle.RenewBeforeExpiry); err == nil {
 		renewTime := state.ExpiresAt.Add(-renewBefore)
 		return now.After(renewTime)
 	}
@@ -2480,7 +2494,7 @@ func (tm *AgentManager) ShouldRenewCertificate(certificateId int) bool {
 	return false
 }
 
-func (tm *AgentManager) RenewCertificate(certificateId int, certificate *Certificate) error {
+func (tm *AgentManager) RenewCertificate(certificateId int, certificate *AgentCertificateConfig) error {
 	state := tm.certificateStates[certificateId]
 
 	if state.CertificateID == "" {
@@ -2501,7 +2515,7 @@ func (tm *AgentManager) RenewCertificate(certificateId int, certificate *Certifi
 
 	if response.CertificateRequestID != "" {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Info().Msgf("certificate %s submitted for renewal to external CA", displayName)
+		log.Info().Str("Certificate", displayName).Msg("certificate submitted for renewal to external CA")
 
 		state.CertificateRequestID = response.CertificateRequestID
 		state.Status = "renewing"
@@ -2516,7 +2530,7 @@ func (tm *AgentManager) RenewCertificate(certificateId int, certificate *Certifi
 	return tm.handleImmediateRenewalResponse(certificateId, certificate, response)
 }
 
-func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certificate *Certificate, response *api.RenewCertificateResponse) error {
+func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certificate *AgentCertificateConfig, response *api.RenewCertificateResponse) error {
 	state := tm.certificateStates[certificateId]
 
 	state.CertificateID = response.CertificateID
@@ -2530,7 +2544,7 @@ func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certif
 		state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 	}
 
-	if renewBeforeDuration, err := parseDurationWithDays(certificate.RenewBeforeExpiry); err == nil {
+	if renewBeforeDuration, err := parseDurationWithDays(certificate.Lifecycle.RenewBeforeExpiry); err == nil {
 		state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
 	}
 
@@ -2548,14 +2562,14 @@ func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certif
 	err := tm.WriteCertificateFiles(certificate, certResponse)
 	if err != nil {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Error().Msgf("failed to write renewed certificate files for certificate %s: %v", displayName, err)
+		log.Error().Str("Certificate", displayName).Msgf("failed to write renewed certificate files: %v", err)
 		state.Status = "failed"
 		state.LastError = fmt.Sprintf("failed to write files: %v", err)
 		return err
 	}
 
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	log.Info().Msgf("certificate %s renewed successfully (serial: %s)", displayName, response.SerialNumber)
+	log.Info().Str("Certificate", displayName).Str("serial", response.SerialNumber).Msg("certificate renewed successfully")
 
 	if certificate.PostHooks.OnRenewal.Command != "" {
 		tm.ExecutePostHook(certificate.PostHooks.OnRenewal.Command, certificate.PostHooks.OnRenewal.Timeout, "renewal", certificateId, certificate)
@@ -2564,107 +2578,130 @@ func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certif
 	return nil
 }
 
-func (tm *AgentManager) PollCertificateRequestForRenewal(certificateId int, certificate *Certificate, requestID string) {
-	maxAttempts := EXTERNAL_CA_MAX_RENEWAL_ATTEMPTS
-	pollingInterval := EXTERNAL_CA_POLLING_INTERVAL
+func (tm *AgentManager) PollCertificateRequestForRenewal(certificateId int, certificate *AgentCertificateConfig, requestID string) {
+	pollingInterval := EXTERNAL_CA_INITIAL_POLLING_INTERVAL
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for {
 		status, certResponse, err := tm.checkCertificateRequestStatusByID(requestID)
 		if err != nil {
-			log.Error().Msgf("failed to check renewal status for certificate %s: %v", displayName, err)
+			log.Error().Str("Certificate", displayName).Msgf("failed to check renewal status: %v", err)
 
+			func() {
+				tm.mutex.Lock()
+				defer tm.mutex.Unlock()
+				state := tm.certificateStates[certificateId]
+				state.LastError = fmt.Sprintf("polling error: %v", err)
+				state.RetryCount++
+			}()
+
+			log.Info().Str("Certificate", displayName).Msgf("waiting %s before next renewal polling attempt", pollingInterval)
+			time.Sleep(pollingInterval)
+
+			pollingInterval *= 2
+			if pollingInterval > EXTERNAL_CA_MAX_POLLING_INTERVAL {
+				pollingInterval = EXTERNAL_CA_MAX_POLLING_INTERVAL
+			}
+			continue
+		}
+
+		var shouldReturn bool
+		var shouldContinue bool
+
+		func() {
 			tm.mutex.Lock()
-			state := tm.certificateStates[certificateId]
-			state.LastError = fmt.Sprintf("polling error: %v", err)
-			state.RetryCount++
-			tm.mutex.Unlock()
+			defer tm.mutex.Unlock()
 
+			state := tm.certificateStates[certificateId]
+
+			switch status {
+			case "issued":
+				if certResponse == nil {
+					shouldContinue = true
+					return
+				}
+
+				if certResponse.Certificate == nil {
+					log.Error().Str("Certificate", displayName).Msg("certificate renewal failed: no certificate data received")
+					tm.handleFailedCertificateRenewal(certificateId, certificate, "no certificate data in issued response")
+					shouldReturn = true
+					return
+				}
+
+				log.Info().Str("Certificate", displayName).Msg("certificate renewed successfully")
+
+				state.CertificateID = certResponse.Certificate.CertificateID
+				state.SerialNumber = certResponse.Certificate.SerialNumber
+				state.IssuedAt = time.Now()
+				state.Status = "active"
+				state.LastError = ""
+				state.RetryCount = 0
+				state.CertificateRequestID = requestID
+
+				if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
+					state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
+				}
+
+				if renewBeforeDuration, err := parseDurationWithDays(certificate.Lifecycle.RenewBeforeExpiry); err == nil {
+					state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
+				}
+
+			case "failed":
+				log.Error().Str("Certificate", displayName).Msg("certificate renewal failed")
+				tm.handleFailedCertificateRenewal(certificateId, certificate, "external CA renewal failed")
+				shouldReturn = true
+				return
+
+			case "pending":
+				// Continue polling
+
+			default:
+				log.Warn().Str("Certificate", displayName).Msg("unknown renewal status")
+			}
+		}()
+
+		if shouldReturn {
+			return
+		}
+
+		if shouldContinue {
 			time.Sleep(pollingInterval)
 			continue
 		}
 
-		tm.mutex.Lock()
-		state := tm.certificateStates[certificateId]
-
-		switch status {
-		case "issued":
-			if certResponse == nil {
-				tm.mutex.Unlock()
-				time.Sleep(pollingInterval)
-				continue
-			}
-
-			if certResponse.Certificate == nil {
-				log.Error().Msgf("certificate %s renewal failed: no certificate data received", displayName)
-				tm.handleFailedCertificateRenewal(certificateId, certificate, "no certificate data in issued response")
-				tm.mutex.Unlock()
-				return
-			}
-
-			log.Info().Msgf("certificate %s renewed successfully", displayName)
-
-			state.CertificateID = certResponse.Certificate.CertificateID
-			state.SerialNumber = certResponse.Certificate.SerialNumber
-			state.IssuedAt = time.Now()
-			state.Status = "active"
-			state.LastError = ""
-			state.RetryCount = 0
-			state.CertificateRequestID = requestID
-
-			if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
-				state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
-			}
-
-			if renewBeforeDuration, err := parseDurationWithDays(certificate.RenewBeforeExpiry); err == nil {
-				state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
-			}
-
-			tm.mutex.Unlock()
-
+		if status == "issued" && certResponse != nil && certResponse.Certificate != nil {
 			if err := tm.WriteCertificateFiles(certificate, certResponse); err != nil {
-				log.Error().Msgf("failed to write renewed certificate files for certificate %s: %v", displayName, err)
+				log.Error().Str("Certificate", displayName).Msgf("failed to write renewed certificate files: %v", err)
 
-				tm.mutex.Lock()
-				state.Status = "failed"
-				state.LastError = fmt.Sprintf("failed to write files: %v", err)
-				tm.mutex.Unlock()
+				func() {
+					tm.mutex.Lock()
+					defer tm.mutex.Unlock()
+					state := tm.certificateStates[certificateId]
+					state.Status = "failed"
+					state.LastError = fmt.Sprintf("failed to write files: %v", err)
+				}()
 				return
 			}
 
-			log.Info().Msgf("successfully renewed certificate %s (new serial: %s)", displayName, certResponse.Certificate.SerialNumber)
+			log.Info().Str("Certificate", displayName).Str("serial", certResponse.Certificate.SerialNumber).Msg("successfully renewed certificate")
 
 			if certificate.PostHooks.OnRenewal.Command != "" {
 				tm.ExecutePostHook(certificate.PostHooks.OnRenewal.Command, certificate.PostHooks.OnRenewal.Timeout, "renewal", certificateId, certificate)
 			}
 			return
-
-		case "failed":
-			log.Error().Msgf("certificate %s renewal failed", displayName)
-			tm.handleFailedCertificateRenewal(certificateId, certificate, "external CA renewal failed")
-			tm.mutex.Unlock()
-			return
-
-		case "pending":
-			tm.mutex.Unlock()
-
-		default:
-			log.Warn().Msgf("unknown renewal status '%s' for certificate %s", status, displayName)
-			tm.mutex.Unlock()
 		}
 
-		if attempt < maxAttempts {
-			time.Sleep(pollingInterval)
+		log.Info().Str("Certificate", displayName).Msgf("waiting %s before next renewal polling attempt", pollingInterval)
+		time.Sleep(pollingInterval)
+
+		pollingInterval *= 2
+		if pollingInterval > EXTERNAL_CA_MAX_POLLING_INTERVAL {
+			pollingInterval = EXTERNAL_CA_MAX_POLLING_INTERVAL
 		}
 	}
-
-	log.Error().Msgf("certificate %s renewal timed out after %d attempts", displayName, maxAttempts)
-	tm.mutex.Lock()
-	tm.handleFailedCertificateRenewal(certificateId, certificate, "renewal timeout")
-	tm.mutex.Unlock()
 }
 
-func (tm *AgentManager) handleFailedCertificateRenewal(certificateId int, certificate *Certificate, reason string) {
+func (tm *AgentManager) handleFailedCertificateRenewal(certificateId int, certificate *AgentCertificateConfig, reason string) {
 	state := tm.certificateStates[certificateId]
 	state.Status = "failed"
 	state.LastError = fmt.Sprintf("renewal failed: %s", reason)
@@ -2672,23 +2709,21 @@ func (tm *AgentManager) handleFailedCertificateRenewal(certificateId int, certif
 	state.CertificateRequestID = ""
 
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	log.Error().Msgf("renewal failed for certificate %s: %s (retry count: %d)", displayName, reason, state.RetryCount)
+	log.Error().Str("Certificate", displayName).Msgf("renewal failed: %s", reason)
 
 	if certificate.PostHooks.OnFailure.Command != "" {
 		tm.ExecutePostHook(certificate.PostHooks.OnFailure.Command, certificate.PostHooks.OnFailure.Timeout, "failure", certificateId, certificate)
 	}
 
-	if state.RetryCount < certificate.MaxRetries {
-		retryInterval, _ := parseDurationWithDays(certificate.RetryInterval)
+	if state.RetryCount < certificate.Lifecycle.MaxFailureRetries {
 		state.LastRetry = time.Now()
-		log.Info().Msgf("scheduling retry for certificate %s renewal in %s", displayName, retryInterval)
+		log.Info().Str("Certificate", displayName).Msg("scheduling retry for certificate renewal")
 	} else {
-		log.Error().Msgf("max retries (%d) exceeded for certificate %s renewal", certificate.MaxRetries, displayName)
+		log.Error().Str("Certificate", displayName).Msg("max retries exceeded for certificate renewal")
 	}
 }
 
-
-func (tm *AgentManager) handleImmediateRenewalResponseFromIssuance(certificateId int, certificate *Certificate, response *api.CertificateResponse) error {
+func (tm *AgentManager) handleImmediateRenewalResponseFromIssuance(certificateId int, certificate *AgentCertificateConfig, response *api.CertificateResponse) error {
 	state := tm.certificateStates[certificateId]
 
 	state.CertificateID = response.Certificate.CertificateID
@@ -2702,21 +2737,21 @@ func (tm *AgentManager) handleImmediateRenewalResponseFromIssuance(certificateId
 		state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 	}
 
-	if renewBeforeDuration, err := parseDurationWithDays(certificate.RenewBeforeExpiry); err == nil {
+	if renewBeforeDuration, err := parseDurationWithDays(certificate.Lifecycle.RenewBeforeExpiry); err == nil {
 		state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
 	}
 
 	err := tm.WriteCertificateFiles(certificate, response)
 	if err != nil {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Error().Msgf("failed to write renewed certificate files for certificate %s: %v", displayName, err)
+		log.Error().Str("Certificate", displayName).Msgf("failed to write renewed certificate files: %v", err)
 		state.Status = "failed"
 		state.LastError = fmt.Sprintf("failed to write files: %v", err)
 		return err
 	}
 
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
-	log.Info().Msgf("successfully renewed certificate %s (new serial: %s)", displayName, response.Certificate.SerialNumber)
+	log.Info().Str("Certificate", displayName).Str("serial", response.Certificate.SerialNumber).Msg("successfully renewed certificate")
 
 	if certificate.PostHooks.OnRenewal.Command != "" {
 		tm.ExecutePostHook(certificate.PostHooks.OnRenewal.Command, certificate.PostHooks.OnRenewal.Timeout, "renewal", certificateId, certificate)
