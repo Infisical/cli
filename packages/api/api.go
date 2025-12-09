@@ -48,6 +48,7 @@ const (
 	operationCallGetOrgRelays                      = "CallGetOrgRelays"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
+	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
@@ -863,6 +864,26 @@ func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAcces
 	}
 
 	return pamAccessResponse, nil
+}
+
+func CallPAMAccessApprovalRequest(httpClient *resty.Client, request PAMAccessApprovalRequest) (PAMAccessApprovalRequestResponse, error) {
+	var pamAccessApprovalRequestResponse PAMAccessApprovalRequestResponse
+	response, err := httpClient.
+		R().
+		SetResult(&pamAccessApprovalRequestResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/approval-policies/pam-access/requests", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMAccessApprovalRequestResponse{}, NewGenericRequestError(operationCallPAMAccessApprovalRequest, err)
+	}
+
+	if response.IsError() {
+		return PAMAccessApprovalRequestResponse{}, NewAPIErrorWithResponse(operationCallPAMAccessApprovalRequest, response, nil)
+	}
+
+	return pamAccessApprovalRequestResponse, nil
 }
 
 func CallPAMSessionCredentials(httpClient *resty.Client, sessionId string) (PAMSessionCredentialsResponse, error) {
