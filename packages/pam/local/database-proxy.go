@@ -36,7 +36,7 @@ const (
 
 func askForApprovalRequestTrigger() (bool, error) {
 	prompt := promptui.Prompt{
-		Label:     "This action requires approval. You may trigger an approval request now. Continue?",
+		Label:     "This action requires approval. You may create an approval request now. Continue?",
 		IsConfirm: true,
 	}
 	result, err := prompt.Run()
@@ -70,7 +70,7 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 				shouldSendRequest, err := askForApprovalRequestTrigger()
 				if err != nil {
 					if errors.Is(err, promptui.ErrAbort) {
-						log.Info().Msgf("Approval request was not triggered.")
+						log.Info().Msgf("Approval request was not created.")
 					} else {
 						util.HandleError(err, "Failed to send PAM account request")
 					}
@@ -78,7 +78,7 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 				}
 
 				if !shouldSendRequest {
-					log.Info().Msgf("Approval request was not triggered.")
+					log.Info().Msgf("Approval request was not created.")
 					return
 				}
 
@@ -98,7 +98,7 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 				if err := util.OpenBrowser(url); err != nil {
 					log.Error().Msgf("Failed to do browser redirect: %v", err)
 				}
-				log.Info().Msgf("Approval request triggered.")
+				log.Info().Msgf("Approval request created.")
 				log.Info().Msgf("View details at: %s", url)
 				return
 			}
