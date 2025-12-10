@@ -823,6 +823,8 @@ type PAMSessionCredentials struct {
 	Password              string `json:"password"`
 	AuthMethod            string `json:"authMethod,omitempty"`
 	PrivateKey            string `json:"privateKey,omitempty"`
+	Url                   string `json:"url,omitempty"`
+	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
 }
 
 type UploadSessionLogEntry struct {
@@ -837,6 +839,17 @@ type UploadTerminalEvent struct {
 	EventType   string    `json:"eventType"`
 	Data        []byte    `json:"data"`
 	ElapsedTime float64   `json:"elapsedTime"`
+}
+
+type UploadHttpEvent struct {
+	Timestamp time.Time           `json:"timestamp"`
+	EventType string              `json:"eventType"`
+	RequestId string              `json:"requestId"`
+	Method    string              `json:"method,omitempty"`
+	Url       string              `json:"url,omitempty"`
+	Status    string              `json:"status,omitempty"`
+	Headers   map[string][]string `json:"headers,omitempty"`
+	Body      []byte              `json:"body,omitempty"`
 }
 
 type UploadPAMSessionLogsRequest struct {
