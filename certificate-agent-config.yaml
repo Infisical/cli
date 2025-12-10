@@ -1,3 +1,5 @@
+certificate-management: v1
+
 infisical:
   address: "https://app.infisical.com/"
 
@@ -9,28 +11,26 @@ auth:
     remove_client_secret_on_read: false
 
 certificates:
-  - profile-id: "5882cac9-b182-4209-a311-64b7c12c4610"
+  - profile-name: "my-profile-name"
+    project-slug: "my-project-slug"
 
     # Certificate parameters
-    common-name: "api.mycompany.com"
-    alt-names:
-      - "www.api.mycompany.com"
-      - "internal-api.mycompany.com"
-    key-algorithm: "RSA_2048"
-    signature-algorithm: "RSA-SHA256"
-    key-usages:
-      - "digital_signature"
-      - "key_encipherment"
-    extended-key-usages:
-      - "server_auth"
-
-    # Certificate lifecycle configuration
-    ttl: "30d"
+    attributes:
+      common-name: "api.mycompany.com"
+      alt-names:
+        - "www.api.mycompany.com"
+        - "internal-api.mycompany.com"
+      key-algorithm: "RSA_2048"
+      signature-algorithm: "RSA-SHA256"
+      key-usages:
+        - "digital_signature"
+        - "key_encipherment"
+      extended-key-usages:
+        - "server_auth"
+      ttl: "30d"
     lifecycle:
-      renew-before-expiry: "7d"            # When to start checking for renewal before expiration
+      renew-before-expiry: "1d"            # When to start checking for renewal before expiration
       status-check-interval: "6h"          # How often to check certificate status and renewal needs
-      max-failure-retries: 3               # Maximum number of failed operation retries before giving up
-      failure-retry-interval: "1h"         # How long to wait between failed operation retry attempts
 
     # Post-hooks for automation
     post-hooks:

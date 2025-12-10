@@ -294,6 +294,45 @@ func CallGetProjectById(httpClient *resty.Client, id string) (Project, error) {
 	return projectResponse.Project, nil
 }
 
+func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {
+	var projectResponse GetProjectBySlugResponse
+	response, err := httpClient.
+		R().
+		SetResult(&projectResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, slug))
+
+	if err != nil {
+		return Project{}, NewGenericRequestError("CallGetProjectBySlug", err)
+	}
+
+	if response.IsError() {
+		return Project{}, NewAPIErrorWithResponse("CallGetProjectBySlug", response, nil)
+	}
+
+	return Project(projectResponse), nil
+}
+
+func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug string) (CertificateProfile, error) {
+	var profileResponse GetCertificateProfileResponse
+	response, err := httpClient.
+		R().
+		SetResult(&profileResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("projectId", projectId).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, slug))
+
+	if err != nil {
+		return CertificateProfile{}, NewGenericRequestError("CallGetCertificateProfileBySlug", err)
+	}
+
+	if response.IsError() {
+		return CertificateProfile{}, NewAPIErrorWithResponse("CallGetCertificateProfileBySlug", response, nil)
+	}
+
+	return profileResponse.CertificateProfile, nil
+}
+
 func CallIsAuthenticated(httpClient *resty.Client) bool {
 	var workSpacesResponse GetWorkSpacesResponse
 	response, err := httpClient.

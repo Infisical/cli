@@ -89,12 +89,13 @@ type RetryConfig struct {
 }
 
 type Config struct {
-	Infisical    InfisicalConfig          `yaml:"infisical"`
-	Auth         AuthConfig               `yaml:"auth"`
-	Sinks        []Sink                   `yaml:"sinks"`
-	Cache        CacheConfig              `yaml:"cache,omitempty"`
-	Templates    []Template               `yaml:"templates"`
-	Certificates []AgentCertificateConfig `yaml:"certificates,omitempty"`
+	CertificateManagement string                   `yaml:"certificate-management,omitempty"`
+	Infisical             InfisicalConfig          `yaml:"infisical"`
+	Auth                  AuthConfig               `yaml:"auth"`
+	Sinks                 []Sink                   `yaml:"sinks"`
+	Cache                 CacheConfig              `yaml:"cache,omitempty"`
+	Templates             []Template               `yaml:"templates"`
+	Certificates          []AgentCertificateConfig `yaml:"certificates,omitempty"`
 }
 
 type TemplateWithID struct {
@@ -199,11 +200,7 @@ type CertificateLifecycleConfig struct {
 	MaxFailureRetries int `yaml:"max-failure-retries,omitempty"`
 }
 
-type AgentCertificateConfig struct {
-	ProfileID            string   `yaml:"profile-id"`
-	DestinationPath      string   `yaml:"destination-path"`
-	CSR                  string   `yaml:"csr,omitempty"`
-	CSRPath              string   `yaml:"csr-path,omitempty"`
+type CertificateAttributes struct {
 	CommonName           string   `yaml:"common-name,omitempty"`
 	AltNames             []string `yaml:"alt-names,omitempty"`
 	KeyAlgorithm         string   `yaml:"key-algorithm,omitempty"`
@@ -214,6 +211,16 @@ type AgentCertificateConfig struct {
 	NotAfter             string   `yaml:"not-after,omitempty"`
 	RemoveRootsFromChain bool     `yaml:"remove-roots-from-chain"`
 	TTL                  string   `yaml:"ttl"`
+}
+
+type AgentCertificateConfig struct {
+	ProjectName     string                 `yaml:"project-slug"`
+	ProfileName     string                 `yaml:"profile-name"`
+	ProfileID       string                 `yaml:"-"`
+	DestinationPath string                 `yaml:"destination-path"`
+	CSR             string                 `yaml:"csr,omitempty"`
+	CSRPath         string                 `yaml:"csr-path,omitempty"`
+	Attributes      *CertificateAttributes `yaml:"attributes,omitempty"`
 	// Certificate lifecycle and monitoring configuration
 	Lifecycle CertificateLifecycleConfig `yaml:"lifecycle"`
 	PostHooks struct {
@@ -769,6 +776,35 @@ func ParseAuthConfig(authConfigFile []byte, destination interface{}) error {
 	return nil
 }
 
+func validateAgentConfigVersionCompatibility(config *Config) error {
+	if config.CertificateManagement == "" {
+		if len(config.Certificates) > 0 {
+			return fmt.Errorf("certificates are configured but 'certificate-management' version is not specified.")
+		}
+		return nil
+	}
+
+	switch config.CertificateManagement {
+	case "v1":
+		return validateCertificateManagementV1(config)
+	default:
+		return fmt.Errorf("unsupported certificate-management version: %s. Supported versions: v1", config.CertificateManagement)
+	}
+}
+
+func validateCertificateManagementV1(config *Config) error {
+	if len(config.Templates) > 0 {
+		return fmt.Errorf("certificate-management: v1 does not support 'templates' configuration. Templates are for secret management, not certificate management. Please remove the templates section or use a different configuration mode")
+	}
+
+	if len(config.Certificates) == 0 {
+		return fmt.Errorf("certificate-management: v1 requires at least one certificate to be configured in the 'certificates' section")
+	}
+
+	log.Info().Msg("Configuration validated for certificate-management: v1")
+	return nil
+}
+
 func ParseAgentConfig(configFile []byte) (*Config, error) {
 	var rawConfig Config
 
@@ -790,6 +826,10 @@ func ParseAgentConfig(configFile []byte) (*Config, error) {
 	config.INFISICAL_URL = util.AppendAPIEndpoint(rawConfig.Infisical.Address)
 
 	log.Info().Msgf("Infisical instance address set to %s", rawConfig.Infisical.Address)
+
+	if err := validateAgentConfigVersionCompatibility(&rawConfig); err != nil {
+		return nil, err
+	}
 
 	return &rawConfig, nil
 }
@@ -1886,12 +1926,100 @@ func processCertificateCSRPaths(certificates *[]AgentCertificateConfig) error {
 	return nil
 }
 
-func (tm *AgentManager) getCertificateDisplayName(certificateId int, certificate *AgentCertificateConfig) string {
-	if certificate.CommonName != "" {
-		return certificate.CommonName
+func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) error {
+	for i, cert := range *certificates {
+		if cert.Attributes == nil || cert.Attributes.TTL == "" || cert.Lifecycle.RenewBeforeExpiry == "" {
+			continue
+		}
+
+		ttl := cert.Attributes.TTL
+		commonName := cert.Attributes.CommonName
+		altNames := cert.Attributes.AltNames
+
+		ttlDuration, err := parseDurationWithDays(ttl)
+		if err != nil {
+			return fmt.Errorf("certificate %d: invalid TTL format '%s': %v", i+1, ttl, err)
+		}
+
+		renewBeforeDuration, err := parseDurationWithDays(cert.Lifecycle.RenewBeforeExpiry)
+		if err != nil {
+			return fmt.Errorf("certificate %d: invalid renew-before-expiry format '%s': %v", i+1, cert.Lifecycle.RenewBeforeExpiry, err)
+		}
+
+		if renewBeforeDuration >= ttlDuration {
+			certName := "certificate"
+			if commonName != "" {
+				certName = fmt.Sprintf("certificate '%s'", commonName)
+			} else if len(altNames) > 0 {
+				certName = fmt.Sprintf("certificate '%s'", altNames[0])
+			} else if cert.ProjectName != "" && cert.ProfileName != "" {
+				certName = fmt.Sprintf("certificate '%s/%s'", cert.ProjectName, cert.ProfileName)
+			}
+
+			return fmt.Errorf("%s: renew-before-expiry (%v) must be less than TTL (%v). "+
+				"Current configuration would attempt to renew the certificate before or immediately after it's issued, "+
+				"which is not possible. Please adjust either the TTL or renew-before-expiry setting",
+				certName, renewBeforeDuration, ttlDuration)
+		}
+
+		if renewBeforeDuration > time.Duration(float64(ttlDuration)*0.8) {
+			certName := "certificate"
+			if commonName != "" {
+				certName = commonName
+			}
+			log.Warn().
+				Str("certificate", certName).
+				Dur("ttl", ttlDuration).
+				Dur("renewBeforeExpiry", renewBeforeDuration).
+				Msg("renew-before-expiry is more than 80% of TTL, which may result in very frequent renewal attempts")
+		}
 	}
-	if len(certificate.AltNames) > 0 {
-		return certificate.AltNames[0]
+	return nil
+}
+
+
+func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
+	for i := range *certificates {
+		cert := &(*certificates)[i]
+
+		if cert.ProjectName == "" || cert.ProfileName == "" {
+			return fmt.Errorf("certificate configuration must specify both 'project-slug' and 'profile-name'")
+		}
+
+		project, err := api.CallGetProjectBySlug(httpClient, cert.ProjectName)
+		if err != nil {
+			return fmt.Errorf("failed to resolve project name '%s': %v. Please check that the project exists and you have access to it", cert.ProjectName, err)
+		}
+
+		if project.ID == "" {
+			return fmt.Errorf("project '%s' was found but returned empty ID. This may indicate a server issue", cert.ProjectName)
+		}
+
+		profile, err := api.CallGetCertificateProfileBySlug(httpClient, project.ID, cert.ProfileName)
+		if err != nil {
+			return fmt.Errorf("failed to resolve profile name '%s' in project '%s' (project ID: %s): %v. Please check that the certificate profile exists in this project", cert.ProfileName, cert.ProjectName, project.ID, err)
+		}
+
+		cert.ProfileID = profile.ID
+	}
+	return nil
+}
+
+func (tm *AgentManager) getCertificateTTL(certificate *AgentCertificateConfig) string {
+	if certificate.Attributes != nil {
+		return certificate.Attributes.TTL
+	}
+	return ""
+}
+
+func (tm *AgentManager) getCertificateDisplayName(certificateId int, certificate *AgentCertificateConfig) string {
+	if certificate.Attributes != nil {
+		if certificate.Attributes.CommonName != "" {
+			return certificate.Attributes.CommonName
+		}
+		if len(certificate.Attributes.AltNames) > 0 {
+			return certificate.Attributes.AltNames[0]
+		}
 	}
 	if certificate.CSRPath != "" {
 		return fmt.Sprintf("CSR-based certificate (%s)", certificate.CSRPath)
@@ -1900,8 +2028,13 @@ func (tm *AgentManager) getCertificateDisplayName(certificateId int, certificate
 }
 
 func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.CertificateAttributes {
+	if certificate.Attributes == nil {
+		return nil
+	}
+
 	attributes := &api.CertificateAttributes{}
 	hasAny := false
+	certAttrs := certificate.Attributes
 
 	setString := func(dst *string, src string) {
 		if src != "" {
@@ -1916,23 +2049,23 @@ func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.Certif
 		}
 	}
 
-	setString(&attributes.TTL, certificate.TTL)
-	setString(&attributes.CommonName, certificate.CommonName)
-	setString(&attributes.KeyAlgorithm, certificate.KeyAlgorithm)
-	setString(&attributes.SignatureAlgorithm, certificate.SignatureAlgorithm)
-	setString(&attributes.NotBefore, certificate.NotBefore)
-	setString(&attributes.NotAfter, certificate.NotAfter)
-	setStringSlice(&attributes.KeyUsages, certificate.KeyUsages)
-	setStringSlice(&attributes.ExtendedKeyUsages, certificate.ExtendedKeyUsages)
+	setString(&attributes.TTL, certAttrs.TTL)
+	setString(&attributes.CommonName, certAttrs.CommonName)
+	setString(&attributes.KeyAlgorithm, certAttrs.KeyAlgorithm)
+	setString(&attributes.SignatureAlgorithm, certAttrs.SignatureAlgorithm)
+	setString(&attributes.NotBefore, certAttrs.NotBefore)
+	setString(&attributes.NotAfter, certAttrs.NotAfter)
+	setStringSlice(&attributes.KeyUsages, certAttrs.KeyUsages)
+	setStringSlice(&attributes.ExtendedKeyUsages, certAttrs.ExtendedKeyUsages)
 
-	if certificate.RemoveRootsFromChain {
-		attributes.RemoveRootsFromChain = certificate.RemoveRootsFromChain
+	if certAttrs.RemoveRootsFromChain {
+		attributes.RemoveRootsFromChain = certAttrs.RemoveRootsFromChain
 		hasAny = true
 	}
 
-	if len(certificate.AltNames) > 0 {
-		altNames := make([]api.AltName, len(certificate.AltNames))
-		for i, altName := range certificate.AltNames {
+	if len(certAttrs.AltNames) > 0 {
+		altNames := make([]api.AltName, len(certAttrs.AltNames))
+		for i, altName := range certAttrs.AltNames {
 			altNames[i] = api.AltName{Type: "dns_name", Value: altName}
 		}
 		attributes.AltNames = altNames
@@ -1997,7 +2130,10 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 	}
 
 	setCommonName := func() {
-		state.CommonName = certificate.CommonName
+		if certificate.Attributes != nil {
+			state.CommonName = certificate.Attributes.CommonName
+		}
+
 		if state.CommonName == "" && request.Attributes != nil {
 			state.CommonName = request.Attributes.CommonName
 		}
@@ -2022,7 +2158,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 		return nil
 	}
 
-	if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
+	if ttlDuration, err := parseDurationWithDays(tm.getCertificateTTL(certificate)); err == nil {
 		state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 	} else {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
@@ -2137,7 +2273,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 		state.LastError = ""
 		state.RetryCount = 0
 
-		if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
+		if ttlDuration, err := parseDurationWithDays(tm.getCertificateTTL(certificate)); err == nil {
 			state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 		} else {
 			state.ExpiresAt = state.IssuedAt.Add(24 * time.Hour)
@@ -2540,7 +2676,7 @@ func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certif
 	state.LastError = ""
 	state.RetryCount = 0
 
-	if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
+	if ttlDuration, err := parseDurationWithDays(tm.getCertificateTTL(certificate)); err == nil {
 		state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 	}
 
@@ -2638,7 +2774,7 @@ func (tm *AgentManager) PollCertificateRequestForRenewal(certificateId int, cert
 				state.RetryCount = 0
 				state.CertificateRequestID = requestID
 
-				if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
+				if ttlDuration, err := parseDurationWithDays(tm.getCertificateTTL(certificate)); err == nil {
 					state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 				}
 
@@ -2733,7 +2869,7 @@ func (tm *AgentManager) handleImmediateRenewalResponseFromIssuance(certificateId
 	state.LastError = ""
 	state.RetryCount = 0
 
-	if ttlDuration, err := parseDurationWithDays(certificate.TTL); err == nil {
+	if ttlDuration, err := parseDurationWithDays(tm.getCertificateTTL(certificate)); err == nil {
 		state.ExpiresAt = state.IssuedAt.Add(ttlDuration)
 	}
 
@@ -2857,6 +2993,12 @@ var agentCmd = &cobra.Command{
 			return
 		}
 
+		err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
+		if err != nil {
+			log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
+			return
+		}
+
 		authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
 
 		if !authMethodValid {
@@ -2879,10 +3021,15 @@ var agentCmd = &cobra.Command{
 			return
 		}
 
+		var certificates []AgentCertificateConfig
+		if agentConfig.CertificateManagement != "" {
+			certificates = agentConfig.Certificates
+		}
+
 		tm := NewAgentManager(NewAgentMangerOptions{
 			FileDeposits:                   filePaths,
 			Templates:                      agentConfig.Templates,
-			Certificates:                   agentConfig.Certificates,
+			Certificates:                   certificates,
 			AuthConfigBytes:                configBytes,
 			NewAccessTokenNotificationChan: tokenRefreshNotifier,
 			ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
@@ -2921,6 +3068,38 @@ var agentCmd = &cobra.Command{
 		}
 
 		go tm.ManageTokenLifecycle()
+
+		if len(agentConfig.Certificates) > 0 {
+			go func() {
+				for {
+					if tm.getTokenUnsafe() != "" {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				httpClient, err := tm.createAuthenticatedClient()
+				if err != nil {
+					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
+					return
+				}
+
+				err = resolveCertificateNameReferences(&agentConfig.Certificates, httpClient)
+				if err != nil {
+					log.Error().Msgf("failed to resolve certificate name references: %v", err)
+					return
+				}
+
+				for i := range tm.certificates {
+					for j := range agentConfig.Certificates {
+						if tm.certificates[i].ID == j+1 {
+							tm.certificates[i].Certificate = agentConfig.Certificates[j]
+							break
+						}
+					}
+				}
+			}()
+		}
 
 		var monitoredTemplatesFinished atomic.Int32
 

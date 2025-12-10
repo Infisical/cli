@@ -136,6 +136,21 @@ type GetProjectByIdResponse struct {
 	Project Project `json:"workspace"`
 }
 
+type GetProjectBySlugResponse Project
+
+type CertificateProfile struct {
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	ProjectID             string `json:"projectId"`
+	CaID                  string `json:"caId"`
+	CertificateTemplateID string `json:"certificateTemplateId"`
+}
+
+type GetCertificateProfileResponse struct {
+	CertificateProfile CertificateProfile `json:"certificateProfile"`
+}
+
 type GetOrganizationsResponse struct {
 	Organizations []struct {
 		ID   string `json:"id"`
