@@ -89,13 +89,13 @@ type RetryConfig struct {
 }
 
 type Config struct {
-	CertificateManagement string                   `yaml:"certificate-management,omitempty"`
-	Infisical             InfisicalConfig          `yaml:"infisical"`
-	Auth                  AuthConfig               `yaml:"auth"`
-	Sinks                 []Sink                   `yaml:"sinks"`
-	Cache                 CacheConfig              `yaml:"cache,omitempty"`
-	Templates             []Template               `yaml:"templates"`
-	Certificates          []AgentCertificateConfig `yaml:"certificates,omitempty"`
+	Version       string                   `yaml:"version,omitempty"`
+	Infisical     InfisicalConfig          `yaml:"infisical"`
+	Auth          AuthConfig               `yaml:"auth"`
+	Sinks         []Sink                   `yaml:"sinks"`
+	Cache         CacheConfig              `yaml:"cache,omitempty"`
+	Templates     []Template               `yaml:"templates"`
+	Certificates  []AgentCertificateConfig `yaml:"certificates,omitempty"`
 }
 
 type TemplateWithID struct {
@@ -243,7 +243,7 @@ type AgentCertificateConfig struct {
 		CertificateChainPath string `yaml:"certificate-chain-path,omitempty"`
 		FilePermissions      string `yaml:"file-permissions,omitempty"`
 		DirectoryPermissions string `yaml:"directory-permissions,omitempty"`
-	} `yaml:"output-file-configuration,omitempty"`
+	} `yaml:"file-output,omitempty"`
 }
 
 type DynamicSecretLeaseWithTTL struct {
@@ -777,35 +777,49 @@ func ParseAuthConfig(authConfigFile []byte, destination interface{}) error {
 }
 
 func validateAgentConfigVersionCompatibility(config *Config) error {
-	if config.CertificateManagement == "" {
+	return validateAgentConfigVersionCompatibilityWithMode(config, false)
+}
+
+func validateAgentConfigVersionCompatibilityWithMode(config *Config, isCertManagerMode bool) error {
+	if config.Version == "" {
 		if len(config.Certificates) > 0 {
-			return fmt.Errorf("certificates are configured but 'certificate-management' version is not specified.")
+			return fmt.Errorf("certificates are configured but 'version' field is not specified. Add 'version: v1' to your config")
 		}
 		return nil
 	}
 
-	switch config.CertificateManagement {
+	switch config.Version {
 	case "v1":
-		return validateCertificateManagementV1(config)
+		if isCertManagerMode {
+			return validateCertificateManagementV1ForCertManager(config)
+		} else {
+			return validateCertificateManagementV1(config)
+		}
 	default:
-		return fmt.Errorf("unsupported certificate-management version: %s. Supported versions: v1", config.CertificateManagement)
+		return fmt.Errorf("unsupported version: %s. Supported versions: v1", config.Version)
 	}
 }
 
 func validateCertificateManagementV1(config *Config) error {
-	if len(config.Templates) > 0 {
-		return fmt.Errorf("certificate-management: v1 does not support 'templates' configuration. Templates are for secret management, not certificate management. Please remove the templates section or use a different configuration mode")
-	}
+	return fmt.Errorf("version: v1 is for certificate management. Please use 'infisical cert-manager agent' for certificate configurations")
+}
 
+func validateCertificateManagementV1ForCertManager(config *Config) error {
 	if len(config.Certificates) == 0 {
-		return fmt.Errorf("certificate-management: v1 requires at least one certificate to be configured in the 'certificates' section")
+		return fmt.Errorf("certificate management requires at least one certificate to be configured")
 	}
-
-	log.Info().Msg("Configuration validated for certificate-management: v1")
 	return nil
 }
 
 func ParseAgentConfig(configFile []byte) (*Config, error) {
+	return parseAgentConfigWithMode(configFile, false)
+}
+
+func ParseAgentConfigForCertManager(configFile []byte) (*Config, error) {
+	return parseAgentConfigWithMode(configFile, true)
+}
+
+func parseAgentConfigWithMode(configFile []byte, isCertManagerMode bool) (*Config, error) {
 	var rawConfig Config
 
 	if err := yaml.Unmarshal(configFile, &rawConfig); err != nil {
@@ -827,7 +841,7 @@ func ParseAgentConfig(configFile []byte) (*Config, error) {
 
 	log.Info().Msgf("Infisical instance address set to %s", rawConfig.Infisical.Address)
 
-	if err := validateAgentConfigVersionCompatibility(&rawConfig); err != nil {
+	if err := validateAgentConfigVersionCompatibilityWithMode(&rawConfig, isCertManagerMode); err != nil {
 		return nil, err
 	}
 
@@ -3022,7 +3036,7 @@ var agentCmd = &cobra.Command{
 		}
 
 		var certificates []AgentCertificateConfig
-		if agentConfig.CertificateManagement != "" {
+		if agentConfig.Version != "" {
 			certificates = agentConfig.Certificates
 		}
 
@@ -3176,11 +3190,228 @@ var agentCmd = &cobra.Command{
 	},
 }
 
+func validateCertificateOnlyMode(config *Config) error {
+	if config.Version != "v1" {
+		return fmt.Errorf("certificate management requires version: v1")
+	}
+
+	if len(config.Certificates) == 0 {
+		return fmt.Errorf("certificate management requires at least one certificate to be configured")
+	}
+
+	if len(config.Templates) > 0 {
+		return fmt.Errorf("certificate-only mode does not support templates. Use regular 'infisical agent' for secrets management")
+	}
+
+	return nil
+}
+
+var certManagerCmd = &cobra.Command{
+	Use:   "cert-manager",
+	Short: "Certificate management commands",
+	Long:  "Commands for managing certificates through the Infisical agent",
+}
+
+var certManagerAgentCmd = &cobra.Command{
+	Example: `
+	infisical cert-manager agent --config certificate-agent-config.yaml
+	`,
+	Use:                   "agent",
+	Short:                 "Launch certificate management agent",
+	Long:                  "Used to launch a client daemon specifically for certificate management and lifecycle automation",
+	DisableFlagsInUseLine: true,
+	Run: func(cmd *cobra.Command, args []string) {
+
+		log.Info().Msg("starting Infisical certificate management agent...")
+
+		configPath, err := cmd.Flags().GetString("config")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag config")
+		}
+
+		var agentConfigInBytes []byte
+
+		agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
+
+		if agentConfigInBase64 == "" {
+			data, err := ioutil.ReadFile(configPath)
+			if err != nil {
+				if !FileExists(configPath) {
+					log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
+					return
+				}
+			}
+			agentConfigInBytes = data
+		}
+
+		if agentConfigInBase64 != "" {
+			decodedAgentConfig, err := base64.StdEncoding.DecodeString(agentConfigInBase64)
+			if err != nil {
+				log.Error().Msgf("Unable to decode base64 config file because %v", err)
+				return
+			}
+
+			agentConfigInBytes = decodedAgentConfig
+		}
+
+		if !FileExists(configPath) && agentConfigInBase64 == "" {
+			log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
+			return
+		}
+
+		agentConfig, err := ParseAgentConfigForCertManager(agentConfigInBytes)
+		if err != nil {
+			log.Error().Msgf("Unable to parse %s because %v. Please ensure that it follows the Infisical Agent config structure", configPath, err)
+			return
+		}
+
+		if err := validateCertificateOnlyMode(agentConfig); err != nil {
+			log.Error().Msgf("Certificate-only mode validation failed: %v", err)
+			return
+		}
+
+		err = processCertificateCSRPaths(&agentConfig.Certificates)
+		if err != nil {
+			log.Error().Msgf("Failed to load CSR files: %v", err)
+			return
+		}
+
+		err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
+		if err != nil {
+			log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
+			return
+		}
+
+		authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
+
+		if !authMethodValid {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		tokenRefreshNotifier := make(chan bool)
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+		filePaths := agentConfig.Sinks
+
+		configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
+		if err != nil {
+			log.Error().Msgf("unable to marshal auth config because %v", err)
+			cancel()
+			return
+		}
+
+		tm := NewAgentManager(NewAgentMangerOptions{
+			FileDeposits:                   filePaths,
+			Templates:                      []Template{}, // No templates in cert-only mode
+			Certificates:                   agentConfig.Certificates,
+			AuthConfigBytes:                configBytes,
+			NewAccessTokenNotificationChan: tokenRefreshNotifier,
+			ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
+			AuthStrategy:                   authStrategy,
+			RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
+			RetryConfig:                    agentConfig.Infisical.RetryConfig,
+		})
+
+		tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
+		if err != nil {
+			log.Error().Msgf("unable to setup cache manager: %v", err)
+			cancel()
+			return
+		}
+		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(tm.cacheManager, tm.SdkRetryConfig())
+
+		go tm.ManageTokenLifecycle()
+
+		if len(agentConfig.Certificates) > 0 {
+			go func() {
+				for {
+					if tm.getTokenUnsafe() != "" {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				httpClient, err := tm.createAuthenticatedClient()
+				if err != nil {
+					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
+					return
+				}
+
+				err = resolveCertificateNameReferences(&agentConfig.Certificates, httpClient)
+				if err != nil {
+					log.Error().Msgf("failed to resolve certificate name references: %v", err)
+					return
+				}
+
+				for i := range tm.certificates {
+					for j := range agentConfig.Certificates {
+						if tm.certificates[i].ID == j+1 {
+							tm.certificates[i].Certificate = agentConfig.Certificates[j]
+							break
+						}
+					}
+				}
+			}()
+		}
+
+		if len(tm.certificates) > 0 {
+			log.Info().Msg("certificate management engine starting...")
+			go tm.MonitorCertificates(ctx)
+		}
+
+		for {
+			select {
+			case <-tokenRefreshNotifier:
+				go tm.WriteTokenToFiles()
+			case <-sigChan:
+				tm.isShuttingDown = true
+				tm.cancelContext()
+				log.Info().Msg("certificate management agent is gracefully shutting down...")
+				cancel()
+
+				exitCode := 0
+
+				if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
+
+					done := make(chan error, 1)
+
+					go func() {
+						done <- tm.RevokeCredentials()
+					}()
+
+					select {
+					case err := <-done:
+						if err != nil {
+							log.Error().Msgf("unable to revoke credentials [err=%v]", err)
+							exitCode = 1
+						}
+					case <-time.After(5 * time.Minute):
+						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
+						exitCode = 1
+					}
+
+				}
+
+				os.Exit(exitCode)
+			}
+		}
+
+	},
+}
+
 func init() {
 	agentCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
 		command.Flags().MarkHidden("domain")
 		command.Parent().HelpFunc()(command, strings)
 	})
 	agentCmd.Flags().String("config", "agent-config.yaml", "The path to agent config yaml file")
+
+	certManagerAgentCmd.Flags().String("config", "certificate-agent-config.yaml", "The path to certificate agent config yaml file")
+	certManagerCmd.AddCommand(certManagerAgentCmd)
+
 	rootCmd.AddCommand(agentCmd)
+	rootCmd.AddCommand(certManagerCmd)
 }

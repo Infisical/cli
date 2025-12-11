@@ -1,4 +1,4 @@
-certificate-management: v1
+version: v1
 
 infisical:
   address: "https://app.infisical.com/"
@@ -44,7 +44,7 @@ certificates:
         command: "logger 'Certificate failed for api.mycompany.com'"
         timeout: 10
 
-    output-file-configuration:
+    file-output:
       private-key-path: "./certs/web-server/private.key"
       certificate-path: "./certs/web-server/certificate.crt"
       certificate-chain-path: "./certs/web-server/chain.crt"
