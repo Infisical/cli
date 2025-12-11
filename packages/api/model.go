@@ -136,6 +136,21 @@ type GetProjectByIdResponse struct {
 	Project Project `json:"workspace"`
 }
 
+type GetProjectBySlugResponse Project
+
+type CertificateProfile struct {
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	ProjectID             string `json:"projectId"`
+	CaID                  string `json:"caId"`
+	CertificateTemplateID string `json:"certificateTemplateId"`
+}
+
+type GetCertificateProfileResponse struct {
+	CertificateProfile CertificateProfile `json:"certificateProfile"`
+}
+
 type GetOrganizationsResponse struct {
 	Organizations []struct {
 		ID   string `json:"id"`
@@ -858,4 +873,91 @@ type UploadPAMSessionLogsRequest struct {
 
 type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
+}
+
+type AltName struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type CertificateAttributes struct {
+	TTL                  string    `json:"ttl,omitempty"`
+	SignatureAlgorithm   string    `json:"signatureAlgorithm,omitempty"`
+	KeyAlgorithm         string    `json:"keyAlgorithm,omitempty"`
+	CommonName           string    `json:"commonName,omitempty"`
+	KeyUsages            []string  `json:"keyUsages,omitempty"`
+	ExtendedKeyUsages    []string  `json:"extendedKeyUsages,omitempty"`
+	NotBefore            string    `json:"notBefore,omitempty"`
+	NotAfter             string    `json:"notAfter,omitempty"`
+	AltNames             []AltName `json:"altNames,omitempty"`
+	RemoveRootsFromChain bool      `json:"removeRootsFromChain,omitempty"`
+}
+
+type IssueCertificateRequest struct {
+	ProfileID  string                 `json:"profileId"`
+	CSR        string                 `json:"csr,omitempty"`
+	Attributes *CertificateAttributes `json:"attributes,omitempty"`
+}
+
+type CertificateData struct {
+	Certificate          string `json:"certificate"`
+	IssuingCaCertificate string `json:"issuingCaCertificate"`
+	CertificateChain     string `json:"certificateChain"`
+	PrivateKey           string `json:"privateKey,omitempty"`
+	SerialNumber         string `json:"serialNumber"`
+	CertificateID        string `json:"certificateId"`
+}
+
+type CertificateResponse struct {
+	Certificate          *CertificateData `json:"certificate,omitempty"`
+	CertificateRequestID string           `json:"certificateRequestId"`
+}
+
+type RetrieveCertificateResponse struct {
+	Certificate struct {
+		ID                string    `json:"id"`
+		CreatedAt         time.Time `json:"createdAt"`
+		UpdatedAt         time.Time `json:"updatedAt"`
+		Status            string    `json:"status"`
+		SerialNumber      string    `json:"serialNumber"`
+		CommonName        string    `json:"commonName"`
+		NotBefore         time.Time `json:"notBefore"`
+		NotAfter          time.Time `json:"notAfter"`
+		ProjectId         string    `json:"projectId"`
+		CaId              string    `json:"caId"`
+		KeyUsages         []string  `json:"keyUsages"`
+		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
+		Certificate       string    `json:"certificate,omitempty"`
+		CertificateChain  string    `json:"certificateChain,omitempty"`
+		PrivateKey        string    `json:"privateKey,omitempty"`
+	} `json:"certificate"`
+}
+
+type RenewCertificateRequest struct {
+}
+
+type RenewCertificateResponse struct {
+	Certificate          string `json:"certificate"`
+	IssuingCaCertificate string `json:"issuingCaCertificate"`
+	CertificateChain     string `json:"certificateChain"`
+	PrivateKey           string `json:"privateKey"`
+	SerialNumber         string `json:"serialNumber"`
+	CertificateID        string `json:"certificateId"`
+	CertificateRequestID string `json:"certificateRequestId,omitempty"`
+}
+
+type GetCertificateRequestResponse struct {
+	Status               string    `json:"status"` // "pending", "issued", "failed"
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+	CommonName           string    `json:"commonName,omitempty"`
+	ProjectID            string    `json:"projectId,omitempty"`
+	ProfileID            string    `json:"profileId,omitempty"`
+	Certificate          *string   `json:"certificate,omitempty"`
+	IssuingCaCertificate *string   `json:"issuingCaCertificate,omitempty"`
+	CertificateChain     *string   `json:"certificateChain,omitempty"`
+	PrivateKey           *string   `json:"privateKey,omitempty"`
+	SerialNumber         *string   `json:"serialNumber,omitempty"`
+	CertificateID        *string   `json:"certificateId,omitempty"`
+	ErrorMessage         *string   `json:"errorMessage,omitempty"`
 }

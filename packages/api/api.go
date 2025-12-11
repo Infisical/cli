@@ -55,6 +55,10 @@ const (
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
+	operationCallIssueCertificate                  = "CallIssueCertificate"
+	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
+	operationCallRenewCertificate                  = "CallRenewCertificate"
+	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -289,6 +293,45 @@ func CallGetProjectById(httpClient *resty.Client, id string) (Project, error) {
 	}
 
 	return projectResponse.Project, nil
+}
+
+func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {
+	var projectResponse GetProjectBySlugResponse
+	response, err := httpClient.
+		R().
+		SetResult(&projectResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, slug))
+
+	if err != nil {
+		return Project{}, NewGenericRequestError("CallGetProjectBySlug", err)
+	}
+
+	if response.IsError() {
+		return Project{}, NewAPIErrorWithResponse("CallGetProjectBySlug", response, nil)
+	}
+
+	return Project(projectResponse), nil
+}
+
+func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug string) (CertificateProfile, error) {
+	var profileResponse GetCertificateProfileResponse
+	response, err := httpClient.
+		R().
+		SetResult(&profileResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("projectId", projectId).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, slug))
+
+	if err != nil {
+		return CertificateProfile{}, NewGenericRequestError("CallGetCertificateProfileBySlug", err)
+	}
+
+	if response.IsError() {
+		return CertificateProfile{}, NewAPIErrorWithResponse("CallGetCertificateProfileBySlug", response, nil)
+	}
+
+	return profileResponse.CertificateProfile, nil
 }
 
 func CallIsAuthenticated(httpClient *resty.Client) bool {
@@ -955,4 +998,82 @@ func CallPAMSessionTermination(httpClient *resty.Client, sessionId string) error
 	}
 
 	return nil
+}
+
+func CallIssueCertificate(httpClient *resty.Client, request IssueCertificateRequest) (*CertificateResponse, error) {
+	var resBody CertificateResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/cert-manager/certificates", config.INFISICAL_URL))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallIssueCertificate, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallIssueCertificate, response, nil)
+	}
+
+	return &resBody, nil
+}
+
+func CallRetrieveCertificate(httpClient *resty.Client, certificateId string) (*RetrieveCertificateResponse, error) {
+	var resBody RetrieveCertificateResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/%s", config.INFISICAL_URL, certificateId))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallRetrieveCertificate, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallRetrieveCertificate, response, nil)
+	}
+
+	return &resBody, nil
+}
+
+func CallRenewCertificate(httpClient *resty.Client, certificateId string, request RenewCertificateRequest) (*RenewCertificateResponse, error) {
+	var resBody RenewCertificateResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/cert-manager/certificates/%s/renew", config.INFISICAL_URL, certificateId))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallRenewCertificate, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallRenewCertificate, response, nil)
+	}
+
+	return &resBody, nil
+}
+
+func CallGetCertificateRequest(httpClient *resty.Client, certificateRequestId string) (*GetCertificateRequestResponse, error) {
+	var resBody GetCertificateRequestResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/certificate-requests/%s", config.INFISICAL_URL, certificateRequestId))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallGetCertificateRequest, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallGetCertificateRequest, response, nil)
+	}
+
+	return &resBody, nil
 }
