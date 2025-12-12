@@ -16,13 +16,21 @@ jobs:
           set -e
 
           # Get the commit hash of the tag
-          TAG_COMMIT=$(git rev-parse ${{ github.ref_name }})
+          TAG_COMMIT=$(git rev-parse ${{ github.ref_name }}^{commit})
           echo "Tag ${{ github.ref_name }} points to commit: $TAG_COMMIT"
 
           # Get the latest commit on main branch
           git fetch origin main
           MAIN_LATEST=$(git rev-parse origin/main)
           echo "Latest commit on main: $MAIN_LATEST"
+
+          # Verify the tag commit is in main's history
+          if ! git merge-base --is-ancestor $TAG_COMMIT origin/main; then
+            echo "ERROR: Tag ${{ github.ref_name }} commit is not in main branch history!"
+            echo "Tag commit: $TAG_COMMIT"
+            echo "This tag was created from a different branch lineage."
+            exit 1
+          fi
 
           # Check if the tag commit is the same as the latest main commit
           if [ "$TAG_COMMIT" != "$MAIN_LATEST" ]; then
