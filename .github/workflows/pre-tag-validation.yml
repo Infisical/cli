@@ -1,0 +1,40 @@
+name: Pre-tag validation
+
+on:
+  workflow_call:
+
+jobs:
+  validate-tag-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag is on latest main commit
+        run: |
+          set -e
+
+          # Get the commit hash of the tag
+          TAG_COMMIT=$(git rev-parse ${{ github.ref_name }})
+          echo "Tag ${{ github.ref_name }} points to commit: $TAG_COMMIT"
+
+          # Get the latest commit on main branch
+          git fetch origin main
+          MAIN_LATEST=$(git rev-parse origin/main)
+          echo "Latest commit on main: $MAIN_LATEST"
+
+          # Check if the tag commit is the same as the latest main commit
+          if [ "$TAG_COMMIT" != "$MAIN_LATEST" ]; then
+            echo "ERROR: Tag ${{ github.ref_name }} is not on the latest main commit!"
+            echo "Tag commit: $TAG_COMMIT"
+            echo "Main latest: $MAIN_LATEST"
+
+            # Show what commits are missing
+            echo ""
+            echo "Commits on main that are missing from this tag:"
+            git log --oneline $TAG_COMMIT..origin/main | head -10
+            exit 1
+          fi
+
+          echo "Tag validation passed: ${{ github.ref_name }} is on the latest main commit"
