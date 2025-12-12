@@ -110,7 +110,7 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 		if apiError.AdditionalContext == "" {
 			domainHint := extractDomainHint(res.Request.URL)
 			if domainHint != "" {
-				apiError.AdditionalContext = fmt.Sprintf("This error often indicates you're using the wrong Infisical instance. Current request is to: %s\n\nTo fix this:\n• Verify you're using the correct domain with --domain flag or INFISICAL_API_URL environment variable\n• For EU region: use --domain https://eu.infisical.com\n• For self-hosted instances: use --domain https://your-instance.com", domainHint)
+				apiError.AdditionalContext = fmt.Sprintf("Check your credentials or verify you're using the correct domain. Current domain: %s", domainHint)
 			}
 		}
 	}
