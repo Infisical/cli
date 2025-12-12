@@ -838,6 +838,7 @@ type PAMSessionCredentials struct {
 	Password              string `json:"password"`
 	AuthMethod            string `json:"authMethod,omitempty"`
 	PrivateKey            string `json:"privateKey,omitempty"`
+	Certificate           string `json:"certificate,omitempty"`
 	Url                   string `json:"url,omitempty"`
 	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
 }
