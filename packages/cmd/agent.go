@@ -238,11 +238,19 @@ type AgentCertificateConfig struct {
 		} `yaml:"on-failure,omitempty"`
 	} `yaml:"post-hooks,omitempty"`
 	FileConfig struct {
-		PrivateKeyPath       string `yaml:"private-key-path,omitempty"`
-		CertificatePath      string `yaml:"certificate-path,omitempty"`
-		CertificateChainPath string `yaml:"certificate-chain-path,omitempty"`
-		FilePermissions      string `yaml:"file-permissions,omitempty"`
-		DirectoryPermissions string `yaml:"directory-permissions,omitempty"`
+		PrivateKey struct {
+			Path       string `yaml:"path,omitempty"`
+			Permission string `yaml:"permission,omitempty"`
+		} `yaml:"private-key,omitempty"`
+		Certificate struct {
+			Path       string `yaml:"path,omitempty"`
+			Permission string `yaml:"permission,omitempty"`
+		} `yaml:"certificate,omitempty"`
+		Chain struct {
+			Path       string `yaml:"path,omitempty"`
+			Permission string `yaml:"permission,omitempty"`
+			OmitRoot   *bool  `yaml:"omit-root,omitempty"`
+		} `yaml:"chain,omitempty"`
 	} `yaml:"file-output,omitempty"`
 }
 
@@ -2072,10 +2080,14 @@ func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.Certif
 	setStringSlice(&attributes.KeyUsages, certAttrs.KeyUsages)
 	setStringSlice(&attributes.ExtendedKeyUsages, certAttrs.ExtendedKeyUsages)
 
-	if certAttrs.RemoveRootsFromChain {
-		attributes.RemoveRootsFromChain = certAttrs.RemoveRootsFromChain
-		hasAny = true
+	removeRoots := true
+	if certificate.FileConfig.Chain.OmitRoot != nil && !*certificate.FileConfig.Chain.OmitRoot {
+		removeRoots = false
 	}
+
+
+	attributes.RemoveRootsFromChain = removeRoots
+	hasAny = true
 
 	if len(certAttrs.AltNames) > 0 {
 		altNames := make([]api.AltName, len(certAttrs.AltNames))
@@ -2378,29 +2390,36 @@ func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorM
 }
 
 func (tm *AgentManager) WriteCertificateFiles(certificate *AgentCertificateConfig, response *api.CertificateResponse) error {
-	filePerms := os.FileMode(0600)
-	if certificate.FileConfig.FilePermissions != "" {
-		if perms, err := strconv.ParseInt(certificate.FileConfig.FilePermissions, 8, 32); err == nil {
-			filePerms = os.FileMode(perms)
+	getFilePermission := func(permission string) os.FileMode {
+		if permission != "" {
+			if perms, err := strconv.ParseInt(permission, 8, 32); err == nil {
+				return os.FileMode(perms)
+			}
 		}
+		return os.FileMode(0600)
 	}
 
-	privateKeyPath := certificate.FileConfig.PrivateKeyPath
-	certificatePath := certificate.FileConfig.CertificatePath
-	chainPath := certificate.FileConfig.CertificateChainPath
+	privateKeyPath := certificate.FileConfig.PrivateKey.Path
+	privateKeyPerms := getFilePermission(certificate.FileConfig.PrivateKey.Permission)
+
+	certificatePath := certificate.FileConfig.Certificate.Path
+	certificatePerms := getFilePermission(certificate.FileConfig.Certificate.Permission)
+
+	chainPath := certificate.FileConfig.Chain.Path
+	chainPerms := getFilePermission(certificate.FileConfig.Chain.Permission)
 
 	if certificatePath == "" {
-		return fmt.Errorf("certificate-path is required")
+		return fmt.Errorf("certificate.path is required in file-output configuration")
 	}
 
 	if response.Certificate.PrivateKey != "" {
 		if privateKeyPath == "" {
-			return fmt.Errorf("private-key-path is required when private key is present")
+			return fmt.Errorf("private-key.path is required when private key is present")
 		}
 		if err := os.MkdirAll(path.Dir(privateKeyPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for private key %s: %v", privateKeyPath, err)
 		}
-		if err := ioutil.WriteFile(privateKeyPath, []byte(response.Certificate.PrivateKey), filePerms); err != nil {
+		if err := ioutil.WriteFile(privateKeyPath, []byte(response.Certificate.PrivateKey), privateKeyPerms); err != nil {
 			return fmt.Errorf("failed to write private key to %s: %v", privateKeyPath, err)
 		}
 	}
@@ -2408,7 +2427,7 @@ func (tm *AgentManager) WriteCertificateFiles(certificate *AgentCertificateConfi
 	if err := os.MkdirAll(path.Dir(certificatePath), 0755); err != nil {
 		return fmt.Errorf("failed to create directory for certificate %s: %v", certificatePath, err)
 	}
-	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), filePerms); err != nil {
+	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), certificatePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
 
@@ -2416,7 +2435,7 @@ func (tm *AgentManager) WriteCertificateFiles(certificate *AgentCertificateConfi
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for certificate chain %s: %v", chainPath, err)
 		}
-		if err := ioutil.WriteFile(chainPath, []byte(response.Certificate.CertificateChain), filePerms); err != nil {
+		if err := ioutil.WriteFile(chainPath, []byte(response.Certificate.CertificateChain), chainPerms); err != nil {
 			return fmt.Errorf("failed to write certificate chain to %s: %v", chainPath, err)
 		}
 	}
@@ -2657,7 +2676,14 @@ func (tm *AgentManager) RenewCertificate(certificateId int, certificate *AgentCe
 		return err
 	}
 
-	request := api.RenewCertificateRequest{}
+	removeRoots := true
+	if certificate.FileConfig.Chain.OmitRoot != nil && !*certificate.FileConfig.Chain.OmitRoot {
+		removeRoots = false
+	}
+
+	request := api.RenewCertificateRequest{
+		RemoveRootsFromChain: removeRoots,
+	}
 	response, err := api.CallRenewCertificate(httpClient, state.CertificateID, request)
 	if err != nil {
 		return fmt.Errorf("failed to renew certificate: %v", err)

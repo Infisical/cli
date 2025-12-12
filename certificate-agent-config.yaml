@@ -45,8 +45,13 @@ certificates:
         timeout: 10
 
     file-output:
-      private-key-path: "./certs/web-server/private.key"
-      certificate-path: "./certs/web-server/certificate.crt"
-      certificate-chain-path: "./certs/web-server/chain.crt"
-      file-permissions: "0600"
-      directory-permissions: "0755"
+      private-key:
+        path: "./certs/web-server/private.key"
+        permission: "0600"
+      certificate:
+        path: "./certs/web-server/certificate.crt"
+        permission: "0644"
+      chain:
+        path: "./certs/web-server/chain.crt"
+        permission: "0644"
+        omit-root: true
