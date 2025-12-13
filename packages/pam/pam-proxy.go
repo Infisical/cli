@@ -44,11 +44,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
 	}
 
-	log.Debug().
-		Str("sessionId", pamConfig.SessionId).
-		Interface("credentials", credentials).
-		Msg("Retrieved PAM credentials for proxying")
-
 	// Start a goroutine to monitor session expiry and close connection when exceeded
 	go func() {
 		timeUntilExpiry := time.Until(pamConfig.ExpiryTime)
