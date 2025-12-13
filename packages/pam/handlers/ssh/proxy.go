@@ -15,13 +15,14 @@ import (
 
 // SSHProxyConfig holds configuration for the SSH proxy
 type SSHProxyConfig struct {
-	TargetAddr       string // e.g., "target-host:22"
-	AuthMethod       string
-	InjectUsername   string
-	InjectPassword   string
-	InjectPrivateKey string
-	SessionID        string
-	SessionLogger    session.SessionLogger
+	TargetAddr        string // e.g., "target-host:22"
+	AuthMethod        string
+	InjectUsername    string
+	InjectPassword    string
+	InjectPrivateKey  string
+	InjectCertificate string
+	SessionID         string
+	SessionLogger     session.SessionLogger
 }
 
 // SSHProxy handles proxying SSH connections with credential injection
@@ -133,13 +134,37 @@ func (p *SSHProxy) connectToTargetServer() (*ssh.Client, error) {
 		log.Debug().
 			Str("sessionID", p.config.SessionID).
 			Msg("Using public key authentication")
+	case "certificate":
+		// Parse private key
+		signer, err := ssh.ParsePrivateKey([]byte(p.config.InjectPrivateKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse private key: %w", err)
+		}
+		// Parse the certificate
+		pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(p.config.InjectCertificate))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		}
+		cert, ok := pubKey.(*ssh.Certificate)
+		if !ok {
+			return nil, fmt.Errorf("parsed key is not a certificate")
+		}
+		// Create a certificate signer
+		certSigner, err := ssh.NewCertSigner(cert, signer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create certificate signer: %w", err)
+		}
+		authMethods = append(authMethods, ssh.PublicKeys(certSigner))
+		log.Debug().
+			Str("sessionID", p.config.SessionID).
+			Msg("Using certificate authentication")
 	case "password":
 		authMethods = append(authMethods, ssh.Password(p.config.InjectPassword))
 		log.Debug().
 			Str("sessionID", p.config.SessionID).
 			Msg("Using password authentication")
 	default:
-		return nil, fmt.Errorf("invalid or unspecified auth method: %s (must be 'public-key' or 'password')", p.config.AuthMethod)
+		return nil, fmt.Errorf("invalid or unspecified auth method: %s (must be 'public-key', 'certificate', or 'password')", p.config.AuthMethod)
 	}
 
 	// Configure SSH client (proxy acts as client to the target server)
