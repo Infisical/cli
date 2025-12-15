@@ -31,6 +31,7 @@ import (
 	"github.com/dgraph-io/badger/v3"
 	"github.com/go-resty/resty/v2"
 	infisicalSdk "github.com/infisical/go-sdk"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 
@@ -3255,6 +3256,15 @@ var certManagerAgentCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag config")
 		}
 
+		verbose, err := cmd.Flags().GetBool("verbose")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag verbose")
+		}
+
+		if verbose {
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		}
+
 		var agentConfigInBytes []byte
 
 		agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
@@ -3436,6 +3446,7 @@ func init() {
 	agentCmd.Flags().String("config", "agent-config.yaml", "The path to agent config yaml file")
 
 	certManagerAgentCmd.Flags().String("config", "certificate-agent-config.yaml", "The path to certificate agent config yaml file")
+	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")
 	certManagerCmd.AddCommand(certManagerAgentCmd)
 
 	rootCmd.AddCommand(agentCmd)
