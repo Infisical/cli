@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -23,6 +23,52 @@ type GatewayPAMConfig struct {
 	ExpiryTime         time.Time
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
+}
+
+type PAMCapabilitiesResponse struct {
+	SupportedResourceTypes []string `json:"supportedResourceTypes"`
+}
+
+func GetSupportedResourceTypes() []string {
+	return []string{
+		session.ResourceTypePostgres,
+		session.ResourceTypeMysql,
+		session.ResourceTypeSSH,
+		session.ResourceTypeKubernetes,
+	}
+}
+
+// HandlePAMCapabilities handles the capabilities request from the client
+func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn) error {
+	response := PAMCapabilitiesResponse{
+		SupportedResourceTypes: GetSupportedResourceTypes(),
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal capabilities response")
+		return fmt.Errorf("failed to marshal capabilities response: %w", err)
+	}
+
+	// Write length prefix (4 bytes) followed by JSON data
+	length := uint32(len(data))
+	lengthBytes := []byte{
+		byte(length >> 24),
+		byte(length >> 16),
+		byte(length >> 8),
+		byte(length),
+	}
+
+	if _, err := conn.Write(lengthBytes); err != nil {
+		return fmt.Errorf("failed to write length prefix: %w", err)
+	}
+
+	if _, err := conn.Write(data); err != nil {
+		return fmt.Errorf("failed to write capabilities response: %w", err)
+	}
+
+	log.Debug().Strs("supportedTypes", response.SupportedResourceTypes).Msg("Sent PAM capabilities to client")
+	return nil
 }
 
 func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {

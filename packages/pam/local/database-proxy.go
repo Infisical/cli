@@ -32,6 +32,7 @@ type ALPN string
 const (
 	ALPNInfisicalPAMProxy        ALPN = "infisical-pam-proxy"
 	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
+	ALPNInfisicalPAMCapabilities ALPN = "infisical-pam-capabilities"
 )
 
 func askForApprovalRequestTrigger() (bool, error) {
@@ -130,10 +131,16 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
 			sessionExpiry:          time.Now().Add(duration),
 			sessionId:              pamResponse.SessionId,
+			resourceType:           pamResponse.ResourceType,
 			ctx:                    ctx,
 			cancel:                 cancel,
 			shutdownCh:             make(chan struct{}),
 		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
 	}
 
 	err = proxy.Start(port)

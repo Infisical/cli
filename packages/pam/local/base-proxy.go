@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -29,6 +33,7 @@ type BaseProxyServer struct {
 	gatewayServerCertChain string
 	sessionExpiry          time.Time
 	sessionId              string
+	resourceType           string
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	activeConnections      sync.WaitGroup
@@ -86,6 +91,64 @@ func (b *BaseProxyServer) CreateRelayConnection() (net.Conn, error) {
 
 	log.Debug().Msg("Relay TLS connection established")
 	return conn, nil
+}
+
+// FetchGatewayCapabilities fetches the supported resource types from the gateway
+func (b *BaseProxyServer) FetchGatewayCapabilities() (*pam.PAMCapabilitiesResponse, error) {
+	relayConn, err := b.CreateRelayConnection()
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to relay: %w", err)
+	}
+	defer relayConn.Close()
+
+	gatewayConn, err := b.CreateGatewayConnection(relayConn, ALPNInfisicalPAMCapabilities)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to gateway: %w", err)
+	}
+	defer gatewayConn.Close()
+
+	// Read length prefix (4 bytes)
+	lengthBytes := make([]byte, 4)
+	if _, err := io.ReadFull(gatewayConn, lengthBytes); err != nil {
+		return nil, fmt.Errorf("failed to read length prefix: %w", err)
+	}
+
+	length := uint32(lengthBytes[0])<<24 | uint32(lengthBytes[1])<<16 | uint32(lengthBytes[2])<<8 | uint32(lengthBytes[3])
+
+	// Read JSON data
+	data := make([]byte, length)
+	if _, err := io.ReadFull(gatewayConn, data); err != nil {
+		return nil, fmt.Errorf("failed to read capabilities response: %w", err)
+	}
+
+	var response pam.PAMCapabilitiesResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse capabilities response: %w", err)
+	}
+
+	log.Debug().Strs("supportedTypes", response.SupportedResourceTypes).Msg("Received gateway capabilities")
+	return &response, nil
+}
+
+// ValidateResourceTypeSupported checks if the resource type is supported by the gateway
+func (b *BaseProxyServer) ValidateResourceTypeSupported() error {
+	capabilities, err := b.FetchGatewayCapabilities()
+	if err != nil {
+		return fmt.Errorf("failed to fetch gateway capabilities: %w", err)
+	}
+
+	if slices.Contains(capabilities.SupportedResourceTypes, b.resourceType) {
+		return nil
+	}
+
+	return fmt.Errorf(`Your Gateway does not support '%s' PAM accounts.
+
+To fix this:
+1. Update your Gateway deployment
+2. Restart the Gateway service
+3. Retry your access command
+
+Gateway upgrade guide: https://infisical.com/docs/documentation/platform/gateways/gateway-deployment`, b.resourceType)
 }
 
 // CreateGatewayConnection establishes a mTLS connection to the gateway over the relay

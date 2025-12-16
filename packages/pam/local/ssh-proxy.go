@@ -70,10 +70,16 @@ func StartSSHLocalProxy(accessToken string, accountPath string, projectID string
 			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
 			sessionExpiry:          time.Now().Add(duration),
 			sessionId:              pamResponse.SessionId,
+			resourceType:           pamResponse.ResourceType,
 			ctx:                    ctx,
 			cancel:                 cancel,
 			shutdownCh:             make(chan struct{}),
 		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
 	}
 
 	// Start the local TCP proxy on a random port

@@ -77,10 +77,16 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
 			sessionExpiry:          time.Now().Add(duration),
 			sessionId:              pamResponse.SessionId,
+			resourceType:           pamResponse.ResourceType,
 			ctx:                    ctx,
 			cancel:                 cancel,
 			shutdownCh:             make(chan struct{}),
 		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
 	}
 
 	err = proxy.Start(port)

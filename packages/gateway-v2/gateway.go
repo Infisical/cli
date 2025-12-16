@@ -34,6 +34,7 @@ const (
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
+	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
 )
 
@@ -443,7 +444,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation"},
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
 	}
 
 	return nil
@@ -620,6 +621,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePAMCapabilities {
+		log.Info().Msg("Starting PAM capabilities handler")
+		if err := pam.HandlePAMCapabilities(g.ctx, tlsConn); err != nil {
+			log.Error().Err(err).Msg("PAM capabilities handler ended with error")
+		} else {
+			log.Info().Msg("PAM capabilities handler completed")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModePing {
 		log.Info().Msg("Starting ping handler")
 		if err := handlePing(g.ctx, tlsConn, reader); err != nil {
@@ -664,6 +673,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pam-session-cancellation":
 		config.Mode = ForwardModePAMCancellation
+		return config, nil
+
+	case "infisical-pam-capabilities":
+		config.Mode = ForwardModePAMCapabilities
 		return config, nil
 
 	case "infisical-ping":
