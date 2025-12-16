@@ -12,6 +12,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -26,6 +27,7 @@ type GatewayPAMConfig struct {
 }
 
 type PAMCapabilitiesResponse struct {
+	GatewayName            string   `json:"gatewayName"`
 	SupportedResourceTypes []string `json:"supportedResourceTypes"`
 }
 
@@ -39,8 +41,9 @@ func GetSupportedResourceTypes() []string {
 }
 
 // HandlePAMCapabilities handles the capabilities request from the client
-func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn) error {
+func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn, gatewayName string) error {
 	response := PAMCapabilitiesResponse{
+		GatewayName:            gatewayName,
 		SupportedResourceTypes: GetSupportedResourceTypes(),
 	}
 

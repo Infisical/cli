@@ -141,14 +141,15 @@ func (b *BaseProxyServer) ValidateResourceTypeSupported() error {
 		return nil
 	}
 
-	return fmt.Errorf(`Your Gateway does not support '%s' PAM accounts.
+	return fmt.Errorf(`The connected Infisical Gateway '%s' does not support '%s' PAM accounts.
 
-To fix this:
-1. Update your Gateway deployment
-2. Restart the Gateway service
-3. Retry your access command
+Please contact your Gateway administrator and request that they:
+1. Update the Gateway deployment to the latest version.
+2. Restart the Gateway service.
 
-Gateway upgrade guide: https://infisical.com/docs/documentation/platform/gateways/gateway-deployment`, b.resourceType)
+After they have completed the upgrade, you can retry your access command.
+
+The Gateway upgrade guide can be found at: https://infisical.com/docs/documentation/platform/gateways/gateway-deployment`, capabilities.GatewayName, b.resourceType)
 }
 
 // CreateGatewayConnection establishes a mTLS connection to the gateway over the relay

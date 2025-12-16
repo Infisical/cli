@@ -623,7 +623,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCapabilities {
 		log.Info().Msg("Starting PAM capabilities handler")
-		if err := pam.HandlePAMCapabilities(g.ctx, tlsConn); err != nil {
+		if err := pam.HandlePAMCapabilities(g.ctx, tlsConn, g.config.Name); err != nil {
 			log.Error().Err(err).Msg("PAM capabilities handler ended with error")
 		} else {
 			log.Info().Msg("PAM capabilities handler completed")
