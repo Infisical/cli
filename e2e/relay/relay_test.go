@@ -39,7 +39,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 	tempHomeDir := t.TempDir()
 	os.Args = []string{"infisical", "relay", "start", "--domain", infisical.ApiUrl(t)}
-	relayName := RandomSlug(4)
+	relayName := RandomSlug(3)
 	// Need to set home in a temp dir to avoid it reading config file
 	t.Setenv("HOME", tempHomeDir)
 	t.Setenv("INFISICAL_API_URL", infisical.ApiUrl(t))
