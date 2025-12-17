@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/creack/pty"
 	"github.com/go-faker/faker/v4"
@@ -179,16 +181,11 @@ type Command struct {
 	ptmx *os.File
 }
 
-func (c *Command) Start() {
+func (c *Command) Start(ctx context.Context) {
 	t := c.Test
 	runMethod := c.RunMethod
 	if runMethod == "" {
 		runMethod = RunMethodSubprocess
-	}
-
-	exeFile := c.Executable
-	if exeFile == "" {
-		exeFile = "./infisical-merge"
 	}
 
 	env := c.Env
@@ -199,7 +196,12 @@ func (c *Command) Start() {
 
 	switch runMethod {
 	case RunMethodSubprocess:
-		slog.Info("Running command %s with args %v as a sub-process", exeFile, c.Args)
+		exeFile := c.Executable
+		if exeFile == "" {
+			exeFile = "./infisical-merge"
+		}
+
+		slog.Info("Running command as a sub-process", "executable", exeFile, "args", c.Args)
 		c.cmd = exec.Command(c.Executable, c.Args...)
 		c.cmd.Env = make([]string, len(env))
 		for k, v := range env {
@@ -208,6 +210,19 @@ func (c *Command) Start() {
 		ptmx, err := pty.Start(c.cmd)
 		c.ptmx = ptmx
 		require.NoError(t, err)
+	case RunMethodFunctionCall:
+		slog.Info("Running command with args by making function call", "args", c.Args)
+		os.Args = make([]string, len(c.Args)+1)
+		os.Args = append(os.Args, "infisical")
+		os.Args = append(os.Args, c.Args...)
+		for k, v := range env {
+			t.Setenv(k, v)
+		}
+		go func() {
+			if err := cmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				t.Error(err)
+			}
+		}()
 	}
 }
 
