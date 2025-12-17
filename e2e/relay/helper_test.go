@@ -276,13 +276,15 @@ func (c *Command) AssertRunning() {
 		return
 	}
 	slog.Error("Command suppose to be running, but instead, it already has exit status", "exit_code", c.cmd.ProcessState.ExitCode())
-	slog.Error("Stdout", "stdout", c.Stdout())
-	slog.Error("Stderr", "stderr", c.Stderr())
+	slog.Error(fmt.Sprintf("-------- Stdout --------:\n%s", c.Stdout()))
+	slog.Error(fmt.Sprintf("-------- Stderr --------:\n%s", c.Stderr()))
 	c.Test.FailNow()
 }
 
 func (c *Command) Stdout() string {
 	require.NotNil(c.Test, c.stdoutFile)
+	_, err := c.stdoutFile.Seek(0, io.SeekStart)
+	require.NoError(c.Test, err)
 	b, err := io.ReadAll(c.stdoutFile)
 	require.NoError(c.Test, err)
 	return string(b)
@@ -290,6 +292,8 @@ func (c *Command) Stdout() string {
 
 func (c *Command) Stderr() string {
 	require.NotNil(c.Test, c.stderrFile)
+	_, err := c.stderrFile.Seek(0, io.SeekStart)
+	require.NoError(c.Test, err)
 	b, err := io.ReadAll(c.stderrFile)
 	require.NoError(c.Test, err)
 	return string(b)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,7 +38,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	relayName := RandomSlug(3)
 	cmd := Command{
 		Test: t,
-		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
+		Args: []string{"relay", "start", "--domain"},
 		Env: map[string]string{
 			"INFISICAL_API_URL":    infisical.ApiUrl(t),
 			"INFISICAL_RELAY_NAME": relayName,
@@ -48,9 +49,14 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	defer cmd.Stop()
 
+	detectHeartbeat := false
 	require.Eventually(t, func() bool {
 		// Ensure the process is still running
 		cmd.AssertRunning()
+		if t.Failed() {
+			// Stop early
+			return true
+		}
 
 		resp, err := c.GetRelaysWithResponse(ctx)
 		if err != nil {
@@ -69,9 +75,12 @@ func TestRelay_RegistersARelay(t *testing.T) {
 			)
 			if relay.Name == relayName && relay.Heartbeat != nil {
 				slog.Info("Confirmed relay heartbeat")
+				detectHeartbeat = true
 				return true
 			}
 		}
 		return false
 	}, 120*time.Second, 5*time.Second)
+
+	assert.True(t, detectHeartbeat)
 }
