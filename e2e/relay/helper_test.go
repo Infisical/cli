@@ -202,7 +202,7 @@ func (c *Command) Start(ctx context.Context) {
 		}
 
 		slog.Info("Running command as a sub-process", "executable", exeFile, "args", c.Args)
-		c.cmd = exec.Command(c.Executable, c.Args...)
+		c.cmd = exec.Command(exeFile, c.Args...)
 		c.cmd.Env = make([]string, len(env))
 		for k, v := range env {
 			c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -233,10 +233,9 @@ func (c *Command) Stop() {
 		c.ptmx = nil
 	}
 	if c.cmd != nil {
-		err := c.cmd.Cancel()
+		err := c.cmd.Process.Kill()
 		require.NoError(c.Test, err)
-		err = c.cmd.Wait()
-		require.NoError(c.Test, err)
+		_ = c.cmd.Wait()
 		c.cmd = nil
 	}
 }
