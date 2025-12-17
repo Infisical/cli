@@ -51,6 +51,26 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	defer cmd.Stop()
 
+	cmdExit := false
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		// Ensure the process is still running
+		if !cmd.IsRunning() {
+			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
+			cmd.DumpOutput()
+			// Somehow the cmd stops early, let's exit the loop early
+			cmdExit = true
+			return
+		}
+
+		stderr := cmd.Stderr()
+		assert.Containsf(
+			collect, cmd.Stderr(),
+			"Relay server started successfully",
+			"The cmd is not outputting \"Relay server started successfully\" in the Stderr:\n%s", stderr,
+		)
+	}, 120*time.Second, 5*time.Second)
+	require.False(t, cmdExit)
+
 	detectHeartbeat := false
 	require.Eventually(t, func() bool {
 		// Ensure the process is still running
