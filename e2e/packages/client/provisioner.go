@@ -3,11 +3,12 @@ package client
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net/http"
+
 	"github.com/go-faker/faker/v4"
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	"github.com/oapi-codegen/runtime/types"
-	"log/slog"
-	"net/http"
 )
 
 type Provisioner struct {
