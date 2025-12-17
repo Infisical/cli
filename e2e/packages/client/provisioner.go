@@ -80,7 +80,7 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 		return nil, err
 	}
 	if selectOrgResp.StatusCode() != 200 {
-		return nil, fmt.Errorf("expected status code 200, got %v", signUpResp.StatusCode())
+		return nil, fmt.Errorf("expected status code 200, got %v", selectOrgResp.StatusCode())
 	}
 	slog.Info("Selected organization", "orgId", signUpResp.JSON200.Organization.Id)
 
