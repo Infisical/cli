@@ -40,7 +40,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	relayName := RandomSlug(3)
 	cmd := Command{
 		Test: t,
-		Args: []string{"relay", "start", "--domain"},
+		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
 		Env: map[string]string{
 			"INFISICAL_API_URL":    infisical.ApiUrl(t),
 			"INFISICAL_RELAY_NAME": relayName,
@@ -86,4 +86,10 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	}, 120*time.Second, 5*time.Second)
 
 	assert.True(t, detectHeartbeat)
+	stderr := cmd.Stderr()
+	assert.Containsf(
+		t, stderr,
+		"Relay is reachable by Infisical",
+		"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
+	)
 }
