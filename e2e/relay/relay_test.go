@@ -64,7 +64,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 		stderr := cmd.Stderr()
 		assert.Containsf(
-			collect, cmd.Stderr(),
+			collect, stderr,
 			"Relay server started successfully",
 			"The cmd is not outputting \"Relay server started successfully\" in the Stderr:\n%s", stderr,
 		)
