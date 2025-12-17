@@ -209,7 +209,7 @@ func (c *Command) Start(ctx context.Context) {
 
 		slog.Info("Running command as a sub-process", "executable", exeFile, "args", c.Args)
 		c.cmd = exec.Command(exeFile, c.Args...)
-		c.cmd.Env = make([]string, len(env))
+		c.cmd.Env = make([]string, 0, len(env))
 		for k, v := range env {
 			c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
