@@ -56,8 +56,5 @@ func main() {
 			return color + abbrev + "\033[0m"
 		},
 	})
-	err := cmd.Execute()
-	if err != nil {
-		os.Exit(1)
-	}
+	cmd.Execute()
 }
