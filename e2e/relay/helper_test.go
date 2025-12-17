@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/creack/pty"
 	"github.com/go-faker/faker/v4"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
@@ -153,5 +156,72 @@ func WithTokenAuth() MachineIdentityOption {
 		require.Equal(t, http.StatusOK, updateResp.StatusCode())
 
 		i.TokenAuthToken = &tokenResp.JSON200.AccessToken
+	}
+}
+
+type RunMethod string
+
+const (
+	RunMethodSubprocess   RunMethod = "subprocess"
+	RunMethodFunctionCall RunMethod = "functionCall"
+)
+
+type Command struct {
+	Test               *testing.T
+	Executable         string
+	Args               []string
+	Dir                string
+	Env                map[string]string
+	RunMethod          RunMethod
+	DisableTempHomeDir bool
+
+	cmd  *exec.Cmd
+	ptmx *os.File
+}
+
+func (c *Command) Start() {
+	t := c.Test
+	runMethod := c.RunMethod
+	if runMethod == "" {
+		runMethod = RunMethodSubprocess
+	}
+
+	exeFile := c.Executable
+	if exeFile == "" {
+		exeFile = "./infisical-merge"
+	}
+
+	env := c.Env
+	if !c.DisableTempHomeDir {
+		tempDir := t.TempDir()
+		env["HOME"] = tempDir
+	}
+
+	switch runMethod {
+	case RunMethodSubprocess:
+		slog.Info("Running command %s with args %v as a sub-process", exeFile, c.Args)
+		c.cmd = exec.Command(c.Executable, c.Args...)
+		c.cmd.Env = make([]string, len(env))
+		for k, v := range env {
+			c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
+		}
+		ptmx, err := pty.Start(c.cmd)
+		c.ptmx = ptmx
+		require.NoError(t, err)
+	}
+}
+
+func (c *Command) Stop() {
+	if c.ptmx != nil {
+		err := c.ptmx.Close()
+		require.NoError(c.Test, err)
+		c.ptmx = nil
+	}
+	if c.cmd != nil {
+		err := c.cmd.Cancel()
+		require.NoError(c.Test, err)
+		err = c.cmd.Wait()
+		require.NoError(c.Test, err)
+		c.cmd = nil
 	}
 }
