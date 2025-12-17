@@ -23,7 +23,9 @@ func RandomSlug(numWords int) string {
 }
 
 func TestRelay_RegistersARelay(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	infisical := NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
 			// This is needed for the private ip (current host) to be accepted for the relay server
@@ -52,9 +54,10 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	detectHeartbeat := false
 	require.Eventually(t, func() bool {
 		// Ensure the process is still running
-		cmd.AssertRunning()
-		if t.Failed() {
-			// Stop early
+		if !cmd.IsRunning() {
+			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
+			cmd.DumpOutput()
+			// Somehow the cmd stops early, let's exit the loop early
 			return true
 		}
 

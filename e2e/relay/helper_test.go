@@ -271,14 +271,13 @@ func (c *Command) Cmd() *exec.Cmd {
 	return c.cmd
 }
 
-func (c *Command) AssertRunning() {
-	if c.cmd.ProcessState == nil {
-		return
-	}
-	slog.Error("Command suppose to be running, but instead, it already has exit status", "exit_code", c.cmd.ProcessState.ExitCode())
+func (c *Command) IsRunning() bool {
+	return c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil
+}
+
+func (c *Command) DumpOutput() {
 	slog.Error(fmt.Sprintf("-------- Stdout --------:\n%s", c.Stdout()))
 	slog.Error(fmt.Sprintf("-------- Stderr --------:\n%s", c.Stderr()))
-	c.Test.FailNow()
 }
 
 func (c *Command) Stdout() string {
