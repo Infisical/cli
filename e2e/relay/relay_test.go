@@ -45,10 +45,13 @@ func TestRelay_RegistersARelay(t *testing.T) {
 			"INFISICAL_TOKEN":      *identity.TokenAuthToken,
 		},
 	}
-	cmd.Start()
+	cmd.Start(ctx)
 	defer cmd.Stop()
 
 	require.Eventually(t, func() bool {
+		// Ensure the process is still running
+		cmd.AssertRunning()
+
 		resp, err := c.GetRelaysWithResponse(ctx)
 		if err != nil {
 			return false

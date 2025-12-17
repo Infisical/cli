@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/creack/pty"
 	"github.com/go-faker/faker/v4"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
@@ -177,8 +178,11 @@ type Command struct {
 	RunMethod          RunMethod
 	DisableTempHomeDir bool
 
-	cmd  *exec.Cmd
-	ptmx *os.File
+	stdoutFilePath string
+	stdoutFile     *os.File
+	stderrFilePath string
+	stderrFile     *os.File
+	cmd            *exec.Cmd
 }
 
 func (c *Command) Start(ctx context.Context) {
@@ -188,9 +192,11 @@ func (c *Command) Start(ctx context.Context) {
 		runMethod = RunMethodSubprocess
 	}
 
+	tempDir := t.TempDir()
+
 	env := c.Env
 	if !c.DisableTempHomeDir {
-		tempDir := t.TempDir()
+		slog.Info("Use a temp dir HOME", "dir", tempDir)
 		env["HOME"] = tempDir
 	}
 
@@ -207,8 +213,28 @@ func (c *Command) Start(ctx context.Context) {
 		for k, v := range env {
 			c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
-		ptmx, err := pty.Start(c.cmd)
-		c.ptmx = ptmx
+
+		c.stdoutFilePath = path.Join(tempDir, "stdout.log")
+		slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
+		stdoutFile, err := os.Create(c.stdoutFilePath)
+		require.NoError(t, err)
+		c.stdoutFile = stdoutFile
+		c.cmd.Stdout = stdoutFile
+
+		c.stderrFilePath = path.Join(tempDir, "stderr.log")
+		slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
+		stderrFile, err := os.Create(c.stderrFilePath)
+		require.NoError(t, err)
+		c.stderrFile = stderrFile
+		c.cmd.Stderr = stderrFile
+
+		err = c.cmd.Start()
+		go func() {
+			err := c.cmd.Wait()
+			if err != nil {
+				slog.Error("Failed to wait for cmd", "error", err)
+			}
+		}()
 		require.NoError(t, err)
 	case RunMethodFunctionCall:
 		slog.Info("Running command with args by making function call", "args", c.Args)
@@ -227,15 +253,44 @@ func (c *Command) Start(ctx context.Context) {
 }
 
 func (c *Command) Stop() {
-	if c.ptmx != nil {
-		err := c.ptmx.Close()
-		require.NoError(c.Test, err)
-		c.ptmx = nil
-	}
 	if c.cmd != nil {
 		err := c.cmd.Process.Kill()
 		require.NoError(c.Test, err)
 		_ = c.cmd.Wait()
 		c.cmd = nil
 	}
+	if c.stdoutFile != nil {
+		_ = c.stdoutFile.Close()
+	}
+	if c.stderrFile != nil {
+		_ = c.stderrFile.Close()
+	}
+}
+
+func (c *Command) Cmd() *exec.Cmd {
+	return c.cmd
+}
+
+func (c *Command) AssertRunning() {
+	if c.cmd.ProcessState == nil {
+		return
+	}
+	slog.Error("Command suppose to be running, but instead, it already has exit status", "exit_code", c.cmd.ProcessState.ExitCode())
+	slog.Error("Stdout", "stdout", c.Stdout())
+	slog.Error("Stderr", "stderr", c.Stderr())
+	c.Test.FailNow()
+}
+
+func (c *Command) Stdout() string {
+	require.NotNil(c.Test, c.stdoutFile)
+	b, err := io.ReadAll(c.stdoutFile)
+	require.NoError(c.Test, err)
+	return string(b)
+}
+
+func (c *Command) Stderr() string {
+	require.NotNil(c.Test, c.stderrFile)
+	b, err := io.ReadAll(c.stderrFile)
+	require.NoError(c.Test, err)
+	return string(b)
 }
