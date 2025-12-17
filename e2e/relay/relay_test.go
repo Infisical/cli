@@ -2,15 +2,12 @@ package relay_test
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
 	"github.com/stretchr/testify/require"
@@ -37,24 +34,19 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
 	require.NotNil(t, identity)
 
-	tempHomeDir := t.TempDir()
-	os.Args = []string{"infisical", "relay", "start", "--domain", infisical.ApiUrl(t)}
 	relayName := RandomSlug(3)
-	// Need to set home in a temp dir to avoid it reading config file
-	t.Setenv("HOME", tempHomeDir)
-	t.Setenv("INFISICAL_API_URL", infisical.ApiUrl(t))
-	t.Setenv("INFISICAL_RELAY_NAME", relayName)
-	t.Setenv("INFISICAL_RELAY_HOST", "host.docker.internal")
-	t.Setenv("INFISICAL_TOKEN", *identity.TokenAuthToken)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		if err := cmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Error(err)
-		}
-	}()
+	cmd := Command{
+		Test: t,
+		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
+		Env: map[string]string{
+			"INFISICAL_API_URL":    infisical.ApiUrl(t),
+			"INFISICAL_RELAY_NAME": relayName,
+			"INFISICAL_RELAY_HOST": "host.docker.internal",
+			"INFISICAL_TOKEN":      *identity.TokenAuthToken,
+		},
+	}
+	cmd.Start()
+	defer cmd.Stop()
 
 	require.Eventually(t, func() bool {
 		resp, err := c.GetRelaysWithResponse(ctx)
