@@ -253,11 +253,8 @@ func (c *Command) Start(ctx context.Context) {
 }
 
 func (c *Command) Stop() {
-	if c.cmd != nil {
-		err := c.cmd.Process.Kill()
-		require.NoError(c.Test, err)
-		_ = c.cmd.Wait()
-		c.cmd = nil
+	if c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil {
+		_ = c.cmd.Process.Kill()
 	}
 	if c.stdoutFile != nil {
 		_ = c.stdoutFile.Close()
