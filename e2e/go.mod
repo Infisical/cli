@@ -5,8 +5,10 @@ go 1.25.2
 require (
 	github.com/Infisical/infisical-merge v0.0.0
 	github.com/compose-spec/compose-go/v2 v2.9.0
-	github.com/creack/pty v1.1.24
+	github.com/docker/compose/v2 v2.40.2
+	github.com/docker/docker v28.5.1+incompatible
 	github.com/go-faker/faker/v4 v4.7.0
+	github.com/jackc/pgx/v5 v5.7.6
 	github.com/oapi-codegen/oapi-codegen/v2 v2.5.1
 	github.com/oapi-codegen/runtime v1.1.2
 	github.com/stretchr/testify v1.11.1
@@ -74,9 +76,7 @@ require (
 	github.com/docker/buildx v0.29.1 // indirect
 	github.com/docker/cli v28.5.1+incompatible // indirect
 	github.com/docker/cli-docs-tool v0.10.0 // indirect
-	github.com/docker/compose/v2 v2.40.2 // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
-	github.com/docker/docker v28.5.1+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/docker/go v1.5.1-1.0.20160303222718-d30aec9fd63c // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
@@ -145,7 +145,8 @@ require (
 	github.com/infisical/go-sdk v0.6.1 // indirect
 	github.com/infisical/infisical-kmip v0.3.17 // indirect
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
-	github.com/jackc/pgx/v5 v5.7.6 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jedib0t/go-pretty v4.3.0+incompatible // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
