@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/jackc/pgx/v5"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -328,6 +329,37 @@ func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) 
 		slog.Error("Failed to insert super_admin", "error", err)
 		return err
 	}
+
+	rc, err := c.ServiceContainer(ctx, "redis")
+	if err != nil {
+		return err
+	}
+	redisPort, err := rc.MappedPort(ctx, "6379")
+	if err != nil {
+		return err
+	}
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     fmt.Sprintf("localhost:%s", redisPort.Port()), // Redis server address
+		Password: "",                                            // No password by default
+		DB:       0,                                             // Default database index
+	})
+
+	// Optional: Test the connection
+	pong, err := rdb.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	slog.Info("Connected to Redis: %s\n", pong)
+
+	// Clear all keys in the current database (equivalent to resetting the DB)
+	err = rdb.FlushAll(ctx).Err()
+	if err != nil {
+		log.Fatalf("Failed to flush database: %v", err)
+	}
+	slog.Info("All keys cleared successfully from the current database.")
+
+	// Close the connection
+	rdb.Close()
 
 	return nil
 }
