@@ -24,7 +24,6 @@ import (
 
 type InfisicalService struct {
 	Stack           *infisical.Stack
-	compose         infisical.Compose
 	apiClient       client.ClientWithResponsesInterface
 	provisionResult *client.ProvisionResult
 }
@@ -41,12 +40,9 @@ func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithE
 }
 
 func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalService {
-	compose, err := s.Stack.ToComposeWithWaitingForService()
-	s.compose = compose
+	err := s.Stack.Up(ctx)
 	require.NoError(t, err)
-	err = s.compose.Up(ctx)
-	require.NoError(t, err)
-	apiUrl, err := s.compose.ApiUrl(ctx)
+	apiUrl, err := s.Stack.ApiUrl(ctx)
 	require.NoError(t, err)
 
 	slog.Info("Bootstrapping Infisical service", "apiUrl", apiUrl)
@@ -67,7 +63,7 @@ func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalServi
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		err = compose.Down(
+		err = s.Compose().Down(
 			ctx,
 			dockercompose.RemoveOrphans(true),
 			dockercompose.RemoveVolumes(true),
@@ -79,8 +75,8 @@ func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalServi
 	return s
 }
 
-func (s *InfisicalService) Compose() infisical.Compose {
-	return s.compose
+func (s *InfisicalService) Compose() dockercompose.ComposeStack {
+	return s.Stack.Compose()
 }
 
 func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
@@ -92,7 +88,7 @@ func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
 }
 
 func (s *InfisicalService) ApiUrl(t *testing.T) string {
-	apiUrl, err := s.compose.ApiUrl(context.Background())
+	apiUrl, err := s.Stack.ApiUrl(context.Background())
 	require.NoError(t, err)
 	return apiUrl
 }
