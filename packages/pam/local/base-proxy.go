@@ -134,7 +134,12 @@ func (b *BaseProxyServer) FetchGatewayCapabilities() (*pam.PAMCapabilitiesRespon
 func (b *BaseProxyServer) ValidateResourceTypeSupported() error {
 	capabilities, err := b.FetchGatewayCapabilities()
 	if err != nil {
-		return fmt.Errorf("failed to fetch gateway capabilities: %w", err)
+		log.Debug().Err(err).Msg("Failed to fetch gateway capabilities, assuming older gateway version")
+		return nil
+	}
+
+	if len(capabilities.SupportedResourceTypes) == 0 {
+		return nil
 	}
 
 	if slices.Contains(capabilities.SupportedResourceTypes, b.resourceType) {
