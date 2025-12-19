@@ -312,4 +312,5 @@ func (c *RunningCompose) ServiceContainer(ctx context.Context, svcName string) (
 	c.containersLock.Lock()
 	defer c.containersLock.Unlock()
 	c.containers[svcName] = ctr
+	return ctr, nil
 }
