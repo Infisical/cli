@@ -16,6 +16,7 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -72,12 +73,13 @@ func (s *Stack) Up(ctx context.Context) error {
 				return err
 			}
 			s.dockerCompose = &RunningCompose{
-				name:     uniqueName,
-				client:   dockerClient,
-				provider: provider,
+				name:       uniqueName,
+				client:     dockerClient,
+				provider:   provider,
+				containers: make(map[string]*testcontainers.DockerContainer),
 			}
 			// Found existing compose, reuse instead
-			return nil
+			return s.dockerCompose.Up(ctx)
 		}
 	}
 
@@ -250,8 +252,51 @@ type RunningCompose struct {
 }
 
 func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) error {
-	//TODO implement me
-	panic("implement me")
+	db, err := c.ServiceContainer(ctx, "db")
+	if err != nil {
+		return err
+	}
+
+	port, err := db.MappedPort(ctx, "5432")
+	if err != nil {
+		return err
+	}
+
+	conn, err := pgx.Connect(ctx, fmt.Sprintf("postgresql://infisical:infisical@localhost:%s/infisical", port.Port()))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close(context.Background())
+
+	query := `
+		SELECT table_schema, table_name
+		FROM information_schema.tables
+		WHERE table_type = 'BASE TABLE'
+		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY table_schema, table_name;
+	`
+
+	rows, err := conn.Query(ctx, query)
+	if err != nil {
+		log.Fatalf("Query failed: %v", err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Tables:")
+	for rows.Next() {
+		var schema, table string
+		if err := rows.Scan(&schema, &table); err != nil {
+			log.Fatalf("Scan failed: %v", err)
+		}
+		fmt.Printf("- %s.%s\n", schema, table)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Fatalf("Row iteration error: %v", err)
+	}
+
+	return nil
 }
 
 func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
@@ -285,7 +330,7 @@ func (c *RunningCompose) cachedContainer(svcName string) *testcontainers.DockerC
 }
 
 func (c *RunningCompose) ServiceContainer(ctx context.Context, svcName string) (*testcontainers.DockerContainer, error) {
-	if ctr := c.cachedContainer(svcName); c != nil {
+	if ctr := c.cachedContainer(svcName); ctr != nil {
 		return ctr, nil
 	}
 
