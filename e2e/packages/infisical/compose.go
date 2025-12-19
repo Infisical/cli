@@ -2,6 +2,8 @@ package infisical
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,6 +15,8 @@ import (
 
 type Stack struct {
 	Project *types.Project
+
+	dockerCompose compose.ComposeStack
 }
 
 type StackOption func(*Stack)
@@ -22,31 +26,48 @@ type BackendOptions struct {
 	Dockerfile string
 }
 
-func (s *Stack) ToCompose() (Compose, error) {
+func (s *Stack) Up(ctx context.Context) error {
 	data, err := s.Project.MarshalYAML()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	dockerCompose, err := compose.NewDockerComposeWith(
 		compose.WithStackReaders(bytes.NewReader(data)),
 	)
 	if err != nil {
-		return nil, err
-	}
-	return NewComposeWrapper(dockerCompose), nil
-}
-
-func (s *Stack) ToComposeWithWaitingForService() (Compose, error) {
-	dockerCompose, err := s.ToCompose()
-	if err != nil {
-		return nil, err
+		return err
 	}
 	waited := dockerCompose.WaitForService(
 		"backend",
 		wait.ForListeningPort("4000/tcp").
 			WithStartupTimeout(120*time.Second),
 	)
-	return NewComposeWrapper(waited), nil
+	s.dockerCompose = waited
+	return s.dockerCompose.Up(ctx)
+}
+
+func (s *Stack) Down(ctx context.Context) error {
+	return s.dockerCompose.Down(ctx)
+}
+
+func (s *Stack) Compose() compose.ComposeStack {
+	return s.dockerCompose
+}
+
+func (s *Stack) ApiUrl(ctx context.Context) (string, error) {
+	backend, err := s.dockerCompose.ServiceContainer(ctx, "backend")
+	if err != nil {
+		return "", err
+	}
+	host, err := backend.Host(ctx)
+	if err != nil {
+		return "", err
+	}
+	port, err := backend.MappedPort(ctx, "4000")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("http://%s:%s", host, port.Port()), nil
 }
 
 func BackendOptionsFromEnv() BackendOptions {
