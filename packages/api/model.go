@@ -935,6 +935,7 @@ type RetrieveCertificateResponse struct {
 }
 
 type RenewCertificateRequest struct {
+	RemoveRootsFromChain bool `json:"removeRootsFromChain,omitempty"`
 }
 
 type RenewCertificateResponse struct {
