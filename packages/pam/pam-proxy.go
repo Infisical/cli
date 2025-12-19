@@ -209,13 +209,14 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeSSH:
 		sshConfig := ssh.SSHProxyConfig{
-			TargetAddr:       fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
-			AuthMethod:       credentials.AuthMethod,
-			InjectUsername:   credentials.Username,
-			InjectPassword:   credentials.Password,
-			InjectPrivateKey: credentials.PrivateKey,
-			SessionID:        pamConfig.SessionId,
-			SessionLogger:    sessionLogger,
+			TargetAddr:        fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			AuthMethod:        credentials.AuthMethod,
+			InjectUsername:    credentials.Username,
+			InjectPassword:    credentials.Password,
+			InjectPrivateKey:  credentials.PrivateKey,
+			InjectCertificate: credentials.Certificate,
+			SessionID:         pamConfig.SessionId,
+			SessionLogger:     sessionLogger,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
 		log.Info().

@@ -16,6 +16,7 @@ type PAMCredentials struct {
 	Password              string
 	Database              string
 	PrivateKey            string
+	Certificate           string
 	Host                  string
 	Port                  int
 	SSLEnabled            bool
@@ -89,6 +90,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		Password:              response.Credentials.Password,
 		Database:              response.Credentials.Database,
 		PrivateKey:            response.Credentials.PrivateKey,
+		Certificate:           response.Credentials.Certificate,
 		Host:                  response.Credentials.Host,
 		Port:                  response.Credentials.Port,
 		SSLEnabled:            response.Credentials.SSLEnabled,
