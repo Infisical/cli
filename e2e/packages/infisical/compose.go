@@ -6,8 +6,10 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -62,7 +64,18 @@ func (s *Stack) Up(ctx context.Context) error {
 				runningContainers++
 			}
 		}
+		// TODO: also maybe try to match up with services in the project YAML?
 		if runningContainers == len(containers) {
+
+			provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
+			if err != nil {
+				return err
+			}
+			s.dockerCompose = &RunningCompose{
+				name:     uniqueName,
+				client:   dockerClient,
+				provider: provider,
+			}
 			// Found existing compose, reuse instead
 			return nil
 		}
@@ -225,4 +238,78 @@ func WithDefaultStack(backendOptions BackendOptions) StackOption {
 
 func WithDefaultStackFromEnv() StackOption {
 	return WithDefaultStack(BackendOptionsFromEnv())
+}
+
+type RunningCompose struct {
+	name     string
+	client   *testcontainers.DockerClient
+	provider *testcontainers.DockerProvider
+
+	containers     map[string]*testcontainers.DockerContainer
+	containersLock sync.Mutex
+}
+
+func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *RunningCompose) Services() []string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *RunningCompose) WaitForService(s string, strategy wait.Strategy) compose.ComposeStack {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *RunningCompose) WithEnv(m map[string]string) compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) WithOsEnv() compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) cachedContainer(svcName string) *testcontainers.DockerContainer {
+	c.containersLock.Lock()
+	defer c.containersLock.Unlock()
+
+	return c.containers[svcName]
+}
+
+func (c *RunningCompose) ServiceContainer(ctx context.Context, svcName string) (*testcontainers.DockerContainer, error) {
+	if ctr := c.cachedContainer(svcName); c != nil {
+		return ctr, nil
+	}
+
+	containers, err := c.client.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ServiceLabel, svcName)),
+		),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("container list: %w", err)
+	}
+
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("no container found for service name %s", svcName)
+	}
+
+	ctr, err := c.provider.ContainerFromType(ctx, containers[0])
+	if err != nil {
+		return nil, fmt.Errorf("container from type: %w", err)
+	}
+
+	c.containersLock.Lock()
+	defer c.containersLock.Unlock()
+	c.containers[svcName] = ctr
 }
