@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,6 +80,7 @@ func (s *Stack) Up(ctx context.Context) error {
 				provider:   provider,
 				containers: make(map[string]*testcontainers.DockerContainer),
 			}
+			slog.Info("Found existing running containers", "name", uniqueName)
 			// Found existing compose, reuse instead
 			return s.dockerCompose.Up(ctx)
 		}
@@ -264,10 +267,10 @@ func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) 
 
 	conn, err := pgx.Connect(ctx, fmt.Sprintf("postgresql://infisical:infisical@localhost:%s/infisical", port.Port()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
-		os.Exit(1)
+		slog.Error("Unable to connect to database", "err", err)
+		return err
 	}
-	defer conn.Close(context.Background())
+	defer conn.Close(ctx)
 
 	query := `
 		SELECT table_schema, table_name
@@ -279,21 +282,51 @@ func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) 
 
 	rows, err := conn.Query(ctx, query)
 	if err != nil {
-		log.Fatalf("Query failed: %v", err)
+		slog.Error("Unable to execute query", "query", query, "err", err)
+		return err
 	}
 	defer rows.Close()
 
-	fmt.Println("Tables:")
+	tables := make([]string, 0)
 	for rows.Next() {
 		var schema, table string
 		if err := rows.Scan(&schema, &table); err != nil {
-			log.Fatalf("Scan failed: %v", err)
+			slog.Error("Scan failed", "error", err)
+			return err
 		}
-		fmt.Printf("- %s.%s\n", schema, table)
+		tables = append(tables, fmt.Sprintf("%s.%s", schema, table))
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("Row iteration error", "error", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		log.Fatalf("Row iteration error: %v", err)
+	skipTables := map[string]struct{}{
+		"public.infisical_migrations":      {},
+		"public.infisical_migrations_lock": {},
+		// TODO: skip other tables
+	}
+	var builder strings.Builder
+	for _, table := range tables {
+		if _, ok := skipTables[table]; ok {
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE;\n", table))
+	}
+
+	query = builder.String()
+	_, err = conn.Exec(ctx, query)
+	if err != nil {
+		slog.Error("Truncate failed", "error", err)
+		return err
+	}
+	slog.Info("Truncate all tables successfully")
+
+	_, err = conn.Exec(ctx,
+		`INSERT INTO public.super_admin ("id", "fipsEnabled", "initialized", "allowSignUp") VALUES ($1, $2, $3, $4)`,
+		"00000000-0000-0000-0000-000000000000", true, false, true)
+	if err != nil {
+		slog.Error("Failed to insert super_admin", "error", err)
+		return err
 	}
 
 	return nil
@@ -301,7 +334,8 @@ func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) 
 
 func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
 	//TODO implement me
-	panic("implement me")
+	//panic("implement me")
+	return nil
 }
 
 func (c *RunningCompose) Services() []string {
