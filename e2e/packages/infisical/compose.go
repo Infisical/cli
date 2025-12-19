@@ -11,6 +11,10 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -36,6 +40,33 @@ func (s *Stack) Up(ctx context.Context) error {
 	hashBytes := sha1.Sum(data)
 	hashHex := hex.EncodeToString(hashBytes[:])
 	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
+
+	// Try to lookup for existing container with the same name
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(context.Background())
+	if err != nil {
+		return err
+	}
+	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+		),
+	})
+	if err != nil {
+		return err
+	}
+	if len(containers) > 0 {
+		runningContainers := 0
+		for _, c := range containers {
+			if c.State == container.StateRunning {
+				runningContainers++
+			}
+		}
+		if runningContainers == len(containers) {
+			// Found existing compose, reuse instead
+			return nil
+		}
+	}
 
 	dockerCompose, err := compose.NewDockerComposeWith(
 		compose.WithStackReaders(bytes.NewReader(data)),
