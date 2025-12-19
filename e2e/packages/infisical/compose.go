@@ -3,6 +3,8 @@ package infisical
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,8 +33,13 @@ func (s *Stack) Up(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	hashBytes := sha1.Sum(data)
+	hashHex := hex.EncodeToString(hashBytes[:])
+	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
+
 	dockerCompose, err := compose.NewDockerComposeWith(
 		compose.WithStackReaders(bytes.NewReader(data)),
+		compose.StackIdentifier(uniqueName),
 	)
 	if err != nil {
 		return err
