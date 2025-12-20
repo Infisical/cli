@@ -42,9 +42,25 @@ func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithE
 func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalService {
 	err := s.Stack.Up(ctx)
 	require.NoError(t, err)
+
+	s.Bootstrap(ctx, t)
+
+	t.Cleanup(func() {
+		err = s.Compose().Down(
+			ctx,
+			dockercompose.RemoveOrphans(true),
+			dockercompose.RemoveVolumes(true),
+		)
+		if err != nil {
+			slog.Error("Failed to clean up Infisical service", "err", err)
+		}
+	})
+	return s
+}
+
+func (s *InfisicalService) Bootstrap(ctx context.Context, t *testing.T) {
 	apiUrl, err := s.Stack.ApiUrl(ctx)
 	require.NoError(t, err)
-
 	slog.Info("Bootstrapping Infisical service", "apiUrl", apiUrl)
 	hc := http.Client{}
 	provisioningClient, err := client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
@@ -61,18 +77,6 @@ func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalServi
 		client.WithRequestEditorFn(bearerAuth.Intercept),
 	)
 	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		err = s.Compose().Down(
-			ctx,
-			dockercompose.RemoveOrphans(true),
-			dockercompose.RemoveVolumes(true),
-		)
-		if err != nil {
-			slog.Error("Failed to clean up Infisical service", "err", err)
-		}
-	})
-	return s
 }
 
 func (s *InfisicalService) Compose() dockercompose.ComposeStack {
@@ -83,8 +87,15 @@ func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 	return s.apiClient
 }
 
-func (s *InfisicalService) Reset(ctx context.Context) error {
-	return infisical.Reset(ctx, s.Compose())
+func (s *InfisicalService) Reset(ctx context.Context, t *testing.T) {
+	err := infisical.Reset(ctx, s.Compose())
+	require.NoError(t, err)
+	s.Bootstrap(ctx, t)
+}
+
+func (s *InfisicalService) ResetAndBootstrap(ctx context.Context, t *testing.T) {
+	s.Reset(ctx, t)
+	s.Bootstrap(ctx, t)
 }
 
 func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
