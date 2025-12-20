@@ -83,6 +83,10 @@ func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 	return s.apiClient
 }
 
+func (s *InfisicalService) Reset(ctx context.Context) error {
+	return infisical.Reset(ctx, s.Compose())
+}
+
 func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
 	return s.provisionResult
 }
