@@ -90,7 +90,6 @@ func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 func (s *InfisicalService) Reset(ctx context.Context, t *testing.T) {
 	err := infisical.Reset(ctx, s.Compose())
 	require.NoError(t, err)
-	s.Bootstrap(ctx, t)
 }
 
 func (s *InfisicalService) ResetAndBootstrap(ctx context.Context, t *testing.T) {
