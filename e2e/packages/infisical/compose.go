@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,12 +18,30 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/jackc/pgx/v5"
-	"github.com/redis/go-redis/v9"
+	"github.com/docker/go-connections/nat"
+	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// composePortProvider implements client.ServicePortProvider for compose stacks
+type composePortProvider struct {
+	stack compose.ComposeStack
+}
+
+// GetServicePort gets the mapped port for a service
+func (p *composePortProvider) GetServicePort(ctx context.Context, serviceName string, internalPort string) (string, error) {
+	c, err := p.stack.ServiceContainer(ctx, serviceName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get %s c: %w", serviceName, err)
+	}
+	port, err := c.MappedPort(ctx, nat.Port(internalPort))
+	if err != nil {
+		return "", fmt.Errorf("failed to get %s port %s: %w", serviceName, internalPort, err)
+	}
+	return port.Port(), nil
+}
 
 type Stack struct {
 	Project *types.Project
@@ -62,15 +80,29 @@ func (s *Stack) Up(ctx context.Context) error {
 		return err
 	}
 	if len(containers) > 0 {
-		runningContainers := 0
+		services := make([]string, 0, len(s.Project.Services))
+		for name := range s.Project.Services {
+			services = append(services, name)
+		}
+
+		missingServices := make(map[string]int, len(services))
+		for _, service := range services {
+			missingServices[service] = 1
+		}
 		for _, c := range containers {
 			if c.State == container.StateRunning {
-				runningContainers++
+				serviceName, ok := c.Labels[api.ServiceLabel]
+				if !ok {
+					continue
+				}
+				_, ok = missingServices[serviceName]
+				if ok {
+					delete(missingServices, serviceName)
+				}
 			}
 		}
-		// TODO: also maybe try to match up with services in the project YAML?
-		if runningContainers == len(containers) {
 
+		if len(missingServices) == 0 {
 			provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
 			if err != nil {
 				return err
@@ -79,6 +111,7 @@ func (s *Stack) Up(ctx context.Context) error {
 				name:       uniqueName,
 				client:     dockerClient,
 				provider:   provider,
+				services:   services,
 				containers: make(map[string]*testcontainers.DockerContainer),
 			}
 			slog.Info("Found existing running containers", "name", uniqueName)
@@ -100,7 +133,10 @@ func (s *Stack) Up(ctx context.Context) error {
 			WithStartupTimeout(120*time.Second),
 	)
 	s.dockerCompose = waited
-	return s.dockerCompose.Up(ctx)
+	if err := s.dockerCompose.Up(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Stack) Down(ctx context.Context) error {
@@ -247,137 +283,68 @@ func WithDefaultStackFromEnv() StackOption {
 }
 
 type RunningCompose struct {
-	name     string
-	client   *testcontainers.DockerClient
-	provider *testcontainers.DockerProvider
-
+	name           string
+	services       []string
+	client         *testcontainers.DockerClient
+	provider       *testcontainers.DockerProvider
 	containers     map[string]*testcontainers.DockerContainer
 	containersLock sync.Mutex
 }
 
 func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) error {
-	db, err := c.ServiceContainer(ctx, "db")
+	// Create port provider to get service ports
+	portProvider := &composePortProvider{stack: c}
+
+	// Get PostgreSQL port
+	dbPort, err := portProvider.GetServicePort(ctx, "db", "5432")
 	if err != nil {
+		return fmt.Errorf("failed to get db port: %w", err)
+	}
+
+	// Get Redis port
+	redisPort, err := portProvider.GetServicePort(ctx, "redis", "6379")
+	if err != nil {
+		return fmt.Errorf("failed to get redis port: %w", err)
+	}
+
+	// Reset PostgreSQL database
+	if err := client.ResetDB(ctx, client.WithDatabaseConfig(client.DatabaseConfig{
+		User:     "infisical",
+		Password: "infisical",
+		Database: "infisical",
+		Host:     "localhost",
+		Port:     dbPort,
+	})); err != nil {
 		return err
 	}
 
-	port, err := db.MappedPort(ctx, "5432")
+	// Reset Redis database
+	redisPortInt, err := strconv.Atoi(redisPort)
 	if err != nil {
+		return fmt.Errorf("failed to parse redis port: %w", err)
+	}
+	if err := client.ResetRedis(ctx, client.WithRedisConfig(client.RedisConfig{
+		Host:     "localhost",
+		Port:     redisPortInt,
+		Password: "",
+	})); err != nil {
 		return err
 	}
-
-	conn, err := pgx.Connect(ctx, fmt.Sprintf("postgresql://infisical:infisical@localhost:%s/infisical", port.Port()))
-	if err != nil {
-		slog.Error("Unable to connect to database", "err", err)
-		return err
-	}
-	defer conn.Close(ctx)
-
-	query := `
-		SELECT table_schema, table_name
-		FROM information_schema.tables
-		WHERE table_type = 'BASE TABLE'
-		  AND table_schema NOT IN ('pg_catalog', 'information_schema')
-		ORDER BY table_schema, table_name;
-	`
-
-	rows, err := conn.Query(ctx, query)
-	if err != nil {
-		slog.Error("Unable to execute query", "query", query, "err", err)
-		return err
-	}
-	defer rows.Close()
-
-	tables := make([]string, 0)
-	for rows.Next() {
-		var schema, table string
-		if err := rows.Scan(&schema, &table); err != nil {
-			slog.Error("Scan failed", "error", err)
-			return err
-		}
-		tables = append(tables, fmt.Sprintf("%s.%s", schema, table))
-	}
-	if err := rows.Err(); err != nil {
-		slog.Error("Row iteration error", "error", err)
-	}
-
-	skipTables := map[string]struct{}{
-		"public.infisical_migrations":      {},
-		"public.infisical_migrations_lock": {},
-		// TODO: skip other tables
-	}
-	var builder strings.Builder
-	for _, table := range tables {
-		if _, ok := skipTables[table]; ok {
-			continue
-		}
-		builder.WriteString(fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE;\n", table))
-	}
-
-	query = builder.String()
-	_, err = conn.Exec(ctx, query)
-	if err != nil {
-		slog.Error("Truncate failed", "error", err)
-		return err
-	}
-	slog.Info("Truncate all tables successfully")
-
-	_, err = conn.Exec(ctx,
-		`INSERT INTO public.super_admin ("id", "fipsEnabled", "initialized", "allowSignUp") VALUES ($1, $2, $3, $4)`,
-		"00000000-0000-0000-0000-000000000000", true, false, true)
-	if err != nil {
-		slog.Error("Failed to insert super_admin", "error", err)
-		return err
-	}
-
-	rc, err := c.ServiceContainer(ctx, "redis")
-	if err != nil {
-		return err
-	}
-	redisPort, err := rc.MappedPort(ctx, "6379")
-	if err != nil {
-		return err
-	}
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("localhost:%s", redisPort.Port()), // Redis server address
-		Password: "",                                            // No password by default
-		DB:       0,                                             // Default database index
-	})
-
-	// Optional: Test the connection
-	pong, err := rdb.Ping(ctx).Result()
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	slog.Info("Connected to Redis: %s\n", pong)
-
-	// Clear all keys in the current database (equivalent to resetting the DB)
-	err = rdb.FlushAll(ctx).Err()
-	if err != nil {
-		log.Fatalf("Failed to flush database: %v", err)
-	}
-	slog.Info("All keys cleared successfully from the current database.")
-
-	// Close the connection
-	rdb.Close()
 
 	return nil
 }
 
 func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
-	//TODO implement me
-	//panic("implement me")
+	// For the case of running compose, we probably want to reuse it, so just do nothing here
 	return nil
 }
 
 func (c *RunningCompose) Services() []string {
-	//TODO implement me
-	panic("implement me")
+	return c.services
 }
 
 func (c *RunningCompose) WaitForService(s string, strategy wait.Strategy) compose.ComposeStack {
-	//TODO implement me
-	panic("implement me")
+	panic("Cannot modify running compose")
 }
 
 func (c *RunningCompose) WithEnv(m map[string]string) compose.ComposeStack {
