@@ -49,7 +49,13 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		Str("sessionID", sessionID).
 		Msg("New Redis connection for PAM session")
 
+	// TODO: open a new conn to the actual redis server
 	p.relayHandler = NewRelayHandler(clientConn, p.config.SessionLogger)
+	// TODO: run this is a go routine
+	err := p.relayHandler.Handle()
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
