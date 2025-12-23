@@ -24,6 +24,7 @@ var ErrSessionFileNotFound = errors.New("session file not found")
 const (
 	ResourceTypePostgres   = "postgres"
 	ResourceTypeMysql      = "mysql"
+	ResourceTypeRedis      = "redis"
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
 )
