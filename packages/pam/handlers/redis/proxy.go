@@ -37,7 +37,7 @@ func NewRedisProxy(config RedisProxyConfig) *RedisProxy {
 
 // HandleConnection handles a single client connection
 func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
-	defer clientConn.Close()
+	defer func(clientConn net.Conn) { _ = clientConn.Close() }(clientConn)
 
 	sessionID := p.config.SessionID
 
@@ -57,7 +57,7 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	if err != nil {
 		return err
 	}
-	defer selfToServerConn.Close()
+	defer func(selfToServerConn net.Conn) { _ = selfToServerConn.Close() }(selfToServerConn)
 	selfToClientRedisConn := NewRedisConn(selfToServerConn)
 	err = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword)
 	if err != nil {
@@ -76,12 +76,9 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		return fmt.Errorf("failed to authenticate with the target redis server")
 	}
 
-	p.relayHandler = NewRelayHandler(NewRedisConn(clientConn), selfToClientRedisConn, p.config.SessionLogger)
-	// TODO: run this is a go routine
-	err = p.relayHandler.Handle()
-	if err != nil {
-		return err
-	}
+	clientToSelfConn := NewRedisConn(clientConn)
+	defer func() { _ = clientToSelfConn.Close() }()
 
-	return nil
+	p.relayHandler = NewRelayHandler(clientToSelfConn, selfToClientRedisConn, p.config.SessionLogger)
+	return p.relayHandler.Handle()
 }

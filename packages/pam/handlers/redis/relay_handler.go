@@ -28,12 +28,6 @@ func NewRelayHandler(clientToSelfConn *RedisConn, selfToServerConn *RedisConn, s
 }
 
 func (h *RelayHandler) Handle() error {
-	defer func() {
-		_ = h.clientToSelfConn.Close()
-	}()
-	defer func() {
-		_ = h.selfToServerConn.Close()
-	}()
 	for {
 		value, _, err := h.clientToSelfConn.Reader().ReadValue()
 		if err != nil {
