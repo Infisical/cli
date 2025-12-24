@@ -3,11 +3,13 @@ package redis
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
+	"github.com/smallnest/resp3"
 )
 
 // RedisProxyConfig holds configuration for the Redis proxy
@@ -60,6 +62,18 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	err = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword)
 	if err != nil {
 		return err
+	}
+	respValue, _, err := selfToClientRedisConn.Reader().ReadValue()
+	if err != nil {
+		return err
+	}
+	if respValue.Type != resp3.TypeSimpleString && respValue.Str != "OK" {
+		errorMsg := "unknown"
+		if respValue.Type == resp3.TypeSimpleError || respValue.Type == resp3.TypeBlobError {
+			errorMsg = respValue.Str
+		}
+		log.Error().Str("errorMsg", errorMsg).Msg("Failed to authenticate with the target redis server")
+		return fmt.Errorf("failed to authenticate with the target redis server")
 	}
 
 	p.relayHandler = NewRelayHandler(NewRedisConn(clientConn), selfToClientRedisConn, p.config.SessionLogger)
