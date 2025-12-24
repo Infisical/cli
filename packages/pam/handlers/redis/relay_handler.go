@@ -2,7 +2,6 @@ package redis
 
 import (
 	"fmt"
-	"net"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -11,31 +10,24 @@ import (
 
 // RelayHandler handles relaying commands and responses between client and server
 type RelayHandler struct {
-	clientToSelfConn   net.Conn
-	clientToSelfReader *resp3.Reader
-	clientToSelfWriter *resp3.Writer
-	selfToServerConn   net.Conn
-	selfToServerWriter *resp3.Writer
-	selfToServerReader *resp3.Reader
-	sessionLogger      session.SessionLogger
+	clientToSelfConn *RedisConn
+	selfToServerConn *RedisConn
+	sessionLogger    session.SessionLogger
 }
 
 // NewRelayHandler creates a new relay handler
-func NewRelayHandler(clientToSelfConn net.Conn, selfToServerConn net.Conn, sessionLogger session.SessionLogger) *RelayHandler {
+func NewRelayHandler(clientToSelfConn *RedisConn, selfToServerConn *RedisConn, sessionLogger session.SessionLogger) *RelayHandler {
 	return &RelayHandler{
-		clientToSelfConn:   clientToSelfConn,
-		clientToSelfReader: resp3.NewReader(clientToSelfConn),
-		clientToSelfWriter: resp3.NewWriter(clientToSelfConn),
-		selfToServerConn:   selfToServerConn,
-		selfToServerWriter: resp3.NewWriter(selfToServerConn),
-		selfToServerReader: resp3.NewReader(selfToServerConn),
-		sessionLogger:      sessionLogger,
+		clientToSelfConn: clientToSelfConn,
+		selfToServerConn: selfToServerConn,
+		sessionLogger:    sessionLogger,
 	}
 }
 
 func (h *RelayHandler) Handle() error {
+
 	for {
-		value, _, err := h.clientToSelfReader.ReadValue()
+		value, _, err := h.clientToSelfConn.Reader().ReadValue()
 		if err != nil {
 			return err
 		}
@@ -49,32 +41,32 @@ func (h *RelayHandler) Handle() error {
 			switch cmdStr {
 			case "auth":
 				r := resp3.Value{Type: resp3.TypeSimpleString, Str: "OK"}
-				_, err := h.clientToSelfWriter.WriteString(r.ToRESP3String())
+				_, err := h.clientToSelfConn.Writer().WriteString(r.ToRESP3String())
 				if err != nil {
 					return err
 				}
-				err = h.clientToSelfWriter.Flush()
+				err = h.clientToSelfConn.Writer().Flush()
 				if err != nil {
 					return err
 				}
 				break
 			default:
-				_, err := h.selfToServerWriter.WriteString(value.ToRESP3String())
+				_, err := h.selfToServerConn.Writer().WriteString(value.ToRESP3String())
 				if err != nil {
 					return err
 				}
-				err = h.selfToServerWriter.Flush()
-				if err != nil {
-					return err
-				}
-
-				respVal, _, err := h.selfToServerReader.ReadValue()
-				_, err = h.clientToSelfWriter.WriteString(respVal.ToRESP3String())
+				err = h.selfToServerConn.Writer().Flush()
 				if err != nil {
 					return err
 				}
 
-				err = h.clientToSelfWriter.Flush()
+				respVal, _, err := h.selfToServerConn.Reader().ReadValue()
+				_, err = h.clientToSelfConn.Writer().WriteString(respVal.ToRESP3String())
+				if err != nil {
+					return err
+				}
+
+				err = h.clientToSelfConn.Writer().Flush()
 				if err != nil {
 					return err
 				}

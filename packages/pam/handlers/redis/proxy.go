@@ -51,20 +51,18 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		Msg("New Redis connection for PAM session")
 
 	//// TODO: support TLS
-	//rdb := redis.NewClient(&redis.Options{
-	//	Addr:     p.config.TargetAddr,
-	//	Username: p.config.InjectUsername,
-	//	Password: p.config.InjectPassword,
-	//	DB:       p.config.InjectDatabase,
-	//})
-	//
 	selfToServerConn, err := net.DialTimeout("tcp", p.config.TargetAddr, 5*time.Second)
 	if err != nil {
 		return err
 	}
 	defer selfToServerConn.Close()
+	selfToClientRedisConn := NewRedisConn(selfToServerConn)
+	err = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword)
+	if err != nil {
+		return err
+	}
 
-	p.relayHandler = NewRelayHandler(clientConn, selfToServerConn, p.config.SessionLogger)
+	p.relayHandler = NewRelayHandler(NewRedisConn(clientConn), selfToClientRedisConn, p.config.SessionLogger)
 	// TODO: run this is a go routine
 	err = p.relayHandler.Handle()
 	if err != nil {
