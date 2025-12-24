@@ -74,7 +74,7 @@ yay -S infisical-bin
 
 **Using mise-en-place**
 
-If you are using [mise](https://mise.jdx.dev), the polyglot tool version manager you can install `infisical cli` using a command like:
+If you are using [mise-en-place](https://mise.jdx.dev), the polyglot tool version manager you can install infisical cli using a command like:
 
 ```bash
 mise use -g infisical@latest
