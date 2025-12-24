@@ -21,7 +21,11 @@ func NewRedisConn(conn net.Conn) *RedisConn {
 }
 
 func (c *RedisConn) Close() error {
-	return c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
+	if err := c.writer.Flush(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *RedisConn) Reader() *resp3.Reader {
@@ -32,7 +36,13 @@ func (c *RedisConn) Writer() *resp3.Writer {
 	return c.writer
 }
 
-func (c *RedisConn) WriteValue(value resp3.Value) error {
+func (c *RedisConn) WriteValue(value *resp3.Value, flush bool) error {
 	_, err := c.writer.WriteString(value.ToRESP3String())
-	return err
+	if err != nil {
+		return err
+	}
+	if !flush {
+		return nil
+	}
+	return c.writer.Flush()
 }

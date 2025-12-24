@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/rs/zerolog/log"
 	"github.com/smallnest/resp3"
 )
 
@@ -25,7 +26,12 @@ func NewRelayHandler(clientToSelfConn *RedisConn, selfToServerConn *RedisConn, s
 }
 
 func (h *RelayHandler) Handle() error {
-
+	defer func() {
+		_ = h.clientToSelfConn.Close()
+	}()
+	defer func() {
+		_ = h.selfToServerConn.Close()
+	}()
 	for {
 		value, _, err := h.clientToSelfConn.Reader().ReadValue()
 		if err != nil {
@@ -39,40 +45,40 @@ func (h *RelayHandler) Handle() error {
 			}
 			cmdStr := strings.ToLower(value.Elems[0].Str)
 			switch cmdStr {
+			// Handle auth command, we just reply OK instead of forwarding it to the server
 			case "auth":
-				r := resp3.Value{Type: resp3.TypeSimpleString, Str: "OK"}
-				_, err := h.clientToSelfConn.Writer().WriteString(r.ToRESP3String())
-				if err != nil {
-					return err
-				}
-				err = h.clientToSelfConn.Writer().Flush()
+				err := h.clientToSelfConn.WriteValue(&resp3.Value{Type: resp3.TypeSimpleString, Str: "OK"}, true)
 				if err != nil {
 					return err
 				}
 				break
+			// Forward all other commands
 			default:
-				_, err := h.selfToServerConn.Writer().WriteString(value.ToRESP3String())
-				if err != nil {
-					return err
-				}
-				err = h.selfToServerConn.Writer().Flush()
+				err := h.selfToServerConn.WriteValue(value, true)
 				if err != nil {
 					return err
 				}
 
 				respVal, _, err := h.selfToServerConn.Reader().ReadValue()
-				_, err = h.clientToSelfConn.Writer().WriteString(respVal.ToRESP3String())
-				if err != nil {
-					return err
-				}
-
-				err = h.clientToSelfConn.Writer().Flush()
+				err = h.clientToSelfConn.WriteValue(respVal, true)
 				if err != nil {
 					return err
 				}
 			}
 		default:
-			// TODO: return error
+			if err = h.clientToSelfConn.WriteValue(&resp3.Value{Type: resp3.TypeSimpleError, Err: fmt.Sprintf("Unexpected value type %v", value.Type)}, true); err != nil {
+				return err
+			}
+			return fmt.Errorf("unexpected value type %v", value.Type)
 		}
 	}
+}
+
+func (r *RelayHandler) writeLogEntry(entry session.SessionLogEntry) error {
+	err := r.sessionLogger.LogEntry(entry)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to write log entry to file")
+		return err
+	}
+	return nil
 }
