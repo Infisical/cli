@@ -59,10 +59,12 @@ func (h *RelayHandler) Handle() error {
 			default:
 				err := h.selfToServerConn.WriteValue(value, true)
 				if err != nil {
+					h.writeLogEntry(value, nil)
 					return err
 				}
 
 				respVal, _, err := h.selfToServerConn.Reader().ReadValue()
+				h.writeLogEntry(value, respVal)
 				err = h.clientToSelfConn.WriteValue(respVal, true)
 				if err != nil {
 					return err
@@ -77,15 +79,19 @@ func (h *RelayHandler) Handle() error {
 	}
 }
 
-func (r *RelayHandler) writeLogEntry(cmd *resp3.Value, resp *resp3.Value) error {
+func (r *RelayHandler) writeLogEntry(cmd *resp3.Value, resp *resp3.Value) {
 	input, err := valueToJson(cmd)
 	if err != nil {
-		return err
+		log.Error().Err(err).Msg("failed to convert cmd value to json")
+		return
 	}
 	output := ""
-	output, err = valueToJson(resp)
-	if err != nil {
-		return err
+	if resp != nil {
+		output, err = valueToJson(resp)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to convert resp value to json")
+			return
+		}
 	}
 
 	err = r.sessionLogger.LogEntry(session.SessionLogEntry{
@@ -95,9 +101,7 @@ func (r *RelayHandler) writeLogEntry(cmd *resp3.Value, resp *resp3.Value) error 
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("failed to write log entry to file")
-		return err
 	}
-	return nil
 }
 
 func valueToJson(value *resp3.Value) (string, error) {
