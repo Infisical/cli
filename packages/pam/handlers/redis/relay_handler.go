@@ -52,6 +52,7 @@ func (h *RelayHandler) Handle() error {
 					return err
 				}
 				break
+			// TODO: handle monitor / subscribe and other special commands
 			// Forward all other commands
 			default:
 				err := h.selfToServerConn.WriteValue(value, true)
