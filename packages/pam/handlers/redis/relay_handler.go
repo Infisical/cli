@@ -46,7 +46,13 @@ func (h *RelayHandler) Handle() error {
 			}
 			break
 		default:
-			h.selfToServerClient.Do(context.Background(), cmd.Args)
+			// TODO: add logs here
+			r, _ := h.selfToServerClient.Do(context.Background(), cmd.Args).Result()
+			h.clientToSelfWriter.WriteAny(r)
+			err := h.clientToSelfWriter.Flush()
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
