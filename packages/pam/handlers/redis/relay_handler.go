@@ -1,8 +1,10 @@
 package redis
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
@@ -75,11 +77,34 @@ func (h *RelayHandler) Handle() error {
 	}
 }
 
-func (r *RelayHandler) writeLogEntry(entry session.SessionLogEntry) error {
-	err := r.sessionLogger.LogEntry(entry)
+func (r *RelayHandler) writeLogEntry(cmd *resp3.Value, resp *resp3.Value) error {
+	input, err := valueToJson(cmd)
+	if err != nil {
+		return err
+	}
+	output := ""
+	output, err = valueToJson(resp)
+	if err != nil {
+		return err
+	}
+
+	err = r.sessionLogger.LogEntry(session.SessionLogEntry{
+		Timestamp: time.Now(),
+		Input:     input,
+		Output:    output,
+	})
 	if err != nil {
 		log.Error().Err(err).Msg("failed to write log entry to file")
 		return err
 	}
 	return nil
+}
+
+func valueToJson(value *resp3.Value) (string, error) {
+	v := value.SmartResult()
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
