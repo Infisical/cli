@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
@@ -38,6 +39,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeMysql,
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
+		session.ResourceTypeRedis,
 	}
 }
 
@@ -209,11 +211,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Msg("Starting MySQL PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeRedis:
+		redisDb := 0
+		if credentials.Database == "" {
+			redisDb, err = strconv.Atoi(credentials.Database)
+			if err != nil {
+				return fmt.Errorf("failed to parse database from credentials: %w", err)
+			}
+		}
 		redisConfig := redis.RedisProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
 			InjectPassword: credentials.Password,
-			InjectDatabase: credentials.Database,
+			InjectDatabase: redisDb,
 			EnableTLS:      credentials.SSLEnabled,
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,

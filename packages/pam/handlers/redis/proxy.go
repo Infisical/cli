@@ -6,6 +6,7 @@ import (
 	"net"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -14,7 +15,7 @@ type RedisProxyConfig struct {
 	TargetAddr     string
 	InjectUsername string
 	InjectPassword string
-	InjectDatabase string // Redis database number (0-15)
+	InjectDatabase int
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
@@ -24,6 +25,7 @@ type RedisProxyConfig struct {
 // RedisProxy handles proxying Redis connections
 type RedisProxy struct {
 	config       RedisProxyConfig
+	client       *redis.Client
 	relayHandler *RelayHandler
 }
 
@@ -48,6 +50,15 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	log.Info().
 		Str("sessionID", sessionID).
 		Msg("New Redis connection for PAM session")
+
+	// TODO: support TLS
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     p.config.TargetAddr,
+		Username: p.config.InjectUsername,
+		Password: p.config.InjectPassword,
+		DB:       p.config.InjectDatabase,
+	})
+	p.client = rdb
 
 	// TODO: open a new conn to the actual redis server
 	p.relayHandler = NewRelayHandler(clientConn, p.config.SessionLogger)
