@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
@@ -52,18 +51,28 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		Str("sessionID", sessionID).
 		Msg("New Redis connection for PAM session")
 
-	//// TODO: support TLS
-	selfToServerConn, err := net.DialTimeout("tcp", p.config.TargetAddr, 5*time.Second)
-	if err != nil {
-		return err
+	var selfToServerConn net.Conn
+	if !p.config.EnableTLS {
+		c, err := net.Dial("tcp", p.config.TargetAddr)
+		if err != nil {
+			return err
+		}
+		selfToServerConn = c
+	} else {
+		c, err := tls.Dial("tcp", p.config.TargetAddr, p.config.TLSConfig)
+		if err != nil {
+			return err
+		}
+		selfToServerConn = c
 	}
+
 	selfToClientRedisConn := NewRedisConn(selfToServerConn)
 	defer func(selfToClientRedisConn *RedisConn) { _ = selfToClientRedisConn.Close() }(selfToClientRedisConn)
 
-	if err = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword); err != nil {
+	if err := selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword); err != nil {
 		return err
 	}
-	if err = selfToClientRedisConn.Writer().Flush(); err != nil {
+	if err := selfToClientRedisConn.Writer().Flush(); err != nil {
 		return err
 	}
 
