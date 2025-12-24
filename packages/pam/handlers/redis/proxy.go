@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -50,17 +50,23 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		Str("sessionID", sessionID).
 		Msg("New Redis connection for PAM session")
 
-	// TODO: support TLS
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     p.config.TargetAddr,
-		Username: p.config.InjectUsername,
-		Password: p.config.InjectPassword,
-		DB:       p.config.InjectDatabase,
-	})
+	//// TODO: support TLS
+	//rdb := redis.NewClient(&redis.Options{
+	//	Addr:     p.config.TargetAddr,
+	//	Username: p.config.InjectUsername,
+	//	Password: p.config.InjectPassword,
+	//	DB:       p.config.InjectDatabase,
+	//})
+	//
+	selfToServerConn, err := net.DialTimeout("tcp", p.config.TargetAddr, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer selfToServerConn.Close()
 
-	p.relayHandler = NewRelayHandler(clientConn, rdb, p.config.SessionLogger)
+	p.relayHandler = NewRelayHandler(clientConn, selfToServerConn, p.config.SessionLogger)
 	// TODO: run this is a go routine
-	err := p.relayHandler.Handle()
+	err = p.relayHandler.Handle()
 	if err != nil {
 		return err
 	}
