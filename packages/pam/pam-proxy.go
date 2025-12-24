@@ -212,7 +212,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeRedis:
 		redisDb := 0
-		if credentials.Database == "" {
+		if credentials.Database != "" {
 			redisDb, err = strconv.Atoi(credentials.Database)
 			if err != nil {
 				return fmt.Errorf("failed to parse database from credentials: %w", err)

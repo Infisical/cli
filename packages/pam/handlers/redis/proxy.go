@@ -25,7 +25,6 @@ type RedisProxyConfig struct {
 // RedisProxy handles proxying Redis connections
 type RedisProxy struct {
 	config       RedisProxyConfig
-	client       *redis.Client
 	relayHandler *RelayHandler
 }
 
@@ -58,10 +57,8 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 		Password: p.config.InjectPassword,
 		DB:       p.config.InjectDatabase,
 	})
-	p.client = rdb
 
-	// TODO: open a new conn to the actual redis server
-	p.relayHandler = NewRelayHandler(clientConn, p.config.SessionLogger)
+	p.relayHandler = NewRelayHandler(clientConn, rdb, p.config.SessionLogger)
 	// TODO: run this is a go routine
 	err := p.relayHandler.Handle()
 	if err != nil {
