@@ -45,6 +45,7 @@ func (h *RelayHandler) Handle() error {
 				return err
 			}
 			break
+		// TODO: handle subscribe / monitor and the other special cases
 		default:
 			// TODO: add logs here
 			r, _ := h.selfToServerClient.Do(context.Background(), cmd.Args).Result()
