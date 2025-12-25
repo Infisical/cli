@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/fangpenlin/resp3"
 	"github.com/rs/zerolog/log"
-	"github.com/smallnest/resp3"
 )
 
 // RelayHandler handles relaying commands and responses between client and server

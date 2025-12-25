@@ -7,8 +7,8 @@ import (
 	"net"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/fangpenlin/resp3"
 	"github.com/rs/zerolog/log"
-	"github.com/smallnest/resp3"
 )
 
 // RedisProxyConfig holds configuration for the Redis proxy

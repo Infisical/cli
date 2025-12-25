@@ -3,7 +3,7 @@ package redis
 import (
 	"net"
 
-	"github.com/smallnest/resp3"
+	"github.com/fangpenlin/resp3"
 )
 
 type RedisConn struct {
