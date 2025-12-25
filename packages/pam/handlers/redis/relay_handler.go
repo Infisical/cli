@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -51,7 +52,9 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	monitorMode := atomic.Bool{}
 	serverReplyCh := make(chan serverReply, 1)
+
 	go func(ch chan<- serverReply) {
 		for {
 			if err := ctx.Err(); err != nil {
@@ -70,6 +73,25 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 				log.Error().Err(err).Msg("Error reading from server")
 				ch <- serverReply{nil, err}
 				return
+			}
+
+			if monitorMode.Load() {
+				// In the monitoring mode, the server will keep sending simple string log values like
+				//
+				//    +1766623914.688074 [0 127.0.0.1:33956] "AUTH" "(redacted)"
+				//
+				// We need to forward them all to the client. Other than that, we treat them all as
+				// server reply
+				if v.Type == resp3.TypeSimpleString && v.Str != "OK" {
+					err = h.clientToSelfConn.WriteValue(v, true)
+					if err != nil {
+						log.Error().Err(err).Msg("Error forwarding monitoring logs to the client")
+						ch <- serverReply{nil, err}
+						return
+					}
+					h.writeLogEntry(LogTypePush, nil, v)
+					continue
+				}
 			} else if (v.Type == resp3.TypeArray && len(v.Elems) > 0 && strings.ToLower(v.Elems[0].Str) == "message") ||
 				(v.Type == resp3.TypePush) {
 				// pubsub in resp2/resp3 mode will send a push as the confirmation instead of return anything,
@@ -78,7 +100,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 				if !isPubSubConfirmation(v) {
 					err = h.clientToSelfConn.WriteValue(v, true)
 					if err != nil {
-						log.Error().Err(err).Msg("Error forwarding push messages to server")
+						log.Error().Err(err).Msg("Error forwarding push messages to the client")
 						ch <- serverReply{nil, err}
 						return
 					}
@@ -124,13 +146,18 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 					return err
 				}
 				break
-			// TODO: with reset cmd, should we send out AUTH again automatically to the server?
 			// Forward all other commands
 			default:
 				err := h.selfToServerConn.WriteValue(value, true)
 				if err != nil {
 					h.writeLogEntry(LogTypeCmd, value, nil)
 					return err
+				}
+
+				if cmdStr == "monitor" {
+					// We need to turn on the monitor flag before we read the reply,
+					// otherwise some log msg might be treated as server reply
+					monitorMode.Store(true)
 				}
 
 				reply := <-serverReplyCh
@@ -141,6 +168,16 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 				err = h.clientToSelfConn.WriteValue(reply.value, true)
 				if err != nil {
 					return err
+				}
+
+				if cmdStr == "monitor" && reply.value.Str != "OK" {
+					// looks like monitor cmd failed, let's revert the monitoring flag back
+					monitorMode.Store(false)
+				}
+				if cmdStr == "reset" && reply.value.Str == "OK" {
+					// the connection is reset, and we have exited monitor mode as well
+					monitorMode.Store(false)
+					// TODO: with reset cmd, should we send out AUTH again automatically to the server?
 				}
 			}
 		default:
