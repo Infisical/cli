@@ -21,6 +21,18 @@ type RelayHandler struct {
 	sessionLogger    session.SessionLogger
 }
 
+type LogType string
+
+const (
+	LogTypeCmd  LogType = "cmd"
+	LogTypePush LogType = "push"
+)
+
+type RedisLogEntry struct {
+	LogType LogType     `json:"type"`
+	Cmd     interface{} `json:"cmd,omitempty"`
+}
+
 type serverReply struct {
 	value *resp3.Value
 	err   error
@@ -70,7 +82,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 						ch <- serverReply{nil, err}
 						return
 					}
-					// TODO: log push msg here
+					h.writeLogEntry(LogTypePush, nil, v)
 					continue
 				}
 			}
@@ -117,7 +129,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 			default:
 				err := h.selfToServerConn.WriteValue(value, true)
 				if err != nil {
-					h.writeLogEntry(value, nil)
+					h.writeLogEntry(LogTypeCmd, value, nil)
 					return err
 				}
 
@@ -125,7 +137,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 				if reply.err != nil {
 					return reply.err
 				}
-				h.writeLogEntry(value, reply.value)
+				h.writeLogEntry(LogTypeCmd, value, reply.value)
 				err = h.clientToSelfConn.WriteValue(reply.value, true)
 				if err != nil {
 					return err
@@ -140,15 +152,21 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 	}
 }
 
-func (r *RelayHandler) writeLogEntry(cmd *resp3.Value, resp *resp3.Value) {
-	input, err := valueToJson(cmd)
+func (r *RelayHandler) writeLogEntry(logType LogType, cmd *resp3.Value, resp *resp3.Value) {
+	entry := RedisLogEntry{
+		LogType: logType,
+	}
+	if logType == LogTypeCmd {
+		entry.Cmd = cmd.SmartResult()
+	}
+	input, err := valueToJson(entry)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to convert cmd value to json")
 		return
 	}
 	output := ""
 	if resp != nil {
-		output, err = valueToJson(resp)
+		output, err = valueToJson(resp.SmartResult())
 		if err != nil {
 			log.Error().Err(err).Msg("failed to convert resp value to json")
 			return
@@ -165,9 +183,8 @@ func (r *RelayHandler) writeLogEntry(cmd *resp3.Value, resp *resp3.Value) {
 	}
 }
 
-func valueToJson(value *resp3.Value) (string, error) {
-	v := value.SmartResult()
-	data, err := json.Marshal(v)
+func valueToJson(value interface{}) (string, error) {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}
