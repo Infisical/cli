@@ -1,8 +1,11 @@
 package redis
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +21,11 @@ type RelayHandler struct {
 	sessionLogger    session.SessionLogger
 }
 
+type serverReply struct {
+	value *resp3.Value
+	err   error
+}
+
 // NewRelayHandler creates a new relay handler
 func NewRelayHandler(clientToSelfConn *RedisConn, selfToServerConn *RedisConn, sessionLogger session.SessionLogger) *RelayHandler {
 	return &RelayHandler{
@@ -27,7 +35,41 @@ func NewRelayHandler(clientToSelfConn *RedisConn, selfToServerConn *RedisConn, s
 	}
 }
 
-func (h *RelayHandler) Handle() error {
+func (h *RelayHandler) Handle(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	err := h.selfToServerConn.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err != nil {
+		return err
+	}
+
+	serverReplyCh := make(chan serverReply, 1)
+	go func(ch chan<- serverReply) {
+		for {
+			v, _, err := h.selfToServerConn.Reader().ReadValue()
+			if err != nil {
+				if !errors.Is(err, os.ErrDeadlineExceeded) {
+					log.Error().Err(err).Msg("Error reading from server")
+					ch <- serverReply{nil, err}
+					return
+				}
+			} else if v.Type == resp3.TypePush {
+				err = h.clientToSelfConn.WriteValue(v, true)
+				if err != nil {
+					log.Error().Err(err).Msg("Error forwarding push messages to server")
+					return
+				}
+				// TODO: log push msg here
+			}
+			select {
+			case ch <- serverReply{v, nil}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}(serverReplyCh)
+
 	for {
 		value, _, err := h.clientToSelfConn.Reader().ReadValue()
 		if err != nil {
@@ -57,9 +99,12 @@ func (h *RelayHandler) Handle() error {
 					return err
 				}
 
-				respVal, _, err := h.selfToServerConn.Reader().ReadValue()
-				h.writeLogEntry(value, respVal)
-				err = h.clientToSelfConn.WriteValue(respVal, true)
+				reply := <-serverReplyCh
+				if reply.err != nil {
+					return reply.err
+				}
+				h.writeLogEntry(value, reply.value)
+				err = h.clientToSelfConn.WriteValue(reply.value, true)
 				if err != nil {
 					return err
 				}
