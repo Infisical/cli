@@ -93,5 +93,5 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	defer func() { _ = clientToSelfConn.Close() }()
 
 	p.relayHandler = NewRelayHandler(clientToSelfConn, selfToClientRedisConn, p.config.SessionLogger)
-	return p.relayHandler.Handle()
+	return p.relayHandler.Handle(ctx)
 }

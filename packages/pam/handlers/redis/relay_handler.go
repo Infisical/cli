@@ -39,25 +39,30 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	err := h.selfToServerConn.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if err != nil {
-		return err
-	}
-
 	serverReplyCh := make(chan serverReply, 1)
 	go func(ch chan<- serverReply) {
 		for {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			if err := h.selfToServerConn.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				log.Error().Err(err).Msg("failed to set read deadline")
+				ch <- serverReply{nil, err}
+				return
+			}
 			v, _, err := h.selfToServerConn.Reader().ReadValue()
 			if err != nil {
-				if !errors.Is(err, os.ErrDeadlineExceeded) {
-					log.Error().Err(err).Msg("Error reading from server")
-					ch <- serverReply{nil, err}
-					return
+				if errors.Is(err, os.ErrDeadlineExceeded) {
+					continue
 				}
+				log.Error().Err(err).Msg("Error reading from server")
+				ch <- serverReply{nil, err}
+				return
 			} else if v.Type == resp3.TypePush {
 				err = h.clientToSelfConn.WriteValue(v, true)
 				if err != nil {
 					log.Error().Err(err).Msg("Error forwarding push messages to server")
+					ch <- serverReply{nil, err}
 					return
 				}
 				// TODO: log push msg here
@@ -71,8 +76,18 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 	}(serverReplyCh)
 
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := h.clientToSelfConn.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err != nil {
+			return err
+		}
 		value, _, err := h.clientToSelfConn.Reader().ReadValue()
 		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				continue
+			}
 			return err
 		}
 		switch value.Type {
