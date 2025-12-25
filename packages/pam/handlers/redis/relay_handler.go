@@ -59,13 +59,19 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 				ch <- serverReply{nil, err}
 				return
 			} else if v.Type == resp3.TypePush {
-				err = h.clientToSelfConn.WriteValue(v, true)
-				if err != nil {
-					log.Error().Err(err).Msg("Error forwarding push messages to server")
-					ch <- serverReply{nil, err}
-					return
+				// pubsub in resp3 mode will send a push as the confirmation instead of return anything,
+				// we need to treat that as a cmd reply otherwise the main loop will wait forever for the
+				// server reply to forward
+				if !isPubSubConfirmation(v) {
+					err = h.clientToSelfConn.WriteValue(v, true)
+					if err != nil {
+						log.Error().Err(err).Msg("Error forwarding push messages to server")
+						ch <- serverReply{nil, err}
+						return
+					}
+					// TODO: log push msg here
+					continue
 				}
-				// TODO: log push msg here
 			}
 			select {
 			case ch <- serverReply{v, nil}:
@@ -165,4 +171,15 @@ func valueToJson(value *resp3.Value) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func isPubSubConfirmation(value *resp3.Value) bool {
+	if len(value.Elems) < 1 {
+		return false
+	}
+	switch strings.ToLower(value.Elems[0].Str) {
+	case "subscribe", "psubscribe", "ssubscribe", "unsubscribe", "punsubscribe", "sunsubscribe":
+		return true
+	}
+	return false
 }
