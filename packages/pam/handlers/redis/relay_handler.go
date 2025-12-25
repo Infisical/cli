@@ -58,8 +58,9 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 				log.Error().Err(err).Msg("Error reading from server")
 				ch <- serverReply{nil, err}
 				return
-			} else if v.Type == resp3.TypePush {
-				// pubsub in resp3 mode will send a push as the confirmation instead of return anything,
+			} else if (v.Type == resp3.TypeArray && len(v.Elems) > 0 && strings.ToLower(v.Elems[0].Str) == "message") ||
+				(v.Type == resp3.TypePush) {
+				// pubsub in resp2/resp3 mode will send a push as the confirmation instead of return anything,
 				// we need to treat that as a cmd reply otherwise the main loop will wait forever for the
 				// server reply to forward
 				if !isPubSubConfirmation(v) {
@@ -111,7 +112,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 					return err
 				}
 				break
-			// TODO: handle monitor / subscribe and other special commands
+			// TODO: with reset cmd, should we send out AUTH again automatically to the server?
 			// Forward all other commands
 			default:
 				err := h.selfToServerConn.WriteValue(value, true)
