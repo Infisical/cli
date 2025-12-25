@@ -25,8 +25,9 @@ type RelayHandler struct {
 type LogType string
 
 const (
-	LogTypeCmd  LogType = "cmd"
-	LogTypePush LogType = "push"
+	LogTypeCmd     LogType = "cmd"
+	LogTypePush    LogType = "push"
+	LogTypeMonitor LogType = "monitor"
 )
 
 type RedisLogEntry struct {
@@ -89,7 +90,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 						ch <- serverReply{nil, err}
 						return
 					}
-					h.writeLogEntry(LogTypePush, nil, v)
+					h.writeLogEntry(LogTypeMonitor, nil, v)
 					continue
 				}
 			} else if (v.Type == resp3.TypeArray && len(v.Elems) > 0 && strings.ToLower(v.Elems[0].Str) == "message") ||
