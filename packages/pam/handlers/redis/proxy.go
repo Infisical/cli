@@ -80,7 +80,7 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	if err != nil {
 		return err
 	}
-	if respValue.Type != resp3.TypeSimpleString && respValue.Str != "OK" {
+	if respValue.Str != "OK" {
 		errorMsg := "unknown"
 		if respValue.Type == resp3.TypeSimpleError || respValue.Type == resp3.TypeBlobError {
 			errorMsg = respValue.Err
