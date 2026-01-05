@@ -108,9 +108,7 @@ var exportCmd = &cobra.Command{
 		}
 
 		if templatePath != "" {
-			sigChan := make(chan os.Signal, 1)
-			dynamicSecretLeases := NewDynamicSecretLeaseManager(sigChan, nil)
-			newEtag := ""
+			dynamicSecretLeases := NewDynamicSecretLeaseManager(nil, nil)
 
 			accessToken := ""
 			if token != nil {
@@ -124,7 +122,8 @@ var exportCmd = &cobra.Command{
 				accessToken = loggedInUserDetails.UserCredentials.JTWToken
 			}
 
-			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, "", &newEtag, dynamicSecretLeases)
+			currentEtag := ""
+			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
 			if err != nil {
 				util.HandleError(err)
 			}

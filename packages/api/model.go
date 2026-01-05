@@ -136,6 +136,21 @@ type GetProjectByIdResponse struct {
 	Project Project `json:"workspace"`
 }
 
+type GetProjectBySlugResponse Project
+
+type CertificateProfile struct {
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	ProjectID             string `json:"projectId"`
+	CaID                  string `json:"caId"`
+	CertificateTemplateID string `json:"certificateTemplateId"`
+}
+
+type GetCertificateProfileResponse struct {
+	CertificateProfile CertificateProfile `json:"certificateProfile"`
+}
+
 type GetOrganizationsResponse struct {
 	Organizations []struct {
 		ID   string `json:"id"`
@@ -773,7 +788,8 @@ type RegisterGatewayResponse struct {
 
 type PAMAccessRequest struct {
 	Duration     string `json:"duration,omitempty"`
-	AccountId    string `json:"accountId,omitempty"`
+	AccountPath  string `json:"accountPath,omitempty"`
+	ProjectId    string `json:"projectId,omitempty"`
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
 }
 
@@ -788,6 +804,24 @@ type PAMAccessResponse struct {
 	GatewayServerCertificateChain string            `json:"gatewayServerCertificateChain"`
 	RelayHost                     string            `json:"relayHost"`
 	Metadata                      map[string]string `json:"metadata,omitempty"`
+}
+
+type PAMAccessApprovalRequestPayloadRequestData struct {
+	AccountPath    string `json:"accountPath"`
+	AccessDuration string `json:"accessDuration"`
+}
+
+type PAMAccessApprovalRequest struct {
+	ProjectId   string                                     `json:"projectId"`
+	RequestData PAMAccessApprovalRequestPayloadRequestData `json:"requestData"`
+}
+
+type PAMAccessApprovalRequestResponse struct {
+	Request struct {
+		ID        string `json:"id"`
+		ProjectId string `json:"projectId"`
+		OrgId     string `json:"organizationId"`
+	} `json:"request"`
 }
 
 type PAMSessionCredentialsResponse struct {
@@ -805,6 +839,9 @@ type PAMSessionCredentials struct {
 	Password              string `json:"password"`
 	AuthMethod            string `json:"authMethod,omitempty"`
 	PrivateKey            string `json:"privateKey,omitempty"`
+	Certificate           string `json:"certificate,omitempty"`
+	Url                   string `json:"url,omitempty"`
+	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
 }
 
 type MFASessionStatus string
@@ -833,10 +870,109 @@ type UploadTerminalEvent struct {
 	ElapsedTime float64   `json:"elapsedTime"`
 }
 
+type UploadHttpEvent struct {
+	Timestamp time.Time           `json:"timestamp"`
+	EventType string              `json:"eventType"`
+	RequestId string              `json:"requestId"`
+	Method    string              `json:"method,omitempty"`
+	Url       string              `json:"url,omitempty"`
+	Status    string              `json:"status,omitempty"`
+	Headers   map[string][]string `json:"headers,omitempty"`
+	Body      []byte              `json:"body,omitempty"`
+}
+
 type UploadPAMSessionLogsRequest struct {
 	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadTerminalEvent
 }
 
 type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
+}
+
+type AltName struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type CertificateAttributes struct {
+	TTL                  string    `json:"ttl,omitempty"`
+	SignatureAlgorithm   string    `json:"signatureAlgorithm,omitempty"`
+	KeyAlgorithm         string    `json:"keyAlgorithm,omitempty"`
+	CommonName           string    `json:"commonName,omitempty"`
+	KeyUsages            []string  `json:"keyUsages,omitempty"`
+	ExtendedKeyUsages    []string  `json:"extendedKeyUsages,omitempty"`
+	NotBefore            string    `json:"notBefore,omitempty"`
+	NotAfter             string    `json:"notAfter,omitempty"`
+	AltNames             []AltName `json:"altNames,omitempty"`
+	RemoveRootsFromChain bool      `json:"removeRootsFromChain,omitempty"`
+}
+
+type IssueCertificateRequest struct {
+	ProfileID  string                 `json:"profileId"`
+	CSR        string                 `json:"csr,omitempty"`
+	Attributes *CertificateAttributes `json:"attributes,omitempty"`
+}
+
+type CertificateData struct {
+	Certificate          string `json:"certificate"`
+	IssuingCaCertificate string `json:"issuingCaCertificate"`
+	CertificateChain     string `json:"certificateChain"`
+	PrivateKey           string `json:"privateKey,omitempty"`
+	SerialNumber         string `json:"serialNumber"`
+	CertificateID        string `json:"certificateId"`
+}
+
+type CertificateResponse struct {
+	Certificate          *CertificateData `json:"certificate,omitempty"`
+	CertificateRequestID string           `json:"certificateRequestId"`
+}
+
+type RetrieveCertificateResponse struct {
+	Certificate struct {
+		ID                string    `json:"id"`
+		CreatedAt         time.Time `json:"createdAt"`
+		UpdatedAt         time.Time `json:"updatedAt"`
+		Status            string    `json:"status"`
+		SerialNumber      string    `json:"serialNumber"`
+		CommonName        string    `json:"commonName"`
+		NotBefore         time.Time `json:"notBefore"`
+		NotAfter          time.Time `json:"notAfter"`
+		ProjectId         string    `json:"projectId"`
+		CaId              string    `json:"caId"`
+		KeyUsages         []string  `json:"keyUsages"`
+		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
+		Certificate       string    `json:"certificate,omitempty"`
+		CertificateChain  string    `json:"certificateChain,omitempty"`
+		PrivateKey        string    `json:"privateKey,omitempty"`
+	} `json:"certificate"`
+}
+
+type RenewCertificateRequest struct {
+	RemoveRootsFromChain bool `json:"removeRootsFromChain,omitempty"`
+}
+
+type RenewCertificateResponse struct {
+	Certificate          string `json:"certificate"`
+	IssuingCaCertificate string `json:"issuingCaCertificate"`
+	CertificateChain     string `json:"certificateChain"`
+	PrivateKey           string `json:"privateKey"`
+	SerialNumber         string `json:"serialNumber"`
+	CertificateID        string `json:"certificateId"`
+	CertificateRequestID string `json:"certificateRequestId,omitempty"`
+}
+
+type GetCertificateRequestResponse struct {
+	Status               string    `json:"status"` // "pending", "issued", "failed"
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+	CommonName           string    `json:"commonName,omitempty"`
+	ProjectID            string    `json:"projectId,omitempty"`
+	ProfileID            string    `json:"profileId,omitempty"`
+	Certificate          *string   `json:"certificate,omitempty"`
+	IssuingCaCertificate *string   `json:"issuingCaCertificate,omitempty"`
+	CertificateChain     *string   `json:"certificateChain,omitempty"`
+	PrivateKey           *string   `json:"privateKey,omitempty"`
+	SerialNumber         *string   `json:"serialNumber,omitempty"`
+	CertificateID        *string   `json:"certificateId,omitempty"`
+	ErrorMessage         *string   `json:"errorMessage,omitempty"`
 }

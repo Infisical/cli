@@ -1,0 +1,24 @@
+[Unit]
+Description={{ .Description }}
+After=network.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+EnvironmentFile={{ .EnvironmentFile }}
+{{ if .ServiceLogFile }}
+ExecStart=/bin/bash -c 'infisical {{ .ServiceType }} start 2>&1 | tee {{ .ServiceLogFile | printf "%q" }}'
+{{ else }}
+ExecStart=infisical {{ .ServiceType }} start
+{{ end }}
+Restart=on-failure
+InaccessibleDirectories=/home
+PrivateTmp=yes
+LimitCORE=infinity
+LimitNOFILE=1000000
+LimitNPROC=60000
+LimitRTPRIO=infinity
+LimitRTTIME=7000000
+
+[Install]
+WantedBy=multi-user.target

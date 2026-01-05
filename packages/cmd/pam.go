@@ -26,16 +26,29 @@ var pamDbCmd = &cobra.Command{
 }
 
 var pamDbAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-name-or-id>",
+	Use:                   "access-account <account-path>",
 	Short:                 "Access PAM database accounts",
 	Long:                  "Access PAM database accounts for Infisical. This starts a local database proxy server that you can use to connect to databases directly.",
-	Example:               "infisical pam db access-account my-postgres-account --duration 4h --port 5432",
+	Example:               "infisical pam db access-account prod/db/my-postgres-account --duration 4h --port 5432 --project-id 1234567890",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountID := args[0]
+		accountPath := args[0]
+
+		projectID, err := cmd.Flags().GetString("project-id")
+		if err != nil {
+			util.HandleError(err, "Unable to parse project-id flag")
+		}
+
+		if projectID == "" {
+			workspaceFile, err := util.GetWorkSpaceFromFile()
+			if err != nil {
+				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
+			}
+			projectID = workspaceFile.WorkspaceId
+		}
 
 		durationStr, err := cmd.Flags().GetString("duration")
 		if err != nil {
@@ -70,7 +83,7 @@ var pamDbAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartDatabaseLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountID, durationStr, port)
+		pam.StartDatabaseLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr, port)
 	},
 }
 
@@ -83,16 +96,16 @@ var pamSshCmd = &cobra.Command{
 }
 
 var pamSshAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-name-or-id>",
+	Use:                   "access-account <account-path>",
 	Short:                 "Start SSH session to PAM account",
 	Long:                  "Start an SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
-	Example:               "infisical pam ssh access-account <account-id> --duration 2h",
+	Example:               "infisical pam ssh access-account prod/ssh/my-ssh-account --duration 2h --project-id 1234567890",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountID := args[0]
+		accountPath := args[0]
 
 		durationStr, err := cmd.Flags().GetString("duration")
 		if err != nil {
@@ -103,6 +116,19 @@ var pamSshAccessAccountCmd = &cobra.Command{
 		_, err = time.ParseDuration(durationStr)
 		if err != nil {
 			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+		}
+
+		projectID, err := cmd.Flags().GetString("project-id")
+		if err != nil {
+			util.HandleError(err, "Unable to parse project-id flag")
+		}
+
+		if projectID == "" {
+			workspaceFile, err := util.GetWorkSpaceFromFile()
+			if err != nil {
+				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
+			}
+			projectID = workspaceFile.WorkspaceId
 		}
 
 		log.Debug().Msg("PAM SSH Access: Trying to fetch credentials using logged in details")
@@ -122,7 +148,77 @@ var pamSshAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountID, durationStr)
+		pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr)
+	},
+}
+var pamKubernetesCmd = &cobra.Command{
+	Use:                   "kubernetes",
+	Aliases:               []string{"k8s"},
+	Short:                 "Kubernetes-related PAM commands",
+	Long:                  "Kubernetes-related PAM commands for Infisical",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var pamKubernetesAccessAccountCmd = &cobra.Command{
+	Use:                   "access-account <account-path>",
+	Short:                 "Access Kubernetes PAM account",
+	Long:                  "Access Kubernetes via a PAM-managed Kubernetes account. This command automatically launches a proxy connected to your Kubernetes cluster through the Infisical Gateway.",
+	Example:               "infisical pam kubernetes access-account prod/ssh/my-k8s-account --duration 2h",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		util.RequireLogin()
+
+		accountPath := args[0]
+
+		durationStr, err := cmd.Flags().GetString("duration")
+		if err != nil {
+			util.HandleError(err, "Unable to parse duration flag")
+		}
+
+		// Parse duration
+		_, err = time.ParseDuration(durationStr)
+		if err != nil {
+			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+		}
+
+		port, err := cmd.Flags().GetInt("port")
+		if err != nil {
+			util.HandleError(err, "Unable to parse port flag")
+		}
+
+		projectID, err := cmd.Flags().GetString("project-id")
+		if err != nil {
+			util.HandleError(err, "Unable to parse project-id flag")
+		}
+
+		if projectID == "" {
+			workspaceFile, err := util.GetWorkSpaceFromFile()
+			if err != nil {
+				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
+			}
+			projectID = workspaceFile.WorkspaceId
+		}
+
+		log.Debug().Msg("PAM Kubernetes Access: Trying to fetch credentials using logged in details")
+
+		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
+		isConnected := util.ValidateInfisicalAPIConnection()
+
+		if isConnected {
+			log.Debug().Msg("PAM Kubernetes Access: Connected to Infisical instance, checking logged in creds")
+		}
+
+		if err != nil {
+			util.HandleError(err, "Unable to get logged in user details")
+		}
+
+		if isConnected && loggedInUserDetails.LoginExpired {
+			loggedInUserDetails = util.EstablishUserLoginSession()
+		}
+
+		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr, port)
 	},
 }
 
@@ -130,11 +226,19 @@ func init() {
 	pamDbCmd.AddCommand(pamDbAccessAccountCmd)
 	pamDbAccessAccountCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
 	pamDbAccessAccountCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
+	pamDbAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
 
 	pamSshCmd.AddCommand(pamSshAccessAccountCmd)
 	pamSshAccessAccountCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
+	pamSshAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
+
+	pamKubernetesCmd.AddCommand(pamKubernetesAccessAccountCmd)
+	pamKubernetesAccessAccountCmd.Flags().String("duration", "1h", "Duration for kubernetes access session (e.g., '1h', '30m', '2h30m')")
+	pamKubernetesAccessAccountCmd.Flags().Int("port", 0, "Port for the local kubernetes proxy server (0 for auto-assign)")
+	pamKubernetesAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
 
 	pamCmd.AddCommand(pamDbCmd)
 	pamCmd.AddCommand(pamSshCmd)
+	pamCmd.AddCommand(pamKubernetesCmd)
 	rootCmd.AddCommand(pamCmd)
 }

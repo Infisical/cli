@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/infisical/go-sdk/packages/util"
@@ -107,7 +108,28 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 		apiError.Details = details
 	}
 
+	if res.StatusCode() == 403 || res.StatusCode() == 401 {
+		if apiError.AdditionalContext == "" {
+			domainHint := extractDomainHint(res.Request.URL)
+			if domainHint != "" {
+				apiError.AdditionalContext = fmt.Sprintf("Check your credentials or verify you're using the correct domain. Current domain: %s", domainHint)
+			}
+		}
+	}
+
 	return apiError
+}
+
+func extractDomainHint(urlStr string) string {
+	if urlStr == "" {
+		return ""
+	}
+
+	if parsedURL, err := url.Parse(urlStr); err == nil && parsedURL.Host != "" {
+		return parsedURL.Scheme + "://" + parsedURL.Host
+	}
+
+	return ""
 }
 
 type errorResponse struct {

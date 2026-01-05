@@ -37,10 +37,19 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 	}
 	httpClient.SetAuthToken(accessToken)
 
-	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 	if err != nil {
-		return "", fmt.Errorf("unable to parse relay flag: %v", err)
+		return "", fmt.Errorf("unable to parse target-relay-name flag: %v", err)
 	}
+
+	// --relay flag is deprecated in favor of --target-relay-name flag but still supported
+	if relayName == "" {
+		relayName, err = GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+		if err != nil {
+			return "", fmt.Errorf("unable to parse relay flag: %v", err)
+		}
+	}
+
 	if relayName != "" {
 		return relayName, nil
 	}
@@ -612,5 +621,19 @@ func OpenBrowser(url string) error {
 		cmd = exec.Command("xdg-open", url)
 	}
 
+	return cmd.Start()
+}
+
+// OpenBrowser attempts to open a URL in the user's default browser
+func OpenBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	default: // linux and others
+		cmd = exec.Command("xdg-open", url)
+	}
 	return cmd.Start()
 }

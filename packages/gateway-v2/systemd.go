@@ -7,32 +7,11 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 )
 
-const systemdServiceTemplate = `[Unit]
-Description=Infisical Gateway Service
-After=network.target
-
-[Service]
-Type=notify
-NotifyAccess=all
-EnvironmentFile=/etc/infisical/gateway.conf
-ExecStart=infisical gateway start
-Restart=on-failure
-InaccessibleDirectories=/home
-PrivateTmp=yes
-LimitCORE=infinity
-LimitNOFILE=1000000
-LimitNPROC=60000
-LimitRTPRIO=infinity
-LimitRTTIME=7000000
-
-[Install]
-WantedBy=multi-user.target
-`
-
-func InstallGatewaySystemdService(token string, domain string, name string, relayName string) error {
+func InstallGatewaySystemdService(token string, domain string, name string, relayName string, serviceLogFile string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -60,14 +39,17 @@ func InstallGatewaySystemdService(token string, domain string, name string, rela
 		configContent += fmt.Sprintf("%s=%s\n", RELAY_NAME_ENV_NAME, relayName)
 	}
 
-	configPath := filepath.Join(configDir, "gateway.conf")
-	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %v", err)
+	environmentFilePath := filepath.Join(configDir, "gateway.conf")
+	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	servicePath := "/etc/systemd/system/infisical-gateway.service"
-	if err := os.WriteFile(servicePath, []byte(systemdServiceTemplate), 0644); err != nil {
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, "infisical-gateway", "gateway", "Infisical Gateway Service"); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
+	}
+
+	if err := util.WriteLogrotateFile(serviceLogFile, "infisical-gateway"); err != nil {
+		return fmt.Errorf("failed to write logrotate file: %v", err)
 	}
 
 	reloadCmd := exec.Command("systemctl", "daemon-reload")

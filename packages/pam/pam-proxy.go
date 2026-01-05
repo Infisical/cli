@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -21,6 +24,54 @@ type GatewayPAMConfig struct {
 	ExpiryTime         time.Time
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
+}
+
+type PAMCapabilitiesResponse struct {
+	GatewayName            string   `json:"gatewayName"`
+	SupportedResourceTypes []string `json:"supportedResourceTypes"`
+}
+
+func GetSupportedResourceTypes() []string {
+	return []string{
+		session.ResourceTypePostgres,
+		session.ResourceTypeMysql,
+		session.ResourceTypeSSH,
+		session.ResourceTypeKubernetes,
+	}
+}
+
+// HandlePAMCapabilities handles the capabilities request from the client
+func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn, gatewayName string) error {
+	response := PAMCapabilitiesResponse{
+		GatewayName:            gatewayName,
+		SupportedResourceTypes: GetSupportedResourceTypes(),
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal capabilities response")
+		return fmt.Errorf("failed to marshal capabilities response: %w", err)
+	}
+
+	// Write length prefix (4 bytes) followed by JSON data
+	length := uint32(len(data))
+	lengthBytes := []byte{
+		byte(length >> 24),
+		byte(length >> 16),
+		byte(length >> 8),
+		byte(length),
+	}
+
+	if _, err := conn.Write(lengthBytes); err != nil {
+		return fmt.Errorf("failed to write length prefix: %w", err)
+	}
+
+	if _, err := conn.Write(data); err != nil {
+		return fmt.Errorf("failed to write capabilities response: %w", err)
+	}
+
+	log.Debug().Strs("supportedTypes", response.SupportedResourceTypes).Msg("Sent PAM capabilities to client")
+	return nil
 }
 
 func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
@@ -90,9 +141,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
 
+	serverName := credentials.Host
+	if pamConfig.ResourceType == session.ResourceTypeKubernetes {
+		parsed, err := url.Parse(credentials.Url)
+		if err != nil {
+			return fmt.Errorf("failed to parse URL: %w", err)
+		}
+		serverName = parsed.Hostname()
+	}
+
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: !credentials.SSLRejectUnauthorized,
-		ServerName:         credentials.Host,
+		ServerName:         serverName,
 	}
 	// If a server certificate is provided, add it to the root CA pool
 	if credentials.SSLCertificate != "" {
@@ -149,13 +209,14 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeSSH:
 		sshConfig := ssh.SSHProxyConfig{
-			TargetAddr:       fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
-			AuthMethod:       credentials.AuthMethod,
-			InjectUsername:   credentials.Username,
-			InjectPassword:   credentials.Password,
-			InjectPrivateKey: credentials.PrivateKey,
-			SessionID:        pamConfig.SessionId,
-			SessionLogger:    sessionLogger,
+			TargetAddr:        fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			AuthMethod:        credentials.AuthMethod,
+			InjectUsername:    credentials.Username,
+			InjectPassword:    credentials.Password,
+			InjectPrivateKey:  credentials.PrivateKey,
+			InjectCertificate: credentials.Certificate,
+			SessionID:         pamConfig.SessionId,
+			SessionLogger:     sessionLogger,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
 		log.Info().
@@ -163,6 +224,21 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", sshConfig.TargetAddr).
 			Msg("Starting SSH PAM proxy")
 
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeKubernetes:
+		kubernetesConfig := kubernetes.KubernetesProxyConfig{
+			AuthMethod:                credentials.AuthMethod,
+			InjectServiceAccountToken: credentials.ServiceAccountToken,
+			TargetApiServer:           credentials.Url,
+			TLSConfig:                 tlsConfig,
+			SessionID:                 pamConfig.SessionId,
+			SessionLogger:             sessionLogger,
+		}
+		proxy := kubernetes.NewKubernetesProxy(kubernetesConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", kubernetesConfig.TargetApiServer).
+			Msg("Starting Kubernetes PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
