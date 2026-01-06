@@ -185,6 +185,53 @@ type Command struct {
 	cmd            *exec.Cmd
 }
 
+func findExecutable(t *testing.T) string {
+	// First, check for INFISICAL_CLI_EXECUTABLE environment variable
+	envExec := os.Getenv("INFISICAL_CLI_EXECUTABLE")
+	if envExec != "" {
+		if err := validateExecutable(envExec); err != nil {
+			t.Fatalf("INFISICAL_CLI_EXECUTABLE is set to '%s' but the executable cannot be found or is not executable: %v\n"+
+				"Please ensure the path is correct and the file has execute permissions.", envExec, err)
+		}
+		return envExec
+	}
+
+	// Fall back to default path
+	defaultPath := "./infisical-merge"
+	if err := validateExecutable(defaultPath); err != nil {
+		t.Fatalf("Cannot find executable at default path '%s': %v\n"+
+			"Please either:\n"+
+			"  1. Build the executable and place it at './infisical-merge', or\n"+
+			"  2. Set the INFISICAL_CLI_EXECUTABLE environment variable to the correct path.\n"+
+			"     Example: export INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge", defaultPath, err)
+	}
+	return defaultPath
+}
+
+func validateExecutable(path string) error {
+	// Check if file exists
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("file does not exist")
+		}
+		return fmt.Errorf("cannot access file: %w", err)
+	}
+
+	// Check if it's a regular file (not a directory)
+	if info.IsDir() {
+		return fmt.Errorf("path is a directory, not an executable file")
+	}
+
+	// Check if file is executable
+	mode := info.Mode()
+	if mode&0111 == 0 {
+		return fmt.Errorf("file exists but is not executable (permissions: %s)", mode.String())
+	}
+
+	return nil
+}
+
 func (c *Command) Start(ctx context.Context) {
 	t := c.Test
 	runMethod := c.RunMethod
@@ -204,7 +251,7 @@ func (c *Command) Start(ctx context.Context) {
 	case RunMethodSubprocess:
 		exeFile := c.Executable
 		if exeFile == "" {
-			exeFile = "./infisical-merge"
+			exeFile = findExecutable(t)
 		}
 
 		slog.Info("Running command as a sub-process", "executable", exeFile, "args", c.Args)
