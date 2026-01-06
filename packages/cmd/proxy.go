@@ -44,6 +44,7 @@ var proxyDebugCmd = &cobra.Command{
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run:                   printCacheDebug,
+	Hidden:                true,
 }
 
 func startProxyServer(cmd *cobra.Command, args []string) {
