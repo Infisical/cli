@@ -68,24 +68,27 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	selfToClientRedisConn := NewRedisConn(selfToServerConn)
 	defer func(selfToClientRedisConn *RedisConn) { _ = selfToClientRedisConn.Close() }(selfToClientRedisConn)
 
-	if err := selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword); err != nil {
-		return err
-	}
-	if err := selfToClientRedisConn.Writer().Flush(); err != nil {
-		return err
-	}
-
-	respValue, _, err := selfToClientRedisConn.Reader().ReadValue()
-	if err != nil {
-		return err
-	}
-	if respValue.Str != "OK" {
-		errorMsg := "unknown"
-		if respValue.Type == resp3.TypeSimpleError || respValue.Type == resp3.TypeBlobError {
-			errorMsg = respValue.Err
+	// Only authenticate if credentials are provided
+	if p.config.InjectUsername != "" && p.config.InjectPassword != "" {
+		if err := selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword); err != nil {
+			return err
 		}
-		log.Error().Str("errorMsg", errorMsg).Msg("Failed to authenticate with the target redis server")
-		return fmt.Errorf("failed to authenticate with the target redis server")
+		if err := selfToClientRedisConn.Writer().Flush(); err != nil {
+			return err
+		}
+
+		respValue, _, err := selfToClientRedisConn.Reader().ReadValue()
+		if err != nil {
+			return err
+		}
+		if respValue.Str != "OK" {
+			errorMsg := "unknown"
+			if respValue.Type == resp3.TypeSimpleError || respValue.Type == resp3.TypeBlobError {
+				errorMsg = respValue.Err
+			}
+			log.Error().Str("errorMsg", errorMsg).Msg("Failed to authenticate with the target redis server")
+			return fmt.Errorf("failed to authenticate with the target redis server")
+		}
 	}
 
 	clientToSelfConn := NewRedisConn(clientConn)
