@@ -35,7 +35,7 @@ func NewRedisProxy(config RedisProxyConfig) *RedisProxy {
 
 // HandleConnection handles a single client connection
 func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
-	defer func(clientConn net.Conn) { _ = clientConn.Close() }(clientConn)
+	defer clientConn.Close()
 
 	sessionID := p.config.SessionID
 
@@ -89,7 +89,7 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	}
 
 	clientToSelfConn := NewRedisConn(clientConn)
-	defer func() { _ = clientToSelfConn.Close() }()
+	defer clientToSelfConn.Close()
 
 	p.relayHandler = NewRelayHandler(clientToSelfConn, selfToClientRedisConn, p.config.SessionLogger)
 	return p.relayHandler.Handle(ctx)
