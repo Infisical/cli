@@ -239,7 +239,6 @@ func (c *Command) Start(ctx context.Context) {
 	case RunMethodFunctionCall:
 		slog.Info("Running command with args by making function call", "args", c.Args)
 		os.Args = make([]string, len(c.Args)+1)
-		os.Args = append(os.Args, "infisical")
 		os.Args = append(os.Args, c.Args...)
 		for k, v := range env {
 			t.Setenv(k, v)
