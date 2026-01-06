@@ -232,11 +232,27 @@ func validateExecutable(path string) error {
 	return nil
 }
 
+func getDefaultRunMethod(t *testing.T) RunMethod {
+	envRunMethod := os.Getenv("CLI_E2E_DEFAULT_RUN_METHOD")
+	if envRunMethod == "" {
+		return RunMethodSubprocess
+	}
+
+	// Validate the value
+	runMethod := RunMethod(envRunMethod)
+	if runMethod != RunMethodSubprocess && runMethod != RunMethodFunctionCall {
+		t.Fatalf("CLI_E2E_DEFAULT_RUN_METHOD is set to '%s' but is not a valid run method.\n"+
+			"Valid values are: '%s' or '%s'", envRunMethod, RunMethodSubprocess, RunMethodFunctionCall)
+	}
+
+	return runMethod
+}
+
 func (c *Command) Start(ctx context.Context) {
 	t := c.Test
 	runMethod := c.RunMethod
 	if runMethod == "" {
-		runMethod = RunMethodSubprocess
+		runMethod = getDefaultRunMethod(t)
 	}
 
 	tempDir := t.TempDir()
