@@ -112,10 +112,13 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	}, 120*time.Second, 5*time.Second)
 
 	assert.True(t, detectHeartbeat)
-	stderr := cmd.Stderr()
-	assert.Containsf(
-		t, stderr,
-		"Relay is reachable by Infisical",
-		"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
-	)
+	if cmd.RunMethod == RunMethodSubprocess {
+		stderr := cmd.Stderr()
+		assert.Containsf(
+			t, stderr,
+			"Relay is reachable by Infisical",
+			"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
+		)
+	}
+	// TODO: find a way to collect stderr for func call method and assert as well
 }
