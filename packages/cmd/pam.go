@@ -164,7 +164,7 @@ var pamKubernetesAccessAccountCmd = &cobra.Command{
 	Use:                   "access-account <account-path>",
 	Short:                 "Access Kubernetes PAM account",
 	Long:                  "Access Kubernetes via a PAM-managed Kubernetes account. This command automatically launches a proxy connected to your Kubernetes cluster through the Infisical Gateway.",
-	Example:               "infisical pam kubernetes access-account prod/ssh/my-k8s-account --duration 2h",
+	Example:               "infisical pam kubernetes access-account prod/ssh/my-k8s-account --duration 2h --project-id <project_uuid>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
