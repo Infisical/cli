@@ -12,6 +12,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
@@ -37,6 +38,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeMysql,
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
+		session.ResourceTypeRedis,
 	}
 }
 
@@ -206,6 +208,24 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mysqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MySQL PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeRedis:
+		redisConfig := redis.RedisProxyConfig{
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+
+		proxy := redis.NewRedisProxy(redisConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", redisConfig.TargetAddr).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting Redis PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeSSH:
 		sshConfig := ssh.SSHProxyConfig{

@@ -105,13 +105,13 @@ func (r *RelayHandler) checkConnLostError(err error) {
 	}
 }
 
-func (r *RelayHandler) writeLogEntry(entry session.SessionLogEntry) (*mysql.Result, error) {
+func (r *RelayHandler) writeLogEntry(entry session.SessionLogEntry) error {
 	err := r.sessionLogger.LogEntry(entry)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to write log entry to file")
-		return nil, err
+		return err
 	}
-	return nil, nil
+	return nil
 }
 
 func formatResult(result *mysql.Result) string {
