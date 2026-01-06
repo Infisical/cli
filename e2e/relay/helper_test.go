@@ -238,7 +238,8 @@ func (c *Command) Start(ctx context.Context) {
 		require.NoError(t, err)
 	case RunMethodFunctionCall:
 		slog.Info("Running command with args by making function call", "args", c.Args)
-		os.Args = make([]string, len(c.Args)+1)
+		os.Args = make([]string, 0, len(c.Args)+1)
+		os.Args = append(os.Args, "infisical")
 		os.Args = append(os.Args, c.Args...)
 		for k, v := range env {
 			t.Setenv(k, v)
