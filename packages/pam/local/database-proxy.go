@@ -61,7 +61,7 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 		ProjectId:   projectID,
 	}
 
-	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.ErrorMessage == "A policy is in place for this resource" {

@@ -38,7 +38,7 @@ func StartSSHLocalProxy(accessToken string, accountPath string, projectID string
 		ProjectId:   projectID,
 	}
 
-	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
 		util.HandleError(err, "Failed to access PAM account")
 		return

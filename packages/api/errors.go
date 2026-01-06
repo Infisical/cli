@@ -24,6 +24,7 @@ func NewGenericRequestError(operation string, err error) *GenericRequestError {
 
 // APIError represents an error response from the API
 type APIError struct {
+	Name              string   `json:"name"`
 	AdditionalContext string   `json:"additionalContext,omitempty"`
 	ExtraMessages     []string `json:"-"`
 	Details           any      `json:"details,omitempty"`
@@ -79,7 +80,7 @@ func (e APIError) Error() string {
 }
 
 func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalContext *string) error {
-	errorMessage, details := TryParseErrorBody(res)
+	errorMessage, details, errorName := TryParseErrorBody(res)
 	reqId := util.TryExtractReqId(res)
 
 	if res == nil {
@@ -88,6 +89,7 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 
 	apiError := &APIError{
 		Operation:  operation,
+		Name:       errorName,
 		Method:     res.Request.Method,
 		URL:        res.Request.URL,
 		StatusCode: res.StatusCode(),
@@ -134,26 +136,27 @@ type errorResponse struct {
 	Message string `json:"message"`
 	Details any    `json:"details"`
 	ReqId   string `json:"reqId"`
+	Name    string `json:"error"`
 }
 
 /*
 Instead of changing the signature of the sdk function - let's just keep a one local to this codebase
 */
-func TryParseErrorBody(res *resty.Response) (string, any) {
+func TryParseErrorBody(res *resty.Response) (string, any, string) {
 	var details any
 
 	if res == nil || !res.IsError() {
-		return "", details
+		return "", details, ""
 	}
 
 	body := res.String()
 	if body == "" {
-		return "", details
+		return "", details, ""
 	}
 
 	// stringify zod body entirely
 	if res.StatusCode() == 422 {
-		return body, details
+		return body, details, ""
 	}
 
 	// now we have a string, we need to try to parse it as json
@@ -162,7 +165,7 @@ func TryParseErrorBody(res *resty.Response) (string, any) {
 	err := json.Unmarshal([]byte(body), &errorResponse)
 
 	if err != nil {
-		return "", details
+		return "", details, ""
 	}
 
 	// Check if details is empty and return nil if so
@@ -170,22 +173,22 @@ func TryParseErrorBody(res *resty.Response) (string, any) {
 		switch v := errorResponse.Details.(type) {
 		case []any:
 			if len(v) == 0 {
-				return errorResponse.Message, nil
+				return errorResponse.Message, nil, errorResponse.Name
 			}
 		case []string:
 			if len(v) == 0 {
-				return errorResponse.Message, nil
+				return errorResponse.Message, nil, errorResponse.Name
 			}
 		case map[string]any:
 			if len(v) == 0 {
-				return errorResponse.Message, nil
+				return errorResponse.Message, nil, errorResponse.Name
 			}
 		case string:
 			if v == "" {
-				return errorResponse.Message, nil
+				return errorResponse.Message, nil, errorResponse.Name
 			}
 		}
 	}
 
-	return errorResponse.Message, errorResponse.Details
+	return errorResponse.Message, errorResponse.Details, errorResponse.Name
 }

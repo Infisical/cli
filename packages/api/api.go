@@ -53,6 +53,7 @@ const (
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
+	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
@@ -998,6 +999,25 @@ func CallPAMSessionTermination(httpClient *resty.Client, sessionId string) error
 	}
 
 	return nil
+}
+
+func CallGetMFASessionStatus(httpClient *resty.Client, mfaSessionId string) (MFASessionStatusResponse, error) {
+	var mfaSessionStatusResponse MFASessionStatusResponse
+	response, err := httpClient.
+		R().
+		SetResult(&mfaSessionStatusResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v2/mfa-sessions/%s/status", config.INFISICAL_URL, mfaSessionId))
+
+	if err != nil {
+		return MFASessionStatusResponse{}, NewGenericRequestError(operationCallGetMFASessionStatus, err)
+	}
+
+	if response.IsError() {
+		return MFASessionStatusResponse{}, NewAPIErrorWithResponse(operationCallGetMFASessionStatus, response, nil)
+	}
+
+	return mfaSessionStatusResponse, nil
 }
 
 func CallIssueCertificate(httpClient *resty.Client, request IssueCertificateRequest) (*CertificateResponse, error) {
