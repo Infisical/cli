@@ -10,7 +10,6 @@ require (
 	github.com/creack/pty v1.1.21
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/dgraph-io/badger/v3 v3.2103.5
-	github.com/fangpenlin/resp3 v0.0.0-20240310073403-cc1191e354f4
 	github.com/fatih/semgroup v1.2.0
 	github.com/gitleaks/go-gitdiff v0.9.1
 	github.com/go-mysql-org/go-mysql v1.13.0
@@ -33,6 +32,7 @@ require (
 	github.com/quic-go/quic-go v0.54.1
 	github.com/rs/cors v1.11.0
 	github.com/rs/zerolog v1.26.1
+	github.com/smallnest/resp3 v0.1.1
 	github.com/spf13/cobra v1.6.1
 	github.com/spf13/viper v1.8.1
 	github.com/stretchr/testify v1.10.0
@@ -206,5 +206,3 @@ require (
 replace github.com/zalando/go-keyring => github.com/Infisical/go-keyring v1.0.2
 
 replace github.com/pion/turn/v4 => github.com/Infisical/turn/v4 v4.0.1
-
-replace github.com/fangpenlin/resp3 => github.com/fangpenlin/resp3 v0.0.0-20251225202820-d6b330d23081

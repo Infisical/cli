@@ -234,7 +234,7 @@ var pamRedisAccessAccountCmd = &cobra.Command{
 	Use:                   "access-account <account-path>",
 	Short:                 "Access Redis PAM account",
 	Long:                  "Access Redis via a PAM-managed Redis account. This starts a local Redis proxy server that you can use to connect to Redis directly.",
-	Example:               "infisical pam redis access-account prod/redis/my-redis-account --duration 4h --port 6379 --project-id 1234567890",
+	Example:               "infisical pam redis access-account prod/redis/my-redis-account --duration 4h --port 6379 --project-id <project_uuid>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
