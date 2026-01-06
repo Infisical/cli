@@ -16,7 +16,6 @@ type RedisProxyConfig struct {
 	TargetAddr     string
 	InjectUsername string
 	InjectPassword string
-	InjectDatabase int
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
