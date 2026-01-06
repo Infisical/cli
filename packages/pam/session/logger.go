@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,8 +24,46 @@ type SessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
+// TerminalEventType represents the type of terminal event
+type TerminalEventType string
+
+const (
+	TerminalEventInput  TerminalEventType = "input"  // Data from user to server
+	TerminalEventOutput TerminalEventType = "output" // Data from server to user
+)
+
+// TerminalEvent represents a single event in a terminal session
+type TerminalEvent struct {
+	Timestamp   time.Time         `json:"timestamp"`
+	EventType   TerminalEventType `json:"eventType"`
+	Data        []byte            `json:"data"`        // Raw terminal data
+	ElapsedTime float64           `json:"elapsedTime"` // Seconds since session start (for replay)
+}
+
+type HttpEventType string
+
+type HttpEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	// TODO: ideally this should be different polymorphic structs determined by the event type,
+	// 		 just not sure what's the best way to do in go lang
+	EventType HttpEventType `json:"eventType"`
+	RequestId string        `json:"requestId"`
+	Headers   http.Header   `json:"headers"`
+	Method    string        `json:"method,omitempty"`
+	URL       string        `json:"url,omitempty"`
+	Status    string        `json:"status,omitempty"`
+	Body      []byte        `json:"body,omitempty"`
+}
+
+const (
+	HttpEventRequest  HttpEventType = "request"
+	HttpEventResponse HttpEventType = "response"
+)
+
 type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
+	LogTerminalEvent(event TerminalEvent) error
+	LogHttpEvent(event HttpEvent) error
 	Close() error
 }
 
@@ -34,6 +73,7 @@ type EncryptedSessionLogger struct {
 	expiresAt     time.Time
 	file          *os.File
 	mutex         sync.Mutex
+	sessionStart  time.Time // Track session start time for elapsed time calculation
 }
 
 type RequestResponsePair struct {
@@ -133,7 +173,7 @@ func CleanupSessionMutex(sessionID string) {
 	}
 }
 
-func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time) (*EncryptedSessionLogger, error) {
+func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time, resourceType string) (*EncryptedSessionLogger, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
 	}
@@ -147,7 +187,14 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 		return nil, fmt.Errorf("failed to create session recording directory: %w", err)
 	}
 
-	filename := fmt.Sprintf("pam_session_%s_expires_%d.enc", sessionID, expiresAt.Unix())
+	// Use new filename format with resource type if provided
+	var filename string
+	if resourceType != "" {
+		filename = fmt.Sprintf("pam_session_%s_%s_expires_%d.enc", sessionID, resourceType, expiresAt.Unix())
+	} else {
+		// Legacy format for backwards compatibility
+		filename = fmt.Sprintf("pam_session_%s_expires_%d.enc", sessionID, expiresAt.Unix())
+	}
 	fullPath := filepath.Join(recordingDir, filename)
 
 	// Open file in append mode to support multiple connections per session
@@ -161,10 +208,11 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 		encryptionKey: encryptionKey,
 		expiresAt:     expiresAt,
 		file:          file,
+		sessionStart:  time.Now(),
 	}, nil
 }
 
-func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
+func (sl *EncryptedSessionLogger) writeEvent(productEventData func() ([]byte, error)) error {
 	sl.mutex.Lock()
 	defer sl.mutex.Unlock()
 
@@ -172,9 +220,9 @@ func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
 		return fmt.Errorf("session logger not initialized")
 	}
 
-	jsonData, err := json.Marshal(entry)
+	jsonData, err := productEventData()
 	if err != nil {
-		return fmt.Errorf("failed to marshal entry: %w", err)
+		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
 	encryptedData, err := EncryptData(jsonData, sl.encryptionKey)
@@ -199,11 +247,34 @@ func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
 		return fmt.Errorf("failed to write encrypted data: %w", err)
 	}
 
+	// For high-frequency events like terminal I/O, we might want to buffer
+	// But for now, sync to ensure durability
 	if err := sl.file.Sync(); err != nil {
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
-
 	return nil
+}
+
+func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		return json.Marshal(entry)
+	})
+}
+
+func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		// Calculate elapsed time if not already set
+		if event.ElapsedTime == 0 {
+			event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
+		}
+		return json.Marshal(event)
+	})
+}
+
+func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		return json.Marshal(event)
+	})
 }
 
 func (sl *EncryptedSessionLogger) Close() error {

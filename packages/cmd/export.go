@@ -108,9 +108,7 @@ var exportCmd = &cobra.Command{
 		}
 
 		if templatePath != "" {
-			sigChan := make(chan os.Signal, 1)
-			dynamicSecretLeases := NewDynamicSecretLeaseManager(sigChan)
-			newEtag := ""
+			dynamicSecretLeases := NewDynamicSecretLeaseManager(nil, nil)
 
 			accessToken := ""
 			if token != nil {
@@ -124,7 +122,8 @@ var exportCmd = &cobra.Command{
 				accessToken = loggedInUserDetails.UserCredentials.JTWToken
 			}
 
-			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, "", &newEtag, dynamicSecretLeases)
+			currentEtag := ""
+			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
 			if err != nil {
 				util.HandleError(err)
 			}
@@ -207,7 +206,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 			defaultFilename := getDefaultFilename(format)
 			return filepath.Join(absPath, defaultFilename), nil
 		}
-		
+
 		// Ensure the parent directory exists
 		parentDir := filepath.Dir(absPath)
 		if _, err := os.Stat(parentDir); os.IsNotExist(err) {
@@ -216,7 +215,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 				return "", fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 		}
-		
+
 		// If no extension provided, add default extension based on format
 		if filepath.Ext(absPath) == "" {
 			ext := getDefaultExtension(format)

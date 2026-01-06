@@ -412,6 +412,10 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse domain flag")
 		}
 
+		if domain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
+		}
+
 		gatewayName, err := cmd.Flags().GetString("name")
 		if err != nil {
 			util.HandleError(err, "Unable to parse name flag")
@@ -420,12 +424,17 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(errors.New("Gateway name is required"))
 		}
 
+		serviceLogFile, err := cmd.Flags().GetString("log-file")
+		if err != nil {
+			util.HandleError(err, "Unable to parse log-file flag")
+		}
+
 		relayName, err := util.GetRelayName(cmd, false, token.Token)
 		if err != nil {
 			util.HandleError(err, "unable to get relay name")
 		}
 
-		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName)
+		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile)
 		if err != nil {
 			util.HandleError(err, "Unable to install systemd service")
 		}
@@ -501,7 +510,8 @@ func init() {
 	gatewayCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
 	// Gateway start command flags (v2)
-	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to")
+	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway")
 	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
@@ -521,7 +531,9 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
-	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay")
+	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
+	gatewaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
 
 	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")

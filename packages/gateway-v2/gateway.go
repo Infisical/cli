@@ -19,6 +19,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -33,6 +34,7 @@ const (
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
+	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
 )
 
@@ -107,6 +109,7 @@ type Gateway struct {
 	cancel           context.CancelFunc
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
+	notifyOnce       sync.Once
 }
 
 // NewGateway creates a new gateway instance
@@ -313,6 +316,10 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 
 		g.startHeartbeatOnce(ctx, errCh)
 
+		g.notifyOnce.Do(func() {
+			systemd.SdNotify(false, systemd.SdNotifyReady)
+		})
+
 		log.Info().Msgf("Relay connection established for gateway")
 		return g.handleConnection(client)
 	}
@@ -374,7 +381,7 @@ func (g *Gateway) registerGateway() error {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}
 
-	if util.CLI_VERSION == "devel" && certResp.RelayHost == "host.docker.internal" {
+	if util.IsDevelopmentMode() && certResp.RelayHost == "host.docker.internal" {
 		certResp.RelayHost = "127.0.0.1"
 	}
 
@@ -437,7 +444,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation"},
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
 	}
 
 	return nil
@@ -510,7 +517,7 @@ func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
 		}
 
 		// no host cert check when in dev mode
-		if util.CLI_VERSION == "devel" {
+		if util.IsDevelopmentMode() {
 			fmt.Println("Gateway running in development mode, skipping host certificate validation")
 			return nil
 		}
@@ -614,6 +621,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePAMCapabilities {
+		log.Info().Msg("Starting PAM capabilities handler")
+		if err := pam.HandlePAMCapabilities(g.ctx, tlsConn, g.config.Name); err != nil {
+			log.Error().Err(err).Msg("PAM capabilities handler ended with error")
+		} else {
+			log.Info().Msg("PAM capabilities handler completed")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModePing {
 		log.Info().Msg("Starting ping handler")
 		if err := handlePing(g.ctx, tlsConn, reader); err != nil {
@@ -658,6 +673,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pam-session-cancellation":
 		config.Mode = ForwardModePAMCancellation
+		return config, nil
+
+	case "infisical-pam-capabilities":
+		config.Mode = ForwardModePAMCapabilities
 		return config, nil
 
 	case "infisical-ping":

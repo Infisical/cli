@@ -12,6 +12,9 @@ permissions:
   contents: write
 
 jobs:
+  validate-tag-branch:
+    uses: ./.github/workflows/pre-tag-validation.yml
+
   # cli-integration-tests:
   #   name: Run tests before deployment
   #   uses: ./.github/workflows/run-cli-tests.yml
@@ -32,6 +35,7 @@ jobs:
     needs:
       # - cli-integration-tests
       - goreleaser
+      - validate-tag-branch
     steps:
       - uses: actions/checkout@v3
         with:
@@ -84,6 +88,8 @@ jobs:
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
+    needs:
+      - validate-tag-branch
     steps:
       - uses: actions/checkout@v3
         with:
@@ -93,13 +99,16 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: 🔧 Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
       - run: git fetch --force --tags
       - run: echo "Ref name ${{github.ref_name}}"
       - uses: actions/setup-go@v3
         with:
-          go-version: ">=1.19.3"
+          go-version: ">=1.24.11"
           cache: true
           cache-dependency-path: go.sum
       - name: Setup for libssl1.0-dev
@@ -154,6 +163,8 @@ jobs:
   # Currently only supports Windows amd64
   goreleaser-windows:
     runs-on: windows-2022
+    needs:
+      - validate-tag-branch
     steps:
       - uses: actions/checkout@v3
         with:
@@ -165,7 +176,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: ">=1.19.3"
+          go-version: ">=1.24.11"
           cache: true
           cache-dependency-path: go.sum
 

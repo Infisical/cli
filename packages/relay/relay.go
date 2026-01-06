@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -187,6 +188,8 @@ func (r *Relay) Start(ctx context.Context) error {
 	go r.startTLSServer()
 
 	log.Info().Msg("Relay server started successfully")
+
+	systemd.SdNotify(false, systemd.SdNotifyReady)
 
 	// Wait for context cancellation
 	<-ctx.Done()

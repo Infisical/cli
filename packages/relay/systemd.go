@@ -8,35 +8,14 @@ import (
 	"runtime"
 
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 )
-
-const relaySystemdServiceTemplate = `[Unit]
-Description=Infisical Relay Service
-After=network.target
-
-[Service]
-Type=notify
-NotifyAccess=all
-EnvironmentFile=/etc/infisical/relay.conf
-ExecStart=infisical relay start
-Restart=on-failure
-InaccessibleDirectories=/home
-PrivateTmp=yes
-LimitCORE=infinity
-LimitNOFILE=1000000
-LimitNPROC=60000
-LimitRTPRIO=infinity
-LimitRTTIME=7000000
-
-[Install]
-WantedBy=multi-user.target
-`
 
 // InstallRelaySystemdService installs the systemd unit and writes configuration for the relay.
 // token is used for org-type relays (written as INFISICAL_TOKEN). For instance-type relays,
 // relayAuthSecret is written as INFISICAL_RELAY_AUTH_SECRET.
-func InstallRelaySystemdService(token string, domain string, name string, host string, instanceType string, relayAuthSecret string) error {
+func InstallRelaySystemdService(token string, domain string, name string, host string, instanceType string, relayAuthSecret string, serviceLogFile string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -75,14 +54,19 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 		}
 	}
 
-	configPath := filepath.Join(configDir, "relay.conf")
-	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %v", err)
+	environmentFilePath := filepath.Join(configDir, "relay.conf")
+	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	servicePath := "/etc/systemd/system/infisical-relay.service"
-	if err := os.WriteFile(servicePath, []byte(relaySystemdServiceTemplate), 0644); err != nil {
+	serviceName := "infisical-relay"
+
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, serviceName, "relay", "Infisical Relay Service"); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %v", err)
+	}
+
+	if err := util.WriteLogrotateFile(serviceLogFile, serviceName); err != nil {
+		return fmt.Errorf("failed to write logrotate file: %v", err)
 	}
 
 	reloadCmd := exec.Command("systemctl", "daemon-reload")

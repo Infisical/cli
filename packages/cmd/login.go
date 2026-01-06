@@ -272,11 +272,15 @@ var loginCmd = &cobra.Command{
 			credential, err := authStrategies[strategy]()
 
 			if err != nil {
-				euErrorMessage := ""
-				if strings.HasPrefix(config.INFISICAL_URL, util.INFISICAL_DEFAULT_US_URL) {
-					euErrorMessage = fmt.Sprintf("\nIf you are using the Infisical Cloud Europe Region, please switch to it by using the \"--domain %s\" flag.", util.INFISICAL_DEFAULT_EU_URL)
+				domainHint := ""
+				currentDomain := strings.TrimSuffix(config.INFISICAL_URL, "/api")
+				errMsg := err.Error()
+
+				if strings.Contains(errMsg, "status-code=401") || strings.Contains(errMsg, "status-code=403") {
+					domainHint = fmt.Sprintf("\n\nCheck your credentials or verify you're using the correct domain. Current domain: %s", currentDomain)
 				}
-				util.HandleError(fmt.Errorf("unable to authenticate with %s [err=%v].%s", formatAuthMethod(loginMethod), err, euErrorMessage))
+
+				util.HandleError(fmt.Errorf("unable to authenticate with %s [err=%v].%s", formatAuthMethod(loginMethod), err, domainHint))
 			}
 
 			if plainOutput {

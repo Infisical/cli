@@ -11,14 +11,19 @@ import (
 )
 
 type PAMCredentials struct {
+	AuthMethod            string
 	Username              string
 	Password              string
 	Database              string
+	PrivateKey            string
+	Certificate           string
 	Host                  string
 	Port                  int
 	SSLEnabled            bool
 	SSLRejectUnauthorized bool
 	SSLCertificate        string
+	Url                   string
+	ServiceAccountToken   string
 }
 
 type cachedCredentials struct {
@@ -80,14 +85,19 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 	}
 
 	credentials := &PAMCredentials{
+		AuthMethod:            response.Credentials.AuthMethod,
 		Username:              response.Credentials.Username,
 		Password:              response.Credentials.Password,
 		Database:              response.Credentials.Database,
+		PrivateKey:            response.Credentials.PrivateKey,
+		Certificate:           response.Credentials.Certificate,
 		Host:                  response.Credentials.Host,
 		Port:                  response.Credentials.Port,
 		SSLEnabled:            response.Credentials.SSLEnabled,
 		SSLRejectUnauthorized: response.Credentials.SSLRejectUnauthorized,
 		SSLCertificate:        response.Credentials.SSLCertificate,
+		Url:                   response.Credentials.Url,
+		ServiceAccountToken:   response.Credentials.ServiceAccountToken,
 	}
 
 	cm.cacheMutex.Lock()

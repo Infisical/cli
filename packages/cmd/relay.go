@@ -206,6 +206,11 @@ var relaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse relay-auth-secret flag")
 		}
 
+		serviceLogFile, err := cmd.Flags().GetString("log-file")
+		if err != nil {
+			util.HandleError(err, "Unable to parse log-file flag")
+		}
+
 		if instanceType == "instance" && relayAuthSecret == "" {
 			util.HandleError(fmt.Errorf("for type 'instance', --relay-auth-secret flag or %s env must be set", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
 		}
@@ -214,7 +219,7 @@ var relaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("for type '%s', --token flag or %s env must be set", instanceType, gatewayv2.INFISICAL_TOKEN_ENV_NAME))
 		}
 
-		if err := relay.InstallRelaySystemdService(token, domain, name, host, instanceType, relayAuthSecret); err != nil {
+		if err := relay.InstallRelaySystemdService(token, domain, name, host, instanceType, relayAuthSecret, serviceLogFile); err != nil {
 			util.HandleError(err, "Failed to install relay systemd service")
 		}
 
@@ -265,6 +270,7 @@ func init() {
 
 	// systemd install command flags
 	relaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token (org type)")
+	relaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/relay.log. If not provided, logs will not be written to a file.")
 	relaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	relaySystemdInstallCmd.Flags().String("name", "", "The name of the relay")
 	relaySystemdInstallCmd.Flags().String("host", "", "The IP or hostname for the relay")
