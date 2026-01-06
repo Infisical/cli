@@ -53,7 +53,13 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 	cmdExit := false
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		// Ensure the process is still running
+		if cmd.RunMethod != RunMethodSubprocess {
+			// For function call method, we cannot check if the subprocess if running or not,
+			// also it's a bit hard to collect stderr like subprocess.
+			// Ideally, we should mock it and collect them regardless
+			return
+		}
+		// Ensure the process is still running if it's a subprocess
 		if !cmd.IsRunning() {
 			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
 			cmd.DumpOutput()
@@ -73,8 +79,8 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 	detectHeartbeat := false
 	require.Eventually(t, func() bool {
-		// Ensure the process is still running
-		if !cmd.IsRunning() {
+		// Ensure the process is still running if it's a subprocess
+		if cmd.RunMethod == RunMethodSubprocess && !cmd.IsRunning() {
 			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
 			cmd.DumpOutput()
 			// Somehow the cmd stops early, let's exit the loop early
