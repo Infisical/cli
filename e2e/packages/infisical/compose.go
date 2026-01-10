@@ -47,7 +47,7 @@ func (s *Stack) Up(ctx context.Context) error {
 	// Skip cache lookup if CLI_E2E_DISABLE_COMPOSE_CACHE is set
 	if os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "" {
 		// Try to lookup for existing container with the same name
-		dockerClient, err := testcontainers.NewDockerClientWithOpts(context.Background())
+		dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
 		if err != nil {
 			return err
 		}
