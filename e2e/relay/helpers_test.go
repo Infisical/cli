@@ -24,7 +24,6 @@ import (
 
 type InfisicalService struct {
 	Stack           *infisical.Stack
-	compose         infisical.Compose
 	apiClient       client.ClientWithResponsesInterface
 	provisionResult *client.ProvisionResult
 }
@@ -41,14 +40,27 @@ func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithE
 }
 
 func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalService {
-	compose, err := s.Stack.ToComposeWithWaitingForService()
-	s.compose = compose
-	require.NoError(t, err)
-	err = s.compose.Up(ctx)
-	require.NoError(t, err)
-	apiUrl, err := s.compose.ApiUrl(ctx)
+	t.Cleanup(func() {
+		err := s.Compose().Down(
+			ctx,
+			dockercompose.RemoveOrphans(true),
+			dockercompose.RemoveVolumes(true),
+		)
+		if err != nil {
+			slog.Error("Failed to clean up Infisical service", "err", err)
+		}
+	})
+
+	err := s.Stack.Up(ctx)
 	require.NoError(t, err)
 
+	s.Bootstrap(ctx, t)
+	return s
+}
+
+func (s *InfisicalService) Bootstrap(ctx context.Context, t *testing.T) {
+	apiUrl, err := s.Stack.ApiUrl(ctx)
+	require.NoError(t, err)
 	slog.Info("Bootstrapping Infisical service", "apiUrl", apiUrl)
 	hc := http.Client{}
 	provisioningClient, err := client.NewClientWithResponses(apiUrl, client.WithHTTPClient(&hc))
@@ -65,26 +77,24 @@ func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalServi
 		client.WithRequestEditorFn(bearerAuth.Intercept),
 	)
 	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		err = compose.Down(
-			ctx,
-			dockercompose.RemoveOrphans(true),
-			dockercompose.RemoveVolumes(true),
-		)
-		if err != nil {
-			slog.Error("Failed to clean up Infisical service", "err", err)
-		}
-	})
-	return s
 }
 
-func (s *InfisicalService) Compose() infisical.Compose {
-	return s.compose
+func (s *InfisicalService) Compose() dockercompose.ComposeStack {
+	return s.Stack.Compose()
 }
 
 func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 	return s.apiClient
+}
+
+func (s *InfisicalService) Reset(ctx context.Context, t *testing.T) {
+	err := infisical.Reset(ctx, s.Compose())
+	require.NoError(t, err)
+}
+
+func (s *InfisicalService) ResetAndBootstrap(ctx context.Context, t *testing.T) {
+	s.Reset(ctx, t)
+	s.Bootstrap(ctx, t)
 }
 
 func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
@@ -92,7 +102,7 @@ func (s *InfisicalService) ProvisionResult() *client.ProvisionResult {
 }
 
 func (s *InfisicalService) ApiUrl(t *testing.T) string {
-	apiUrl, err := s.compose.ApiUrl(context.Background())
+	apiUrl, err := s.Stack.ApiUrl(context.Background())
 	require.NoError(t, err)
 	return apiUrl
 }
