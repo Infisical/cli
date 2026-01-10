@@ -40,13 +40,8 @@ func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithE
 }
 
 func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalService {
-	err := s.Stack.Up(ctx)
-	require.NoError(t, err)
-
-	s.Bootstrap(ctx, t)
-
 	t.Cleanup(func() {
-		err = s.Compose().Down(
+		err := s.Compose().Down(
 			ctx,
 			dockercompose.RemoveOrphans(true),
 			dockercompose.RemoveVolumes(true),
@@ -55,6 +50,11 @@ func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalServi
 			slog.Error("Failed to clean up Infisical service", "err", err)
 		}
 	})
+
+	err := s.Stack.Up(ctx)
+	require.NoError(t, err)
+
+	s.Bootstrap(ctx, t)
 	return s
 }
 
