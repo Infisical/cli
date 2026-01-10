@@ -44,58 +44,61 @@ func (s *Stack) Up(ctx context.Context) error {
 	hashHex := hex.EncodeToString(hashBytes[:])
 	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
 
-	// Try to lookup for existing container with the same name
-	dockerClient, err := testcontainers.NewDockerClientWithOpts(context.Background())
-	if err != nil {
-		return err
-	}
-	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
-		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
-		),
-	})
-	if err != nil {
-		return err
-	}
-	if len(containers) > 0 {
-		services := make([]string, 0, len(s.Project.Services))
-		for name := range s.Project.Services {
-			services = append(services, name)
+	// Skip cache lookup if CLI_E2E_DISABLE_COMPOSE_CACHE is set
+	if os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "" {
+		// Try to lookup for existing container with the same name
+		dockerClient, err := testcontainers.NewDockerClientWithOpts(context.Background())
+		if err != nil {
+			return err
 		}
+		containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
+			All: true,
+			Filters: filters.NewArgs(
+				filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+			),
+		})
+		if err != nil {
+			return err
+		}
+		if len(containers) > 0 {
+			services := make([]string, 0, len(s.Project.Services))
+			for name := range s.Project.Services {
+				services = append(services, name)
+			}
 
-		missingServices := make(map[string]int, len(services))
-		for _, service := range services {
-			missingServices[service] = 1
-		}
-		for _, c := range containers {
-			if c.State == container.StateRunning {
-				serviceName, ok := c.Labels[api.ServiceLabel]
-				if !ok {
-					continue
-				}
-				_, ok = missingServices[serviceName]
-				if ok {
-					delete(missingServices, serviceName)
+			missingServices := make(map[string]int, len(services))
+			for _, service := range services {
+				missingServices[service] = 1
+			}
+			for _, c := range containers {
+				if c.State == container.StateRunning {
+					serviceName, ok := c.Labels[api.ServiceLabel]
+					if !ok {
+						continue
+					}
+					_, ok = missingServices[serviceName]
+					if ok {
+						delete(missingServices, serviceName)
+					}
 				}
 			}
-		}
 
-		if len(missingServices) == 0 {
-			provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
-			if err != nil {
-				return err
+			if len(missingServices) == 0 {
+				provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
+				if err != nil {
+					return err
+				}
+				s.dockerCompose = &RunningCompose{
+					name:       uniqueName,
+					client:     dockerClient,
+					provider:   provider,
+					services:   services,
+					containers: make(map[string]*testcontainers.DockerContainer),
+				}
+				slog.Info("Found existing running containers", "name", uniqueName)
+				// Found existing compose, reuse instead
+				return s.dockerCompose.Up(ctx)
 			}
-			s.dockerCompose = &RunningCompose{
-				name:       uniqueName,
-				client:     dockerClient,
-				provider:   provider,
-				services:   services,
-				containers: make(map[string]*testcontainers.DockerContainer),
-			}
-			slog.Info("Found existing running containers", "name", uniqueName)
-			// Found existing compose, reuse instead
-			return s.dockerCompose.Up(ctx)
 		}
 	}
 
