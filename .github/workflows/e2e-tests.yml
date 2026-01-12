@@ -24,12 +24,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Checkout another public repo
+      - name: Checkout infisical repository
         uses: actions/checkout@v4
         with:
           repository: infisical/infisical
           path: deps/
-          ref: main          
+          ref: main
+    
+      - name: debug
+        run: |
+            echo "INFISICAL_BACKEND_DIR: ${{ github.workspace }}/deps/infisical/backend"
+            ls -la ${{ github.workspace }}/deps/
+            tree ${{ github.workspace }}/deps/
 
       - name: Set up Go
         uses: actions/setup-go@v4
