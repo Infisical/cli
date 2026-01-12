@@ -24,6 +24,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Checkout another public repo
+        uses: actions/checkout@v4
+        with:
+          repository: infisical/infisical
+          path: deps/
+          ref: main          
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
@@ -52,6 +59,7 @@ jobs:
       - name: Run e2e tests
         working-directory: ${{ github.workspace }}/e2e
         env:
+          INFISICAL_BACKEND_DIR: ${{ github.workspace }}/deps/infisical/backend
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-merge
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
         run: |
