@@ -28,14 +28,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: infisical/infisical
-          path: deps/
+          path: deps/infisical/
           ref: main
-    
-      - name: debug
-        run: |
-            echo "INFISICAL_BACKEND_DIR: ${{ github.workspace }}/deps/infisical/backend"
-            ls -la ${{ github.workspace }}/deps/
-            tree ${{ github.workspace }}/deps/
 
       - name: Set up Go
         uses: actions/setup-go@v4
