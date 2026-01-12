@@ -35,6 +35,69 @@ type BackendOptions struct {
 	Dockerfile string
 }
 
+func (s *Stack) tryReuseExistingContainers(ctx context.Context, uniqueName string) (bool, error) {
+	log.Printf("Trying to reuse existing container: %s", uniqueName)
+	// Try to lookup for existing container with the same name
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return false, err
+	}
+	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+		),
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(containers) == 0 {
+		slog.Info("No containers found, skip reusing containers", "name", uniqueName)
+		return false, nil
+	}
+
+	services := make([]string, 0, len(s.Project.Services))
+	for name := range s.Project.Services {
+		services = append(services, name)
+	}
+
+	missingServices := make(map[string]int, len(services))
+	for _, service := range services {
+		missingServices[service] = 1
+	}
+	for _, c := range containers {
+		if c.State == container.StateRunning {
+			serviceName, ok := c.Labels[api.ServiceLabel]
+			if !ok {
+				continue
+			}
+			_, ok = missingServices[serviceName]
+			if ok {
+				delete(missingServices, serviceName)
+			}
+		}
+	}
+	if len(missingServices) > 0 {
+		slog.Info("Missing containers found, skip reusing containers", "count", len(missingServices), "name", uniqueName)
+		return false, nil
+	}
+
+	provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
+	if err != nil {
+		return false, err
+	}
+	s.dockerCompose = &RunningCompose{
+		name:       uniqueName,
+		client:     dockerClient,
+		provider:   provider,
+		services:   services,
+		containers: make(map[string]*testcontainers.DockerContainer),
+	}
+	slog.Info("Found existing running containers", "name", uniqueName)
+	// Found existing compose, reuse instead
+	return true, s.dockerCompose.Up(ctx)
+}
+
 func (s *Stack) Up(ctx context.Context) error {
 	data, err := s.Project.MarshalYAML()
 	if err != nil {
@@ -45,60 +108,15 @@ func (s *Stack) Up(ctx context.Context) error {
 	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
 
 	// Skip cache lookup if CLI_E2E_DISABLE_COMPOSE_CACHE is set
-	if os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "" {
-		// Try to lookup for existing container with the same name
-		dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "1" {
+		slog.Info("Disable compose cache", "name", uniqueName)
+	} else {
+		reused, err := s.tryReuseExistingContainers(ctx, uniqueName)
 		if err != nil {
 			return err
 		}
-		containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
-			All: true,
-			Filters: filters.NewArgs(
-				filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
-			),
-		})
-		if err != nil {
-			return err
-		}
-		if len(containers) > 0 {
-			services := make([]string, 0, len(s.Project.Services))
-			for name := range s.Project.Services {
-				services = append(services, name)
-			}
-
-			missingServices := make(map[string]int, len(services))
-			for _, service := range services {
-				missingServices[service] = 1
-			}
-			for _, c := range containers {
-				if c.State == container.StateRunning {
-					serviceName, ok := c.Labels[api.ServiceLabel]
-					if !ok {
-						continue
-					}
-					_, ok = missingServices[serviceName]
-					if ok {
-						delete(missingServices, serviceName)
-					}
-				}
-			}
-
-			if len(missingServices) == 0 {
-				provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
-				if err != nil {
-					return err
-				}
-				s.dockerCompose = &RunningCompose{
-					name:       uniqueName,
-					client:     dockerClient,
-					provider:   provider,
-					services:   services,
-					containers: make(map[string]*testcontainers.DockerContainer),
-				}
-				slog.Info("Found existing running containers", "name", uniqueName)
-				// Found existing compose, reuse instead
-				return s.dockerCompose.Up(ctx)
-			}
+		if reused {
+			return nil
 		}
 	}
 
