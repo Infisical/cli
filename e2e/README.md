@@ -75,7 +75,7 @@ Currently, you need to enable the needed feature flags for running your tests ma
 If you don't know how to enable those feature flags, please contact the Infisical engineering team members; they will show you how to do that.
 In the future, we will provide a builder API to the `NewInfisicalService()` object for you to simply specify which features you would like to enable.
 
-## Running the test
+## Running the tests - Complete Example
 
 To run the e2e test, you can do the following:
 
