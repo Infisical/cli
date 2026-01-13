@@ -2,17 +2,30 @@ package infisical
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 type Stack struct {
 	Project *types.Project
+
+	dockerCompose compose.ComposeStack
 }
 
 type StackOption func(*Stack)
@@ -22,31 +35,132 @@ type BackendOptions struct {
 	Dockerfile string
 }
 
-func (s *Stack) ToCompose() (Compose, error) {
-	data, err := s.Project.MarshalYAML()
+func (s *Stack) tryReuseExistingContainers(ctx context.Context, uniqueName string) (bool, error) {
+	log.Printf("Trying to reuse existing container: %s", uniqueName)
+	// Try to lookup for existing container with the same name
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	dockerCompose, err := compose.NewDockerComposeWith(
-		compose.WithStackReaders(bytes.NewReader(data)),
-	)
+	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+		),
+	})
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	return NewComposeWrapper(dockerCompose), nil
+	if len(containers) == 0 {
+		slog.Info("No containers found, skip reusing containers", "name", uniqueName)
+		return false, nil
+	}
+
+	services := make([]string, 0, len(s.Project.Services))
+	for name := range s.Project.Services {
+		services = append(services, name)
+	}
+
+	missingServices := make(map[string]int, len(services))
+	for _, service := range services {
+		missingServices[service] = 1
+	}
+	for _, c := range containers {
+		if c.State == container.StateRunning {
+			serviceName, ok := c.Labels[api.ServiceLabel]
+			if !ok {
+				continue
+			}
+			_, ok = missingServices[serviceName]
+			if ok {
+				delete(missingServices, serviceName)
+			}
+		}
+	}
+	if len(missingServices) > 0 {
+		slog.Info("Missing containers found, skip reusing containers", "count", len(missingServices), "name", uniqueName)
+		return false, nil
+	}
+
+	provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
+	if err != nil {
+		return false, err
+	}
+	s.dockerCompose = &RunningCompose{
+		name:       uniqueName,
+		client:     dockerClient,
+		provider:   provider,
+		services:   services,
+		containers: make(map[string]*testcontainers.DockerContainer),
+	}
+	slog.Info("Found existing running containers", "name", uniqueName)
+	// Found existing compose, reuse instead
+	return true, s.dockerCompose.Up(ctx)
 }
 
-func (s *Stack) ToComposeWithWaitingForService() (Compose, error) {
-	dockerCompose, err := s.ToCompose()
+func (s *Stack) Up(ctx context.Context) error {
+	data, err := s.Project.MarshalYAML()
 	if err != nil {
-		return nil, err
+		return err
+	}
+	hashBytes := sha1.Sum(data)
+	hashHex := hex.EncodeToString(hashBytes[:])
+	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
+
+	// Skip cache lookup if CLI_E2E_DISABLE_COMPOSE_CACHE is set
+	if os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "1" {
+		slog.Info("Disable compose cache", "name", uniqueName)
+	} else {
+		reused, err := s.tryReuseExistingContainers(ctx, uniqueName)
+		if err != nil {
+			return err
+		}
+		if reused {
+			return nil
+		}
+	}
+
+	dockerCompose, err := compose.NewDockerComposeWith(
+		compose.WithStackReaders(bytes.NewReader(data)),
+		compose.StackIdentifier(uniqueName),
+	)
+	if err != nil {
+		return err
 	}
 	waited := dockerCompose.WaitForService(
 		"backend",
 		wait.ForListeningPort("4000/tcp").
 			WithStartupTimeout(120*time.Second),
 	)
-	return NewComposeWrapper(waited), nil
+	s.dockerCompose = waited
+	if err := s.dockerCompose.Up(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Stack) Down(ctx context.Context) error {
+	return s.dockerCompose.Down(ctx)
+}
+
+func (s *Stack) Compose() compose.ComposeStack {
+	return s.dockerCompose
+}
+
+func (s *Stack) ApiUrl(ctx context.Context) (string, error) {
+	backend, err := s.dockerCompose.ServiceContainer(ctx, "backend")
+	if err != nil {
+		return "", err
+	}
+	host, err := backend.Host(ctx)
+	if err != nil {
+		return "", err
+	}
+	port, err := backend.MappedPort(ctx, "4000")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("http://%s:%s", host, port.Port()), nil
 }
 
 func BackendOptionsFromEnv() BackendOptions {
@@ -166,4 +280,76 @@ func WithDefaultStack(backendOptions BackendOptions) StackOption {
 
 func WithDefaultStackFromEnv() StackOption {
 	return WithDefaultStack(BackendOptionsFromEnv())
+}
+
+type RunningCompose struct {
+	name           string
+	services       []string
+	client         *testcontainers.DockerClient
+	provider       *testcontainers.DockerProvider
+	containers     map[string]*testcontainers.DockerContainer
+	containersLock sync.Mutex
+}
+
+func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) error {
+	return Reset(ctx, c)
+}
+
+func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
+	// For the case of running compose, we probably want to reuse it, so just do nothing here
+	return nil
+}
+
+func (c *RunningCompose) Services() []string {
+	return c.services
+}
+
+func (c *RunningCompose) WaitForService(s string, strategy wait.Strategy) compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) WithEnv(m map[string]string) compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) WithOsEnv() compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) cachedContainer(svcName string) *testcontainers.DockerContainer {
+	c.containersLock.Lock()
+	defer c.containersLock.Unlock()
+
+	return c.containers[svcName]
+}
+
+func (c *RunningCompose) ServiceContainer(ctx context.Context, svcName string) (*testcontainers.DockerContainer, error) {
+	if ctr := c.cachedContainer(svcName); ctr != nil {
+		return ctr, nil
+	}
+
+	containers, err := c.client.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ServiceLabel, svcName)),
+		),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("container list: %w", err)
+	}
+
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("no container found for service name %s", svcName)
+	}
+
+	ctr, err := c.provider.ContainerFromType(ctx, containers[0])
+	if err != nil {
+		return nil, fmt.Errorf("container from type: %w", err)
+	}
+
+	c.containersLock.Lock()
+	defer c.containersLock.Unlock()
+	c.containers[svcName] = ctr
+	return ctr, nil
 }

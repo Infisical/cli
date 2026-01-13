@@ -5,10 +5,14 @@ go 1.25.2
 require (
 	github.com/Infisical/infisical-merge v0.0.0
 	github.com/compose-spec/compose-go/v2 v2.9.0
-	github.com/creack/pty v1.1.24
+	github.com/docker/compose/v2 v2.40.2
+	github.com/docker/docker v28.5.1+incompatible
+	github.com/docker/go-connections v0.6.0
 	github.com/go-faker/faker/v4 v4.7.0
+	github.com/jackc/pgx/v5 v5.7.6
 	github.com/oapi-codegen/oapi-codegen/v2 v2.5.1
 	github.com/oapi-codegen/runtime v1.1.2
+	github.com/redis/go-redis/v9 v9.17.2
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/compose v0.40.0
@@ -70,16 +74,14 @@ require (
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dgraph-io/badger/v3 v3.2103.5 // indirect
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/buildx v0.29.1 // indirect
 	github.com/docker/cli v28.5.1+incompatible // indirect
 	github.com/docker/cli-docs-tool v0.10.0 // indirect
-	github.com/docker/compose/v2 v2.40.2 // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
-	github.com/docker/docker v28.5.1+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/docker/go v1.5.1-1.0.20160303222718-d30aec9fd63c // indirect
-	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-metrics v0.0.1 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dprotaso/go-yit v0.0.0-20220510233725-9ba8df137936 // indirect
@@ -88,6 +90,7 @@ require (
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/eiannone/keyboard v0.0.0-20220611211555-0d226195f203 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
+	github.com/emirpasic/gods v1.12.0 // indirect
 	github.com/fatih/color v1.17.0 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -145,7 +148,8 @@ require (
 	github.com/infisical/go-sdk v0.6.1 // indirect
 	github.com/infisical/infisical-kmip v0.3.17 // indirect
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
-	github.com/jackc/pgx/v5 v5.7.6 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jedib0t/go-pretty v4.3.0+incompatible // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
@@ -233,6 +237,7 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
+	github.com/smallnest/resp3 v0.0.0-20251228151914-4f2fa7427e69 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/speakeasy-api/jsonpath v0.6.0 // indirect
 	github.com/speakeasy-api/openapi-overlay v0.10.2 // indirect
