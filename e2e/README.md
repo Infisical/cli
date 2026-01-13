@@ -130,7 +130,7 @@ To solve the problem, you can set the `TESTCONTAINERS_RYUK_DISABLED` environment
 TESTCONTAINERS_RYUK_DISABLED=true
 ```
 
-To learn more about the behaivor of Ryuk from testcontainers, please read [their document here](https://golang.testcontainers.org/features/garbage_collector/#ryuk).
+To learn more about the behavior of Ryuk from testcontainers, please read [their document here](https://golang.testcontainers.org/features/garbage_collector/#ryuk).
 
 ## Use compose containers cache to speed up the development cycle
 
