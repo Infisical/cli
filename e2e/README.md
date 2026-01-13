@@ -121,7 +121,7 @@ If you run the command test with `functionCall`, it will not write the stdout / 
 ## Troubleshooting the failing tests due to Infisical backend API errors
 
 If the errors happen in the backend, to find out what's going on, you can open the Docker Desktop app or use `docker ps` and then `docker logs` to find out what the error message is in the Infisical backend API server.
-Please note that by default, the testcontainers library (the library we use to run the docker-compose for the Infisical stack) will start a container called Ryuk for deleting the containers after the test is finished.
+Please note that by default, the [testcontainers library](https://github.com/testcontainers/testcontainers-go) (the library we use to run the docker-compose for the Infisical stack) will start a container called Ryuk for deleting the containers after the test is finished.
 Because of that, if you run into an error in the backend reproduced by running the test, the container might already be gone after the test finishes.
 Then you won't be able to look inside the container and find out what's going on.
 To solve the problem, you can set the `TESTCONTAINERS_RYUK_DISABLED` environment variable to `true` like this to disable the container deleting behavior:
@@ -129,6 +129,8 @@ To solve the problem, you can set the `TESTCONTAINERS_RYUK_DISABLED` environment
 ```bash
 TESTCONTAINERS_RYUK_DISABLED=true
 ```
+
+To learn more about the behaivor of Ryuk from testcontainers, please read [their document here](https://golang.testcontainers.org/features/garbage_collector/#ryuk).
 
 ## Use compose containers cache to speed up the development cycle
 
