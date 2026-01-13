@@ -95,3 +95,29 @@ go test github.com/infisical/cli/e2e-tests/relay
 ```
 
 It's a bit verbose right now, but we will improve the quality of life over time by adding things such as a Makefile to make it much easier.
+
+## Troubleshooting the failing tests due to CLI error
+
+Sometimes, the e2e tests failed.
+To find out why it fails, if it's a failure of the CLI cmd process itself, such as the cmd exits with an error code, you can look at the logs and may found this:
+
+```
+2026/01/12 11:05:14 INFO Running command as a sub-process executable=/Users/fangpenlin/workspace/cli/infisical-merge args="[relay start --domain http://localhost:54937]"
+2026/01/12 11:05:14 INFO Writing stdout to temp file file=/var/folders/wc/g97rf4092_z9wqbp93djvnt00000gn/T/TestRelay_RegistersARelay2199940539/001/stdout.log
+2026/01/12 11:05:14 INFO Writing stderr to temp file file=/var/folders/wc/g97rf4092_z9wqbp93djvnt00000gn/T/TestRelay_RegistersARelay2199940539/001/stderr.log
+```
+
+With the sub-process approach, the stdout and stderr logs should be outputting to the files as shown in the path.
+In that case, you may want to inspect the stderr log file like:
+
+```bash
+less /var/folders/wc/g97rf4092_z9wqbp93djvnt00000gn/T/TestRelay_RegistersARelay2199940539/001/stderr.log
+```
+
+Then you should be able to find otu why it fail.
+You can also switch the call method to `functionCall` and setup debugger to trace into the CLI program to find out why they fail.
+If you run the cmd test with `functionCall`, it will not write the stdout / stderr to file, but instead, it should print it to the console where you run the tests.
+
+## Troubleshooting the failing tests due to Infisical backend API errors
+
+## Use compose containers cache to speed up the development cycle
