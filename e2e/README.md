@@ -120,4 +120,37 @@ If you run the cmd test with `functionCall`, it will not write the stdout / stde
 
 ## Troubleshooting the failing tests due to Infisical backend API errors
 
+If the errors happen in the backend, to find out what's going on, you can open the Docker Desktop app or use `docker ps` and then `docker logs` to find out what's the error message in the Infisical backend API server.
+Please note that by default, the testcontainers library (the library we used to run the docker-compose for the Infisical stack) will start a container called Ryuk for deleting the containers after the test is finished.
+Because of that, if you run into an error in the backend reproduced by running the test, the container might already be gone after the test finish.
+Then you won't be able to look inside the container and find out what's going on.
+To solve the problem, you can set the `TESTCONTAINERS_RYUK_DISABLED` environment to `true` like this to disable the container deleting behavior:
+
+```bash
+TESTCONTAINERS_RYUK_DISABLED=true
+```
+
 ## Use compose containers cache to speed up the development cycle
+
+More often than not, we may find ourselves in the loop of:
+
+- Change a few line of CLI code
+- Run the test
+- Change a few line of CLI code again
+- Run the test again
+- Change a few line of CLI code once again
+- Run the test once again
+- ...
+
+It would be very time consuming to wait for the Infisical backend server to fully bootup for each interation.
+To speed up the development cycle, we have a cache system built in.
+Here's how it works.
+If you have `TESTCONTAINERS_RYUK_DISABLED` set to `true`, each time when the `Up` method of the `InfisicalService()` is called, we will look at the hash value of the compose YAML file generated from the desired environment defined in the e2e test case.
+If there's such container already running, we will reuse it by resetting its database instead of starting a new one.
+That way, it's much faster than booting up a new compose stack and wait for it to get online.
+
+If for any reason the cache system is not working or desired, you can disable it by setting `CLI_E2E_DISABLE_COMPOSE_CACHE` value to `1` like this:
+
+```bash
+export CLI_E2E_DISABLE_COMPOSE_CACHE=1
+```
