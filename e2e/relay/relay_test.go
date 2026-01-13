@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -37,7 +38,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
 	require.NotNil(t, identity)
 
-	relayName := RandomSlug(3)
+	relayName := RandomSlug(2)
 	cmd := Command{
 		Test: t,
 		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
@@ -121,4 +122,81 @@ func TestRelay_RegistersARelay(t *testing.T) {
 		)
 	}
 	// TODO: find a way to collect stderr for func call method and assert as well
+}
+
+func TestRelay_RegistersAGateway(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	infisical := NewInfisicalService().
+		WithBackendEnvironment(types.NewMappingWithEquals([]string{
+			// This is needed for the private ip (current host) to be accepted for the relay server
+			"ALLOW_INTERNAL_IP_CONNECTIONS=true",
+		})).
+		Up(t, ctx)
+
+	c := infisical.ApiClient()
+	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
+	require.NotNil(t, identity)
+
+	relayName := RandomSlug(2)
+	relayCmd := Command{
+		Test: t,
+		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
+		Env: map[string]string{
+			"INFISICAL_API_URL":    infisical.ApiUrl(t),
+			"INFISICAL_RELAY_NAME": relayName,
+			"INFISICAL_RELAY_HOST": "host.docker.internal",
+			"INFISICAL_TOKEN":      *identity.TokenAuthToken,
+		},
+	}
+	relayCmd.Start(ctx)
+	defer relayCmd.Stop()
+
+	detectHeartbeat := false
+	require.Eventually(t, func() bool {
+		// Ensure the process is still running if it's a subprocess
+		if relayCmd.RunMethod == RunMethodSubprocess && !relayCmd.IsRunning() {
+			slog.Error("Command is not running as expected", "exit_code", relayCmd.Cmd().ProcessState.ExitCode())
+			relayCmd.DumpOutput()
+			// Somehow the relayCmd stops early, let's exit the loop early
+			return true
+		}
+
+		resp, err := c.GetRelaysWithResponse(ctx)
+		if err != nil {
+			return false
+		}
+		if resp.StatusCode() != http.StatusOK {
+			return false
+		}
+		for _, relay := range *resp.JSON200 {
+			slog.Info(
+				"Relay info",
+				"id", relay.Id,
+				"name", relay.Name,
+				"host", relay.Host,
+				"heartbeat", relay.Heartbeat,
+			)
+			if relay.Name == relayName && relay.Heartbeat != nil {
+				slog.Info("Confirmed relay heartbeat")
+				detectHeartbeat = true
+				return true
+			}
+		}
+		return false
+	}, 120*time.Second, 5*time.Second)
+	assert.True(t, detectHeartbeat)
+
+	gatewayName := RandomSlug(2)
+	gatewayCmd := Command{
+		Test: t,
+		Args: []string{"gateway", "start", fmt.Sprintf("--name=%s", gatewayName)},
+		Env: map[string]string{
+			"INFISICAL_API_URL": infisical.ApiUrl(t),
+			"INFISICAL_TOKEN":   *identity.TokenAuthToken,
+		},
+	}
+	gatewayCmd.Start(ctx)
+	defer gatewayCmd.Stop()
 }
