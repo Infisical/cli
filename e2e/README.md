@@ -47,3 +47,51 @@ The drawback is that currently we cannot collect stdout and stderr.
 Some extra efforts might be needed to update the CLI code to abstract the stdout and stderr output from logs to make it possible.
 In the meantime since this is not available, we didn't set it as the default value.
 With this run method, since that we are linking the e2e test build with the CLI as a library directly, there's no need to build the executable sperately.
+
+## Setting the `INFISICAL_BACKEND_DIR` value
+
+To make our CLI test against the actual Infisical API server, we provide easy to use API to spin up the full Infisical stack in docker-compose like this:
+
+```go
+infisical := NewInfisicalService().
+    WithBackendEnvironment(types.NewMappingWithEquals([]string{
+        // This is needed for the private ip (current host) to be accepted for the relay server
+        "ALLOW_INTERNAL_IP_CONNECTIONS=true",
+    })).
+		Up(t, ctx)
+```
+
+Because it runs the actual Infisical API server stack, you need to specify `INFISICAL_BACKEND_DIR` value and pointing to the `backend` folder of the [infisical repository](https://github.com/infisical/infisical) to make it works
+Like, for example, you have the repo checked out at `/Users/fangpen/workspace/infisical`.
+Then you can expose environment variable like this:
+
+```bash
+export INFISICAL_BACKEND_DIR=/Users/fangpen/workspace/infisical/backend
+```
+
+Please note that the `/backend` path is appended.
+
+Currently, you need to enable the needed feature flag for running your tests manually in the locally checked out Infisical repo.
+If you don't know how to enable those feature flags, please contact the infisical eng-team members, they will show you how to do that.
+In the future, we will provide builder API to the `NewInfisicalService()` object for you to simply sepcify which feature you would like to enable.
+
+## Running the test
+
+To run the e2e test, you can do the following:
+
+```bash
+# switch to the e2e folder
+cd e2e
+go test github.com/infisical/cli/e2e-tests/relay
+```
+
+Combining the exporting environment variables, you might end up with running cmds like this:
+
+```bash
+export INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge
+export INFISICAL_BACKEND_DIR=/path/to/infisical/backend
+cd e2e
+go test github.com/infisical/cli/e2e-tests/relay
+```
+
+It's a bit verbose right now, but we will improve the quality of life over time by adding things such as a Makefile to make it much easier.
