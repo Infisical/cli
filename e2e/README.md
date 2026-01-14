@@ -156,3 +156,35 @@ If for any reason the cache system is not working as desired, you can disable it
 ```bash
 export CLI_E2E_DISABLE_COMPOSE_CACHE=1
 ```
+
+## Generate Infisical client code
+
+The e2e tests use generated client code to interact with the Infisical backend API.
+The client code is generated from the OpenAPI specification using `go:generate` and the `oapi-codegen` tool.
+
+### How it works
+
+1. **Download the OpenAPI specification**: While the Infisical backend server is running (typically on `http://localhost:4000`), download the OpenAPI JSON specification:
+
+   ```bash
+   curl http://localhost:4000/api/docs/json -o api.json
+   ```
+
+2. **Important note**: Before downloading the OpenAPI spec, you may need to manually set `hidden: false` for some internal endpoints in the backend code. This step is currently done manually, but a CI job should automate this in the future.
+
+3. **Generate the client code**: Once you have the `api.json` file in the `e2e` folder, you can generate the client code using either:
+
+   - `go generate` command:
+     ```bash
+     cd e2e
+     go generate
+     ```
+   - Or the Makefile target:
+     ```bash
+     cd e2e
+     make generate-code
+     ```
+
+   This will generate `packages/client/client.gen.go` from the OpenAPI specification using the configuration in `openapi-cfg.yaml`.
+
+The `go:generate` directive is defined in `e2e/main.go` and uses the `oapi-codegen` tool to generate type-safe Go client code from the OpenAPI specification.
