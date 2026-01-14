@@ -314,7 +314,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 		// -- Secret Mutation Purging --
 
-		if (r.Method == http.MethodPatch || r.Method == http.MethodDelete) &&
+		if (r.Method == http.MethodPatch || r.Method == http.MethodDelete || r.Method == http.MethodPost) &&
 			proxy.IsSecretsEndpoint(r.URL.Path) &&
 			resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			var projectId, environment, secretPath string
