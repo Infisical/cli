@@ -353,26 +353,27 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 					Str("path", r.URL.Path).
 					Msg("Missing projectId or environment for cache purging - skipping cache purge")
 				return
-			}
-
-			log.Debug().
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Str("projectId", projectId).
-				Str("environment", environment).
-				Str("secretPath", secretPath).
-				Msg("Attempting mutation purging across all tokens")
-			purgedCount := cache.PurgeByMutation(projectId, environment, secretPath)
-
-			if purgedCount == 1 {
-				log.Info().
-					Str("mutationPath", secretPath).
-					Msg("Entry purged")
 			} else {
-				log.Info().
-					Int("purgedCount", purgedCount).
-					Str("mutationPath", secretPath).
-					Msg("Entries purged")
+
+				log.Debug().
+					Str("method", r.Method).
+					Str("path", r.URL.Path).
+					Str("projectId", projectId).
+					Str("environment", environment).
+					Str("secretPath", secretPath).
+					Msg("Attempting mutation purging across all tokens")
+				purgedCount := cache.PurgeByMutation(projectId, environment, secretPath)
+
+				if purgedCount == 1 {
+					log.Info().
+						Str("mutationPath", secretPath).
+						Msg("Entry purged")
+				} else {
+					log.Info().
+						Int("purgedCount", purgedCount).
+						Str("mutationPath", secretPath).
+						Msg("Entries purged")
+				}
 			}
 		}
 
