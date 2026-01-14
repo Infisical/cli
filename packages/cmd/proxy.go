@@ -483,6 +483,8 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		log.Info().Msgf("Infisical proxy server starting on %s", listenAddress)
 	}
 
+	log.Info().Msgf("Forwarding requests to %s", domain)
+
 	if tlsEnabled {
 		if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			util.HandleError(err, "Failed to start proxy server with TLS")
@@ -492,7 +494,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 			util.HandleError(err, "Failed to start proxy server")
 		}
 	}
-	log.Info().Msgf("Forwarding requests to %s", domain)
+
 }
 
 func printCacheDebug(cmd *cobra.Command, args []string) {
