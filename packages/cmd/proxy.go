@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/crypto"
 	"github.com/Infisical/infisical-merge/packages/proxy"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/Infisical/infisical-merge/packages/util/cache"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -62,18 +65,56 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse listen-address flag")
 	}
 
+	tlsEnabled, err := cmd.Flags().GetBool("tls-enabled")
+	if err != nil {
+		util.HandleError(err, "Unable to parse tls-enabled flag")
+	}
+
+	tlsCertFile, err := cmd.Flags().GetString("tls-cert-file")
+	if err != nil {
+		util.HandleError(err, "Unable to parse tls-cert-file flag")
+	}
+
+	tlsKeyFile, err := cmd.Flags().GetString("tls-key-file")
+	if err != nil {
+		util.HandleError(err, "Unable to parse tls-key-file flag")
+	}
+
+	if tlsEnabled && (tlsCertFile == "" || tlsKeyFile == "") {
+		util.PrintErrorMessageAndExit("`tls-cert-file` and `tls-key-file` are required when `tls-enabled` is set to true")
+	}
+
 	if listenAddress == "" {
 		util.PrintErrorMessageAndExit("Listen-address flag is required")
 	}
 
-	resyncInterval, err := cmd.Flags().GetInt("resync-interval")
+	evictionStrategy, err := cmd.Flags().GetString("eviction-strategy")
 	if err != nil {
-		util.HandleError(err, "Unable to parse resync-interval flag")
+		util.HandleError(err, "Unable to parse eviction-strategy flag")
 	}
 
-	cacheTTL, err := cmd.Flags().GetInt("cache-ttl")
+	if evictionStrategy != "optimistic" {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid eviction-strategy '%s'. Currently only 'optimistic' is supported.", evictionStrategy))
+	}
+
+	accessTokenCheckIntervalStr, err := cmd.Flags().GetString("access-token-check-interval")
 	if err != nil {
-		util.HandleError(err, "Unable to parse cache-ttl flag")
+		util.HandleError(err, "Unable to parse access-token-check-interval flag")
+	}
+
+	accessTokenCheckInterval, err := util.ParseTimeDurationString(accessTokenCheckIntervalStr, true)
+	if err != nil {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid access-token-check-interval format '%s'. Use formats like 5m, 1h, 1d", accessTokenCheckIntervalStr))
+	}
+
+	staticSecretsRefreshIntervalStr, err := cmd.Flags().GetString("static-secrets-refresh-interval")
+	if err != nil {
+		util.HandleError(err, "Unable to parse static-secrets-refresh-interval flag")
+	}
+
+	staticSecretsRefreshInterval, err := util.ParseTimeDurationString(staticSecretsRefreshIntervalStr, true)
+	if err != nil {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid static-secrets-refresh-interval format '%s'. Use formats like 30m, 1h, 1d", staticSecretsRefreshIntervalStr))
 	}
 
 	domainURL, err := url.Parse(domain)
@@ -90,12 +131,29 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		Timeout: 0,
 	}
 
-	cache := proxy.NewCache()
-	devMode := util.CLI_VERSION == "devel"
+	// Create in-memory cache (no persistence, no encryption needed for ephemeral data)
+	// For persistent cache with encryption, use proxy.NewCacheWithOptions
+
+	encryptionKey, err := crypto.GenerateRandomBytes(32)
+	if err != nil {
+		util.HandleError(err, "Failed to generate random encryption key")
+	}
+
+	cache, err := proxy.NewCache(cache.EncryptedStorageOptions{
+		InMemory:      true,
+		EncryptionKey: [32]byte(encryptionKey),
+	})
+
+	if err != nil {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to create cache: %v", err))
+	}
+
+	defer cache.Close()
+
 	mux := http.NewServeMux()
 
 	// Debug endpoint (dev mode only)
-	if devMode {
+	if util.IsDevelopmentMode() {
 		mux.HandleFunc("/_debug/cache", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -373,15 +431,28 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	// Add proxy handler to mux
 	mux.HandleFunc("/", proxyHandler)
 
+	var tlsConfig *tls.Config
+	if tlsEnabled {
+		cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+		if err != nil {
+			util.HandleError(err, fmt.Sprintf("Failed to load TLS certificate and key: %s", err))
+		}
+
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+	}
+
 	server := &http.Server{
-		Addr:    listenAddress,
-		Handler: mux,
+		Addr:      listenAddress,
+		Handler:   mux,
+		TLSConfig: tlsConfig,
 	}
 
 	resyncCtx, resyncCancel := context.WithCancel(context.Background())
 	defer resyncCancel()
 
-	go proxy.StartResyncLoop(resyncCtx, cache, domainURL, httpClient, resyncInterval, cacheTTL)
+	go proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval)
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -406,12 +477,22 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		os.Exit(0)
 	}()
 
-	log.Info().Msgf("Infisical proxy server starting on %s", listenAddress)
-	log.Info().Msgf("Forwarding requests to %s", domain)
-
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		util.HandleError(err, "Failed to start proxy server")
+	if tlsEnabled {
+		log.Info().Msgf("Infisical proxy server starting on %s with TLS enabled", listenAddress)
+	} else {
+		log.Info().Msgf("Infisical proxy server starting on %s", listenAddress)
 	}
+
+	if tlsEnabled {
+		if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			util.HandleError(err, "Failed to start proxy server with TLS")
+		}
+	} else {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			util.HandleError(err, "Failed to start proxy server")
+		}
+	}
+	log.Info().Msgf("Forwarding requests to %s", domain)
 }
 
 func printCacheDebug(cmd *cobra.Command, args []string) {
@@ -466,8 +547,12 @@ func isStreamingEndpoint(path string) bool {
 func init() {
 	proxyStartCmd.Flags().String("domain", "", "Domain of your Infisical instance (e.g., https://app.infisical.com for cloud, https://my-self-hosted-instance.com for self-hosted)")
 	proxyStartCmd.Flags().String("listen-address", "localhost:8081", "The address for the proxy server to listen on. Defaults to localhost:8081")
-	proxyStartCmd.Flags().Int("resync-interval", 10, "Interval in minutes for resyncing cached secrets. Defaults to 10 minutes.")
-	proxyStartCmd.Flags().Int("cache-ttl", 60, "TTL in minutes for individual cache entries. Defaults to 60 minutes.")
+	proxyStartCmd.Flags().String("eviction-strategy", "optimistic", "Cache eviction strategy. 'optimistic' keeps cached data when Infisical is unreachable for high availability. Defaults to optimistic.")
+	proxyStartCmd.Flags().String("access-token-check-interval", "5m", "How often to validate that access tokens are still valid (e.g., 5m, 1h). Defaults to 5m.")
+	proxyStartCmd.Flags().String("static-secrets-refresh-interval", "1h", "How often to refresh cached secrets (e.g., 30m, 1h, 1d). Defaults to 1h.")
+	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")
+	proxyStartCmd.Flags().String("tls-key-file", "", "The path to the TLS key file for the proxy server. Required when `tls-enabled` is set to true (default)")
+	proxyStartCmd.Flags().Bool("tls-enabled", true, "Whether to enable TLS for the proxy server. Defaults to true")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 

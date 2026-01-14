@@ -181,6 +181,138 @@ func (s *EncryptedStorage) Delete(key string) error {
 	})
 }
 
+// GetKeysByPrefix returns all keys that start with the given prefix (keys only, no values)
+func (s *EncryptedStorage) GetKeysByPrefix(prefix string) ([]string, error) {
+	var keys []string
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false // Keys only, much faster
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefixBytes := []byte(prefix)
+		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+			keys = append(keys, string(it.Item().Key()))
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get keys by prefix: %w", err)
+	}
+
+	return keys, nil
+}
+
+// GetByPrefix returns all key-value pairs where the key starts with the given prefix
+func (s *EncryptedStorage) GetByPrefix(prefix string, destFactory func() interface{}) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchSize = 10
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefixBytes := []byte(prefix)
+		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+			item := it.Item()
+			key := string(item.Key())
+
+			encrypted, err := item.ValueCopy(nil)
+			if err != nil {
+				return fmt.Errorf("failed to copy value for key %s: %w", key, err)
+			}
+
+			decrypted, err := s.decrypt(encrypted)
+			if err != nil {
+				return fmt.Errorf("failed to decrypt value for key %s: %w", key, err)
+			}
+
+			dest := destFactory()
+			if err := json.Unmarshal(decrypted, dest); err != nil {
+				return fmt.Errorf("failed to unmarshal value for key %s: %w", key, err)
+			}
+
+			result[key] = dest
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// DeleteByPrefix deletes all keys that start with the given prefix
+// Deletions are batched to avoid exceeding BadgerDB's transaction size limits
+func (s *EncryptedStorage) DeleteByPrefix(prefix string) (int, error) {
+	const batchSize = 1000 // Process deletions in batches to avoid transaction size limits
+
+	log.Debug().Str("prefix", prefix).Msg("Deleting by prefix")
+
+	// First, collect all keys to delete
+	keysToDelete, err := s.GetKeysByPrefix(prefix)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(keysToDelete) == 0 {
+		return 0, nil
+	}
+
+	deletedCount := 0
+
+	// Process deletions in batches
+	for i := 0; i < len(keysToDelete); i += batchSize {
+		end := i + batchSize
+		if end > len(keysToDelete) {
+			end = len(keysToDelete)
+		}
+		batch := keysToDelete[i:end]
+
+		err = s.db.Update(func(txn *badger.Txn) error {
+			for _, key := range batch {
+				if err := txn.Delete([]byte(key)); err != nil {
+					return fmt.Errorf("failed to delete key %s: %w", key, err)
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			return deletedCount, fmt.Errorf("failed to delete batch starting at index %d: %w", i, err)
+		}
+
+		deletedCount += len(batch)
+	}
+
+	return deletedCount, nil
+}
+
+// Exists checks if a key exists in the storage
+func (s *EncryptedStorage) Exists(key string) (bool, error) {
+	var exists bool
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		_, err := txn.Get([]byte(key))
+		if err == badger.ErrKeyNotFound {
+			exists = false
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		exists = true
+		return nil
+	})
+
+	return exists, err
+}
+
 func (s *EncryptedStorage) Close() error {
 	return s.db.Close()
 }

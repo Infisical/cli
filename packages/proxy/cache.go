@@ -4,52 +4,114 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Infisical/infisical-merge/packages/util/cache"
+	"github.com/rs/zerolog/log"
+)
+
+// Storage key prefixes
+const (
+	prefixEntry = "entry:"
+	prefixToken = "token:"
+	prefixPath  = "path:"
 )
 
 type IndexEntry struct {
-	CacheKey        string
-	SecretPath      string
-	EnvironmentSlug string
-	ProjectId       string
+	CacheKey        string `json:"cacheKey"`
+	SecretPath      string `json:"secretPath"`
+	EnvironmentSlug string `json:"environmentSlug"`
+	ProjectId       string `json:"projectId"`
 }
 
 type CachedRequest struct {
-	Method     string
-	RequestURI string
-	Headers    http.Header
-	CachedAt   time.Time
+	Method     string      `json:"method"`
+	RequestURI string      `json:"requestUri"`
+	Headers    http.Header `json:"headers"`
+	CachedAt   time.Time   `json:"cachedAt"`
 }
 
 type CachedResponse struct {
-	StatusCode int
-	Header     http.Header
-	BodyBytes  []byte
+	StatusCode int         `json:"statusCode"`
+	Header     http.Header `json:"header"`
+	BodyBytes  []byte      `json:"bodyBytes"`
 }
 
-type CacheEntry struct {
-	Request  *CachedRequest
-	Response *CachedResponse
+// StoredCacheEntry is the structure stored in EncryptedStorage
+type StoredCacheEntry struct {
+	Request  *CachedRequest  `json:"request"`
+	Response *CachedResponse `json:"response"`
+	Token    string          `json:"token"`
+	Index    IndexEntry      `json:"index"`
 }
 
-// Cache is an in-memory cache for HTTP responses
+// PathIndexMarker is a simple marker stored at path index keys
+type PathIndexMarker struct {
+	CacheKey string `json:"cacheKey"`
+}
+
+// Cache is an HTTP response cache fully backed by EncryptedStorage
 type Cache struct {
-	entries           map[string]*CacheEntry                                          // main store: cacheKey -> cache entry (request + response)
-	tokenIndex        map[string]map[string]IndexEntry                                // secondary index: token -> map[cacheKey]IndexEntry, used for token invalidation
-	compoundPathIndex map[string]map[string]map[string]map[string]map[string]struct{} // token -> projectID -> envSlug -> secretPath -> cacheKey -> struct{}, used for purging after mutation calls
-	mu                sync.RWMutex                                                    // for thread-safe access
+	storage *cache.EncryptedStorage
+	mu      sync.RWMutex
 }
 
-func NewCache() *Cache {
-	return &Cache{
-		entries:           make(map[string]*CacheEntry),
-		tokenIndex:        make(map[string]map[string]IndexEntry),
-		compoundPathIndex: make(map[string]map[string]map[string]map[string]map[string]struct{}),
+// NewCache creates a cache with the specified options
+func NewCache(opts cache.EncryptedStorageOptions) (*Cache, error) {
+	storage, err := cache.NewEncryptedStorage(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cache storage: %w", err)
 	}
+
+	return &Cache{
+		storage: storage,
+	}, nil
+}
+
+// Close closes the underlying storage
+func (c *Cache) Close() error {
+	return c.storage.Close()
+}
+
+// hashToken creates a short hash of the token for use in storage keys
+// This avoids storing the full token in key names while still being unique
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:8]) // First 8 bytes = 16 hex chars
+}
+
+// buildEntryKey builds the storage key for a cache entry
+func buildEntryKey(cacheKey string) string {
+	return prefixEntry + cacheKey
+}
+
+// buildTokenIndexKey builds the storage key for token index entry
+func buildTokenIndexKey(token, cacheKey string) string {
+	return prefixToken + hashToken(token) + ":" + cacheKey
+}
+
+// buildTokenIndexPrefix builds the prefix for all token index entries for a token
+func buildTokenIndexPrefix(token string) string {
+	return prefixToken + hashToken(token) + ":"
+}
+
+// buildPathIndexKey builds the storage key for path index entry
+func buildPathIndexKey(token string, indexEntry IndexEntry) string {
+	// Escape colons in secretPath to avoid key parsing issues
+	escapedPath := strings.ReplaceAll(indexEntry.SecretPath, ":", "\\:")
+	return fmt.Sprintf("%s%s:%s:%s:%s:%s",
+		prefixPath,
+		hashToken(token),
+		indexEntry.ProjectId,
+		indexEntry.EnvironmentSlug,
+		escapedPath,
+		indexEntry.CacheKey,
+	)
 }
 
 func IsSecretsEndpoint(path string) bool {
@@ -69,8 +131,13 @@ func (c *Cache) Get(cacheKey string) (*http.Response, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	entry, exists := c.entries[cacheKey]
-	if !exists {
+	var entry StoredCacheEntry
+	err := c.storage.Get(buildEntryKey(cacheKey), &entry)
+	if err != nil {
+		return nil, false
+	}
+
+	if entry.Response == nil {
 		return nil, false
 	}
 
@@ -89,10 +156,15 @@ func (c *Cache) Set(cacheKey string, req *http.Request, resp *http.Response, tok
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// We can't use the response body directly because it will be closed by the time we need to use it
+	// Read response body
 	var bodyBytes []byte
 	if resp.Body != nil {
-		bodyBytes, _ = io.ReadAll(resp.Body)
+		var err error
+		bodyBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			log.Error().Err(err).Str("cacheKey", cacheKey).Msg("Failed to read response body")
+			bodyBytes = nil
+		}
 	}
 
 	// Extract request metadata
@@ -104,7 +176,7 @@ func (c *Cache) Set(cacheKey string, req *http.Request, resp *http.Response, tok
 	responseHeader := make(http.Header)
 	CopyHeaders(responseHeader, resp.Header)
 
-	entry := &CacheEntry{
+	entry := StoredCacheEntry{
 		Request: &CachedRequest{
 			Method:     req.Method,
 			RequestURI: requestURI,
@@ -116,40 +188,37 @@ func (c *Cache) Set(cacheKey string, req *http.Request, resp *http.Response, tok
 			Header:     responseHeader,
 			BodyBytes:  bodyBytes,
 		},
+		Token: token,
+		Index: indexEntry,
 	}
 
-	c.entries[cacheKey] = entry
+	// Store main entry
+	if err := c.storage.Set(buildEntryKey(cacheKey), entry); err != nil {
+		log.Error().Err(err).Str("cacheKey", cacheKey).Msg("Failed to store cache entry")
+		return
+	}
 
-	// Update secondary index for token
-	if c.tokenIndex[token] == nil {
-		c.tokenIndex[token] = make(map[string]IndexEntry)
+	// Store token index entry
+	tokenIndexKey := buildTokenIndexKey(token, cacheKey)
+	if err := c.storage.Set(tokenIndexKey, indexEntry); err != nil {
+		log.Error().Err(err).Str("cacheKey", cacheKey).Msg("Failed to store token index entry")
 	}
-	c.tokenIndex[token][cacheKey] = indexEntry
 
-	// Update compound path index
-	if c.compoundPathIndex[token] == nil {
-		c.compoundPathIndex[token] = make(map[string]map[string]map[string]map[string]struct{})
+	// Store path index entry
+	pathIndexKey := buildPathIndexKey(token, indexEntry)
+	if err := c.storage.Set(pathIndexKey, PathIndexMarker{CacheKey: cacheKey}); err != nil {
+		log.Error().Err(err).Str("cacheKey", cacheKey).Msg("Failed to store path index entry")
 	}
-	if c.compoundPathIndex[token][indexEntry.ProjectId] == nil {
-		c.compoundPathIndex[token][indexEntry.ProjectId] = make(map[string]map[string]map[string]struct{})
-	}
-	if c.compoundPathIndex[token][indexEntry.ProjectId][indexEntry.EnvironmentSlug] == nil {
-		c.compoundPathIndex[token][indexEntry.ProjectId][indexEntry.EnvironmentSlug] = make(map[string]map[string]struct{})
-	}
-	if c.compoundPathIndex[token][indexEntry.ProjectId][indexEntry.EnvironmentSlug][indexEntry.SecretPath] == nil {
-		c.compoundPathIndex[token][indexEntry.ProjectId][indexEntry.EnvironmentSlug][indexEntry.SecretPath] = make(map[string]struct{})
-	}
-	c.compoundPathIndex[token][indexEntry.ProjectId][indexEntry.EnvironmentSlug][indexEntry.SecretPath][cacheKey] = struct{}{}
 }
 
 // UpdateResponse updates only the response data and cachedAt timestamp for an existing cache entry
-// This is used during resync when the request parameters (and thus IndexEntry) haven't changed
 func (c *Cache) UpdateResponse(cacheKey string, statusCode int, header http.Header, bodyBytes []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	entry, exists := c.entries[cacheKey]
-	if !exists {
+	var entry StoredCacheEntry
+	err := c.storage.Get(buildEntryKey(cacheKey), &entry)
+	if err != nil {
 		return
 	}
 
@@ -165,6 +234,11 @@ func (c *Cache) UpdateResponse(cacheKey string, statusCode int, header http.Head
 	entry.Response.Header = responseHeader
 	entry.Response.BodyBytes = bodyBytesCopy
 	entry.Request.CachedAt = time.Now()
+
+	// Update in storage
+	if err := c.storage.Set(buildEntryKey(cacheKey), entry); err != nil {
+		log.Error().Err(err).Str("cacheKey", cacheKey).Msg("Failed to update cache entry")
+	}
 }
 
 func CopyHeaders(dst, src http.Header) {
@@ -221,14 +295,33 @@ func (c *Cache) GetExpiredRequests(cacheTTL time.Duration) map[string]*CachedReq
 	defer c.mu.RUnlock()
 
 	now := time.Now()
-	requests := make(map[string]*CachedRequest, 0)
+	requests := make(map[string]*CachedRequest)
 
-	for key, entry := range c.entries {
+	// Get all entry keys
+	entryKeys, err := c.storage.GetKeysByPrefix(prefixEntry)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get entry keys for expired requests check")
+		return requests
+	}
+
+	for _, key := range entryKeys {
+		var entry StoredCacheEntry
+		if err := c.storage.Get(key, &entry); err != nil {
+			continue
+		}
+
+		if entry.Request == nil {
+			continue
+		}
+
 		// Only include entries where cache-ttl has expired
 		age := now.Sub(entry.Request.CachedAt)
 		if age <= cacheTTL {
 			continue
 		}
+
+		// Extract cacheKey from storage key (remove prefix)
+		cacheKey := strings.TrimPrefix(key, prefixEntry)
 
 		requestCopy := &CachedRequest{
 			Method:     entry.Request.Method,
@@ -239,7 +332,7 @@ func (c *Cache) GetExpiredRequests(cacheTTL time.Duration) map[string]*CachedReq
 
 		CopyHeaders(requestCopy.Headers, entry.Request.Headers)
 
-		requests[key] = requestCopy
+		requests[cacheKey] = requestCopy
 	}
 
 	return requests
@@ -249,104 +342,76 @@ func (c *Cache) EvictEntry(cacheKey string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	entry, exists := c.entries[cacheKey]
-	if !exists {
+	c.evictEntryUnsafe(cacheKey)
+}
+
+// evictEntryUnsafe evicts an entry without acquiring the lock (caller must hold lock)
+func (c *Cache) evictEntryUnsafe(cacheKey string) {
+	// Get the entry to find its token and index info
+	var entry StoredCacheEntry
+	if err := c.storage.Get(buildEntryKey(cacheKey), &entry); err != nil {
 		return
 	}
 
-	token := ExtractTokenFromRequest(&http.Request{Header: entry.Request.Headers})
-
-	// Remove from main store
-	delete(c.entries, cacheKey)
-
-	// Remove from token index and get IndexEntry for compound index cleanup
-	var indexEntry IndexEntry
-	if token != "" {
-		if tokenEntries, ok := c.tokenIndex[token]; ok {
-			indexEntry = tokenEntries[cacheKey]
-			delete(tokenEntries, cacheKey)
-			if len(tokenEntries) == 0 {
-				delete(c.tokenIndex, token)
-			}
-		}
+	// Remove main entry
+	if err := c.storage.Delete(buildEntryKey(cacheKey)); err != nil {
+		log.Error().Err(err).Str("cacheKey", cacheKey).Msg("Failed to delete cache entry")
 	}
 
-	// Remove from compound path index
-	if token == "" || indexEntry.ProjectId == "" || indexEntry.EnvironmentSlug == "" || indexEntry.SecretPath == "" {
-		return
+	// Remove token index entry
+	tokenIndexKey := buildTokenIndexKey(entry.Token, cacheKey)
+	if err := c.storage.Delete(tokenIndexKey); err != nil {
+		log.Debug().Err(err).Str("cacheKey", cacheKey).Msg("Failed to delete token index entry")
 	}
 
-	projectMap := c.compoundPathIndex[token]
-	if projectMap == nil {
-		return
-	}
-
-	envMap := projectMap[indexEntry.ProjectId]
-	if envMap == nil {
-		// Orphaned project entry
-		delete(projectMap, indexEntry.ProjectId)
-		if len(projectMap) == 0 {
-			delete(c.compoundPathIndex, token)
-		}
-		return
-	}
-
-	pathsMap := envMap[indexEntry.EnvironmentSlug]
-	if pathsMap == nil {
-		// Orphaned environment entry
-		delete(envMap, indexEntry.EnvironmentSlug)
-		if len(envMap) == 0 {
-			delete(projectMap, indexEntry.ProjectId)
-		}
-		if len(projectMap) == 0 {
-			delete(c.compoundPathIndex, token)
-		}
-		return
-	}
-
-	cacheKeys := pathsMap[indexEntry.SecretPath]
-	if cacheKeys == nil {
-		// Orphaned path entry
-		delete(pathsMap, indexEntry.SecretPath)
-		if len(pathsMap) == 0 {
-			delete(envMap, indexEntry.EnvironmentSlug)
-		}
-		if len(envMap) == 0 {
-			delete(projectMap, indexEntry.ProjectId)
-		}
-		if len(projectMap) == 0 {
-			delete(c.compoundPathIndex, token)
-		}
-		return
-	}
-
-	delete(cacheKeys, cacheKey)
-
-	// If no more cacheKeys for this path, remove the path entry
-	if len(cacheKeys) == 0 {
-		delete(pathsMap, indexEntry.SecretPath)
-	}
-
-	// Clean up empty nested maps
-	if len(pathsMap) == 0 {
-		delete(envMap, indexEntry.EnvironmentSlug)
-	}
-	if len(envMap) == 0 {
-		delete(projectMap, indexEntry.ProjectId)
-	}
-	if len(projectMap) == 0 {
-		delete(c.compoundPathIndex, token)
+	// Remove path index entry
+	pathIndexKey := buildPathIndexKey(entry.Token, entry.Index)
+	if err := c.storage.Delete(pathIndexKey); err != nil {
+		log.Debug().Err(err).Str("cacheKey", cacheKey).Msg("Failed to delete path index entry")
 	}
 }
 
+// GetAllTokens returns all unique tokens that have cached entries
 func (c *Cache) GetAllTokens() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	tokens := make([]string, 0, len(c.tokenIndex))
-	for token := range c.tokenIndex {
+	// Get all token index keys and extract unique token hashes
+	tokenKeys, err := c.storage.GetKeysByPrefix(prefixToken)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get token index keys")
+		return nil
+	}
+
+	// We need to get unique tokens, but we only have hashes in the keys
+	// We need to look up the actual token from entries
+	tokenHashToToken := make(map[string]string)
+
+	for _, key := range tokenKeys {
+		// Key format: token:{tokenHash}:{cacheKey}
+		parts := strings.SplitN(strings.TrimPrefix(key, prefixToken), ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		tokenHash := parts[0]
+		cacheKey := parts[1]
+
+		if _, exists := tokenHashToToken[tokenHash]; exists {
+			continue // Already found this token
+		}
+
+		// Get the entry to find the actual token
+		var entry StoredCacheEntry
+		if err := c.storage.Get(buildEntryKey(cacheKey), &entry); err == nil {
+			tokenHashToToken[tokenHash] = entry.Token
+		}
+	}
+
+	tokens := make([]string, 0, len(tokenHashToToken))
+	for _, token := range tokenHashToToken {
 		tokens = append(tokens, token)
 	}
+
 	return tokens
 }
 
@@ -355,17 +420,30 @@ func (c *Cache) GetFirstRequestForToken(token string) (cacheKey string, request 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tokenEntries, exists := c.tokenIndex[token]
-	if !exists || len(tokenEntries) == 0 {
+	tokenPrefix := buildTokenIndexPrefix(token)
+	tokenKeys, err := c.storage.GetKeysByPrefix(tokenPrefix)
+	if err != nil || len(tokenKeys) == 0 {
 		return "", nil, false
 	}
 
 	// Get the first cacheKey from the token's entries
-	for key := range tokenEntries {
-		entry, exists := c.entries[key]
-		if !exists {
-			// Delete orphan cache entry
-			delete(tokenEntries, key)
+	for _, key := range tokenKeys {
+		// Key format: token:{tokenHash}:{cacheKey}
+		parts := strings.SplitN(strings.TrimPrefix(key, prefixToken), ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		cacheKey := parts[1]
+
+		var entry StoredCacheEntry
+		if err := c.storage.Get(buildEntryKey(cacheKey), &entry); err != nil {
+			// Delete orphan index entry
+			c.storage.Delete(key)
+			continue
+		}
+
+		if entry.Request == nil {
+			c.storage.Delete(key)
 			continue
 		}
 
@@ -378,44 +456,52 @@ func (c *Cache) GetFirstRequestForToken(token string) (cacheKey string, request 
 
 		CopyHeaders(requestCopy.Headers, entry.Request.Headers)
 
-		return key, requestCopy, true
+		return cacheKey, requestCopy, true
 	}
 
 	return "", nil, false
 }
 
+// EvictAllEntriesForToken evicts all cache entries for a given token
 func (c *Cache) EvictAllEntriesForToken(token string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tokenEntries, exists := c.tokenIndex[token]
-	if !exists {
+	tokenPrefix := buildTokenIndexPrefix(token)
+	tokenKeys, err := c.storage.GetKeysByPrefix(tokenPrefix)
+	if err != nil {
 		return 0
 	}
 
-	evictedCount := len(tokenEntries)
+	evictedCount := 0
 
-	// Delete all entries from main store
-	for cacheKey := range tokenEntries {
-		delete(c.entries, cacheKey)
+	for _, key := range tokenKeys {
+		// Key format: token:{tokenHash}:{cacheKey}
+		parts := strings.SplitN(strings.TrimPrefix(key, prefixToken), ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		cacheKey := parts[1]
+
+		c.evictEntryUnsafe(cacheKey)
+		evictedCount++
 	}
-
-	// Delete token from token index
-	delete(c.tokenIndex, token)
-
-	// Delete token from compound path index
-	delete(c.compoundPathIndex, token)
 
 	return evictedCount
 }
 
+// RemoveTokenFromIndex removes all index entries for a token (without deleting main entries)
 func (c *Cache) RemoveTokenFromIndex(token string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	delete(c.tokenIndex, token)
+	tokenPrefix := buildTokenIndexPrefix(token)
+	c.storage.DeleteByPrefix(tokenPrefix)
 
-	delete(c.compoundPathIndex, token)
+	// Also delete path index entries for this token
+	// Path keys start with path:{tokenHash}:...
+	pathPrefix := prefixPath + hashToken(token) + ":"
+	c.storage.DeleteByPrefix(pathPrefix)
 }
 
 // PurgeByMutation purges cache entries across ALL tokens that match the mutation path
@@ -425,48 +511,34 @@ func (c *Cache) PurgeByMutation(projectID, envSlug, mutationPath string) int {
 
 	purgedCount := 0
 
-	// Iterate through all tokens in the compound index
-	for token, projectMap := range c.compoundPathIndex {
-		envMap, ok := projectMap[projectID]
-		if !ok {
+	// Get all path index keys
+	pathKeys, err := c.storage.GetKeysByPrefix(prefixPath)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get path index keys for mutation purge")
+		return 0
+	}
+
+	for _, key := range pathKeys {
+		// Key format: path:{tokenHash}:{projectId}:{envSlug}:{escapedSecretPath}:{cacheKey}
+		withoutPrefix := strings.TrimPrefix(key, prefixPath)
+		parts := strings.SplitN(withoutPrefix, ":", 5)
+		if len(parts) < 5 {
 			continue
 		}
 
-		pathsMap, ok := envMap[envSlug]
-		if !ok {
+		keyProjectID := parts[1]
+		keyEnvSlug := parts[2]
+		keySecretPath := strings.ReplaceAll(parts[3], "\\:", ":") // Unescape colons
+		keyCacheKey := parts[4]
+
+		// Check if this entry matches the mutation criteria
+		if keyProjectID != projectID || keyEnvSlug != envSlug {
 			continue
 		}
 
-		// Iterate through all paths and check matches
-		for storedPath, cacheKeys := range pathsMap {
-			if matchesPath(storedPath, mutationPath) {
-				for cacheKey := range cacheKeys {
-					// Remove from main store
-					delete(c.entries, cacheKey)
-
-					// Remove from token index
-					if tokenEntries, ok := c.tokenIndex[token]; ok {
-						delete(tokenEntries, cacheKey)
-						if len(tokenEntries) == 0 {
-							delete(c.tokenIndex, token)
-						}
-					}
-
-					purgedCount++
-				}
-				delete(pathsMap, storedPath)
-			}
-		}
-
-		// Clean up empty nested maps for this token
-		if len(pathsMap) == 0 {
-			delete(envMap, envSlug)
-		}
-		if len(envMap) == 0 {
-			delete(projectMap, projectID)
-		}
-		if len(projectMap) == 0 {
-			delete(c.compoundPathIndex, token)
+		if matchesPath(keySecretPath, mutationPath) {
+			c.evictEntryUnsafe(keyCacheKey)
+			purgedCount++
 		}
 	}
 
@@ -528,29 +600,77 @@ func (c *Cache) GetDebugInfo() CacheDebugInfo {
 	var totalSize int64
 	entriesByToken := make(map[string]int)
 	tokenIndex := make(map[string][]IndexEntry)
-	cacheKeys := make([]CacheKeyDebugInfo, 0, len(c.entries))
+	cacheKeys := make([]CacheKeyDebugInfo, 0)
+	totalEntries := 0
 
-	// Calculate sizes and build cache keys with timestamps
-	for cacheKey, entry := range c.entries {
-		cacheKeys = append(cacheKeys, CacheKeyDebugInfo{
-			CacheKey: cacheKey,
-			CachedAt: entry.Request.CachedAt,
-		})
-		totalSize += int64(len(entry.Response.BodyBytes))
+	// Get all entry keys
+	entryKeys, err := c.storage.GetKeysByPrefix(prefixEntry)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get entry keys for debug info")
+		return CacheDebugInfo{}
 	}
 
-	// Build token index and count entries per token
-	for token, entries := range c.tokenIndex {
-		entriesByToken[token] = len(entries)
-		tokenIndex[token] = make([]IndexEntry, 0, len(entries))
-		for _, entry := range entries {
-			tokenIndex[token] = append(tokenIndex[token], entry)
+	// Maps for building compound path index debug info
+	// tokenHash -> projectID -> envSlug -> secretPath -> []CacheKeyDebugInfo
+	pathIndexData := make(map[string]map[string]map[string]map[string][]CacheKeyDebugInfo)
+	tokenHashToToken := make(map[string]string)
+
+	for _, key := range entryKeys {
+		var entry StoredCacheEntry
+		if err := c.storage.Get(key, &entry); err != nil {
+			continue
 		}
+
+		cacheKey := strings.TrimPrefix(key, prefixEntry)
+		tokenHash := hashToken(entry.Token)
+		tokenHashToToken[tokenHash] = entry.Token
+
+		// Count entries per token
+		entriesByToken[entry.Token]++
+
+		// Add to token index
+		if tokenIndex[entry.Token] == nil {
+			tokenIndex[entry.Token] = make([]IndexEntry, 0)
+		}
+		tokenIndex[entry.Token] = append(tokenIndex[entry.Token], entry.Index)
+
+		// Calculate size
+		if entry.Response != nil {
+			totalSize += int64(len(entry.Response.BodyBytes))
+		}
+
+		// Add to cache keys list
+		if entry.Request != nil {
+			cacheKeys = append(cacheKeys, CacheKeyDebugInfo{
+				CacheKey: cacheKey,
+				CachedAt: entry.Request.CachedAt,
+			})
+		}
+
+		totalEntries++
+
+		// Build path index data
+		if pathIndexData[tokenHash] == nil {
+			pathIndexData[tokenHash] = make(map[string]map[string]map[string][]CacheKeyDebugInfo)
+		}
+		if pathIndexData[tokenHash][entry.Index.ProjectId] == nil {
+			pathIndexData[tokenHash][entry.Index.ProjectId] = make(map[string]map[string][]CacheKeyDebugInfo)
+		}
+		if pathIndexData[tokenHash][entry.Index.ProjectId][entry.Index.EnvironmentSlug] == nil {
+			pathIndexData[tokenHash][entry.Index.ProjectId][entry.Index.EnvironmentSlug] = make(map[string][]CacheKeyDebugInfo)
+		}
+		keyInfo := CacheKeyDebugInfo{CacheKey: cacheKey}
+		if entry.Request != nil {
+			keyInfo.CachedAt = entry.Request.CachedAt
+		}
+		pathIndexData[tokenHash][entry.Index.ProjectId][entry.Index.EnvironmentSlug][entry.Index.SecretPath] =
+			append(pathIndexData[tokenHash][entry.Index.ProjectId][entry.Index.EnvironmentSlug][entry.Index.SecretPath], keyInfo)
 	}
 
 	// Build compound path index debug info
-	compoundPathIndex := make([]CompoundPathIndexDebugInfo, 0, len(c.compoundPathIndex))
-	for token, projectMap := range c.compoundPathIndex {
+	compoundPathIndex := make([]CompoundPathIndexDebugInfo, 0)
+	for tokenHash, projectMap := range pathIndexData {
+		token := tokenHashToToken[tokenHash]
 		projects := make(map[string]ProjectDebugInfo)
 		totalPaths := 0
 		totalKeys := 0
@@ -564,23 +684,13 @@ func (c *Cache) GetDebugInfo() CacheDebugInfo {
 				paths := make(map[string]PathDebugInfo)
 				envTotalKeys := 0
 
-				for secretPath, cacheKeys := range pathsMap {
-					keys := make([]CacheKeyDebugInfo, 0, len(cacheKeys))
-					for cacheKey := range cacheKeys {
-
-						if entry, exists := c.entries[cacheKey]; exists {
-							keys = append(keys, CacheKeyDebugInfo{
-								CacheKey: cacheKey,
-								CachedAt: entry.Request.CachedAt,
-							})
-						}
-					}
+				for secretPath, keyInfos := range pathsMap {
 					paths[secretPath] = PathDebugInfo{
 						SecretPath: secretPath,
-						CacheKeys:  keys,
-						KeyCount:   len(cacheKeys),
+						CacheKeys:  keyInfos,
+						KeyCount:   len(keyInfos),
 					}
-					envTotalKeys += len(cacheKeys)
+					envTotalKeys += len(keyInfos)
 					projectTotalPaths++
 				}
 
@@ -611,8 +721,8 @@ func (c *Cache) GetDebugInfo() CacheDebugInfo {
 	}
 
 	return CacheDebugInfo{
-		TotalEntries:      len(c.entries),
-		TotalTokens:       len(c.tokenIndex),
+		TotalEntries:      totalEntries,
+		TotalTokens:       len(tokenHashToToken),
 		TotalSizeBytes:    totalSize,
 		EntriesByToken:    entriesByToken,
 		CacheKeys:         cacheKeys,
