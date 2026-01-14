@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const OPTIMISTIC_CACHE_EVICTION_STRATEGY = "optimistic"
+
 var proxyCmd = &cobra.Command{
 	Example:               `infisical proxy start`,
 	Short:                 "Used to run Infisical proxy server",
@@ -93,7 +95,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse eviction-strategy flag")
 	}
 
-	if evictionStrategy != "optimistic" {
+	if evictionStrategy != OPTIMISTIC_CACHE_EVICTION_STRATEGY {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid eviction-strategy '%s'. Currently only 'optimistic' is supported.", evictionStrategy))
 	}
 
@@ -566,7 +568,7 @@ func isStreamingEndpoint(path string) bool {
 func init() {
 	proxyStartCmd.Flags().String("domain", "", "Domain of your Infisical instance (e.g., https://app.infisical.com for cloud, https://my-self-hosted-instance.com for self-hosted)")
 	proxyStartCmd.Flags().String("listen-address", "localhost:8081", "The address for the proxy server to listen on. Defaults to localhost:8081")
-	proxyStartCmd.Flags().String("eviction-strategy", "optimistic", "Cache eviction strategy. 'optimistic' keeps cached data when Infisical is unreachable for high availability. Defaults to optimistic.")
+	proxyStartCmd.Flags().String("eviction-strategy", OPTIMISTIC_CACHE_EVICTION_STRATEGY, "Cache eviction strategy. 'optimistic' keeps cached data when Infisical is unreachable for high availability. Currently only 'optimistic' is supported.")
 	proxyStartCmd.Flags().String("access-token-check-interval", "5m", "How often to validate that access tokens are still valid (e.g., 5m, 1h). Defaults to 5m.")
 	proxyStartCmd.Flags().String("static-secrets-refresh-interval", "1h", "How often to refresh cached secrets (e.g., 30m, 1h, 1d). Defaults to 1h.")
 	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")
