@@ -103,7 +103,8 @@ func buildTokenIndexPrefix(token string) string {
 // buildPathIndexKey builds the storage key for path index entry
 // Key format: path:{projectId}:{envSlug}:{tokenHash}:{escapedSecretPath}:{cacheKey}
 func buildPathIndexKey(token string, indexEntry IndexEntry) string {
-	// Escape colons in secretPath to avoid key parsing issues
+	// Escape colons in secretPath to avoid key parsing issues.
+	// Currently not relevant as we don't support colons in secret paths, but if we decide to broaden our allowed folder naming in the future, this would be needed
 	escapedPath := strings.ReplaceAll(indexEntry.SecretPath, ":", "\\:")
 	key := fmt.Sprintf("%s%s:%s:%s:%s:%s",
 		prefixPath,
