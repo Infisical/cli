@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -188,10 +190,16 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	}, 120*time.Second, 5*time.Second)
 	assert.True(t, detectHeartbeat)
 
+	tmpLogDir := t.TempDir()
+	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
+	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
 	gatewayName := RandomSlug(2)
 	gatewayCmd := Command{
 		Test: t,
-		Args: []string{"gateway", "start", fmt.Sprintf("--name=%s", gatewayName)},
+		Args: []string{"gateway", "start",
+			fmt.Sprintf("--name=%s", gatewayName),
+			fmt.Sprintf("--pam-session-recording-path=%s", sessionRecordingPath),
+		},
 		Env: map[string]string{
 			"INFISICAL_API_URL": infisical.ApiUrl(t),
 			"INFISICAL_TOKEN":   *identity.TokenAuthToken,
@@ -199,4 +207,61 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	}
 	gatewayCmd.Start(ctx)
 	defer gatewayCmd.Stop()
+
+	gatewayCmdExit := false
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		if gatewayCmd.RunMethod != RunMethodSubprocess {
+			// For function call method, we cannot check if the subprocess if running or not,
+			// also it's a bit hard to collect stderr like subprocess.
+			// Ideally, we should mock it and collect them regardless
+			return
+		}
+		// Ensure the process is still running if it's a subprocess
+		if !gatewayCmd.IsRunning() {
+			slog.Error("Command is not running as expected", "exit_code", gatewayCmd.Cmd().ProcessState.ExitCode())
+			gatewayCmd.DumpOutput()
+			// Somehow the cmd stops early, let's exit the loop early
+			gatewayCmdExit = true
+			return
+		}
+
+		stderr := gatewayCmd.Stderr()
+		assert.Containsf(
+			collect, stderr,
+			"Successfully registered gateway",
+			"The cmd is not outputting \"Successfully registered gateway\" in the Stderr:\n%s", stderr,
+		)
+	}, 120*time.Second, 5*time.Second)
+	require.False(t, gatewayCmdExit)
+
+	detectGatewayReachable := false
+	require.Eventually(t, func() bool {
+		// Ensure the process is still running if it's a subprocess
+		if gatewayCmd.RunMethod == RunMethodSubprocess && !gatewayCmd.IsRunning() {
+			slog.Error("Command is not running as expected", "exit_code", gatewayCmd.Cmd().ProcessState.ExitCode())
+			gatewayCmd.DumpOutput()
+			// Somehow the gatewayCmd stops early, let's exit the loop early
+			return true
+		}
+
+		if gatewayCmd.RunMethod == RunMethodSubprocess {
+			stderr := gatewayCmd.Stderr()
+			if strings.Contains(stderr, "Gateway is reachable by Infisical") {
+				slog.Info("Confirmed gateway is reachable")
+				detectGatewayReachable = true
+				return true
+			}
+		}
+		return false
+	}, 120*time.Second, 5*time.Second)
+	assert.True(t, detectGatewayReachable)
+	if gatewayCmd.RunMethod == RunMethodSubprocess {
+		stderr := gatewayCmd.Stderr()
+		assert.Containsf(
+			t, stderr,
+			"Gateway is reachable by Infisical",
+			"The cmd is not outputting \"Gateway is reachable by Infisical\" in the Stderr:\n%s", stderr,
+		)
+	}
+	// TODO: find a way to collect stderr for func call method and assert as well
 }

@@ -49,6 +49,7 @@ func ResetRedis(ctx context.Context, opts ...func(*ResetRedisOptions)) error {
 
 // resetRedisDB resets the Redis database by flushing all keys.
 func resetRedisDB(ctx context.Context, opts ResetRedisOptions) error {
+	slog.Info("Resetting Postgres database")
 	addr := fmt.Sprintf("%s:%d", opts.RedisConfig.Host, opts.RedisConfig.Port)
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     addr,

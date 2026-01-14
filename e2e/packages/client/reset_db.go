@@ -70,6 +70,8 @@ func ResetDB(ctx context.Context, opts ...func(*ResetDBOptions)) error {
 // resetPostgresDB resets the PostgreSQL database by truncating all tables (except skipped ones)
 // and inserting a default super_admin record.
 func resetPostgresDB(ctx context.Context, opts ResetDBOptions) error {
+	slog.Info("Resetting Postgres database")
+
 	// Build connection string using config
 	connStr := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s",
 		opts.DBConfig.User,

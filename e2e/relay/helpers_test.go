@@ -307,7 +307,10 @@ func (c *Command) Start(ctx context.Context) {
 		go func() {
 			err := c.cmd.Wait()
 			if err != nil {
-				slog.Error("Failed to wait for cmd", "error", err)
+				// Don't log "signal: killed" errors as they're expected when processes are terminated
+				if err.Error() != "signal: killed" {
+					slog.Error("Failed to wait for cmd", "error", err)
+				}
 			}
 		}()
 		require.NoError(t, err)

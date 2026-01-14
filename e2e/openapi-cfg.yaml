@@ -15,4 +15,5 @@ output-options:
     - attachTokenAuth
     - createTokenAuthToken
     - getRelays
+    - getGateways
     - createProject
