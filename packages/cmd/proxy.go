@@ -347,6 +347,14 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 				secretPath = "/"
 			}
 
+			if projectId == "" || environment == "" {
+				log.Warn().
+					Str("method", r.Method).
+					Str("path", r.URL.Path).
+					Msg("Missing projectId or environment for cache purging - skipping cache purge")
+				return
+			}
+
 			log.Debug().
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
@@ -354,7 +362,6 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 				Str("environment", environment).
 				Str("secretPath", secretPath).
 				Msg("Attempting mutation purging across all tokens")
-
 			purgedCount := cache.PurgeByMutation(projectId, environment, secretPath)
 
 			if purgedCount == 1 {
@@ -412,13 +419,22 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 			proxy.CopyHeaders(cachedResp.Header, resp.Header)
 
-			cache.Set(cacheKey, r, cachedResp, token, indexEntry)
+			if indexEntry.ProjectId != "" && indexEntry.EnvironmentSlug != "" {
 
-			log.Debug().
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Str("cacheKey", cacheKey).
-				Msg("Response cached successfully")
+				cache.Set(cacheKey, r, cachedResp, token, indexEntry)
+
+				log.Debug().
+					Str("method", r.Method).
+					Str("path", r.URL.Path).
+					Str("cacheKey", cacheKey).
+					Msg("Secret response cached successfully")
+			} else {
+				log.Warn().
+					Str("method", r.Method).
+					Str("path", r.URL.Path).
+					Str("cacheKey", cacheKey).
+					Msg("Secret response not cached because project ID or environment slug is empty")
+			}
 		}
 
 		log.Debug().

@@ -101,17 +101,27 @@ func buildTokenIndexPrefix(token string) string {
 }
 
 // buildPathIndexKey builds the storage key for path index entry
+// Key format: path:{projectId}:{envSlug}:{tokenHash}:{escapedSecretPath}:{cacheKey}
 func buildPathIndexKey(token string, indexEntry IndexEntry) string {
 	// Escape colons in secretPath to avoid key parsing issues
 	escapedPath := strings.ReplaceAll(indexEntry.SecretPath, ":", "\\:")
-	return fmt.Sprintf("%s%s:%s:%s:%s:%s",
+	key := fmt.Sprintf("%s%s:%s:%s:%s:%s",
 		prefixPath,
-		hashToken(token),
 		indexEntry.ProjectId,
 		indexEntry.EnvironmentSlug,
+		hashToken(token),
 		escapedPath,
 		indexEntry.CacheKey,
 	)
+
+	log.Debug().Str("pathIndexKey", key).Msg("Built path index key")
+
+	return key
+}
+
+// buildPathIndexPrefixForProject builds the prefix for all path entries matching a project+env
+func buildPathIndexPrefixForProject(projectId, envSlug string) string {
+	return fmt.Sprintf("%s%s:%s:", prefixPath, projectId, envSlug)
 }
 
 func IsSecretsEndpoint(path string) bool {
@@ -491,6 +501,7 @@ func (c *Cache) EvictAllEntriesForToken(token string) int {
 }
 
 // RemoveTokenFromIndex removes all index entries for a token (without deleting main entries)
+// This is a cleanup function called rarely for orphaned tokens
 func (c *Cache) RemoveTokenFromIndex(token string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -499,9 +510,27 @@ func (c *Cache) RemoveTokenFromIndex(token string) {
 	c.storage.DeleteByPrefix(tokenPrefix)
 
 	// Also delete path index entries for this token
-	// Path keys start with path:{tokenHash}:...
-	pathPrefix := prefixPath + hashToken(token) + ":"
-	c.storage.DeleteByPrefix(pathPrefix)
+	// since path keys are prefixed by projectId:envSlug
+	// we need to scan all path keys to find those containing this token's hash
+	tokenHash := hashToken(token)
+	pathKeys, err := c.storage.GetKeysByPrefix(prefixPath)
+	if err != nil {
+		log.Debug().Err(err).Msg("Failed to get path keys for token index cleanup")
+		return
+	}
+
+	for _, key := range pathKeys {
+		// Key format: path:{projectId}:{envSlug}:{tokenHash}:{secretPath}:{cacheKey}
+		withoutPrefix := strings.TrimPrefix(key, prefixPath)
+		parts := strings.SplitN(withoutPrefix, ":", 4)
+		if len(parts) < 3 {
+			continue
+		}
+		keyTokenHash := parts[2]
+		if keyTokenHash == tokenHash {
+			c.storage.Delete(key)
+		}
+	}
 }
 
 // PurgeByMutation purges cache entries across ALL tokens that match the mutation path
@@ -511,30 +540,25 @@ func (c *Cache) PurgeByMutation(projectID, envSlug, mutationPath string) int {
 
 	purgedCount := 0
 
-	// Get all path index keys
-	pathKeys, err := c.storage.GetKeysByPrefix(prefixPath)
+	prefix := buildPathIndexPrefixForProject(projectID, envSlug)
+	pathKeys, err := c.storage.GetKeysByPrefix(prefix)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get path index keys for mutation purge")
 		return 0
 	}
 
 	for _, key := range pathKeys {
-		// Key format: path:{tokenHash}:{projectId}:{envSlug}:{escapedSecretPath}:{cacheKey}
-		withoutPrefix := strings.TrimPrefix(key, prefixPath)
-		parts := strings.SplitN(withoutPrefix, ":", 5)
-		if len(parts) < 5 {
+		// Key format: path:{projectId}:{envSlug}:{tokenHash}:{escapedSecretPath}:{cacheKey}
+		// We already filtered by projectId:envSlug via prefix, so extract remaining parts
+		withoutPrefix := strings.TrimPrefix(key, prefix)
+		parts := strings.SplitN(withoutPrefix, ":", 3)
+		if len(parts) < 3 {
 			continue
 		}
 
-		keyProjectID := parts[1]
-		keyEnvSlug := parts[2]
-		keySecretPath := strings.ReplaceAll(parts[3], "\\:", ":") // Unescape colons
-		keyCacheKey := parts[4]
-
-		// Check if this entry matches the mutation criteria
-		if keyProjectID != projectID || keyEnvSlug != envSlug {
-			continue
-		}
+		// parts[0] = tokenHash (not needed for matching)
+		keySecretPath := strings.ReplaceAll(parts[1], "\\:", ":") // Unescape colons
+		keyCacheKey := parts[2]
 
 		if matchesPath(keySecretPath, mutationPath) {
 			c.evictEntryUnsafe(keyCacheKey)

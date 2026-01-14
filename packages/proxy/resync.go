@@ -15,6 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var rateLimitSecondsRegex = regexp.MustCompile(`(\d+)\s+seconds?`)
+
 // maskToken masks a token showing only first 5 and last 5 characters
 func maskToken(token string) string {
 	if len(token) <= 10 {
@@ -37,8 +39,7 @@ func parseRateLimitSeconds(body []byte) int {
 		return seconds
 	}
 
-	re := regexp.MustCompile(`(\d+)\s+seconds?`)
-	matches := re.FindStringSubmatch(errorResponse.Message)
+	matches := rateLimitSecondsRegex.FindStringSubmatch(errorResponse.Message)
 	if len(matches) < 2 {
 		return 10
 	}
