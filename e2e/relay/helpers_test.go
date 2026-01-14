@@ -12,6 +12,8 @@ import (
 	"path"
 	"testing"
 
+	_ "github.com/joho/godotenv/autoload"
+
 	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
