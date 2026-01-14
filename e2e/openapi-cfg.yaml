@@ -3,3 +3,9 @@ output: ./packages/client/client.gen.go
 generate:
   models: true
   client: true
+output-options:
+  exclude-operation-ids:
+  # Note: the following operations are excluded due to a schema error:
+  #       error generating type for param (profileIds): error merging schemas: error merging schemas for AllOf: can not merge incompatible types: [string], [array]
+    - getCertificateRequest
+    - listCertificateRequests
