@@ -119,7 +119,7 @@ func (s *InfisicalService) CreateMachineIdentity(t *testing.T, ctx context.Conte
 
 	// Create machine identity for the relay
 	role := "member"
-	identityResp, err := c.PostApiV1IdentitiesWithResponse(ctx, client.PostApiV1IdentitiesJSONRequestBody{
+	identityResp, err := c.CreateMachineIdentityWithResponse(ctx, client.CreateMachineIdentityJSONRequestBody{
 		Name:           faker.Name(),
 		Role:           &role,
 		OrganizationId: s.provisionResult.OrgId,
@@ -160,10 +160,10 @@ func WithTokenAuth() MachineIdentityOption {
 		require.Equal(t, http.StatusOK, updateResp.StatusCode())
 
 		// Create auth token for relay CLI
-		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
+		tokenResp, err := c.CreateTokenAuthTokenWithResponse(
 			ctx,
 			i.Id,
-			client.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody{},
+			client.CreateTokenAuthTokenJSONRequestBody{},
 		)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, updateResp.StatusCode())

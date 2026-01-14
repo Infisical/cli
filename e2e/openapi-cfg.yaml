@@ -4,8 +4,15 @@ generate:
   models: true
   client: true
 output-options:
-  exclude-operation-ids:
-  # Note: the following operations are excluded due to a schema error:
-  #       error generating type for param (profileIds): error merging schemas: error merging schemas for AllOf: can not merge incompatible types: [string], [array]
-    - getCertificateRequest
-    - listCertificateRequests
+  # there are many errors when generating the client code for the full openapi spec
+  # that's why we only include the operations that we need for the e2e tests at this moment
+  # feel free to add more operations as needed
+  include-operation-ids:
+    - adminSignUp
+    - selectOrganizationV3
+    - refreshAuthToken
+    - createMachineIdentity
+    - attachTokenAuth
+    - createTokenAuthToken
+    - getRelays
+    - createProject

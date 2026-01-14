@@ -51,7 +51,7 @@ func WithCookies(cookies ...*http.Cookie) RequestEditorFn {
 
 func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	slog.Info("Signing up Admin account ...")
-	signUpResp, err := p.Client.PostApiV1AdminSignupWithResponse(ctx, PostApiV1AdminSignupJSONRequestBody{
+	signUpResp, err := p.Client.AdminSignUpWithResponse(ctx, AdminSignUpJSONRequestBody{
 		Email:     types.Email(faker.Email()),
 		FirstName: faker.FirstName(),
 		Password:  faker.Password(),
@@ -69,9 +69,9 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	selectOrgResp, err := p.Client.PostApiV3AuthSelectOrganizationWithResponse(
+	selectOrgResp, err := p.Client.SelectOrganizationV3WithResponse(
 		ctx,
-		PostApiV3AuthSelectOrganizationJSONRequestBody{
+		SelectOrganizationV3JSONRequestBody{
 			OrganizationId: signUpResp.JSON200.Organization.Id.String(),
 		},
 		bearerAuth.Intercept,
@@ -90,7 +90,7 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	authTokenResp, err := p.Client.PostApiV1AuthTokenWithResponse(
+	authTokenResp, err := p.Client.RefreshAuthTokenWithResponse(
 		ctx,
 		orgBearerAuth.Intercept,
 		// Notice: we need to pass in cookies from sign-up for the token creation to work
