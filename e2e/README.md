@@ -12,10 +12,13 @@ Please feel free to reach out to @fangpenlin on the Slack channel if you encount
 The main subject of testing is a CLI executable program, i.e., the `infisical` command.
 Currently we support two approaches to test the CLI.
 The default run method is `subprocess`.
-You can set the `CLI_E2E_DEFAULT_RUN_METHOD` environment variable to change the default run method.
-For example:
+You can set the `CLI_E2E_DEFAULT_RUN_METHOD` environment variable to change the default run method, either in your `.env` file or as an environment variable:
 
 ```bash
+# In .env file:
+CLI_E2E_DEFAULT_RUN_METHOD=functionCall
+
+# Or as environment variable:
 export CLI_E2E_DEFAULT_RUN_METHOD=functionCall
 ```
 
@@ -27,9 +30,13 @@ The drawback of this approach is that attaching a debugger to the CLI command re
 This is the default run method if not specified.
 
 When using this run method, you need to make sure the executable is at the default location `./infisical-merge`.
-Otherwise, you can also specify the path to the executable by setting the `INFISICAL_CLI_EXECUTABLE` environment variable like this:
+Otherwise, you can also specify the path to the executable by setting the `INFISICAL_CLI_EXECUTABLE` environment variable, either in your `.env` file or as an environment variable:
 
 ```bash
+# In .env file:
+INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge
+
+# Or as environment variable:
 export INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge
 ```
 
@@ -48,6 +55,64 @@ Some extra efforts might be needed to update the CLI code to abstract the stdout
 In the meantime, since this is not available, we didn't set it as the default value.
 With this run method, since we are linking the e2e test build with the CLI as a library directly, there's no need to build the executable separately.
 
+## Environment Variables Configuration
+
+E2E tests support loading environment variables from a `.env` file for easier configuration management. The `.env` file is automatically loaded when tests run using the [godotenv autoload feature](https://github.com/joho/godotenv#autoload) from the open source [godotenv library](https://github.com/joho/godotenv). The autoload happens when the test package is imported, so as long as you run tests from the `e2e` directory, the `.env` file in that directory will be automatically loaded.
+
+### Using a `.env` file
+
+1. Copy the sample file to create your `.env` file:
+
+   ```bash
+   cd e2e
+   cp .env.sample .env
+   ```
+
+2. Edit `.env` and set the required values (see `.env.sample` for detailed comments on each variable):
+
+   ```bash
+   # Required: Path to the Infisical backend directory
+   INFISICAL_BACKEND_DIR=/path/to/infisical/backend
+
+   # Optional: Other configuration variables
+   # CLI_E2E_DEFAULT_RUN_METHOD=subprocess
+   # INFISICAL_CLI_EXECUTABLE=./infisical-merge
+   ```
+
+3. Run your tests - the `.env` file will be automatically loaded:
+   ```bash
+   cd e2e
+   go test github.com/infisical/cli/e2e-tests/relay
+   ```
+
+**Note:** The `.env` file is git-ignored, so your local configuration won't be committed to the repository. See `.env.sample` for all available configuration options with detailed explanations.
+
+### Available Environment Variables
+
+The following environment variables can be set either in your `.env` file or as shell environment variables:
+
+#### Required Variables
+
+- **`INFISICAL_BACKEND_DIR`**: Path to the backend folder of the [infisical repository](https://github.com/infisical/infisical). This is required for tests to work.
+  - Example: `/Users/your-username/workspace/infisical/backend`
+
+#### Optional Variables
+
+- **`INFISICAL_BACKEND_DOCKERFILE`**: Dockerfile to use for building the backend service. Defaults to `"Dockerfile.dev.fips"` if not set.
+
+- **`INFISICAL_CLI_EXECUTABLE`**: Path to the CLI executable to use for testing. If not set, tests will look for `./infisical-merge` in the e2e directory. Only needed when using the "subprocess" run method.
+
+- **`CLI_E2E_DEFAULT_RUN_METHOD`**: Default run method for CLI commands in tests. Valid values:
+
+  - `"subprocess"` (default): Runs CLI as a separate process - better for debugging, can collect stdout/stderr
+  - `"functionCall"`: Calls CLI functions directly - better for IDE debugging
+
+- **`CLI_E2E_DISABLE_COMPOSE_CACHE`**: Set to `"1"` to disable the compose container cache. When enabled (default), tests reuse existing containers to speed up development.
+
+- **`TESTCONTAINERS_RYUK_DISABLED`**: Set to `"true"` to disable Ryuk container cleanup. Useful for debugging backend issues as containers will remain running after tests complete.
+
+For detailed descriptions and examples, see the `.env.sample` file.
+
 ## Setting the `INFISICAL_BACKEND_DIR` value
 
 To make our CLI test against the actual Infisical API server, we provide an easy-to-use API to spin up the full Infisical stack in docker-compose like this:
@@ -62,8 +127,7 @@ infisical := NewInfisicalService().
 ```
 
 Because it runs the actual Infisical API server stack, you need to specify the `INFISICAL_BACKEND_DIR` value and point it to the `backend` folder of the [infisical repository](https://github.com/infisical/infisical) to make it work.
-For example, if you have the repo checked out at `/Users/fangpen/workspace/infisical`.
-Then you can set the environment variable like this:
+The easiest way is to set it in your `.env` file (see above), or you can export it as an environment variable:
 
 ```bash
 export INFISICAL_BACKEND_DIR=/Users/fangpen/workspace/infisical/backend
@@ -85,7 +149,14 @@ cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
 ```
 
-Combining the exported environment variables, you might end up with running commands like this:
+If you're using a `.env` file (recommended), just make sure it's configured and run the tests:
+
+```bash
+cd e2e
+go test github.com/infisical/cli/e2e-tests/relay
+```
+
+Alternatively, you can export environment variables manually:
 
 ```bash
 export INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge
@@ -94,7 +165,7 @@ cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
 ```
 
-It's a bit verbose right now, but we will improve the quality of life over time by adding things such as a Makefile to make it much easier.
+**Tip:** Using a `.env` file is much more convenient than exporting variables manually. See the [Environment Variables Configuration](#environment-variables-configuration) section above for details.
 
 ## Troubleshooting the failing tests due to CLI error
 
@@ -124,10 +195,16 @@ If the errors happen in the backend, to find out what's going on, you can open t
 Please note that by default, the [testcontainers library](https://github.com/testcontainers/testcontainers-go) (the library we use to run the docker-compose for the Infisical stack) will start a container called Ryuk for deleting the containers after the test is finished.
 Because of that, if you run into an error in the backend reproduced by running the test, the container might already be gone after the test finishes.
 Then you won't be able to look inside the container and find out what's going on.
-To solve the problem, you can set the `TESTCONTAINERS_RYUK_DISABLED` environment variable to `true` like this to disable the container deleting behavior:
+To solve the problem, you can set the `TESTCONTAINERS_RYUK_DISABLED` environment variable to `true` to disable the container deleting behavior. You can do this either in your `.env` file:
 
 ```bash
 TESTCONTAINERS_RYUK_DISABLED=true
+```
+
+Or as an environment variable:
+
+```bash
+export TESTCONTAINERS_RYUK_DISABLED=true
 ```
 
 To learn more about the behavior of Ryuk from testcontainers, please read [their document here](https://golang.testcontainers.org/features/garbage_collector/#ryuk).
@@ -151,7 +228,13 @@ If you have `TESTCONTAINERS_RYUK_DISABLED` set to `true`, each time the `Up` met
 If there's such a container already running, we will reuse it by resetting its database instead of starting a new one.
 That way, it's much faster than booting up a new compose stack and waiting for it to get online.
 
-If for any reason the cache system is not working as desired, you can disable it by setting the `CLI_E2E_DISABLE_COMPOSE_CACHE` value to `1` like this:
+If for any reason the cache system is not working as desired, you can disable it by setting the `CLI_E2E_DISABLE_COMPOSE_CACHE` value to `1`. You can do this either in your `.env` file:
+
+```bash
+CLI_E2E_DISABLE_COMPOSE_CACHE=1
+```
+
+Or as an environment variable:
 
 ```bash
 export CLI_E2E_DISABLE_COMPOSE_CACHE=1
