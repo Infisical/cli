@@ -177,7 +177,7 @@ func runAccessTokenValidation(cache *Cache, domainURL *url.URL, httpClient *http
 		}
 
 		// If 401, evict all entries for this token
-		if resp.StatusCode == http.StatusUnauthorized {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			evictedCount := cache.EvictAllEntriesForToken(token)
 			resp.Body.Close()
 			tokensEvicted++
