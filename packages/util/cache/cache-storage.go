@@ -11,13 +11,14 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/rs/zerolog/log"
 )
 
 type EncryptedStorage struct {
 	db  *badger.DB
-	key [32]byte
+	key *memguard.LockedBuffer
 }
 
 type EncryptedStorageOptions struct {
@@ -27,7 +28,7 @@ type EncryptedStorageOptions struct {
 	InMemory bool
 
 	// Only required if InMemory is false
-	EncryptionKey [32]byte
+	EncryptionKey *memguard.LockedBuffer
 }
 
 func NewEncryptedStorage(opts EncryptedStorageOptions) (*EncryptedStorage, error) {
@@ -314,6 +315,7 @@ func (s *EncryptedStorage) Exists(key string) (bool, error) {
 }
 
 func (s *EncryptedStorage) Close() error {
+	s.key.Destroy()
 	return s.db.Close()
 }
 
@@ -347,7 +349,7 @@ func (s *EncryptedStorage) StartPeriodicGarbageCollection(context context.Contex
 }
 
 func (s *EncryptedStorage) encrypt(plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(s.key[:])
+	block, err := aes.NewCipher(s.key.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +368,7 @@ func (s *EncryptedStorage) encrypt(plaintext []byte) ([]byte, error) {
 }
 
 func (s *EncryptedStorage) decrypt(ciphertext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(s.key[:])
+	block, err := aes.NewCipher(s.key.Bytes())
 	if err != nil {
 		return nil, err
 	}

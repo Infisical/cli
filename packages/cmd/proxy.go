@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,15 +16,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/crypto"
 	"github.com/Infisical/infisical-merge/packages/proxy"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
+	"github.com/awnumar/memguard"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-const OPTIMISTIC_CACHE_EVICTION_STRATEGY = "optimistic"
+type CacheEvictionStrategy string
+
+const (
+	CacheEvictionStrategyOptimistic CacheEvictionStrategy = "optimistic"
+)
 
 var proxyCmd = &cobra.Command{
 	Example:               `infisical proxy start`,
@@ -95,7 +100,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse eviction-strategy flag")
 	}
 
-	if evictionStrategy != OPTIMISTIC_CACHE_EVICTION_STRATEGY {
+	if evictionStrategy != string(CacheEvictionStrategyOptimistic) {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid eviction-strategy '%s'. Currently only 'optimistic' is supported.", evictionStrategy))
 	}
 
@@ -135,15 +140,12 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 	// Create in-memory cache (no persistence, no encryption needed for ephemeral data)
 	// For persistent cache with encryption, use proxy.NewCacheWithOptions
-
-	encryptionKey, err := crypto.GenerateRandomBytes(32)
-	if err != nil {
-		util.HandleError(err, "Failed to generate random encryption key")
-	}
+	encryptionKey := memguard.NewBufferRandom(32)
+	defer encryptionKey.Destroy()
 
 	cache, err := proxy.NewCache(cache.EncryptedStorageOptions{
 		InMemory:      true,
-		EncryptionKey: [32]byte(encryptionKey),
+		EncryptionKey: encryptionKey,
 	})
 
 	if err != nil {
@@ -287,7 +289,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 						flusher.Flush()
 					}
 				}
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					break
 				}
 				if err != nil {
@@ -568,7 +570,7 @@ func isStreamingEndpoint(path string) bool {
 func init() {
 	proxyStartCmd.Flags().String("domain", "", "Domain of your Infisical instance (e.g., https://app.infisical.com for cloud, https://my-self-hosted-instance.com for self-hosted)")
 	proxyStartCmd.Flags().String("listen-address", "localhost:8081", "The address for the proxy server to listen on. Defaults to localhost:8081")
-	proxyStartCmd.Flags().String("eviction-strategy", OPTIMISTIC_CACHE_EVICTION_STRATEGY, "Cache eviction strategy. 'optimistic' keeps cached data when Infisical is unreachable for high availability. Currently only 'optimistic' is supported.")
+	proxyStartCmd.Flags().String("eviction-strategy", string(CacheEvictionStrategyOptimistic), "Cache eviction strategy. 'optimistic' keeps cached data when Infisical is unreachable for high availability. Currently only 'optimistic' is supported.")
 	proxyStartCmd.Flags().String("access-token-check-interval", "5m", "How often to validate that access tokens are still valid (e.g., 5m, 1h). Defaults to 5m.")
 	proxyStartCmd.Flags().String("static-secrets-refresh-interval", "1h", "How often to refresh cached secrets (e.g., 30m, 1h, 1d). Defaults to 1h.")
 	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")

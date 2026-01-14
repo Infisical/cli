@@ -28,6 +28,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/go-resty/resty/v2"
 	infisicalSdk "github.com/infisical/go-sdk"
@@ -90,13 +91,13 @@ type RetryConfig struct {
 }
 
 type Config struct {
-	Version       string                   `yaml:"version,omitempty"`
-	Infisical     InfisicalConfig          `yaml:"infisical"`
-	Auth          AuthConfig               `yaml:"auth"`
-	Sinks         []Sink                   `yaml:"sinks"`
-	Cache         CacheConfig              `yaml:"cache,omitempty"`
-	Templates     []Template               `yaml:"templates"`
-	Certificates  []AgentCertificateConfig `yaml:"certificates,omitempty"`
+	Version      string                   `yaml:"version,omitempty"`
+	Infisical    InfisicalConfig          `yaml:"infisical"`
+	Auth         AuthConfig               `yaml:"auth"`
+	Sinks        []Sink                   `yaml:"sinks"`
+	Cache        CacheConfig              `yaml:"cache,omitempty"`
+	Templates    []Template               `yaml:"templates"`
+	Certificates []AgentCertificateConfig `yaml:"certificates,omitempty"`
 }
 
 type TemplateWithID struct {
@@ -195,10 +196,10 @@ type Template struct {
 }
 
 type CertificateLifecycleConfig struct {
-	RenewBeforeExpiry string `yaml:"renew-before-expiry"`
-	StatusCheckInterval string `yaml:"status-check-interval"`
+	RenewBeforeExpiry    string `yaml:"renew-before-expiry"`
+	StatusCheckInterval  string `yaml:"status-check-interval"`
 	FailureRetryInterval string `yaml:"failure-retry-interval,omitempty"`
-	MaxFailureRetries int `yaml:"max-failure-retries,omitempty"`
+	MaxFailureRetries    int    `yaml:"max-failure-retries,omitempty"`
 }
 
 type CertificateAttributes struct {
@@ -343,7 +344,10 @@ func NewCacheManager(ctx context.Context, cacheConfig *CacheConfig) (*CacheManag
 		return &CacheManager{}, fmt.Errorf("unable to read service account token: %v. Please ensure the file exists and is not empty", err)
 	}
 
-	encryptionKey := sha256.Sum256(serviceAccountToken)
+	hash := sha256.Sum256(serviceAccountToken)
+	encryptionKey := memguard.NewBufferFromBytes(hash[:]) // the hash (source) is wiped after copied to the secure buffer
+
+	defer encryptionKey.Destroy()
 
 	cacheStorage, err := cache.NewEncryptedStorage(cache.EncryptedStorageOptions{
 		DBPath:        cacheConfig.Persistent.Path,
@@ -2000,7 +2004,6 @@ func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) 
 	return nil
 }
 
-
 func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
 	for i := range *certificates {
 		cert := &(*certificates)[i]
@@ -2085,7 +2088,6 @@ func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.Certif
 	if certificate.FileConfig.Chain.OmitRoot != nil && !*certificate.FileConfig.Chain.OmitRoot {
 		removeRoots = false
 	}
-
 
 	attributes.RemoveRootsFromChain = removeRoots
 	hasAny = true
@@ -3207,7 +3209,6 @@ var agentCmd = &cobra.Command{
 						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
 						exitCode = 1
 					}
-
 				}
 
 				os.Exit(exitCode)
