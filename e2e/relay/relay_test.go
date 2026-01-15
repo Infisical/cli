@@ -56,9 +56,10 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 	cmdExit := false
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		// Ensure the process is still running if it's a subprocess
-		if cmd.RunMethod == RunMethodSubprocess && !cmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
+		// Ensure the process is still running
+		if !cmd.IsRunning() {
+			exitCode := cmd.ExitCode()
+			slog.Error("Command is not running as expected", "exit_code", exitCode)
 			cmd.DumpOutput()
 			// Somehow the cmd stops early, let's exit the loop early
 			cmdExit = true
@@ -76,9 +77,10 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 	detectHeartbeat := false
 	require.Eventually(t, func() bool {
-		// Ensure the process is still running if it's a subprocess
-		if cmd.RunMethod == RunMethodSubprocess && !cmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
+		// Ensure the process is still running
+		if !cmd.IsRunning() {
+			exitCode := cmd.ExitCode()
+			slog.Error("Command is not running as expected", "exit_code", exitCode)
 			cmd.DumpOutput()
 			// Somehow the cmd stops early, let's exit the loop early
 			return true
@@ -201,9 +203,10 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 
 	gatewayCmdExit := false
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		// Ensure the process is still running if it's a subprocess
-		if gatewayCmd.RunMethod == RunMethodSubprocess && !gatewayCmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", gatewayCmd.Cmd().ProcessState.ExitCode())
+		// Ensure the process is still running
+		if !gatewayCmd.IsRunning() {
+			exitCode := gatewayCmd.ExitCode()
+			slog.Error("Command is not running as expected", "exit_code", exitCode)
 			gatewayCmd.DumpOutput()
 			// Somehow the cmd stops early, let's exit the loop early
 			gatewayCmdExit = true
@@ -221,9 +224,10 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 
 	detectGatewayReachable := false
 	require.Eventually(t, func() bool {
-		// Ensure the process is still running if it's a subprocess
-		if gatewayCmd.RunMethod == RunMethodSubprocess && !gatewayCmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", gatewayCmd.Cmd().ProcessState.ExitCode())
+		// Ensure the process is still running
+		if !gatewayCmd.IsRunning() {
+			exitCode := gatewayCmd.ExitCode()
+			slog.Error("Command is not running as expected", "exit_code", exitCode)
 			gatewayCmd.DumpOutput()
 			// Somehow the gatewayCmd stops early, let's exit the loop early
 			return true

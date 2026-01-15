@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sync"
 	"testing"
 
 	_ "github.com/joho/godotenv/autoload"
@@ -201,6 +202,8 @@ type Command struct {
 	functionCallCtx    context.Context
 	functionCallCancel context.CancelFunc
 	functionCallDone   chan struct{}
+	functionCallErr    error // Store error from ExecuteContext
+	functionCallErrMu  sync.Mutex
 }
 
 func findExecutable(t *testing.T) string {
@@ -343,7 +346,11 @@ func (c *Command) Start(ctx context.Context) {
 		}
 		go func() {
 			defer close(c.functionCallDone)
-			if err := cmd.RootCmd.ExecuteContext(c.functionCallCtx); err != nil && !errors.Is(err, context.Canceled) {
+			err := cmd.RootCmd.ExecuteContext(c.functionCallCtx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				c.functionCallErrMu.Lock()
+				c.functionCallErr = err
+				c.functionCallErrMu.Unlock()
 				t.Error(err)
 			}
 		}()
@@ -380,6 +387,34 @@ func (c *Command) Stop() {
 
 func (c *Command) Cmd() *exec.Cmd {
 	return c.cmd
+}
+
+// ExitCode returns the exit code of the command.
+// For subprocess mode: returns the process exit code (0 for success, non-zero for failure).
+// For function call mode: returns 0 if no error occurred, 1 if an error occurred.
+// Returns -1 if the command is still running or if the exit code cannot be determined.
+func (c *Command) ExitCode() int {
+	switch c.RunMethod {
+	case RunMethodSubprocess:
+		if c.cmd == nil || c.cmd.ProcessState == nil {
+			return -1 // Still running or not started
+		}
+		return c.cmd.ProcessState.ExitCode()
+	case RunMethodFunctionCall:
+		// Check if still running
+		if c.IsRunning() {
+			return -1 // Still running
+		}
+		// Check if there was an error
+		c.functionCallErrMu.Lock()
+		defer c.functionCallErrMu.Unlock()
+		if c.functionCallErr != nil {
+			return 1 // Error occurred
+		}
+		return 0 // Success
+	default:
+		return -1
+	}
 }
 
 func (c *Command) IsRunning() bool {
