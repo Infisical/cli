@@ -356,6 +356,18 @@ func (c *Command) Stop() {
 	if c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil {
 		_ = c.cmd.Process.Kill()
 	}
+
+	// Reset logger and RootCmd outputs to safe writers before closing files
+	// This prevents "file already closed" errors when the logger tries to write
+	// after the files are closed
+	if c.RunMethod == RunMethodFunctionCall {
+		// Reset logger to use os.Stderr before closing the file
+		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
+		// Reset RootCmd outputs to default
+		cmd.RootCmd.SetOut(os.Stdout)
+		cmd.RootCmd.SetErr(os.Stderr)
+	}
+
 	if c.stdoutFile != nil {
 		_ = c.stdoutFile.Close()
 	}
