@@ -334,9 +334,6 @@ func (c *Command) Start(ctx context.Context) {
 		cmd.RootCmd.SetOut(stdoutFile)
 		cmd.RootCmd.SetErr(stderrFile)
 
-		// Update logger to use RootCmd's stderr
-		cmd.UpdateLoggerOutput()
-
 		os.Args = make([]string, 0, len(c.Args)+1)
 		os.Args = append(os.Args, "infisical")
 		os.Args = append(os.Args, c.Args...)

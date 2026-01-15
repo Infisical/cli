@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -26,6 +27,22 @@ var RootCmd = &cobra.Command{
 	Long:              `Infisical is a simple, end-to-end encrypted service that enables teams to sync and manage their environment variables across their development life cycle.`,
 	CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
 	Version:           util.CLI_VERSION,
+}
+
+// rootCmdStderrWriter is a writer wrapper that dynamically reads from RootCmd.ErrOrStderr()
+// on each write. This allows the logger to automatically use RootCmd's stderr even if it's
+// changed after logger initialization (e.g., in tests).
+type rootCmdStderrWriter struct{}
+
+func (w *rootCmdStderrWriter) Write(p []byte) (n int, err error) {
+	return RootCmd.ErrOrStderr().Write(p)
+}
+
+// RootCmdStderrWriter returns a writer that proxies all writes to RootCmd.ErrOrStderr().
+// This writer dynamically reads from RootCmd on each write, so it will automatically
+// use whatever stderr is set on RootCmd, even if changed after initialization.
+func RootCmdStderrWriter() io.Writer {
+	return &rootCmdStderrWriter{}
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -113,9 +130,10 @@ func initLog() {
 	}
 }
 
-// UpdateLoggerOutput updates the global logger to use RootCmd's stderr output.
-// This is useful for testing when RootCmd.SetErr() is used to redirect stderr.
-func UpdateLoggerOutput() {
+// GetLoggerConfig returns the logger configuration with a writer that proxies to RootCmd's stderr.
+// This allows the logger to automatically use RootCmd's stderr even if it's changed after
+// initialization (e.g., in tests via RootCmd.SetErr()).
+func GetLoggerConfig() zerolog.ConsoleWriter {
 	// very annoying but zerolog doesn't allow us to change one color without changing all of them
 	// these are the default colors for each level, except for warn
 	levelColors := map[string]string{
@@ -140,8 +158,8 @@ func UpdateLoggerOutput() {
 		"panic": "PNC",
 	}
 
-	log.Logger = log.Output(zerolog.ConsoleWriter{
-		Out:        RootCmd.ErrOrStderr(),
+	return zerolog.ConsoleWriter{
+		Out:        RootCmdStderrWriter(),
 		TimeFormat: time.RFC3339,
 		FormatLevel: func(i interface{}) string {
 			level := fmt.Sprintf("%s", i)
@@ -155,5 +173,5 @@ func UpdateLoggerOutput() {
 			}
 			return color + abbrev + "\033[0m"
 		},
-	})
+	}
 }
