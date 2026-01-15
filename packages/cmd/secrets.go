@@ -885,5 +885,5 @@ func init() {
 	secretsCmd.Flags().Bool("plain", false, "print values without formatting, one per line (deprecated, use --output instead)")
 	secretsCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	util.AddOutputFlagsToCmd(secretsCmd, "The output to format the secrets in.")
-	rootCmd.AddCommand(secretsCmd)
+	RootCmd.AddCommand(secretsCmd)
 }

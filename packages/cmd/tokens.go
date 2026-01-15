@@ -176,5 +176,5 @@ func init() {
 
 	tokensCmd.AddCommand(tokensCreateCmd)
 
-	rootCmd.AddCommand(tokensCmd)
+	RootCmd.AddCommand(tokensCmd)
 }

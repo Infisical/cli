@@ -263,7 +263,7 @@ func getDefaultExtension(format string) string {
 }
 
 func init() {
-	rootCmd.AddCommand(exportCmd)
+	RootCmd.AddCommand(exportCmd)
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
 	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv)")

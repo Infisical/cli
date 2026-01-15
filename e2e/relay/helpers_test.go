@@ -316,6 +316,27 @@ func (c *Command) Start(ctx context.Context) {
 		require.NoError(t, err)
 	case RunMethodFunctionCall:
 		slog.Info("Running command with args by making function call", "args", c.Args)
+
+		// Create stdout and stderr files similar to subprocess method
+		c.stdoutFilePath = path.Join(tempDir, "stdout.log")
+		slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
+		stdoutFile, err := os.Create(c.stdoutFilePath)
+		require.NoError(t, err)
+		c.stdoutFile = stdoutFile
+
+		c.stderrFilePath = path.Join(tempDir, "stderr.log")
+		slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
+		stderrFile, err := os.Create(c.stderrFilePath)
+		require.NoError(t, err)
+		c.stderrFile = stderrFile
+
+		// Set RootCmd output to files
+		cmd.RootCmd.SetOut(stdoutFile)
+		cmd.RootCmd.SetErr(stderrFile)
+
+		// Update logger to use RootCmd's stderr
+		cmd.UpdateLoggerOutput()
+
 		os.Args = make([]string, 0, len(c.Args)+1)
 		os.Args = append(os.Args, "infisical")
 		os.Args = append(os.Args, c.Args...)
@@ -323,7 +344,7 @@ func (c *Command) Start(ctx context.Context) {
 			t.Setenv(k, v)
 		}
 		go func() {
-			if err := cmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := cmd.RootCmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				t.Error(err)
 			}
 		}()

@@ -749,5 +749,5 @@ func init() {
 	dynamicSecretCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	dynamicSecretCmd.Flags().String("path", "/", "get dynamic secret within a folder path")
 	util.AddOutputFlagsToCmd(dynamicSecretCmd, "The output to format the dynamic secrets in.")
-	rootCmd.AddCommand(dynamicSecretCmd)
+	RootCmd.AddCommand(dynamicSecretCmd)
 }

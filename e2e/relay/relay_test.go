@@ -56,14 +56,8 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 	cmdExit := false
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		if cmd.RunMethod != RunMethodSubprocess {
-			// For function call method, we cannot check if the subprocess if running or not,
-			// also it's a bit hard to collect stderr like subprocess.
-			// Ideally, we should mock it and collect them regardless
-			return
-		}
 		// Ensure the process is still running if it's a subprocess
-		if !cmd.IsRunning() {
+		if cmd.RunMethod == RunMethodSubprocess && !cmd.IsRunning() {
 			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
 			cmd.DumpOutput()
 			// Somehow the cmd stops early, let's exit the loop early
@@ -115,15 +109,12 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	}, 120*time.Second, 5*time.Second)
 
 	assert.True(t, detectHeartbeat)
-	if cmd.RunMethod == RunMethodSubprocess {
-		stderr := cmd.Stderr()
-		assert.Containsf(
-			t, stderr,
-			"Relay is reachable by Infisical",
-			"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
-		)
-	}
-	// TODO: find a way to collect stderr for func call method and assert as well
+	stderr := cmd.Stderr()
+	assert.Containsf(
+		t, stderr,
+		"Relay is reachable by Infisical",
+		"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
+	)
 }
 
 func TestRelay_RegistersAGateway(t *testing.T) {
@@ -210,14 +201,8 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 
 	gatewayCmdExit := false
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		if gatewayCmd.RunMethod != RunMethodSubprocess {
-			// For function call method, we cannot check if the subprocess if running or not,
-			// also it's a bit hard to collect stderr like subprocess.
-			// Ideally, we should mock it and collect them regardless
-			return
-		}
 		// Ensure the process is still running if it's a subprocess
-		if !gatewayCmd.IsRunning() {
+		if gatewayCmd.RunMethod == RunMethodSubprocess && !gatewayCmd.IsRunning() {
 			slog.Error("Command is not running as expected", "exit_code", gatewayCmd.Cmd().ProcessState.ExitCode())
 			gatewayCmd.DumpOutput()
 			// Somehow the cmd stops early, let's exit the loop early
@@ -228,7 +213,7 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 		stderr := gatewayCmd.Stderr()
 		assert.Containsf(
 			collect, stderr,
-			"Successfully registered gateway",
+			"Successfully registered gateway and received certificates",
 			"The cmd is not outputting \"Successfully registered gateway\" in the Stderr:\n%s", stderr,
 		)
 	}, 120*time.Second, 5*time.Second)
@@ -244,24 +229,19 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 			return true
 		}
 
-		if gatewayCmd.RunMethod == RunMethodSubprocess {
-			stderr := gatewayCmd.Stderr()
-			if strings.Contains(stderr, "Gateway is reachable by Infisical") {
-				slog.Info("Confirmed gateway is reachable")
-				detectGatewayReachable = true
-				return true
-			}
+		stderr := gatewayCmd.Stderr()
+		if strings.Contains(stderr, "Gateway is reachable by Infisical") {
+			slog.Info("Confirmed gateway is reachable")
+			detectGatewayReachable = true
+			return true
 		}
 		return false
 	}, 120*time.Second, 5*time.Second)
 	assert.True(t, detectGatewayReachable)
-	if gatewayCmd.RunMethod == RunMethodSubprocess {
-		stderr := gatewayCmd.Stderr()
-		assert.Containsf(
-			t, stderr,
-			"Gateway is reachable by Infisical",
-			"The cmd is not outputting \"Gateway is reachable by Infisical\" in the Stderr:\n%s", stderr,
-		)
-	}
-	// TODO: find a way to collect stderr for func call method and assert as well
+	stderr := gatewayCmd.Stderr()
+	assert.Containsf(
+		t, stderr,
+		"Gateway is reachable by Infisical",
+		"The cmd is not outputting \"Gateway is reachable by Infisical\" in the Stderr:\n%s", stderr,
+	)
 }

@@ -109,5 +109,5 @@ func printAvailableVaultBackends() {
 func init() {
 	vaultCmd.AddCommand(vaultSetCmd)
 
-	rootCmd.AddCommand(vaultCmd)
+	RootCmd.AddCommand(vaultCmd)
 }

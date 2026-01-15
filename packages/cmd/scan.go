@@ -95,7 +95,7 @@ func init() {
 
 	// add flags to main
 	scanCmd.AddCommand(scanGitChangesCmd)
-	rootCmd.AddCommand(scanCmd)
+	RootCmd.AddCommand(scanCmd)
 
 	installCmd.Flags().Bool("pre-commit-hook", false, "installs pre commit hook for Git repository")
 	scanCmd.AddCommand(installCmd)

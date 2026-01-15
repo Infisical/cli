@@ -391,7 +391,7 @@ func setDomainConfig(domain string) {
 }
 
 func init() {
-	rootCmd.AddCommand(loginCmd)
+	RootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().Bool("clear-domains", false, "clear all self-hosting domains from the config file")
 	loginCmd.Flags().BoolP("interactive", "i", false, "login via the command line")
 	loginCmd.Flags().Bool("plain", false, "only output the token without any formatting")

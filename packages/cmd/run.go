@@ -208,7 +208,7 @@ func filterReservedEnvVars(env map[string]models.SingleEnvironmentVariable) {
 }
 
 func init() {
-	rootCmd.AddCommand(runCmd)
+	RootCmd.AddCommand(runCmd)
 	runCmd.Flags().String("token", "", "fetch secrets using service token or machine identity access token")
 	runCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
 	runCmd.Flags().StringP("env", "e", "dev", "set the environment (dev, prod, etc.) from which your secrets should be pulled from")

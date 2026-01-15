@@ -283,5 +283,5 @@ func init() {
 	relayCmd.AddCommand(relayStartCmd)
 	relayCmd.AddCommand(relaySystemdCmd)
 
-	rootCmd.AddCommand(relayCmd)
+	RootCmd.AddCommand(relayCmd)
 }

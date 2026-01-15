@@ -255,7 +255,7 @@ func init() {
 
 	userCmd.AddCommand(userGetCmd)
 	userCmd.AddCommand(switchCmd)
-	rootCmd.AddCommand(userCmd)
+	RootCmd.AddCommand(userCmd)
 }
 
 // This returns all logged in user emails from the config file.

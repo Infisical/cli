@@ -1138,5 +1138,5 @@ func init() {
 
 	sshCmd.AddCommand(sshAddHostCmd)
 
-	rootCmd.AddCommand(sshCmd)
+	RootCmd.AddCommand(sshCmd)
 }

@@ -20,7 +20,7 @@ var manCmd = &cobra.Command{
 	Hidden:                true,
 	Args:                  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		manPage, err := mcobra.NewManPage(1, rootCmd)
+		manPage, err := mcobra.NewManPage(1, RootCmd)
 		if err != nil {
 			return err
 		}
@@ -31,5 +31,5 @@ var manCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(manCmd)
+	RootCmd.AddCommand(manCmd)
 }
