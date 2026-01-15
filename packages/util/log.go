@@ -3,6 +3,7 @@ package util
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fatih/color"
 )
+
+// GetStderrWriter is a function that returns the stderr writer to use.
+// It can be set by the cmd package to use RootCmd's stderr.
+// If not set, it defaults to returning os.Stderr.
+var GetStderrWriter func() io.Writer = func() io.Writer {
+	return os.Stderr
+}
 
 func HandleError(err error, messages ...string) {
 	PrintErrorAndExit(1, err, messages...)
@@ -41,7 +49,11 @@ func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 }
 
 func PrintWarning(message string) {
-	color.New(color.FgYellow).Fprintf(os.Stderr, "Warning: %v \n", message)
+	PrintWarningWithWriter(message, GetStderrWriter())
+}
+
+func PrintWarningWithWriter(message string, w io.Writer) {
+	color.New(color.FgYellow).Fprintf(w, "Warning: %v \n", message)
 }
 
 func PrintSuccessMessage(message string) {

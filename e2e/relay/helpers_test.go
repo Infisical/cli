@@ -20,6 +20,7 @@ import (
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	dockercompose "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -333,6 +334,9 @@ func (c *Command) Start(ctx context.Context) {
 		// Set RootCmd output to files
 		cmd.RootCmd.SetOut(stdoutFile)
 		cmd.RootCmd.SetErr(stderrFile)
+
+		// Update log.Logger to use the testing stderr before executing
+		log.Logger = log.Output(cmd.GetLoggerConfig(stderrFile))
 
 		os.Args = make([]string, 0, len(c.Args)+1)
 		os.Args = append(os.Args, "infisical")

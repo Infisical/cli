@@ -55,6 +55,7 @@ func Execute() {
 }
 
 func init() {
+	util.GetStderrWriter = RootCmdStderrWriter
 	cobra.OnInitialize(initLog)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
@@ -130,10 +131,8 @@ func initLog() {
 	}
 }
 
-// GetLoggerConfig returns the logger configuration with a writer that proxies to RootCmd's stderr.
-// This allows the logger to automatically use RootCmd's stderr even if it's changed after
-// initialization (e.g., in tests via RootCmd.SetErr()).
-func GetLoggerConfig() zerolog.ConsoleWriter {
+// GetLoggerConfig returns the logger configuration with the provided writer.
+func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 	// very annoying but zerolog doesn't allow us to change one color without changing all of them
 	// these are the default colors for each level, except for warn
 	levelColors := map[string]string{
@@ -159,7 +158,7 @@ func GetLoggerConfig() zerolog.ConsoleWriter {
 	}
 
 	return zerolog.ConsoleWriter{
-		Out:        RootCmdStderrWriter(),
+		Out:        w,
 		TimeFormat: time.RFC3339,
 		FormatLevel: func(i interface{}) string {
 			level := fmt.Sprintf("%s", i)
