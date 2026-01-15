@@ -196,6 +196,11 @@ type Command struct {
 	stderrFilePath string
 	stderrFile     *os.File
 	cmd            *exec.Cmd
+
+	// For function call method: track execution state
+	functionCallCtx    context.Context
+	functionCallCancel context.CancelFunc
+	functionCallDone   chan struct{}
 }
 
 func findExecutable(t *testing.T) string {
@@ -276,6 +281,18 @@ func (c *Command) Start(ctx context.Context) {
 		env["HOME"] = tempDir
 	}
 
+	c.stdoutFilePath = path.Join(tempDir, "stdout.log")
+	slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
+	stdoutFile, err := os.Create(c.stdoutFilePath)
+	require.NoError(t, err)
+	c.stdoutFile = stdoutFile
+
+	c.stderrFilePath = path.Join(tempDir, "stderr.log")
+	slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
+	stderrFile, err := os.Create(c.stderrFilePath)
+	require.NoError(t, err)
+	c.stderrFile = stderrFile
+
 	switch runMethod {
 	case RunMethodSubprocess:
 		exeFile := c.Executable
@@ -290,21 +307,10 @@ func (c *Command) Start(ctx context.Context) {
 			c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
 
-		c.stdoutFilePath = path.Join(tempDir, "stdout.log")
-		slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
-		stdoutFile, err := os.Create(c.stdoutFilePath)
-		require.NoError(t, err)
-		c.stdoutFile = stdoutFile
-		c.cmd.Stdout = stdoutFile
+		c.cmd.Stdout = c.stdoutFile
+		c.cmd.Stderr = c.stderrFile
 
-		c.stderrFilePath = path.Join(tempDir, "stderr.log")
-		slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
-		stderrFile, err := os.Create(c.stderrFilePath)
-		require.NoError(t, err)
-		c.stderrFile = stderrFile
-		c.cmd.Stderr = stderrFile
-
-		err = c.cmd.Start()
+		err := c.cmd.Start()
 		go func() {
 			err := c.cmd.Wait()
 			if err != nil {
@@ -318,25 +324,16 @@ func (c *Command) Start(ctx context.Context) {
 	case RunMethodFunctionCall:
 		slog.Info("Running command with args by making function call", "args", c.Args)
 
-		// Create stdout and stderr files similar to subprocess method
-		c.stdoutFilePath = path.Join(tempDir, "stdout.log")
-		slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
-		stdoutFile, err := os.Create(c.stdoutFilePath)
-		require.NoError(t, err)
-		c.stdoutFile = stdoutFile
-
-		c.stderrFilePath = path.Join(tempDir, "stderr.log")
-		slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
-		stderrFile, err := os.Create(c.stderrFilePath)
-		require.NoError(t, err)
-		c.stderrFile = stderrFile
+		// Create a cancellable context for tracking function call execution
+		c.functionCallCtx, c.functionCallCancel = context.WithCancel(ctx)
+		c.functionCallDone = make(chan struct{})
 
 		// Set RootCmd output to files
-		cmd.RootCmd.SetOut(stdoutFile)
-		cmd.RootCmd.SetErr(stderrFile)
+		cmd.RootCmd.SetOut(c.stdoutFile)
+		cmd.RootCmd.SetErr(c.stderrFile)
 
 		// Update log.Logger to use the testing stderr before executing
-		log.Logger = log.Output(cmd.GetLoggerConfig(stderrFile))
+		log.Logger = log.Output(cmd.GetLoggerConfig(c.stderrFile))
 
 		os.Args = make([]string, 0, len(c.Args)+1)
 		os.Args = append(os.Args, "infisical")
@@ -345,7 +342,8 @@ func (c *Command) Start(ctx context.Context) {
 			t.Setenv(k, v)
 		}
 		go func() {
-			if err := cmd.RootCmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			defer close(c.functionCallDone)
+			if err := cmd.RootCmd.ExecuteContext(c.functionCallCtx); err != nil && !errors.Is(err, context.Canceled) {
 				t.Error(err)
 			}
 		}()
@@ -361,6 +359,10 @@ func (c *Command) Stop() {
 	// This prevents "file already closed" errors when the logger tries to write
 	// after the files are closed
 	if c.RunMethod == RunMethodFunctionCall {
+		// Cancel the context to signal the command to stop
+		if c.functionCallCancel != nil {
+			c.functionCallCancel()
+		}
 		// Reset logger to use os.Stderr before closing the file
 		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
 		// Reset RootCmd outputs to default
@@ -381,7 +383,30 @@ func (c *Command) Cmd() *exec.Cmd {
 }
 
 func (c *Command) IsRunning() bool {
-	return c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil
+	switch c.RunMethod {
+	case RunMethodSubprocess:
+		return c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil
+	case RunMethodFunctionCall:
+		// Check if the function call is still running by checking:
+		// 1. Context is not cancelled
+		// 2. Done channel is not closed (meaning goroutine hasn't finished)
+		if c.functionCallCtx == nil || c.functionCallDone == nil {
+			return false
+		}
+		select {
+		case <-c.functionCallCtx.Done():
+			// Context was cancelled, command is stopping or stopped
+			return false
+		case <-c.functionCallDone:
+			// Goroutine has completed
+			return false
+		default:
+			// Context is not done and goroutine hasn't signaled completion
+			return true
+		}
+	default:
+		return false
+	}
 }
 
 func (c *Command) DumpOutput() {
