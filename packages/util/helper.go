@@ -569,17 +569,17 @@ func HandleMFASession(httpClient *resty.Client, mfaSessionId string, mfaMethod s
 	mfaURL := fmt.Sprintf("%s/mfa-session/%s", strings.TrimSuffix(infisicalURL, "/api"), mfaSessionId)
 
 	// Display MFA message
-	fmt.Printf("\n🔐 MFA Verification Required (%s)\n", mfaMethod)
-	fmt.Printf("→ %s\n", mfaURL)
+	PrintfStderr("\n🔐 MFA Verification Required (%s)\n", mfaMethod)
+	PrintfStderr("→ %s\n", mfaURL)
 
 	// Try to open browser
 	if err := OpenBrowser(mfaURL); err != nil {
 		log.Debug().Err(err).Msg("Failed to open browser automatically")
 	} else {
-		fmt.Println("✓ Browser opened automatically")
+		PrintlnStderr("✓ Browser opened automatically")
 	}
 
-	fmt.Println("⏳ Waiting for MFA verification...\n")
+	PrintlnStderr("⏳ Waiting for MFA verification...\n")
 
 	// Poll for MFA completion
 	maxAttempts := 150 // 5 minutes at 2s intervals

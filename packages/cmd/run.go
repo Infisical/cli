@@ -160,14 +160,14 @@ var runCmd = &cobra.Command{
 				command := cmd.Flag("command").Value.String()
 				err = executeMultipleCommandWithEnvs(command, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
 				if err != nil {
-					fmt.Println(err)
+					util.PrintlnStderr(err)
 					os.Exit(1)
 				}
 
 			} else {
 				err = executeSingleCommandWithEnvs(args, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
 				if err != nil {
-					fmt.Println(err)
+					util.PrintlnStderr(err)
 					os.Exit(1)
 				}
 			}

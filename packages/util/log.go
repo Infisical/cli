@@ -21,6 +21,49 @@ var GetStderrWriter func() io.Writer = func() io.Writer {
 	return os.Stderr
 }
 
+// GetStdoutWriter is a function that returns the stdout writer to use.
+// It can be set by the cmd package to use RootCmd's stdout.
+// If not set, it defaults to returning os.Stdout.
+var GetStdoutWriter func() io.Writer = func() io.Writer {
+	return os.Stdout
+}
+
+// PrintStderr prints to stderr using GetStderrWriter (which proxies to RootCmd's stderr).
+// This is equivalent to fmt.Print but uses RootCmd's stderr.
+func PrintStderr(a ...interface{}) {
+	fmt.Fprint(GetStderrWriter(), a...)
+}
+
+// PrintlnStderr prints to stderr using GetStderrWriter (which proxies to RootCmd's stderr).
+// This is equivalent to fmt.Println but uses RootCmd's stderr.
+func PrintlnStderr(a ...interface{}) {
+	fmt.Fprintln(GetStderrWriter(), a...)
+}
+
+// PrintfStderr prints to stderr using GetStderrWriter (which proxies to RootCmd's stderr).
+// This is equivalent to fmt.Printf but uses RootCmd's stderr.
+func PrintfStderr(format string, a ...interface{}) {
+	fmt.Fprintf(GetStderrWriter(), format, a...)
+}
+
+// PrintStdout prints to stdout using GetStdoutWriter (which proxies to RootCmd's stdout).
+// This is equivalent to fmt.Print but uses RootCmd's stdout.
+func PrintStdout(a ...interface{}) {
+	fmt.Fprint(GetStdoutWriter(), a...)
+}
+
+// PrintlnStdout prints to stdout using GetStdoutWriter (which proxies to RootCmd's stdout).
+// This is equivalent to fmt.Println but uses RootCmd's stdout.
+func PrintlnStdout(a ...interface{}) {
+	fmt.Fprintln(GetStdoutWriter(), a...)
+}
+
+// PrintfStdout prints to stdout using GetStdoutWriter (which proxies to RootCmd's stdout).
+// This is equivalent to fmt.Printf but uses RootCmd's stdout.
+func PrintfStdout(format string, a ...interface{}) {
+	fmt.Fprintf(GetStdoutWriter(), format, a...)
+}
+
 func HandleError(err error, messages ...string) {
 	PrintErrorAndExit(1, err, messages...)
 }
@@ -39,7 +82,7 @@ func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 		// Print additional messages for both API and non-API errors
 		if len(messages) > 0 {
 			for _, message := range messages {
-				fmt.Fprintln(os.Stderr, message)
+				PrintlnStderr(message)
 			}
 		}
 
@@ -63,7 +106,7 @@ func PrintSuccessMessage(message string) {
 func PrintErrorMessageAndExit(messages ...string) {
 	if len(messages) > 0 {
 		for _, message := range messages {
-			fmt.Fprintln(os.Stderr, message)
+			PrintlnStderr(message)
 		}
 	}
 
@@ -71,7 +114,7 @@ func PrintErrorMessageAndExit(messages ...string) {
 }
 
 func printError(e error) {
-	color.New(color.FgRed).Fprintf(os.Stderr, "error: %v\n", e)
+	color.New(color.FgRed).Fprintf(GetStderrWriter(), "error: %v\n", e)
 }
 
 func printPrettyAPIError(apiErr api.APIError) {
@@ -220,7 +263,7 @@ func printPrettyAPIError(apiErr api.APIError) {
 	supportMsg := supportStyle.Render("If this issue continues, get support at ") + linkStyle.Render("https://infisical.com/slack")
 	content.WriteString(supportMsg)
 
-	fmt.Fprintln(os.Stderr, content.String())
+	PrintlnStderr(content.String())
 }
 
 func getStatusCodeColor(statusCode int) string {

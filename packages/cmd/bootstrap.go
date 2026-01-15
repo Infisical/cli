@@ -258,7 +258,7 @@ var bootstrapCmd = &cobra.Command{
 				return
 			}
 
-			fmt.Println(string(responseJSON))
+			util.PrintlnStdout(string(responseJSON))
 		}
 	},
 }

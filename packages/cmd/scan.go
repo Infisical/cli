@@ -163,14 +163,14 @@ var installCmd = &cobra.Command{
 		if installPrecommit {
 			hooksPath, err := getHooksPath()
 			if err != nil {
-				fmt.Printf("Error: %s\n", err)
+				util.PrintfStderr("Error: %s\n", err)
 				return
 			}
 
 			if hooksPath != ".git/hooks" {
 				defaultHookOverride, err := overrideDefaultHooksPath(hooksPath)
 				if err != nil {
-					fmt.Printf("Error: %s\n", err)
+					util.PrintfStderr("Error: %s\n", err)
 				}
 
 				if defaultHookOverride {
@@ -186,7 +186,7 @@ var installCmd = &cobra.Command{
 
 			err = createOrUpdatePreCommitFile(hooksPath)
 			if err != nil {
-				fmt.Printf("Error: %s\n", err)
+				util.PrintfStderr("Error: %s\n", err)
 				return
 			}
 

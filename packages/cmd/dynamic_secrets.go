@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -133,7 +132,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Unable to format output")
 		}
-		fmt.Print(output)
+		util.PrintStdout(output)
 	} else {
 		visualize.PrintAllDynamicRootCredentials(dynamicSecretRootCredentials)
 	}
@@ -296,21 +295,21 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Unable to format output")
 		}
-		fmt.Print(output)
+		util.PrintStdout(output)
 	} else {
 		// plain output is deprecated is replaced by output=dotenv format, but remains for backwards compatibility
 		if plainOutput {
 			for key, value := range leaseCredentials {
 				if cred, ok := value.(string); ok {
-					fmt.Printf("%s=%s\n", key, cred)
+					util.PrintfStdout("%s=%s\n", key, cred)
 				}
 			}
 		} else {
-			fmt.Println("Dynamic Secret Leasing")
-			fmt.Printf("Name: %s\n", dynamicSecretRootCredential.Name)
-			fmt.Printf("Provider: %s\n", dynamicSecretRootCredential.Type)
-			fmt.Printf("Lease ID: %s\n", leaseDetails.Id)
-			fmt.Printf("Expire At: %s\n", leaseDetails.ExpireAt.Local().Format("02-Jan-2006 03:04:05 PM"))
+			util.PrintlnStderr("Dynamic Secret Leasing")
+			util.PrintfStderr("Name: %s\n", dynamicSecretRootCredential.Name)
+			util.PrintfStderr("Provider: %s\n", dynamicSecretRootCredential.Type)
+			util.PrintfStderr("Lease ID: %s\n", leaseDetails.Id)
+			util.PrintfStderr("Expire At: %s\n", leaseDetails.ExpireAt.Local().Format("02-Jan-2006 03:04:05 PM"))
 			visualize.PrintAllDyamicSecretLeaseCredentials(leaseCredentials)
 		}
 	}
@@ -443,10 +442,10 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Unable to format output")
 		}
-		fmt.Print(output)
+		util.PrintStdout(output)
 	} else {
 
-		fmt.Println("Successfully renewed dynamic secret lease")
+		util.PrintlnStderr("Successfully renewed dynamic secret lease")
 		visualize.PrintAllDynamicSecretLeases([]infisicalSdkModels.DynamicSecretLease{leaseDetails})
 	}
 
@@ -571,10 +570,10 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Unable to format output")
 		}
-		fmt.Print(output)
+		util.PrintStdout(output)
 	} else {
 
-		fmt.Println("Successfully revoked dynamic secret lease")
+		util.PrintlnStderr("Successfully revoked dynamic secret lease")
 		visualize.PrintAllDynamicSecretLeases([]infisicalSdkModels.DynamicSecretLease{leaseDetails})
 	}
 
@@ -695,7 +694,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Unable to format output")
 		}
-		fmt.Print(output)
+		util.PrintStdout(output)
 	} else {
 		visualize.PrintAllDynamicSecretLeases(dynamicSecretLeases)
 	}

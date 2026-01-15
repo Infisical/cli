@@ -5,11 +5,12 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	mcobra "github.com/muesli/mango-cobra"
 	"github.com/muesli/roff"
 	"github.com/spf13/cobra"
+
+	"github.com/Infisical/infisical-merge/packages/util"
 )
 
 var manCmd = &cobra.Command{
@@ -25,7 +26,7 @@ var manCmd = &cobra.Command{
 			return err
 		}
 
-		_, err = fmt.Fprint(os.Stdout, manPage.Build(roff.NewDocument()))
+		_, err = fmt.Fprint(util.GetStdoutWriter(), manPage.Build(roff.NewDocument()))
 		return err
 	},
 }

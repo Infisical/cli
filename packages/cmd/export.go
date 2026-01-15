@@ -127,7 +127,7 @@ var exportCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err)
 			}
-			fmt.Print(processedTemplate.String())
+			util.PrintStdout(processedTemplate.String())
 			return
 		}
 
@@ -163,10 +163,10 @@ var exportCmd = &cobra.Command{
 				util.HandleError(err, "Failed to write output to file")
 			}
 
-			fmt.Printf("Successfully exported secrets to: %s\n", finalPath)
+			util.PrintfStderr("Successfully exported secrets to: %s\n", finalPath)
 		} else {
 			// Original behavior - print to stdout when no output file specified
-			fmt.Print(output)
+			util.PrintStdout(output)
 		}
 
 		// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))

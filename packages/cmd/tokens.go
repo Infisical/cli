@@ -91,7 +91,7 @@ var tokensCreateCmd = &cobra.Command{
 			parts := strings.Split(scope, ":")
 
 			if len(parts) != 2 {
-				fmt.Println("--scope flag is malformed. Each scope flag should be in the following format: <env-slug>:<folder-path>")
+				util.PrintlnStderr("--scope flag is malformed. Each scope flag should be in the following format: <env-slug>:<folder-path>")
 				return
 			}
 
@@ -149,19 +149,19 @@ var tokensCreateCmd = &cobra.Command{
 		serviceToken := createServiceTokenResponse.ServiceToken + "." + hexEncodedRandomBytes
 
 		if tokenOnly {
-			fmt.Println(serviceToken)
+			util.PrintlnStdout(serviceToken)
 		} else {
 			printablePermission := []string{}
 			for _, permission := range permissions {
 				printablePermission = append(printablePermission, fmt.Sprintf("([environment: %v] [path: %v])", permission.Environment, permission.SecretPath))
 			}
 
-			fmt.Printf("New service token created\n")
-			fmt.Printf("Name: %v\n", serviceTokenName)
-			fmt.Printf("Project ID: %v\n", workspaceId)
-			fmt.Printf("Access type: [%v]\n", strings.Join(accessLevels, ", "))
-			fmt.Printf("Permission(s): %v\n", strings.Join(printablePermission, ", "))
-			fmt.Printf("Service Token: %v\n", serviceToken)
+			util.PrintfStderr("New service token created\n")
+			util.PrintfStderr("Name: %v\n", serviceTokenName)
+			util.PrintfStderr("Project ID: %v\n", workspaceId)
+			util.PrintfStderr("Access type: [%v]\n", strings.Join(accessLevels, ", "))
+			util.PrintfStderr("Permission(s): %v\n", strings.Join(printablePermission, ", "))
+			util.PrintfStderr("Service Token: %v\n", serviceToken)
 		}
 	},
 }

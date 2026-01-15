@@ -45,6 +45,22 @@ func RootCmdStderrWriter() io.Writer {
 	return &rootCmdStderrWriter{}
 }
 
+// rootCmdStdoutWriter is a writer wrapper that dynamically reads from RootCmd.OutOrStdout()
+// on each write. This allows the logger to automatically use RootCmd's stdout even if it's
+// changed after logger initialization (e.g., in tests).
+type rootCmdStdoutWriter struct{}
+
+func (w *rootCmdStdoutWriter) Write(p []byte) (n int, err error) {
+	return RootCmd.OutOrStdout().Write(p)
+}
+
+// RootCmdStdoutWriter returns a writer that proxies all writes to RootCmd.OutOrStdout().
+// This writer dynamically reads from RootCmd on each write, so it will automatically
+// use whatever stdout is set on RootCmd, even if changed after initialization.
+func RootCmdStdoutWriter() io.Writer {
+	return &rootCmdStdoutWriter{}
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the RootCmd.
 func Execute() {
@@ -56,6 +72,7 @@ func Execute() {
 
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
+	util.GetStdoutWriter = RootCmdStdoutWriter
 	cobra.OnInitialize(initLog)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")

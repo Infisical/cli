@@ -150,9 +150,9 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 	}
 
 	if port == 0 {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Database proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
 	}
 
 	username, ok := pamResponse.Metadata["username"]
@@ -177,24 +177,24 @@ func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID s
 	}
 
 	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                  Database Proxy Session Started!                  \n")
-	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
-	fmt.Printf("\n")
-	fmt.Printf("You can now connect to your database using this connection string:\n")
+	util.PrintfStderr("\n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("                  Database Proxy Session Started!                  \n")
+	util.PrintfStderr("----------------------------------------------------------------------\n")
+	util.PrintfStderr("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
+	util.PrintfStderr("\n")
+	util.PrintfStderr("You can now connect to your database using this connection string:\n")
 
 	switch pamResponse.ResourceType {
 	case session.ResourceTypePostgres:
-		fmt.Printf("postgres://%s@localhost:%d/%s", username, proxy.port, database)
+		util.PrintfStderr("postgres://%s@localhost:%d/%s", username, proxy.port, database)
 	case session.ResourceTypeMysql:
-		fmt.Printf("mysql://%s@localhost:%d/%s", username, proxy.port, database)
+		util.PrintfStderr("mysql://%s@localhost:%d/%s", username, proxy.port, database)
 	default:
-		fmt.Printf("localhost:%d", proxy.port)
+		util.PrintfStderr("localhost:%d", proxy.port)
 	}
-	fmt.Printf("\n**********************************************************************\n")
-	fmt.Printf("\n")
+	util.PrintfStderr("\n**********************************************************************\n")
+	util.PrintfStderr("\n")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

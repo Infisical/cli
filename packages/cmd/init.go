@@ -99,7 +99,7 @@ var initCmd = &cobra.Command{
 				} else if mfaErrorResponse != nil {
 					if mfaErrorResponse.Context.Code == "mfa_invalid" {
 						msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
-						fmt.Println(msg)
+						util.PrintlnStderr(msg)
 						if i == 5 {
 							util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
 							break

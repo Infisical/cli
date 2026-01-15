@@ -85,7 +85,7 @@ var getCmd = &cobra.Command{
 				util.HandleError(err, "Unable to format output")
 			}
 
-			fmt.Print(output)
+			util.PrintStdout(output)
 		} else {
 			visualize.PrintAllFoldersDetails(folders, foldersPath)
 		}
@@ -175,7 +175,7 @@ var createCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err, "Unable to format output")
 			}
-			fmt.Print(output)
+			util.PrintStdout(output)
 		} else {
 			util.PrintSuccessMessage(fmt.Sprintf("folder named `%s` created in path %s", folderName, folderPath))
 		}
@@ -261,7 +261,7 @@ var deleteCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err, "Unable to format output")
 			}
-			fmt.Print(output)
+			util.PrintStdout(output)
 		} else {
 
 			util.PrintSuccessMessage(fmt.Sprintf("folder named `%s` deleted in path %s", folderName, folderPath))

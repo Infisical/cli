@@ -136,9 +136,9 @@ func StartRedisLocalProxy(accessToken string, accountPath string, projectID stri
 	}
 
 	if port == 0 {
-		fmt.Printf("Redis proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("Redis proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
 	}
 
 	username, ok := pamResponse.Metadata["username"]
@@ -157,20 +157,20 @@ func StartRedisLocalProxy(accessToken string, accountPath string, projectID stri
 	}
 
 	log.Info().Msgf("Redis proxy server listening on port %d", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                  Redis Proxy Session Started!                  \n")
-	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
-	fmt.Printf("\n")
-	fmt.Printf("You can now connect to your Redis instance using:\n")
+	util.PrintfStderr("\n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("                  Redis Proxy Session Started!                  \n")
+	util.PrintfStderr("----------------------------------------------------------------------\n")
+	util.PrintfStderr("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
+	util.PrintfStderr("\n")
+	util.PrintfStderr("You can now connect to your Redis instance using:\n")
 	if username != "" {
-		fmt.Printf("redis://%s@localhost:%d", username, proxy.port)
+		util.PrintfStderr("redis://%s@localhost:%d", username, proxy.port)
 	} else {
-		fmt.Printf("redis://localhost:%d", proxy.port)
+		util.PrintfStderr("redis://localhost:%d", proxy.port)
 	}
-	fmt.Printf("\n**********************************************************************\n")
-	fmt.Printf("\n")
+	util.PrintfStderr("\n**********************************************************************\n")
+	util.PrintfStderr("\n")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

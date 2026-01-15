@@ -141,10 +141,10 @@ var userGetTokenCmd = &cobra.Command{
 		}
 
 		if plain {
-			fmt.Println(loggedInUserDetails.UserCredentials.JTWToken)
+			util.PrintlnStdout(loggedInUserDetails.UserCredentials.JTWToken)
 		} else {
-			fmt.Println("Session ID:", tokenPayload.TokenVersionId)
-			fmt.Println("Token:", loggedInUserDetails.UserCredentials.JTWToken)
+			util.PrintlnStdout("Session ID:", tokenPayload.TokenVersionId)
+			util.PrintlnStdout("Token:", loggedInUserDetails.UserCredentials.JTWToken)
 		}
 	},
 }

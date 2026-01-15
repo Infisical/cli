@@ -130,11 +130,11 @@ var secretsCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err, "Unable to format output")
 			}
-			fmt.Print(output)
+			util.PrintStdout(output)
 		} else {
 			if plainOutput {
 				for _, secret := range secrets {
-					fmt.Printf("%s=%s\n", secret.Key, secret.Value)
+					util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
 				}
 			} else {
 				visualize.PrintAllSecretDetails(secrets)
@@ -313,7 +313,7 @@ var secretsSetCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err, "Unable to format output")
 			}
-			fmt.Print(output)
+			util.PrintStdout(output)
 		} else {
 			visualize.Table(headers, rows)
 		}
@@ -421,9 +421,9 @@ var secretsDeleteCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err, "Unable to format output")
 			}
-			fmt.Print(output)
+			util.PrintStdout(output)
 		} else {
-			fmt.Printf("secret name(s) [%v] have been deleted from your project \n", strings.Join(args, ", "))
+			util.PrintfStderr("secret name(s) [%v] have been deleted from your project \n", strings.Join(args, ", "))
 		}
 
 		Telemetry.CaptureEvent("cli-command:secrets delete", posthog.NewProperties().Set("secretCount", len(args)).Set("version", util.CLI_VERSION))
@@ -562,13 +562,13 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 			util.HandleError(err, "Unable to format output")
 		}
 
-		fmt.Print(output)
+		util.PrintStdout(output)
 	} else {
 
 		// showOnlyValue deprecated in favor of --plain, below only for backward compatibility
 		if plainOutput {
 			for _, secret := range requestedSecrets {
-				fmt.Println(secret.Value)
+				util.PrintlnStdout(secret.Value)
 			}
 		} else {
 			visualize.PrintAllSecretDetails(requestedSecrets)
@@ -774,10 +774,10 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 		dashedList = append(dashedList, fmt.Sprintf("# - %s \n", item))
 	}
 	if len(dashedList) > 0 {
-		fmt.Println(CenterString("TABLE OF CONTENTS", 80))
-		fmt.Println(strings.Join(dashedList, ""))
+		util.PrintlnStdout(CenterString("TABLE OF CONTENTS", 80))
+		util.PrintlnStdout(strings.Join(dashedList, ""))
 	}
-	fmt.Println(strings.Join(fullyGeneratedDocuments, ""))
+	util.PrintlnStdout(strings.Join(fullyGeneratedDocuments, ""))
 
 	Telemetry.CaptureEvent("cli-command:generate-example-env", posthog.NewProperties().Set("secretCount", len(secrets)).Set("version", util.CLI_VERSION))
 }
