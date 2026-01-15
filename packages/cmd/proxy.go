@@ -581,5 +581,5 @@ func init() {
 
 	proxyCmd.AddCommand(proxyStartCmd)
 	proxyCmd.AddCommand(proxyDebugCmd)
-	rootCmd.AddCommand(proxyCmd)
+	RootCmd.AddCommand(proxyCmd)
 }
