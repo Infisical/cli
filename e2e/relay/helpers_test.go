@@ -592,3 +592,11 @@ func WaitForStderr(t *testing.T, opts WaitForStderrOptions) WaitResult {
 	}
 	return WaitFor(t, waitOpts)
 }
+
+func RandomSlug(numWords int) string {
+	var words []string
+	for i := 0; i < numWords; i++ {
+		words = append(words, strings.ToLower(faker.Word()))
+	}
+	return strings.Join(words, "-")
+}
