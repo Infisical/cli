@@ -547,5 +547,5 @@ func init() {
 	gatewayCmd.AddCommand(gatewayInstallCmd)
 	gatewayCmd.AddCommand(gatewayUninstallCmd)
 	gatewayCmd.AddCommand(gatewayRelayCmd)
-	rootCmd.AddCommand(gatewayCmd)
+	RootCmd.AddCommand(gatewayCmd)
 }

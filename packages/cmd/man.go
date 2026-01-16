@@ -5,11 +5,12 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	mcobra "github.com/muesli/mango-cobra"
 	"github.com/muesli/roff"
 	"github.com/spf13/cobra"
+
+	"github.com/Infisical/infisical-merge/packages/util"
 )
 
 var manCmd = &cobra.Command{
@@ -20,16 +21,16 @@ var manCmd = &cobra.Command{
 	Hidden:                true,
 	Args:                  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		manPage, err := mcobra.NewManPage(1, rootCmd)
+		manPage, err := mcobra.NewManPage(1, RootCmd)
 		if err != nil {
 			return err
 		}
 
-		_, err = fmt.Fprint(os.Stdout, manPage.Build(roff.NewDocument()))
+		_, err = fmt.Fprint(util.GetStdoutWriter(), manPage.Build(roff.NewDocument()))
 		return err
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(manCmd)
+	RootCmd.AddCommand(manCmd)
 }

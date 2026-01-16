@@ -3,3 +3,19 @@ output: ./packages/client/client.gen.go
 generate:
   models: true
   client: true
+output-options:
+  # there are many errors when generating the client code for the full openapi spec
+  # that's why we only include the operations that we need for the e2e tests at this moment
+  # feel free to add more operations as needed
+  include-operation-ids:
+    - adminSignUp
+    - selectOrganizationV3
+    - refreshAuthToken
+    - createMachineIdentity
+    - attachTokenAuth
+    - createTokenAuthToken
+    - getRelays
+    - listGateways
+    - createProject
+    - createKubernetesPamResource
+    - createRedisPamResource

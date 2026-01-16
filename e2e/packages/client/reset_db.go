@@ -70,6 +70,8 @@ func ResetDB(ctx context.Context, opts ...func(*ResetDBOptions)) error {
 // resetPostgresDB resets the PostgreSQL database by truncating all tables (except skipped ones)
 // and inserting a default super_admin record.
 func resetPostgresDB(ctx context.Context, opts ResetDBOptions) error {
+	slog.Info("Resetting Postgres database")
+
 	// Build connection string using config
 	connStr := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s",
 		opts.DBConfig.User,
@@ -116,17 +118,17 @@ func resetPostgresDB(ctx context.Context, opts ResetDBOptions) error {
 		return err
 	}
 
-	// Build truncate statements
-	var builder strings.Builder
+	// Build truncate statement with all tables
+	tablesToTruncate := make([]string, 0)
 	for _, table := range tables {
 		if _, ok := opts.SkipTables[table]; ok {
 			continue
 		}
-		builder.WriteString(fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE;\n", table))
+		tablesToTruncate = append(tablesToTruncate, table)
 	}
 
-	truncateQuery := builder.String()
-	if truncateQuery != "" {
+	if len(tablesToTruncate) > 0 {
+		truncateQuery := fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE;", strings.Join(tablesToTruncate, ", "))
 		_, err = conn.Exec(ctx, truncateQuery)
 		if err != nil {
 			slog.Error("Truncate failed", "error", err)

@@ -4,27 +4,16 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/go-faker/faker/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func RandomSlug(numWords int) string {
-	var words []string
-	for i := 0; i < numWords; i++ {
-		words = append(words, strings.ToLower(faker.Word()))
-	}
-	return strings.Join(words, "-")
-}
-
 func TestRelay_RegistersARelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
 	infisical := NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
@@ -37,7 +26,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
 	require.NotNil(t, identity)
 
-	relayName := RandomSlug(3)
+	relayName := RandomSlug(2)
 	cmd := Command{
 		Test: t,
 		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
@@ -49,76 +38,45 @@ func TestRelay_RegistersARelay(t *testing.T) {
 		},
 	}
 	cmd.Start(ctx)
-	defer cmd.Stop()
+	t.Cleanup(cmd.Stop)
 
-	cmdExit := false
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		if cmd.RunMethod != RunMethodSubprocess {
-			// For function call method, we cannot check if the subprocess if running or not,
-			// also it's a bit hard to collect stderr like subprocess.
-			// Ideally, we should mock it and collect them regardless
-			return
-		}
-		// Ensure the process is still running if it's a subprocess
-		if !cmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
-			cmd.DumpOutput()
-			// Somehow the cmd stops early, let's exit the loop early
-			cmdExit = true
-			return
-		}
+	result := WaitForStderr(t, WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "Relay server started successfully",
+	})
+	require.Equal(t, WaitSuccess, result)
 
-		stderr := cmd.Stderr()
-		assert.Containsf(
-			collect, stderr,
-			"Relay server started successfully",
-			"The cmd is not outputting \"Relay server started successfully\" in the Stderr:\n%s", stderr,
-		)
-	}, 120*time.Second, 5*time.Second)
-	require.False(t, cmdExit)
-
-	detectHeartbeat := false
-	require.Eventually(t, func() bool {
-		// Ensure the process is still running if it's a subprocess
-		if cmd.RunMethod == RunMethodSubprocess && !cmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", cmd.Cmd().ProcessState.ExitCode())
-			cmd.DumpOutput()
-			// Somehow the cmd stops early, let's exit the loop early
-			return true
-		}
-
-		resp, err := c.GetRelaysWithResponse(ctx)
-		if err != nil {
-			return false
-		}
-		if resp.StatusCode() != http.StatusOK {
-			return false
-		}
-		for _, relay := range *resp.JSON200 {
-			slog.Info(
-				"Relay info",
-				"id", relay.Id,
-				"name", relay.Name,
-				"host", relay.Host,
-				"heartbeat", relay.Heartbeat,
-			)
-			if relay.Name == relayName && relay.Heartbeat != nil {
-				slog.Info("Confirmed relay heartbeat")
-				detectHeartbeat = true
-				return true
+	result = WaitFor(t, WaitForOptions{
+		EnsureCmdRunning: &cmd,
+		Condition: func() ConditionResult {
+			resp, err := c.GetRelaysWithResponse(ctx)
+			if err != nil {
+				return ConditionWait
 			}
-		}
-		return false
-	}, 120*time.Second, 5*time.Second)
+			if resp.StatusCode() != http.StatusOK {
+				return ConditionWait
+			}
+			for _, relay := range *resp.JSON200 {
+				slog.Info(
+					"Relay info",
+					"id", relay.Id,
+					"name", relay.Name,
+					"host", relay.Host,
+					"heartbeat", relay.Heartbeat,
+				)
+				if relay.Name == relayName && relay.Heartbeat != nil {
+					slog.Info("Confirmed relay heartbeat")
+					return ConditionSuccess
+				}
+			}
+			return ConditionWait
+		},
+	})
+	require.Equal(t, WaitSuccess, result)
 
-	assert.True(t, detectHeartbeat)
-	if cmd.RunMethod == RunMethodSubprocess {
-		stderr := cmd.Stderr()
-		assert.Containsf(
-			t, stderr,
-			"Relay is reachable by Infisical",
-			"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
-		)
-	}
-	// TODO: find a way to collect stderr for func call method and assert as well
+	result = WaitForStderr(t, WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "Relay is reachable by Infisical",
+	})
+	assert.Equal(t, WaitSuccess, result)
 }

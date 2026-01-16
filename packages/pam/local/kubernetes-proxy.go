@@ -96,9 +96,9 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	}
 
 	if port == 0 {
-		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Kubernetes proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
 	}
 
 	accountName, ok := pamResponse.Metadata["accountName"]
@@ -143,13 +143,13 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	proxy.kubeConfigPath = kubeconfig
 
 	log.Info().Msgf("Kubernetes proxy server listening on port %d", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                  Kubernetes Proxy Session Started!                   \n")
-	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
-	fmt.Printf("Your current kubectl context has been switched to %s, you can start using kubectl command to access your Kubernetes right now\n", clusterName)
-	fmt.Printf("\n")
+	util.PrintfStderr("\n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("                  Kubernetes Proxy Session Started!                   \n")
+	util.PrintfStderr("----------------------------------------------------------------------\n")
+	util.PrintfStderr("Accessing account %s at folder path %s\n", accountName, accountPath)
+	util.PrintfStderr("Your current kubectl context has been switched to %s, you can start using kubectl command to access your Kubernetes right now\n", clusterName)
+	util.PrintfStderr("\n")
 	// TODO: write kubectl config
 
 	sigChan := make(chan os.Signal, 1)

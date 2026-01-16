@@ -258,7 +258,7 @@ var bootstrapCmd = &cobra.Command{
 				return
 			}
 
-			fmt.Println(string(responseJSON))
+			util.PrintlnStdout(string(responseJSON))
 		}
 	},
 }
@@ -273,5 +273,5 @@ func init() {
 	bootstrapCmd.Flags().String("k8-secret-template", "{\"data\":{\"token\":\"{{.Identity.Credentials.Token}}\"}}", "The template to use for rendering the Kubernetes secret (entire secret JSON)")
 	bootstrapCmd.Flags().String("k8-secret-namespace", "", "The namespace to create the Kubernetes secret in")
 	bootstrapCmd.Flags().String("k8-secret-name", "", "The name of the Kubernetes secret to create")
-	rootCmd.AddCommand(bootstrapCmd)
+	RootCmd.AddCommand(bootstrapCmd)
 }

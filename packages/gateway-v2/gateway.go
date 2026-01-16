@@ -518,7 +518,7 @@ func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
 
 		// no host cert check when in dev mode
 		if util.IsDevelopmentMode() {
-			fmt.Println("Gateway running in development mode, skipping host certificate validation")
+			util.PrintlnStderr("Gateway running in development mode, skipping host certificate validation")
 			return nil
 		}
 

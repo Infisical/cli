@@ -99,5 +99,5 @@ func init() {
 	kmipStartCmd.Flags().String("hostnames-or-ips", "", "Comma-separated list of hostnames or IPs")
 
 	kmipCmd.AddCommand(kmipStartCmd)
-	rootCmd.AddCommand(kmipCmd)
+	RootCmd.AddCommand(kmipCmd)
 }

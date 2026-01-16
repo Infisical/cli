@@ -17,6 +17,10 @@ import (
 )
 
 func CheckForUpdate() {
+	CheckForUpdateWithWriter(os.Stderr)
+}
+
+func CheckForUpdateWithWriter(w io.Writer) {
 	if checkEnv := os.Getenv("INFISICAL_DISABLE_UPDATE_CHECK"); checkEnv != "" {
 		return
 	}
@@ -41,19 +45,23 @@ func CheckForUpdate() {
 			blue(latestVersion),
 		)
 
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprintln(w, msg)
 
 		updateInstructions := GetUpdateInstructions()
 
 		if updateInstructions != "" {
 			msg = fmt.Sprintf("\n%s\n", GetUpdateInstructions())
-			fmt.Fprintln(os.Stderr, msg)
+			fmt.Fprintln(w, msg)
 		}
 
 	}
 }
 
 func DisplayAptInstallationChangeBanner(isSilent bool) {
+	DisplayAptInstallationChangeBannerWithWriter(isSilent, os.Stderr)
+}
+
+func DisplayAptInstallationChangeBannerWithWriter(isSilent bool, w io.Writer) {
 	if isSilent {
 		return
 	}
@@ -67,7 +75,7 @@ func DisplayAptInstallationChangeBanner(isSilent bool) {
 				yellow("Update Required: Your current package installation script is outdated and will no longer receive updates.\nPlease update to the new installation script which can be found here https://infisical.com/docs/cli/overview#installation debian section\n"),
 			)
 
-			fmt.Fprintln(os.Stderr, msg)
+			fmt.Fprintln(w, msg)
 		}
 	}
 }

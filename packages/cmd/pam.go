@@ -316,5 +316,5 @@ func init() {
 	pamCmd.AddCommand(pamSshCmd)
 	pamCmd.AddCommand(pamKubernetesCmd)
 	pamCmd.AddCommand(pamRedisCmd)
-	rootCmd.AddCommand(pamCmd)
+	RootCmd.AddCommand(pamCmd)
 }

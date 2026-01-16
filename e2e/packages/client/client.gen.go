@@ -22,60 +22,33 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
-// Defines values for GetApiV1ProjectsParamsIncludeRoles.
+// Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
 const (
-	False GetApiV1ProjectsParamsIncludeRoles = "false"
-	True  GetApiV1ProjectsParamsIncludeRoles = "true"
+	ServiceAccountToken CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "service-account-token"
 )
 
-// Defines values for GetApiV1ProjectsParamsType.
+// Defines values for CreateProjectJSONBodyType.
 const (
-	GetApiV1ProjectsParamsTypeCertManager    GetApiV1ProjectsParamsType = "cert-manager"
-	GetApiV1ProjectsParamsTypeKms            GetApiV1ProjectsParamsType = "kms"
-	GetApiV1ProjectsParamsTypePam            GetApiV1ProjectsParamsType = "pam"
-	GetApiV1ProjectsParamsTypeSecretManager  GetApiV1ProjectsParamsType = "secret-manager"
-	GetApiV1ProjectsParamsTypeSecretScanning GetApiV1ProjectsParamsType = "secret-scanning"
-	GetApiV1ProjectsParamsTypeSsh            GetApiV1ProjectsParamsType = "ssh"
+	Ai             CreateProjectJSONBodyType = "ai"
+	CertManager    CreateProjectJSONBodyType = "cert-manager"
+	Kms            CreateProjectJSONBodyType = "kms"
+	Pam            CreateProjectJSONBodyType = "pam"
+	SecretManager  CreateProjectJSONBodyType = "secret-manager"
+	SecretScanning CreateProjectJSONBodyType = "secret-scanning"
+	Ssh            CreateProjectJSONBodyType = "ssh"
 )
 
-// Defines values for PostApiV1ProjectsJSONBodyType.
+// Defines values for SelectOrganizationV3JSONBodyUserAgent.
 const (
-	PostApiV1ProjectsJSONBodyTypeCertManager    PostApiV1ProjectsJSONBodyType = "cert-manager"
-	PostApiV1ProjectsJSONBodyTypeKms            PostApiV1ProjectsJSONBodyType = "kms"
-	PostApiV1ProjectsJSONBodyTypePam            PostApiV1ProjectsJSONBodyType = "pam"
-	PostApiV1ProjectsJSONBodyTypeSecretManager  PostApiV1ProjectsJSONBodyType = "secret-manager"
-	PostApiV1ProjectsJSONBodyTypeSecretScanning PostApiV1ProjectsJSONBodyType = "secret-scanning"
-	PostApiV1ProjectsJSONBodyTypeSsh            PostApiV1ProjectsJSONBodyType = "ssh"
+	Cli SelectOrganizationV3JSONBodyUserAgent = "cli"
 )
 
-// Defines values for PostApiV3AuthSelectOrganizationJSONBodyUserAgent.
-const (
-	Cli PostApiV3AuthSelectOrganizationJSONBodyUserAgent = "cli"
-)
-
-// PostApiV1AdminSignupJSONBody defines parameters for PostApiV1AdminSignup.
-type PostApiV1AdminSignupJSONBody struct {
+// AdminSignUpJSONBody defines parameters for AdminSignUp.
+type AdminSignUpJSONBody struct {
 	Email     openapi_types.Email `json:"email"`
 	FirstName string              `json:"firstName"`
 	LastName  *string             `json:"lastName,omitempty"`
 	Password  string              `json:"password"`
-}
-
-// PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody defines parameters for PatchApiV1AuthTokenAuthIdentitiesIdentityId.
-type PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody struct {
-	// AccessTokenMaxTTL The new maximum lifetime for an access token in seconds.
-	AccessTokenMaxTTL *int `json:"accessTokenMaxTTL,omitempty"`
-
-	// AccessTokenNumUsesLimit The new maximum number of times that an access token can be used.
-	AccessTokenNumUsesLimit *int `json:"accessTokenNumUsesLimit,omitempty"`
-
-	// AccessTokenTTL The new lifetime for an access token in seconds.
-	AccessTokenTTL *int `json:"accessTokenTTL,omitempty"`
-
-	// AccessTokenTrustedIps The new IPs or CIDR ranges that access tokens can be used from.
-	AccessTokenTrustedIps *[]struct {
-		IpAddress string `json:"ipAddress"`
-	} `json:"accessTokenTrustedIps,omitempty"`
 }
 
 // AttachTokenAuthJSONBody defines parameters for AttachTokenAuth.
@@ -95,29 +68,17 @@ type AttachTokenAuthJSONBody struct {
 	} `json:"accessTokenTrustedIps,omitempty"`
 }
 
-// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams defines parameters for GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens.
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams struct {
-	// Offset The offset to start from. If you enter 10, it will start from the 10th token.
-	Offset *float32 `form:"offset,omitempty" json:"offset,omitempty"`
-
-	// Limit The number of tokens to return.
-	Limit *float32 `form:"limit,omitempty" json:"limit,omitempty"`
-}
-
-// PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONBody defines parameters for PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens.
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONBody struct {
+// CreateTokenAuthTokenJSONBody defines parameters for CreateTokenAuthToken.
+type CreateTokenAuthTokenJSONBody struct {
 	// Name The name of the token to create.
 	Name *string `json:"name,omitempty"`
+
+	// SubOrganizationName The sub organization name to scope the token to.
+	SubOrganizationName *string `json:"subOrganizationName,omitempty"`
 }
 
-// GetApiV1IdentitiesParams defines parameters for GetApiV1Identities.
-type GetApiV1IdentitiesParams struct {
-	// OrgId The ID of the organization to list identities.
-	OrgId string `form:"orgId" json:"orgId"`
-}
-
-// PostApiV1IdentitiesJSONBody defines parameters for PostApiV1Identities.
-type PostApiV1IdentitiesJSONBody struct {
+// CreateMachineIdentityJSONBody defines parameters for CreateMachineIdentity.
+type CreateMachineIdentityJSONBody struct {
 	// HasDeleteProtection Prevents deletion of the identity when enabled.
 	HasDeleteProtection *bool `json:"hasDeleteProtection,omitempty"`
 	Metadata            *[]struct {
@@ -135,20 +96,53 @@ type PostApiV1IdentitiesJSONBody struct {
 	Role *string `json:"role,omitempty"`
 }
 
-// GetApiV1ProjectsParams defines parameters for GetApiV1Projects.
-type GetApiV1ProjectsParams struct {
-	IncludeRoles *GetApiV1ProjectsParamsIncludeRoles `form:"includeRoles,omitempty" json:"includeRoles,omitempty"`
-	Type         *GetApiV1ProjectsParamsType         `form:"type,omitempty" json:"type,omitempty"`
+// CreateKubernetesPamResourceJSONBody defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+		Url                   string  `json:"url"`
+	} `json:"connectionDetails"`
+	GatewayId                  openapi_types.UUID                                              `json:"gatewayId"`
+	Name                       string                                                          `json:"name"`
+	ProjectId                  openapi_types.UUID                                              `json:"projectId"`
+	RotationAccountCredentials *CreateKubernetesPamResourceJSONBody_RotationAccountCredentials `json:"rotationAccountCredentials"`
 }
 
-// GetApiV1ProjectsParamsIncludeRoles defines parameters for GetApiV1Projects.
-type GetApiV1ProjectsParamsIncludeRoles string
+// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 struct {
+	AuthMethod          CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod `json:"authMethod"`
+	ServiceAccountToken string                                                                   `json:"serviceAccountToken"`
+}
 
-// GetApiV1ProjectsParamsType defines parameters for GetApiV1Projects.
-type GetApiV1ProjectsParamsType string
+// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod string
 
-// PostApiV1ProjectsJSONBody defines parameters for PostApiV1Projects.
-type PostApiV1ProjectsJSONBody struct {
+// CreateKubernetesPamResourceJSONBody_RotationAccountCredentials defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBody_RotationAccountCredentials struct {
+	union json.RawMessage
+}
+
+// CreateRedisPamResourceJSONBody defines parameters for CreateRedisPamResource.
+type CreateRedisPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		Host                  string  `json:"host"`
+		Port                  float32 `json:"port"`
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslEnabled            bool    `json:"sslEnabled"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+	} `json:"connectionDetails"`
+	GatewayId                  openapi_types.UUID `json:"gatewayId"`
+	Name                       string             `json:"name"`
+	ProjectId                  openapi_types.UUID `json:"projectId"`
+	RotationAccountCredentials *struct {
+		Password *string `json:"password,omitempty"`
+		Username *string `json:"username,omitempty"`
+	} `json:"rotationAccountCredentials"`
+}
+
+// CreateProjectJSONBody defines parameters for CreateProject.
+type CreateProjectJSONBody struct {
 	HasDeleteProtection *bool   `json:"hasDeleteProtection,omitempty"`
 	KmsKeyId            *string `json:"kmsKeyId,omitempty"`
 
@@ -163,42 +157,45 @@ type PostApiV1ProjectsJSONBody struct {
 	Slug *string `json:"slug,omitempty"`
 
 	// Template The name of the project template, if specified, to apply to this project.
-	Template *string                        `json:"template,omitempty"`
-	Type     *PostApiV1ProjectsJSONBodyType `json:"type,omitempty"`
+	Template *string                    `json:"template,omitempty"`
+	Type     *CreateProjectJSONBodyType `json:"type,omitempty"`
 }
 
-// PostApiV1ProjectsJSONBodyType defines parameters for PostApiV1Projects.
-type PostApiV1ProjectsJSONBodyType string
+// CreateProjectJSONBodyType defines parameters for CreateProject.
+type CreateProjectJSONBodyType string
 
-// PostApiV3AuthSelectOrganizationJSONBody defines parameters for PostApiV3AuthSelectOrganization.
-type PostApiV3AuthSelectOrganizationJSONBody struct {
-	OrganizationId string                                            `json:"organizationId"`
-	UserAgent      *PostApiV3AuthSelectOrganizationJSONBodyUserAgent `json:"userAgent,omitempty"`
+// SelectOrganizationV3JSONBody defines parameters for SelectOrganizationV3.
+type SelectOrganizationV3JSONBody struct {
+	OrganizationId string                                 `json:"organizationId"`
+	UserAgent      *SelectOrganizationV3JSONBodyUserAgent `json:"userAgent,omitempty"`
 }
 
-// PostApiV3AuthSelectOrganizationJSONBodyUserAgent defines parameters for PostApiV3AuthSelectOrganization.
-type PostApiV3AuthSelectOrganizationJSONBodyUserAgent string
+// SelectOrganizationV3JSONBodyUserAgent defines parameters for SelectOrganizationV3.
+type SelectOrganizationV3JSONBodyUserAgent string
 
-// PostApiV1AdminSignupJSONRequestBody defines body for PostApiV1AdminSignup for application/json ContentType.
-type PostApiV1AdminSignupJSONRequestBody PostApiV1AdminSignupJSONBody
-
-// PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody defines body for PatchApiV1AuthTokenAuthIdentitiesIdentityId for application/json ContentType.
-type PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONBody
+// AdminSignUpJSONRequestBody defines body for AdminSignUp for application/json ContentType.
+type AdminSignUpJSONRequestBody AdminSignUpJSONBody
 
 // AttachTokenAuthJSONRequestBody defines body for AttachTokenAuth for application/json ContentType.
 type AttachTokenAuthJSONRequestBody AttachTokenAuthJSONBody
 
-// PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody defines body for PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens for application/json ContentType.
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONBody
+// CreateTokenAuthTokenJSONRequestBody defines body for CreateTokenAuthToken for application/json ContentType.
+type CreateTokenAuthTokenJSONRequestBody CreateTokenAuthTokenJSONBody
 
-// PostApiV1IdentitiesJSONRequestBody defines body for PostApiV1Identities for application/json ContentType.
-type PostApiV1IdentitiesJSONRequestBody PostApiV1IdentitiesJSONBody
+// CreateMachineIdentityJSONRequestBody defines body for CreateMachineIdentity for application/json ContentType.
+type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
 
-// PostApiV1ProjectsJSONRequestBody defines body for PostApiV1Projects for application/json ContentType.
-type PostApiV1ProjectsJSONRequestBody PostApiV1ProjectsJSONBody
+// CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
+type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
 
-// PostApiV3AuthSelectOrganizationJSONRequestBody defines body for PostApiV3AuthSelectOrganization for application/json ContentType.
-type PostApiV3AuthSelectOrganizationJSONRequestBody PostApiV3AuthSelectOrganizationJSONBody
+// CreateRedisPamResourceJSONRequestBody defines body for CreateRedisPamResource for application/json ContentType.
+type CreateRedisPamResourceJSONRequestBody CreateRedisPamResourceJSONBody
+
+// CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
+type CreateProjectJSONRequestBody CreateProjectJSONBody
+
+// SelectOrganizationV3JSONRequestBody defines body for SelectOrganizationV3 for application/json ContentType.
+type SelectOrganizationV3JSONRequestBody SelectOrganizationV3JSONBody
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -273,65 +270,58 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
-	// PostApiV1AdminSignupWithBody request with any body
-	PostApiV1AdminSignupWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// AdminSignUpWithBody request with any body
+	AdminSignUpWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	PostApiV1AdminSignup(ctx context.Context, body PostApiV1AdminSignupJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	AdminSignUp(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PostApiV1AuthToken request
-	PostApiV1AuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// DeleteApiV1AuthTokenAuthIdentitiesIdentityId request
-	DeleteApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// GetApiV1AuthTokenAuthIdentitiesIdentityId request
-	GetApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody request with any body
-	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// RefreshAuthToken request
+	RefreshAuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// AttachTokenAuthWithBody request with any body
 	AttachTokenAuthWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	AttachTokenAuth(ctx context.Context, identityId string, body AttachTokenAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens request
-	GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateTokenAuthTokenWithBody request with any body
+	CreateTokenAuthTokenWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBody request with any body
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateTokenAuthToken(ctx context.Context, identityId string, body CreateTokenAuthTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateMachineIdentityWithBody request with any body
+	CreateMachineIdentityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// GetApiV1Identities request
-	GetApiV1Identities(ctx context.Context, params *GetApiV1IdentitiesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateMachineIdentity(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PostApiV1IdentitiesWithBody request with any body
-	PostApiV1IdentitiesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateKubernetesPamResourceWithBody request with any body
+	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	PostApiV1Identities(ctx context.Context, body PostApiV1IdentitiesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// GetApiV1Projects request
-	GetApiV1Projects(ctx context.Context, params *GetApiV1ProjectsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateRedisPamResourceWithBody request with any body
+	CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PostApiV1ProjectsWithBody request with any body
-	PostApiV1ProjectsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	PostApiV1Projects(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateProjectWithBody request with any body
+	CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateProject(ctx context.Context, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetRelays request
 	GetRelays(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PostApiV3AuthSelectOrganizationWithBody request with any body
-	PostApiV3AuthSelectOrganizationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// ListGateways request
+	ListGateways(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	PostApiV3AuthSelectOrganization(ctx context.Context, body PostApiV3AuthSelectOrganizationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// SelectOrganizationV3WithBody request with any body
+	SelectOrganizationV3WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SelectOrganizationV3(ctx context.Context, body SelectOrganizationV3JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
-func (c *Client) PostApiV1AdminSignupWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AdminSignupRequestWithBody(c.Server, contentType, body)
+func (c *Client) AdminSignUpWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAdminSignUpRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -342,8 +332,8 @@ func (c *Client) PostApiV1AdminSignupWithBody(ctx context.Context, contentType s
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1AdminSignup(ctx context.Context, body PostApiV1AdminSignupJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AdminSignupRequest(c.Server, body)
+func (c *Client) AdminSignUp(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAdminSignUpRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -354,56 +344,8 @@ func (c *Client) PostApiV1AdminSignup(ctx context.Context, body PostApiV1AdminSi
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1AuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AuthTokenRequest(c.Server)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) DeleteApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) GetApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(c.Server, identityId, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequest(c.Server, identityId, body)
+func (c *Client) RefreshAuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRefreshAuthTokenRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -438,8 +380,8 @@ func (c *Client) AttachTokenAuth(ctx context.Context, identityId string, body At
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequest(c.Server, identityId, params)
+func (c *Client) CreateTokenAuthTokenWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateTokenAuthTokenRequestWithBody(c.Server, identityId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -450,8 +392,8 @@ func (c *Client) GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Con
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequestWithBody(c.Server, identityId, contentType, body)
+func (c *Client) CreateTokenAuthToken(ctx context.Context, identityId string, body CreateTokenAuthTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateTokenAuthTokenRequest(c.Server, identityId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -462,8 +404,8 @@ func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBody(ctx co
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequest(c.Server, identityId, body)
+func (c *Client) CreateMachineIdentityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMachineIdentityRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -474,8 +416,8 @@ func (c *Client) PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx context.Co
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetApiV1Identities(ctx context.Context, params *GetApiV1IdentitiesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetApiV1IdentitiesRequest(c.Server, params)
+func (c *Client) CreateMachineIdentity(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMachineIdentityRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -486,8 +428,8 @@ func (c *Client) GetApiV1Identities(ctx context.Context, params *GetApiV1Identit
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1IdentitiesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1IdentitiesRequestWithBody(c.Server, contentType, body)
+func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateKubernetesPamResourceRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -498,8 +440,8 @@ func (c *Client) PostApiV1IdentitiesWithBody(ctx context.Context, contentType st
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1Identities(ctx context.Context, body PostApiV1IdentitiesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1IdentitiesRequest(c.Server, body)
+func (c *Client) CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateKubernetesPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -510,8 +452,8 @@ func (c *Client) PostApiV1Identities(ctx context.Context, body PostApiV1Identiti
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetApiV1Projects(ctx context.Context, params *GetApiV1ProjectsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetApiV1ProjectsRequest(c.Server, params)
+func (c *Client) CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRedisPamResourceRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -522,8 +464,8 @@ func (c *Client) GetApiV1Projects(ctx context.Context, params *GetApiV1ProjectsP
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1ProjectsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1ProjectsRequestWithBody(c.Server, contentType, body)
+func (c *Client) CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRedisPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -534,8 +476,20 @@ func (c *Client) PostApiV1ProjectsWithBody(ctx context.Context, contentType stri
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV1Projects(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV1ProjectsRequest(c.Server, body)
+func (c *Client) CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateProjectRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateProject(ctx context.Context, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateProjectRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -558,8 +512,8 @@ func (c *Client) GetRelays(ctx context.Context, reqEditors ...RequestEditorFn) (
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV3AuthSelectOrganizationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV3AuthSelectOrganizationRequestWithBody(c.Server, contentType, body)
+func (c *Client) ListGateways(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListGatewaysRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -570,8 +524,8 @@ func (c *Client) PostApiV3AuthSelectOrganizationWithBody(ctx context.Context, co
 	return c.Client.Do(req)
 }
 
-func (c *Client) PostApiV3AuthSelectOrganization(ctx context.Context, body PostApiV3AuthSelectOrganizationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostApiV3AuthSelectOrganizationRequest(c.Server, body)
+func (c *Client) SelectOrganizationV3WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSelectOrganizationV3RequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -582,19 +536,31 @@ func (c *Client) PostApiV3AuthSelectOrganization(ctx context.Context, body PostA
 	return c.Client.Do(req)
 }
 
-// NewPostApiV1AdminSignupRequest calls the generic PostApiV1AdminSignup builder with application/json body
-func NewPostApiV1AdminSignupRequest(server string, body PostApiV1AdminSignupJSONRequestBody) (*http.Request, error) {
+func (c *Client) SelectOrganizationV3(ctx context.Context, body SelectOrganizationV3JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSelectOrganizationV3Request(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// NewAdminSignUpRequest calls the generic AdminSignUp builder with application/json body
+func NewAdminSignUpRequest(server string, body AdminSignUpJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostApiV1AdminSignupRequestWithBody(server, "application/json", bodyReader)
+	return NewAdminSignUpRequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewPostApiV1AdminSignupRequestWithBody generates requests for PostApiV1AdminSignup with any type of body
-func NewPostApiV1AdminSignupRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewAdminSignUpRequestWithBody generates requests for AdminSignUp with any type of body
+func NewAdminSignUpRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -622,8 +588,8 @@ func NewPostApiV1AdminSignupRequestWithBody(server string, contentType string, b
 	return req, nil
 }
 
-// NewPostApiV1AuthTokenRequest generates requests for PostApiV1AuthToken
-func NewPostApiV1AuthTokenRequest(server string) (*http.Request, error) {
+// NewRefreshAuthTokenRequest generates requests for RefreshAuthToken
+func NewRefreshAuthTokenRequest(server string) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -645,121 +611,6 @@ func NewPostApiV1AuthTokenRequest(server string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return req, nil
-}
-
-// NewDeleteApiV1AuthTokenAuthIdentitiesIdentityIdRequest generates requests for DeleteApiV1AuthTokenAuthIdentitiesIdentityId
-func NewDeleteApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewGetApiV1AuthTokenAuthIdentitiesIdentityIdRequest generates requests for GetApiV1AuthTokenAuthIdentitiesIdentityId
-func NewGetApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequest calls the generic PatchApiV1AuthTokenAuthIdentitiesIdentityId builder with application/json body
-func NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequest(server string, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server, identityId, "application/json", bodyReader)
-}
-
-// NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody generates requests for PatchApiV1AuthTokenAuthIdentitiesIdentityId with any type of body
-func NewPatchApiV1AuthTokenAuthIdentitiesIdentityIdRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("PATCH", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -811,91 +662,19 @@ func NewAttachTokenAuthRequestWithBody(server string, identityId string, content
 	return req, nil
 }
 
-// NewGetApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequest generates requests for GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens
-func NewGetApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequest(server string, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/auth/token-auth/identities/%s/tokens", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if params != nil {
-		queryValues := queryURL.Query()
-
-		if params.Offset != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		if params.Limit != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		queryURL.RawQuery = queryValues.Encode()
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequest calls the generic PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens builder with application/json body
-func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequest(server string, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody) (*http.Request, error) {
+// NewCreateTokenAuthTokenRequest calls the generic CreateTokenAuthToken builder with application/json body
+func NewCreateTokenAuthTokenRequest(server string, identityId string, body CreateTokenAuthTokenJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequestWithBody(server, identityId, "application/json", bodyReader)
+	return NewCreateTokenAuthTokenRequestWithBody(server, identityId, "application/json", bodyReader)
 }
 
-// NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequestWithBody generates requests for PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens with any type of body
-func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreateTokenAuthTokenRequestWithBody generates requests for CreateTokenAuthToken with any type of body
+func NewCreateTokenAuthTokenRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -930,64 +709,19 @@ func NewPostApiV1AuthTokenAuthIdentitiesIdentityIdTokensRequestWithBody(server s
 	return req, nil
 }
 
-// NewGetApiV1IdentitiesRequest generates requests for GetApiV1Identities
-func NewGetApiV1IdentitiesRequest(server string, params *GetApiV1IdentitiesParams) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/identities")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if params != nil {
-		queryValues := queryURL.Query()
-
-		if queryFrag, err := runtime.StyleParamWithLocation("form", true, "orgId", runtime.ParamLocationQuery, params.OrgId); err != nil {
-			return nil, err
-		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-			return nil, err
-		} else {
-			for k, v := range parsed {
-				for _, v2 := range v {
-					queryValues.Add(k, v2)
-				}
-			}
-		}
-
-		queryURL.RawQuery = queryValues.Encode()
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewPostApiV1IdentitiesRequest calls the generic PostApiV1Identities builder with application/json body
-func NewPostApiV1IdentitiesRequest(server string, body PostApiV1IdentitiesJSONRequestBody) (*http.Request, error) {
+// NewCreateMachineIdentityRequest calls the generic CreateMachineIdentity builder with application/json body
+func NewCreateMachineIdentityRequest(server string, body CreateMachineIdentityJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostApiV1IdentitiesRequestWithBody(server, "application/json", bodyReader)
+	return NewCreateMachineIdentityRequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewPostApiV1IdentitiesRequestWithBody generates requests for PostApiV1Identities with any type of body
-func NewPostApiV1IdentitiesRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreateMachineIdentityRequestWithBody generates requests for CreateMachineIdentity with any type of body
+func NewCreateMachineIdentityRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1015,8 +749,19 @@ func NewPostApiV1IdentitiesRequestWithBody(server string, contentType string, bo
 	return req, nil
 }
 
-// NewGetApiV1ProjectsRequest generates requests for GetApiV1Projects
-func NewGetApiV1ProjectsRequest(server string, params *GetApiV1ProjectsParams) (*http.Request, error) {
+// NewCreateKubernetesPamResourceRequest calls the generic CreateKubernetesPamResource builder with application/json body
+func NewCreateKubernetesPamResourceRequest(server string, body CreateKubernetesPamResourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateKubernetesPamResourceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateKubernetesPamResourceRequestWithBody generates requests for CreateKubernetesPamResource with any type of body
+func NewCreateKubernetesPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1024,7 +769,7 @@ func NewGetApiV1ProjectsRequest(server string, params *GetApiV1ProjectsParams) (
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/api/v1/projects")
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/kubernetes")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1034,65 +779,69 @@ func NewGetApiV1ProjectsRequest(server string, params *GetApiV1ProjectsParams) (
 		return nil, err
 	}
 
-	if params != nil {
-		queryValues := queryURL.Query()
-
-		if params.IncludeRoles != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "includeRoles", runtime.ParamLocationQuery, *params.IncludeRoles); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		if params.Type != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "type", runtime.ParamLocationQuery, *params.Type); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		queryURL.RawQuery = queryValues.Encode()
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	req, err := http.NewRequest("POST", queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
 
+	req.Header.Add("Content-Type", contentType)
+
 	return req, nil
 }
 
-// NewPostApiV1ProjectsRequest calls the generic PostApiV1Projects builder with application/json body
-func NewPostApiV1ProjectsRequest(server string, body PostApiV1ProjectsJSONRequestBody) (*http.Request, error) {
+// NewCreateRedisPamResourceRequest calls the generic CreateRedisPamResource builder with application/json body
+func NewCreateRedisPamResourceRequest(server string, body CreateRedisPamResourceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostApiV1ProjectsRequestWithBody(server, "application/json", bodyReader)
+	return NewCreateRedisPamResourceRequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewPostApiV1ProjectsRequestWithBody generates requests for PostApiV1Projects with any type of body
-func NewPostApiV1ProjectsRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreateRedisPamResourceRequestWithBody generates requests for CreateRedisPamResource with any type of body
+func NewCreateRedisPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/redis")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateProjectRequest calls the generic CreateProject builder with application/json body
+func NewCreateProjectRequest(server string, body CreateProjectJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateProjectRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateProjectRequestWithBody generates requests for CreateProject with any type of body
+func NewCreateProjectRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1147,19 +896,46 @@ func NewGetRelaysRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
-// NewPostApiV3AuthSelectOrganizationRequest calls the generic PostApiV3AuthSelectOrganization builder with application/json body
-func NewPostApiV3AuthSelectOrganizationRequest(server string, body PostApiV3AuthSelectOrganizationJSONRequestBody) (*http.Request, error) {
+// NewListGatewaysRequest generates requests for ListGateways
+func NewListGatewaysRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/gateways")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewSelectOrganizationV3Request calls the generic SelectOrganizationV3 builder with application/json body
+func NewSelectOrganizationV3Request(server string, body SelectOrganizationV3JSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostApiV3AuthSelectOrganizationRequestWithBody(server, "application/json", bodyReader)
+	return NewSelectOrganizationV3RequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewPostApiV3AuthSelectOrganizationRequestWithBody generates requests for PostApiV3AuthSelectOrganization with any type of body
-func NewPostApiV3AuthSelectOrganizationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewSelectOrganizationV3RequestWithBody generates requests for SelectOrganizationV3 with any type of body
+func NewSelectOrganizationV3RequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1230,64 +1006,57 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
-	// PostApiV1AdminSignupWithBodyWithResponse request with any body
-	PostApiV1AdminSignupWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AdminSignupResponse, error)
+	// AdminSignUpWithBodyWithResponse request with any body
+	AdminSignUpWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AdminSignUpResponse, error)
 
-	PostApiV1AdminSignupWithResponse(ctx context.Context, body PostApiV1AdminSignupJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AdminSignupResponse, error)
+	AdminSignUpWithResponse(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*AdminSignUpResponse, error)
 
-	// PostApiV1AuthTokenWithResponse request
-	PostApiV1AuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenResponse, error)
-
-	// DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request
-	DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
-
-	// GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request
-	GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
-
-	// PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with any body
-	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
-
-	PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error)
+	// RefreshAuthTokenWithResponse request
+	RefreshAuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RefreshAuthTokenResponse, error)
 
 	// AttachTokenAuthWithBodyWithResponse request with any body
 	AttachTokenAuthWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachTokenAuthResponse, error)
 
 	AttachTokenAuthWithResponse(ctx context.Context, identityId string, body AttachTokenAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachTokenAuthResponse, error)
 
-	// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse request
-	GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error)
+	// CreateTokenAuthTokenWithBodyWithResponse request with any body
+	CreateTokenAuthTokenWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTokenAuthTokenResponse, error)
 
-	// PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBodyWithResponse request with any body
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error)
+	CreateTokenAuthTokenWithResponse(ctx context.Context, identityId string, body CreateTokenAuthTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTokenAuthTokenResponse, error)
 
-	PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error)
+	// CreateMachineIdentityWithBodyWithResponse request with any body
+	CreateMachineIdentityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
 
-	// GetApiV1IdentitiesWithResponse request
-	GetApiV1IdentitiesWithResponse(ctx context.Context, params *GetApiV1IdentitiesParams, reqEditors ...RequestEditorFn) (*GetApiV1IdentitiesResponse, error)
+	CreateMachineIdentityWithResponse(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
 
-	// PostApiV1IdentitiesWithBodyWithResponse request with any body
-	PostApiV1IdentitiesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1IdentitiesResponse, error)
+	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
+	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
-	PostApiV1IdentitiesWithResponse(ctx context.Context, body PostApiV1IdentitiesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1IdentitiesResponse, error)
+	CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
-	// GetApiV1ProjectsWithResponse request
-	GetApiV1ProjectsWithResponse(ctx context.Context, params *GetApiV1ProjectsParams, reqEditors ...RequestEditorFn) (*GetApiV1ProjectsResponse, error)
+	// CreateRedisPamResourceWithBodyWithResponse request with any body
+	CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
 
-	// PostApiV1ProjectsWithBodyWithResponse request with any body
-	PostApiV1ProjectsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1ProjectsResponse, error)
+	CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
 
-	PostApiV1ProjectsWithResponse(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1ProjectsResponse, error)
+	// CreateProjectWithBodyWithResponse request with any body
+	CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
+
+	CreateProjectWithResponse(ctx context.Context, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
 
 	// GetRelaysWithResponse request
 	GetRelaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetRelaysResponse, error)
 
-	// PostApiV3AuthSelectOrganizationWithBodyWithResponse request with any body
-	PostApiV3AuthSelectOrganizationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV3AuthSelectOrganizationResponse, error)
+	// ListGatewaysWithResponse request
+	ListGatewaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListGatewaysResponse, error)
 
-	PostApiV3AuthSelectOrganizationWithResponse(ctx context.Context, body PostApiV3AuthSelectOrganizationJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV3AuthSelectOrganizationResponse, error)
+	// SelectOrganizationV3WithBodyWithResponse request with any body
+	SelectOrganizationV3WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SelectOrganizationV3Response, error)
+
+	SelectOrganizationV3WithResponse(ctx context.Context, body SelectOrganizationV3JSONRequestBody, reqEditors ...RequestEditorFn) (*SelectOrganizationV3Response, error)
 }
 
-type PostApiV1AdminSignupResponse struct {
+type AdminSignUpResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
@@ -1318,6 +1087,7 @@ type PostApiV1AdminSignupResponse struct {
 			RootOrgId                             *openapi_types.UUID `json:"rootOrgId"`
 			ScannerProductEnabled                 *bool               `json:"scannerProductEnabled"`
 			ScimEnabled                           *bool               `json:"scimEnabled"`
+			SecretShareBrandConfig                interface{}         `json:"secretShareBrandConfig"`
 			SecretsProductEnabled                 *bool               `json:"secretsProductEnabled"`
 			SelectedMfaMethod                     *string             `json:"selectedMfaMethod"`
 			ShareSecretsProductEnabled            *bool               `json:"shareSecretsProductEnabled"`
@@ -1352,52 +1122,53 @@ type PostApiV1AdminSignupResponse struct {
 		} `json:"user"`
 	}
 	JSON400 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode PostApiV1AdminSignup400StatusCode `json:"statusCode"`
+		Details    interface{}              `json:"details,omitempty"`
+		Error      string                   `json:"error"`
+		Message    string                   `json:"message"`
+		ReqId      string                   `json:"reqId"`
+		StatusCode AdminSignUp400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode PostApiV1AdminSignup401StatusCode `json:"statusCode"`
+		Error      string                   `json:"error"`
+		Message    string                   `json:"message"`
+		ReqId      string                   `json:"reqId"`
+		StatusCode AdminSignUp401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                       `json:"details,omitempty"`
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode PostApiV1AdminSignup403StatusCode `json:"statusCode"`
+		Details    interface{}              `json:"details,omitempty"`
+		Error      string                   `json:"error"`
+		Message    string                   `json:"message"`
+		ReqId      string                   `json:"reqId"`
+		StatusCode AdminSignUp403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode PostApiV1AdminSignup404StatusCode `json:"statusCode"`
+		Error      string                   `json:"error"`
+		Message    string                   `json:"message"`
+		ReqId      string                   `json:"reqId"`
+		StatusCode AdminSignUp404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                            `json:"error"`
-		Message    interface{}                       `json:"message,omitempty"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode PostApiV1AdminSignup422StatusCode `json:"statusCode"`
+		Error      string                   `json:"error"`
+		Message    interface{}              `json:"message,omitempty"`
+		ReqId      string                   `json:"reqId"`
+		StatusCode AdminSignUp422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode PostApiV1AdminSignup500StatusCode `json:"statusCode"`
+		Error      string                   `json:"error"`
+		Message    string                   `json:"message"`
+		ReqId      string                   `json:"reqId"`
+		StatusCode AdminSignUp500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV1AdminSignup400StatusCode float32
-type PostApiV1AdminSignup401StatusCode float32
-type PostApiV1AdminSignup403StatusCode float32
-type PostApiV1AdminSignup404StatusCode float32
-type PostApiV1AdminSignup422StatusCode float32
-type PostApiV1AdminSignup500StatusCode float32
+type AdminSignUp400StatusCode float32
+type AdminSignUp401StatusCode float32
+type AdminSignUp403StatusCode float32
+type AdminSignUp404StatusCode float32
+type AdminSignUp422StatusCode float32
+type AdminSignUp500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV1AdminSignupResponse) Status() string {
+func (r AdminSignUpResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1405,67 +1176,69 @@ func (r PostApiV1AdminSignupResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV1AdminSignupResponse) StatusCode() int {
+func (r AdminSignUpResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type PostApiV1AuthTokenResponse struct {
+type RefreshAuthTokenResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
-		OrganizationId *string `json:"organizationId,omitempty"`
-		Token          string  `json:"token"`
+		OrganizationId    *string `json:"organizationId,omitempty"`
+		SubOrganizationId *string `json:"subOrganizationId,omitempty"`
+		Token             string  `json:"token"`
 	}
 	JSON400 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode PostApiV1AuthToken400StatusCode `json:"statusCode"`
+		Details    interface{}                   `json:"details,omitempty"`
+		Error      string                        `json:"error"`
+		Message    string                        `json:"message"`
+		ReqId      string                        `json:"reqId"`
+		StatusCode RefreshAuthToken400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode PostApiV1AuthToken401StatusCode `json:"statusCode"`
+		Error      string                        `json:"error"`
+		Message    string                        `json:"message"`
+		ReqId      string                        `json:"reqId"`
+		StatusCode RefreshAuthToken401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                     `json:"details,omitempty"`
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode PostApiV1AuthToken403StatusCode `json:"statusCode"`
+		Details    interface{}                   `json:"details,omitempty"`
+		Error      string                        `json:"error"`
+		Message    string                        `json:"message"`
+		ReqId      string                        `json:"reqId"`
+		StatusCode RefreshAuthToken403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode PostApiV1AuthToken404StatusCode `json:"statusCode"`
+		Error      string                        `json:"error"`
+		Message    string                        `json:"message"`
+		ReqId      string                        `json:"reqId"`
+		StatusCode RefreshAuthToken404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                          `json:"error"`
-		Message    interface{}                     `json:"message,omitempty"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode PostApiV1AuthToken422StatusCode `json:"statusCode"`
+		Error      string                        `json:"error"`
+		Message    interface{}                   `json:"message,omitempty"`
+		ReqId      string                        `json:"reqId"`
+		StatusCode RefreshAuthToken422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode PostApiV1AuthToken500StatusCode `json:"statusCode"`
+		Error      string                        `json:"error"`
+		Message    string                        `json:"message"`
+		ReqId      string                        `json:"reqId"`
+		StatusCode RefreshAuthToken500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV1AuthToken400StatusCode float32
-type PostApiV1AuthToken401StatusCode float32
-type PostApiV1AuthToken403StatusCode float32
-type PostApiV1AuthToken404StatusCode float32
-type PostApiV1AuthToken422StatusCode float32
-type PostApiV1AuthToken500StatusCode float32
+type RefreshAuthToken400StatusCode float32
+type RefreshAuthToken401StatusCode float32
+type RefreshAuthToken403StatusCode float32
+type RefreshAuthToken404StatusCode float32
+type RefreshAuthToken422StatusCode float32
+type RefreshAuthToken500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV1AuthTokenResponse) Status() string {
+func (r RefreshAuthTokenResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1473,238 +1246,7 @@ func (r PostApiV1AuthTokenResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV1AuthTokenResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		IdentityTokenAuth struct {
-			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
-			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
-			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
-			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
-			CreatedAt               time.Time          `json:"createdAt"`
-			Id                      openapi_types.UUID `json:"id"`
-			IdentityId              openapi_types.UUID `json:"identityId"`
-			UpdatedAt               time.Time          `json:"updatedAt"`
-		} `json:"identityTokenAuth"`
-	}
-	JSON400 *struct {
-		Error      string                                                    `json:"error"`
-		Message    string                                                    `json:"message"`
-		ReqId      string                                                    `json:"reqId"`
-		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                                                    `json:"error"`
-		Message    string                                                    `json:"message"`
-		ReqId      string                                                    `json:"reqId"`
-		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                                               `json:"details,omitempty"`
-		Error      string                                                    `json:"error"`
-		Message    string                                                    `json:"message"`
-		ReqId      string                                                    `json:"reqId"`
-		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                                                    `json:"error"`
-		Message    string                                                    `json:"message"`
-		ReqId      string                                                    `json:"reqId"`
-		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                                                    `json:"error"`
-		Message    interface{}                                               `json:"message,omitempty"`
-		ReqId      string                                                    `json:"reqId"`
-		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                                                    `json:"error"`
-		Message    string                                                    `json:"message"`
-		ReqId      string                                                    `json:"reqId"`
-		StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
-	}
-}
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
-type DeleteApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		IdentityTokenAuth struct {
-			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
-			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
-			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
-			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
-			CreatedAt               time.Time          `json:"createdAt"`
-			Id                      openapi_types.UUID `json:"id"`
-			IdentityId              openapi_types.UUID `json:"identityId"`
-			UpdatedAt               time.Time          `json:"updatedAt"`
-		} `json:"identityTokenAuth"`
-	}
-	JSON400 *struct {
-		Error      string                                                 `json:"error"`
-		Message    string                                                 `json:"message"`
-		ReqId      string                                                 `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                                                 `json:"error"`
-		Message    string                                                 `json:"message"`
-		ReqId      string                                                 `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                                            `json:"details,omitempty"`
-		Error      string                                                 `json:"error"`
-		Message    string                                                 `json:"message"`
-		ReqId      string                                                 `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                                                 `json:"error"`
-		Message    string                                                 `json:"message"`
-		ReqId      string                                                 `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                                                 `json:"error"`
-		Message    interface{}                                            `json:"message,omitempty"`
-		ReqId      string                                                 `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                                                 `json:"error"`
-		Message    string                                                 `json:"message"`
-		ReqId      string                                                 `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
-	}
-}
-type GetApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		IdentityTokenAuth struct {
-			AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
-			AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-			AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
-			AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
-			AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
-			CreatedAt               time.Time          `json:"createdAt"`
-			Id                      openapi_types.UUID `json:"id"`
-			IdentityId              openapi_types.UUID `json:"identityId"`
-			UpdatedAt               time.Time          `json:"updatedAt"`
-		} `json:"identityTokenAuth"`
-	}
-	JSON400 *struct {
-		Error      string                                                   `json:"error"`
-		Message    string                                                   `json:"message"`
-		ReqId      string                                                   `json:"reqId"`
-		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                                                   `json:"error"`
-		Message    string                                                   `json:"message"`
-		ReqId      string                                                   `json:"reqId"`
-		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                                              `json:"details,omitempty"`
-		Error      string                                                   `json:"error"`
-		Message    string                                                   `json:"message"`
-		ReqId      string                                                   `json:"reqId"`
-		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                                                   `json:"error"`
-		Message    string                                                   `json:"message"`
-		ReqId      string                                                   `json:"reqId"`
-		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                                                   `json:"error"`
-		Message    interface{}                                              `json:"message,omitempty"`
-		ReqId      string                                                   `json:"reqId"`
-		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                                                   `json:"error"`
-		Message    string                                                   `json:"message"`
-		ReqId      string                                                   `json:"reqId"`
-		StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
-	}
-}
-type PatchApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode float32
-type PatchApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode float32
-type PatchApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode float32
-type PatchApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode float32
-type PatchApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode float32
-type PatchApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse) StatusCode() int {
+func (r RefreshAuthTokenResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1728,6 +1270,7 @@ type AttachTokenAuthResponse struct {
 		} `json:"identityTokenAuth"`
 	}
 	JSON400 *struct {
+		Details    interface{}                  `json:"details,omitempty"`
 		Error      string                       `json:"error"`
 		Message    string                       `json:"message"`
 		ReqId      string                       `json:"reqId"`
@@ -1788,90 +1331,7 @@ func (r AttachTokenAuthResponse) StatusCode() int {
 	return 0
 }
 
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Tokens []struct {
-			AccessTokenLastRenewedAt *time.Time         `json:"accessTokenLastRenewedAt"`
-			AccessTokenLastUsedAt    *time.Time         `json:"accessTokenLastUsedAt"`
-			AccessTokenMaxTTL        *float32           `json:"accessTokenMaxTTL,omitempty"`
-			AccessTokenNumUses       *float32           `json:"accessTokenNumUses,omitempty"`
-			AccessTokenNumUsesLimit  *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-			AccessTokenPeriod        *float32           `json:"accessTokenPeriod,omitempty"`
-			AccessTokenTTL           *float32           `json:"accessTokenTTL,omitempty"`
-			AuthMethod               string             `json:"authMethod"`
-			CreatedAt                time.Time          `json:"createdAt"`
-			Id                       string             `json:"id"`
-			IdentityId               openapi_types.UUID `json:"identityId"`
-			IdentityUAClientSecretId *string            `json:"identityUAClientSecretId"`
-			IsAccessTokenRevoked     *bool              `json:"isAccessTokenRevoked,omitempty"`
-			Name                     *string            `json:"name"`
-			UpdatedAt                time.Time          `json:"updatedAt"`
-		} `json:"tokens"`
-	}
-	JSON400 *struct {
-		Error      string                                                       `json:"error"`
-		Message    string                                                       `json:"message"`
-		ReqId      string                                                       `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                                                       `json:"error"`
-		Message    string                                                       `json:"message"`
-		ReqId      string                                                       `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                                                  `json:"details,omitempty"`
-		Error      string                                                       `json:"error"`
-		Message    string                                                       `json:"message"`
-		ReqId      string                                                       `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                                                       `json:"error"`
-		Message    string                                                       `json:"message"`
-		ReqId      string                                                       `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                                                       `json:"error"`
-		Message    interface{}                                                  `json:"message,omitempty"`
-		ReqId      string                                                       `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                                                       `json:"error"`
-		Message    string                                                       `json:"message"`
-		ReqId      string                                                       `json:"reqId"`
-		StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens500StatusCode `json:"statusCode"`
-	}
-}
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens400StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens401StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens403StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens404StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens422StatusCode float32
-type GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse struct {
+type CreateTokenAuthTokenResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
@@ -1879,72 +1339,74 @@ type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse struct {
 		AccessTokenMaxTTL float32 `json:"accessTokenMaxTTL"`
 		ExpiresIn         float32 `json:"expiresIn"`
 		TokenData         struct {
-			AccessTokenLastRenewedAt *time.Time         `json:"accessTokenLastRenewedAt"`
-			AccessTokenLastUsedAt    *time.Time         `json:"accessTokenLastUsedAt"`
-			AccessTokenMaxTTL        *float32           `json:"accessTokenMaxTTL,omitempty"`
-			AccessTokenNumUses       *float32           `json:"accessTokenNumUses,omitempty"`
-			AccessTokenNumUsesLimit  *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-			AccessTokenPeriod        *float32           `json:"accessTokenPeriod,omitempty"`
-			AccessTokenTTL           *float32           `json:"accessTokenTTL,omitempty"`
-			AuthMethod               string             `json:"authMethod"`
-			CreatedAt                time.Time          `json:"createdAt"`
-			Id                       string             `json:"id"`
-			IdentityId               openapi_types.UUID `json:"identityId"`
-			IdentityUAClientSecretId *string            `json:"identityUAClientSecretId"`
-			IsAccessTokenRevoked     *bool              `json:"isAccessTokenRevoked,omitempty"`
-			Name                     *string            `json:"name"`
-			UpdatedAt                time.Time          `json:"updatedAt"`
+			AccessTokenLastRenewedAt *time.Time          `json:"accessTokenLastRenewedAt"`
+			AccessTokenLastUsedAt    *time.Time          `json:"accessTokenLastUsedAt"`
+			AccessTokenMaxTTL        *float32            `json:"accessTokenMaxTTL,omitempty"`
+			AccessTokenNumUses       *float32            `json:"accessTokenNumUses,omitempty"`
+			AccessTokenNumUsesLimit  *float32            `json:"accessTokenNumUsesLimit,omitempty"`
+			AccessTokenPeriod        *float32            `json:"accessTokenPeriod,omitempty"`
+			AccessTokenTTL           *float32            `json:"accessTokenTTL,omitempty"`
+			AuthMethod               string              `json:"authMethod"`
+			CreatedAt                time.Time           `json:"createdAt"`
+			Id                       string              `json:"id"`
+			IdentityId               openapi_types.UUID  `json:"identityId"`
+			IdentityUAClientSecretId *string             `json:"identityUAClientSecretId"`
+			IsAccessTokenRevoked     *bool               `json:"isAccessTokenRevoked,omitempty"`
+			Name                     *string             `json:"name"`
+			SubOrganizationId        *openapi_types.UUID `json:"subOrganizationId"`
+			UpdatedAt                time.Time           `json:"updatedAt"`
 		} `json:"tokenData"`
-		TokenType PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens200TokenType `json:"tokenType"`
+		TokenType CreateTokenAuthToken200TokenType `json:"tokenType"`
 	}
 	JSON400 *struct {
-		Error      string                                                        `json:"error"`
-		Message    string                                                        `json:"message"`
-		ReqId      string                                                        `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens400StatusCode `json:"statusCode"`
+		Details    interface{}                       `json:"details,omitempty"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateTokenAuthToken400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                                                        `json:"error"`
-		Message    string                                                        `json:"message"`
-		ReqId      string                                                        `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens401StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateTokenAuthToken401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                                                   `json:"details,omitempty"`
-		Error      string                                                        `json:"error"`
-		Message    string                                                        `json:"message"`
-		ReqId      string                                                        `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens403StatusCode `json:"statusCode"`
+		Details    interface{}                       `json:"details,omitempty"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateTokenAuthToken403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                                                        `json:"error"`
-		Message    string                                                        `json:"message"`
-		ReqId      string                                                        `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens404StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateTokenAuthToken404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                                                        `json:"error"`
-		Message    interface{}                                                   `json:"message,omitempty"`
-		ReqId      string                                                        `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens422StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    interface{}                       `json:"message,omitempty"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateTokenAuthToken422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                                                        `json:"error"`
-		Message    string                                                        `json:"message"`
-		ReqId      string                                                        `json:"reqId"`
-		StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens500StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateTokenAuthToken500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens200TokenType string
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens400StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens401StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens403StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens404StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens422StatusCode float32
-type PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens500StatusCode float32
+type CreateTokenAuthToken200TokenType string
+type CreateTokenAuthToken400StatusCode float32
+type CreateTokenAuthToken401StatusCode float32
+type CreateTokenAuthToken403StatusCode float32
+type CreateTokenAuthToken404StatusCode float32
+type CreateTokenAuthToken422StatusCode float32
+type CreateTokenAuthToken500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse) Status() string {
+func (r CreateTokenAuthTokenResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1952,105 +1414,14 @@ func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse) Status() strin
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse) StatusCode() int {
+func (r CreateTokenAuthTokenResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type GetApiV1IdentitiesResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Identities []struct {
-			CreatedAt  time.Time `json:"createdAt"`
-			CustomRole *struct {
-				Description *string            `json:"description"`
-				Id          openapi_types.UUID `json:"id"`
-				Name        string             `json:"name"`
-				Permissions interface{}        `json:"permissions,omitempty"`
-				Slug        string             `json:"slug"`
-			} `json:"customRole,omitempty"`
-			Id       openapi_types.UUID `json:"id"`
-			Identity struct {
-				AuthMethods         []string           `json:"authMethods"`
-				HasDeleteProtection *bool              `json:"hasDeleteProtection,omitempty"`
-				Id                  openapi_types.UUID `json:"id"`
-				Name                string             `json:"name"`
-			} `json:"identity"`
-			IdentityId          openapi_types.UUID  `json:"identityId"`
-			LastLoginAuthMethod *string             `json:"lastLoginAuthMethod"`
-			LastLoginTime       *time.Time          `json:"lastLoginTime"`
-			OrgId               openapi_types.UUID  `json:"orgId"`
-			Role                string              `json:"role"`
-			RoleId              *openapi_types.UUID `json:"roleId"`
-			UpdatedAt           time.Time           `json:"updatedAt"`
-		} `json:"identities"`
-		TotalCount float32 `json:"totalCount"`
-	}
-	JSON400 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode GetApiV1Identities400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode GetApiV1Identities401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                     `json:"details,omitempty"`
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode GetApiV1Identities403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode GetApiV1Identities404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                          `json:"error"`
-		Message    interface{}                     `json:"message,omitempty"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode GetApiV1Identities422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                          `json:"error"`
-		Message    string                          `json:"message"`
-		ReqId      string                          `json:"reqId"`
-		StatusCode GetApiV1Identities500StatusCode `json:"statusCode"`
-	}
-}
-type GetApiV1Identities400StatusCode float32
-type GetApiV1Identities401StatusCode float32
-type GetApiV1Identities403StatusCode float32
-type GetApiV1Identities404StatusCode float32
-type GetApiV1Identities422StatusCode float32
-type GetApiV1Identities500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r GetApiV1IdentitiesResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetApiV1IdentitiesResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type PostApiV1IdentitiesResponse struct {
+type CreateMachineIdentityResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
@@ -2072,52 +1443,53 @@ type PostApiV1IdentitiesResponse struct {
 		} `json:"identity"`
 	}
 	JSON400 *struct {
-		Error      string                           `json:"error"`
-		Message    string                           `json:"message"`
-		ReqId      string                           `json:"reqId"`
-		StatusCode PostApiV1Identities400StatusCode `json:"statusCode"`
+		Details    interface{}                        `json:"details,omitempty"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateMachineIdentity400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                           `json:"error"`
-		Message    string                           `json:"message"`
-		ReqId      string                           `json:"reqId"`
-		StatusCode PostApiV1Identities401StatusCode `json:"statusCode"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateMachineIdentity401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                      `json:"details,omitempty"`
-		Error      string                           `json:"error"`
-		Message    string                           `json:"message"`
-		ReqId      string                           `json:"reqId"`
-		StatusCode PostApiV1Identities403StatusCode `json:"statusCode"`
+		Details    interface{}                        `json:"details,omitempty"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateMachineIdentity403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                           `json:"error"`
-		Message    string                           `json:"message"`
-		ReqId      string                           `json:"reqId"`
-		StatusCode PostApiV1Identities404StatusCode `json:"statusCode"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateMachineIdentity404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                           `json:"error"`
-		Message    interface{}                      `json:"message,omitempty"`
-		ReqId      string                           `json:"reqId"`
-		StatusCode PostApiV1Identities422StatusCode `json:"statusCode"`
+		Error      string                             `json:"error"`
+		Message    interface{}                        `json:"message,omitempty"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateMachineIdentity422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                           `json:"error"`
-		Message    string                           `json:"message"`
-		ReqId      string                           `json:"reqId"`
-		StatusCode PostApiV1Identities500StatusCode `json:"statusCode"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateMachineIdentity500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV1Identities400StatusCode float32
-type PostApiV1Identities401StatusCode float32
-type PostApiV1Identities403StatusCode float32
-type PostApiV1Identities404StatusCode float32
-type PostApiV1Identities422StatusCode float32
-type PostApiV1Identities500StatusCode float32
+type CreateMachineIdentity400StatusCode float32
+type CreateMachineIdentity401StatusCode float32
+type CreateMachineIdentity403StatusCode float32
+type CreateMachineIdentity404StatusCode float32
+type CreateMachineIdentity422StatusCode float32
+type CreateMachineIdentity500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV1IdentitiesResponse) Status() string {
+func (r CreateMachineIdentityResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2125,103 +1497,90 @@ func (r PostApiV1IdentitiesResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV1IdentitiesResponse) StatusCode() int {
+func (r CreateMachineIdentityResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type GetApiV1ProjectsResponse struct {
+type CreateKubernetesPamResourceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
-		Projects []struct {
-			UnderscoreId           string    `json:"_id"`
-			AuditLogsRetentionDays *float32  `json:"auditLogsRetentionDays"`
-			AutoCapitalization     *bool     `json:"autoCapitalization"`
-			CreatedAt              time.Time `json:"createdAt"`
-			DefaultProduct         *string   `json:"defaultProduct"`
-			Description            *string   `json:"description"`
-			Environments           []struct {
-				Id   string `json:"id"`
-				Name string `json:"name"`
-				Slug string `json:"slug"`
-			} `json:"environments"`
-			HasDeleteProtection *bool               `json:"hasDeleteProtection"`
-			Id                  string              `json:"id"`
-			KmsCertificateKeyId *openapi_types.UUID `json:"kmsCertificateKeyId"`
-			Name                string              `json:"name"`
-			OrgId               openapi_types.UUID  `json:"orgId"`
-			PitVersionLimit     *float32            `json:"pitVersionLimit,omitempty"`
-			Roles               *[]struct {
-				CreatedAt   time.Time          `json:"createdAt"`
-				Description *string            `json:"description"`
-				Id          openapi_types.UUID `json:"id"`
-				Name        string             `json:"name"`
-				Permissions interface{}        `json:"permissions,omitempty"`
-				ProjectId   string             `json:"projectId"`
-				Slug        string             `json:"slug"`
-				UpdatedAt   time.Time          `json:"updatedAt"`
-				Version     *float32           `json:"version,omitempty"`
-			} `json:"roles,omitempty"`
-			SecretDetectionIgnoreValues *[]string `json:"secretDetectionIgnoreValues"`
-			SecretSharing               *bool     `json:"secretSharing,omitempty"`
-			ShowSnapshotsLegacy         *bool     `json:"showSnapshotsLegacy,omitempty"`
-			Slug                        string    `json:"slug"`
-			Type                        string    `json:"type"`
-			UpdatedAt                   time.Time `json:"updatedAt"`
-			UpgradeStatus               *string   `json:"upgradeStatus"`
-			Version                     *float32  `json:"version,omitempty"`
-		} `json:"projects"`
+		Resource struct {
+			ConnectionDetails struct {
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				Url                   string  `json:"url"`
+			} `json:"connectionDetails"`
+			CreatedAt                  time.Time                                                            `json:"createdAt"`
+			EncryptedResourceMetadata  interface{}                                                          `json:"encryptedResourceMetadata"`
+			GatewayId                  *openapi_types.UUID                                                  `json:"gatewayId"`
+			Id                         openapi_types.UUID                                                   `json:"id"`
+			Name                       string                                                               `json:"name"`
+			ProjectId                  string                                                               `json:"projectId"`
+			ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
+			RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
+			UpdatedAt                  time.Time                                                            `json:"updatedAt"`
+		} `json:"resource"`
 	}
 	JSON400 *struct {
-		Error      string                        `json:"error"`
-		Message    string                        `json:"message"`
-		ReqId      string                        `json:"reqId"`
-		StatusCode GetApiV1Projects400StatusCode `json:"statusCode"`
+		Details    interface{}                              `json:"details,omitempty"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                        `json:"error"`
-		Message    string                        `json:"message"`
-		ReqId      string                        `json:"reqId"`
-		StatusCode GetApiV1Projects401StatusCode `json:"statusCode"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                   `json:"details,omitempty"`
-		Error      string                        `json:"error"`
-		Message    string                        `json:"message"`
-		ReqId      string                        `json:"reqId"`
-		StatusCode GetApiV1Projects403StatusCode `json:"statusCode"`
+		Details    interface{}                              `json:"details,omitempty"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                        `json:"error"`
-		Message    string                        `json:"message"`
-		ReqId      string                        `json:"reqId"`
-		StatusCode GetApiV1Projects404StatusCode `json:"statusCode"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                        `json:"error"`
-		Message    interface{}                   `json:"message,omitempty"`
-		ReqId      string                        `json:"reqId"`
-		StatusCode GetApiV1Projects422StatusCode `json:"statusCode"`
+		Error      string                                   `json:"error"`
+		Message    interface{}                              `json:"message,omitempty"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                        `json:"error"`
-		Message    string                        `json:"message"`
-		ReqId      string                        `json:"reqId"`
-		StatusCode GetApiV1Projects500StatusCode `json:"statusCode"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
 	}
 }
-type GetApiV1Projects400StatusCode float32
-type GetApiV1Projects401StatusCode float32
-type GetApiV1Projects403StatusCode float32
-type GetApiV1Projects404StatusCode float32
-type GetApiV1Projects422StatusCode float32
-type GetApiV1Projects500StatusCode float32
+type CreateKubernetesPamResource200ResourceResourceType string
+type CreateKubernetesPamResource200ResourceRotationAccountCredentials0 struct {
+	AuthMethod CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod `json:"authMethod"`
+}
+type CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod string
+type CreateKubernetesPamResource_200_Resource_RotationAccountCredentials struct {
+	union json.RawMessage
+}
+type CreateKubernetesPamResource400StatusCode float32
+type CreateKubernetesPamResource401StatusCode float32
+type CreateKubernetesPamResource403StatusCode float32
+type CreateKubernetesPamResource404StatusCode float32
+type CreateKubernetesPamResource422StatusCode float32
+type CreateKubernetesPamResource500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r GetApiV1ProjectsResponse) Status() string {
+func (r CreateKubernetesPamResourceResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2229,14 +1588,102 @@ func (r GetApiV1ProjectsResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r GetApiV1ProjectsResponse) StatusCode() int {
+func (r CreateKubernetesPamResourceResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type PostApiV1ProjectsResponse struct {
+type CreateRedisPamResourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Resource struct {
+			ConnectionDetails struct {
+				Host                  string  `json:"host"`
+				Port                  float32 `json:"port"`
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslEnabled            bool    `json:"sslEnabled"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+			} `json:"connectionDetails"`
+			CreatedAt                  time.Time                                     `json:"createdAt"`
+			EncryptedResourceMetadata  interface{}                                   `json:"encryptedResourceMetadata"`
+			GatewayId                  *openapi_types.UUID                           `json:"gatewayId"`
+			Id                         openapi_types.UUID                            `json:"id"`
+			Name                       string                                        `json:"name"`
+			ProjectId                  string                                        `json:"projectId"`
+			ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
+			RotationAccountCredentials *struct {
+				Username *string `json:"username,omitempty"`
+			} `json:"rotationAccountCredentials"`
+			UpdatedAt time.Time `json:"updatedAt"`
+		} `json:"resource"`
+	}
+	JSON400 *struct {
+		Details    interface{}                         `json:"details,omitempty"`
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                         `json:"details,omitempty"`
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                              `json:"error"`
+		Message    interface{}                         `json:"message,omitempty"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
+	}
+}
+type CreateRedisPamResource200ResourceResourceType string
+type CreateRedisPamResource400StatusCode float32
+type CreateRedisPamResource401StatusCode float32
+type CreateRedisPamResource403StatusCode float32
+type CreateRedisPamResource404StatusCode float32
+type CreateRedisPamResource422StatusCode float32
+type CreateRedisPamResource500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateRedisPamResourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateRedisPamResourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
@@ -2269,52 +1716,53 @@ type PostApiV1ProjectsResponse struct {
 		} `json:"project"`
 	}
 	JSON400 *struct {
-		Error      string                         `json:"error"`
-		Message    string                         `json:"message"`
-		ReqId      string                         `json:"reqId"`
-		StatusCode PostApiV1Projects400StatusCode `json:"statusCode"`
+		Details    interface{}                `json:"details,omitempty"`
+		Error      string                     `json:"error"`
+		Message    string                     `json:"message"`
+		ReqId      string                     `json:"reqId"`
+		StatusCode CreateProject400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                         `json:"error"`
-		Message    string                         `json:"message"`
-		ReqId      string                         `json:"reqId"`
-		StatusCode PostApiV1Projects401StatusCode `json:"statusCode"`
+		Error      string                     `json:"error"`
+		Message    string                     `json:"message"`
+		ReqId      string                     `json:"reqId"`
+		StatusCode CreateProject401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                    `json:"details,omitempty"`
-		Error      string                         `json:"error"`
-		Message    string                         `json:"message"`
-		ReqId      string                         `json:"reqId"`
-		StatusCode PostApiV1Projects403StatusCode `json:"statusCode"`
+		Details    interface{}                `json:"details,omitempty"`
+		Error      string                     `json:"error"`
+		Message    string                     `json:"message"`
+		ReqId      string                     `json:"reqId"`
+		StatusCode CreateProject403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                         `json:"error"`
-		Message    string                         `json:"message"`
-		ReqId      string                         `json:"reqId"`
-		StatusCode PostApiV1Projects404StatusCode `json:"statusCode"`
+		Error      string                     `json:"error"`
+		Message    string                     `json:"message"`
+		ReqId      string                     `json:"reqId"`
+		StatusCode CreateProject404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                         `json:"error"`
-		Message    interface{}                    `json:"message,omitempty"`
-		ReqId      string                         `json:"reqId"`
-		StatusCode PostApiV1Projects422StatusCode `json:"statusCode"`
+		Error      string                     `json:"error"`
+		Message    interface{}                `json:"message,omitempty"`
+		ReqId      string                     `json:"reqId"`
+		StatusCode CreateProject422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                         `json:"error"`
-		Message    string                         `json:"message"`
-		ReqId      string                         `json:"reqId"`
-		StatusCode PostApiV1Projects500StatusCode `json:"statusCode"`
+		Error      string                     `json:"error"`
+		Message    string                     `json:"message"`
+		ReqId      string                     `json:"reqId"`
+		StatusCode CreateProject500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV1Projects400StatusCode float32
-type PostApiV1Projects401StatusCode float32
-type PostApiV1Projects403StatusCode float32
-type PostApiV1Projects404StatusCode float32
-type PostApiV1Projects422StatusCode float32
-type PostApiV1Projects500StatusCode float32
+type CreateProject400StatusCode float32
+type CreateProject401StatusCode float32
+type CreateProject403StatusCode float32
+type CreateProject404StatusCode float32
+type CreateProject422StatusCode float32
+type CreateProject500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV1ProjectsResponse) Status() string {
+func (r CreateProjectResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2322,7 +1770,7 @@ func (r PostApiV1ProjectsResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV1ProjectsResponse) StatusCode() int {
+func (r CreateProjectResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2344,6 +1792,7 @@ type GetRelaysResponse struct {
 		UpdatedAt       time.Time           `json:"updatedAt"`
 	}
 	JSON400 *struct {
+		Details    interface{}            `json:"details,omitempty"`
 		Error      string                 `json:"error"`
 		Message    string                 `json:"message"`
 		ReqId      string                 `json:"reqId"`
@@ -2404,7 +1853,84 @@ func (r GetRelaysResponse) StatusCode() int {
 	return 0
 }
 
-type PostApiV3AuthSelectOrganizationResponse struct {
+type ListGatewaysResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]struct {
+		CreatedAt time.Time          `json:"createdAt"`
+		Heartbeat *time.Time         `json:"heartbeat"`
+		Id        openapi_types.UUID `json:"id"`
+		Identity  struct {
+			Id   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"identity"`
+		IdentityId openapi_types.UUID `json:"identityId"`
+		Name       string             `json:"name"`
+		UpdatedAt  time.Time          `json:"updatedAt"`
+	}
+	JSON400 *struct {
+		Details    interface{}               `json:"details,omitempty"`
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}               `json:"details,omitempty"`
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                    `json:"error"`
+		Message    interface{}               `json:"message,omitempty"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways500StatusCode `json:"statusCode"`
+	}
+}
+type ListGateways400StatusCode float32
+type ListGateways401StatusCode float32
+type ListGateways403StatusCode float32
+type ListGateways404StatusCode float32
+type ListGateways422StatusCode float32
+type ListGateways500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r ListGatewaysResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListGatewaysResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type SelectOrganizationV3Response struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
@@ -2413,52 +1939,53 @@ type PostApiV3AuthSelectOrganizationResponse struct {
 		Token        string  `json:"token"`
 	}
 	JSON400 *struct {
-		Error      string                                       `json:"error"`
-		Message    string                                       `json:"message"`
-		ReqId      string                                       `json:"reqId"`
-		StatusCode PostApiV3AuthSelectOrganization400StatusCode `json:"statusCode"`
+		Details    interface{}                       `json:"details,omitempty"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode SelectOrganizationV3400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                                       `json:"error"`
-		Message    string                                       `json:"message"`
-		ReqId      string                                       `json:"reqId"`
-		StatusCode PostApiV3AuthSelectOrganization401StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode SelectOrganizationV3401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                                  `json:"details,omitempty"`
-		Error      string                                       `json:"error"`
-		Message    string                                       `json:"message"`
-		ReqId      string                                       `json:"reqId"`
-		StatusCode PostApiV3AuthSelectOrganization403StatusCode `json:"statusCode"`
+		Details    interface{}                       `json:"details,omitempty"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode SelectOrganizationV3403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                                       `json:"error"`
-		Message    string                                       `json:"message"`
-		ReqId      string                                       `json:"reqId"`
-		StatusCode PostApiV3AuthSelectOrganization404StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode SelectOrganizationV3404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                                       `json:"error"`
-		Message    interface{}                                  `json:"message,omitempty"`
-		ReqId      string                                       `json:"reqId"`
-		StatusCode PostApiV3AuthSelectOrganization422StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    interface{}                       `json:"message,omitempty"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode SelectOrganizationV3422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                                       `json:"error"`
-		Message    string                                       `json:"message"`
-		ReqId      string                                       `json:"reqId"`
-		StatusCode PostApiV3AuthSelectOrganization500StatusCode `json:"statusCode"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode SelectOrganizationV3500StatusCode `json:"statusCode"`
 	}
 }
-type PostApiV3AuthSelectOrganization400StatusCode float32
-type PostApiV3AuthSelectOrganization401StatusCode float32
-type PostApiV3AuthSelectOrganization403StatusCode float32
-type PostApiV3AuthSelectOrganization404StatusCode float32
-type PostApiV3AuthSelectOrganization422StatusCode float32
-type PostApiV3AuthSelectOrganization500StatusCode float32
+type SelectOrganizationV3400StatusCode float32
+type SelectOrganizationV3401StatusCode float32
+type SelectOrganizationV3403StatusCode float32
+type SelectOrganizationV3404StatusCode float32
+type SelectOrganizationV3422StatusCode float32
+type SelectOrganizationV3500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r PostApiV3AuthSelectOrganizationResponse) Status() string {
+func (r SelectOrganizationV3Response) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2466,72 +1993,37 @@ func (r PostApiV3AuthSelectOrganizationResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PostApiV3AuthSelectOrganizationResponse) StatusCode() int {
+func (r SelectOrganizationV3Response) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-// PostApiV1AdminSignupWithBodyWithResponse request with arbitrary body returning *PostApiV1AdminSignupResponse
-func (c *ClientWithResponses) PostApiV1AdminSignupWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AdminSignupResponse, error) {
-	rsp, err := c.PostApiV1AdminSignupWithBody(ctx, contentType, body, reqEditors...)
+// AdminSignUpWithBodyWithResponse request with arbitrary body returning *AdminSignUpResponse
+func (c *ClientWithResponses) AdminSignUpWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AdminSignUpResponse, error) {
+	rsp, err := c.AdminSignUpWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AdminSignupResponse(rsp)
+	return ParseAdminSignUpResponse(rsp)
 }
 
-func (c *ClientWithResponses) PostApiV1AdminSignupWithResponse(ctx context.Context, body PostApiV1AdminSignupJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AdminSignupResponse, error) {
-	rsp, err := c.PostApiV1AdminSignup(ctx, body, reqEditors...)
+func (c *ClientWithResponses) AdminSignUpWithResponse(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*AdminSignUpResponse, error) {
+	rsp, err := c.AdminSignUp(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AdminSignupResponse(rsp)
+	return ParseAdminSignUpResponse(rsp)
 }
 
-// PostApiV1AuthTokenWithResponse request returning *PostApiV1AuthTokenResponse
-func (c *ClientWithResponses) PostApiV1AuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenResponse, error) {
-	rsp, err := c.PostApiV1AuthToken(ctx, reqEditors...)
+// RefreshAuthTokenWithResponse request returning *RefreshAuthTokenResponse
+func (c *ClientWithResponses) RefreshAuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RefreshAuthTokenResponse, error) {
+	rsp, err := c.RefreshAuthToken(ctx, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AuthTokenResponse(rsp)
-}
-
-// DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request returning *DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse
-func (c *ClientWithResponses) DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	rsp, err := c.DeleteApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseDeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
-}
-
-// GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse request returning *GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse
-func (c *ClientWithResponses) GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	rsp, err := c.GetApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
-}
-
-// PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse request with arbitrary body returning *PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse
-func (c *ClientWithResponses) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	rsp, err := c.PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithBody(ctx, identityId, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
-}
-
-func (c *ClientWithResponses) PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse(ctx context.Context, identityId string, body PatchApiV1AuthTokenAuthIdentitiesIdentityIdJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	rsp, err := c.PatchApiV1AuthTokenAuthIdentitiesIdentityId(ctx, identityId, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp)
+	return ParseRefreshAuthTokenResponse(rsp)
 }
 
 // AttachTokenAuthWithBodyWithResponse request with arbitrary body returning *AttachTokenAuthResponse
@@ -2551,82 +2043,89 @@ func (c *ClientWithResponses) AttachTokenAuthWithResponse(ctx context.Context, i
 	return ParseAttachTokenAuthResponse(rsp)
 }
 
-// GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse request returning *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse
-func (c *ClientWithResponses) GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, params *GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensParams, reqEditors ...RequestEditorFn) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error) {
-	rsp, err := c.GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx, identityId, params, reqEditors...)
+// CreateTokenAuthTokenWithBodyWithResponse request with arbitrary body returning *CreateTokenAuthTokenResponse
+func (c *ClientWithResponses) CreateTokenAuthTokenWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTokenAuthTokenResponse, error) {
+	rsp, err := c.CreateTokenAuthTokenWithBody(ctx, identityId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp)
+	return ParseCreateTokenAuthTokenResponse(rsp)
 }
 
-// PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBodyWithResponse request with arbitrary body returning *PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse
-func (c *ClientWithResponses) PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error) {
-	rsp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithBody(ctx, identityId, contentType, body, reqEditors...)
+func (c *ClientWithResponses) CreateTokenAuthTokenWithResponse(ctx context.Context, identityId string, body CreateTokenAuthTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTokenAuthTokenResponse, error) {
+	rsp, err := c.CreateTokenAuthToken(ctx, identityId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp)
+	return ParseCreateTokenAuthTokenResponse(rsp)
 }
 
-func (c *ClientWithResponses) PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(ctx context.Context, identityId string, body PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error) {
-	rsp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens(ctx, identityId, body, reqEditors...)
+// CreateMachineIdentityWithBodyWithResponse request with arbitrary body returning *CreateMachineIdentityResponse
+func (c *ClientWithResponses) CreateMachineIdentityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error) {
+	rsp, err := c.CreateMachineIdentityWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp)
+	return ParseCreateMachineIdentityResponse(rsp)
 }
 
-// GetApiV1IdentitiesWithResponse request returning *GetApiV1IdentitiesResponse
-func (c *ClientWithResponses) GetApiV1IdentitiesWithResponse(ctx context.Context, params *GetApiV1IdentitiesParams, reqEditors ...RequestEditorFn) (*GetApiV1IdentitiesResponse, error) {
-	rsp, err := c.GetApiV1Identities(ctx, params, reqEditors...)
+func (c *ClientWithResponses) CreateMachineIdentityWithResponse(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error) {
+	rsp, err := c.CreateMachineIdentity(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseGetApiV1IdentitiesResponse(rsp)
+	return ParseCreateMachineIdentityResponse(rsp)
 }
 
-// PostApiV1IdentitiesWithBodyWithResponse request with arbitrary body returning *PostApiV1IdentitiesResponse
-func (c *ClientWithResponses) PostApiV1IdentitiesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1IdentitiesResponse, error) {
-	rsp, err := c.PostApiV1IdentitiesWithBody(ctx, contentType, body, reqEditors...)
+// CreateKubernetesPamResourceWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamResourceResponse
+func (c *ClientWithResponses) CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
+	rsp, err := c.CreateKubernetesPamResourceWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1IdentitiesResponse(rsp)
+	return ParseCreateKubernetesPamResourceResponse(rsp)
 }
 
-func (c *ClientWithResponses) PostApiV1IdentitiesWithResponse(ctx context.Context, body PostApiV1IdentitiesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1IdentitiesResponse, error) {
-	rsp, err := c.PostApiV1Identities(ctx, body, reqEditors...)
+func (c *ClientWithResponses) CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
+	rsp, err := c.CreateKubernetesPamResource(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1IdentitiesResponse(rsp)
+	return ParseCreateKubernetesPamResourceResponse(rsp)
 }
 
-// GetApiV1ProjectsWithResponse request returning *GetApiV1ProjectsResponse
-func (c *ClientWithResponses) GetApiV1ProjectsWithResponse(ctx context.Context, params *GetApiV1ProjectsParams, reqEditors ...RequestEditorFn) (*GetApiV1ProjectsResponse, error) {
-	rsp, err := c.GetApiV1Projects(ctx, params, reqEditors...)
+// CreateRedisPamResourceWithBodyWithResponse request with arbitrary body returning *CreateRedisPamResourceResponse
+func (c *ClientWithResponses) CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error) {
+	rsp, err := c.CreateRedisPamResourceWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseGetApiV1ProjectsResponse(rsp)
+	return ParseCreateRedisPamResourceResponse(rsp)
 }
 
-// PostApiV1ProjectsWithBodyWithResponse request with arbitrary body returning *PostApiV1ProjectsResponse
-func (c *ClientWithResponses) PostApiV1ProjectsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV1ProjectsResponse, error) {
-	rsp, err := c.PostApiV1ProjectsWithBody(ctx, contentType, body, reqEditors...)
+func (c *ClientWithResponses) CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error) {
+	rsp, err := c.CreateRedisPamResource(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1ProjectsResponse(rsp)
+	return ParseCreateRedisPamResourceResponse(rsp)
 }
 
-func (c *ClientWithResponses) PostApiV1ProjectsWithResponse(ctx context.Context, body PostApiV1ProjectsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV1ProjectsResponse, error) {
-	rsp, err := c.PostApiV1Projects(ctx, body, reqEditors...)
+// CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
+func (c *ClientWithResponses) CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error) {
+	rsp, err := c.CreateProjectWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV1ProjectsResponse(rsp)
+	return ParseCreateProjectResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateProjectWithResponse(ctx context.Context, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error) {
+	rsp, err := c.CreateProject(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateProjectResponse(rsp)
 }
 
 // GetRelaysWithResponse request returning *GetRelaysResponse
@@ -2638,32 +2137,41 @@ func (c *ClientWithResponses) GetRelaysWithResponse(ctx context.Context, reqEdit
 	return ParseGetRelaysResponse(rsp)
 }
 
-// PostApiV3AuthSelectOrganizationWithBodyWithResponse request with arbitrary body returning *PostApiV3AuthSelectOrganizationResponse
-func (c *ClientWithResponses) PostApiV3AuthSelectOrganizationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostApiV3AuthSelectOrganizationResponse, error) {
-	rsp, err := c.PostApiV3AuthSelectOrganizationWithBody(ctx, contentType, body, reqEditors...)
+// ListGatewaysWithResponse request returning *ListGatewaysResponse
+func (c *ClientWithResponses) ListGatewaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListGatewaysResponse, error) {
+	rsp, err := c.ListGateways(ctx, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV3AuthSelectOrganizationResponse(rsp)
+	return ParseListGatewaysResponse(rsp)
 }
 
-func (c *ClientWithResponses) PostApiV3AuthSelectOrganizationWithResponse(ctx context.Context, body PostApiV3AuthSelectOrganizationJSONRequestBody, reqEditors ...RequestEditorFn) (*PostApiV3AuthSelectOrganizationResponse, error) {
-	rsp, err := c.PostApiV3AuthSelectOrganization(ctx, body, reqEditors...)
+// SelectOrganizationV3WithBodyWithResponse request with arbitrary body returning *SelectOrganizationV3Response
+func (c *ClientWithResponses) SelectOrganizationV3WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SelectOrganizationV3Response, error) {
+	rsp, err := c.SelectOrganizationV3WithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePostApiV3AuthSelectOrganizationResponse(rsp)
+	return ParseSelectOrganizationV3Response(rsp)
 }
 
-// ParsePostApiV1AdminSignupResponse parses an HTTP response from a PostApiV1AdminSignupWithResponse call
-func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignupResponse, error) {
+func (c *ClientWithResponses) SelectOrganizationV3WithResponse(ctx context.Context, body SelectOrganizationV3JSONRequestBody, reqEditors ...RequestEditorFn) (*SelectOrganizationV3Response, error) {
+	rsp, err := c.SelectOrganizationV3(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSelectOrganizationV3Response(rsp)
+}
+
+// ParseAdminSignUpResponse parses an HTTP response from a AdminSignUpWithResponse call
+func ParseAdminSignUpResponse(rsp *http.Response) (*AdminSignUpResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &PostApiV1AdminSignupResponse{
+	response := &AdminSignUpResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -2698,6 +2206,7 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 				RootOrgId                             *openapi_types.UUID `json:"rootOrgId"`
 				ScannerProductEnabled                 *bool               `json:"scannerProductEnabled"`
 				ScimEnabled                           *bool               `json:"scimEnabled"`
+				SecretShareBrandConfig                interface{}         `json:"secretShareBrandConfig"`
 				SecretsProductEnabled                 *bool               `json:"secretsProductEnabled"`
 				SelectedMfaMethod                     *string             `json:"selectedMfaMethod"`
 				ShareSecretsProductEnabled            *bool               `json:"shareSecretsProductEnabled"`
@@ -2738,10 +2247,11 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode PostApiV1AdminSignup400StatusCode `json:"statusCode"`
+			Details    interface{}              `json:"details,omitempty"`
+			Error      string                   `json:"error"`
+			Message    string                   `json:"message"`
+			ReqId      string                   `json:"reqId"`
+			StatusCode AdminSignUp400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2750,10 +2260,10 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode PostApiV1AdminSignup401StatusCode `json:"statusCode"`
+			Error      string                   `json:"error"`
+			Message    string                   `json:"message"`
+			ReqId      string                   `json:"reqId"`
+			StatusCode AdminSignUp401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2762,11 +2272,11 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                       `json:"details,omitempty"`
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode PostApiV1AdminSignup403StatusCode `json:"statusCode"`
+			Details    interface{}              `json:"details,omitempty"`
+			Error      string                   `json:"error"`
+			Message    string                   `json:"message"`
+			ReqId      string                   `json:"reqId"`
+			StatusCode AdminSignUp403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2775,10 +2285,10 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode PostApiV1AdminSignup404StatusCode `json:"statusCode"`
+			Error      string                   `json:"error"`
+			Message    string                   `json:"message"`
+			ReqId      string                   `json:"reqId"`
+			StatusCode AdminSignUp404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2787,10 +2297,10 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                            `json:"error"`
-			Message    interface{}                       `json:"message,omitempty"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode PostApiV1AdminSignup422StatusCode `json:"statusCode"`
+			Error      string                   `json:"error"`
+			Message    interface{}              `json:"message,omitempty"`
+			ReqId      string                   `json:"reqId"`
+			StatusCode AdminSignUp422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2799,10 +2309,10 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode PostApiV1AdminSignup500StatusCode `json:"statusCode"`
+			Error      string                   `json:"error"`
+			Message    string                   `json:"message"`
+			ReqId      string                   `json:"reqId"`
+			StatusCode AdminSignUp500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2814,15 +2324,15 @@ func ParsePostApiV1AdminSignupResponse(rsp *http.Response) (*PostApiV1AdminSignu
 	return response, nil
 }
 
-// ParsePostApiV1AuthTokenResponse parses an HTTP response from a PostApiV1AuthTokenWithResponse call
-func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenResponse, error) {
+// ParseRefreshAuthTokenResponse parses an HTTP response from a RefreshAuthTokenWithResponse call
+func ParseRefreshAuthTokenResponse(rsp *http.Response) (*RefreshAuthTokenResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &PostApiV1AuthTokenResponse{
+	response := &RefreshAuthTokenResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -2830,8 +2340,9 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
-			OrganizationId *string `json:"organizationId,omitempty"`
-			Token          string  `json:"token"`
+			OrganizationId    *string `json:"organizationId,omitempty"`
+			SubOrganizationId *string `json:"subOrganizationId,omitempty"`
+			Token             string  `json:"token"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2840,10 +2351,11 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode PostApiV1AuthToken400StatusCode `json:"statusCode"`
+			Details    interface{}                   `json:"details,omitempty"`
+			Error      string                        `json:"error"`
+			Message    string                        `json:"message"`
+			ReqId      string                        `json:"reqId"`
+			StatusCode RefreshAuthToken400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2852,10 +2364,10 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode PostApiV1AuthToken401StatusCode `json:"statusCode"`
+			Error      string                        `json:"error"`
+			Message    string                        `json:"message"`
+			ReqId      string                        `json:"reqId"`
+			StatusCode RefreshAuthToken401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2864,11 +2376,11 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                     `json:"details,omitempty"`
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode PostApiV1AuthToken403StatusCode `json:"statusCode"`
+			Details    interface{}                   `json:"details,omitempty"`
+			Error      string                        `json:"error"`
+			Message    string                        `json:"message"`
+			ReqId      string                        `json:"reqId"`
+			StatusCode RefreshAuthToken403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2877,10 +2389,10 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode PostApiV1AuthToken404StatusCode `json:"statusCode"`
+			Error      string                        `json:"error"`
+			Message    string                        `json:"message"`
+			ReqId      string                        `json:"reqId"`
+			StatusCode RefreshAuthToken404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2889,10 +2401,10 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                          `json:"error"`
-			Message    interface{}                     `json:"message,omitempty"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode PostApiV1AuthToken422StatusCode `json:"statusCode"`
+			Error      string                        `json:"error"`
+			Message    interface{}                   `json:"message,omitempty"`
+			ReqId      string                        `json:"reqId"`
+			StatusCode RefreshAuthToken422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -2901,343 +2413,10 @@ func ParsePostApiV1AuthTokenResponse(rsp *http.Response) (*PostApiV1AuthTokenRes
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode PostApiV1AuthToken500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseDeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a DeleteApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
-func ParseDeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &DeleteApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			IdentityTokenAuth struct {
-				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
-				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
-				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
-				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
-				CreatedAt               time.Time          `json:"createdAt"`
-				Id                      openapi_types.UUID `json:"id"`
-				IdentityId              openapi_types.UUID `json:"identityId"`
-				UpdatedAt               time.Time          `json:"updatedAt"`
-			} `json:"identityTokenAuth"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Error      string                                                    `json:"error"`
-			Message    string                                                    `json:"message"`
-			ReqId      string                                                    `json:"reqId"`
-			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                                                    `json:"error"`
-			Message    string                                                    `json:"message"`
-			ReqId      string                                                    `json:"reqId"`
-			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                                               `json:"details,omitempty"`
-			Error      string                                                    `json:"error"`
-			Message    string                                                    `json:"message"`
-			ReqId      string                                                    `json:"reqId"`
-			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                                                    `json:"error"`
-			Message    string                                                    `json:"message"`
-			ReqId      string                                                    `json:"reqId"`
-			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                                                    `json:"error"`
-			Message    interface{}                                               `json:"message,omitempty"`
-			ReqId      string                                                    `json:"reqId"`
-			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                                                    `json:"error"`
-			Message    string                                                    `json:"message"`
-			ReqId      string                                                    `json:"reqId"`
-			StatusCode DeleteApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a GetApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
-func ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			IdentityTokenAuth struct {
-				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
-				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
-				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
-				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
-				CreatedAt               time.Time          `json:"createdAt"`
-				Id                      openapi_types.UUID `json:"id"`
-				IdentityId              openapi_types.UUID `json:"identityId"`
-				UpdatedAt               time.Time          `json:"updatedAt"`
-			} `json:"identityTokenAuth"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Error      string                                                 `json:"error"`
-			Message    string                                                 `json:"message"`
-			ReqId      string                                                 `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                                                 `json:"error"`
-			Message    string                                                 `json:"message"`
-			ReqId      string                                                 `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                                            `json:"details,omitempty"`
-			Error      string                                                 `json:"error"`
-			Message    string                                                 `json:"message"`
-			ReqId      string                                                 `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                                                 `json:"error"`
-			Message    string                                                 `json:"message"`
-			ReqId      string                                                 `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                                                 `json:"error"`
-			Message    interface{}                                            `json:"message,omitempty"`
-			ReqId      string                                                 `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                                                 `json:"error"`
-			Message    string                                                 `json:"message"`
-			ReqId      string                                                 `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse parses an HTTP response from a PatchApiV1AuthTokenAuthIdentitiesIdentityIdWithResponse call
-func ParsePatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse(rsp *http.Response) (*PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &PatchApiV1AuthTokenAuthIdentitiesIdentityIdResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			IdentityTokenAuth struct {
-				AccessTokenMaxTTL       *float32           `json:"accessTokenMaxTTL,omitempty"`
-				AccessTokenNumUsesLimit *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-				AccessTokenPeriod       *float32           `json:"accessTokenPeriod,omitempty"`
-				AccessTokenTTL          *float32           `json:"accessTokenTTL,omitempty"`
-				AccessTokenTrustedIps   interface{}        `json:"accessTokenTrustedIps,omitempty"`
-				CreatedAt               time.Time          `json:"createdAt"`
-				Id                      openapi_types.UUID `json:"id"`
-				IdentityId              openapi_types.UUID `json:"identityId"`
-				UpdatedAt               time.Time          `json:"updatedAt"`
-			} `json:"identityTokenAuth"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Error      string                                                   `json:"error"`
-			Message    string                                                   `json:"message"`
-			ReqId      string                                                   `json:"reqId"`
-			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                                                   `json:"error"`
-			Message    string                                                   `json:"message"`
-			ReqId      string                                                   `json:"reqId"`
-			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                                              `json:"details,omitempty"`
-			Error      string                                                   `json:"error"`
-			Message    string                                                   `json:"message"`
-			ReqId      string                                                   `json:"reqId"`
-			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                                                   `json:"error"`
-			Message    string                                                   `json:"message"`
-			ReqId      string                                                   `json:"reqId"`
-			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                                                   `json:"error"`
-			Message    interface{}                                              `json:"message,omitempty"`
-			ReqId      string                                                   `json:"reqId"`
-			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                                                   `json:"error"`
-			Message    string                                                   `json:"message"`
-			ReqId      string                                                   `json:"reqId"`
-			StatusCode PatchApiV1AuthTokenAuthIdentitiesIdentityId500StatusCode `json:"statusCode"`
+			Error      string                        `json:"error"`
+			Message    string                        `json:"message"`
+			ReqId      string                        `json:"reqId"`
+			StatusCode RefreshAuthToken500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3284,6 +2463,7 @@ func ParseAttachTokenAuthResponse(rsp *http.Response) (*AttachTokenAuthResponse,
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
+			Details    interface{}                  `json:"details,omitempty"`
 			Error      string                       `json:"error"`
 			Message    string                       `json:"message"`
 			ReqId      string                       `json:"reqId"`
@@ -3360,132 +2540,15 @@ func ParseAttachTokenAuthResponse(rsp *http.Response) (*AttachTokenAuthResponse,
 	return response, nil
 }
 
-// ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse parses an HTTP response from a GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse call
-func ParseGetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Response) (*GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error) {
+// ParseCreateTokenAuthTokenResponse parses an HTTP response from a CreateTokenAuthTokenWithResponse call
+func ParseCreateTokenAuthTokenResponse(rsp *http.Response) (*CreateTokenAuthTokenResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &GetApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Tokens []struct {
-				AccessTokenLastRenewedAt *time.Time         `json:"accessTokenLastRenewedAt"`
-				AccessTokenLastUsedAt    *time.Time         `json:"accessTokenLastUsedAt"`
-				AccessTokenMaxTTL        *float32           `json:"accessTokenMaxTTL,omitempty"`
-				AccessTokenNumUses       *float32           `json:"accessTokenNumUses,omitempty"`
-				AccessTokenNumUsesLimit  *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-				AccessTokenPeriod        *float32           `json:"accessTokenPeriod,omitempty"`
-				AccessTokenTTL           *float32           `json:"accessTokenTTL,omitempty"`
-				AuthMethod               string             `json:"authMethod"`
-				CreatedAt                time.Time          `json:"createdAt"`
-				Id                       string             `json:"id"`
-				IdentityId               openapi_types.UUID `json:"identityId"`
-				IdentityUAClientSecretId *string            `json:"identityUAClientSecretId"`
-				IsAccessTokenRevoked     *bool              `json:"isAccessTokenRevoked,omitempty"`
-				Name                     *string            `json:"name"`
-				UpdatedAt                time.Time          `json:"updatedAt"`
-			} `json:"tokens"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Error      string                                                       `json:"error"`
-			Message    string                                                       `json:"message"`
-			ReqId      string                                                       `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                                                       `json:"error"`
-			Message    string                                                       `json:"message"`
-			ReqId      string                                                       `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                                                  `json:"details,omitempty"`
-			Error      string                                                       `json:"error"`
-			Message    string                                                       `json:"message"`
-			ReqId      string                                                       `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                                                       `json:"error"`
-			Message    string                                                       `json:"message"`
-			ReqId      string                                                       `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                                                       `json:"error"`
-			Message    interface{}                                                  `json:"message,omitempty"`
-			ReqId      string                                                       `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                                                       `json:"error"`
-			Message    string                                                       `json:"message"`
-			ReqId      string                                                       `json:"reqId"`
-			StatusCode GetApiV1AuthTokenAuthIdentitiesIdentityIdTokens500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse parses an HTTP response from a PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse call
-func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Response) (*PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse{
+	response := &CreateTokenAuthTokenResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3497,23 +2560,24 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 			AccessTokenMaxTTL float32 `json:"accessTokenMaxTTL"`
 			ExpiresIn         float32 `json:"expiresIn"`
 			TokenData         struct {
-				AccessTokenLastRenewedAt *time.Time         `json:"accessTokenLastRenewedAt"`
-				AccessTokenLastUsedAt    *time.Time         `json:"accessTokenLastUsedAt"`
-				AccessTokenMaxTTL        *float32           `json:"accessTokenMaxTTL,omitempty"`
-				AccessTokenNumUses       *float32           `json:"accessTokenNumUses,omitempty"`
-				AccessTokenNumUsesLimit  *float32           `json:"accessTokenNumUsesLimit,omitempty"`
-				AccessTokenPeriod        *float32           `json:"accessTokenPeriod,omitempty"`
-				AccessTokenTTL           *float32           `json:"accessTokenTTL,omitempty"`
-				AuthMethod               string             `json:"authMethod"`
-				CreatedAt                time.Time          `json:"createdAt"`
-				Id                       string             `json:"id"`
-				IdentityId               openapi_types.UUID `json:"identityId"`
-				IdentityUAClientSecretId *string            `json:"identityUAClientSecretId"`
-				IsAccessTokenRevoked     *bool              `json:"isAccessTokenRevoked,omitempty"`
-				Name                     *string            `json:"name"`
-				UpdatedAt                time.Time          `json:"updatedAt"`
+				AccessTokenLastRenewedAt *time.Time          `json:"accessTokenLastRenewedAt"`
+				AccessTokenLastUsedAt    *time.Time          `json:"accessTokenLastUsedAt"`
+				AccessTokenMaxTTL        *float32            `json:"accessTokenMaxTTL,omitempty"`
+				AccessTokenNumUses       *float32            `json:"accessTokenNumUses,omitempty"`
+				AccessTokenNumUsesLimit  *float32            `json:"accessTokenNumUsesLimit,omitempty"`
+				AccessTokenPeriod        *float32            `json:"accessTokenPeriod,omitempty"`
+				AccessTokenTTL           *float32            `json:"accessTokenTTL,omitempty"`
+				AuthMethod               string              `json:"authMethod"`
+				CreatedAt                time.Time           `json:"createdAt"`
+				Id                       string              `json:"id"`
+				IdentityId               openapi_types.UUID  `json:"identityId"`
+				IdentityUAClientSecretId *string             `json:"identityUAClientSecretId"`
+				IsAccessTokenRevoked     *bool               `json:"isAccessTokenRevoked,omitempty"`
+				Name                     *string             `json:"name"`
+				SubOrganizationId        *openapi_types.UUID `json:"subOrganizationId"`
+				UpdatedAt                time.Time           `json:"updatedAt"`
 			} `json:"tokenData"`
-			TokenType PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens200TokenType `json:"tokenType"`
+			TokenType CreateTokenAuthToken200TokenType `json:"tokenType"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3522,10 +2586,11 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                                                        `json:"error"`
-			Message    string                                                        `json:"message"`
-			ReqId      string                                                        `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens400StatusCode `json:"statusCode"`
+			Details    interface{}                       `json:"details,omitempty"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateTokenAuthToken400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3534,10 +2599,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                                                        `json:"error"`
-			Message    string                                                        `json:"message"`
-			ReqId      string                                                        `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens401StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateTokenAuthToken401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3546,11 +2611,11 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                                                   `json:"details,omitempty"`
-			Error      string                                                        `json:"error"`
-			Message    string                                                        `json:"message"`
-			ReqId      string                                                        `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens403StatusCode `json:"statusCode"`
+			Details    interface{}                       `json:"details,omitempty"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateTokenAuthToken403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3559,10 +2624,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                                                        `json:"error"`
-			Message    string                                                        `json:"message"`
-			ReqId      string                                                        `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens404StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateTokenAuthToken404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3571,10 +2636,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                                                        `json:"error"`
-			Message    interface{}                                                   `json:"message,omitempty"`
-			ReqId      string                                                        `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens422StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    interface{}                       `json:"message,omitempty"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateTokenAuthToken422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3583,10 +2648,10 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                                                        `json:"error"`
-			Message    string                                                        `json:"message"`
-			ReqId      string                                                        `json:"reqId"`
-			StatusCode PostApiV1AuthTokenAuthIdentitiesIdentityIdTokens500StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateTokenAuthToken500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3598,140 +2663,15 @@ func ParsePostApiV1AuthTokenAuthIdentitiesIdentityIdTokensResponse(rsp *http.Res
 	return response, nil
 }
 
-// ParseGetApiV1IdentitiesResponse parses an HTTP response from a GetApiV1IdentitiesWithResponse call
-func ParseGetApiV1IdentitiesResponse(rsp *http.Response) (*GetApiV1IdentitiesResponse, error) {
+// ParseCreateMachineIdentityResponse parses an HTTP response from a CreateMachineIdentityWithResponse call
+func ParseCreateMachineIdentityResponse(rsp *http.Response) (*CreateMachineIdentityResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &GetApiV1IdentitiesResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Identities []struct {
-				CreatedAt  time.Time `json:"createdAt"`
-				CustomRole *struct {
-					Description *string            `json:"description"`
-					Id          openapi_types.UUID `json:"id"`
-					Name        string             `json:"name"`
-					Permissions interface{}        `json:"permissions,omitempty"`
-					Slug        string             `json:"slug"`
-				} `json:"customRole,omitempty"`
-				Id       openapi_types.UUID `json:"id"`
-				Identity struct {
-					AuthMethods         []string           `json:"authMethods"`
-					HasDeleteProtection *bool              `json:"hasDeleteProtection,omitempty"`
-					Id                  openapi_types.UUID `json:"id"`
-					Name                string             `json:"name"`
-				} `json:"identity"`
-				IdentityId          openapi_types.UUID  `json:"identityId"`
-				LastLoginAuthMethod *string             `json:"lastLoginAuthMethod"`
-				LastLoginTime       *time.Time          `json:"lastLoginTime"`
-				OrgId               openapi_types.UUID  `json:"orgId"`
-				Role                string              `json:"role"`
-				RoleId              *openapi_types.UUID `json:"roleId"`
-				UpdatedAt           time.Time           `json:"updatedAt"`
-			} `json:"identities"`
-			TotalCount float32 `json:"totalCount"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode GetApiV1Identities400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode GetApiV1Identities401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                     `json:"details,omitempty"`
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode GetApiV1Identities403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode GetApiV1Identities404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                          `json:"error"`
-			Message    interface{}                     `json:"message,omitempty"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode GetApiV1Identities422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                          `json:"error"`
-			Message    string                          `json:"message"`
-			ReqId      string                          `json:"reqId"`
-			StatusCode GetApiV1Identities500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParsePostApiV1IdentitiesResponse parses an HTTP response from a PostApiV1IdentitiesWithResponse call
-func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &PostApiV1IdentitiesResponse{
+	response := &CreateMachineIdentityResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3763,10 +2703,11 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                           `json:"error"`
-			Message    string                           `json:"message"`
-			ReqId      string                           `json:"reqId"`
-			StatusCode PostApiV1Identities400StatusCode `json:"statusCode"`
+			Details    interface{}                        `json:"details,omitempty"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateMachineIdentity400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3775,10 +2716,10 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                           `json:"error"`
-			Message    string                           `json:"message"`
-			ReqId      string                           `json:"reqId"`
-			StatusCode PostApiV1Identities401StatusCode `json:"statusCode"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateMachineIdentity401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3787,11 +2728,11 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                      `json:"details,omitempty"`
-			Error      string                           `json:"error"`
-			Message    string                           `json:"message"`
-			ReqId      string                           `json:"reqId"`
-			StatusCode PostApiV1Identities403StatusCode `json:"statusCode"`
+			Details    interface{}                        `json:"details,omitempty"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateMachineIdentity403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3800,10 +2741,10 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                           `json:"error"`
-			Message    string                           `json:"message"`
-			ReqId      string                           `json:"reqId"`
-			StatusCode PostApiV1Identities404StatusCode `json:"statusCode"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateMachineIdentity404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3812,10 +2753,10 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                           `json:"error"`
-			Message    interface{}                      `json:"message,omitempty"`
-			ReqId      string                           `json:"reqId"`
-			StatusCode PostApiV1Identities422StatusCode `json:"statusCode"`
+			Error      string                             `json:"error"`
+			Message    interface{}                        `json:"message,omitempty"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateMachineIdentity422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3824,10 +2765,10 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                           `json:"error"`
-			Message    string                           `json:"message"`
-			ReqId      string                           `json:"reqId"`
-			StatusCode PostApiV1Identities500StatusCode `json:"statusCode"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateMachineIdentity500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3839,15 +2780,15 @@ func ParsePostApiV1IdentitiesResponse(rsp *http.Response) (*PostApiV1IdentitiesR
 	return response, nil
 }
 
-// ParseGetApiV1ProjectsResponse parses an HTTP response from a GetApiV1ProjectsWithResponse call
-func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsResponse, error) {
+// ParseCreateKubernetesPamResourceResponse parses an HTTP response from a CreateKubernetesPamResourceWithResponse call
+func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubernetesPamResourceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &GetApiV1ProjectsResponse{
+	response := &CreateKubernetesPamResourceResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3855,44 +2796,22 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
-			Projects []struct {
-				UnderscoreId           string    `json:"_id"`
-				AuditLogsRetentionDays *float32  `json:"auditLogsRetentionDays"`
-				AutoCapitalization     *bool     `json:"autoCapitalization"`
-				CreatedAt              time.Time `json:"createdAt"`
-				DefaultProduct         *string   `json:"defaultProduct"`
-				Description            *string   `json:"description"`
-				Environments           []struct {
-					Id   string `json:"id"`
-					Name string `json:"name"`
-					Slug string `json:"slug"`
-				} `json:"environments"`
-				HasDeleteProtection *bool               `json:"hasDeleteProtection"`
-				Id                  string              `json:"id"`
-				KmsCertificateKeyId *openapi_types.UUID `json:"kmsCertificateKeyId"`
-				Name                string              `json:"name"`
-				OrgId               openapi_types.UUID  `json:"orgId"`
-				PitVersionLimit     *float32            `json:"pitVersionLimit,omitempty"`
-				Roles               *[]struct {
-					CreatedAt   time.Time          `json:"createdAt"`
-					Description *string            `json:"description"`
-					Id          openapi_types.UUID `json:"id"`
-					Name        string             `json:"name"`
-					Permissions interface{}        `json:"permissions,omitempty"`
-					ProjectId   string             `json:"projectId"`
-					Slug        string             `json:"slug"`
-					UpdatedAt   time.Time          `json:"updatedAt"`
-					Version     *float32           `json:"version,omitempty"`
-				} `json:"roles,omitempty"`
-				SecretDetectionIgnoreValues *[]string `json:"secretDetectionIgnoreValues"`
-				SecretSharing               *bool     `json:"secretSharing,omitempty"`
-				ShowSnapshotsLegacy         *bool     `json:"showSnapshotsLegacy,omitempty"`
-				Slug                        string    `json:"slug"`
-				Type                        string    `json:"type"`
-				UpdatedAt                   time.Time `json:"updatedAt"`
-				UpgradeStatus               *string   `json:"upgradeStatus"`
-				Version                     *float32  `json:"version,omitempty"`
-			} `json:"projects"`
+			Resource struct {
+				ConnectionDetails struct {
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+					Url                   string  `json:"url"`
+				} `json:"connectionDetails"`
+				CreatedAt                  time.Time                                                            `json:"createdAt"`
+				EncryptedResourceMetadata  interface{}                                                          `json:"encryptedResourceMetadata"`
+				GatewayId                  *openapi_types.UUID                                                  `json:"gatewayId"`
+				Id                         openapi_types.UUID                                                   `json:"id"`
+				Name                       string                                                               `json:"name"`
+				ProjectId                  string                                                               `json:"projectId"`
+				ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
+				RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
+				UpdatedAt                  time.Time                                                            `json:"updatedAt"`
+			} `json:"resource"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3901,10 +2820,11 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                        `json:"error"`
-			Message    string                        `json:"message"`
-			ReqId      string                        `json:"reqId"`
-			StatusCode GetApiV1Projects400StatusCode `json:"statusCode"`
+			Details    interface{}                              `json:"details,omitempty"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3913,10 +2833,10 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                        `json:"error"`
-			Message    string                        `json:"message"`
-			ReqId      string                        `json:"reqId"`
-			StatusCode GetApiV1Projects401StatusCode `json:"statusCode"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3925,11 +2845,11 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                   `json:"details,omitempty"`
-			Error      string                        `json:"error"`
-			Message    string                        `json:"message"`
-			ReqId      string                        `json:"reqId"`
-			StatusCode GetApiV1Projects403StatusCode `json:"statusCode"`
+			Details    interface{}                              `json:"details,omitempty"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3938,10 +2858,10 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                        `json:"error"`
-			Message    string                        `json:"message"`
-			ReqId      string                        `json:"reqId"`
-			StatusCode GetApiV1Projects404StatusCode `json:"statusCode"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3950,10 +2870,10 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                        `json:"error"`
-			Message    interface{}                   `json:"message,omitempty"`
-			ReqId      string                        `json:"reqId"`
-			StatusCode GetApiV1Projects422StatusCode `json:"statusCode"`
+			Error      string                                   `json:"error"`
+			Message    interface{}                              `json:"message,omitempty"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3962,10 +2882,10 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                        `json:"error"`
-			Message    string                        `json:"message"`
-			ReqId      string                        `json:"reqId"`
-			StatusCode GetApiV1Projects500StatusCode `json:"statusCode"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -3977,15 +2897,136 @@ func ParseGetApiV1ProjectsResponse(rsp *http.Response) (*GetApiV1ProjectsRespons
 	return response, nil
 }
 
-// ParsePostApiV1ProjectsResponse parses an HTTP response from a PostApiV1ProjectsWithResponse call
-func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsResponse, error) {
+// ParseCreateRedisPamResourceResponse parses an HTTP response from a CreateRedisPamResourceWithResponse call
+func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamResourceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &PostApiV1ProjectsResponse{
+	response := &CreateRedisPamResourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Resource struct {
+				ConnectionDetails struct {
+					Host                  string  `json:"host"`
+					Port                  float32 `json:"port"`
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslEnabled            bool    `json:"sslEnabled"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				} `json:"connectionDetails"`
+				CreatedAt                  time.Time                                     `json:"createdAt"`
+				EncryptedResourceMetadata  interface{}                                   `json:"encryptedResourceMetadata"`
+				GatewayId                  *openapi_types.UUID                           `json:"gatewayId"`
+				Id                         openapi_types.UUID                            `json:"id"`
+				Name                       string                                        `json:"name"`
+				ProjectId                  string                                        `json:"projectId"`
+				ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
+				RotationAccountCredentials *struct {
+					Username *string `json:"username,omitempty"`
+				} `json:"rotationAccountCredentials"`
+				UpdatedAt time.Time `json:"updatedAt"`
+			} `json:"resource"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                         `json:"details,omitempty"`
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                         `json:"details,omitempty"`
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    interface{}                         `json:"message,omitempty"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateProjectResponse parses an HTTP response from a CreateProjectWithResponse call
+func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateProjectResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -4028,10 +3069,11 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                         `json:"error"`
-			Message    string                         `json:"message"`
-			ReqId      string                         `json:"reqId"`
-			StatusCode PostApiV1Projects400StatusCode `json:"statusCode"`
+			Details    interface{}                `json:"details,omitempty"`
+			Error      string                     `json:"error"`
+			Message    string                     `json:"message"`
+			ReqId      string                     `json:"reqId"`
+			StatusCode CreateProject400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4040,10 +3082,10 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                         `json:"error"`
-			Message    string                         `json:"message"`
-			ReqId      string                         `json:"reqId"`
-			StatusCode PostApiV1Projects401StatusCode `json:"statusCode"`
+			Error      string                     `json:"error"`
+			Message    string                     `json:"message"`
+			ReqId      string                     `json:"reqId"`
+			StatusCode CreateProject401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4052,11 +3094,11 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                    `json:"details,omitempty"`
-			Error      string                         `json:"error"`
-			Message    string                         `json:"message"`
-			ReqId      string                         `json:"reqId"`
-			StatusCode PostApiV1Projects403StatusCode `json:"statusCode"`
+			Details    interface{}                `json:"details,omitempty"`
+			Error      string                     `json:"error"`
+			Message    string                     `json:"message"`
+			ReqId      string                     `json:"reqId"`
+			StatusCode CreateProject403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4065,10 +3107,10 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                         `json:"error"`
-			Message    string                         `json:"message"`
-			ReqId      string                         `json:"reqId"`
-			StatusCode PostApiV1Projects404StatusCode `json:"statusCode"`
+			Error      string                     `json:"error"`
+			Message    string                     `json:"message"`
+			ReqId      string                     `json:"reqId"`
+			StatusCode CreateProject404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4077,10 +3119,10 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                         `json:"error"`
-			Message    interface{}                    `json:"message,omitempty"`
-			ReqId      string                         `json:"reqId"`
-			StatusCode PostApiV1Projects422StatusCode `json:"statusCode"`
+			Error      string                     `json:"error"`
+			Message    interface{}                `json:"message,omitempty"`
+			ReqId      string                     `json:"reqId"`
+			StatusCode CreateProject422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4089,10 +3131,10 @@ func ParsePostApiV1ProjectsResponse(rsp *http.Response) (*PostApiV1ProjectsRespo
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                         `json:"error"`
-			Message    string                         `json:"message"`
-			ReqId      string                         `json:"reqId"`
-			StatusCode PostApiV1Projects500StatusCode `json:"statusCode"`
+			Error      string                     `json:"error"`
+			Message    string                     `json:"message"`
+			ReqId      string                     `json:"reqId"`
+			StatusCode CreateProject500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4137,6 +3179,7 @@ func ParseGetRelaysResponse(rsp *http.Response) (*GetRelaysResponse, error) {
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
+			Details    interface{}            `json:"details,omitempty"`
 			Error      string                 `json:"error"`
 			Message    string                 `json:"message"`
 			ReqId      string                 `json:"reqId"`
@@ -4213,15 +3256,126 @@ func ParseGetRelaysResponse(rsp *http.Response) (*GetRelaysResponse, error) {
 	return response, nil
 }
 
-// ParsePostApiV3AuthSelectOrganizationResponse parses an HTTP response from a PostApiV3AuthSelectOrganizationWithResponse call
-func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV3AuthSelectOrganizationResponse, error) {
+// ParseListGatewaysResponse parses an HTTP response from a ListGatewaysWithResponse call
+func ParseListGatewaysResponse(rsp *http.Response) (*ListGatewaysResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &PostApiV3AuthSelectOrganizationResponse{
+	response := &ListGatewaysResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []struct {
+			CreatedAt time.Time          `json:"createdAt"`
+			Heartbeat *time.Time         `json:"heartbeat"`
+			Id        openapi_types.UUID `json:"id"`
+			Identity  struct {
+				Id   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"identity"`
+			IdentityId openapi_types.UUID `json:"identityId"`
+			Name       string             `json:"name"`
+			UpdatedAt  time.Time          `json:"updatedAt"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}               `json:"details,omitempty"`
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}               `json:"details,omitempty"`
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    interface{}               `json:"message,omitempty"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSelectOrganizationV3Response parses an HTTP response from a SelectOrganizationV3WithResponse call
+func ParseSelectOrganizationV3Response(rsp *http.Response) (*SelectOrganizationV3Response, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SelectOrganizationV3Response{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -4240,10 +3394,11 @@ func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Error      string                                       `json:"error"`
-			Message    string                                       `json:"message"`
-			ReqId      string                                       `json:"reqId"`
-			StatusCode PostApiV3AuthSelectOrganization400StatusCode `json:"statusCode"`
+			Details    interface{}                       `json:"details,omitempty"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode SelectOrganizationV3400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4252,10 +3407,10 @@ func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                                       `json:"error"`
-			Message    string                                       `json:"message"`
-			ReqId      string                                       `json:"reqId"`
-			StatusCode PostApiV3AuthSelectOrganization401StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode SelectOrganizationV3401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4264,11 +3419,11 @@ func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                                  `json:"details,omitempty"`
-			Error      string                                       `json:"error"`
-			Message    string                                       `json:"message"`
-			ReqId      string                                       `json:"reqId"`
-			StatusCode PostApiV3AuthSelectOrganization403StatusCode `json:"statusCode"`
+			Details    interface{}                       `json:"details,omitempty"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode SelectOrganizationV3403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4277,10 +3432,10 @@ func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                                       `json:"error"`
-			Message    string                                       `json:"message"`
-			ReqId      string                                       `json:"reqId"`
-			StatusCode PostApiV3AuthSelectOrganization404StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode SelectOrganizationV3404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4289,10 +3444,10 @@ func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                                       `json:"error"`
-			Message    interface{}                                  `json:"message,omitempty"`
-			ReqId      string                                       `json:"reqId"`
-			StatusCode PostApiV3AuthSelectOrganization422StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    interface{}                       `json:"message,omitempty"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode SelectOrganizationV3422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4301,10 +3456,10 @@ func ParsePostApiV3AuthSelectOrganizationResponse(rsp *http.Response) (*PostApiV
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                                       `json:"error"`
-			Message    string                                       `json:"message"`
-			ReqId      string                                       `json:"reqId"`
-			StatusCode PostApiV3AuthSelectOrganization500StatusCode `json:"statusCode"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode SelectOrganizationV3500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

@@ -3450,6 +3450,6 @@ func init() {
 	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")
 	certManagerCmd.AddCommand(certManagerAgentCmd)
 
-	rootCmd.AddCommand(agentCmd)
-	rootCmd.AddCommand(certManagerCmd)
+	RootCmd.AddCommand(agentCmd)
+	RootCmd.AddCommand(certManagerCmd)
 }

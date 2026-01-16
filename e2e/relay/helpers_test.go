@@ -10,7 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	_ "github.com/joho/godotenv/autoload"
 
 	"github.com/Infisical/infisical-merge/packages/cmd"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -18,6 +23,8 @@ import (
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	dockercompose "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -41,13 +48,16 @@ func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithE
 
 func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalService {
 	t.Cleanup(func() {
-		err := s.Compose().Down(
-			ctx,
-			dockercompose.RemoveOrphans(true),
-			dockercompose.RemoveVolumes(true),
-		)
-		if err != nil {
-			slog.Error("Failed to clean up Infisical service", "err", err)
+		// Only clean up if CLI_E2E_REMOVE_COMPOSE is set to "1"
+		if os.Getenv("CLI_E2E_REMOVE_COMPOSE") == "1" {
+			err := s.Compose().Down(
+				ctx,
+				dockercompose.RemoveOrphans(true),
+				dockercompose.RemoveVolumes(true),
+			)
+			if err != nil {
+				slog.Error("Failed to clean up Infisical service", "err", err)
+			}
 		}
 	})
 
@@ -119,7 +129,7 @@ func (s *InfisicalService) CreateMachineIdentity(t *testing.T, ctx context.Conte
 
 	// Create machine identity for the relay
 	role := "member"
-	identityResp, err := c.PostApiV1IdentitiesWithResponse(ctx, client.PostApiV1IdentitiesJSONRequestBody{
+	identityResp, err := c.CreateMachineIdentityWithResponse(ctx, client.CreateMachineIdentityJSONRequestBody{
 		Name:           faker.Name(),
 		Role:           &role,
 		OrganizationId: s.provisionResult.OrgId,
@@ -160,10 +170,10 @@ func WithTokenAuth() MachineIdentityOption {
 		require.Equal(t, http.StatusOK, updateResp.StatusCode())
 
 		// Create auth token for relay CLI
-		tokenResp, err := c.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensWithResponse(
+		tokenResp, err := c.CreateTokenAuthTokenWithResponse(
 			ctx,
 			i.Id,
-			client.PostApiV1AuthTokenAuthIdentitiesIdentityIdTokensJSONRequestBody{},
+			client.CreateTokenAuthTokenJSONRequestBody{},
 		)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, updateResp.StatusCode())
@@ -193,6 +203,13 @@ type Command struct {
 	stderrFilePath string
 	stderrFile     *os.File
 	cmd            *exec.Cmd
+
+	// For function call method: track execution state
+	functionCallCtx    context.Context
+	functionCallCancel context.CancelFunc
+	functionCallDone   chan struct{}
+	functionCallErr    error // Store error from ExecuteContext
+	functionCallErrMu  sync.Mutex
 }
 
 func findExecutable(t *testing.T) string {
@@ -245,7 +262,7 @@ func validateExecutable(path string) error {
 func getDefaultRunMethod(t *testing.T) RunMethod {
 	envRunMethod := os.Getenv("CLI_E2E_DEFAULT_RUN_METHOD")
 	if envRunMethod == "" {
-		return RunMethodSubprocess
+		return RunMethodFunctionCall
 	}
 
 	// Validate the value
@@ -258,11 +275,21 @@ func getDefaultRunMethod(t *testing.T) RunMethod {
 	return runMethod
 }
 
+// resetCommandContext recursively sets the context on a command and all its children.
+// This is necessary when reusing a command that was previously executed with a cancelled context.
+func resetCommandContext(cmd *cobra.Command, ctx context.Context) {
+	cmd.SetContext(ctx)
+	for _, child := range cmd.Commands() {
+		resetCommandContext(child, ctx)
+	}
+}
+
 func (c *Command) Start(ctx context.Context) {
 	t := c.Test
 	runMethod := c.RunMethod
 	if runMethod == "" {
 		runMethod = getDefaultRunMethod(t)
+		c.RunMethod = runMethod
 	}
 
 	tempDir := t.TempDir()
@@ -272,6 +299,18 @@ func (c *Command) Start(ctx context.Context) {
 		slog.Info("Use a temp dir HOME", "dir", tempDir)
 		env["HOME"] = tempDir
 	}
+
+	c.stdoutFilePath = path.Join(tempDir, "stdout.log")
+	slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
+	stdoutFile, err := os.Create(c.stdoutFilePath)
+	require.NoError(t, err)
+	c.stdoutFile = stdoutFile
+
+	c.stderrFilePath = path.Join(tempDir, "stderr.log")
+	slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
+	stderrFile, err := os.Create(c.stderrFilePath)
+	require.NoError(t, err)
+	c.stderrFile = stderrFile
 
 	switch runMethod {
 	case RunMethodSubprocess:
@@ -287,30 +326,39 @@ func (c *Command) Start(ctx context.Context) {
 			c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
 
-		c.stdoutFilePath = path.Join(tempDir, "stdout.log")
-		slog.Info("Writing stdout to temp file", "file", c.stdoutFilePath)
-		stdoutFile, err := os.Create(c.stdoutFilePath)
-		require.NoError(t, err)
-		c.stdoutFile = stdoutFile
-		c.cmd.Stdout = stdoutFile
+		c.cmd.Stdout = c.stdoutFile
+		c.cmd.Stderr = c.stderrFile
 
-		c.stderrFilePath = path.Join(tempDir, "stderr.log")
-		slog.Info("Writing stderr to temp file", "file", c.stderrFilePath)
-		stderrFile, err := os.Create(c.stderrFilePath)
-		require.NoError(t, err)
-		c.stderrFile = stderrFile
-		c.cmd.Stderr = stderrFile
-
-		err = c.cmd.Start()
+		err := c.cmd.Start()
 		go func() {
 			err := c.cmd.Wait()
 			if err != nil {
-				slog.Error("Failed to wait for cmd", "error", err)
+				// Don't log "signal: killed" errors as they're expected when processes are terminated
+				if err.Error() != "signal: killed" {
+					slog.Error("Failed to wait for cmd", "error", err)
+				}
 			}
 		}()
 		require.NoError(t, err)
 	case RunMethodFunctionCall:
 		slog.Info("Running command with args by making function call", "args", c.Args)
+
+		// Create a cancellable context for tracking function call execution
+		c.functionCallCtx, c.functionCallCancel = context.WithCancel(ctx)
+		c.functionCallDone = make(chan struct{})
+
+		// Recursively reset the root cmd and its children to use the new ctx
+		// because in the last execution of the root cmd, the ctx was cancelled and it's
+		// already assigned to the children commands.
+		resetCommandContext(cmd.RootCmd, c.functionCallCtx)
+
+		// Set RootCmd output to files
+		cmd.RootCmd.SetOut(c.stdoutFile)
+		cmd.RootCmd.SetErr(c.stderrFile)
+
+		// Update log.Logger to use the testing stderr before executing
+		log.Logger = log.Output(cmd.GetLoggerConfig(c.stderrFile))
+
 		os.Args = make([]string, 0, len(c.Args)+1)
 		os.Args = append(os.Args, "infisical")
 		os.Args = append(os.Args, c.Args...)
@@ -318,7 +366,12 @@ func (c *Command) Start(ctx context.Context) {
 			t.Setenv(k, v)
 		}
 		go func() {
-			if err := cmd.ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			defer close(c.functionCallDone)
+			err := cmd.RootCmd.ExecuteContext(c.functionCallCtx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				c.functionCallErrMu.Lock()
+				c.functionCallErr = err
+				c.functionCallErrMu.Unlock()
 				t.Error(err)
 			}
 		}()
@@ -329,6 +382,22 @@ func (c *Command) Stop() {
 	if c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil {
 		_ = c.cmd.Process.Kill()
 	}
+
+	// Reset logger and RootCmd outputs to safe writers before closing files
+	// This prevents "file already closed" errors when the logger tries to write
+	// after the files are closed
+	if c.RunMethod == RunMethodFunctionCall {
+		// Cancel the context to signal the command to stop
+		if c.functionCallCancel != nil {
+			c.functionCallCancel()
+		}
+		// Reset logger to use os.Stderr before closing the file
+		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
+		// Reset RootCmd outputs to default
+		cmd.RootCmd.SetOut(os.Stdout)
+		cmd.RootCmd.SetErr(os.Stderr)
+	}
+
 	if c.stdoutFile != nil {
 		_ = c.stdoutFile.Close()
 	}
@@ -341,8 +410,59 @@ func (c *Command) Cmd() *exec.Cmd {
 	return c.cmd
 }
 
+// ExitCode returns the exit code of the command.
+// For subprocess mode: returns the process exit code (0 for success, non-zero for failure).
+// For function call mode: returns 0 if no error occurred, 1 if an error occurred.
+// Returns -1 if the command is still running or if the exit code cannot be determined.
+func (c *Command) ExitCode() int {
+	switch c.RunMethod {
+	case RunMethodSubprocess:
+		if c.cmd == nil || c.cmd.ProcessState == nil {
+			return -1 // Still running or not started
+		}
+		return c.cmd.ProcessState.ExitCode()
+	case RunMethodFunctionCall:
+		// Check if still running
+		if c.IsRunning() {
+			return -1 // Still running
+		}
+		// Check if there was an error
+		c.functionCallErrMu.Lock()
+		defer c.functionCallErrMu.Unlock()
+		if c.functionCallErr != nil {
+			return 1 // Error occurred
+		}
+		return 0 // Success
+	default:
+		return -1
+	}
+}
+
 func (c *Command) IsRunning() bool {
-	return c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil
+	switch c.RunMethod {
+	case RunMethodSubprocess:
+		return c.cmd != nil && c.cmd.Process != nil && c.cmd.ProcessState == nil
+	case RunMethodFunctionCall:
+		// Check if the function call is still running by checking:
+		// 1. Context is not cancelled
+		// 2. Done channel is not closed (meaning goroutine hasn't finished)
+		if c.functionCallCtx == nil || c.functionCallDone == nil {
+			return false
+		}
+		select {
+		case <-c.functionCallCtx.Done():
+			// Context was cancelled, command is stopping or stopped
+			return false
+		case <-c.functionCallDone:
+			// Goroutine has completed
+			return false
+		default:
+			// Context is not done and goroutine hasn't signaled completion
+			return true
+		}
+	default:
+		panic(fmt.Errorf("unknown RunMethod value: %s", c.RunMethod))
+	}
 }
 
 func (c *Command) DumpOutput() {
@@ -366,4 +486,117 @@ func (c *Command) Stderr() string {
 	b, err := io.ReadAll(c.stderrFile)
 	require.NoError(c.Test, err)
 	return string(b)
+}
+
+// ConditionResult represents the result of a condition check in EventuallyWithCommandRunning.
+// This is used as input to the condition function and includes ConditionWait for internal use.
+type ConditionResult int
+
+const (
+	ConditionWait       ConditionResult = iota // Continue waiting for the condition
+	ConditionSuccess                           // Condition is met, exit successfully
+	ConditionBreakEarly                        // Break the loop early (e.g., command exited)
+)
+
+// WaitResult represents the final result returned by WaitFor.
+// This enum only includes values that can be returned to the caller.
+type WaitResult int
+
+const (
+	WaitSuccess    WaitResult = iota // Condition was met successfully
+	WaitCmdExit                      // Command exited unexpectedly
+	WaitBreakEarly                   // Condition function returned ConditionBreakEarly
+)
+
+// WaitForOptions contains options for WaitFor.
+type WaitForOptions struct {
+	EnsureCmdRunning *Command // If provided, ensures the command is still running during the wait
+	Condition        func() ConditionResult
+	Timeout          time.Duration // Default: 120 seconds
+	Interval         time.Duration // Default: 5 seconds
+}
+
+// WaitFor waits for a condition while optionally ensuring the command is still running.
+// If EnsureCmdRunning is provided, the function will check that the command is still running
+// on each iteration and return WaitCmdExit if it exits unexpectedly.
+// The condition function should return a ConditionResult:
+//   - ConditionWait: keep waiting for the condition
+//   - ConditionSuccess: condition is met, exit successfully
+//   - ConditionBreakEarly: break the loop early (e.g., command exited)
+//
+// Returns a WaitResult indicating how the wait completed:
+//   - WaitSuccess: condition was met successfully
+//   - WaitCmdExit: command exited unexpectedly (only if EnsureCmdRunning is provided)
+//   - WaitBreakEarly: condition function returned ConditionBreakEarly
+func WaitFor(t *testing.T, opts WaitForOptions) WaitResult {
+	// Set defaults
+	if opts.Timeout == 0 {
+		opts.Timeout = 120 * time.Second
+	}
+	if opts.Interval == 0 {
+		opts.Interval = 5 * time.Second
+	}
+
+	var result WaitResult
+	require.Eventually(t, func() bool {
+		// Ensure the process is still running if EnsureCmdRunning is provided
+		if opts.EnsureCmdRunning != nil && !opts.EnsureCmdRunning.IsRunning() {
+			exitCode := opts.EnsureCmdRunning.ExitCode()
+			slog.Error("Command is not running as expected", "exit_code", exitCode)
+			opts.EnsureCmdRunning.DumpOutput()
+			// Command exited unexpectedly
+			result = WaitCmdExit
+			return true
+		}
+
+		conditionResult := opts.Condition()
+		switch conditionResult {
+		case ConditionSuccess:
+			result = WaitSuccess
+			return true
+		case ConditionBreakEarly:
+			result = WaitBreakEarly
+			return true
+		case ConditionWait:
+			return false
+		default:
+			return false
+		}
+	}, opts.Timeout, opts.Interval)
+	return result
+}
+
+// WaitForStderrOptions contains options for WaitForStderr.
+type WaitForStderrOptions struct {
+	EnsureCmdRunning *Command      // The command to monitor (required)
+	ExpectedString   string        // The string to look for in stderr (required)
+	Timeout          time.Duration // Default: 120 seconds
+	Interval         time.Duration // Default: 5 seconds
+}
+
+// WaitForStderr waits for the command to output a specific string in stderr
+// while ensuring the command is still running. Returns a WaitResult indicating how the wait completed.
+func WaitForStderr(t *testing.T, opts WaitForStderrOptions) WaitResult {
+	waitOpts := WaitForOptions{
+		EnsureCmdRunning: opts.EnsureCmdRunning,
+		Timeout:          opts.Timeout,
+		Interval:         opts.Interval,
+		Condition: func() ConditionResult {
+			stderr := opts.EnsureCmdRunning.Stderr()
+			if strings.Contains(stderr, opts.ExpectedString) {
+				slog.Info("Confirmed stderr contains expected string", "expected", opts.ExpectedString)
+				return ConditionSuccess
+			}
+			return ConditionWait
+		},
+	}
+	return WaitFor(t, waitOpts)
+}
+
+func RandomSlug(numWords int) string {
+	var words []string
+	for i := 0; i < numWords; i++ {
+		words = append(words, strings.ToLower(faker.Word()))
+	}
+	return strings.Join(words, "-")
 }
