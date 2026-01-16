@@ -48,13 +48,16 @@ func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithE
 
 func (s *InfisicalService) Up(t *testing.T, ctx context.Context) *InfisicalService {
 	t.Cleanup(func() {
-		err := s.Compose().Down(
-			ctx,
-			dockercompose.RemoveOrphans(true),
-			dockercompose.RemoveVolumes(true),
-		)
-		if err != nil {
-			slog.Error("Failed to clean up Infisical service", "err", err)
+		// Only clean up if CLI_E2E_REMOVE_COMPOSE is set to "1"
+		if os.Getenv("CLI_E2E_REMOVE_COMPOSE") == "1" {
+			err := s.Compose().Down(
+				ctx,
+				dockercompose.RemoveOrphans(true),
+				dockercompose.RemoveVolumes(true),
+			)
+			if err != nil {
+				slog.Error("Failed to clean up Infisical service", "err", err)
+			}
 		}
 	})
 

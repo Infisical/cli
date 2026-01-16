@@ -109,6 +109,8 @@ The following environment variables can be set either in your `.env` file or as 
 
 - **`CLI_E2E_DISABLE_COMPOSE_CACHE`**: Set to `"1"` to disable the compose container cache. When enabled (default), tests reuse existing containers to speed up development.
 
+- **`CLI_E2E_REMOVE_COMPOSE`**: Set to `"1"` to enable cleanup of compose containers after tests complete. When not set (default), containers will remain running after tests finish, which is useful for debugging. Our cache system will also reuse the existing container if matches, to speed up the development cycle. This controls whether the `t.Cleanup()` function removes the compose stack.
+
 - **`TESTCONTAINERS_RYUK_DISABLED`**: Set to `"true"` to disable Ryuk container cleanup. Useful for debugging backend issues as containers will remain running after tests complete.
 
 For detailed descriptions and examples, see the `.env.sample` file.
