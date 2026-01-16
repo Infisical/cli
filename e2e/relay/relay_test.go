@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/go-faker/faker/v4"
@@ -54,38 +53,47 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	defer cmd.Stop()
 
-	result := EventuallyWithCommandRunningExpectStderr(t, &cmd, "Relay server started successfully", 120*time.Second, 5*time.Second)
+	result := WaitForStderr(t, WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "Relay server started successfully",
+	})
 	require.Equal(t, WaitSuccess, result)
 
 	detectHeartbeat := false
-	result = EventuallyWithCommandRunning(t, &cmd, func() ConditionResult {
-		resp, err := c.GetRelaysWithResponse(ctx)
-		if err != nil {
-			return ConditionWait
-		}
-		if resp.StatusCode() != http.StatusOK {
-			return ConditionWait
-		}
-		for _, relay := range *resp.JSON200 {
-			slog.Info(
-				"Relay info",
-				"id", relay.Id,
-				"name", relay.Name,
-				"host", relay.Host,
-				"heartbeat", relay.Heartbeat,
-			)
-			if relay.Name == relayName && relay.Heartbeat != nil {
-				slog.Info("Confirmed relay heartbeat")
-				detectHeartbeat = true
-				return ConditionSuccess
+	result = WaitFor(t, WaitForOptions{
+		EnsureCmdRunning: &cmd,
+		Condition: func() ConditionResult {
+			resp, err := c.GetRelaysWithResponse(ctx)
+			if err != nil {
+				return ConditionWait
 			}
-		}
-		return ConditionWait
-	}, 120*time.Second, 5*time.Second)
+			if resp.StatusCode() != http.StatusOK {
+				return ConditionWait
+			}
+			for _, relay := range *resp.JSON200 {
+				slog.Info(
+					"Relay info",
+					"id", relay.Id,
+					"name", relay.Name,
+					"host", relay.Host,
+					"heartbeat", relay.Heartbeat,
+				)
+				if relay.Name == relayName && relay.Heartbeat != nil {
+					slog.Info("Confirmed relay heartbeat")
+					detectHeartbeat = true
+					return ConditionSuccess
+				}
+			}
+			return ConditionWait
+		},
+	})
 	require.Equal(t, WaitSuccess, result)
 
 	assert.True(t, detectHeartbeat)
-	result = EventuallyWithCommandRunningExpectStderr(t, &cmd, "Relay is reachable by Infisical", 120*time.Second, 5*time.Second)
+	result = WaitForStderr(t, WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "Relay is reachable by Infisical",
+	})
 	assert.Equal(t, WaitSuccess, result)
 }
 
@@ -119,30 +127,33 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	defer relayCmd.Stop()
 
 	detectHeartbeat := false
-	result := EventuallyWithCommandRunning(t, &relayCmd, func() ConditionResult {
-		resp, err := c.GetRelaysWithResponse(ctx)
-		if err != nil {
-			return ConditionWait
-		}
-		if resp.StatusCode() != http.StatusOK {
-			return ConditionWait
-		}
-		for _, relay := range *resp.JSON200 {
-			slog.Info(
-				"Relay info",
-				"id", relay.Id,
-				"name", relay.Name,
-				"host", relay.Host,
-				"heartbeat", relay.Heartbeat,
-			)
-			if relay.Name == relayName && relay.Heartbeat != nil {
-				slog.Info("Confirmed relay heartbeat")
-				detectHeartbeat = true
-				return ConditionSuccess
+	result := WaitFor(t, WaitForOptions{
+		EnsureCmdRunning: &relayCmd,
+		Condition: func() ConditionResult {
+			resp, err := c.GetRelaysWithResponse(ctx)
+			if err != nil {
+				return ConditionWait
 			}
-		}
-		return ConditionWait
-	}, 120*time.Second, 5*time.Second)
+			if resp.StatusCode() != http.StatusOK {
+				return ConditionWait
+			}
+			for _, relay := range *resp.JSON200 {
+				slog.Info(
+					"Relay info",
+					"id", relay.Id,
+					"name", relay.Name,
+					"host", relay.Host,
+					"heartbeat", relay.Heartbeat,
+				)
+				if relay.Name == relayName && relay.Heartbeat != nil {
+					slog.Info("Confirmed relay heartbeat")
+					detectHeartbeat = true
+					return ConditionSuccess
+				}
+			}
+			return ConditionWait
+		},
+	})
 	require.Equal(t, WaitSuccess, result)
 	assert.True(t, detectHeartbeat)
 
@@ -164,9 +175,15 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	gatewayCmd.Start(ctx)
 	defer gatewayCmd.Stop()
 
-	result = EventuallyWithCommandRunningExpectStderr(t, &gatewayCmd, "Successfully registered gateway and received certificates", 120*time.Second, 5*time.Second)
+	result = WaitForStderr(t, WaitForStderrOptions{
+		EnsureCmdRunning: &gatewayCmd,
+		ExpectedString:   "Successfully registered gateway and received certificates",
+	})
 	require.Equal(t, WaitSuccess, result)
 
-	result = EventuallyWithCommandRunningExpectStderr(t, &gatewayCmd, "Gateway is reachable by Infisical", 120*time.Second, 5*time.Second)
+	result = WaitForStderr(t, WaitForStderrOptions{
+		EnsureCmdRunning: &gatewayCmd,
+		ExpectedString:   "Gateway is reachable by Infisical",
+	})
 	assert.Equal(t, WaitSuccess, result)
 }

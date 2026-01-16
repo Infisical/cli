@@ -495,7 +495,7 @@ const (
 	ConditionBreakEarly                        // Break the loop early (e.g., command exited)
 )
 
-// WaitResult represents the final result returned by EventuallyWithCommandRunning.
+// WaitResult represents the final result returned by WaitFor.
 // This enum only includes values that can be returned to the caller.
 type WaitResult int
 
@@ -505,7 +505,17 @@ const (
 	WaitBreakEarly                   // Condition function returned ConditionBreakEarly
 )
 
-// EventuallyWithCommandRunning ensures the command is still running while executing the condition function.
+// WaitForOptions contains options for WaitFor.
+type WaitForOptions struct {
+	EnsureCmdRunning *Command // If provided, ensures the command is still running during the wait
+	Condition        func() ConditionResult
+	Timeout          time.Duration // Default: 120 seconds
+	Interval         time.Duration // Default: 5 seconds
+}
+
+// WaitFor waits for a condition while optionally ensuring the command is still running.
+// If EnsureCmdRunning is provided, the function will check that the command is still running
+// on each iteration and return WaitCmdExit if it exits unexpectedly.
 // The condition function should return a ConditionResult:
 //   - ConditionWait: keep waiting for the condition
 //   - ConditionSuccess: condition is met, exit successfully
@@ -513,22 +523,30 @@ const (
 //
 // Returns a WaitResult indicating how the wait completed:
 //   - WaitSuccess: condition was met successfully
-//   - WaitCmdExit: command exited unexpectedly
+//   - WaitCmdExit: command exited unexpectedly (only if EnsureCmdRunning is provided)
 //   - WaitBreakEarly: condition function returned ConditionBreakEarly
-func EventuallyWithCommandRunning(t *testing.T, cmd *Command, condition func() ConditionResult, timeout time.Duration, interval time.Duration) WaitResult {
+func WaitFor(t *testing.T, opts WaitForOptions) WaitResult {
+	// Set defaults
+	if opts.Timeout == 0 {
+		opts.Timeout = 120 * time.Second
+	}
+	if opts.Interval == 0 {
+		opts.Interval = 5 * time.Second
+	}
+
 	var result WaitResult
 	require.Eventually(t, func() bool {
-		// Ensure the process is still running
-		if !cmd.IsRunning() {
-			exitCode := cmd.ExitCode()
+		// Ensure the process is still running if EnsureCmdRunning is provided
+		if opts.EnsureCmdRunning != nil && !opts.EnsureCmdRunning.IsRunning() {
+			exitCode := opts.EnsureCmdRunning.ExitCode()
 			slog.Error("Command is not running as expected", "exit_code", exitCode)
-			cmd.DumpOutput()
+			opts.EnsureCmdRunning.DumpOutput()
 			// Command exited unexpectedly
 			result = WaitCmdExit
 			return true
 		}
 
-		conditionResult := condition()
+		conditionResult := opts.Condition()
 		switch conditionResult {
 		case ConditionSuccess:
 			result = WaitSuccess
@@ -541,19 +559,33 @@ func EventuallyWithCommandRunning(t *testing.T, cmd *Command, condition func() C
 		default:
 			return false
 		}
-	}, timeout, interval)
+	}, opts.Timeout, opts.Interval)
 	return result
 }
 
-// EventuallyWithCommandRunningExpectStderr waits for the command to output a specific string in stderr
+// WaitForStderrOptions contains options for WaitForStderr.
+type WaitForStderrOptions struct {
+	EnsureCmdRunning *Command      // The command to monitor (required)
+	ExpectedString   string         // The string to look for in stderr (required)
+	Timeout          time.Duration // Default: 120 seconds
+	Interval         time.Duration // Default: 5 seconds
+}
+
+// WaitForStderr waits for the command to output a specific string in stderr
 // while ensuring the command is still running. Returns a WaitResult indicating how the wait completed.
-func EventuallyWithCommandRunningExpectStderr(t *testing.T, cmd *Command, expectedString string, timeout time.Duration, interval time.Duration) WaitResult {
-	return EventuallyWithCommandRunning(t, cmd, func() ConditionResult {
-		stderr := cmd.Stderr()
-		if strings.Contains(stderr, expectedString) {
-			slog.Info("Confirmed stderr contains expected string", "expected", expectedString)
-			return ConditionSuccess
-		}
-		return ConditionWait
-	}, timeout, interval)
+func WaitForStderr(t *testing.T, opts WaitForStderrOptions) WaitResult {
+	waitOpts := WaitForOptions{
+		EnsureCmdRunning: opts.EnsureCmdRunning,
+		Timeout:          opts.Timeout,
+		Interval:         opts.Interval,
+		Condition: func() ConditionResult {
+			stderr := opts.EnsureCmdRunning.Stderr()
+			if strings.Contains(stderr, opts.ExpectedString) {
+				slog.Info("Confirmed stderr contains expected string", "expected", opts.ExpectedString)
+				return ConditionSuccess
+			}
+			return ConditionWait
+		},
+	}
+	return WaitFor(t, waitOpts)
 }
