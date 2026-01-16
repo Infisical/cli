@@ -259,7 +259,7 @@ func validateExecutable(path string) error {
 func getDefaultRunMethod(t *testing.T) RunMethod {
 	envRunMethod := os.Getenv("CLI_E2E_DEFAULT_RUN_METHOD")
 	if envRunMethod == "" {
-		return RunMethodSubprocess
+		return RunMethodFunctionCall
 	}
 
 	// Validate the value

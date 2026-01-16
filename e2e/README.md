@@ -11,23 +11,24 @@ Please feel free to reach out to @fangpenlin on the Slack channel if you encount
 
 The main subject of testing is a CLI executable program, i.e., the `infisical` command.
 Currently we support two approaches to test the CLI.
-The default run method is `subprocess`.
+The default run method is `functionCall`.
 You can set the `CLI_E2E_DEFAULT_RUN_METHOD` environment variable to change the default run method, either in your `.env` file or as an environment variable:
 
 ```bash
 # In .env file:
-CLI_E2E_DEFAULT_RUN_METHOD=functionCall
+CLI_E2E_DEFAULT_RUN_METHOD=subprocess
 
 # Or as environment variable:
-export CLI_E2E_DEFAULT_RUN_METHOD=functionCall
+export CLI_E2E_DEFAULT_RUN_METHOD=subprocess
 ```
 
 ### The `subprocess` run method
 
 The most straightforward way to run a CLI command and test it is to start a new subprocess with the command executable, control the input by environment vars, stdin, args and see how it connects to the server and what it outputs (stdout and stderr).
 The benefit of this approach is that it simulates what a user really does and we can collect the stdout and stderr easily.
+It also provides better isolation between test cases with less side effects from previous test cases.
+For example, if a previous test case forgot to reset a global state, it won't affect subsequent test cases since each command runs in a fresh process.
 The drawback of this approach is that attaching a debugger to the CLI command requires some extra work (like finding the PID and attaching to it by using the PID from the debugger).
-This is the default run method if not specified.
 
 When using this run method, you need to make sure the executable is at the default location `./infisical-merge`.
 Otherwise, you can also specify the path to the executable by setting the `INFISICAL_CLI_EXECUTABLE` environment variable, either in your `.env` file or as an environment variable:
@@ -49,11 +50,10 @@ go build .
 ### The `functionCall` run method
 
 The function call method calls the `main` command function directly from the e2e test case.
-The benefit is that you can attach a debugger directly to the CLI process without extra effort.
-The drawback is that currently we cannot collect stdout and stderr.
-Some extra efforts might be needed to update the CLI code to abstract the stdout and stderr output from logs to make it possible.
-In the meantime, since this is not available, we didn't set it as the default value.
+The benefit is that you can attach a debugger directly to the CLI process without extra effort, and we can collect stdout and stderr just like with the subprocess method.
 With this run method, since we are linking the e2e test build with the CLI as a library directly, there's no need to build the executable separately.
+This is the default run method if not specified.
+Note that since all commands run in the same process, if state wasn't cleared correctly from a previous command call, it may affect the next test case. Make sure to properly reset any global state between test cases when using this method.
 
 ## Environment Variables Configuration
 
@@ -75,7 +75,7 @@ E2E tests support loading environment variables from a `.env` file for easier co
    INFISICAL_BACKEND_DIR=/path/to/infisical/backend
 
    # Optional: Other configuration variables
-   # CLI_E2E_DEFAULT_RUN_METHOD=subprocess
+   # CLI_E2E_DEFAULT_RUN_METHOD=functionCall
    # INFISICAL_CLI_EXECUTABLE=./infisical-merge
    ```
 
@@ -104,8 +104,8 @@ The following environment variables can be set either in your `.env` file or as 
 
 - **`CLI_E2E_DEFAULT_RUN_METHOD`**: Default run method for CLI commands in tests. Valid values:
 
-  - `"subprocess"` (default): Runs CLI as a separate process - better for debugging, can collect stdout/stderr
-  - `"functionCall"`: Calls CLI functions directly - better for IDE debugging
+  - `"functionCall"` (default): Calls CLI functions directly - better for IDE debugging, can collect stdout/stderr
+  - `"subprocess"`: Runs CLI as a separate process - simulates real user interaction, can collect stdout/stderr
 
 - **`CLI_E2E_DISABLE_COMPOSE_CACHE`**: Set to `"1"` to disable the compose container cache. When enabled (default), tests reuse existing containers to speed up development.
 
@@ -187,7 +187,7 @@ less /var/folders/wc/g97rf4092_z9wqbp93djvnt00000gn/T/TestRelay_RegistersARelay2
 
 Then you should be able to find out why it fails.
 You can also switch the call method to `functionCall` and set up a debugger to trace into the CLI program to find out why it fails.
-If you run the command test with `functionCall`, it will not write the stdout / stderr to a file, but instead, it should print it to the console where you run the tests.
+With the `functionCall` method, the stdout and stderr logs are also written to temp files, just like with the `subprocess` method, so you can inspect them in the same way.
 
 ## Troubleshooting the failing tests due to Infisical backend API errors
 
@@ -248,6 +248,17 @@ The client code is generated from the OpenAPI specification using `go:generate` 
 ### How it works
 
 1. **Download the OpenAPI specification**: While the Infisical backend server is running (typically on `http://localhost:4000`), download the OpenAPI JSON specification:
+
+   You can use the Makefile target to fetch and format the API docs:
+
+   ```bash
+   cd e2e
+   make api.json
+   ```
+
+   This will fetch the OpenAPI spec from `http://localhost:4000/api/docs/json`, format it with `jq`, and save it to `api.json`. If the request fails, the existing `api.json` file will not be overwritten and error messages will be displayed.
+
+   Alternatively, you can use curl directly:
 
    ```bash
    curl http://localhost:4000/api/docs/json -o api.json
