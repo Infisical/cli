@@ -54,25 +54,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	defer cmd.Stop()
 
-	cmdExit := false
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		// Ensure the process is still running
-		if !cmd.IsRunning() {
-			exitCode := cmd.ExitCode()
-			slog.Error("Command is not running as expected", "exit_code", exitCode)
-			cmd.DumpOutput()
-			// Somehow the cmd stops early, let's exit the loop early
-			cmdExit = true
-			return
-		}
-
-		stderr := cmd.Stderr()
-		assert.Containsf(
-			collect, stderr,
-			"Relay server started successfully",
-			"The cmd is not outputting \"Relay server started successfully\" in the Stderr:\n%s", stderr,
-		)
-	}, 120*time.Second, 5*time.Second)
+	cmdExit := EventuallyExpectStderr(t, &cmd, "Relay server started successfully", 120*time.Second, 5*time.Second)
 	require.False(t, cmdExit)
 
 	detectHeartbeat := false
@@ -111,12 +93,8 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	}, 120*time.Second, 5*time.Second)
 
 	assert.True(t, detectHeartbeat)
-	stderr := cmd.Stderr()
-	assert.Containsf(
-		t, stderr,
-		"Relay is reachable by Infisical",
-		"The cmd is not outputting \"Relay is reachable by Infisical\" in the Stderr:\n%s", stderr,
-	)
+	cmdExit = EventuallyExpectStderr(t, &cmd, "Relay is reachable by Infisical", 120*time.Second, 5*time.Second)
+	assert.False(t, cmdExit)
 }
 
 func TestRelay_RegistersAGateway(t *testing.T) {
@@ -201,51 +179,9 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	gatewayCmd.Start(ctx)
 	defer gatewayCmd.Stop()
 
-	gatewayCmdExit := false
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		// Ensure the process is still running
-		if !gatewayCmd.IsRunning() {
-			exitCode := gatewayCmd.ExitCode()
-			slog.Error("Command is not running as expected", "exit_code", exitCode)
-			gatewayCmd.DumpOutput()
-			// Somehow the cmd stops early, let's exit the loop early
-			gatewayCmdExit = true
-			return
-		}
-
-		stderr := gatewayCmd.Stderr()
-		assert.Containsf(
-			collect, stderr,
-			"Successfully registered gateway and received certificates",
-			"The cmd is not outputting \"Successfully registered gateway\" in the Stderr:\n%s", stderr,
-		)
-	}, 120*time.Second, 5*time.Second)
+	gatewayCmdExit := EventuallyExpectStderr(t, &gatewayCmd, "Successfully registered gateway and received certificates", 120*time.Second, 5*time.Second)
 	require.False(t, gatewayCmdExit)
 
-	detectGatewayReachable := false
-	require.Eventually(t, func() bool {
-		// Ensure the process is still running
-		if !gatewayCmd.IsRunning() {
-			exitCode := gatewayCmd.ExitCode()
-			slog.Error("Command is not running as expected", "exit_code", exitCode)
-			gatewayCmd.DumpOutput()
-			// Somehow the gatewayCmd stops early, let's exit the loop early
-			return true
-		}
-
-		stderr := gatewayCmd.Stderr()
-		if strings.Contains(stderr, "Gateway is reachable by Infisical") {
-			slog.Info("Confirmed gateway is reachable")
-			detectGatewayReachable = true
-			return true
-		}
-		return false
-	}, 120*time.Second, 5*time.Second)
-	assert.True(t, detectGatewayReachable)
-	stderr := gatewayCmd.Stderr()
-	assert.Containsf(
-		t, stderr,
-		"Gateway is reachable by Infisical",
-		"The cmd is not outputting \"Gateway is reachable by Infisical\" in the Stderr:\n%s", stderr,
-	)
+	gatewayCmdExit = EventuallyExpectStderr(t, &gatewayCmd, "Gateway is reachable by Infisical", 120*time.Second, 5*time.Second)
+	assert.False(t, gatewayCmdExit)
 }

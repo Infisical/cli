@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/joho/godotenv/autoload"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	dockercompose "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -481,4 +484,34 @@ func (c *Command) Stderr() string {
 	b, err := io.ReadAll(c.stderrFile)
 	require.NoError(c.Test, err)
 	return string(b)
+}
+
+// EventuallyExpectStderr waits for the command to output a specific string in stderr
+// while ensuring the command is still running. Returns true if the command exited early, false otherwise.
+func EventuallyExpectStderr(t *testing.T, cmd *Command, expectedString string, timeout time.Duration, interval time.Duration) bool {
+	cmdExit := false
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		// Ensure the process is still running
+		if !cmd.IsRunning() {
+			exitCode := cmd.ExitCode()
+			slog.Error("Command is not running as expected", "exit_code", exitCode)
+			cmd.DumpOutput()
+			// Somehow the cmd stops early, let's exit the loop early
+			cmdExit = true
+			// Fail the assertion to stop retrying
+			assert.Fail(collect, "Command exited early")
+			return
+		}
+
+		stderr := cmd.Stderr()
+		if strings.Contains(stderr, expectedString) {
+			slog.Info("Confirmed stderr contains expected string", "expected", expectedString)
+		}
+		assert.Containsf(
+			collect, stderr,
+			expectedString,
+			"The cmd is not outputting %q in the Stderr:\n%s", expectedString, stderr,
+		)
+	}, timeout, interval)
+	return cmdExit
 }
