@@ -54,7 +54,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	defer cmd.Stop()
 
-	result := EventuallyExpectStderr(t, &cmd, "Relay server started successfully", 120*time.Second, 5*time.Second)
+	result := EventuallyWithCommandRunningExpectStderr(t, &cmd, "Relay server started successfully", 120*time.Second, 5*time.Second)
 	require.Equal(t, WaitSuccess, result)
 
 	detectHeartbeat := false
@@ -85,7 +85,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	require.Equal(t, WaitSuccess, result)
 
 	assert.True(t, detectHeartbeat)
-	result = EventuallyExpectStderr(t, &cmd, "Relay is reachable by Infisical", 120*time.Second, 5*time.Second)
+	result = EventuallyWithCommandRunningExpectStderr(t, &cmd, "Relay is reachable by Infisical", 120*time.Second, 5*time.Second)
 	assert.Equal(t, WaitSuccess, result)
 }
 
@@ -164,9 +164,9 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	gatewayCmd.Start(ctx)
 	defer gatewayCmd.Stop()
 
-	result = EventuallyExpectStderr(t, &gatewayCmd, "Successfully registered gateway and received certificates", 120*time.Second, 5*time.Second)
+	result = EventuallyWithCommandRunningExpectStderr(t, &gatewayCmd, "Successfully registered gateway and received certificates", 120*time.Second, 5*time.Second)
 	require.Equal(t, WaitSuccess, result)
 
-	result = EventuallyExpectStderr(t, &gatewayCmd, "Gateway is reachable by Infisical", 120*time.Second, 5*time.Second)
+	result = EventuallyWithCommandRunningExpectStderr(t, &gatewayCmd, "Gateway is reachable by Infisical", 120*time.Second, 5*time.Second)
 	assert.Equal(t, WaitSuccess, result)
 }

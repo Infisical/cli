@@ -545,9 +545,9 @@ func EventuallyWithCommandRunning(t *testing.T, cmd *Command, condition func() C
 	return result
 }
 
-// EventuallyExpectStderr waits for the command to output a specific string in stderr
+// EventuallyWithCommandRunningExpectStderr waits for the command to output a specific string in stderr
 // while ensuring the command is still running. Returns a WaitResult indicating how the wait completed.
-func EventuallyExpectStderr(t *testing.T, cmd *Command, expectedString string, timeout time.Duration, interval time.Duration) WaitResult {
+func EventuallyWithCommandRunningExpectStderr(t *testing.T, cmd *Command, expectedString string, timeout time.Duration, interval time.Duration) WaitResult {
 	return EventuallyWithCommandRunning(t, cmd, func() ConditionResult {
 		stderr := cmd.Stderr()
 		if strings.Contains(stderr, expectedString) {
