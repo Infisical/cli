@@ -198,7 +198,7 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 
 func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
 	infisical := NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
@@ -222,7 +222,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 		},
 	}
 	relayCmd.Start(ctx)
-	defer relayCmd.Stop()
+	t.Cleanup(relayCmd.Stop)
 	result := WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
 		ExpectedString:   "Relay server started successfully",
@@ -245,7 +245,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 		},
 	}
 	gatewayCmd.Start(ctx)
-	defer gatewayCmd.Stop()
+	t.Cleanup(gatewayCmd.Stop)
 	result = WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &gatewayCmd,
 		ExpectedString:   "Gateway is reachable by Infisical",
@@ -287,7 +287,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	projectId := projectResp.JSON200.Project.Id
 
 	t.Run("kubernetes", func(t *testing.T) {
-		//t.Parallel()
+		t.Parallel()
 		ctx := t.Context()
 		// Create a mock HTTP server running on a random port in a goroutine
 		// The HTTP server implements a mock /version endpoint that returns dummy data
@@ -359,7 +359,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	})
 
 	t.Run("redis", func(t *testing.T) {
-		//t.Parallel()
+		t.Parallel()
 		ctx := t.Context()
 		// Start a Redis container using testcontainers Redis module
 		redisContainer, err := tcredis.Run(ctx, "redis:8.4.0")
