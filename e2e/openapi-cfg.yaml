@@ -15,5 +15,6 @@ output-options:
     - attachTokenAuth
     - createTokenAuthToken
     - getRelays
-    - getGateways
+    - listGateways
     - createProject
+    - createKubernetesPamResource

@@ -22,6 +22,11 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
+const (
+	ServiceAccountToken CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "service-account-token"
+)
+
 // Defines values for CreateProjectJSONBodyType.
 const (
 	Ai             CreateProjectJSONBodyType = "ai"
@@ -91,6 +96,33 @@ type CreateMachineIdentityJSONBody struct {
 	Role *string `json:"role,omitempty"`
 }
 
+// CreateKubernetesPamResourceJSONBody defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+		Url                   string  `json:"url"`
+	} `json:"connectionDetails"`
+	GatewayId                  openapi_types.UUID                                              `json:"gatewayId"`
+	Name                       string                                                          `json:"name"`
+	ProjectId                  openapi_types.UUID                                              `json:"projectId"`
+	RotationAccountCredentials *CreateKubernetesPamResourceJSONBody_RotationAccountCredentials `json:"rotationAccountCredentials"`
+}
+
+// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 struct {
+	AuthMethod          CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod `json:"authMethod"`
+	ServiceAccountToken string                                                                   `json:"serviceAccountToken"`
+}
+
+// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod string
+
+// CreateKubernetesPamResourceJSONBody_RotationAccountCredentials defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBody_RotationAccountCredentials struct {
+	union json.RawMessage
+}
+
 // CreateProjectJSONBody defines parameters for CreateProject.
 type CreateProjectJSONBody struct {
 	HasDeleteProtection *bool   `json:"hasDeleteProtection,omitempty"`
@@ -134,6 +166,9 @@ type CreateTokenAuthTokenJSONRequestBody CreateTokenAuthTokenJSONBody
 
 // CreateMachineIdentityJSONRequestBody defines body for CreateMachineIdentity for application/json ContentType.
 type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
+
+// CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
+type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
 
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody CreateProjectJSONBody
@@ -236,6 +271,11 @@ type ClientInterface interface {
 	CreateMachineIdentityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateMachineIdentity(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateKubernetesPamResourceWithBody request with any body
+	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateProjectWithBody request with any body
 	CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -352,6 +392,30 @@ func (c *Client) CreateMachineIdentityWithBody(ctx context.Context, contentType 
 
 func (c *Client) CreateMachineIdentity(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateMachineIdentityRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateKubernetesPamResourceRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateKubernetesPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -635,6 +699,46 @@ func NewCreateMachineIdentityRequestWithBody(server string, contentType string, 
 	return req, nil
 }
 
+// NewCreateKubernetesPamResourceRequest calls the generic CreateKubernetesPamResource builder with application/json body
+func NewCreateKubernetesPamResourceRequest(server string, body CreateKubernetesPamResourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateKubernetesPamResourceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateKubernetesPamResourceRequestWithBody generates requests for CreateKubernetesPamResource with any type of body
+func NewCreateKubernetesPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/kubernetes")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreateProjectRequest calls the generic CreateProject builder with application/json body
 func NewCreateProjectRequest(server string, body CreateProjectJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -834,6 +938,11 @@ type ClientWithResponsesInterface interface {
 	CreateMachineIdentityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
 
 	CreateMachineIdentityWithResponse(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
+
+	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
+	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
+
+	CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
 	// CreateProjectWithBodyWithResponse request with any body
 	CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
@@ -1300,6 +1409,97 @@ func (r CreateMachineIdentityResponse) StatusCode() int {
 	return 0
 }
 
+type CreateKubernetesPamResourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Resource struct {
+			ConnectionDetails struct {
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				Url                   string  `json:"url"`
+			} `json:"connectionDetails"`
+			CreatedAt                  time.Time                                                            `json:"createdAt"`
+			EncryptedResourceMetadata  interface{}                                                          `json:"encryptedResourceMetadata"`
+			GatewayId                  *openapi_types.UUID                                                  `json:"gatewayId"`
+			Id                         openapi_types.UUID                                                   `json:"id"`
+			Name                       string                                                               `json:"name"`
+			ProjectId                  string                                                               `json:"projectId"`
+			ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
+			RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
+			UpdatedAt                  time.Time                                                            `json:"updatedAt"`
+		} `json:"resource"`
+	}
+	JSON400 *struct {
+		Details    interface{}                              `json:"details,omitempty"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                              `json:"details,omitempty"`
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                   `json:"error"`
+		Message    interface{}                              `json:"message,omitempty"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                   `json:"error"`
+		Message    string                                   `json:"message"`
+		ReqId      string                                   `json:"reqId"`
+		StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
+	}
+}
+type CreateKubernetesPamResource200ResourceResourceType string
+type CreateKubernetesPamResource200ResourceRotationAccountCredentials0 struct {
+	AuthMethod CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod `json:"authMethod"`
+}
+type CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod string
+type CreateKubernetesPamResource_200_Resource_RotationAccountCredentials struct {
+	union json.RawMessage
+}
+type CreateKubernetesPamResource400StatusCode float32
+type CreateKubernetesPamResource401StatusCode float32
+type CreateKubernetesPamResource403StatusCode float32
+type CreateKubernetesPamResource404StatusCode float32
+type CreateKubernetesPamResource422StatusCode float32
+type CreateKubernetesPamResource500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateKubernetesPamResourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateKubernetesPamResourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1692,6 +1892,23 @@ func (c *ClientWithResponses) CreateMachineIdentityWithResponse(ctx context.Cont
 		return nil, err
 	}
 	return ParseCreateMachineIdentityResponse(rsp)
+}
+
+// CreateKubernetesPamResourceWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamResourceResponse
+func (c *ClientWithResponses) CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
+	rsp, err := c.CreateKubernetesPamResourceWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateKubernetesPamResourceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
+	rsp, err := c.CreateKubernetesPamResource(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateKubernetesPamResourceResponse(rsp)
 }
 
 // CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
@@ -2352,6 +2569,123 @@ func ParseCreateMachineIdentityResponse(rsp *http.Response) (*CreateMachineIdent
 			Message    string                             `json:"message"`
 			ReqId      string                             `json:"reqId"`
 			StatusCode CreateMachineIdentity500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateKubernetesPamResourceResponse parses an HTTP response from a CreateKubernetesPamResourceWithResponse call
+func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubernetesPamResourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateKubernetesPamResourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Resource struct {
+				ConnectionDetails struct {
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+					Url                   string  `json:"url"`
+				} `json:"connectionDetails"`
+				CreatedAt                  time.Time                                                            `json:"createdAt"`
+				EncryptedResourceMetadata  interface{}                                                          `json:"encryptedResourceMetadata"`
+				GatewayId                  *openapi_types.UUID                                                  `json:"gatewayId"`
+				Id                         openapi_types.UUID                                                   `json:"id"`
+				Name                       string                                                               `json:"name"`
+				ProjectId                  string                                                               `json:"projectId"`
+				ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
+				RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
+				UpdatedAt                  time.Time                                                            `json:"updatedAt"`
+			} `json:"resource"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                              `json:"details,omitempty"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                              `json:"details,omitempty"`
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                   `json:"error"`
+			Message    interface{}                              `json:"message,omitempty"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                   `json:"error"`
+			Message    string                                   `json:"message"`
+			ReqId      string                                   `json:"reqId"`
+			StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
