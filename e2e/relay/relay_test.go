@@ -287,7 +287,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	// Create a mock HTTP server running on a random port in a goroutine
 	// The HTTP server implements a mock /version endpoint that returns dummy data
 	// and marks a variable as true when the endpoint is hit
-	//var versionEndpointHit bool
+	var versionEndpointHit bool
 	var versionEndpointHitMu sync.Mutex
 
 	// Create a listener on a random port (port 0 means OS assigns an available port)
@@ -350,4 +350,5 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 		})
 	require.NoError(t, err)
 	require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
+	require.True(t, versionEndpointHit)
 }
