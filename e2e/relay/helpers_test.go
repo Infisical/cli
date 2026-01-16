@@ -25,7 +25,6 @@ import (
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	dockercompose "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -486,32 +485,75 @@ func (c *Command) Stderr() string {
 	return string(b)
 }
 
-// EventuallyExpectStderr waits for the command to output a specific string in stderr
-// while ensuring the command is still running. Returns true if the command exited early, false otherwise.
-func EventuallyExpectStderr(t *testing.T, cmd *Command, expectedString string, timeout time.Duration, interval time.Duration) bool {
-	cmdExit := false
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+// ConditionResult represents the result of a condition check in EventuallyWithCommandRunning.
+// This is used as input to the condition function and includes ConditionWait for internal use.
+type ConditionResult int
+
+const (
+	ConditionWait       ConditionResult = iota // Continue waiting for the condition
+	ConditionSuccess                           // Condition is met, exit successfully
+	ConditionBreakEarly                        // Break the loop early (e.g., command exited)
+)
+
+// WaitResult represents the final result returned by EventuallyWithCommandRunning.
+// This enum only includes values that can be returned to the caller.
+type WaitResult int
+
+const (
+	WaitSuccess    WaitResult = iota // Condition was met successfully
+	WaitCmdExit                      // Command exited unexpectedly
+	WaitBreakEarly                   // Condition function returned ConditionBreakEarly
+)
+
+// EventuallyWithCommandRunning ensures the command is still running while executing the condition function.
+// The condition function should return a ConditionResult:
+//   - ConditionWait: keep waiting for the condition
+//   - ConditionSuccess: condition is met, exit successfully
+//   - ConditionBreakEarly: break the loop early (e.g., command exited)
+//
+// Returns a WaitResult indicating how the wait completed:
+//   - WaitSuccess: condition was met successfully
+//   - WaitCmdExit: command exited unexpectedly
+//   - WaitBreakEarly: condition function returned ConditionBreakEarly
+func EventuallyWithCommandRunning(t *testing.T, cmd *Command, condition func() ConditionResult, timeout time.Duration, interval time.Duration) WaitResult {
+	var result WaitResult
+	require.Eventually(t, func() bool {
 		// Ensure the process is still running
 		if !cmd.IsRunning() {
 			exitCode := cmd.ExitCode()
 			slog.Error("Command is not running as expected", "exit_code", exitCode)
 			cmd.DumpOutput()
-			// Somehow the cmd stops early, let's exit the loop early
-			cmdExit = true
-			// Fail the assertion to stop retrying
-			assert.Fail(collect, "Command exited early")
-			return
+			// Command exited unexpectedly
+			result = WaitCmdExit
+			return true
 		}
 
+		conditionResult := condition()
+		switch conditionResult {
+		case ConditionSuccess:
+			result = WaitSuccess
+			return true
+		case ConditionBreakEarly:
+			result = WaitBreakEarly
+			return true
+		case ConditionWait:
+			return false
+		default:
+			return false
+		}
+	}, timeout, interval)
+	return result
+}
+
+// EventuallyExpectStderr waits for the command to output a specific string in stderr
+// while ensuring the command is still running. Returns a WaitResult indicating how the wait completed.
+func EventuallyExpectStderr(t *testing.T, cmd *Command, expectedString string, timeout time.Duration, interval time.Duration) WaitResult {
+	return EventuallyWithCommandRunning(t, cmd, func() ConditionResult {
 		stderr := cmd.Stderr()
 		if strings.Contains(stderr, expectedString) {
 			slog.Info("Confirmed stderr contains expected string", "expected", expectedString)
+			return ConditionSuccess
 		}
-		assert.Containsf(
-			collect, stderr,
-			expectedString,
-			"The cmd is not outputting %q in the Stderr:\n%s", expectedString, stderr,
-		)
+		return ConditionWait
 	}, timeout, interval)
-	return cmdExit
 }

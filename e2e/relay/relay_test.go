@@ -54,26 +54,17 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	defer cmd.Stop()
 
-	cmdExit := EventuallyExpectStderr(t, &cmd, "Relay server started successfully", 120*time.Second, 5*time.Second)
-	require.False(t, cmdExit)
+	result := EventuallyExpectStderr(t, &cmd, "Relay server started successfully", 120*time.Second, 5*time.Second)
+	require.Equal(t, WaitSuccess, result)
 
 	detectHeartbeat := false
-	require.Eventually(t, func() bool {
-		// Ensure the process is still running
-		if !cmd.IsRunning() {
-			exitCode := cmd.ExitCode()
-			slog.Error("Command is not running as expected", "exit_code", exitCode)
-			cmd.DumpOutput()
-			// Somehow the cmd stops early, let's exit the loop early
-			return true
-		}
-
+	result = EventuallyWithCommandRunning(t, &cmd, func() ConditionResult {
 		resp, err := c.GetRelaysWithResponse(ctx)
 		if err != nil {
-			return false
+			return ConditionWait
 		}
 		if resp.StatusCode() != http.StatusOK {
-			return false
+			return ConditionWait
 		}
 		for _, relay := range *resp.JSON200 {
 			slog.Info(
@@ -86,15 +77,16 @@ func TestRelay_RegistersARelay(t *testing.T) {
 			if relay.Name == relayName && relay.Heartbeat != nil {
 				slog.Info("Confirmed relay heartbeat")
 				detectHeartbeat = true
-				return true
+				return ConditionSuccess
 			}
 		}
-		return false
+		return ConditionWait
 	}, 120*time.Second, 5*time.Second)
+	require.Equal(t, WaitSuccess, result)
 
 	assert.True(t, detectHeartbeat)
-	cmdExit = EventuallyExpectStderr(t, &cmd, "Relay is reachable by Infisical", 120*time.Second, 5*time.Second)
-	assert.False(t, cmdExit)
+	result = EventuallyExpectStderr(t, &cmd, "Relay is reachable by Infisical", 120*time.Second, 5*time.Second)
+	assert.Equal(t, WaitSuccess, result)
 }
 
 func TestRelay_RegistersAGateway(t *testing.T) {
@@ -127,21 +119,13 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	defer relayCmd.Stop()
 
 	detectHeartbeat := false
-	require.Eventually(t, func() bool {
-		// Ensure the process is still running if it's a subprocess
-		if relayCmd.RunMethod == RunMethodSubprocess && !relayCmd.IsRunning() {
-			slog.Error("Command is not running as expected", "exit_code", relayCmd.Cmd().ProcessState.ExitCode())
-			relayCmd.DumpOutput()
-			// Somehow the relayCmd stops early, let's exit the loop early
-			return true
-		}
-
+	result := EventuallyWithCommandRunning(t, &relayCmd, func() ConditionResult {
 		resp, err := c.GetRelaysWithResponse(ctx)
 		if err != nil {
-			return false
+			return ConditionWait
 		}
 		if resp.StatusCode() != http.StatusOK {
-			return false
+			return ConditionWait
 		}
 		for _, relay := range *resp.JSON200 {
 			slog.Info(
@@ -154,11 +138,12 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 			if relay.Name == relayName && relay.Heartbeat != nil {
 				slog.Info("Confirmed relay heartbeat")
 				detectHeartbeat = true
-				return true
+				return ConditionSuccess
 			}
 		}
-		return false
+		return ConditionWait
 	}, 120*time.Second, 5*time.Second)
+	require.Equal(t, WaitSuccess, result)
 	assert.True(t, detectHeartbeat)
 
 	tmpLogDir := t.TempDir()
@@ -179,9 +164,9 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	gatewayCmd.Start(ctx)
 	defer gatewayCmd.Stop()
 
-	gatewayCmdExit := EventuallyExpectStderr(t, &gatewayCmd, "Successfully registered gateway and received certificates", 120*time.Second, 5*time.Second)
-	require.False(t, gatewayCmdExit)
+	result = EventuallyExpectStderr(t, &gatewayCmd, "Successfully registered gateway and received certificates", 120*time.Second, 5*time.Second)
+	require.Equal(t, WaitSuccess, result)
 
-	gatewayCmdExit = EventuallyExpectStderr(t, &gatewayCmd, "Gateway is reachable by Infisical", 120*time.Second, 5*time.Second)
-	assert.False(t, gatewayCmdExit)
+	result = EventuallyExpectStderr(t, &gatewayCmd, "Gateway is reachable by Infisical", 120*time.Second, 5*time.Second)
+	assert.Equal(t, WaitSuccess, result)
 }
