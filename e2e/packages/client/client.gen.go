@@ -123,6 +123,24 @@ type CreateKubernetesPamResourceJSONBody_RotationAccountCredentials struct {
 	union json.RawMessage
 }
 
+// CreateRedisPamResourceJSONBody defines parameters for CreateRedisPamResource.
+type CreateRedisPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		Host                  string  `json:"host"`
+		Port                  float32 `json:"port"`
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslEnabled            bool    `json:"sslEnabled"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+	} `json:"connectionDetails"`
+	GatewayId                  openapi_types.UUID `json:"gatewayId"`
+	Name                       string             `json:"name"`
+	ProjectId                  openapi_types.UUID `json:"projectId"`
+	RotationAccountCredentials *struct {
+		Password *string `json:"password,omitempty"`
+		Username *string `json:"username,omitempty"`
+	} `json:"rotationAccountCredentials"`
+}
+
 // CreateProjectJSONBody defines parameters for CreateProject.
 type CreateProjectJSONBody struct {
 	HasDeleteProtection *bool   `json:"hasDeleteProtection,omitempty"`
@@ -169,6 +187,9 @@ type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
 
 // CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
 type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
+
+// CreateRedisPamResourceJSONRequestBody defines body for CreateRedisPamResource for application/json ContentType.
+type CreateRedisPamResourceJSONRequestBody CreateRedisPamResourceJSONBody
 
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody CreateProjectJSONBody
@@ -276,6 +297,11 @@ type ClientInterface interface {
 	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateRedisPamResourceWithBody request with any body
+	CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateProjectWithBody request with any body
 	CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -416,6 +442,30 @@ func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, conten
 
 func (c *Client) CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateKubernetesPamResourceRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRedisPamResourceRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRedisPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -739,6 +789,46 @@ func NewCreateKubernetesPamResourceRequestWithBody(server string, contentType st
 	return req, nil
 }
 
+// NewCreateRedisPamResourceRequest calls the generic CreateRedisPamResource builder with application/json body
+func NewCreateRedisPamResourceRequest(server string, body CreateRedisPamResourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateRedisPamResourceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateRedisPamResourceRequestWithBody generates requests for CreateRedisPamResource with any type of body
+func NewCreateRedisPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/redis")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreateProjectRequest calls the generic CreateProject builder with application/json body
 func NewCreateProjectRequest(server string, body CreateProjectJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -943,6 +1033,11 @@ type ClientWithResponsesInterface interface {
 	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
 	CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
+
+	// CreateRedisPamResourceWithBodyWithResponse request with any body
+	CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
+
+	CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
 
 	// CreateProjectWithBodyWithResponse request with any body
 	CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
@@ -1500,6 +1595,94 @@ func (r CreateKubernetesPamResourceResponse) StatusCode() int {
 	return 0
 }
 
+type CreateRedisPamResourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Resource struct {
+			ConnectionDetails struct {
+				Host                  string  `json:"host"`
+				Port                  float32 `json:"port"`
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslEnabled            bool    `json:"sslEnabled"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+			} `json:"connectionDetails"`
+			CreatedAt                  time.Time                                     `json:"createdAt"`
+			EncryptedResourceMetadata  interface{}                                   `json:"encryptedResourceMetadata"`
+			GatewayId                  *openapi_types.UUID                           `json:"gatewayId"`
+			Id                         openapi_types.UUID                            `json:"id"`
+			Name                       string                                        `json:"name"`
+			ProjectId                  string                                        `json:"projectId"`
+			ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
+			RotationAccountCredentials *struct {
+				Username *string `json:"username,omitempty"`
+			} `json:"rotationAccountCredentials"`
+			UpdatedAt time.Time `json:"updatedAt"`
+		} `json:"resource"`
+	}
+	JSON400 *struct {
+		Details    interface{}                         `json:"details,omitempty"`
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                         `json:"details,omitempty"`
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                              `json:"error"`
+		Message    interface{}                         `json:"message,omitempty"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
+	}
+}
+type CreateRedisPamResource200ResourceResourceType string
+type CreateRedisPamResource400StatusCode float32
+type CreateRedisPamResource401StatusCode float32
+type CreateRedisPamResource403StatusCode float32
+type CreateRedisPamResource404StatusCode float32
+type CreateRedisPamResource422StatusCode float32
+type CreateRedisPamResource500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateRedisPamResourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateRedisPamResourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1909,6 +2092,23 @@ func (c *ClientWithResponses) CreateKubernetesPamResourceWithResponse(ctx contex
 		return nil, err
 	}
 	return ParseCreateKubernetesPamResourceResponse(rsp)
+}
+
+// CreateRedisPamResourceWithBodyWithResponse request with arbitrary body returning *CreateRedisPamResourceResponse
+func (c *ClientWithResponses) CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error) {
+	rsp, err := c.CreateRedisPamResourceWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateRedisPamResourceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error) {
+	rsp, err := c.CreateRedisPamResource(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateRedisPamResourceResponse(rsp)
 }
 
 // CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
@@ -2686,6 +2886,127 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 			Message    string                                   `json:"message"`
 			ReqId      string                                   `json:"reqId"`
 			StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateRedisPamResourceResponse parses an HTTP response from a CreateRedisPamResourceWithResponse call
+func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamResourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateRedisPamResourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Resource struct {
+				ConnectionDetails struct {
+					Host                  string  `json:"host"`
+					Port                  float32 `json:"port"`
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslEnabled            bool    `json:"sslEnabled"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				} `json:"connectionDetails"`
+				CreatedAt                  time.Time                                     `json:"createdAt"`
+				EncryptedResourceMetadata  interface{}                                   `json:"encryptedResourceMetadata"`
+				GatewayId                  *openapi_types.UUID                           `json:"gatewayId"`
+				Id                         openapi_types.UUID                            `json:"id"`
+				Name                       string                                        `json:"name"`
+				ProjectId                  string                                        `json:"projectId"`
+				ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
+				RotationAccountCredentials *struct {
+					Username *string `json:"username,omitempty"`
+				} `json:"rotationAccountCredentials"`
+				UpdatedAt time.Time `json:"updatedAt"`
+			} `json:"resource"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                         `json:"details,omitempty"`
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                         `json:"details,omitempty"`
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    interface{}                         `json:"message,omitempty"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

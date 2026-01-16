@@ -18,3 +18,4 @@ output-options:
     - listGateways
     - createProject
     - createKubernetesPamResource
+    - createRedisPamResource

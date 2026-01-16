@@ -284,71 +284,80 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	require.Equal(t, projectResp.StatusCode(), http.StatusOK)
 	projectId := projectResp.JSON200.Project.Id
 
-	// Create a mock HTTP server running on a random port in a goroutine
-	// The HTTP server implements a mock /version endpoint that returns dummy data
-	// and marks a variable as true when the endpoint is hit
-	var versionEndpointHit bool
-	var versionEndpointHitMu sync.Mutex
+	t.Run("kubernetes", func(t *testing.T) {
+		t.Parallel()
+		// Create a mock HTTP server running on a random port in a goroutine
+		// The HTTP server implements a mock /version endpoint that returns dummy data
+		// and marks a variable as true when the endpoint is hit
+		var versionEndpointHit bool
+		var versionEndpointHitMu sync.Mutex
 
-	// Create a listener on a random port (port 0 means OS assigns an available port)
-	listener, err := net.Listen("tcp", ":0")
-	require.NoError(t, err)
+		// Create a listener on a random port (port 0 means OS assigns an available port)
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
 
-	server := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/version" {
-				versionEndpointHitMu.Lock()
-				versionEndpointHit = true
-				versionEndpointHitMu.Unlock()
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/version" {
+					versionEndpointHitMu.Lock()
+					versionEndpointHit = true
+					versionEndpointHitMu.Unlock()
 
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				// Return dummy version data
-				versionData := map[string]interface{}{
-					"version": "1.0.0",
-					"build":   "test-build",
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					// Return dummy version data
+					versionData := map[string]interface{}{
+						"version": "1.0.0",
+						"build":   "test-build",
+					}
+					json.NewEncoder(w).Encode(versionData)
+				} else {
+					w.WriteHeader(http.StatusNotFound)
 				}
-				json.NewEncoder(w).Encode(versionData)
-			} else {
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}),
-	}
-
-	// Start the server in a goroutine
-	go func() {
-		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			t.Errorf("Mock HTTP server error: %v", err)
+			}),
 		}
-	}()
 
-	// Clean up the server when the test completes
-	t.Cleanup(func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
-		defer shutdownCancel()
-		server.Shutdown(shutdownCtx)
+		// Start the server in a goroutine
+		go func() {
+			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+				t.Errorf("Mock HTTP server error: %v", err)
+			}
+		}()
+
+		// Clean up the server when the test completes
+		t.Cleanup(func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer shutdownCancel()
+			server.Shutdown(shutdownCtx)
+		})
+
+		// Get the server URL
+		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+		slog.Info("Mock HTTP server started", "url", serverURL)
+
+		k8sPamResResp, err := c.CreateKubernetesPamResourceWithResponse(
+			ctx,
+			client.CreateKubernetesPamResourceJSONRequestBody{
+				ProjectId: uuid.MustParse(projectId),
+				GatewayId: gatewayId,
+				Name:      "k8s-resource",
+				ConnectionDetails: struct {
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+					Url                   string  `json:"url"`
+				}{
+					Url:                   serverURL,
+					SslRejectUnauthorized: false,
+				},
+			})
+		require.NoError(t, err)
+		require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
+		require.True(t, versionEndpointHit)
 	})
 
-	// Get the server URL
-	serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
-	slog.Info("Mock HTTP server started", "url", serverURL)
-
-	k8sPamResResp, err := c.CreateKubernetesPamResourceWithResponse(
-		ctx,
-		client.CreateKubernetesPamResourceJSONRequestBody{
-			ProjectId: uuid.MustParse(projectId),
-			GatewayId: gatewayId,
-			Name:      "k8s-resource",
-			ConnectionDetails: struct {
-				SslCertificate        *string `json:"sslCertificate,omitempty"`
-				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-				Url                   string  `json:"url"`
-			}{
-				Url:                   serverURL,
-				SslRejectUnauthorized: false,
-			},
-		})
-	require.NoError(t, err)
-	require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
-	require.True(t, versionEndpointHit)
+	t.Run("redis", func(t *testing.T) {
+		t.Parallel()
+		// TODO: Implement Redis PAM resource test
+		// This should test Redis connectivity through the gateway similar to the kubernetes test above
+	})
 }
