@@ -22,6 +22,7 @@ import (
 	"github.com/infisical/cli/e2e-tests/packages/infisical"
 	"github.com/oapi-codegen/oapi-codegen/v2/pkg/securityprovider"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	dockercompose "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -269,6 +270,15 @@ func getDefaultRunMethod(t *testing.T) RunMethod {
 	return runMethod
 }
 
+// resetCommandContext recursively sets the context on a command and all its children.
+// This is necessary when reusing a command that was previously executed with a cancelled context.
+func resetCommandContext(cmd *cobra.Command, ctx context.Context) {
+	cmd.SetContext(ctx)
+	for _, child := range cmd.Commands() {
+		resetCommandContext(child, ctx)
+	}
+}
+
 func (c *Command) Start(ctx context.Context) {
 	t := c.Test
 	runMethod := c.RunMethod
@@ -331,6 +341,11 @@ func (c *Command) Start(ctx context.Context) {
 		// Create a cancellable context for tracking function call execution
 		c.functionCallCtx, c.functionCallCancel = context.WithCancel(ctx)
 		c.functionCallDone = make(chan struct{})
+
+		// Recursively reset the root cmd and its children to use the new ctx
+		// because in the last execution of the root cmd, the ctx was cancelled and it's
+		// already assigned to the children commands.
+		resetCommandContext(cmd.RootCmd, c.functionCallCtx)
 
 		// Set RootCmd output to files
 		cmd.RootCmd.SetOut(c.stdoutFile)
