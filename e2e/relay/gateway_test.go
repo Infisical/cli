@@ -23,7 +23,7 @@ import (
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
-func TestRelay_RegistersAGateway(t *testing.T) {
+func TestGateway_RegistersAGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -116,7 +116,7 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	assert.Equal(t, WaitSuccess, result)
 }
 
-func TestRelay_RelayGatewayConnectivity(t *testing.T) {
+func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
