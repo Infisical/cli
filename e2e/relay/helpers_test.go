@@ -566,7 +566,7 @@ func WaitFor(t *testing.T, opts WaitForOptions) WaitResult {
 // WaitForStderrOptions contains options for WaitForStderr.
 type WaitForStderrOptions struct {
 	EnsureCmdRunning *Command      // The command to monitor (required)
-	ExpectedString   string         // The string to look for in stderr (required)
+	ExpectedString   string        // The string to look for in stderr (required)
 	Timeout          time.Duration // Default: 120 seconds
 	Interval         time.Duration // Default: 5 seconds
 }

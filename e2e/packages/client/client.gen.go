@@ -245,6 +245,9 @@ type ClientInterface interface {
 	// GetRelays request
 	GetRelays(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListGateways request
+	ListGateways(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// SelectOrganizationV3WithBody request with any body
 	SelectOrganizationV3WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -385,6 +388,18 @@ func (c *Client) CreateProject(ctx context.Context, body CreateProjectJSONReques
 
 func (c *Client) GetRelays(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetRelaysRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListGateways(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListGatewaysRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -687,6 +702,33 @@ func NewGetRelaysRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListGatewaysRequest generates requests for ListGateways
+func NewListGatewaysRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/gateways")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewSelectOrganizationV3Request calls the generic SelectOrganizationV3 builder with application/json body
 func NewSelectOrganizationV3Request(server string, body SelectOrganizationV3JSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -800,6 +842,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetRelaysWithResponse request
 	GetRelaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetRelaysResponse, error)
+
+	// ListGatewaysWithResponse request
+	ListGatewaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListGatewaysResponse, error)
 
 	// SelectOrganizationV3WithBodyWithResponse request with any body
 	SelectOrganizationV3WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SelectOrganizationV3Response, error)
@@ -1425,6 +1470,83 @@ func (r GetRelaysResponse) StatusCode() int {
 	return 0
 }
 
+type ListGatewaysResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]struct {
+		CreatedAt time.Time          `json:"createdAt"`
+		Heartbeat *time.Time         `json:"heartbeat"`
+		Id        openapi_types.UUID `json:"id"`
+		Identity  struct {
+			Id   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"identity"`
+		IdentityId openapi_types.UUID `json:"identityId"`
+		Name       string             `json:"name"`
+		UpdatedAt  time.Time          `json:"updatedAt"`
+	}
+	JSON400 *struct {
+		Details    interface{}               `json:"details,omitempty"`
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}               `json:"details,omitempty"`
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                    `json:"error"`
+		Message    interface{}               `json:"message,omitempty"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                    `json:"error"`
+		Message    string                    `json:"message"`
+		ReqId      string                    `json:"reqId"`
+		StatusCode ListGateways500StatusCode `json:"statusCode"`
+	}
+}
+type ListGateways400StatusCode float32
+type ListGateways401StatusCode float32
+type ListGateways403StatusCode float32
+type ListGateways404StatusCode float32
+type ListGateways422StatusCode float32
+type ListGateways500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r ListGatewaysResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListGatewaysResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type SelectOrganizationV3Response struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1596,6 +1718,15 @@ func (c *ClientWithResponses) GetRelaysWithResponse(ctx context.Context, reqEdit
 		return nil, err
 	}
 	return ParseGetRelaysResponse(rsp)
+}
+
+// ListGatewaysWithResponse request returning *ListGatewaysResponse
+func (c *ClientWithResponses) ListGatewaysWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListGatewaysResponse, error) {
+	rsp, err := c.ListGateways(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListGatewaysResponse(rsp)
 }
 
 // SelectOrganizationV3WithBodyWithResponse request with arbitrary body returning *SelectOrganizationV3Response
@@ -2459,6 +2590,117 @@ func ParseGetRelaysResponse(rsp *http.Response) (*GetRelaysResponse, error) {
 			Message    string                 `json:"message"`
 			ReqId      string                 `json:"reqId"`
 			StatusCode GetRelays500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListGatewaysResponse parses an HTTP response from a ListGatewaysWithResponse call
+func ParseListGatewaysResponse(rsp *http.Response) (*ListGatewaysResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListGatewaysResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []struct {
+			CreatedAt time.Time          `json:"createdAt"`
+			Heartbeat *time.Time         `json:"heartbeat"`
+			Id        openapi_types.UUID `json:"id"`
+			Identity  struct {
+				Id   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"identity"`
+			IdentityId openapi_types.UUID `json:"identityId"`
+			Name       string             `json:"name"`
+			UpdatedAt  time.Time          `json:"updatedAt"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}               `json:"details,omitempty"`
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}               `json:"details,omitempty"`
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    interface{}               `json:"message,omitempty"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                    `json:"error"`
+			Message    string                    `json:"message"`
+			ReqId      string                    `json:"reqId"`
+			StatusCode ListGateways500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

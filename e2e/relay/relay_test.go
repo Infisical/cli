@@ -59,7 +59,6 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	})
 	require.Equal(t, WaitSuccess, result)
 
-	detectHeartbeat := false
 	result = WaitFor(t, WaitForOptions{
 		EnsureCmdRunning: &cmd,
 		Condition: func() ConditionResult {
@@ -80,7 +79,6 @@ func TestRelay_RegistersARelay(t *testing.T) {
 				)
 				if relay.Name == relayName && relay.Heartbeat != nil {
 					slog.Info("Confirmed relay heartbeat")
-					detectHeartbeat = true
 					return ConditionSuccess
 				}
 			}
@@ -89,7 +87,6 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	})
 	require.Equal(t, WaitSuccess, result)
 
-	assert.True(t, detectHeartbeat)
 	result = WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &cmd,
 		ExpectedString:   "Relay is reachable by Infisical",
@@ -125,37 +122,11 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	}
 	relayCmd.Start(ctx)
 	defer relayCmd.Stop()
-
-	detectHeartbeat := false
-	result := WaitFor(t, WaitForOptions{
+	result := WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
-		Condition: func() ConditionResult {
-			resp, err := c.GetRelaysWithResponse(ctx)
-			if err != nil {
-				return ConditionWait
-			}
-			if resp.StatusCode() != http.StatusOK {
-				return ConditionWait
-			}
-			for _, relay := range *resp.JSON200 {
-				slog.Info(
-					"Relay info",
-					"id", relay.Id,
-					"name", relay.Name,
-					"host", relay.Host,
-					"heartbeat", relay.Heartbeat,
-				)
-				if relay.Name == relayName && relay.Heartbeat != nil {
-					slog.Info("Confirmed relay heartbeat")
-					detectHeartbeat = true
-					return ConditionSuccess
-				}
-			}
-			return ConditionWait
-		},
+		ExpectedString:   "Relay server started successfully",
 	})
 	require.Equal(t, WaitSuccess, result)
-	assert.True(t, detectHeartbeat)
 
 	tmpLogDir := t.TempDir()
 	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
@@ -178,6 +149,34 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 	result = WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &gatewayCmd,
 		ExpectedString:   "Successfully registered gateway and received certificates",
+	})
+	require.Equal(t, WaitSuccess, result)
+
+	result = WaitFor(t, WaitForOptions{
+		EnsureCmdRunning: &gatewayCmd,
+		Condition: func() ConditionResult {
+			resp, err := c.ListGatewaysWithResponse(ctx)
+			if err != nil {
+				return ConditionWait
+			}
+			if resp.StatusCode() != http.StatusOK {
+				return ConditionWait
+			}
+			for _, gateway := range *resp.JSON200 {
+				slog.Info(
+					"Gateway info",
+					"id", gateway.Id,
+					"name", gateway.Name,
+					"identityId", gateway.IdentityId,
+					"heartbeat", gateway.Heartbeat,
+				)
+				if gateway.Name == gatewayName && gateway.Heartbeat != nil {
+					slog.Info("Confirmed gateway heartbeat")
+					return ConditionSuccess
+				}
+			}
+			return ConditionWait
+		},
 	})
 	require.Equal(t, WaitSuccess, result)
 
