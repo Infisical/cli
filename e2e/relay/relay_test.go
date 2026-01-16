@@ -19,8 +19,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	openapi_types "github.com/oapi-codegen/runtime/types"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func RandomSlug(numWords int) string {
@@ -286,6 +289,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 
 	t.Run("kubernetes", func(t *testing.T) {
 		t.Parallel()
+		ctx := t.Context()
 		// Create a mock HTTP server running on a random port in a goroutine
 		// The HTTP server implements a mock /version endpoint that returns dummy data
 		// and marks a variable as true when the endpoint is hit
@@ -357,7 +361,66 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 
 	t.Run("redis", func(t *testing.T) {
 		t.Parallel()
-		// TODO: Implement Redis PAM resource test
-		// This should test Redis connectivity through the gateway similar to the kubernetes test above
+		ctx := t.Context()
+		// Start a Redis container using testcontainers
+		redisContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        "redis:8.4.0",
+				ExposedPorts: []string{"6379/tcp"},
+				WaitingFor:   wait.ForLog("Ready to accept connections"),
+			},
+			Started: true,
+		})
+		require.NoError(t, err)
+		defer func() {
+			err := redisContainer.Terminate(ctx)
+			if err != nil {
+				t.Logf("Failed to terminate Redis container: %v", err)
+			}
+		}()
+
+		// Get the Redis container host and port
+		redisHost, err := redisContainer.Host(ctx)
+		require.NoError(t, err)
+		redisPort, err := redisContainer.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+
+		// Verify Redis is accessible by connecting to it
+		redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort.Port())
+		rdb := redis.NewClient(&redis.Options{
+			Addr: redisAddr,
+		})
+		defer rdb.Close()
+
+		// Test connection to Redis
+		pong, err := rdb.Ping(ctx).Result()
+		require.NoError(t, err)
+		require.Equal(t, "PONG", pong)
+		slog.Info("Verified Redis is accessible", "addr", redisAddr)
+
+		// Create Redis PAM resource
+		redisPortFloat := float32(redisPort.Int())
+		redisPamResResp, err := c.CreateRedisPamResourceWithResponse(
+			ctx,
+			client.CreateRedisPamResourceJSONRequestBody{
+				ProjectId: uuid.MustParse(projectId),
+				GatewayId: gatewayId,
+				Name:      "redis-resource",
+				ConnectionDetails: struct {
+					Host                  string  `json:"host"`
+					Port                  float32 `json:"port"`
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslEnabled            bool    `json:"sslEnabled"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				}{
+					Host:                  redisHost,
+					Port:                  redisPortFloat,
+					SslEnabled:            false,
+					SslRejectUnauthorized: false,
+				},
+			})
+		require.NoError(t, err)
+		require.Equal(t, redisPamResResp.StatusCode(), http.StatusOK)
+		slog.Info("Redis PAM resource created successfully")
 	})
 }
