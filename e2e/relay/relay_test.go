@@ -18,7 +18,7 @@ import (
 	"github.com/go-faker/faker/v4"
 	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
-	openapi_types "github.com/oapi-codegen/runtime/types"
+	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -253,7 +253,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	assert.Equal(t, WaitSuccess, result)
 
 	c := infisical.ApiClient()
-	var gatewayId openapi_types.UUID
+	var gatewayId openapitypes.UUID
 	resp, err := c.ListGatewaysWithResponse(ctx)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode())
@@ -287,7 +287,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	projectId := projectResp.JSON200.Project.Id
 
 	t.Run("kubernetes", func(t *testing.T) {
-		t.Parallel()
+		//t.Parallel()
 		ctx := t.Context()
 		// Create a mock HTTP server running on a random port in a goroutine
 		// The HTTP server implements a mock /version endpoint that returns dummy data
@@ -359,7 +359,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	})
 
 	t.Run("redis", func(t *testing.T) {
-		t.Parallel()
+		//t.Parallel()
 		ctx := t.Context()
 		// Start a Redis container using testcontainers Redis module
 		redisContainer, err := tcredis.Run(ctx, "redis:8.4.0")
