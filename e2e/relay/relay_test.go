@@ -22,8 +22,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
 func RandomSlug(numWords int) string {
@@ -362,15 +361,8 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 	t.Run("redis", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		// Start a Redis container using testcontainers
-		redisContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-			ContainerRequest: testcontainers.ContainerRequest{
-				Image:        "redis:8.4.0",
-				ExposedPorts: []string{"6379/tcp"},
-				WaitingFor:   wait.ForLog("Ready to accept connections"),
-			},
-			Started: true,
-		})
+		// Start a Redis container using testcontainers Redis module
+		redisContainer, err := tcredis.Run(ctx, "redis:8.4.0")
 		require.NoError(t, err)
 		defer func() {
 			err := redisContainer.Terminate(ctx)
@@ -379,24 +371,28 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 			}
 		}()
 
-		// Get the Redis container host and port
+		// Get the Redis connection string
+		connectionString, err := redisContainer.ConnectionString(ctx)
+		require.NoError(t, err)
+		slog.Info("Redis connection string", "connectionString", connectionString)
+
+		// Parse connection string to get host and port for PAM resource
 		redisHost, err := redisContainer.Host(ctx)
 		require.NoError(t, err)
 		redisPort, err := redisContainer.MappedPort(ctx, "6379")
 		require.NoError(t, err)
 
 		// Verify Redis is accessible by connecting to it
-		redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort.Port())
-		rdb := redis.NewClient(&redis.Options{
-			Addr: redisAddr,
-		})
+		opt, err := redis.ParseURL(connectionString)
+		require.NoError(t, err)
+		rdb := redis.NewClient(opt)
 		defer rdb.Close()
 
 		// Test connection to Redis
 		pong, err := rdb.Ping(ctx).Result()
 		require.NoError(t, err)
 		require.Equal(t, "PONG", pong)
-		slog.Info("Verified Redis is accessible", "addr", redisAddr)
+		slog.Info("Verified Redis is accessible", "addr", connectionString)
 
 		// Create Redis PAM resource
 		redisPortFloat := float32(redisPort.Int())
