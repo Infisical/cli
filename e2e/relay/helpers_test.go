@@ -274,6 +274,7 @@ func (c *Command) Start(ctx context.Context) {
 	runMethod := c.RunMethod
 	if runMethod == "" {
 		runMethod = getDefaultRunMethod(t)
+		c.RunMethod = runMethod
 	}
 
 	tempDir := t.TempDir()
@@ -440,7 +441,7 @@ func (c *Command) IsRunning() bool {
 			return true
 		}
 	default:
-		return false
+		panic(fmt.Errorf("unknown RunMethod value: %s", c.RunMethod))
 	}
 }
 
