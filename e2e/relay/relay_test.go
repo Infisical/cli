@@ -35,7 +35,7 @@ func RandomSlug(numWords int) string {
 
 func TestRelay_RegistersARelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
 	infisical := NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
@@ -60,7 +60,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 		},
 	}
 	cmd.Start(ctx)
-	defer cmd.Stop()
+	t.Cleanup(cmd.Stop)
 
 	result := WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &cmd,
@@ -105,7 +105,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 
 func TestRelay_RegistersAGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
 	infisical := NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
@@ -130,7 +130,7 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 		},
 	}
 	relayCmd.Start(ctx)
-	defer relayCmd.Stop()
+	t.Cleanup(relayCmd.Stop)
 	result := WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
 		ExpectedString:   "Relay server started successfully",
@@ -153,7 +153,7 @@ func TestRelay_RegistersAGateway(t *testing.T) {
 		},
 	}
 	gatewayCmd.Start(ctx)
-	defer gatewayCmd.Stop()
+	t.Cleanup(gatewayCmd.Stop)
 
 	result = WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &gatewayCmd,
@@ -364,12 +364,12 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 		// Start a Redis container using testcontainers Redis module
 		redisContainer, err := tcredis.Run(ctx, "redis:8.4.0")
 		require.NoError(t, err)
-		defer func() {
+		t.Cleanup(func() {
 			err := redisContainer.Terminate(ctx)
 			if err != nil {
 				t.Logf("Failed to terminate Redis container: %v", err)
 			}
-		}()
+		})
 
 		// Get the Redis connection string
 		connectionString, err := redisContainer.ConnectionString(ctx)
@@ -386,7 +386,7 @@ func TestRelay_RelayGatewayConnectivity(t *testing.T) {
 		opt, err := redis.ParseURL(connectionString)
 		require.NoError(t, err)
 		rdb := redis.NewClient(opt)
-		defer rdb.Close()
+		t.Cleanup(func() { rdb.Close() })
 
 		// Test connection to Redis
 		pong, err := rdb.Ping(ctx).Result()
