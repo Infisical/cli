@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/rs/zerolog/log"
@@ -24,14 +25,18 @@ func CheckForUpdateWithWriter(w io.Writer) {
 	if checkEnv := os.Getenv("INFISICAL_DISABLE_UPDATE_CHECK"); checkEnv != "" {
 		return
 	}
-	latestVersion, _, err := getLatestTag("Infisical", "cli")
+	latestVersion, publishedAt, err := getLatestTag("Infisical", "cli")
 	if err != nil {
 		log.Debug().Err(err)
 		// do nothing and continue
 		return
 	}
 
-	// daysSinceRelease, _ := daysSinceDate(publishedDate)
+	// Only prompt if the release is at least 48 hours old
+	hoursSinceRelease := time.Since(publishedAt).Hours()
+	if hoursSinceRelease < 48 {
+		return
+	}
 
 	if latestVersion != CLI_VERSION {
 		yellow := color.New(color.FgYellow).SprintFunc()
@@ -80,21 +85,21 @@ func DisplayAptInstallationChangeBannerWithWriter(isSilent bool, w io.Writer) {
 	}
 }
 
-func getLatestTag(repoOwner string, repoName string) (string, string, error) {
+func getLatestTag(repoOwner string, repoName string) (string, time.Time, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", "", err
+		return "", time.Time{}, err
 	}
 	if resp.StatusCode != 200 {
-		return "", "", errors.New(fmt.Sprintf("gitHub API returned status code %d", resp.StatusCode))
+		return "", time.Time{}, errors.New(fmt.Sprintf("gitHub API returned status code %d", resp.StatusCode))
 	}
 
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", "", err
+		return "", time.Time{}, err
 	}
 
 	var releaseDetails struct {
@@ -103,7 +108,12 @@ func getLatestTag(repoOwner string, repoName string) (string, string, error) {
 	}
 
 	if err := json.Unmarshal(body, &releaseDetails); err != nil {
-		return "", "", fmt.Errorf("failed to unmarshal github response: %w", err)
+		return "", time.Time{}, fmt.Errorf("failed to unmarshal github response: %w", err)
+	}
+
+	publishedAt, err := time.Parse(time.RFC3339, releaseDetails.PublishedAt)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to parse release time: %w", err)
 	}
 
 	tag_prefix := "v"
@@ -111,7 +121,7 @@ func getLatestTag(repoOwner string, repoName string) (string, string, error) {
 	// Extract the version from the first valid tag
 	version := strings.TrimPrefix(releaseDetails.TagName, tag_prefix)
 
-	return version, releaseDetails.PublishedAt, nil
+	return version, publishedAt, nil
 }
 
 func GetUpdateInstructions() string {
@@ -176,16 +186,3 @@ func IsRunningInDocker() bool {
 
 	return strings.Contains(string(cgroup), "docker")
 }
-
-// func daysSinceDate(dateString string) (int, error) {
-// 	layout := "2006-01-02T15:04:05Z"
-// 	parsedDate, err := time.Parse(layout, dateString)
-// 	if err != nil {
-// 		return 0, err
-// 	}
-
-// 	currentTime := time.Now()
-// 	difference := currentTime.Sub(parsedDate)
-// 	days := int(difference.Hours() / 24)
-// 	return days, nil
-// }
