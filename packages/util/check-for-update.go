@@ -25,40 +25,42 @@ func CheckForUpdateWithWriter(w io.Writer) {
 	if checkEnv := os.Getenv("INFISICAL_DISABLE_UPDATE_CHECK"); checkEnv != "" {
 		return
 	}
-	latestVersion, publishedAt, isUrgent, err := getLatestTag("Infisical", "cli")
+	latestVersion, _, isUrgent, err := getLatestTag("Infisical", "cli")
 	if err != nil {
 		log.Debug().Err(err)
 		// do nothing and continue
 		return
 	}
 
-	// Only prompt if the release is at least 48 hours old, unless it's marked as urgent
-	hoursSinceRelease := time.Since(publishedAt).Hours()
-	if !isUrgent && hoursSinceRelease < 48 {
+	if latestVersion == CLI_VERSION {
 		return
 	}
 
-	if latestVersion != CLI_VERSION {
-		yellow := color.New(color.FgYellow).SprintFunc()
-		blue := color.New(color.FgCyan).SprintFunc()
-		black := color.New(color.FgBlack).SprintFunc()
+	// Only prompt if the user's current version is at least 48 hours old, unless urgent.
+	// This avoids nagging users who recently updated.
+	currentVersionPublishedAt, err := getReleasePublishedAt("Infisical", "cli", CLI_VERSION)
+	if err == nil && !isUrgent && time.Since(currentVersionPublishedAt).Hours() < 48 {
+		return
+	}
 
-		msg := fmt.Sprintf("%s %s %s %s",
-			yellow("A new release of infisical is available:"),
-			blue(CLI_VERSION),
-			black("->"),
-			blue(latestVersion),
-		)
+	yellow := color.New(color.FgYellow).SprintFunc()
+	blue := color.New(color.FgCyan).SprintFunc()
+	black := color.New(color.FgBlack).SprintFunc()
 
+	msg := fmt.Sprintf("%s %s %s %s",
+		yellow("A new release of infisical is available:"),
+		blue(CLI_VERSION),
+		black("->"),
+		blue(latestVersion),
+	)
+
+	fmt.Fprintln(w, msg)
+
+	updateInstructions := GetUpdateInstructions()
+
+	if updateInstructions != "" {
+		msg = fmt.Sprintf("\n%s\n", GetUpdateInstructions())
 		fmt.Fprintln(w, msg)
-
-		updateInstructions := GetUpdateInstructions()
-
-		if updateInstructions != "" {
-			msg = fmt.Sprintf("\n%s\n", GetUpdateInstructions())
-			fmt.Fprintln(w, msg)
-		}
-
 	}
 }
 
@@ -125,6 +127,40 @@ func getLatestTag(repoOwner string, repoName string) (string, time.Time, bool, e
 	version := strings.TrimPrefix(releaseDetails.TagName, tag_prefix)
 
 	return version, publishedAt, isUrgent, nil
+}
+
+func getReleasePublishedAt(repoOwner string, repoName string, version string) (time.Time, error) {
+	tag := "v" + version
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", repoOwner, repoName, tag)
+	resp, err := http.Get(url)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if resp.StatusCode != 200 {
+		return time.Time{}, errors.New(fmt.Sprintf("gitHub API returned status code %d", resp.StatusCode))
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var releaseDetails struct {
+		PublishedAt string `json:"published_at"`
+	}
+
+	if err := json.Unmarshal(body, &releaseDetails); err != nil {
+		return time.Time{}, fmt.Errorf("failed to unmarshal github response: %w", err)
+	}
+
+	publishedAt, err := time.Parse(time.RFC3339, releaseDetails.PublishedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse release time: %w", err)
+	}
+
+	return publishedAt, nil
 }
 
 func GetUpdateInstructions() string {
