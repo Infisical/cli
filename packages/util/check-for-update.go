@@ -25,16 +25,16 @@ func CheckForUpdateWithWriter(w io.Writer) {
 	if checkEnv := os.Getenv("INFISICAL_DISABLE_UPDATE_CHECK"); checkEnv != "" {
 		return
 	}
-	latestVersion, publishedAt, err := getLatestTag("Infisical", "cli")
+	latestVersion, publishedAt, isUrgent, err := getLatestTag("Infisical", "cli")
 	if err != nil {
 		log.Debug().Err(err)
 		// do nothing and continue
 		return
 	}
 
-	// Only prompt if the release is at least 48 hours old
+	// Only prompt if the release is at least 48 hours old, unless it's marked as urgent
 	hoursSinceRelease := time.Since(publishedAt).Hours()
-	if hoursSinceRelease < 48 {
+	if !isUrgent && hoursSinceRelease < 48 {
 		return
 	}
 
@@ -85,43 +85,46 @@ func DisplayAptInstallationChangeBannerWithWriter(isSilent bool, w io.Writer) {
 	}
 }
 
-func getLatestTag(repoOwner string, repoName string) (string, time.Time, error) {
+func getLatestTag(repoOwner string, repoName string) (string, time.Time, bool, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	if resp.StatusCode != 200 {
-		return "", time.Time{}, errors.New(fmt.Sprintf("gitHub API returned status code %d", resp.StatusCode))
+		return "", time.Time{}, false, errors.New(fmt.Sprintf("gitHub API returned status code %d", resp.StatusCode))
 	}
 
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 
 	var releaseDetails struct {
 		TagName     string `json:"tag_name"`
 		PublishedAt string `json:"published_at"`
+		Body        string `json:"body"`
 	}
 
 	if err := json.Unmarshal(body, &releaseDetails); err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to unmarshal github response: %w", err)
+		return "", time.Time{}, false, fmt.Errorf("failed to unmarshal github response: %w", err)
 	}
 
 	publishedAt, err := time.Parse(time.RFC3339, releaseDetails.PublishedAt)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to parse release time: %w", err)
+		return "", time.Time{}, false, fmt.Errorf("failed to parse release time: %w", err)
 	}
+
+	isUrgent := strings.Contains(releaseDetails.Body, "#urgent")
 
 	tag_prefix := "v"
 
 	// Extract the version from the first valid tag
 	version := strings.TrimPrefix(releaseDetails.TagName, tag_prefix)
 
-	return version, publishedAt, nil
+	return version, publishedAt, isUrgent, nil
 }
 
 func GetUpdateInstructions() string {
