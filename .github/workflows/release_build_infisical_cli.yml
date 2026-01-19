@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # Required for NPM OIDC auth for releases
 
 jobs:
   validate-tag-branch:
@@ -64,17 +65,6 @@ jobs:
         working-directory: ${{ env.working-directory }}
         run: npm version ${{ env.CLI_VERSION }} --allow-same-version --no-git-tag-version
 
-      - name: Setup NPM
-        working-directory: ${{ env.working-directory }}
-        run: |
-          echo 'registry="https://registry.npmjs.org/"' > ./.npmrc
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ./.npmrc
-
-          echo 'registry="https://registry.npmjs.org/"' > ~/.npmrc
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Pack NPM
         working-directory: ${{ env.working-directory }}
         run: npm pack
@@ -82,9 +72,6 @@ jobs:
       - name: Publish NPM
         working-directory: ${{ env.working-directory }}
         run: npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public --registry=https://registry.npmjs.org/
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
