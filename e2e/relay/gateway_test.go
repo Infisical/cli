@@ -53,7 +53,7 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 	t.Cleanup(relayCmd.Stop)
 	result := WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
-		ExpectedString:   "Relay server started successfully",
+		ExpectedString:   "Relay is reachable by Infisical",
 	})
 	require.Equal(t, WaitSuccess, result)
 
@@ -145,7 +145,7 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	t.Cleanup(relayCmd.Stop)
 	result := WaitForStderr(t, WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
-		ExpectedString:   "Relay server started successfully",
+		ExpectedString:   "Relay is reachable by Infisical",
 	})
 	require.Equal(t, WaitSuccess, result)
 

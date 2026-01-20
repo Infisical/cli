@@ -15,6 +15,8 @@ permissions:
 jobs:
   validate-tag-branch:
     uses: ./.github/workflows/pre-tag-validation.yml
+  cli-tests:
+    uses: ./.github/workflows/run-cli-e2e-tests.yml
 
   # cli-integration-tests:
   #   name: Run tests before deployment
@@ -37,6 +39,7 @@ jobs:
       # - cli-integration-tests
       - goreleaser
       - validate-tag-branch
+      - cli-tests
     steps:
       - uses: actions/checkout@v3
         with:
@@ -77,6 +80,7 @@ jobs:
     runs-on: ubuntu-latest-8-cores
     needs:
       - validate-tag-branch
+      - cli-tests
     steps:
       - uses: actions/checkout@v3
         with:
@@ -152,6 +156,7 @@ jobs:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
+      - cli-tests
     steps:
       - uses: actions/checkout@v3
         with:

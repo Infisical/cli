@@ -129,8 +129,9 @@ func (s *Stack) Up(ctx context.Context) error {
 	}
 	waited := dockerCompose.WaitForService(
 		"backend",
-		wait.ForListeningPort("4000/tcp").
-			WithStartupTimeout(120*time.Second),
+		wait.ForHTTP("/api/status").
+			WithPort("4000/tcp").
+			WithStartupTimeout(5*time.Minute),
 	)
 	s.dockerCompose = waited
 	if err := s.dockerCompose.Up(ctx); err != nil {
@@ -170,7 +171,7 @@ func BackendOptionsFromEnv() BackendOptions {
 	}
 	dockerfile, found := os.LookupEnv("INFISICAL_BACKEND_DOCKERFILE")
 	if !found {
-		dockerfile = "Dockerfile.dev.fips"
+		dockerfile = "Dockerfile"
 	}
 	return BackendOptions{
 		BackendDir: backendDir,
@@ -227,7 +228,7 @@ func WithBackendService(options BackendOptions) StackOption {
 		}
 		dockerfile := options.Dockerfile
 		if dockerfile == "" {
-			dockerfile = "Dockerfile.dev.fips"
+			dockerfile = "Dockerfile"
 		}
 		s.Project.Services["backend"] = types.ServiceConfig{
 			Build: &types.BuildConfig{
@@ -235,12 +236,12 @@ func WithBackendService(options BackendOptions) StackOption {
 				Dockerfile: dockerfile,
 			},
 			Ports: []types.ServicePortConfig{
-				{Published: "", Target: 4000},
+				{Published: "4000", Target: 4000},
 				{Published: "9229", Target: 9229},
 			},
 			Environment: types.NewMappingWithEquals([]string{
 				"NODE_ENV=development",
-				"ENCRYPTION_KEY=VVHnGZ0w98WLgISK4XSJcagezuG6EWRFTk48KE4Y5Mw=",
+				"ENCRYPTION_KEY=6c1fe4e407b8911c104518103505b218",
 				"AUTH_SECRET=5lrMXKKWCVocS/uerPsl7V+TX/aaUaI7iDkgl3tSmLE=",
 				"DB_CONNECTION_URI=postgres://infisical:infisical@db:5432/infisical",
 				"REDIS_URL=redis://redis:6379",
