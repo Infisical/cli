@@ -251,8 +251,8 @@ func WithBackendService(options BackendOptions) StackOption {
 				Dockerfile: dockerfile,
 			},
 			Ports: []types.ServicePortConfig{
-				{Published: "4000", Target: 4000},
-				{Published: "9229", Target: 9229},
+				{Target: 4000}, // Let Docker assign a random host port to avoid conflicts
+				{Target: 9229},
 			},
 			Environment: types.NewMappingWithEquals([]string{
 				"NODE_ENV=development",
