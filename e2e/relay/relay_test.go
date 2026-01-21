@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +16,7 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical := NewInfisicalService().
+	infisical := helpers.NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
 			// This is needed for the private ip (current host) to be accepted for the relay server
 			"ALLOW_INTERNAL_IP_CONNECTIONS=true",
@@ -23,11 +24,11 @@ func TestRelay_RegistersARelay(t *testing.T) {
 		Up(t, ctx)
 
 	c := infisical.ApiClient()
-	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
+	identity := infisical.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
 	require.NotNil(t, identity)
 
-	relayName := RandomSlug(2)
-	cmd := Command{
+	relayName := helpers.RandomSlug(2)
+	cmd := helpers.Command{
 		Test: t,
 		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
 		Env: map[string]string{
@@ -40,21 +41,21 @@ func TestRelay_RegistersARelay(t *testing.T) {
 	cmd.Start(ctx)
 	t.Cleanup(cmd.Stop)
 
-	result := WaitForStderr(t, WaitForStderrOptions{
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &cmd,
 		ExpectedString:   "Relay server started successfully",
 	})
-	require.Equal(t, WaitSuccess, result)
+	require.Equal(t, helpers.WaitSuccess, result)
 
-	result = WaitFor(t, WaitForOptions{
+	result = helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &cmd,
-		Condition: func() ConditionResult {
+		Condition: func() helpers.ConditionResult {
 			resp, err := c.GetRelaysWithResponse(ctx)
 			if err != nil {
-				return ConditionWait
+				return helpers.ConditionWait
 			}
 			if resp.StatusCode() != http.StatusOK {
-				return ConditionWait
+				return helpers.ConditionWait
 			}
 			for _, relay := range *resp.JSON200 {
 				slog.Info(
@@ -66,17 +67,17 @@ func TestRelay_RegistersARelay(t *testing.T) {
 				)
 				if relay.Name == relayName && relay.Heartbeat != nil {
 					slog.Info("Confirmed relay heartbeat")
-					return ConditionSuccess
+					return helpers.ConditionSuccess
 				}
 			}
-			return ConditionWait
+			return helpers.ConditionWait
 		},
 	})
-	require.Equal(t, WaitSuccess, result)
+	require.Equal(t, helpers.WaitSuccess, result)
 
-	result = WaitForStderr(t, WaitForStderrOptions{
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &cmd,
 		ExpectedString:   "Relay is reachable by Infisical",
 	})
-	assert.Equal(t, WaitSuccess, result)
+	assert.Equal(t, helpers.WaitSuccess, result)
 }

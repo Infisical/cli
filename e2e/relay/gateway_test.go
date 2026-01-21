@@ -16,6 +16,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
+	helpers "github.com/infisical/cli/e2e-tests/util"
 	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical := NewInfisicalService().
+	infisical := helpers.NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
 			// This is needed for the private ip (current host) to be accepted for the relay server
 			"ALLOW_INTERNAL_IP_CONNECTIONS=true",
@@ -35,11 +36,11 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 		Up(t, ctx)
 
 	c := infisical.ApiClient()
-	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
+	identity := infisical.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
 	require.NotNil(t, identity)
 
-	relayName := RandomSlug(2)
-	relayCmd := Command{
+	relayName := helpers.RandomSlug(2)
+	relayCmd := helpers.Command{
 		Test: t,
 		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
 		Env: map[string]string{
@@ -51,17 +52,17 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 	}
 	relayCmd.Start(ctx)
 	t.Cleanup(relayCmd.Stop)
-	result := WaitForStderr(t, WaitForStderrOptions{
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
 		ExpectedString:   "Relay is reachable by Infisical",
 	})
-	require.Equal(t, WaitSuccess, result)
+	require.Equal(t, helpers.WaitSuccess, result)
 
 	tmpLogDir := t.TempDir()
 	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
 	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
-	gatewayName := RandomSlug(2)
-	gatewayCmd := Command{
+	gatewayName := helpers.RandomSlug(2)
+	gatewayCmd := helpers.Command{
 		Test: t,
 		Args: []string{"gateway", "start",
 			fmt.Sprintf("--name=%s", gatewayName),
@@ -75,21 +76,21 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 	gatewayCmd.Start(ctx)
 	t.Cleanup(gatewayCmd.Stop)
 
-	result = WaitForStderr(t, WaitForStderrOptions{
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &gatewayCmd,
 		ExpectedString:   "Successfully registered gateway and received certificates",
 	})
-	require.Equal(t, WaitSuccess, result)
+	require.Equal(t, helpers.WaitSuccess, result)
 
-	result = WaitFor(t, WaitForOptions{
+	result = helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &gatewayCmd,
-		Condition: func() ConditionResult {
+		Condition: func() helpers.ConditionResult {
 			resp, err := c.ListGatewaysWithResponse(ctx)
 			if err != nil {
-				return ConditionWait
+				return helpers.ConditionWait
 			}
 			if resp.StatusCode() != http.StatusOK {
-				return ConditionWait
+				return helpers.ConditionWait
 			}
 			for _, gateway := range *resp.JSON200 {
 				slog.Info(
@@ -101,37 +102,37 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 				)
 				if gateway.Name == gatewayName && gateway.Heartbeat != nil {
 					slog.Info("Confirmed gateway heartbeat")
-					return ConditionSuccess
+					return helpers.ConditionSuccess
 				}
 			}
-			return ConditionWait
+			return helpers.ConditionWait
 		},
 	})
-	require.Equal(t, WaitSuccess, result)
+	require.Equal(t, helpers.WaitSuccess, result)
 
-	result = WaitForStderr(t, WaitForStderrOptions{
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &gatewayCmd,
 		ExpectedString:   "Gateway is reachable by Infisical",
 	})
-	assert.Equal(t, WaitSuccess, result)
+	assert.Equal(t, helpers.WaitSuccess, result)
 }
 
 func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical := NewInfisicalService().
+	infisical := helpers.NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
 			// This is needed for the private ip (current host) to be accepted for the relay server
 			"ALLOW_INTERNAL_IP_CONNECTIONS=true",
 		})).
 		Up(t, ctx)
 
-	identity := infisical.CreateMachineIdentity(t, ctx, WithTokenAuth())
+	identity := infisical.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
 	require.NotNil(t, identity)
 
-	relayName := RandomSlug(2)
-	relayCmd := Command{
+	relayName := helpers.RandomSlug(2)
+	relayCmd := helpers.Command{
 		Test: t,
 		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
 		Env: map[string]string{
@@ -143,17 +144,17 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	}
 	relayCmd.Start(ctx)
 	t.Cleanup(relayCmd.Stop)
-	result := WaitForStderr(t, WaitForStderrOptions{
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &relayCmd,
 		ExpectedString:   "Relay is reachable by Infisical",
 	})
-	require.Equal(t, WaitSuccess, result)
+	require.Equal(t, helpers.WaitSuccess, result)
 
 	tmpLogDir := t.TempDir()
 	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
 	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
-	gatewayName := RandomSlug(2)
-	gatewayCmd := Command{
+	gatewayName := helpers.RandomSlug(2)
+	gatewayCmd := helpers.Command{
 		Test: t,
 		Args: []string{"gateway", "start",
 			fmt.Sprintf("--name=%s", gatewayName),
@@ -166,11 +167,11 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	}
 	gatewayCmd.Start(ctx)
 	t.Cleanup(gatewayCmd.Stop)
-	result = WaitForStderr(t, WaitForStderrOptions{
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: &gatewayCmd,
 		ExpectedString:   "Gateway is reachable by Infisical",
 	})
-	assert.Equal(t, WaitSuccess, result)
+	assert.Equal(t, helpers.WaitSuccess, result)
 
 	c := infisical.ApiClient()
 	var gatewayId openapitypes.UUID

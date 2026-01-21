@@ -1,4 +1,4 @@
-package relay_test
+package util
 
 import (
 	"context"
