@@ -93,6 +93,10 @@ func (s *InfisicalService) Compose() dockercompose.ComposeStack {
 	return s.Stack.Compose()
 }
 
+func (s *InfisicalService) DownWithForce(ctx context.Context) error {
+	return s.Stack.DownWithForce(ctx, true)
+}
+
 func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 	return s.apiClient
 }
@@ -127,7 +131,6 @@ type MachineIdentityOption func(*testing.T, context.Context, *InfisicalService, 
 func (s *InfisicalService) CreateMachineIdentity(t *testing.T, ctx context.Context, options ...MachineIdentityOption) MachineIdentity {
 	c := s.apiClient
 
-	// Create machine identity for the relay
 	role := "member"
 	identityResp, err := c.CreateMachineIdentityWithResponse(ctx, client.CreateMachineIdentityJSONRequestBody{
 		Name:           faker.Name(),

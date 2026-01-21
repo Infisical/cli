@@ -17,6 +17,7 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -142,6 +143,20 @@ func (s *Stack) Up(ctx context.Context) error {
 
 func (s *Stack) Down(ctx context.Context) error {
 	return s.dockerCompose.Down(ctx)
+}
+
+// DownWithForce tears down all containers and optionally removes volumes.
+// This works even when using container reuse (RunningCompose).
+func (s *Stack) DownWithForce(ctx context.Context, removeVolumes bool) error {
+	if rc, ok := s.dockerCompose.(*RunningCompose); ok {
+		return rc.DownWithForce(ctx, removeVolumes)
+	}
+	// For regular compose stacks, use the standard Down with options
+	opts := []compose.StackDownOption{compose.RemoveOrphans(true)}
+	if removeVolumes {
+		opts = append(opts, compose.RemoveVolumes(true))
+	}
+	return s.dockerCompose.Down(ctx, opts...)
 }
 
 func (s *Stack) Compose() compose.ComposeStack {
@@ -298,6 +313,59 @@ func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) 
 
 func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
 	// For the case of running compose, we probably want to reuse it, so just do nothing here
+	return nil
+}
+
+// DownWithForce tears down all containers and optionally removes volumes.
+// Unlike Down(), this actually removes containers even when using RunningCompose.
+func (c *RunningCompose) DownWithForce(ctx context.Context, removeVolumes bool) error {
+	slog.Info("Force tearing down compose stack", "name", c.name, "removeVolumes", removeVolumes)
+
+	containers, err := c.client.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+		),
+	})
+	if err != nil {
+		return fmt.Errorf("container list: %w", err)
+	}
+
+	// Stop and remove all containers
+	for _, ctr := range containers {
+		slog.Info("Stopping and removing container", "id", ctr.ID[:12], "name", ctr.Names)
+		timeout := 10
+		if err := c.client.ContainerStop(ctx, ctr.ID, container.StopOptions{Timeout: &timeout}); err != nil {
+			slog.Warn("Failed to stop container", "id", ctr.ID[:12], "error", err)
+		}
+		if err := c.client.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true, RemoveVolumes: removeVolumes}); err != nil {
+			slog.Warn("Failed to remove container", "id", ctr.ID[:12], "error", err)
+		}
+	}
+
+	// Remove the network
+	networks, err := c.client.NetworkList(ctx, network.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+		),
+	})
+	if err != nil {
+		slog.Warn("Failed to list networks", "error", err)
+	} else {
+		for _, network := range networks {
+			slog.Info("Removing network", "name", network.Name)
+			if err := c.client.NetworkRemove(ctx, network.ID); err != nil {
+				slog.Warn("Failed to remove network", "name", network.Name, "error", err)
+			}
+		}
+	}
+
+	// Clear the cached containers
+	c.containersLock.Lock()
+	c.containers = make(map[string]*testcontainers.DockerContainer)
+	c.containersLock.Unlock()
+
+	slog.Info("Compose stack torn down", "name", c.name)
 	return nil
 }
 
