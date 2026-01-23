@@ -147,7 +147,8 @@ var loginCmd = &cobra.Command{
 				}
 			}
 
-			usePresetDomain, err := usePresetDomain(presetDomain)
+			domainFlagExplicitlySet := cmd.Flags().Changed("domain")
+			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet)
 
 			if err != nil {
 				util.HandleError(err)
@@ -434,7 +435,7 @@ func DomainOverridePrompt() (bool, error) {
 	return selectedOption == OVERRIDE, err
 }
 
-func usePresetDomain(presetDomain string) (bool, error) {
+func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool) (bool, error) {
 	infisicalConfig, err := util.GetConfigFile()
 	if err != nil {
 		return false, fmt.Errorf("askForDomain: unable to get config file because [err=%s]", err)
@@ -442,7 +443,11 @@ func usePresetDomain(presetDomain string) (bool, error) {
 
 	preconfiguredUrl := strings.TrimSuffix(presetDomain, "/api")
 
-	if preconfiguredUrl != "" && preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL {
+	// If the domain flag was explicitly set by the user, use it directly (even for US/EU cloud URLs)
+	// Otherwise, only use the preset domain if it's not a default cloud URL
+	shouldUsePresetDomain := preconfiguredUrl != "" && (domainFlagExplicitlySet || (preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL))
+
+	if shouldUsePresetDomain {
 		parsedDomain := strings.TrimSuffix(strings.Trim(preconfiguredUrl, "/"), "/api")
 
 		_, err := url.ParseRequestURI(parsedDomain)
@@ -453,12 +458,15 @@ func usePresetDomain(presetDomain string) (bool, error) {
 		config.INFISICAL_URL = fmt.Sprintf("%s/api", parsedDomain)
 		config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", parsedDomain)
 
-		if !slices.Contains(infisicalConfig.Domains, parsedDomain) {
-			infisicalConfig.Domains = append(infisicalConfig.Domains, parsedDomain)
-			err = util.WriteConfigFile(&infisicalConfig)
+		// Only save non-cloud domains to the config file
+		if parsedDomain != util.INFISICAL_DEFAULT_US_URL && parsedDomain != util.INFISICAL_DEFAULT_EU_URL {
+			if !slices.Contains(infisicalConfig.Domains, parsedDomain) {
+				infisicalConfig.Domains = append(infisicalConfig.Domains, parsedDomain)
+				err = util.WriteConfigFile(&infisicalConfig)
 
-			if err != nil {
-				return false, fmt.Errorf("askForDomain: unable to write domains to config file because [err=%s]", err)
+				if err != nil {
+					return false, fmt.Errorf("askForDomain: unable to write domains to config file because [err=%s]", err)
+				}
 			}
 		}
 
