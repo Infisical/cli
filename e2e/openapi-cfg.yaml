@@ -19,3 +19,9 @@ output-options:
     - createProject
     - createKubernetesPamResource
     - createRedisPamResource
+    - deleteSecretV4
+    - updateSecretV4
+    - createSecretV4
+    - getSecretByNameV4
+    - listSecretsV4
+

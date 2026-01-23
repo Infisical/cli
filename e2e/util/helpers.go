@@ -1,4 +1,4 @@
-package relay_test
+package util
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -93,6 +94,10 @@ func (s *InfisicalService) Compose() dockercompose.ComposeStack {
 	return s.Stack.Compose()
 }
 
+func (s *InfisicalService) DownWithForce(ctx context.Context) error {
+	return s.Stack.DownWithForce(ctx, true)
+}
+
 func (s *InfisicalService) ApiClient() client.ClientWithResponsesInterface {
 	return s.apiClient
 }
@@ -127,7 +132,6 @@ type MachineIdentityOption func(*testing.T, context.Context, *InfisicalService, 
 func (s *InfisicalService) CreateMachineIdentity(t *testing.T, ctx context.Context, options ...MachineIdentityOption) MachineIdentity {
 	c := s.apiClient
 
-	// Create machine identity for the relay
 	role := "member"
 	identityResp, err := c.CreateMachineIdentityWithResponse(ctx, client.CreateMachineIdentityJSONRequestBody{
 		Name:           faker.Name(),
@@ -583,6 +587,7 @@ func WaitForStderr(t *testing.T, opts WaitForStderrOptions) WaitResult {
 		Interval:         opts.Interval,
 		Condition: func() ConditionResult {
 			stderr := opts.EnsureCmdRunning.Stderr()
+
 			if strings.Contains(stderr, opts.ExpectedString) {
 				slog.Info("Confirmed stderr contains expected string", "expected", opts.ExpectedString)
 				return ConditionSuccess
@@ -592,11 +597,19 @@ func WaitForStderr(t *testing.T, opts WaitForStderrOptions) WaitResult {
 	}
 	return WaitFor(t, waitOpts)
 }
-
 func RandomSlug(numWords int) string {
 	var words []string
 	for i := 0; i < numWords; i++ {
 		words = append(words, strings.ToLower(faker.Word()))
 	}
 	return strings.Join(words, "-")
+}
+
+func GetFreePort() int {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		panic(err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }
