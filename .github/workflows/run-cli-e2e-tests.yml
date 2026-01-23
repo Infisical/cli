@@ -4,6 +4,8 @@ on:
   pull_request:
     types: [opened, synchronize]
   workflow_dispatch:
+  workflow_call:
+    
 
 jobs:
   test:
