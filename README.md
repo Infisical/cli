@@ -72,6 +72,14 @@ _Arch Linux:_
 yay -S infisical-bin
 ```
 
+**Using mise-en-place**
+
+If you are using [mise-en-place](https://mise.jdx.dev), the polyglot tool version manager you can install infisical cli using a command like:
+
+```bash
+mise use -g infisical@latest
+```
+
 ### Direct Download
 
 Download binaries from [GitHub Releases](https://github.com/Infisical/cli/releases).
