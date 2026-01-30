@@ -117,6 +117,8 @@ func (a *SdkAuthenticator) HandleUniversalAuthLogin() (credential infisicalSdk.M
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
+	// We are not providing an environment variable because infisical go sdk will check for the environment variable when value is emtpy
+	// Refer: https://github.com/Infisical/go-sdk/blob/main/packages/util/constants.go#L10
 	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
 	if err != nil {
 		return infisicalSdk.MachineIdentityCredential{}, err
