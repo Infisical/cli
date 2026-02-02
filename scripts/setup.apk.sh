@@ -183,7 +183,7 @@ fi
 check_tool "wget"
 
 # Setup
-detect_arch
+validate_arch
 import_rsa_key
 setup_repository
 update_apk
