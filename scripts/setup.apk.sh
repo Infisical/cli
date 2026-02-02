@@ -51,22 +51,20 @@ check_tool() {
     fi
 }
 
-detect_arch() {
-    echo_status "RUN" "Detecting system architecture..."
-    arch=$(uname -m)
+validate_arch() {
+    echo_status "RUN" "Validating system architecture..."
+    local arch=$(uname -m)
     case "$arch" in
         x86_64|amd64)
-            arch="x86_64"
             ;;
         aarch64|arm64)
-            arch="aarch64"
             ;;
         *)
-            echo_status "FAIL" "Detecting system architecture"
+            echo_status "FAIL" "Validating system architecture"
             die "Unsupported architecture: $arch. Supported: x86_64, aarch64"
             ;;
     esac
-    echo_status "OK" "Detected architecture: $arch"
+    echo_status "OK" "Architecture supported: $arch"
 }
 
 import_rsa_key() {
@@ -87,7 +85,7 @@ import_rsa_key() {
 
 setup_repository() {
     local repo_file="/etc/apk/repositories"
-    local repo_url="${PKG_URL}/apk/stable/main"
+    local repo_url="${PKG_URL}/apk/stable/main/${arch}"
     
     echo_status "RUN" "Adding '${PACKAGE_NAME}' repository..."
     
@@ -175,6 +173,11 @@ done
 echo
 echo "Executing the setup script for the '${PACKAGE_NAME}' repository..."
 echo
+
+# Check for root privileges
+if [ "$(id -u)" -ne 0 ]; then
+    die "This script must be run as root (e.g., using sudo)"
+fi
 
 # Check requirements
 check_tool "wget"

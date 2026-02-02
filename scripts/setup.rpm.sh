@@ -12,7 +12,7 @@ test -z "$BASH_SOURCE" && {
     prefix=""
 }
 
-tmp_log=$(mktemp .rpm_setup_XXXXXXXXX)
+tmp_log=$(mktemp /tmp/.rpm_setup_XXXXXXXXX)
 
 # Environment variables that can be set
 PKG_URL=${PKG_URL:-"https://artifacts-cli.infisical.com"}
@@ -168,7 +168,7 @@ function check_tool {
 function cleanup {
     echo
     rm -rf "$tmpdir"
-    rm -rf $tmp_log
+    rm -rf "$tmp_log"
 }
 
 function shutdown {
@@ -183,9 +183,8 @@ function check_os {
 
 function detect_os_system {
     check_os && return 0
-    echo_running "$text"
     local text="Detecting your OS distribution and release using system methods ..."
-
+    echo_running "$text"
     local tool_rc=1
     test -f '/etc/os-release' && {
       . /etc/os-release
@@ -292,7 +291,7 @@ function detect_os_modern_python {
           echo_okfail "$text" || {
               local text="Installing pip via get-pip bootstrap ..."
               echo_running "$text"
-              curl -1sLf https://bootstrap.pypa.io/get-pip.py 2>$tmp/log | python &>$tmp_log
+              curl -1sLf https://bootstrap.pypa.io/get-pip.py 2>$tmp_log | python &>$tmp_log
               echo_okfail "$text" || die "Failed to install pip!"
           }
       }
@@ -505,7 +504,7 @@ function setup_repository {
         retry 3 "yum-config-manager --add-repo $repofile" &>$tmp_log
         local rc=$?
     elif test "$manager" == "dnf"; then
-        if [[ "$dnf_version" -lt 5 ]]; then
+        if [[ -z "$dnf_version" || "$dnf_version" -lt 5 ]]; then
             retry 3 "dnf config-manager --add-repo $repofile" &>$tmp_log
             local rc=$?
         else
@@ -532,7 +531,7 @@ function setup_repository {
         local min_version="3.8.0"
         local cur_version="$(rpm -q --queryformat '%{VERSION}' microdnf)"
         if [[ "$(printf "%s\n" $cur_version $min_version | sort -V | head -n 1)" != "$min_version" ]]; then
-            $manager upgrade microdnf # v3.8+ required to use makecache
+            $manager upgrade -y microdnf # v3.8+ required to use makecache
         fi
         retry 3 "$manager makecache -y --disablerepo='*' --enablerepo='infisical-cli*'"
         local rc=$?
@@ -550,9 +549,6 @@ function usage () {
      cat <<EOF
 Usage: $self [opts]
   -h Displays this usage text.
-  -i Ignore repository setup errors during setup and
-     continue with install.  This will leave the repository config
-     in place rather than removing it upon errors.
 EOF
      exit 0
 }
@@ -560,14 +556,12 @@ EOF
 trap cleanup EXIT
 trap shutdown INT
 
-ignore_errors=1
 manager=""
 dnf_version=""
 tmpdir=$(mktemp -d)
 
-while getopts ":ih" OPT; do
+while getopts ":h" OPT; do
     case $OPT in
-         i) ignore_errors=0 ;;
          h) usage ;;
         \?) usage ;;
     esac

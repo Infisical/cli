@@ -1,4 +1,7 @@
-cd dist
+#!/bin/bash
+set -eo pipefail
+
+cd dist || { echo "Failed to cd into dist"; exit 1; }
 
 # ============================================
 # APK - Upload to Cloudsmith (keep until S3 is validated)
@@ -24,9 +27,11 @@ if ls *.apk 1> /dev/null 2>&1; then
         if [[ "$i" == *"aarch64"* ]] || [[ "$i" == *"arm64"* ]]; then
             echo "Copying $i to aarch64/"
             cp "$i" apk-staging/stable/main/aarch64/
-        else
+        elif [[ "$i" == *"x86_64"* ]] || [[ "$i" == *"amd64"* ]]; then
             echo "Copying $i to x86_64/"
             cp "$i" apk-staging/stable/main/x86_64/
+        else
+            echo "Warning: Unknown architecture for $i, skipping S3 upload"
         fi
     done
     
@@ -97,11 +102,11 @@ for i in *.rpm; do
 done
 
 # Regenerate RPM repository metadata with mkrepo
+# Note: mkrepo uses boto3 which automatically reads AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY from environment variables set in the workflow
 if ls *.rpm 1> /dev/null 2>&1; then
     export GPG_SIGN_KEY=$INFISICAL_CLI_REPO_SIGNING_KEY_ID
-    mkrepo s3://$INFISICAL_CLI_S3_BUCKET/rpm \
-        --s3-access-key-id="$AWS_ACCESS_KEY_ID" \
-        --s3-secret-access-key="$AWS_SECRET_ACCESS_KEY" \
+    mkrepo "s3://$INFISICAL_CLI_S3_BUCKET/rpm" \
         --s3-region="us-east-1" \
         --sign
 fi
