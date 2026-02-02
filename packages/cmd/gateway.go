@@ -515,6 +515,7 @@ func init() {
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway")
 	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
+	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
 	gatewayStartCmd.Flags().String("client-secret", "", "client secret for universal auth")
 	gatewayStartCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")

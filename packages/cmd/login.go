@@ -399,6 +399,7 @@ func init() {
 	loginCmd.Flags().String("method", "user", "login method [user, universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]")
 	loginCmd.Flags().String("client-id", "", "client id for universal auth")
 	loginCmd.Flags().String("client-secret", "", "client secret for universal auth")
+	loginCmd.Flags().String("organization-slug", "", "When set for machine identity login, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	loginCmd.Flags().String("machine-identity-id", "", "machine identity id for these login methods [kubernetes, azure, gcp-id-token, gcp-iam, aws-iam]")
 	loginCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	loginCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
