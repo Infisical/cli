@@ -124,7 +124,15 @@ jobs:
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
       - run: pip install --upgrade cloudsmith-cli
+      - name: Install mkrepo and dependencies
+        run: pip install mkrepo univers boto3
+      - name: Install AWS CLI
+        run: pip install awscli
+      - name: Install rpm-sign
+        run: sudo apt-get install -y rpm
       - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252
         with:
           ruby-version: "3.3" # Not needed with a .ruby-version, .tool-versions or mise.toml
@@ -136,7 +144,13 @@ jobs:
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_KEY_PASSPHRASE: ${{ secrets.GPG_SIGNING_KEY_PASSPHRASE }}
-      - name: Publish to CloudSmith
+      - name: Configure APK Signing Key
+        run: |
+          echo -n "$APK_PRIVATE_KEY" | base64 --decode > /tmp/infisical-apk.rsa
+          chmod 600 /tmp/infisical-apk.rsa
+        env:
+          APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+      - name: Publish packages to repositories
         run: sh upload_to_cloudsmith.sh
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
@@ -144,8 +158,9 @@ jobs:
           INFISICAL_CLI_REPO_SIGNING_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_SIGNING_KEY_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
+          APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
       - name: Invalidate Cloudfront cache
-        run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/deb/dists/stable/*'
+        run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/Packages/*' '/rpm/repodata/*' '/deb/dists/stable/*' '/apk/stable/main/*'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
