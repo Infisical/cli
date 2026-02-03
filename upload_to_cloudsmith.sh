@@ -99,6 +99,12 @@ if ls *.apk 1> /dev/null 2>&1 && [ "$S3_ENABLED" = "true" ]; then
     echo "APK packages uploaded successfully"
 fi
 
+# Validate signing key ID is configured
+if [ -z "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" ]; then
+    echo "Error: INFISICAL_CLI_REPO_SIGNING_KEY_ID not set"
+    exit 1
+fi
+
 for i in *.deb; do
     [ -f "$i" ] || break
     deb-s3 upload --bucket=$INFISICAL_CLI_S3_BUCKET --prefix=deb --visibility=private --sign=$INFISICAL_CLI_REPO_SIGNING_KEY_ID --preserve-versions $i
@@ -117,12 +123,6 @@ done
 # RPM - Upload to S3 and regenerate repo metadata
 # ============================================
 if [ "$S3_ENABLED" = "true" ]; then
-    # Validate signing key ID is configured for RPM
-    if [ -z "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" ]; then
-        echo "Error: INFISICAL_CLI_REPO_SIGNING_KEY_ID not set"
-        exit 1
-    fi
-    
     for i in *.rpm; do
         [ -f "$i" ] || break
         
