@@ -57,6 +57,12 @@ if ls *.apk 1> /dev/null 2>&1 && [ "$S3_ENABLED" = "true" ]; then
     echo "Syncing existing APK packages from S3..."
     aws s3 sync "s3://$INFISICAL_CLI_S3_BUCKET/apk/" apk-staging/ --exclude "*/APKINDEX.tar.gz"
     
+    # Validate APK private key exists
+    if [ ! -f "$APK_PRIVATE_KEY_PATH" ]; then
+        echo "Error: APK private key not found at $APK_PRIVATE_KEY_PATH"
+        exit 1
+    fi
+    
     # Generate APKINDEX using Alpine container
     echo "Generating APKINDEX.tar.gz using Alpine container..."
     docker run --rm \
@@ -64,7 +70,8 @@ if ls *.apk 1> /dev/null 2>&1 && [ "$S3_ENABLED" = "true" ]; then
         -v "$APK_PRIVATE_KEY_PATH:/keys/infisical.rsa:ro" \
         alpine:3.21 sh -c '
             set -e
-            apk add --no-cache alpine-sdk > /dev/null 2>&1
+            echo "Installing alpine-sdk..."
+            apk add --no-cache alpine-sdk || { echo "Failed to install alpine-sdk"; exit 1; }
             
             # Process x86_64
             if ls /repo/stable/main/x86_64/*.apk 1> /dev/null 2>&1; then
@@ -110,6 +117,12 @@ done
 # RPM - Upload to S3 and regenerate repo metadata
 # ============================================
 if [ "$S3_ENABLED" = "true" ]; then
+    # Validate signing key ID is configured for RPM
+    if [ -z "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" ]; then
+        echo "Error: INFISICAL_CLI_REPO_SIGNING_KEY_ID not set"
+        exit 1
+    fi
+    
     for i in *.rpm; do
         [ -f "$i" ] || break
         
