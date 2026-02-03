@@ -3,6 +3,12 @@ set -eo pipefail
 
 cd dist || { echo "Failed to cd into dist"; exit 1; }
 
+# Validate signing key ID is configured
+if [ -z "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" ]; then
+    echo "Error: INFISICAL_CLI_REPO_SIGNING_KEY_ID not set"
+    exit 1
+fi
+
 # Validate required environment variables for S3 uploads
 validate_s3_env() {
     local missing=()
@@ -97,12 +103,6 @@ if ls *.apk 1> /dev/null 2>&1 && [ "$S3_ENABLED" = "true" ]; then
     aws s3 sync apk-staging/ "s3://$INFISICAL_CLI_S3_BUCKET/apk/"
     
     echo "APK packages uploaded successfully"
-fi
-
-# Validate signing key ID is configured
-if [ -z "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" ]; then
-    echo "Error: INFISICAL_CLI_REPO_SIGNING_KEY_ID not set"
-    exit 1
 fi
 
 for i in *.deb; do
