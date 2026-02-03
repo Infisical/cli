@@ -51,20 +51,22 @@ check_tool() {
     fi
 }
 
-validate_arch() {
-    echo_status "RUN" "Validating system architecture..."
-    local arch=$(uname -m)
-    case "$arch" in
+detect_arch() {
+    echo_status "RUN" "Detecting system architecture..."
+    local raw_arch=$(uname -m)
+    case "$raw_arch" in
         x86_64|amd64)
+            arch="x86_64"
             ;;
         aarch64|arm64)
+            arch="aarch64"
             ;;
         *)
-            echo_status "FAIL" "Validating system architecture"
-            die "Unsupported architecture: $arch. Supported: x86_64, aarch64"
+            echo_status "FAIL" "Detecting system architecture"
+            die "Unsupported architecture: $raw_arch. Supported: x86_64, aarch64"
             ;;
     esac
-    echo_status "OK" "Architecture supported: $arch"
+    echo_status "OK" "Architecture detected: $arch"
 }
 
 import_rsa_key() {
@@ -183,7 +185,7 @@ fi
 check_tool "wget"
 
 # Setup
-validate_arch
+detect_arch
 import_rsa_key
 setup_repository
 update_apk

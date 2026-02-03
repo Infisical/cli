@@ -3,6 +3,24 @@ set -eo pipefail
 
 cd dist || { echo "Failed to cd into dist"; exit 1; }
 
+# Validate required environment variables for S3 uploads
+validate_s3_env() {
+    local missing=()
+    [ -z "$INFISICAL_CLI_S3_BUCKET" ] && missing+=("INFISICAL_CLI_S3_BUCKET")
+    [ -z "$AWS_ACCESS_KEY_ID" ] && missing+=("AWS_ACCESS_KEY_ID")
+    [ -z "$AWS_SECRET_ACCESS_KEY" ] && missing+=("AWS_SECRET_ACCESS_KEY")
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Warning: Missing environment variables for S3 uploads: ${missing[*]}"
+        echo "S3 upload steps will be skipped."
+        return 1
+    fi
+    return 0
+}
+
+S3_ENABLED=false
+validate_s3_env && S3_ENABLED=true
+
 # ============================================
 # APK - Upload to Cloudsmith (keep until S3 is validated)
 # ============================================
@@ -14,7 +32,7 @@ done
 # ============================================
 # APK - Upload to S3 and generate APKINDEX
 # ============================================
-if ls *.apk 1> /dev/null 2>&1; then
+if ls *.apk 1> /dev/null 2>&1 && [ "$S3_ENABLED" = "true" ]; then
     echo "Processing APK packages..."
     
     # Create local directory structure
@@ -91,22 +109,24 @@ done
 # ============================================
 # RPM - Upload to S3 and regenerate repo metadata
 # ============================================
-for i in *.rpm; do
-    [ -f "$i" ] || break
-    
-    # Sign the RPM package
-    rpmsign --addsign --key-id="$INFISICAL_CLI_REPO_SIGNING_KEY_ID" "$i"
-    
-    # Upload to S3
-    aws s3 cp "$i" "s3://$INFISICAL_CLI_S3_BUCKET/rpm/Packages/"
-done
+if [ "$S3_ENABLED" = "true" ]; then
+    for i in *.rpm; do
+        [ -f "$i" ] || break
+        
+        # Sign the RPM package
+        rpmsign --addsign --key-id="$INFISICAL_CLI_REPO_SIGNING_KEY_ID" "$i"
+        
+        # Upload to S3
+        aws s3 cp "$i" "s3://$INFISICAL_CLI_S3_BUCKET/rpm/Packages/"
+    done
 
-# Regenerate RPM repository metadata with mkrepo
-# Note: mkrepo uses boto3 which automatically reads AWS_ACCESS_KEY_ID and
-# AWS_SECRET_ACCESS_KEY from environment variables set in the workflow
-if ls *.rpm 1> /dev/null 2>&1; then
-    export GPG_SIGN_KEY=$INFISICAL_CLI_REPO_SIGNING_KEY_ID
-    mkrepo "s3://$INFISICAL_CLI_S3_BUCKET/rpm" \
-        --s3-region="us-east-1" \
-        --sign
+    # Regenerate RPM repository metadata with mkrepo
+    # Note: mkrepo uses boto3 which automatically reads AWS_ACCESS_KEY_ID and
+    # AWS_SECRET_ACCESS_KEY from environment variables set in the workflow
+    if ls *.rpm 1> /dev/null 2>&1; then
+        export GPG_SIGN_KEY=$INFISICAL_CLI_REPO_SIGNING_KEY_ID
+        mkrepo "s3://$INFISICAL_CLI_S3_BUCKET/rpm" \
+            --s3-region="us-east-1" \
+            --sign
+    fi
 fi
