@@ -789,6 +789,8 @@ type RegisterGatewayResponse struct {
 type PAMAccessRequest struct {
 	Duration     string `json:"duration,omitempty"`
 	AccountPath  string `json:"accountPath,omitempty"`
+	ResourceName string `json:"resourceName,omitempty"`
+	AccountName  string `json:"accountName,omitempty"`
 	ProjectId    string `json:"projectId,omitempty"`
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
 }
@@ -807,7 +809,9 @@ type PAMAccessResponse struct {
 }
 
 type PAMAccessApprovalRequestPayloadRequestData struct {
-	AccountPath    string `json:"accountPath"`
+	AccountPath    string `json:"accountPath,omitempty"`
+	ResourceName   string `json:"resourceName,omitempty"`
+	AccountName    string `json:"accountName,omitempty"`
 	AccessDuration string `json:"accessDuration"`
 }
 

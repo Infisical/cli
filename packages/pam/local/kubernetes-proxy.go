@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -27,10 +26,10 @@ type KubernetesProxyServer struct {
 	kubeConfigOriginalContext string
 }
 
-func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId, durationStr string, port int) {
+func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams, projectId, durationStr string, port int) {
 	log.Info().
 		Str("projectId", projectId).
-		Str("accountPath", accountPath).
+		Str("account", accessParams.GetDisplayName()).
 		Str("duration", durationStr).
 		Msg("Starting kubernetes proxy")
 
@@ -38,14 +37,13 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
-	pamRequest := api.PAMAccessRequest{
-		Duration:    durationStr,
-		AccountPath: accountPath,
-		ProjectId:   projectId,
-	}
+	pamRequest := accessParams.ToAPIRequest(projectId, durationStr)
 
-	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
+		if HandleApprovalWorkflow(httpClient, err, projectId, accessParams, durationStr) {
+			return
+		}
 		util.HandleError(err, "Failed to access PAM account")
 		return
 	}
@@ -96,20 +94,9 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	}
 
 	if port == 0 {
-		util.PrintfStderr("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
+		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
 	} else {
-		util.PrintfStderr("Kubernetes proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
-	}
-
-	accountName, ok := pamResponse.Metadata["accountName"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
-		return
-	}
-	actualAccountPath, ok := pamResponse.Metadata["accountPath"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
-		return
+		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
 	}
 
 	// TODO: we should let the user decide whether if they want to update kubeconfig or not
@@ -121,7 +108,14 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 		log.Fatal().Err(err).Msg("Failed to load kubernetes config")
 		return
 	}
-	clusterName := fmt.Sprintf("infisical-k8s-pam/%s", actualAccountPath)
+
+	// Build cluster name for kubeconfig context
+	var clusterName string
+	if accessParams.ResourceName != "" && accessParams.AccountName != "" {
+		clusterName = fmt.Sprintf("infisical-k8s-pam/%s/%s", accessParams.ResourceName, accessParams.AccountName)
+	} else {
+		clusterName = fmt.Sprintf("infisical-k8s-pam/%s", accessParams.AccountPath)
+	}
 
 	config.Clusters[clusterName] = &k8sapi.Cluster{
 		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
@@ -143,13 +137,19 @@ func StartKubernetesLocalProxy(accessToken string, accountPath string, projectId
 	proxy.kubeConfigPath = kubeconfig
 
 	log.Info().Msgf("Kubernetes proxy server listening on port %d", proxy.port)
-	util.PrintfStderr("\n")
-	util.PrintfStderr("**********************************************************************\n")
-	util.PrintfStderr("                  Kubernetes Proxy Session Started!                   \n")
-	util.PrintfStderr("----------------------------------------------------------------------\n")
-	util.PrintfStderr("Accessing account %s at folder path %s\n", accountName, accountPath)
-	util.PrintfStderr("Your current kubectl context has been switched to %s, you can start using kubectl command to access your Kubernetes right now\n", clusterName)
-	util.PrintfStderr("\n")
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("                  Kubernetes Proxy Session Started!                   \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	if accessParams.ResourceName != "" && accessParams.AccountName != "" {
+		fmt.Printf("Resource: %s\n", accessParams.ResourceName)
+		fmt.Printf("Account:  %s\n", accessParams.AccountName)
+	} else {
+		fmt.Printf("Account Path: %s\n", accessParams.AccountPath)
+	}
+	fmt.Printf("\nYour kubectl context has been switched to: %s\n", clusterName)
+	fmt.Printf("You can now use kubectl commands to access your Kubernetes cluster.\n")
+	fmt.Printf("\n")
 	// TODO: write kubectl config
 
 	sigChan := make(chan os.Signal, 1)
