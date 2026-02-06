@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
@@ -27,19 +26,18 @@ type SSHProxyServer struct {
 	sshProcess      *exec.Cmd
 }
 
-func StartSSHLocalProxy(accessToken string, accountPath string, projectID string, durationStr string) {
+func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string) {
 	httpClient := resty.New()
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
-	pamRequest := api.PAMAccessRequest{
-		Duration:    durationStr,
-		AccountPath: accountPath,
-		ProjectId:   projectID,
-	}
+	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
 
 	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
+		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
+			return
+		}
 		util.HandleError(err, "Failed to access PAM account")
 		return
 	}

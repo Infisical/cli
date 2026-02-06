@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,8 +20,44 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/manifoldco/promptui"
 	"github.com/rs/zerolog/log"
 )
+
+type PAMAccessParams struct {
+	AccountPath  string
+	ResourceName string
+	AccountName  string
+}
+
+// GetDisplayName returns a user-friendly display name for the access params
+func (p PAMAccessParams) GetDisplayName() string {
+	if p.AccountPath != "" {
+		return p.AccountPath
+	}
+	return fmt.Sprintf("%s/%s", p.ResourceName, p.AccountName)
+}
+
+// ToAPIRequest converts PAMAccessParams to an api.PAMAccessRequest
+func (p PAMAccessParams) ToAPIRequest(projectID, duration string) api.PAMAccessRequest {
+	return api.PAMAccessRequest{
+		Duration:     duration,
+		AccountPath:  p.AccountPath,
+		ResourceName: p.ResourceName,
+		AccountName:  p.AccountName,
+		ProjectId:    projectID,
+	}
+}
+
+// ToApprovalRequestData converts PAMAccessParams to api.PAMAccessApprovalRequestPayloadRequestData
+func (p PAMAccessParams) ToApprovalRequestData(duration string) api.PAMAccessApprovalRequestPayloadRequestData {
+	return api.PAMAccessApprovalRequestPayloadRequestData{
+		AccountPath:    p.AccountPath,
+		ResourceName:   p.ResourceName,
+		AccountName:    p.AccountName,
+		AccessDuration: duration,
+	}
+}
 
 // BaseProxyServer contains common functionality for all local proxy types
 type BaseProxyServer struct {
@@ -248,7 +285,7 @@ func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 }
 
 // CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required
-// This is a shared function used by both database and SSH proxies
+// This is a shared function used by all PAM proxies
 func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequest) (api.PAMAccessResponse, error) {
 	// Initial request
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
@@ -286,4 +323,70 @@ func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequ
 	}
 
 	return pamResponse, nil
+}
+
+// HandleApprovalWorkflow checks if an error is due to an approval policy and handles the approval request flow.
+// Returns true if the error was handled (either approval request created or user declined), false otherwise.
+func HandleApprovalWorkflow(httpClient *resty.Client, err error, projectID string, accessParams PAMAccessParams, durationStr string) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.ErrorMessage != "A policy is in place for this resource" {
+		return false
+	}
+
+	details, ok := apiErr.Details.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	log.Info().Msgf("Account is protected by approval policy: %s", details["policyName"])
+
+	shouldSendRequest, promptErr := askForApprovalRequestTrigger()
+	if promptErr != nil {
+		if errors.Is(promptErr, promptui.ErrAbort) {
+			log.Info().Msgf("Approval request was not created.")
+		} else {
+			util.HandleError(promptErr, "Failed to send PAM account request")
+		}
+		return true
+	}
+
+	if !shouldSendRequest {
+		log.Info().Msgf("Approval request was not created.")
+		return true
+	}
+
+	approvalReq, reqErr := api.CallPAMAccessApprovalRequest(httpClient, api.PAMAccessApprovalRequest{
+		ProjectId:   projectID,
+		RequestData: accessParams.ToApprovalRequestData(durationStr),
+	})
+	if reqErr != nil {
+		util.HandleError(reqErr, "Failed to send PAM account request")
+		return true
+	}
+
+	url := fmt.Sprintf("%s/organizations/%s/projects/pam/%s/approval-requests/%s",
+		strings.TrimSuffix(config.INFISICAL_URL, "/api"),
+		approvalReq.Request.OrgId,
+		approvalReq.Request.ProjectId,
+		approvalReq.Request.ID)
+
+	if browserErr := util.OpenBrowser(url); browserErr != nil {
+		log.Error().Msgf("Failed to do browser redirect: %v", browserErr)
+	}
+
+	log.Info().Msgf("Approval request created.")
+	log.Info().Msgf("View details at: %s", url)
+	return true
+}
+
+func askForApprovalRequestTrigger() (bool, error) {
+	prompt := promptui.Prompt{
+		Label:     "This action requires approval. You may create an approval request now. Continue?",
+		IsConfirm: true,
+	}
+	result, err := prompt.Run()
+	if err != nil {
+		return false, err
+	}
+	return strings.ToLower(result) == "y", nil
 }
