@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -550,6 +551,30 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 
 	go ssh.DiscardRequests(requests)
 
+	// Peek first byte to detect connection type:
+	// 0x16 = TLS ClientHello → mTLS flow (CLI clients)
+	// 0x00 = Web ECDH magic byte → web flow (browser clients)
+	firstByte := make([]byte, 1)
+	if _, err := io.ReadFull(channel, firstByte); err != nil {
+		log.Info().Msgf("Failed to read first byte: %v", err)
+		return
+	}
+
+	switch firstByte[0] {
+	case 0x16:
+		g.handleMTLSConnection(channel, firstByte)
+	case 0x00:
+		// ECDH magic byte - handle web proxy connection
+		virtualConn := &prefixedVirtualConnection{channel: channel}
+		if err := pam.HandlePAMWebProxy(g.ctx, virtualConn, g.httpClient, g.pamCredentialsManager, g.pamSessionUploader); err != nil {
+			log.Error().Err(err).Msg("PAM web proxy handler ended with error")
+		}
+	default:
+		log.Warn().Msgf("Unknown protocol byte: 0x%02x, closing channel", firstByte[0])
+	}
+}
+
+func (g *Gateway) handleMTLSConnection(channel ssh.Channel, firstByte []byte) {
 	// Create mTLS server configuration
 	tlsConfig := g.tlsConfig
 	if tlsConfig == nil {
@@ -557,10 +582,8 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	}
 
-	// Create a virtual connection that pipes data between SSH channel and TLS
-	virtualConn := &virtualConnection{
-		channel: channel,
-	}
+	// Create a virtual connection that prepends the peeked byte
+	virtualConn := newPrefixedVirtualConnection(firstByte, channel)
 
 	// Wrap the virtual connection with TLS
 	tlsConn := tls.Server(virtualConn, tlsConfig)
@@ -776,40 +799,55 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 	return nil
 }
 
-// virtualConnection implements net.Conn to bridge SSH channel and TLS
-type virtualConnection struct {
+// prefixedVirtualConnection implements net.Conn, prepending buffered bytes before reading from the channel
+type prefixedVirtualConnection struct {
 	channel ssh.Channel
+	prefix  []byte
+	offset  int
 }
 
-func (vc *virtualConnection) Read(b []byte) (n int, err error) {
+func newPrefixedVirtualConnection(prefix []byte, channel ssh.Channel) *prefixedVirtualConnection {
+	return &prefixedVirtualConnection{
+		channel: channel,
+		prefix:  prefix,
+		offset:  0,
+	}
+}
+
+func (vc *prefixedVirtualConnection) Read(b []byte) (int, error) {
+	if vc.offset < len(vc.prefix) {
+		n := copy(b, vc.prefix[vc.offset:])
+		vc.offset += n
+		return n, nil
+	}
 	return vc.channel.Read(b)
 }
 
-func (vc *virtualConnection) Write(b []byte) (n int, err error) {
+func (vc *prefixedVirtualConnection) Write(b []byte) (int, error) {
 	return vc.channel.Write(b)
 }
 
-func (vc *virtualConnection) Close() error {
+func (vc *prefixedVirtualConnection) Close() error {
 	return vc.channel.Close()
 }
 
-func (vc *virtualConnection) LocalAddr() net.Addr {
+func (vc *prefixedVirtualConnection) LocalAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
 }
 
-func (vc *virtualConnection) RemoteAddr() net.Addr {
+func (vc *prefixedVirtualConnection) RemoteAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
 }
 
-func (vc *virtualConnection) SetDeadline(t time.Time) error {
+func (vc *prefixedVirtualConnection) SetDeadline(t time.Time) error {
 	return nil
 }
 
-func (vc *virtualConnection) SetReadDeadline(t time.Time) error {
+func (vc *prefixedVirtualConnection) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-func (vc *virtualConnection) SetWriteDeadline(t time.Time) error {
+func (vc *prefixedVirtualConnection) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 

@@ -24,6 +24,7 @@ type PAMCredentials struct {
 	SSLCertificate        string
 	Url                   string
 	ServiceAccountToken   string
+	SharedSecret          string
 }
 
 type cachedCredentials struct {
@@ -98,6 +99,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		SSLCertificate:        response.Credentials.SSLCertificate,
 		Url:                   response.Credentials.Url,
 		ServiceAccountToken:   response.Credentials.ServiceAccountToken,
+		SharedSecret:          response.SharedSecret,
 	}
 
 	cm.cacheMutex.Lock()
