@@ -17,6 +17,8 @@ var pamCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
+// ==================== Database Commands ====================
+
 var pamDbCmd = &cobra.Command{
 	Use:                   "db",
 	Short:                 "Database-related PAM commands",
@@ -25,17 +27,22 @@ var pamDbCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
-var pamDbAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-path>",
+var pamDbAccessCmd = &cobra.Command{
+	Use:                   "access",
 	Short:                 "Access PAM database accounts",
 	Long:                  "Access PAM database accounts for Infisical. This starts a local database proxy server that you can use to connect to databases directly.",
-	Example:               "infisical pam db access-account prod/db/my-postgres-account --duration 4h --port 5432 --project-id 1234567890",
+	Example:               "infisical pam db access --resource infisical-shared-cloud-instances --account infisical --project-id b38bef10-2685-43c4-9a2c-635206d60bec --duration 4h",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
+	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountPath := args[0]
+		resourceName, _ := cmd.Flags().GetString("resource")
+		accountName, _ := cmd.Flags().GetString("account")
+
+		if resourceName == "" || accountName == "" {
+			util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
+		}
 
 		projectID, err := cmd.Flags().GetString("project-id")
 		if err != nil {
@@ -55,7 +62,6 @@ var pamDbAccessAccountCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse duration flag")
 		}
 
-		// Parse duration
 		_, err = time.ParseDuration(durationStr)
 		if err != nil {
 			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
@@ -83,9 +89,14 @@ var pamDbAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartDatabaseLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr, port)
+		pam.StartDatabaseLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
+			ResourceName: resourceName,
+			AccountName:  accountName,
+		}, projectID, durationStr, port)
 	},
 }
+
+// ==================== SSH Commands ====================
 
 var pamSshCmd = &cobra.Command{
 	Use:                   "ssh",
@@ -95,24 +106,28 @@ var pamSshCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
-var pamSshAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-path>",
+var pamSshAccessCmd = &cobra.Command{
+	Use:                   "access",
 	Short:                 "Start SSH session to PAM account",
 	Long:                  "Start an SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
-	Example:               "infisical pam ssh access-account prod/ssh/my-ssh-account --duration 2h --project-id 1234567890",
+	Example:               "infisical pam ssh access --resource prod-servers --account root --project-id b38bef10-2685-43c4-9a2c-635206d60bec --duration 1h",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
+	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountPath := args[0]
+		resourceName, _ := cmd.Flags().GetString("resource")
+		accountName, _ := cmd.Flags().GetString("account")
+
+		if resourceName == "" || accountName == "" {
+			util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
+		}
 
 		durationStr, err := cmd.Flags().GetString("duration")
 		if err != nil {
 			util.HandleError(err, "Unable to parse duration flag")
 		}
 
-		// Parse duration
 		_, err = time.ParseDuration(durationStr)
 		if err != nil {
 			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
@@ -148,9 +163,15 @@ var pamSshAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr)
+		pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
+			ResourceName: resourceName,
+			AccountName:  accountName,
+		}, projectID, durationStr)
 	},
 }
+
+// ==================== Kubernetes Commands ====================
+
 var pamKubernetesCmd = &cobra.Command{
 	Use:                   "kubernetes",
 	Aliases:               []string{"k8s"},
@@ -160,24 +181,28 @@ var pamKubernetesCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
-var pamKubernetesAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-path>",
+var pamKubernetesAccessCmd = &cobra.Command{
+	Use:                   "access",
 	Short:                 "Access Kubernetes PAM account",
 	Long:                  "Access Kubernetes via a PAM-managed Kubernetes account. This command automatically launches a proxy connected to your Kubernetes cluster through the Infisical Gateway.",
-	Example:               "infisical pam kubernetes access-account prod/ssh/my-k8s-account --duration 2h --project-id <project_uuid>",
+	Example:               "infisical pam kubernetes access --resource prod-cluster --account developer --project-id b38bef10-2685-43c4-9a2c-635206d60bec --duration 4h",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
+	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountPath := args[0]
+		resourceName, _ := cmd.Flags().GetString("resource")
+		accountName, _ := cmd.Flags().GetString("account")
+
+		if resourceName == "" || accountName == "" {
+			util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
+		}
 
 		durationStr, err := cmd.Flags().GetString("duration")
 		if err != nil {
 			util.HandleError(err, "Unable to parse duration flag")
 		}
 
-		// Parse duration
 		_, err = time.ParseDuration(durationStr)
 		if err != nil {
 			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
@@ -218,9 +243,14 @@ var pamKubernetesAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr, port)
+		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
+			ResourceName: resourceName,
+			AccountName:  accountName,
+		}, projectID, durationStr, port)
 	},
 }
+
+// ==================== Redis Commands ====================
 
 var pamRedisCmd = &cobra.Command{
 	Use:                   "redis",
@@ -230,17 +260,22 @@ var pamRedisCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
-var pamRedisAccessAccountCmd = &cobra.Command{
-	Use:                   "access-account <account-path>",
-	Short:                 "Access Redis PAM account",
-	Long:                  "Access Redis via a PAM-managed Redis account. This starts a local Redis proxy server that you can use to connect to Redis directly.",
-	Example:               "infisical pam redis access-account prod/redis/my-redis-account --duration 4h --port 6379 --project-id <project_uuid>",
+var pamRedisAccessCmd = &cobra.Command{
+	Use:                   "access",
+	Short:                 "Access PAM Redis accounts",
+	Long:                  "Access PAM Redis accounts for Infisical. This starts a local Redis proxy server that you can use to connect to Redis directly.",
+	Example:               "infisical pam redis access --resource my-redis-resource --account redis-admin --duration 4h --port 6379 --project-id <project_uuid>",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
+	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 
-		accountPath := args[0]
+		resourceName, _ := cmd.Flags().GetString("resource")
+		accountName, _ := cmd.Flags().GetString("account")
+
+		if resourceName == "" || accountName == "" {
+			util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
+		}
 
 		projectID, err := cmd.Flags().GetString("project-id")
 		if err != nil {
@@ -260,7 +295,6 @@ var pamRedisAccessAccountCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse duration flag")
 		}
 
-		// Parse duration
 		_, err = time.ParseDuration(durationStr)
 		if err != nil {
 			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
@@ -288,29 +322,52 @@ var pamRedisAccessAccountCmd = &cobra.Command{
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartRedisLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, accountPath, projectID, durationStr, port)
+		pam.StartRedisLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
+			ResourceName: resourceName,
+			AccountName:  accountName,
+		}, projectID, durationStr, port)
 	},
 }
 
 func init() {
-	pamDbCmd.AddCommand(pamDbAccessAccountCmd)
-	pamDbAccessAccountCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
-	pamDbAccessAccountCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
-	pamDbAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	// Database commands
+	pamDbCmd.AddCommand(pamDbAccessCmd)
+	pamDbAccessCmd.Flags().String("resource", "", "Name of the PAM resource to access")
+	pamDbAccessCmd.Flags().String("account", "", "Name of the account within the resource")
+	pamDbAccessCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
+	pamDbAccessCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
+	pamDbAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamDbAccessCmd.MarkFlagRequired("resource")
+	pamDbAccessCmd.MarkFlagRequired("account")
 
-	pamSshCmd.AddCommand(pamSshAccessAccountCmd)
-	pamSshAccessAccountCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
-	pamSshAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	// SSH commands
+	pamSshCmd.AddCommand(pamSshAccessCmd)
+	pamSshAccessCmd.Flags().String("resource", "", "Name of the PAM resource to access")
+	pamSshAccessCmd.Flags().String("account", "", "Name of the account within the resource")
+	pamSshAccessCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
+	pamSshAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamSshAccessCmd.MarkFlagRequired("resource")
+	pamSshAccessCmd.MarkFlagRequired("account")
 
-	pamKubernetesCmd.AddCommand(pamKubernetesAccessAccountCmd)
-	pamKubernetesAccessAccountCmd.Flags().String("duration", "1h", "Duration for kubernetes access session (e.g., '1h', '30m', '2h30m')")
-	pamKubernetesAccessAccountCmd.Flags().Int("port", 0, "Port for the local kubernetes proxy server (0 for auto-assign)")
-	pamKubernetesAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	// Kubernetes commands
+	pamKubernetesCmd.AddCommand(pamKubernetesAccessCmd)
+	pamKubernetesAccessCmd.Flags().String("resource", "", "Name of the PAM resource to access")
+	pamKubernetesAccessCmd.Flags().String("account", "", "Name of the account within the resource")
+	pamKubernetesAccessCmd.Flags().String("duration", "1h", "Duration for kubernetes access session (e.g., '1h', '30m', '2h30m')")
+	pamKubernetesAccessCmd.Flags().Int("port", 0, "Port for the local kubernetes proxy server (0 for auto-assign)")
+	pamKubernetesAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamKubernetesAccessCmd.MarkFlagRequired("resource")
+	pamKubernetesAccessCmd.MarkFlagRequired("account")
 
-	pamRedisCmd.AddCommand(pamRedisAccessAccountCmd)
-	pamRedisAccessAccountCmd.Flags().String("duration", "1h", "Duration for Redis access session (e.g., '1h', '30m', '2h30m')")
-	pamRedisAccessAccountCmd.Flags().Int("port", 0, "Port for the local Redis proxy server (0 for auto-assign)")
-	pamRedisAccessAccountCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	// Redis commands
+	pamRedisCmd.AddCommand(pamRedisAccessCmd)
+	pamRedisAccessCmd.Flags().String("resource", "", "Name of the PAM resource to access")
+	pamRedisAccessCmd.Flags().String("account", "", "Name of the account within the resource")
+	pamRedisAccessCmd.Flags().String("duration", "1h", "Duration for Redis access session (e.g., '1h', '30m', '2h30m')")
+	pamRedisAccessCmd.Flags().Int("port", 0, "Port for the local Redis proxy server (0 for auto-assign)")
+	pamRedisAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamRedisAccessCmd.MarkFlagRequired("resource")
+	pamRedisAccessCmd.MarkFlagRequired("account")
 
 	pamCmd.AddCommand(pamDbCmd)
 	pamCmd.AddCommand(pamSshCmd)
