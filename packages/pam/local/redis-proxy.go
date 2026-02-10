@@ -2,22 +2,17 @@ package pam
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
-	"github.com/manifoldco/promptui"
 	"github.com/rs/zerolog/log"
 )
 
@@ -27,64 +22,21 @@ type RedisProxyServer struct {
 	port            int
 }
 
-func StartRedisLocalProxy(accessToken string, accountPath string, projectID string, durationStr string, port int) {
-	log.Info().Msgf("Starting Redis proxy for account: %s", accountPath)
+func StartRedisLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string, port int) {
+	log.Info().Msgf("Starting Redis proxy for account: %s", accessParams.GetDisplayName())
 	log.Info().Msgf("Session duration: %s", durationStr)
 
 	httpClient := resty.New()
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
-	pamRequest := api.PAMAccessRequest{
-		Duration:    durationStr,
-		AccountPath: accountPath,
-		ProjectId:   projectID,
-	}
+	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
 
-	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
-		var apiErr *api.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorMessage == "A policy is in place for this resource" {
-			if v, ok := apiErr.Details.(map[string]any); ok {
-				log.Info().Msgf("Account is protected by approval policy: %s", v["policyName"])
-
-				shouldSendRequest, err := askForApprovalRequestTrigger()
-				if err != nil {
-					if errors.Is(err, promptui.ErrAbort) {
-						log.Info().Msgf("Approval request was not created.")
-					} else {
-						util.HandleError(err, "Failed to send PAM account request")
-					}
-					return
-				}
-
-				if !shouldSendRequest {
-					log.Info().Msgf("Approval request was not created.")
-					return
-				}
-
-				approvalReq, err := api.CallPAMAccessApprovalRequest(httpClient, api.PAMAccessApprovalRequest{
-					ProjectId: projectID,
-					RequestData: api.PAMAccessApprovalRequestPayloadRequestData{
-						AccountPath:    accountPath,
-						AccessDuration: durationStr,
-					},
-				})
-				if err != nil {
-					util.HandleError(err, "Failed to send PAM account request")
-					return
-				}
-
-				url := fmt.Sprintf("%s/organizations/%s/projects/pam/%s/approval-requests/%s", strings.TrimSuffix(config.INFISICAL_URL, "/api"), approvalReq.Request.OrgId, approvalReq.Request.ProjectId, approvalReq.Request.ID)
-				if err := util.OpenBrowser(url); err != nil {
-					log.Error().Msgf("Failed to do browser redirect: %v", err)
-				}
-				log.Info().Msgf("Approval request created.")
-				log.Info().Msgf("View details at: %s", url)
-				return
-			}
+		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
+			return
 		}
-
 		util.HandleError(err, "Failed to access PAM account")
 		return
 	}
@@ -136,24 +88,14 @@ func StartRedisLocalProxy(accessToken string, accountPath string, projectID stri
 	}
 
 	if port == 0 {
-		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
 	} else {
-		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
+		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
 	}
 
 	username, ok := pamResponse.Metadata["username"]
 	if !ok {
 		username = "" // Redis may not always have username
-	}
-	accountName, ok := pamResponse.Metadata["accountName"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
-		return
-	}
-	accountPathMetadata, ok := pamResponse.Metadata["accountPath"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
-		return
 	}
 
 	log.Info().Msgf("Redis proxy server listening on port %d", proxy.port)
@@ -161,7 +103,7 @@ func StartRedisLocalProxy(accessToken string, accountPath string, projectID stri
 	util.PrintfStderr("**********************************************************************\n")
 	util.PrintfStderr("                  Redis Proxy Session Started!                  \n")
 	util.PrintfStderr("----------------------------------------------------------------------\n")
-	util.PrintfStderr("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
+	util.PrintfStderr("Resource: %s, Account: %s\n", accessParams.ResourceName, accessParams.AccountName)
 	util.PrintfStderr("\n")
 	util.PrintfStderr("You can now connect to your Redis instance using:\n")
 	if username != "" {

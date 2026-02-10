@@ -110,12 +110,7 @@ func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams,
 	}
 
 	// Build cluster name for kubeconfig context
-	var clusterName string
-	if accessParams.ResourceName != "" && accessParams.AccountName != "" {
-		clusterName = fmt.Sprintf("infisical-k8s-pam/%s/%s", accessParams.ResourceName, accessParams.AccountName)
-	} else {
-		clusterName = fmt.Sprintf("infisical-k8s-pam/%s", accessParams.AccountPath)
-	}
+	clusterName := fmt.Sprintf("infisical-k8s-pam/%s/%s", accessParams.ResourceName, accessParams.AccountName)
 
 	config.Clusters[clusterName] = &k8sapi.Cluster{
 		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
@@ -141,12 +136,8 @@ func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams,
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Kubernetes Proxy Session Started!                   \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	if accessParams.ResourceName != "" && accessParams.AccountName != "" {
-		fmt.Printf("Resource: %s\n", accessParams.ResourceName)
-		fmt.Printf("Account:  %s\n", accessParams.AccountName)
-	} else {
-		fmt.Printf("Account Path: %s\n", accessParams.AccountPath)
-	}
+	fmt.Printf("Resource: %s\n", accessParams.ResourceName)
+	fmt.Printf("Account:  %s\n", accessParams.AccountName)
 	fmt.Printf("\nYour kubectl context has been switched to: %s\n", clusterName)
 	fmt.Printf("You can now use kubectl commands to access your Kubernetes cluster.\n")
 	fmt.Printf("\n")

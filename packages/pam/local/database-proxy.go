@@ -111,12 +111,8 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Database Proxy Session Started!                  \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	if accessParams.ResourceName != "" && accessParams.AccountName != "" {
-		fmt.Printf("Resource: %s\n", accessParams.ResourceName)
-		fmt.Printf("Account:  %s\n", accessParams.AccountName)
-	} else {
-		fmt.Printf("Account Path: %s\n", accessParams.AccountPath)
-	}
+	fmt.Printf("Resource: %s\n", accessParams.ResourceName)
+	fmt.Printf("Account:  %s\n", accessParams.AccountName)
 	fmt.Printf("\n")
 	fmt.Printf("You can now connect to your database using this connection string:\n")
 

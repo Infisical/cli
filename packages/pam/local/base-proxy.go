@@ -25,16 +25,12 @@ import (
 )
 
 type PAMAccessParams struct {
-	AccountPath  string
 	ResourceName string
 	AccountName  string
 }
 
 // GetDisplayName returns a user-friendly display name for the access params
 func (p PAMAccessParams) GetDisplayName() string {
-	if p.AccountPath != "" {
-		return p.AccountPath
-	}
 	return fmt.Sprintf("%s/%s", p.ResourceName, p.AccountName)
 }
 
@@ -42,7 +38,6 @@ func (p PAMAccessParams) GetDisplayName() string {
 func (p PAMAccessParams) ToAPIRequest(projectID, duration string) api.PAMAccessRequest {
 	return api.PAMAccessRequest{
 		Duration:     duration,
-		AccountPath:  p.AccountPath,
 		ResourceName: p.ResourceName,
 		AccountName:  p.AccountName,
 		ProjectId:    projectID,
@@ -52,7 +47,6 @@ func (p PAMAccessParams) ToAPIRequest(projectID, duration string) api.PAMAccessR
 // ToApprovalRequestData converts PAMAccessParams to api.PAMAccessApprovalRequestPayloadRequestData
 func (p PAMAccessParams) ToApprovalRequestData(duration string) api.PAMAccessApprovalRequestPayloadRequestData {
 	return api.PAMAccessApprovalRequestPayloadRequestData{
-		AccountPath:    p.AccountPath,
 		ResourceName:   p.ResourceName,
 		AccountName:    p.AccountName,
 		AccessDuration: duration,
