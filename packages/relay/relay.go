@@ -448,7 +448,7 @@ func (r *Relay) handleSSHAgent(conn net.Conn) {
 				req.Reply(false, nil)
 			}
 		}
-	}()
+	}()ss
 
 	// Handle channel requests
 	for newChannel := range chans {
