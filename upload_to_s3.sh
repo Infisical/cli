@@ -43,6 +43,12 @@ if ls *.apk 1> /dev/null 2>&1; then
         # Extract package name and version from .PKGINFO inside the APK
         pkgname=$(tar -xzf "$i" -O .PKGINFO 2>/dev/null | grep "^pkgname" | cut -d' ' -f3)
         pkgver=$(tar -xzf "$i" -O .PKGINFO 2>/dev/null | grep "^pkgver" | cut -d' ' -f3)
+        
+        if [ -z "$pkgname" ] || [ -z "$pkgver" ]; then
+            echo "Error: Failed to extract package info from $i"
+            exit 1
+        fi
+        
         alpine_filename="${pkgname}-${pkgver}.apk"
         
         if [[ "$i" == *"aarch64"* ]] || [[ "$i" == *"arm64"* ]]; then
