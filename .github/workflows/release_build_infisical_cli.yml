@@ -126,7 +126,6 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: "3.12"
-      - run: pip install --upgrade cloudsmith-cli
       - name: Install mkrepo and dependencies
         run: pip install mkrepo univers boto3
       - name: Install AWS CLI
@@ -151,9 +150,8 @@ jobs:
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
       - name: Publish packages to repositories
-        run: bash upload_to_cloudsmith.sh
+        run: bash upload_to_s3.sh
         env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
           INFISICAL_CLI_S3_BUCKET: ${{ secrets.INFISICAL_CLI_S3_BUCKET }}
           INFISICAL_CLI_REPO_SIGNING_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_SIGNING_KEY_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
@@ -203,3 +201,5 @@ jobs:
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+

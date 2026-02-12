@@ -87,7 +87,8 @@ import_rsa_key() {
 
 setup_repository() {
     local repo_file="/etc/apk/repositories"
-    local repo_url="${PKG_URL}/apk/stable/main/${arch}"
+    # Note: Alpine's apk tool automatically appends /<arch>/APKINDEX.tar.gz to the repo URL
+    local repo_url="${PKG_URL}/apk/stable/main"
     
     echo_status "RUN" "Adding '${PACKAGE_NAME}' repository..."
     

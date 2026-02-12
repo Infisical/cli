@@ -25,14 +25,6 @@ validate_s3_env() {
 validate_s3_env
 
 # ============================================
-# APK - Upload to Cloudsmith (keep until S3 is validated)
-# ============================================
-for i in *.apk; do
-    [ -f "$i" ] || break
-    cloudsmith push alpine --republish infisical/infisical-cli/alpine/any-version $i
-done
-
-# ============================================
 # APK - Upload to S3 and generate APKINDEX
 # ============================================
 if ls *.apk 1> /dev/null 2>&1; then
@@ -42,15 +34,29 @@ if ls *.apk 1> /dev/null 2>&1; then
     mkdir -p apk-staging/stable/main/x86_64
     mkdir -p apk-staging/stable/main/aarch64
     
-    # Sort APK files by architecture
+    # Sort APK files by architecture and rename to Alpine naming convention
+    # Alpine expects: <pkgname>-<version>.apk (e.g., infisical-0.43.54.apk)
+    # GoReleaser creates: <pkgname>_<version>_linux_<arch>.apk
     for i in *.apk; do
         [ -f "$i" ] || break
+        
+        # Extract package name and version from .PKGINFO inside the APK
+        pkgname=$(tar -xzf "$i" -O .PKGINFO 2>/dev/null | grep "^pkgname" | cut -d' ' -f3)
+        pkgver=$(tar -xzf "$i" -O .PKGINFO 2>/dev/null | grep "^pkgver" | cut -d' ' -f3)
+        
+        if [ -z "$pkgname" ] || [ -z "$pkgver" ]; then
+            echo "Error: Failed to extract package info from $i"
+            exit 1
+        fi
+        
+        alpine_filename="${pkgname}-${pkgver}.apk"
+        
         if [[ "$i" == *"aarch64"* ]] || [[ "$i" == *"arm64"* ]]; then
-            echo "Copying $i to aarch64/"
-            cp "$i" apk-staging/stable/main/aarch64/
+            echo "Copying $i to aarch64/ as $alpine_filename"
+            cp "$i" "apk-staging/stable/main/aarch64/${alpine_filename}"
         elif [[ "$i" == *"x86_64"* ]] || [[ "$i" == *"amd64"* ]]; then
-            echo "Copying $i to x86_64/"
-            cp "$i" apk-staging/stable/main/x86_64/
+            echo "Copying $i to x86_64/ as $alpine_filename"
+            cp "$i" "apk-staging/stable/main/x86_64/${alpine_filename}"
         else
             echo "Warning: Unknown architecture for $i, skipping S3 upload"
         fi
@@ -70,7 +76,6 @@ if ls *.apk 1> /dev/null 2>&1; then
     # Note: nFPM-generated APKs don't need individual signatures.
     # We only sign the APKINDEX, which contains checksums of all packages.
     # Using --allow-untrusted because nFPM packages aren't signed with Alpine tools.
-    # Cloudsmith also only signs the APKINDEX, not the individual APK files. (https://help.cloudsmith.io/docs/signing-keys)
     echo "Generating APKINDEX.tar.gz using Alpine container..."
     docker run --rm \
         -v "$(pwd)/apk-staging:/repo" \
@@ -85,9 +90,9 @@ if ls *.apk 1> /dev/null 2>&1; then
                 arch_dir="$1"
                 arch_name="$2"
                 
-                if ls /repo/stable/main/${arch_dir}/*.apk 1> /dev/null 2>&1; then
+                if ls "/repo/stable/main/${arch_dir}"/*.apk 1> /dev/null 2>&1; then
                     echo "Processing ${arch_name} packages..."
-                    cd /repo/stable/main/${arch_dir}
+                    cd "/repo/stable/main/${arch_dir}"
                     
                     # Generate index (--allow-untrusted for nFPM-generated packages)
                     echo "Generating APKINDEX for ${arch_name}..."
@@ -115,14 +120,6 @@ for i in *.deb; do
     deb-s3 upload --bucket=$INFISICAL_CLI_S3_BUCKET --prefix=deb --visibility=private --sign=$INFISICAL_CLI_REPO_SIGNING_KEY_ID --preserve-versions $i
 done
 
-
-# ============================================
-# RPM - Upload to Cloudsmith (keep until S3 is validated)
-# ============================================
-for i in *.rpm; do
-    [ -f "$i" ] || break
-    cloudsmith push rpm --republish infisical/infisical-cli/any-distro/any-version $i
-done
 
 # ============================================
 # RPM - Upload to S3 and regenerate repo metadata
