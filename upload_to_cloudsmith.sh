@@ -67,6 +67,10 @@ if ls *.apk 1> /dev/null 2>&1; then
     fi
     
     # Generate APKINDEX using Alpine container
+    # Note: nFPM-generated APKs don't need individual signatures.
+    # We only sign the APKINDEX, which contains checksums of all packages.
+    # Using --allow-untrusted because nFPM packages aren't signed with Alpine tools.
+    # Cloudsmith also only signs the APKINDEX, not the individual APK files. (https://help.cloudsmith.io/docs/signing-keys)
     echo "Generating APKINDEX.tar.gz using Alpine container..."
     docker run --rm \
         -v "$(pwd)/apk-staging:/repo" \
@@ -76,23 +80,27 @@ if ls *.apk 1> /dev/null 2>&1; then
             echo "Installing alpine-sdk..."
             apk add --no-cache alpine-sdk || { echo "Failed to install alpine-sdk"; exit 1; }
             
-            # Process x86_64
-            if ls /repo/stable/main/x86_64/*.apk 1> /dev/null 2>&1; then
-                echo "Generating APKINDEX for x86_64..."
-                cd /repo/stable/main/x86_64
-                apk index -o APKINDEX.tar.gz *.apk
-                abuild-sign -k /keys/infisical.rsa APKINDEX.tar.gz
-                echo "x86_64 APKINDEX signed successfully"
-            fi
+            # Function to generate and sign index for an architecture
+            process_arch() {
+                arch_dir="$1"
+                arch_name="$2"
+                
+                if ls /repo/stable/main/${arch_dir}/*.apk 1> /dev/null 2>&1; then
+                    echo "Processing ${arch_name} packages..."
+                    cd /repo/stable/main/${arch_dir}
+                    
+                    # Generate index (--allow-untrusted for nFPM-generated packages)
+                    echo "Generating APKINDEX for ${arch_name}..."
+                    apk index --allow-untrusted -o APKINDEX.tar.gz *.apk
+                    
+                    # Sign the index
+                    abuild-sign -k /keys/infisical.rsa APKINDEX.tar.gz
+                    echo "${arch_name} APKINDEX signed successfully"
+                fi
+            }
             
-            # Process aarch64
-            if ls /repo/stable/main/aarch64/*.apk 1> /dev/null 2>&1; then
-                echo "Generating APKINDEX for aarch64..."
-                cd /repo/stable/main/aarch64
-                apk index -o APKINDEX.tar.gz *.apk
-                abuild-sign -k /keys/infisical.rsa APKINDEX.tar.gz
-                echo "aarch64 APKINDEX signed successfully"
-            fi
+            process_arch "x86_64" "x86_64"
+            process_arch "aarch64" "aarch64"
         '
     
     # Upload everything to S3
