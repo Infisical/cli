@@ -39,6 +39,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
 	"github.com/spf13/cobra"
@@ -985,16 +986,10 @@ func ProcessTemplate(templateId int, templatePath string, data interface{}, acce
 		"listSecrets":     secretFunction,
 		"dynamic_secret":  dynamicSecretFunction,
 		"getSecretByName": getSingleSecretFunction,
-		"minus": func(a, b int) int {
-			return a - b
-		},
-		"add": func(a, b int) int {
-			return a + b
-		},
 	}
 
 	templateName := path.Base(templatePath)
-	tmpl, err := template.New(templateName).Funcs(funcs).ParseFiles(templatePath)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(funcs)).ParseFiles(templatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -1027,7 +1022,7 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 	templateName := "base64Template"
 
-	tmpl, err := template.New(templateName).Funcs(funcs).Parse(templateString)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(funcs)).Parse(templateString)
 	if err != nil {
 		return nil, err
 	}
@@ -1053,7 +1048,7 @@ func ProcessLiteralTemplate(templateId int, templateString string, data interfac
 
 	templateName := "literalTemplate"
 
-	tmpl, err := template.New(templateName).Funcs(funcs).Parse(templateString)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(funcs)).Parse(templateString)
 	if err != nil {
 		return nil, err
 	}
