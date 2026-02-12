@@ -13,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -37,12 +38,14 @@ func handleK8SecretOutput(bootstrapResponse api.BootstrapInstanceResponse, k8Sec
 		return fmt.Errorf("failed to create Kubernetes client: %v", err)
 	}
 
-	// Parse and execute the template to render the data/stringData section
-	tmpl, err := template.New("k8-secret-template").Funcs(template.FuncMap{
+	templateFuncs := template.FuncMap{
 		"encodeBase64": func(s string) string {
 			return base64.StdEncoding.EncodeToString([]byte(s))
 		},
-	}).Parse(k8SecretTemplate)
+	}
+
+	// Parse and execute the template to render the data/stringData section
+	tmpl, err := template.New("k8-secret-template").Funcs(templates.CompileTemplateFunctions(templateFuncs)).Parse(k8SecretTemplate)
 
 	if err != nil {
 		return fmt.Errorf("failed to parse output template: %v", err)
