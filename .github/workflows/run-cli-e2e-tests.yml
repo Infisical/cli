@@ -26,6 +26,15 @@ jobs:
         with:
           repository: infisical/infisical
           path: infisical
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
       - name: Test with the Go CLI
         run: go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/...
         working-directory: ./e2e
