@@ -151,11 +151,19 @@ cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
 ```
 
+To run the cert-manager agent tests:
+
+```bash
+cd e2e
+go test github.com/infisical/cli/e2e-tests/agent
+```
+
 If you're using a `.env` file (recommended), just make sure it's configured and run the tests:
 
 ```bash
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
+go test github.com/infisical/cli/e2e-tests/agent
 ```
 
 Alternatively, you can export environment variables manually:
@@ -165,6 +173,7 @@ export INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge
 export INFISICAL_BACKEND_DIR=/path/to/infisical/backend
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
+go test github.com/infisical/cli/e2e-tests/agent
 ```
 
 **Tip:** Using a `.env` file is much more convenient than exporting variables manually. See the [Environment Variables Configuration](#environment-variables-configuration) section above for details.

@@ -17,6 +17,7 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/compose"
@@ -108,19 +109,45 @@ func (s *Stack) Up(ctx context.Context) error {
 	hashHex := hex.EncodeToString(hashBytes[:])
 	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
 
-	// Skip cache lookup if CLI_E2E_DISABLE_COMPOSE_CACHE is set
-	if os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "1" {
-		slog.Info("Disable compose cache", "name", uniqueName)
-	} else {
-		reused, err := s.tryReuseExistingContainers(ctx, uniqueName)
-		if err != nil {
-			return err
-		}
-		if reused {
-			return nil
-		}
+	disableCache := os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "1"
+
+	// If containers were already created in this test run, just reset the DB.
+	if s.dockerCompose != nil {
+		slog.Info("Reusing containers from current test run", "name", uniqueName)
+		return s.dockerCompose.Up(ctx)
 	}
 
+	// Try to reuse containers from a previous run (unless cache is disabled).
+	if !disableCache {
+		reused, err := s.tryReuseExistingContainers(ctx, uniqueName)
+		if err != nil {
+			slog.Warn("Failed to reuse existing containers, tearing down and recreating",
+				"name", uniqueName, "error", err)
+			if s.dockerCompose != nil {
+				if err := s.DownWithForce(ctx, true); err != nil {
+					slog.Warn("Failed to tear down stale containers", "error", err)
+				}
+			}
+		} else if reused {
+			return nil
+		}
+	} else {
+		slog.Info("Compose cache disabled, building fresh containers", "name", uniqueName)
+	}
+
+	if err := s.buildAndUp(ctx, data, uniqueName); err != nil {
+		slog.Warn("First compose up failed, removing stale images and retrying",
+			"name", uniqueName, "error", err)
+		s.DownWithForce(ctx, true) //nolint:errcheck
+		if err := removeStaleImages(ctx, uniqueName); err != nil {
+			slog.Warn("Failed to remove stale images", "error", err)
+		}
+		return s.buildAndUp(ctx, data, uniqueName)
+	}
+	return nil
+}
+
+func (s *Stack) buildAndUp(ctx context.Context, data []byte, uniqueName string) error {
 	dockerCompose, err := compose.NewDockerComposeWith(
 		compose.WithStackReaders(bytes.NewReader(data)),
 		compose.StackIdentifier(uniqueName),
@@ -135,10 +162,7 @@ func (s *Stack) Up(ctx context.Context) error {
 			WithStartupTimeout(5*time.Minute),
 	)
 	s.dockerCompose = waited
-	if err := s.dockerCompose.Up(ctx); err != nil {
-		return err
-	}
-	return nil
+	return s.dockerCompose.Up(ctx)
 }
 
 func (s *Stack) Down(ctx context.Context) error {
@@ -232,6 +256,23 @@ func WithRedisService() StackOption {
 			Environment: types.NewMappingWithEquals([]string{
 				"ALLOW_EMPTY_PASSWORD=yes",
 			}),
+		}
+	}
+}
+
+func WithPebbleService() StackOption {
+	return func(s *Stack) {
+		if s.Project.Services == nil {
+			s.Project.Services = types.Services{}
+		}
+		s.Project.Services["pebble"] = types.ServiceConfig{
+			Image: "ghcr.io/letsencrypt/pebble:latest",
+			Ports: []types.ServicePortConfig{{Published: "", Target: 14000}},
+			Environment: types.NewMappingWithEquals([]string{
+				"PEBBLE_VA_ALWAYS_VALID=1",
+				"PEBBLE_VA_NOSLEEP=1",
+			}),
+			Command: types.ShellCommand{"-config", "test/config/pebble-config.json", "-strict"},
 		}
 	}
 }
@@ -331,6 +372,13 @@ func (c *RunningCompose) DownWithForce(ctx context.Context, removeVolumes bool) 
 		return fmt.Errorf("container list: %w", err)
 	}
 
+	imageIDs := make(map[string]struct{})
+	for _, ctr := range containers {
+		if ctr.ImageID != "" {
+			imageIDs[ctr.ImageID] = struct{}{}
+		}
+	}
+
 	// Stop and remove all containers
 	for _, ctr := range containers {
 		slog.Info("Stopping and removing container", "id", ctr.ID[:12], "name", ctr.Names)
@@ -340,6 +388,13 @@ func (c *RunningCompose) DownWithForce(ctx context.Context, removeVolumes bool) 
 		}
 		if err := c.client.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true, RemoveVolumes: removeVolumes}); err != nil {
 			slog.Warn("Failed to remove container", "id", ctr.ID[:12], "error", err)
+		}
+	}
+
+	for imgID := range imageIDs {
+		slog.Info("Removing stale image", "id", imgID[:12])
+		if _, err := c.client.ImageRemove(ctx, imgID, image.RemoveOptions{Force: true}); err != nil {
+			slog.Warn("Failed to remove image (may be shared)", "id", imgID[:12], "error", err)
 		}
 	}
 
@@ -366,6 +421,30 @@ func (c *RunningCompose) DownWithForce(ctx context.Context, removeVolumes bool) 
 	c.containersLock.Unlock()
 
 	slog.Info("Compose stack torn down", "name", c.name)
+	return nil
+}
+
+func removeStaleImages(ctx context.Context, projectName string) error {
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return err
+	}
+
+	images, err := dockerClient.ImageList(ctx, image.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("reference", fmt.Sprintf("%s-*", projectName)),
+		),
+	})
+	if err != nil {
+		return fmt.Errorf("image list: %w", err)
+	}
+
+	for _, img := range images {
+		slog.Info("Removing stale compose image", "id", img.ID[:19], "tags", img.RepoTags)
+		if _, err := dockerClient.ImageRemove(ctx, img.ID, image.RemoveOptions{Force: true}); err != nil {
+			slog.Warn("Failed to remove image", "id", img.ID[:19], "error", err)
+		}
+	}
 	return nil
 }
 

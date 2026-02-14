@@ -40,10 +40,34 @@ func NewInfisicalService() *InfisicalService {
 	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
 }
 
+func NewInfisicalServiceWithAcme() *InfisicalService {
+	backendOpts := infisical.BackendOptionsFromEnv()
+	backendOpts.Dockerfile = "Dockerfile.dev"
+	svc := &InfisicalService{
+		Stack: infisical.NewStack(
+			infisical.WithDbService(),
+			infisical.WithRedisService(),
+			infisical.WithPebbleService(),
+			infisical.WithBackendService(backendOpts),
+		),
+	}
+	svc.WithBackendEnvironment(types.NewMappingWithEquals([]string{
+		"ACME_DEVELOPMENT_MODE=true",
+		"ACME_SKIP_UPSTREAM_VALIDATION=true",
+		"BDD_NOCK_API_ENABLED=true",
+		"NODE_TLS_REJECT_UNAUTHORIZED=0",
+	}))
+	return svc
+}
+
+func PebbleInternalUrl() string {
+	return "https://pebble:14000/dir"
+}
+
 func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithEquals) *InfisicalService {
 	backend := s.Stack.Project.Services["backend"]
 	backend.Environment = backend.Environment.OverrideBy(environment)
-	fmt.Print(s.Stack.Project.Services["backend"].Environment)
+	s.Stack.Project.Services["backend"] = backend
 	return s
 }
 
