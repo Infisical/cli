@@ -108,9 +108,7 @@ var exportCmd = &cobra.Command{
 		}
 
 		if templatePath != "" {
-			sigChan := make(chan os.Signal, 1)
-			dynamicSecretLeases := NewDynamicSecretLeaseManager(sigChan)
-			newEtag := ""
+			dynamicSecretLeases := NewDynamicSecretLeaseManager(nil, nil)
 
 			accessToken := ""
 			if token != nil {
@@ -124,11 +122,12 @@ var exportCmd = &cobra.Command{
 				accessToken = loggedInUserDetails.UserCredentials.JTWToken
 			}
 
-			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, "", &newEtag, dynamicSecretLeases)
+			currentEtag := ""
+			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
 			if err != nil {
 				util.HandleError(err)
 			}
-			fmt.Print(processedTemplate.String())
+			util.PrintStdout(processedTemplate.String())
 			return
 		}
 
@@ -164,10 +163,10 @@ var exportCmd = &cobra.Command{
 				util.HandleError(err, "Failed to write output to file")
 			}
 
-			fmt.Printf("Successfully exported secrets to: %s\n", finalPath)
+			util.PrintfStderr("Successfully exported secrets to: %s\n", finalPath)
 		} else {
 			// Original behavior - print to stdout when no output file specified
-			fmt.Print(output)
+			util.PrintStdout(output)
 		}
 
 		// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))
@@ -207,7 +206,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 			defaultFilename := getDefaultFilename(format)
 			return filepath.Join(absPath, defaultFilename), nil
 		}
-		
+
 		// Ensure the parent directory exists
 		parentDir := filepath.Dir(absPath)
 		if _, err := os.Stat(parentDir); os.IsNotExist(err) {
@@ -216,7 +215,7 @@ func resolveOutputPath(outputFile, format string) (string, error) {
 				return "", fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 		}
-		
+
 		// If no extension provided, add default extension based on format
 		if filepath.Ext(absPath) == "" {
 			ext := getDefaultExtension(format)
@@ -264,7 +263,7 @@ func getDefaultExtension(format string) string {
 }
 
 func init() {
-	rootCmd.AddCommand(exportCmd)
+	RootCmd.AddCommand(exportCmd)
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
 	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv)")

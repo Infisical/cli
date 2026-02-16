@@ -7,17 +7,217 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"path/filepath"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
+
+const (
+	RELAY_CACHE_FILE = "/var/lib/infisical/cached_relay"
+)
+
+func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (string, error) {
+	httpClient, err := GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return "", err
+	}
+	httpClient.SetAuthToken(accessToken)
+
+	relayName, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
+	if err != nil {
+		return "", fmt.Errorf("unable to parse target-relay-name flag: %v", err)
+	}
+
+	// --relay flag is deprecated in favor of --target-relay-name flag but still supported
+	if relayName == "" {
+		relayName, err = GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+		if err != nil {
+			return "", fmt.Errorf("unable to parse relay flag: %v", err)
+		}
+	}
+
+	if relayName != "" {
+		return relayName, nil
+	}
+
+	allRelays, err := api.CallGetRelays(httpClient)
+	if err != nil {
+		log.Debug().Err(err).Msg("Failed to call GetRelays API")
+		return "", fmt.Errorf("failed to fetch relays from platform: %w", err)
+	}
+	if len(allRelays) == 0 {
+		return "", fmt.Errorf("no relays available from the platform")
+	}
+
+	// filter for healthy relays
+	var healthyRelays []api.Relay
+	for _, relay := range allRelays {
+		if time.Since(relay.Heartbeat) < time.Hour {
+			healthyRelays = append(healthyRelays, relay)
+		}
+	}
+
+	if len(healthyRelays) == 0 {
+		return "", fmt.Errorf("no healthy relays available")
+	}
+
+	// check if a cached relay is still healthy
+	if !forceRefetch {
+		cachedRelayNameBytes, err := os.ReadFile(RELAY_CACHE_FILE)
+		if err == nil {
+			cachedRelayName := string(cachedRelayNameBytes)
+			if cachedRelayName != "" {
+				var cachedRelayInfo *api.Relay
+				for i := range healthyRelays {
+					if healthyRelays[i].Name == cachedRelayName {
+						cachedRelayInfo = &healthyRelays[i]
+						break
+					}
+				}
+
+				if cachedRelayInfo != nil {
+					// ping the cached relay to confirm it's reachable
+					address := fmt.Sprintf("%s:8443", cachedRelayInfo.Host)
+					conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+					if err == nil {
+						conn.Close()
+						log.Debug().Str("relay", cachedRelayName).Msg("Using valid and responsive cached relay")
+						return cachedRelayName, nil
+					}
+					log.Debug().Str("relay", cachedRelayName).Err(err).Msg("Cached relay is healthy but failed to respond to ping, finding a new one")
+				} else {
+					log.Debug().Str("relay", cachedRelayName).Msg("Cached relay is no longer healthy, finding a new one")
+				}
+			}
+		}
+	}
+
+	var healthyOrgRelays []api.Relay
+	var healthyInstanceRelays []api.Relay
+	for _, r := range healthyRelays {
+		if r.OrgId != nil {
+			healthyOrgRelays = append(healthyOrgRelays, r)
+		} else {
+			healthyInstanceRelays = append(healthyInstanceRelays, r)
+		}
+	}
+
+	type pingResult struct {
+		relay   api.Relay
+		latency time.Duration
+		err     error
+	}
+
+	findBestByPing := func(relaysToPing []api.Relay) (*api.Relay, time.Duration) {
+		if len(relaysToPing) == 0 {
+			return nil, 0
+		}
+
+		resultsChan := make(chan pingResult, len(relaysToPing))
+		var wg sync.WaitGroup
+
+		for _, relay := range relaysToPing {
+			wg.Add(1)
+			go func(r api.Relay) {
+				defer wg.Done()
+				address := fmt.Sprintf("%s:8443", r.Host)
+				start := time.Now()
+
+				conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+				latency := time.Since(start)
+
+				if err == nil {
+					conn.Close()
+				}
+				resultsChan <- pingResult{relay: r, latency: latency, err: err}
+			}(relay)
+		}
+
+		go func() {
+			wg.Wait()
+			close(resultsChan)
+		}()
+
+		var bestRelay *api.Relay
+		minLatency := time.Duration(1<<63 - 1)
+
+		for result := range resultsChan {
+			if result.err != nil {
+				log.Debug().Err(result.err).Str("relay", result.relay.Name).Msg("Failed to ping relay")
+				continue
+			}
+			log.Debug().Str("relay", result.relay.Name).Dur("latency", result.latency).Msg("Successfully pinged relay")
+			if result.latency < minLatency {
+				minLatency = result.latency
+				currentRelay := result.relay
+				bestRelay = &currentRelay
+			}
+		}
+		return bestRelay, minLatency
+	}
+
+	var bestRelay *api.Relay
+	var minLatency time.Duration
+
+	if len(healthyOrgRelays) > 0 {
+		log.Debug().Msg("Prioritizing healthy organization relays by pinging")
+		bestRelay, minLatency = findBestByPing(healthyOrgRelays)
+	}
+
+	if bestRelay == nil && len(healthyInstanceRelays) > 0 {
+		if len(healthyOrgRelays) > 0 {
+			log.Debug().Msg("All organization relays failed to respond, falling back to instance relays")
+		} else {
+			log.Debug().Msg("No healthy organization relays available, using instance relays")
+		}
+		bestRelay, minLatency = findBestByPing(healthyInstanceRelays)
+	}
+
+	var chosenRelay api.Relay
+	if bestRelay == nil {
+		log.Warn().Msg("Could not determine best relay by ping, selecting a random healthy relay")
+		log.Debug().Int("healthy_relays", len(healthyRelays)).Msg("All pings to healthy relays failed. Check network connectivity.")
+
+		if len(healthyOrgRelays) > 0 {
+			log.Debug().Msg("Selecting a random healthy organization relay")
+			chosenRelay = healthyOrgRelays[rand.Intn(len(healthyOrgRelays))]
+		} else {
+			log.Debug().Msg("No healthy organization relays available, selecting a random healthy instance relay")
+			chosenRelay = healthyInstanceRelays[rand.Intn(len(healthyInstanceRelays))]
+		}
+	} else {
+		chosenRelay = *bestRelay
+		log.Debug().Str("relay", chosenRelay.Name).Dur("latency", minLatency).Msg("Selected best relay by ping")
+	}
+
+	// cache the chosen relay
+	err = os.MkdirAll(filepath.Dir(RELAY_CACHE_FILE), 0755)
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to create cache directory for relay")
+	} else {
+		err = os.WriteFile(RELAY_CACHE_FILE, []byte(chosenRelay.Name), 0644)
+		if err != nil {
+			log.Error().Err(err).Str("relayName", chosenRelay.Name).Msg("Failed to cache relay name")
+		}
+	}
+
+	return chosenRelay.Name, nil
+}
 
 type DecodedSymmetricEncryptionDetails = struct {
 	Cipher []byte
@@ -306,6 +506,7 @@ func GetCmdFlagOrEnv(cmd *cobra.Command, flag string, envNames []string) (string
 		for _, env := range envNames {
 			value = strings.TrimSpace(os.Getenv(env))
 			if value != "" {
+				log.Debug().Str("env", env).Str("flag", flag).Msg("Using value from environment variable for flag")
 				break
 			}
 		}
@@ -313,6 +514,26 @@ func GetCmdFlagOrEnv(cmd *cobra.Command, flag string, envNames []string) (string
 	if value == "" {
 		return "", fmt.Errorf("please provide %s flag", flag)
 	}
+	return value, nil
+}
+
+func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames []string, defaultValue string) (string, error) {
+	value, flagsErr := cmd.Flags().GetString(flag)
+	if flagsErr != nil {
+		return "", flagsErr
+	}
+	if value == "" {
+		for _, env := range envNames {
+			value = strings.TrimSpace(os.Getenv(env))
+			if value != "" {
+				break
+			}
+		}
+	}
+	if value == "" {
+		return defaultValue, nil
+	}
+
 	return value, nil
 }
 
@@ -335,4 +556,126 @@ func GenerateETagFromSecrets(secrets []models.SingleEnvironmentVariable) string 
 
 	hash := sha256.Sum256(content)
 	return fmt.Sprintf(`"%s"`, hex.EncodeToString(hash[:]))
+}
+
+func IsDevelopmentMode() bool {
+	return CLI_VERSION == "devel"
+
+}
+
+// HandleMFASession opens a browser for MFA verification and polls until completion
+func HandleMFASession(httpClient *resty.Client, mfaSessionId string, mfaMethod string, infisicalURL string) error {
+	// Construct MFA URL
+	mfaURL := fmt.Sprintf("%s/mfa-session/%s", strings.TrimSuffix(infisicalURL, "/api"), mfaSessionId)
+
+	// Display MFA message
+	PrintfStderr("\n🔐 MFA Verification Required (%s)\n", mfaMethod)
+	PrintfStderr("→ %s\n", mfaURL)
+
+	// Try to open browser
+	if err := OpenBrowser(mfaURL); err != nil {
+		log.Debug().Err(err).Msg("Failed to open browser automatically")
+	} else {
+		PrintlnStderr("✓ Browser opened automatically")
+	}
+
+	PrintlnStderr("⏳ Waiting for MFA verification...\n")
+
+	// Poll for MFA completion
+	maxAttempts := 150 // 5 minutes at 2s intervals
+	pollInterval := 2 * time.Second
+
+	for i := 0; i < maxAttempts; i++ {
+		time.Sleep(pollInterval)
+
+		status, err := api.CallGetMFASessionStatus(httpClient, mfaSessionId)
+		if err != nil {
+			// Check if it's a 404 (session expired)
+			if apiErr, ok := err.(*api.APIError); ok {
+				if apiErr.StatusCode == 404 {
+					return fmt.Errorf("MFA session expired. Please try again")
+				}
+			}
+			// Continue polling on other errors
+			log.Debug().Err(err).Msg("Error polling MFA status, will retry")
+			continue
+		}
+
+		if status.Status == api.MFASessionStatusActive {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("MFA verification timeout. Please try again")
+}
+
+// OpenBrowser attempts to open a URL in the user's default browser
+func OpenBrowser(url string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	default: // linux and others
+		cmd = exec.Command("xdg-open", url)
+	}
+
+	return cmd.Start()
+}
+
+// ParseTimeDurationString converts a string representation of a polling interval to a time.Duration
+func ParseTimeDurationString(pollingInterval string, allowLessThanOneSecond bool) (time.Duration, error) {
+	length := len(pollingInterval)
+	if length < 2 {
+		return 0, fmt.Errorf("invalid format")
+	}
+
+	splitIndex := length
+	for i := length - 1; i >= 0; i-- {
+		if pollingInterval[i] >= '0' && pollingInterval[i] <= '9' {
+			splitIndex = i + 1
+			break
+		}
+	}
+
+	if splitIndex == 0 || splitIndex == length {
+		return 0, fmt.Errorf("invalid format: must contain both number and unit")
+	}
+
+	numberPart := pollingInterval[:splitIndex]
+	unit := pollingInterval[splitIndex:]
+
+	number, err := strconv.Atoi(numberPart)
+	if err != nil {
+		return 0, err
+	}
+
+	if number <= 0 {
+		return 0, fmt.Errorf("polling interval must be greater than 0")
+	}
+
+	switch unit {
+	case "s":
+		if number < 60 && !IsDevelopmentMode() && !allowLessThanOneSecond {
+			return 0, fmt.Errorf("polling interval must be at least 60 seconds")
+		}
+		return time.Duration(number) * time.Second, nil
+	case "ms":
+		if number < 1000 && !IsDevelopmentMode() && !allowLessThanOneSecond {
+			return 0, fmt.Errorf("polling interval must be at least 1000 milliseconds")
+		}
+		return time.Duration(number) * time.Millisecond, nil
+	case "m":
+		return time.Duration(number) * time.Minute, nil
+	case "h":
+		return time.Duration(number) * time.Hour, nil
+	case "d":
+		return time.Duration(number) * 24 * time.Hour, nil
+	case "w":
+		return time.Duration(number) * 7 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("invalid time unit")
+	}
 }

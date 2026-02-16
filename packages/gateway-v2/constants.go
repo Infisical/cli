@@ -1,0 +1,26 @@
+package gatewayv2
+
+const (
+	KUBERNETES_SERVICE_HOST_ENV_NAME              = "KUBERNETES_SERVICE_HOST"
+	KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME        = "KUBERNETES_SERVICE_PORT_HTTPS"
+	KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH       = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+	KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH         = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME = "INFISICAL_PAM_SESSION_RECORDING_PATH"
+
+	RELAY_NAME_ENV_NAME   = "INFISICAL_RELAY_NAME"
+	RELAY_HOST_ENV_NAME   = "INFISICAL_RELAY_HOST"
+	RELAY_TYPE_ENV_NAME   = "INFISICAL_RELAY_TYPE"
+	GATEWAY_NAME_ENV_NAME = "INFISICAL_GATEWAY_NAME"
+
+	RELAY_AUTH_SECRET_ENV_NAME = "INFISICAL_RELAY_AUTH_SECRET"
+	INFISICAL_TOKEN_ENV_NAME   = "INFISICAL_TOKEN"
+
+	INFISICAL_HTTP_PROXY_ACTION_HEADER = "x-infisical-action"
+)
+
+type HttpProxyAction string
+
+const (
+	HttpProxyActionInjectGatewayK8sServiceAccountToken HttpProxyAction = "inject-k8s-sa-auth-token"
+	HttpProxyActionUseGatewayK8sServiceAccount         HttpProxyAction = "use-k8s-sa"
+)

@@ -1,0 +1,57 @@
+version: v1
+
+infisical:
+  address: "https://app.infisical.com/"
+
+auth:
+  type: "universal-auth"
+  config:
+    client-id: "./client-id"
+    client-secret: "./client-secret"
+    remove_client_secret_on_read: false
+
+certificates:
+  - profile-name: "my-profile-name"
+    project-slug: "my-project-slug"
+
+    # Certificate parameters
+    attributes:
+      common-name: "api.mycompany.com"
+      alt-names:
+        - "www.api.mycompany.com"
+        - "internal-api.mycompany.com"
+      key-algorithm: "RSA_2048"
+      signature-algorithm: "RSA-SHA256"
+      key-usages:
+        - "digital_signature"
+        - "key_encipherment"
+      extended-key-usages:
+        - "server_auth"
+      ttl: "30d"
+    lifecycle:
+      renew-before-expiry: "1d"            # When to start checking for renewal before expiration
+      status-check-interval: "6h"          # How often to check certificate status and renewal needs
+
+    # Post-hooks for automation
+    post-hooks:
+      on-issuance:
+        command: "systemctl reload nginx"
+        timeout: 30
+      on-renewal:
+        command: "systemctl reload nginx"
+        timeout: 30
+      on-failure:
+        command: "logger 'Certificate failed for api.mycompany.com'"
+        timeout: 10
+
+    file-output:
+      private-key:
+        path: "./certs/web-server/private.key"
+        permission: "0600"
+      certificate:
+        path: "./certs/web-server/certificate.crt"
+        permission: "0644"
+      chain:
+        path: "./certs/web-server/chain.crt"
+        permission: "0644"
+        omit-root: true

@@ -14,6 +14,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/gateway"
+	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/pkg/errors"
@@ -87,6 +89,7 @@ var gatewayCmd = &cobra.Command{
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
+		log.Info().Msg("DEPRECATION NOTICE: The 'infisical gateway' command will be deprecated in a future version. Please use 'infisical gateway start'.\nNOTE: This requires manually updating your existing resources to point to the new gateway.")
 
 		infisicalClient, cancelSdk, err := getInfisicalSdkInstance(cmd)
 		if err != nil {
@@ -199,6 +202,110 @@ var gatewayCmd = &cobra.Command{
 	},
 }
 
+var gatewayStartCmd = &cobra.Command{
+	Use:                   "start",
+	Short:                 "Start the new Infisical gateway",
+	Long:                  "Start the new Infisical gateway component.",
+	Example:               "infisical gateway start --name=<name> --token=<token>",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		gatewayName, err := util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
+		if err != nil {
+			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
+		}
+
+		pamSessionRecordingPath, err := util.GetCmdFlagOrEnv(cmd, "pam-session-recording-path", []string{gatewayv2.INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME})
+		if err == nil && pamSessionRecordingPath != "" {
+			session.SetSessionRecordingPath(pamSessionRecordingPath)
+		}
+
+		infisicalClient, cancelSdk, err := getInfisicalSdkInstance(cmd)
+		if err != nil {
+			util.HandleError(err, "unable to get infisical client")
+		}
+		defer cancelSdk()
+
+		var accessToken atomic.Value
+		accessToken.Store(infisicalClient.Auth().GetAccessToken())
+
+		if accessToken.Load().(string) == "" {
+			util.HandleError(errors.New("no access token found"))
+		}
+
+		relayName, err := util.GetRelayName(cmd, false, accessToken.Load().(string))
+		if err != nil {
+			util.HandleError(err, "unable to get relay name")
+		}
+
+		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
+			Name:           gatewayName,
+			RelayName:      relayName,
+			ReconnectDelay: 10 * time.Second,
+		})
+
+		if err != nil {
+			util.HandleError(err, "unable to create gateway instance")
+		}
+
+		gatewayInstance.SetToken(accessToken.Load().(string))
+
+		Telemetry.CaptureEvent("cli-command:gateway-v2", posthog.NewProperties().Set("version", util.CLI_VERSION))
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		ctx, cancelCmd := context.WithCancel(cmd.Context())
+		defer cancelCmd()
+
+		go func() {
+			<-sigCh
+			log.Info().Msg("Received shutdown signal, shutting down gateway...")
+			cancelCmd()
+			cancelSdk()
+
+			// Give graceful shutdown 10 seconds, then force exit on second signal
+			select {
+			case <-sigCh:
+				log.Warn().Msg("Second signal received, force exit triggered")
+				os.Exit(1)
+			case <-time.After(10 * time.Second):
+				log.Info().Msg("Graceful shutdown completed")
+				os.Exit(0)
+			}
+		}()
+
+		// Token refresh goroutine - runs every 10 seconds
+		go func() {
+			tokenRefreshTicker := time.NewTicker(10 * time.Second)
+			defer tokenRefreshTicker.Stop()
+
+			for {
+				select {
+				case <-tokenRefreshTicker.C:
+					if ctx.Err() != nil {
+						return
+					}
+
+					newToken := infisicalClient.Auth().GetAccessToken()
+					if newToken != "" && newToken != accessToken.Load().(string) {
+						accessToken.Store(newToken)
+						gatewayInstance.SetToken(newToken)
+					}
+
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		err = gatewayInstance.Start(ctx)
+		if err != nil {
+			util.HandleError(err, "unable to start gateway instance")
+		}
+	},
+}
+
 var gatewayInstallCmd = &cobra.Command{
 	Use:                   "install",
 	Short:                 "Install and enable systemd service for the gateway (requires sudo)",
@@ -265,6 +372,105 @@ var gatewayUninstallCmd = &cobra.Command{
 	},
 }
 
+var gatewaySystemdCmd = &cobra.Command{
+	Use:   "systemd",
+	Short: "Manage systemd service for Infisical gateway",
+	Long:  "Manage systemd service for Infisical gateway. Use 'systemd install' to install and enable the service.",
+	Example: `sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name>
+  sudo infisical gateway systemd uninstall`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var gatewaySystemdInstallCmd = &cobra.Command{
+	Use:                   "install",
+	Short:                 "Install and enable systemd service for the gateway (v2) (requires sudo)",
+	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux.",
+	Example:               "sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name>",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS != "linux" {
+			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
+		}
+
+		if os.Geteuid() != 0 {
+			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+		}
+
+		token, err := util.GetInfisicalToken(cmd)
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
+		if token == nil {
+			util.HandleError(errors.New("Token not found"))
+		}
+
+		domain, err := cmd.Flags().GetString("domain")
+		if err != nil {
+			util.HandleError(err, "Unable to parse domain flag")
+		}
+
+		if domain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
+		}
+
+		gatewayName, err := cmd.Flags().GetString("name")
+		if err != nil {
+			util.HandleError(err, "Unable to parse name flag")
+		}
+		if gatewayName == "" {
+			util.HandleError(errors.New("Gateway name is required"))
+		}
+
+		serviceLogFile, err := cmd.Flags().GetString("log-file")
+		if err != nil {
+			util.HandleError(err, "Unable to parse log-file flag")
+		}
+
+		relayName, err := util.GetRelayName(cmd, false, token.Token)
+		if err != nil {
+			util.HandleError(err, "unable to get relay name")
+		}
+
+		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile)
+		if err != nil {
+			util.HandleError(err, "Unable to install systemd service")
+		}
+
+		enableCmd := exec.Command("systemctl", "enable", "infisical-gateway")
+		if err := enableCmd.Run(); err != nil {
+			util.HandleError(err, "Failed to enable systemd service")
+		}
+
+		log.Info().Msg("Successfully installed and enabled infisical-gateway service")
+		log.Info().Msg("To start the service, run: sudo systemctl start infisical-gateway")
+	},
+}
+
+var gatewaySystemdUninstallCmd = &cobra.Command{
+	Use:                   "uninstall",
+	Short:                 "Uninstall and remove systemd service for the gateway (requires sudo)",
+	Long:                  "Uninstall and remove systemd service for the gateway. Must be run with sudo on Linux.",
+	Example:               "sudo infisical gateway systemd uninstall",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS != "linux" {
+			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
+		}
+
+		if os.Geteuid() != 0 {
+			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+		}
+
+		if err := gatewayv2.UninstallGatewaySystemdService(); err != nil {
+			util.HandleError(err, "Failed to uninstall systemd service")
+		}
+	},
+}
+
 var gatewayRelayCmd = &cobra.Command{
 	Example:               `infisical gateway relay`,
 	Short:                 "Used to run infisical gateway relay",
@@ -293,26 +499,54 @@ var gatewayRelayCmd = &cobra.Command{
 }
 
 func init() {
+	// Legacy gateway command flags (v1)
 	gatewayCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
-
 	gatewayCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
-
 	gatewayCmd.Flags().String("client-id", "", "client id for universal auth")
 	gatewayCmd.Flags().String("client-secret", "", "client secret for universal auth")
-
 	gatewayCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
 	gatewayCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	gatewayCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
-
 	gatewayCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
+	// Gateway start command flags (v2)
+	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
+	gatewayStartCmd.Flags().String("name", "", "name of the gateway")
+	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
+	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
+	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
+	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
+	gatewayStartCmd.Flags().String("client-secret", "", "client secret for universal auth")
+	gatewayStartCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
+	gatewayStartCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
+	gatewayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
+	gatewayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
+	gatewayStartCmd.Flags().String("pam-session-recording-path", "", "directory path for PAM session recordings (defaults to /var/lib/infisical/session_recordings)")
+
+	// Legacy install command flags (v1)
 	gatewayInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
 	gatewayInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 
+	// Systemd install command flags (v2)
+	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
+	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
+	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
+	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
+	gatewaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
+
+	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")
 
+	// Wire up command hierarchy
+	gatewaySystemdCmd.AddCommand(gatewaySystemdInstallCmd)
+	gatewaySystemdCmd.AddCommand(gatewaySystemdUninstallCmd)
+
+	gatewayCmd.AddCommand(gatewayStartCmd)
+	gatewayCmd.AddCommand(gatewaySystemdCmd)
 	gatewayCmd.AddCommand(gatewayInstallCmd)
 	gatewayCmd.AddCommand(gatewayUninstallCmd)
 	gatewayCmd.AddCommand(gatewayRelayCmd)
-	rootCmd.AddCommand(gatewayCmd)
+	RootCmd.AddCommand(gatewayCmd)
 }

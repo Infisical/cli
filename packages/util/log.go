@@ -3,7 +3,9 @@ package util
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -11,6 +13,56 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fatih/color"
 )
+
+// GetStderrWriter is a function that returns the stderr writer to use.
+// It can be set by the cmd package to use RootCmd's stderr.
+// If not set, it defaults to returning os.Stderr.
+var GetStderrWriter func() io.Writer = func() io.Writer {
+	return os.Stderr
+}
+
+// GetStdoutWriter is a function that returns the stdout writer to use.
+// It can be set by the cmd package to use RootCmd's stdout.
+// If not set, it defaults to returning os.Stdout.
+var GetStdoutWriter func() io.Writer = func() io.Writer {
+	return os.Stdout
+}
+
+// PrintStderr prints to stderr using GetStderrWriter (which proxies to RootCmd's stderr).
+// This is equivalent to fmt.Print but uses RootCmd's stderr.
+func PrintStderr(a ...interface{}) {
+	fmt.Fprint(GetStderrWriter(), a...)
+}
+
+// PrintlnStderr prints to stderr using GetStderrWriter (which proxies to RootCmd's stderr).
+// This is equivalent to fmt.Println but uses RootCmd's stderr.
+func PrintlnStderr(a ...interface{}) {
+	fmt.Fprintln(GetStderrWriter(), a...)
+}
+
+// PrintfStderr prints to stderr using GetStderrWriter (which proxies to RootCmd's stderr).
+// This is equivalent to fmt.Printf but uses RootCmd's stderr.
+func PrintfStderr(format string, a ...interface{}) {
+	fmt.Fprintf(GetStderrWriter(), format, a...)
+}
+
+// PrintStdout prints to stdout using GetStdoutWriter (which proxies to RootCmd's stdout).
+// This is equivalent to fmt.Print but uses RootCmd's stdout.
+func PrintStdout(a ...interface{}) {
+	fmt.Fprint(GetStdoutWriter(), a...)
+}
+
+// PrintlnStdout prints to stdout using GetStdoutWriter (which proxies to RootCmd's stdout).
+// This is equivalent to fmt.Println but uses RootCmd's stdout.
+func PrintlnStdout(a ...interface{}) {
+	fmt.Fprintln(GetStdoutWriter(), a...)
+}
+
+// PrintfStdout prints to stdout using GetStdoutWriter (which proxies to RootCmd's stdout).
+// This is equivalent to fmt.Printf but uses RootCmd's stdout.
+func PrintfStdout(format string, a ...interface{}) {
+	fmt.Fprintf(GetStdoutWriter(), format, a...)
+}
 
 func HandleError(err error, messages ...string) {
 	PrintErrorAndExit(1, err, messages...)
@@ -30,7 +82,7 @@ func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 		// Print additional messages for both API and non-API errors
 		if len(messages) > 0 {
 			for _, message := range messages {
-				fmt.Fprintln(os.Stderr, message)
+				PrintlnStderr(message)
 			}
 		}
 
@@ -40,7 +92,11 @@ func PrintErrorAndExit(exitCode int, err error, messages ...string) {
 }
 
 func PrintWarning(message string) {
-	color.New(color.FgYellow).Fprintf(os.Stderr, "Warning: %v \n", message)
+	PrintWarningWithWriter(message, GetStderrWriter())
+}
+
+func PrintWarningWithWriter(message string, w io.Writer) {
+	color.New(color.FgYellow).Fprintf(w, "Warning: %v \n", message)
 }
 
 func PrintSuccessMessage(message string) {
@@ -50,7 +106,7 @@ func PrintSuccessMessage(message string) {
 func PrintErrorMessageAndExit(messages ...string) {
 	if len(messages) > 0 {
 		for _, message := range messages {
-			fmt.Fprintln(os.Stderr, message)
+			PrintlnStderr(message)
 		}
 	}
 
@@ -58,25 +114,32 @@ func PrintErrorMessageAndExit(messages ...string) {
 }
 
 func printError(e error) {
-	color.New(color.FgRed).Fprintf(os.Stderr, "error: %v\n", e)
+	color.New(color.FgRed).Fprintf(GetStderrWriter(), "error: %v\n", e)
 }
 
 func printPrettyAPIError(apiErr api.APIError) {
-	// Using ANSI color codes
-	red := lipgloss.Color("196")    // Bright red
-	yellow := lipgloss.Color("184") // Bright yellow/gold
-	gray := lipgloss.Color("245")   // Light gray
-	white := lipgloss.Color("255")  // White
+	isDark := lipgloss.HasDarkBackground()
+
+	var (
+		labelColor       lipgloss.Color = lipgloss.Color("196") // Bright Red
+		primaryTextColor lipgloss.Color = lipgloss.Color("235") // Dark Gray
+		accentColor      lipgloss.Color = lipgloss.Color("17")  // Dark Blue
+	)
+
+	if isDark {
+		primaryTextColor = lipgloss.Color("245") // Light Gray
+		accentColor = lipgloss.Color("27")       // Light Blue
+	}
 
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(red)
+		Foreground(labelColor)
 
 	valueStyle := lipgloss.NewStyle().
-		Foreground(white)
+		Foreground(primaryTextColor)
 
 	detailStyle := lipgloss.NewStyle().
-		Foreground(yellow).
+		Foreground(accentColor).
 		MarginLeft(2)
 
 	// Build the error content
@@ -88,10 +151,19 @@ func printPrettyAPIError(apiErr api.APIError) {
 		Bold(true).
 		Foreground(lipgloss.Color(statusColor))
 
+	domain := extractDomainFromURL(apiErr.URL)
+
 	// Request details
 	content.WriteString(labelStyle.Render("Request: "))
 	content.WriteString(valueStyle.Render(fmt.Sprintf("%s %s", apiErr.Method, apiErr.URL)))
 	content.WriteString("\n")
+
+	// Show which instance is being used
+	if domain != "" {
+		content.WriteString(labelStyle.Render("Instance: "))
+		content.WriteString(valueStyle.Render(domain))
+		content.WriteString("\n")
+	}
 
 	// Request ID if available
 	if apiErr.ReqId != "" {
@@ -181,17 +253,17 @@ func printPrettyAPIError(apiErr api.APIError) {
 
 	// Support message with styled link
 	supportStyle := lipgloss.NewStyle().
-		Foreground(gray).
+		Foreground(primaryTextColor).
 		MarginTop(1)
 
 	linkStyle := lipgloss.NewStyle().
-		Foreground(yellow).
+		Foreground(accentColor).
 		Underline(true)
 
 	supportMsg := supportStyle.Render("If this issue continues, get support at ") + linkStyle.Render("https://infisical.com/slack")
 	content.WriteString(supportMsg)
 
-	fmt.Fprintln(os.Stderr, content.String())
+	PrintlnStderr(content.String())
 }
 
 func getStatusCodeColor(statusCode int) string {
@@ -203,4 +275,16 @@ func getStatusCodeColor(statusCode int) string {
 	default:
 		return "255" // White for unknown
 	}
+}
+
+func extractDomainFromURL(urlStr string) string {
+	if urlStr == "" {
+		return ""
+	}
+
+	if parsedURL, err := url.Parse(urlStr); err == nil && parsedURL.Host != "" {
+		return parsedURL.Scheme + "://" + parsedURL.Host
+	}
+
+	return ""
 }

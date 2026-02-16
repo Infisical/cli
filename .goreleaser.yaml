@@ -146,6 +146,7 @@ nfpms:
         dst: /usr/share/man/man1/infisical.1.gz
 
 scoop:
+  name: infisical
   bucket:
     owner: Infisical
     name: scoop-infisical
@@ -213,7 +214,7 @@ dockers:
       - "--platform=linux/amd64"
   - dockerfile: docker/alpine
     goos: linux
-    goarch: amd64
+    goarch: arm64
     use: buildx
     ids:
       - all-other-builds

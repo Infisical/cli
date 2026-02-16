@@ -117,7 +117,14 @@ func (a *SdkAuthenticator) HandleUniversalAuthLogin() (credential infisicalSdk.M
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().UniversalAuthLogin(clientId, clientSecret)
+	// We are not providing an environment variable because infisical go sdk will check for the environment variable when value is emtpy
+	// Refer: https://github.com/Infisical/go-sdk/blob/main/packages/util/constants.go#L10
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).UniversalAuthLogin(clientId, clientSecret)
 }
 
 func (a *SdkAuthenticator) HandleJwtAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -132,7 +139,12 @@ func (a *SdkAuthenticator) HandleJwtAuthLogin() (credential infisicalSdk.Machine
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().JwtAuthLogin(identityId, jwt)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).JwtAuthLogin(identityId, jwt)
 }
 
 func (a *SdkAuthenticator) HandleKubernetesAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -147,7 +159,12 @@ func (a *SdkAuthenticator) HandleKubernetesAuthLogin() (credential infisicalSdk.
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().KubernetesAuthLogin(identityId, serviceAccountTokenPath)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).KubernetesAuthLogin(identityId, serviceAccountTokenPath)
 }
 
 func (a *SdkAuthenticator) HandleAzureAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -157,7 +174,12 @@ func (a *SdkAuthenticator) HandleAzureAuthLogin() (credential infisicalSdk.Machi
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().AzureAuthLogin(identityId, "")
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).AzureAuthLogin(identityId, "")
 }
 
 func (a *SdkAuthenticator) HandleGcpIdTokenAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -167,7 +189,12 @@ func (a *SdkAuthenticator) HandleGcpIdTokenAuthLogin() (credential infisicalSdk.
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().GcpIdTokenAuthLogin(identityId)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).GcpIdTokenAuthLogin(identityId)
 }
 
 func (a *SdkAuthenticator) HandleGcpIamAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -182,7 +209,12 @@ func (a *SdkAuthenticator) HandleGcpIamAuthLogin() (credential infisicalSdk.Mach
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().GcpIamAuthLogin(identityId, serviceAccountKeyFilePath)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).GcpIamAuthLogin(identityId, serviceAccountKeyFilePath)
 }
 
 func (a *SdkAuthenticator) HandleAwsIamAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -192,7 +224,12 @@ func (a *SdkAuthenticator) HandleAwsIamAuthLogin() (credential infisicalSdk.Mach
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().AwsIamAuthLogin(identityId)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).AwsIamAuthLogin(identityId)
 }
 
 func (a *SdkAuthenticator) HandleOidcAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -207,7 +244,12 @@ func (a *SdkAuthenticator) HandleOidcAuthLogin() (credential infisicalSdk.Machin
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().OidcAuthLogin(identityId, jwt)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).OidcAuthLogin(identityId, jwt)
 }
 
 func (a *SdkAuthenticator) HandleLdapAuthLogin() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -226,5 +268,10 @@ func (a *SdkAuthenticator) HandleLdapAuthLogin() (credential infisicalSdk.Machin
 		return infisicalSdk.MachineIdentityCredential{}, err
 	}
 
-	return a.infisicalClient.Auth().LdapAuthLogin(identityId, ldapUsername, ldapPassword)
+	organizationSlug, err := GetCmdFlagOrEnvWithDefaultValue(a.cmd, "organization-slug", []string{}, "")
+	if err != nil {
+		return infisicalSdk.MachineIdentityCredential{}, err
+	}
+
+	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).LdapAuthLogin(identityId, ldapUsername, ldapPassword)
 }

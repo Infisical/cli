@@ -1,4 +1,4 @@
-FROM alpine
+FROM alpine:3.22.2
 RUN apk add --no-cache tini
 
 ## Upgrade OpenSSL libraries to mitigate known vulnerabilities as the current Alpine image has not been patched yet.
