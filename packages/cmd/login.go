@@ -148,7 +148,8 @@ var loginCmd = &cobra.Command{
 			}
 
 			domainFlagExplicitlySet := cmd.Flags().Changed("domain")
-			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet)
+			_, envVarExplicitlySet := os.LookupEnv("INFISICAL_API_URL")
+			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet || envVarExplicitlySet)
 
 			if err != nil {
 				util.HandleError(err)
@@ -444,8 +445,6 @@ func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool) (bool, e
 
 	preconfiguredUrl := strings.TrimSuffix(presetDomain, "/api")
 
-	// If the domain flag was explicitly set by the user, use it directly (even for US/EU cloud URLs)
-	// Otherwise, only use the preset domain if it's not a default cloud URL
 	shouldUsePresetDomain := preconfiguredUrl != "" && (domainFlagExplicitlySet || (preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL))
 
 	if shouldUsePresetDomain {
