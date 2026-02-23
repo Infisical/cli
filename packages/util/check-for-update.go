@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -167,6 +168,9 @@ func GetUpdateInstructions() string {
 	execPath, err := os.Executable()
 	if err != nil {
 		execPath = ""
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
 	}
 	return getUpdateInstructions(runtime.GOOS, execPath)
 }
