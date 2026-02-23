@@ -31,7 +31,7 @@ jobs:
           $scoopPath = "$env:USERPROFILE\scoop\apps\infisical\current"
           New-Item -ItemType Directory -Force -Path $scoopPath | Out-Null
           Copy-Item infisical.exe "$scoopPath\infisical.exe"
-          $output = & "$scoopPath\infisical.exe" --help 2>&1 | Out-String
+          $output = & "$scoopPath\infisical.exe" vault 2>&1 | Out-String
           Write-Host "Output: $output"
           if ($output -notmatch "scoop update infisical") {
             Write-Error "Expected 'scoop update infisical', got: $output"
@@ -44,7 +44,7 @@ jobs:
           $npmPath = "$env:APPDATA\npm\node_modules\@infisical\cli\bin"
           New-Item -ItemType Directory -Force -Path $npmPath | Out-Null
           Copy-Item infisical.exe "$npmPath\infisical.exe"
-          $output = & "$npmPath\infisical.exe" --help 2>&1 | Out-String
+          $output = & "$npmPath\infisical.exe" vault 2>&1 | Out-String
           Write-Host "Output: $output"
           if ($output -notmatch "npm update -g @infisical/cli") {
             Write-Error "Expected 'npm update -g @infisical/cli', got: $output"
@@ -57,7 +57,7 @@ jobs:
           $wingetPath = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
           New-Item -ItemType Directory -Force -Path $wingetPath | Out-Null
           Copy-Item infisical.exe "$wingetPath\infisical.exe"
-          $output = & "$wingetPath\infisical.exe" --help 2>&1 | Out-String
+          $output = & "$wingetPath\infisical.exe" vault 2>&1 | Out-String
           Write-Host "Output: $output"
           if ($output -notmatch "winget upgrade Infisical.Infisical") {
             Write-Error "Expected 'winget upgrade Infisical.Infisical', got: $output"
@@ -78,7 +78,7 @@ jobs:
         run: |
           mkdir -p /tmp/homebrew/bin
           cp infisical /tmp/homebrew/bin/infisical
-          output=$(/tmp/homebrew/bin/infisical --help 2>&1 || true)
+          output=$(/tmp/homebrew/bin/infisical vault 2>&1 || true)
           echo "Output: $output"
           echo "$output" | grep -q "brew update" || (echo "Expected brew instruction, got: $output" && exit 1)
 
@@ -86,7 +86,7 @@ jobs:
         run: |
           mkdir -p /tmp/node_modules/@infisical/cli/bin
           cp infisical /tmp/node_modules/@infisical/cli/bin/infisical
-          output=$(/tmp/node_modules/@infisical/cli/bin/infisical --help 2>&1 || true)
+          output=$(/tmp/node_modules/@infisical/cli/bin/infisical vault 2>&1 || true)
           echo "Output: $output"
           echo "$output" | grep -q "npm update -g @infisical/cli" || (echo "Expected npm instruction, got: $output" && exit 1)
 
@@ -103,7 +103,7 @@ jobs:
       - name: Test apt path detection
         run: |
           sudo cp infisical /usr/bin/infisical
-          output=$(/usr/bin/infisical --help 2>&1 || true)
+          output=$(/usr/bin/infisical vault 2>&1 || true)
           echo "Output: $output"
           echo "$output" | grep -q "apt-get" || (echo "Expected apt-get instruction, got: $output" && exit 1)
 
@@ -111,6 +111,6 @@ jobs:
         run: |
           mkdir -p $HOME/.npm-global/lib/node_modules/@infisical/cli/bin
           cp infisical $HOME/.npm-global/lib/node_modules/@infisical/cli/bin/infisical
-          output=$($HOME/.npm-global/lib/node_modules/@infisical/cli/bin/infisical --help 2>&1 || true)
+          output=$($HOME/.npm-global/lib/node_modules/@infisical/cli/bin/infisical vault 2>&1 || true)
           echo "Output: $output"
           echo "$output" | grep -q "npm update -g @infisical/cli" || (echo "Expected npm instruction, got: $output" && exit 1)
