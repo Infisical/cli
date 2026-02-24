@@ -73,6 +73,11 @@ var loginCmd = &cobra.Command{
 		presetDomain := config.INFISICAL_URL
 
 		clearSelfHostedDomains, err := cmd.Flags().GetBool("clear-domains")
+
+		if err != nil {
+			util.HandleError(err)
+		}
+		silentMode, err := cmd.Flags().GetBool("silent")
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -148,7 +153,8 @@ var loginCmd = &cobra.Command{
 			}
 
 			domainFlagExplicitlySet := cmd.Flags().Changed("domain")
-			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet)
+			shouldPrintInfo := !silentMode && !plainOutput
+			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet, shouldPrintInfo)
 
 			if err != nil {
 				util.HandleError(err)
@@ -436,7 +442,7 @@ func DomainOverridePrompt() (bool, error) {
 	return selectedOption == OVERRIDE, err
 }
 
-func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool) (bool, error) {
+func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, shouldPrintInfo bool) (bool, error) {
 	infisicalConfig, err := util.GetConfigFile()
 	if err != nil {
 		return false, fmt.Errorf("askForDomain: unable to get config file because [err=%s]", err)
@@ -474,7 +480,9 @@ func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool) (bool, e
 		whilte := color.New(color.FgGreen)
 		boldWhite := whilte.Add(color.Bold)
 		time.Sleep(time.Second * 1)
-		boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
+		if shouldPrintInfo {
+			boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
+		}
 
 		return true, nil
 	}
