@@ -469,6 +469,14 @@ func (m *Model) handleGlobalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handlePromptKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "tab":
+		m.promptBar.Blur()
+		m.cycleFocus(1)
+		return m, nil
+	case "shift+tab":
+		m.promptBar.Blur()
+		m.cycleFocus(-1)
+		return m, nil
 	case "esc":
 		m.promptBar.Blur()
 		m.setFocus(PaneSecretBrowser)
