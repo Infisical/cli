@@ -1,6 +1,7 @@
 package itui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -252,7 +253,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.detailPane.SetOutput("Command Failed", output, true)
 		} else {
-			m.detailPane.SetOutput("Command Output", result.Stdout, false)
+			// Try to parse as a secret list (e.g. from infisical export --format=json)
+			stdout := strings.TrimSpace(result.Stdout)
+			var secrets []Secret
+			if json.Unmarshal([]byte(stdout), &secrets) == nil && len(secrets) > 0 {
+				items := make([]components.SecretItem, len(secrets))
+				for i, s := range secrets {
+					items[i] = components.SecretItem{
+						KeyName: s.Key,
+						Value:   s.Value,
+						Type:    s.Type,
+					}
+				}
+				m.detailPane.SetSecretList("Secrets ("+m.ctx.Environment+")", items)
+			} else {
+				m.detailPane.SetOutput("Command Output", result.Stdout, false)
+			}
 		}
 		m.promptBar.Reset()
 		// Refresh secrets after any command
