@@ -54,6 +54,7 @@ type Model struct {
 	auditLog        *AuditLogger
 	valueCache      map[string]string // placeholder → real value, for sanitize/hydrate
 	persistentState PersistentState
+	pendingAction   *PendingAction // deferred action to run after secrets reload
 
 	// Window
 	windowWidth  int
@@ -207,9 +208,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case secretsLoadedMsg:
 		if msg.err != nil {
 			m.detailPane.SetOutput("Error Loading Secrets", msg.err.Error(), true)
+			m.pendingAction = nil // clear pending on error
 		} else {
 			m.secrets = msg.secrets
 			m.updateSecretBrowser()
+		}
+		// Execute pending action after secrets are loaded
+		if m.pendingAction != nil {
+			action := m.pendingAction
+			m.pendingAction = nil
+			switch action.Type {
+			case PendingOpenSecretForm:
+				m.secretForm.Show()
+			case PendingFocusPrompt:
+				m.setFocus(PanePrompt)
+				m.promptBar.Focus()
+			}
 		}
 		return m, nil
 
@@ -254,6 +268,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case components.ConfirmNoMsg:
 		m.promptBar.Reset()
+		return m, nil
+
+	case components.NavigationHintMsg:
+		if msg.TargetEnv != "" {
+			m.ctx.Environment = msg.TargetEnv
+			m.updateContextBar()
+			return m, m.loadSecrets
+		}
 		return m, nil
 
 	case components.PaletteResultMsg:
@@ -354,7 +376,13 @@ func (m *Model) handleGlobalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			recentKeys = append(recentKeys, r.SecretKey)
 		}
-		m.cmdPalette.Show(secretKeys, m.ctx.Environments, recentKeys, m.persistentState.Pins)
+		m.cmdPalette.Show(components.PaletteContext{
+			SecretKeys:   secretKeys,
+			Environments: m.ctx.Environments,
+			Recents:      recentKeys,
+			Pins:         m.persistentState.Pins,
+			CurrentEnv:   m.ctx.Environment,
+		})
 	case "c":
 		if m.focusedPane == PaneDetailOutput {
 			// Copy displayed value/output to clipboard
@@ -515,6 +543,17 @@ func (m *Model) handlePaletteResult(msg components.PaletteResultMsg) (tea.Model,
 				m.detailPane.SetOutput("Copied", "Value copied to clipboard.", false)
 			}
 		}
+	case components.PaletteCreateSecret:
+		m.secretForm.Show()
+	case components.PaletteCreateSecretInEnv:
+		m.ctx.Environment = msg.Data
+		m.updateContextBar()
+		m.pendingAction = &PendingAction{Type: PendingOpenSecretForm}
+		return m, m.loadSecrets
+	case components.PaletteNavigatePath:
+		m.ctx.Path = msg.Data
+		m.updateContextBar()
+		return m, m.loadSecrets
 	}
 	return m, nil
 }
@@ -654,6 +693,8 @@ func (m *Model) updateSecretBrowser() {
 		}
 	}
 	m.secretBrowser.SetSecrets(items)
+	m.secretBrowser.Environments = m.ctx.Environments
+	m.secretBrowser.CurrentEnv = m.ctx.Environment
 }
 
 func (m *Model) updateLayout() {

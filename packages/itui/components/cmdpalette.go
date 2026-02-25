@@ -19,12 +19,24 @@ const (
 	PaletteCopyCLI
 	PaletteOpenHelp
 	PaletteCopyValue
+	PaletteCreateSecret
+	PaletteCreateSecretInEnv
+	PaletteNavigatePath
 )
 
 // PaletteResultMsg is emitted when an item is selected in the command palette
 type PaletteResultMsg struct {
 	Action PaletteAction
 	Data   string
+}
+
+// PaletteContext provides all the data the command palette needs to build its items
+type PaletteContext struct {
+	SecretKeys   []string
+	Environments []string
+	Recents      []string
+	Pins         []string
+	CurrentEnv   string
 }
 
 // PaletteItem is a single entry in the command palette
@@ -90,7 +102,7 @@ func NewCmdPalette() CmdPaletteModel {
 }
 
 // Show opens the palette and populates it with current data
-func (m *CmdPaletteModel) Show(secretKeys []string, envs []string, recents []string, pins []string) {
+func (m *CmdPaletteModel) Show(ctx PaletteContext) {
 	m.Visible = true
 	m.searchInput.SetValue("")
 	m.searchInput.Focus()
@@ -113,8 +125,24 @@ func (m *CmdPaletteModel) Show(secretKeys []string, envs []string, recents []str
 		Action: PaletteOpenHelp,
 	})
 
+	// Create secret actions
+	m.items = append(m.items, PaletteItem{
+		Label: "Create new secret", Category: "action",
+		Action: PaletteCreateSecret,
+	})
+	for _, env := range ctx.Environments {
+		if env != ctx.CurrentEnv {
+			m.items = append(m.items, PaletteItem{
+				Label:    fmt.Sprintf("Create secret in %s", env),
+				Category: "action",
+				Action:   PaletteCreateSecretInEnv,
+				Data:     env,
+			})
+		}
+	}
+
 	// Pinned secrets
-	for _, pin := range pins {
+	for _, pin := range ctx.Pins {
 		m.items = append(m.items, PaletteItem{
 			Label: "★ " + pin, Category: "pinned",
 			Action: PaletteGoToSecret, Data: pin,
@@ -123,7 +151,7 @@ func (m *CmdPaletteModel) Show(secretKeys []string, envs []string, recents []str
 
 	// Recent secrets (max 5)
 	shown := 0
-	for _, key := range recents {
+	for _, key := range ctx.Recents {
 		if shown >= 5 {
 			break
 		}
@@ -135,17 +163,21 @@ func (m *CmdPaletteModel) Show(secretKeys []string, envs []string, recents []str
 	}
 
 	// All secrets
-	for _, key := range secretKeys {
+	for _, key := range ctx.SecretKeys {
 		m.items = append(m.items, PaletteItem{
 			Label: key, Category: "secret",
 			Action: PaletteGoToSecret, Data: key,
 		})
 	}
 
-	// Environments
-	for _, env := range envs {
+	// Environments with friendly labels
+	for _, env := range ctx.Environments {
+		label := "Switch to " + env
+		if env == ctx.CurrentEnv {
+			label = "Switch to " + env + " (current)"
+		}
 		m.items = append(m.items, PaletteItem{
-			Label: env, Category: "env",
+			Label: label, Category: "env",
 			Action: PaletteGoToEnv, Data: env,
 		})
 	}
@@ -166,8 +198,7 @@ func (m *CmdPaletteModel) applyFilter() {
 	} else {
 		m.filtered = nil
 		for _, item := range m.items {
-			if strings.Contains(strings.ToLower(item.Label), query) ||
-				strings.Contains(strings.ToLower(item.Category), query) {
+			if matchesQuery(item, query) {
 				m.filtered = append(m.filtered, item)
 			}
 		}
@@ -175,6 +206,42 @@ func (m *CmdPaletteModel) applyFilter() {
 	if m.cursor >= len(m.filtered) {
 		m.cursor = max(0, len(m.filtered)-1)
 	}
+}
+
+// matchesQuery checks if an item matches the search query, including common aliases
+func matchesQuery(item PaletteItem, query string) bool {
+	label := strings.ToLower(item.Label)
+	cat := strings.ToLower(item.Category)
+
+	// Direct substring match on label or category
+	if strings.Contains(label, query) || strings.Contains(cat, query) {
+		return true
+	}
+
+	// Alias matching: expand query to check synonyms
+	aliases := map[string][]string{
+		"prod":       {"production"},
+		"production": {"prod"},
+		"stg":        {"staging"},
+		"stage":      {"staging"},
+		"staging":    {"stg", "stage"},
+		"dev":        {"development"},
+		"development": {"dev"},
+		"create":     {"new", "add"},
+		"new":        {"create", "add"},
+		"add":        {"create", "new"},
+		"switch":     {"env", "navigate"},
+		"go to":      {"switch", "navigate"},
+	}
+	if synonyms, ok := aliases[query]; ok {
+		for _, syn := range synonyms {
+			if strings.Contains(label, syn) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // Update handles input events
@@ -286,6 +353,12 @@ func categoryDisplayName(cat string) string {
 		return "Secrets"
 	case "env":
 		return "Environments"
+	case "navigate":
+		return "Navigation"
+	case "project":
+		return "Projects"
+	case "path":
+		return "Paths"
 	default:
 		return cat
 	}

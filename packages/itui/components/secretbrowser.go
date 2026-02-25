@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -69,12 +70,20 @@ func (d SecretItemDelegate) Render(w io.Writer, m list.Model, index int, listIte
 	fmt.Fprint(w, line)
 }
 
+// NavigationHintMsg is emitted when the user presses Enter during filtering
+// and the filter text matches a navigation intent (e.g., an environment name).
+type NavigationHintMsg struct {
+	TargetEnv string
+}
+
 type SecretBrowserModel struct {
-	list     list.Model
-	Active   bool
-	Width    int
-	Height   int
-	Selected int
+	list         list.Model
+	Active       bool
+	Width        int
+	Height       int
+	Selected     int
+	Environments []string // available envs, populated by parent for smart hints
+	CurrentEnv   string   // current env, populated by parent
 }
 
 func NewSecretBrowser() SecretBrowserModel {
@@ -141,9 +150,57 @@ func (m SecretBrowserModel) Update(msg tea.Msg) (SecretBrowserModel, tea.Cmd) {
 	if !m.Active {
 		return m, nil
 	}
+
+	// Intercept Enter during filtering with no visible results —
+	// check if the filter text matches an environment name for smart navigation
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "enter" {
+		if m.list.FilterState() == list.Filtering && len(m.list.VisibleItems()) == 0 {
+			if targetEnv := m.matchEnvFromFilter(); targetEnv != "" {
+				m.list.ResetFilter()
+				return m, func() tea.Msg {
+					return NavigationHintMsg{TargetEnv: targetEnv}
+				}
+			}
+		}
+	}
+
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// matchEnvFromFilter checks if the current filter text matches an environment name
+func (m SecretBrowserModel) matchEnvFromFilter() string {
+	query := strings.ToLower(m.list.FilterValue())
+	if query == "" {
+		return ""
+	}
+
+	// Map common aliases to canonical env slugs
+	envAliases := map[string]string{
+		"prod": "prod", "production": "prod",
+		"stg": "staging", "stage": "staging", "staging": "staging",
+		"dev": "dev", "development": "dev",
+		"test": "test", "testing": "test",
+	}
+
+	// Check alias match first
+	if slug, ok := envAliases[query]; ok {
+		for _, env := range m.Environments {
+			if strings.HasPrefix(strings.ToLower(env), slug) && env != m.CurrentEnv {
+				return env
+			}
+		}
+	}
+
+	// Direct prefix match on environment names
+	for _, env := range m.Environments {
+		if strings.HasPrefix(strings.ToLower(env), query) && env != m.CurrentEnv {
+			return env
+		}
+	}
+
+	return ""
 }
 
 func (m SecretBrowserModel) View() string {
@@ -160,7 +217,16 @@ func (m SecretBrowserModel) View() string {
 	}
 
 	content := m.list.View()
-	if len(m.list.Items()) == 0 {
+
+	// Show smart navigation hints when filtering yields no results
+	if m.list.FilterState() == list.Filtering && len(m.list.VisibleItems()) == 0 {
+		hints := m.buildFilterHints()
+		if hints != "" {
+			content += "\n" + hints
+		}
+	}
+
+	if len(m.list.Items()) == 0 && m.list.FilterState() == list.Unfiltered {
 		content = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6B7280")).
 			Italic(true).
@@ -168,4 +234,39 @@ func (m SecretBrowserModel) View() string {
 	}
 
 	return style.Render(content)
+}
+
+// buildFilterHints generates helpful suggestions when the filter has no matches
+func (m SecretBrowserModel) buildFilterHints() string {
+	query := strings.ToLower(m.list.FilterValue())
+	if query == "" {
+		return ""
+	}
+
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Italic(true)
+	actionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
+
+	var hints []string
+
+	// Check if query matches an environment
+	if targetEnv := m.matchEnvFromFilter(); targetEnv != "" {
+		hints = append(hints, fmt.Sprintf("  %s Switch to %s  %s",
+			actionStyle.Render("→"),
+			targetEnv,
+			hintStyle.Render("[press Enter]")))
+	}
+
+	// Check for create/new intent
+	if strings.Contains(query, "create") || strings.Contains(query, "new") || strings.Contains(query, "add") {
+		hints = append(hints, fmt.Sprintf("  %s Create new secret  %s",
+			actionStyle.Render("→"),
+			hintStyle.Render("[press n]")))
+	}
+
+	if len(hints) == 0 {
+		return ""
+	}
+
+	header := hintStyle.Render("  Did you mean?")
+	return header + "\n" + strings.Join(hints, "\n")
 }
