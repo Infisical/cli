@@ -72,9 +72,12 @@ func NewModel() Model {
 		aiClient = NewAIClient(apiKey)
 	}
 
+	browser := components.NewSecretBrowser()
+	browser.Active = true
+
 	return Model{
 		contextBar:      components.NewContextBar(),
-		secretBrowser:   components.NewSecretBrowser(),
+		secretBrowser:   browser,
 		detailPane:      components.NewDetailPane(),
 		promptBar:       components.NewPromptBar(),
 		envPicker:       components.NewEnvPicker(),
@@ -401,6 +404,19 @@ func (m *Model) handleGlobalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+		}
+	default:
+		// Forward unhandled keys to the active component so arrow keys,
+		// j/k, and other navigation reach the secret browser list.
+		switch m.focusedPane {
+		case PaneSecretBrowser:
+			var cmd tea.Cmd
+			m.secretBrowser, cmd = m.secretBrowser.Update(msg)
+			return m, cmd
+		case PaneDetailOutput:
+			var cmd tea.Cmd
+			m.detailPane, cmd = m.detailPane.Update(msg)
+			return m, cmd
 		}
 	}
 

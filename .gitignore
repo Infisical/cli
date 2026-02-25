@@ -10,4 +10,4 @@ test/infisical-merge
 .DS_Store
 
 
-/agent-testing
+.claude/worktrees/
