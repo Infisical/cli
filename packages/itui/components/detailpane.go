@@ -15,6 +15,7 @@ const (
 	DetailModeSecret DetailMode = iota
 	DetailModeOutput
 	DetailModeWelcome
+	DetailModeSecretList
 )
 
 var (
@@ -73,6 +74,10 @@ type DetailPaneModel struct {
 	OutputTitle   string
 	OutputContent string
 	OutputIsError bool
+
+	// Secret list (AI command result)
+	SecretListTitle string
+	SecretList      []SecretItem
 }
 
 func NewDetailPane() DetailPaneModel {
@@ -109,6 +114,15 @@ func (m *DetailPaneModel) SetOutput(title, content string, isError bool) {
 	m.updateViewportContent()
 }
 
+// SetSecretList displays a formatted list of secrets with masked values.
+func (m *DetailPaneModel) SetSecretList(title string, secrets []SecretItem) {
+	m.Mode = DetailModeSecretList
+	m.SecretListTitle = title
+	m.SecretList = secrets
+	m.ValueRevealed = false
+	m.updateViewportContent()
+}
+
 // CopyableContent returns the most relevant text for clipboard copy.
 // For secrets: the value. For command output: the output content.
 func (m *DetailPaneModel) CopyableContent() string {
@@ -117,13 +131,19 @@ func (m *DetailPaneModel) CopyableContent() string {
 		return m.SecretValue
 	case DetailModeOutput:
 		return m.OutputContent
+	case DetailModeSecretList:
+		var b strings.Builder
+		for _, s := range m.SecretList {
+			b.WriteString(fmt.Sprintf("%s=%s\n", s.KeyName, s.Value))
+		}
+		return b.String()
 	default:
 		return ""
 	}
 }
 
 func (m *DetailPaneModel) ToggleReveal() {
-	if m.Mode == DetailModeSecret {
+	if m.Mode == DetailModeSecret || m.Mode == DetailModeSecretList {
 		m.ValueRevealed = !m.ValueRevealed
 		m.updateViewportContent()
 	}
@@ -139,6 +159,8 @@ func (m *DetailPaneModel) updateViewportContent() {
 		content = m.renderOutput()
 	case DetailModeWelcome:
 		content = m.renderWelcome()
+	case DetailModeSecretList:
+		content = m.renderSecretList()
 	}
 
 	m.viewport.SetContent(content)
@@ -178,6 +200,58 @@ func (m *DetailPaneModel) renderSecretDetail() string {
 		b.WriteString(dLabelStyle.Render("Comment:"))
 		b.WriteString("  ")
 		b.WriteString(dValueStyle.Render(m.SecretComment))
+	}
+
+	return b.String()
+}
+
+func (m *DetailPaneModel) renderSecretList() string {
+	var b strings.Builder
+
+	// Title with count
+	title := fmt.Sprintf("%s — %d secret", m.SecretListTitle, len(m.SecretList))
+	if len(m.SecretList) != 1 {
+		title += "s"
+	}
+	b.WriteString(dTitleStyle.Render(title))
+	b.WriteString("\n")
+
+	// Reveal hint
+	if m.ValueRevealed {
+		b.WriteString(dMaskedStyle.Render("  [press r to hide]"))
+	} else {
+		b.WriteString(dMaskedStyle.Render("  [press r to reveal]"))
+	}
+	b.WriteString("\n\n")
+
+	// Find max key length for alignment
+	maxKeyLen := 0
+	for _, s := range m.SecretList {
+		if len(s.KeyName) > maxKeyLen {
+			maxKeyLen = len(s.KeyName)
+		}
+	}
+	if maxKeyLen > 30 {
+		maxKeyLen = 30
+	}
+
+	// Render each secret as a row
+	for _, s := range m.SecretList {
+		keyPadded := s.KeyName
+		if len(keyPadded) < maxKeyLen {
+			keyPadded += strings.Repeat(" ", maxKeyLen-len(keyPadded))
+		}
+
+		b.WriteString("  ")
+		b.WriteString(dKeyStyle.Render(keyPadded))
+		b.WriteString("  ")
+
+		if m.ValueRevealed {
+			b.WriteString(dValueStyle.Render(s.Value))
+		} else {
+			b.WriteString(dMaskedStyle.Render("••••••••"))
+		}
+		b.WriteString("\n")
 	}
 
 	return b.String()
