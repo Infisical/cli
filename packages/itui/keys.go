@@ -20,6 +20,10 @@ type keyMap struct {
 	Refresh       key.Binding
 	Confirm       key.Binding
 	Deny          key.Binding
+	CmdPalette    key.Binding
+	CopyToClip    key.Binding
+	CopyDeepLink  key.Binding
+	PasteAnalyze  key.Binding
 }
 
 var keys = keyMap{
@@ -90,5 +94,21 @@ var keys = keyMap{
 	Deny: key.NewBinding(
 		key.WithKeys("n", "N"),
 		key.WithHelp("n", "deny"),
+	),
+	CmdPalette: key.NewBinding(
+		key.WithKeys("ctrl+k"),
+		key.WithHelp("ctrl+k", "command palette"),
+	),
+	CopyToClip: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "copy to clipboard"),
+	),
+	CopyDeepLink: key.NewBinding(
+		key.WithKeys("ctrl+l"),
+		key.WithHelp("ctrl+l", "copy CLI deep link"),
+	),
+	PasteAnalyze: key.NewBinding(
+		key.WithKeys("ctrl+v"),
+		key.WithHelp("ctrl+v", "paste & analyze"),
 	),
 }

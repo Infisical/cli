@@ -119,6 +119,15 @@ func helpContent() string {
 			},
 		},
 		{
+			title: "Clipboard & Tools",
+			binds: []struct{ key, desc string }{
+				{"Ctrl+K", "Command palette"},
+				{"c", "Copy value / output"},
+				{"Ctrl+L", "Copy CLI deep link"},
+				{"Ctrl+V", "Paste & analyze output"},
+			},
+		},
+		{
 			title: "General",
 			binds: []struct{ key, desc string }{
 				{"?", "Toggle this help"},

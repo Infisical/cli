@@ -132,6 +132,11 @@ func (m SecretBrowserModel) SelectedIndex() int {
 	return m.list.Index()
 }
 
+// SelectIndex programmatically selects a secret by index (used by command palette).
+func (m *SecretBrowserModel) SelectIndex(idx int) {
+	m.list.Select(idx)
+}
+
 func (m SecretBrowserModel) Update(msg tea.Msg) (SecretBrowserModel, tea.Cmd) {
 	if !m.Active {
 		return m, nil
