@@ -109,6 +109,19 @@ func (m *DetailPaneModel) SetOutput(title, content string, isError bool) {
 	m.updateViewportContent()
 }
 
+// CopyableContent returns the most relevant text for clipboard copy.
+// For secrets: the value. For command output: the output content.
+func (m *DetailPaneModel) CopyableContent() string {
+	switch m.Mode {
+	case DetailModeSecret:
+		return m.SecretValue
+	case DetailModeOutput:
+		return m.OutputContent
+	default:
+		return ""
+	}
+}
+
 func (m *DetailPaneModel) ToggleReveal() {
 	if m.Mode == DetailModeSecret {
 		m.ValueRevealed = !m.ValueRevealed

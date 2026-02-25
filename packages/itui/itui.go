@@ -41,16 +41,19 @@ type Model struct {
 	confirmDialog components.ConfirmModel
 	secretForm    components.SecretFormModel
 	helpModal     components.HelpModel
+	cmdPalette    components.CmdPaletteModel
+	pasteAnalyzer components.PasteAnalyzerModel
 
 	// State
-	ctx         SessionContext
-	secrets     []Secret
-	focusedPane FocusedPane
-	mode        AppMode
-	aiClient    *AIClient
-	executor    *Executor
-	auditLog    *AuditLogger
-	valueCache  map[string]string // placeholder → real value, for sanitize/hydrate
+	ctx             SessionContext
+	secrets         []Secret
+	focusedPane     FocusedPane
+	mode            AppMode
+	aiClient        *AIClient
+	executor        *Executor
+	auditLog        *AuditLogger
+	valueCache      map[string]string // placeholder → real value, for sanitize/hydrate
+	persistentState PersistentState
 
 	// Window
 	windowWidth  int
@@ -73,20 +76,23 @@ func NewModel() Model {
 	browser.Active = true
 
 	return Model{
-		contextBar:    components.NewContextBar(),
-		secretBrowser: browser,
-		detailPane:    components.NewDetailPane(),
-		promptBar:     components.NewPromptBar(),
-		envPicker:     components.NewEnvPicker(),
-		confirmDialog: components.NewConfirm(),
-		secretForm:    components.NewSecretForm(),
-		helpModal:     components.NewHelp(),
-		focusedPane:   PaneSecretBrowser,
-		mode:          ModeNormal,
-		executor:      executor,
-		aiClient:      aiClient,
-		auditLog:      NewAuditLogger(),
-		valueCache:    make(map[string]string),
+		contextBar:      components.NewContextBar(),
+		secretBrowser:   browser,
+		detailPane:      components.NewDetailPane(),
+		promptBar:       components.NewPromptBar(),
+		envPicker:       components.NewEnvPicker(),
+		confirmDialog:   components.NewConfirm(),
+		secretForm:      components.NewSecretForm(),
+		helpModal:       components.NewHelp(),
+		cmdPalette:      components.NewCmdPalette(),
+		pasteAnalyzer:   components.NewPasteAnalyzer(),
+		focusedPane:     PaneSecretBrowser,
+		mode:            ModeNormal,
+		executor:        executor,
+		aiClient:        aiClient,
+		auditLog:        NewAuditLogger(),
+		valueCache:      make(map[string]string),
+		persistentState: LoadState(),
 		ctx: SessionContext{
 			Environment: "dev",
 			Path:        "/",
@@ -127,10 +133,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Handle overlays first
+		// Handle overlays first (priority: help → cmdPalette → pasteAnalyzer → envPicker → ...)
 		if m.helpModal.Visible {
 			var cmd tea.Cmd
 			m.helpModal, cmd = m.helpModal.Update(msg)
+			return m, cmd
+		}
+		if m.cmdPalette.Visible {
+			var cmd tea.Cmd
+			m.cmdPalette, cmd = m.cmdPalette.Update(msg)
+			return m, cmd
+		}
+		if m.pasteAnalyzer.Visible {
+			var cmd tea.Cmd
+			m.pasteAnalyzer, cmd = m.pasteAnalyzer.Update(msg)
 			return m, cmd
 		}
 		if m.envPicker.Visible {
@@ -240,6 +256,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptBar.Reset()
 		return m, nil
 
+	case components.PaletteResultMsg:
+		return m.handlePaletteResult(msg)
+
+	case components.PasteAnalysisMsg:
+		if msg.SuggestedCommand != "" {
+			m.promptBar.SetPreview(msg.SuggestedCommand, msg.Explanation, "read", false)
+		} else {
+			m.detailPane.SetOutput("Analysis", msg.Explanation, false)
+		}
+		return m, nil
+
 	case components.SecretCreatedMsg:
 		// Use RunSecretSet directly — keeps KEY=VALUE as a single arg
 		// so values with spaces/special chars aren't broken
@@ -314,6 +341,55 @@ func (m *Model) handleGlobalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailPane.ToggleReveal()
 	case "R":
 		return m, m.loadContext
+	case "ctrl+k":
+		// Open command palette with current secrets, envs, recents, pins
+		secretKeys := make([]string, 0, len(m.secrets))
+		for _, s := range m.secrets {
+			secretKeys = append(secretKeys, s.Key)
+		}
+		recentKeys := make([]string, 0, len(m.persistentState.Recents))
+		for _, r := range m.persistentState.Recents {
+			if len(recentKeys) >= 5 {
+				break
+			}
+			recentKeys = append(recentKeys, r.SecretKey)
+		}
+		m.cmdPalette.Show(secretKeys, m.ctx.Environments, recentKeys, m.persistentState.Pins)
+	case "c":
+		if m.focusedPane == PaneDetailOutput {
+			// Copy displayed value/output to clipboard
+			content := m.detailPane.CopyableContent()
+			if content != "" {
+				if err := CopyToClipboard(content); err != nil {
+					m.detailPane.SetOutput("Copy Failed", err.Error(), true)
+				} else {
+					m.detailPane.SetOutput("Copied", "Content copied to clipboard.", false)
+				}
+			}
+		}
+	case "ctrl+l":
+		// Copy CLI deep-link command for current view
+		cmd := fmt.Sprintf("infisical secrets --env=%s", m.ctx.Environment)
+		if m.ctx.Path != "" && m.ctx.Path != "/" {
+			cmd += " --path=" + m.ctx.Path
+		}
+		if item, ok := m.secretBrowser.SelectedItem(); ok {
+			cmd = fmt.Sprintf("infisical secrets get %s --env=%s", item.KeyName, m.ctx.Environment)
+			if m.ctx.Path != "" && m.ctx.Path != "/" {
+				cmd += " --path=" + m.ctx.Path
+			}
+		}
+		if err := CopyToClipboard(cmd); err != nil {
+			m.detailPane.SetOutput("Copy Failed", err.Error(), true)
+		} else {
+			m.detailPane.SetOutput("Copied CLI Command", cmd, false)
+		}
+	case "ctrl+v":
+		// Open paste analyzer — try to pre-fill from clipboard
+		m.pasteAnalyzer.Show()
+		if content, err := ReadFromClipboard(); err == nil && content != "" {
+			m.pasteAnalyzer.SetClipboardContent(content)
+		}
 	case "enter":
 		if m.focusedPane == PaneSecretBrowser {
 			if item, ok := m.secretBrowser.SelectedItem(); ok {
@@ -321,6 +397,9 @@ func (m *Model) handleGlobalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				for _, s := range m.secrets {
 					if s.Key == item.KeyName {
 						m.detailPane.SetSecret(s.Key, s.Value, s.Type, s.SecretPath, s.Comment)
+						// Track in recents
+						m.persistentState.AddRecent(s.Key, m.ctx.Environment)
+						SaveState(m.persistentState)
 						break
 					}
 				}
@@ -391,6 +470,50 @@ func (m *Model) handlePreviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		if m.promptBar.PreviewConfirm {
 			return m, m.executeCommand(m.promptBar.PreviewCommand)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handlePaletteResult(msg components.PaletteResultMsg) (tea.Model, tea.Cmd) {
+	switch msg.Action {
+	case components.PaletteGoToSecret:
+		// Find and select the secret in the browser
+		for i, s := range m.secrets {
+			if s.Key == msg.Data {
+				m.secretBrowser.SelectIndex(i)
+				m.detailPane.SetSecret(s.Key, s.Value, s.Type, s.SecretPath, s.Comment)
+				m.setFocus(PaneSecretBrowser)
+				// Track in recents
+				m.persistentState.AddRecent(s.Key, m.ctx.Environment)
+				SaveState(m.persistentState)
+				break
+			}
+		}
+	case components.PaletteGoToEnv:
+		m.ctx.Environment = msg.Data
+		m.updateContextBar()
+		return m, m.loadSecrets
+	case components.PaletteCopyCLI:
+		cmd := fmt.Sprintf("infisical secrets --env=%s", m.ctx.Environment)
+		if m.ctx.Path != "" && m.ctx.Path != "/" {
+			cmd += " --path=" + m.ctx.Path
+		}
+		if err := CopyToClipboard(cmd); err != nil {
+			m.detailPane.SetOutput("Copy Failed", err.Error(), true)
+		} else {
+			m.detailPane.SetOutput("Copied CLI Command", cmd, false)
+		}
+	case components.PaletteOpenHelp:
+		m.helpModal.Show()
+	case components.PaletteCopyValue:
+		content := m.detailPane.CopyableContent()
+		if content != "" {
+			if err := CopyRawToClipboard(content); err != nil {
+				m.detailPane.SetOutput("Copy Failed", err.Error(), true)
+			} else {
+				m.detailPane.SetOutput("Copied", "Value copied to clipboard.", false)
+			}
 		}
 	}
 	return m, nil
@@ -567,10 +690,14 @@ func (m Model) View() string {
 		return "Loading ITUI..."
 	}
 
-	// Check for overlays
+	// Check for overlays (priority matches Update chain)
 	var overlay string
 	if m.helpModal.Visible {
 		overlay = m.helpModal.View()
+	} else if m.cmdPalette.Visible {
+		overlay = m.cmdPalette.View()
+	} else if m.pasteAnalyzer.Visible {
+		overlay = m.pasteAnalyzer.View()
 	} else if m.envPicker.Visible {
 		overlay = m.envPicker.View()
 	} else if m.confirmDialog.Visible {
