@@ -130,3 +130,81 @@ func TestBuildSetArgs(t *testing.T) {
 
 	_ = e // satisfy linter
 }
+
+func TestParseSetCommand(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantKV     []string
+		wantFlags  []string
+	}{
+		{
+			name:      "simple set",
+			input:     "infisical secrets set DB_URL=postgres://localhost --env=dev",
+			wantKV:    []string{"DB_URL=postgres://localhost"},
+			wantFlags: []string{"--env=dev"},
+		},
+		{
+			name:      "set with path",
+			input:     "infisical secrets set API_KEY=sk-test-123 --env=staging --path=/backend",
+			wantKV:    []string{"API_KEY=sk-test-123"},
+			wantFlags: []string{"--env=staging", "--path=/backend"},
+		},
+		{
+			name:      "multiple KV pairs",
+			input:     "infisical secrets set KEY1=val1 KEY2=val2 --env=dev",
+			wantKV:    []string{"KEY1=val1", "KEY2=val2"},
+			wantFlags: []string{"--env=dev"},
+		},
+		{
+			name:      "without infisical prefix",
+			input:     "secrets set MY_SECRET=hello --env=prod",
+			wantKV:    []string{"MY_SECRET=hello"},
+			wantFlags: []string{"--env=prod"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kv, flags := ParseSetCommand(tt.input)
+			if len(kv) != len(tt.wantKV) {
+				t.Errorf("kv: expected %v, got %v", tt.wantKV, kv)
+			} else {
+				for i, v := range kv {
+					if v != tt.wantKV[i] {
+						t.Errorf("kv[%d]: expected %q, got %q", i, tt.wantKV[i], v)
+					}
+				}
+			}
+			if len(flags) != len(tt.wantFlags) {
+				t.Errorf("flags: expected %v, got %v", tt.wantFlags, flags)
+			} else {
+				for i, v := range flags {
+					if v != tt.wantFlags[i] {
+						t.Errorf("flags[%d]: expected %q, got %q", i, tt.wantFlags[i], v)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestIsSecretsSetCommand(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"infisical secrets set KEY=val --env=dev", true},
+		{"secrets set KEY=val --env=dev", true},
+		{"infisical secrets get KEY --env=dev", false},
+		{"infisical export --format=json", false},
+		{"infisical secrets delete KEY --env=dev", false},
+	}
+
+	for _, tt := range tests {
+		got := IsSecretsSetCommand(tt.input)
+		if got != tt.want {
+			t.Errorf("IsSecretsSetCommand(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}

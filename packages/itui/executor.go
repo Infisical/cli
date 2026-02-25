@@ -67,6 +67,60 @@ func (e *Executor) RunRaw(command string) CommandResult {
 	return e.Run(args...)
 }
 
+// RunSecretSet executes a `secrets set` command with properly separated args.
+// KEY=VALUE pairs are kept as single arguments to prevent values with spaces
+// or special characters from being broken up.
+func (e *Executor) RunSecretSet(keyValues []string, flags []string) CommandResult {
+	args := []string{"secrets", "set"}
+	args = append(args, keyValues...)
+	args = append(args, flags...)
+	return e.Run(args...)
+}
+
+// ParseSetCommand splits a hydrated `secrets set KEY=VALUE --flag=val` command
+// into key-value pairs and flags. KEY=VALUE args (where key doesn't start with --)
+// are kept intact as single strings.
+func ParseSetCommand(command string) (kvPairs []string, flags []string) {
+	// Strip "infisical " prefix
+	cmd := strings.TrimSpace(command)
+	if strings.HasPrefix(cmd, "infisical ") {
+		cmd = strings.TrimPrefix(cmd, "infisical ")
+	}
+	// Strip "secrets set " prefix
+	if strings.HasPrefix(cmd, "secrets set ") {
+		cmd = strings.TrimPrefix(cmd, "secrets set ")
+	} else if strings.HasPrefix(cmd, "secrets set") {
+		cmd = strings.TrimPrefix(cmd, "secrets set")
+	}
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return nil, nil
+	}
+
+	// Split respecting quotes
+	tokens := splitArgs(cmd)
+	for _, token := range tokens {
+		if strings.HasPrefix(token, "--") || strings.HasPrefix(token, "-") {
+			flags = append(flags, token)
+		} else if strings.Contains(token, "=") {
+			kvPairs = append(kvPairs, token)
+		} else {
+			// Might be a flag value or part of something, treat as flag
+			flags = append(flags, token)
+		}
+	}
+	return kvPairs, flags
+}
+
+// IsSecretsSetCommand returns true if the command is an `infisical secrets set` command
+func IsSecretsSetCommand(command string) bool {
+	cmd := strings.TrimSpace(command)
+	if strings.HasPrefix(cmd, "infisical ") {
+		cmd = strings.TrimPrefix(cmd, "infisical ")
+	}
+	return strings.HasPrefix(cmd, "secrets set")
+}
+
 // FetchSecrets retrieves secrets for the given environment and path
 func (e *Executor) FetchSecrets(env, path string) ([]Secret, error) {
 	args := []string{"export", "--format=json", "--env=" + env}

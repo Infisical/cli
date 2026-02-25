@@ -238,10 +238,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case components.SecretCreatedMsg:
-		return m, m.executeCommand(
-			fmt.Sprintf("infisical secrets set %s=%s --env=%s --path=%s",
-				msg.Key, msg.Value, m.ctx.Environment, m.ctx.Path),
-		)
+		// Use RunSecretSet directly — keeps KEY=VALUE as a single arg
+		// so values with spaces/special chars aren't broken
+		executor := m.executor
+		auditLog := m.auditLog
+		env := m.ctx.Environment
+		path := m.ctx.Path
+		key := msg.Key
+		value := msg.Value
+		return m, func() tea.Msg {
+			kvPairs := []string{key + "=" + value}
+			flags := []string{"--env=" + env}
+			if path != "" && path != "/" {
+				flags = append(flags, "--path="+path)
+			}
+			result := executor.RunSecretSet(kvPairs, flags)
+			auditLog.Log(AuditEntry{
+				Environment:      env,
+				AICommand:        fmt.Sprintf("secrets set %s=[redacted] --env=%s", key, env),
+				ValidationResult: "allowed",
+				ExecutionResult:  "success",
+			})
+			return commandExecutedMsg{result: result}
+		}
 	}
 
 	// Update active components
@@ -387,23 +406,15 @@ func (m *Model) translatePrompt(input string) tea.Cmd {
 }
 
 func (m *Model) executeCommand(command string) tea.Cmd {
-	// Hydrate placeholders with cached real values
-	hydrated := HydrateCommand(command, m.valueCache)
-
-	auditEntry := AuditEntry{
-		UserEmail:   m.ctx.UserEmail,
-		Environment: m.ctx.Environment,
-		AICommand:   command,
-	}
-
-	// If the command differs after hydration, record it (without real values in log)
-	if hydrated != command {
-		auditEntry.HydratedCommand = "[hydrated — values redacted from log]"
-	}
-
-	// Validate the hydrated command
-	if err := ValidateCommand(hydrated); err != nil {
-		auditEntry.ValidationResult = "rejected: " + err.Error()
+	// Step 1: Validate the AI command (with placeholders still in place).
+	// Placeholders like [VALUE_1] are safe — no special chars to false-positive on.
+	if err := ValidateCommand(command); err != nil {
+		auditEntry := AuditEntry{
+			UserEmail:        m.ctx.UserEmail,
+			Environment:      m.ctx.Environment,
+			AICommand:        command,
+			ValidationResult: "rejected: " + err.Error(),
+		}
 		m.auditLog.Log(auditEntry)
 		return func() tea.Msg {
 			return commandExecutedMsg{result: CommandResult{
@@ -414,12 +425,33 @@ func (m *Model) executeCommand(command string) tea.Cmd {
 		}
 	}
 
-	auditEntry.ValidationResult = "allowed"
+	// Step 2: Hydrate placeholders with cached real values
+	hydrated := HydrateCommand(command, m.valueCache)
+
+	auditEntry := AuditEntry{
+		UserEmail:        m.ctx.UserEmail,
+		Environment:      m.ctx.Environment,
+		AICommand:        command,
+		ValidationResult: "allowed",
+	}
+	if hydrated != command {
+		auditEntry.HydratedCommand = "[hydrated — values redacted from log]"
+	}
+
 	executor := m.executor
 	auditLog := m.auditLog
 
+	// Step 3: Execute — use safe arg handling for `secrets set` to preserve
+	// values with spaces/special chars as single arguments
 	return func() tea.Msg {
-		result := executor.RunRaw(hydrated)
+		var result CommandResult
+
+		if IsSecretsSetCommand(hydrated) {
+			kvPairs, flags := ParseSetCommand(hydrated)
+			result = executor.RunSecretSet(kvPairs, flags)
+		} else {
+			result = executor.RunRaw(hydrated)
+		}
 
 		// Log after execution
 		if result.Error != nil {

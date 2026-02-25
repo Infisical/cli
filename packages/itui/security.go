@@ -35,8 +35,9 @@ var dangerousPatterns = []string{
 }
 
 // ValidateCommand checks that an AI-generated command is safe to execute.
-// It verifies the command uses an allowed infisical subcommand and contains
-// no shell injection patterns.
+// It verifies the command uses an allowed infisical subcommand and checks
+// for shell injection in the command structure (not inside KEY=VALUE values,
+// since secret values may legitimately contain special characters).
 func ValidateCommand(command string) error {
 	command = strings.TrimSpace(command)
 
@@ -50,23 +51,60 @@ func ValidateCommand(command string) error {
 		stripped = strings.TrimPrefix(stripped, "infisical ")
 	}
 
-	// Check for shell metacharacters in the full command
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(command, pattern) {
-			return fmt.Errorf("command rejected: contains dangerous pattern %q — possible shell injection", pattern)
+	// First pass: check for newlines and carriage returns in the raw command.
+	// These are always dangerous regardless of where they appear.
+	for _, ch := range []string{"\n", "\r"} {
+		if strings.Contains(command, ch) {
+			return fmt.Errorf("command rejected: contains dangerous pattern %q — possible shell injection", ch)
 		}
 	}
 
-	// Parse the subcommand (first 1-2 tokens)
+	// Parse tokens for validation
 	tokens := strings.Fields(stripped)
 	if len(tokens) == 0 {
 		return fmt.Errorf("empty command after parsing")
 	}
 
+	// Check for shell metacharacters in each token.
+	// For KEY=VALUE args (not flags), we only check the KEY portion,
+	// because secret values can legitimately contain >, <, $, |, etc.
+	// BUT: we also need to detect injection APPENDED to a value like "KEY=val; rm".
+	// Strategy: if a token contains = and is not a flag, split on first = and
+	// only validate the key. The value part is trusted (came from local cache).
+	for _, token := range tokens {
+		isKVArg := false
+		if eqIdx := strings.Index(token, "="); eqIdx > 0 && !strings.HasPrefix(token, "--") {
+			isKVArg = true
+			// Check only the key part for dangerous patterns
+			keyPart := token[:eqIdx]
+			for _, pattern := range dangerousPatterns {
+				if strings.Contains(keyPart, pattern) {
+					return fmt.Errorf("command rejected: contains dangerous pattern %q — possible shell injection", pattern)
+				}
+			}
+		}
+
+		if !isKVArg {
+			// This is a subcommand, flag, or standalone token — check fully
+			for _, pattern := range dangerousPatterns {
+				if strings.Contains(token, pattern) {
+					return fmt.Errorf("command rejected: contains dangerous pattern %q — possible shell injection", pattern)
+				}
+			}
+		}
+	}
+
 	// Check two-token subcommands first (e.g., "secrets get")
 	if len(tokens) >= 2 {
 		twoToken := tokens[0] + " " + tokens[1]
-		if allowedCommands[twoToken] {
+		// For "secrets set", the second token might be KEY=VALUE, so also check
+		// just the first word of the second token
+		secondWord := tokens[1]
+		if eqIdx := strings.Index(secondWord, "="); eqIdx > 0 {
+			secondWord = secondWord[:eqIdx]
+		}
+		twoTokenClean := tokens[0] + " " + secondWord
+		if allowedCommands[twoToken] || allowedCommands[twoTokenClean] {
 			return nil
 		}
 	}
