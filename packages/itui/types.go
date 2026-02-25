@@ -57,6 +57,20 @@ type SessionContext struct {
 	Environments []string
 }
 
+// PendingActionType identifies a deferred action to run after a navigation change
+type PendingActionType int
+
+const (
+	PendingNone PendingActionType = iota
+	PendingOpenSecretForm
+	PendingFocusPrompt
+)
+
+// PendingAction is queued to execute after an async operation (e.g., secrets reload) completes
+type PendingAction struct {
+	Type PendingActionType
+}
+
 // AIResponse is the structured response from the AI model
 type AIResponse struct {
 	Command              string `json:"command"`
