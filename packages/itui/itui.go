@@ -304,6 +304,13 @@ func (m *Model) handleGlobalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	default:
+		// Pass unhandled keys to the active component
+		if m.focusedPane == PaneSecretBrowser {
+			var cmd tea.Cmd
+			m.secretBrowser, cmd = m.secretBrowser.Update(msg)
+			return m, cmd
+		}
 	}
 
 	return m, nil
