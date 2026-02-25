@@ -103,7 +103,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		Path:        "/backend",
 	}
 
-	prompt := buildSystemPrompt(ctx)
+	prompt := buildSystemPrompt(ctx, []string{"DATABASE_URL", "API_KEY"})
 
 	if len(prompt) == 0 {
 		t.Error("system prompt should not be empty")
@@ -120,6 +120,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 		{"environment", "staging"},
 		{"path", "/backend"},
 		{"response format", "JSON"},
+		{"secret keys", "DATABASE_URL"},
+		{"placeholder rules", "[VALUE_N]"},
 		{"infisical CLI reference", "infisical secrets"},
 	}
 

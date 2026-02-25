@@ -43,8 +43,19 @@ func (e *Executor) Run(args ...string) CommandResult {
 	}
 }
 
-// RunRaw executes a raw command string (from AI output)
+// RunRaw executes a raw command string (from AI output).
+// It validates the command against the allowlist and checks for shell injection
+// before executing.
 func (e *Executor) RunRaw(command string) CommandResult {
+	// Validate command before execution
+	if err := ValidateCommand(command); err != nil {
+		return CommandResult{
+			Command: command,
+			Error:   fmt.Errorf("security: %w", err),
+			Stderr:  err.Error(),
+		}
+	}
+
 	// Strip "infisical " prefix if present
 	command = strings.TrimSpace(command)
 	if strings.HasPrefix(command, "infisical ") {

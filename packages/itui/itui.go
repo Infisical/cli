@@ -49,6 +49,8 @@ type Model struct {
 	mode        AppMode
 	aiClient    *AIClient
 	executor    *Executor
+	auditLog    *AuditLogger
+	valueCache  map[string]string // placeholder → real value, for sanitize/hydrate
 
 	// Window
 	windowWidth  int
@@ -80,6 +82,8 @@ func NewModel() Model {
 		mode:          ModeNormal,
 		executor:      executor,
 		aiClient:      aiClient,
+		auditLog:      NewAuditLogger(),
+		valueCache:    make(map[string]string),
 		ctx: SessionContext{
 			Environment: "dev",
 			Path:        "/",
@@ -321,7 +325,8 @@ func (m *Model) handlePromptKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.promptBar.SetLoading()
-		return m, m.translatePrompt(input)
+		cmd := m.translatePrompt(input)
+		return m, cmd
 	}
 
 	// Let the text input handle the key
@@ -356,16 +361,74 @@ func (m *Model) handlePreviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) translatePrompt(input string) tea.Cmd {
+func (m *Model) translatePrompt(input string) tea.Cmd {
+	// Collect known secret values for redaction
+	knownValues := make([]string, 0, len(m.secrets))
+	for _, s := range m.secrets {
+		if s.Value != "" {
+			knownValues = append(knownValues, s.Value)
+		}
+	}
+
+	// Sanitize: extract values, replace with placeholders
+	sanitized, cache := SanitizePrompt(input, knownValues)
+	m.valueCache = cache
+
+	// Collect secret key names (safe to send to AI)
+	secretKeys := make([]string, 0, len(m.secrets))
+	for _, s := range m.secrets {
+		secretKeys = append(secretKeys, s.Key)
+	}
+
 	return func() tea.Msg {
-		resp, err := m.aiClient.Translate(input, m.ctx)
+		resp, err := m.aiClient.Translate(sanitized, m.ctx, secretKeys)
 		return aiResponseMsg{response: resp, err: err}
 	}
 }
 
-func (m Model) executeCommand(command string) tea.Cmd {
+func (m *Model) executeCommand(command string) tea.Cmd {
+	// Hydrate placeholders with cached real values
+	hydrated := HydrateCommand(command, m.valueCache)
+
+	auditEntry := AuditEntry{
+		UserEmail:   m.ctx.UserEmail,
+		Environment: m.ctx.Environment,
+		AICommand:   command,
+	}
+
+	// If the command differs after hydration, record it (without real values in log)
+	if hydrated != command {
+		auditEntry.HydratedCommand = "[hydrated — values redacted from log]"
+	}
+
+	// Validate the hydrated command
+	if err := ValidateCommand(hydrated); err != nil {
+		auditEntry.ValidationResult = "rejected: " + err.Error()
+		m.auditLog.Log(auditEntry)
+		return func() tea.Msg {
+			return commandExecutedMsg{result: CommandResult{
+				Command: command,
+				Error:   fmt.Errorf("security: %s", err.Error()),
+				Stderr:  "Command rejected: " + err.Error(),
+			}}
+		}
+	}
+
+	auditEntry.ValidationResult = "allowed"
+	executor := m.executor
+	auditLog := m.auditLog
+
 	return func() tea.Msg {
-		result := m.executor.RunRaw(command)
+		result := executor.RunRaw(hydrated)
+
+		// Log after execution
+		if result.Error != nil {
+			auditEntry.ExecutionError = result.Error.Error()
+		} else {
+			auditEntry.ExecutionResult = "success"
+		}
+		auditLog.Log(auditEntry)
+
 		return commandExecutedMsg{result: result}
 	}
 }

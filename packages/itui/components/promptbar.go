@@ -67,7 +67,7 @@ type PromptBarModel struct {
 
 func NewPromptBar() PromptBarModel {
 	ti := textinput.New()
-	ti.Placeholder = "Ask me anything about your secrets..."
+	ti.Placeholder = "Ask about your secrets... (sent to Google Gemini — values are redacted)"
 	ti.CharLimit = 500
 	ti.Prompt = ""
 

@@ -31,13 +31,14 @@ func NewAIClient(apiKey string) *AIClient {
 	}
 }
 
-// Translate converts a natural language prompt into an Infisical CLI command
-func (a *AIClient) Translate(userInput string, ctx SessionContext) (AIResponse, error) {
+// Translate converts a natural language prompt into an Infisical CLI command.
+// secretKeys contains key names only (never values) to provide context to the AI.
+func (a *AIClient) Translate(userInput string, ctx SessionContext, secretKeys []string) (AIResponse, error) {
 	if a.client == nil {
 		return AIResponse{}, fmt.Errorf("AI client not initialized. Set GEMINI_API_KEY environment variable")
 	}
 
-	systemPrompt := buildSystemPrompt(ctx)
+	systemPrompt := buildSystemPrompt(ctx, secretKeys)
 
 	result, err := a.client.Models.GenerateContent(
 		context.Background(),
@@ -107,7 +108,12 @@ func parseAIResponse(text string) (AIResponse, error) {
 	return resp, nil
 }
 
-func buildSystemPrompt(ctx SessionContext) string {
+func buildSystemPrompt(ctx SessionContext, secretKeys []string) string {
+	keyList := "none loaded"
+	if len(secretKeys) > 0 {
+		keyList = strings.Join(secretKeys, ", ")
+	}
+
 	return fmt.Sprintf(`You are ITUI, an AI assistant embedded in the Infisical Terminal UI. Your sole job is to translate natural language requests into exact Infisical CLI commands.
 
 ## Current Session Context
@@ -116,6 +122,15 @@ func buildSystemPrompt(ctx SessionContext) string {
 - Project Name: %s
 - Current Environment: %s
 - Current Path: %s
+- Available secret keys: %s
+
+## CRITICAL: Value Placeholder Rules
+- User prompts may contain [VALUE_N] placeholders (e.g., [VALUE_1], [VALUE_2])
+- These placeholders represent real secret values that have been redacted for security
+- You MUST preserve these placeholders exactly as-is in your generated commands
+- Example: if the user says "set DATABASE_URL to [VALUE_1]", generate: infisical secrets set DATABASE_URL=[VALUE_1] --env=ENV
+- NEVER attempt to guess, decode, or replace placeholder values
+- NEVER ask the user to provide the actual value — it is already cached locally
 
 ## Response Format
 You MUST respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
@@ -141,6 +156,7 @@ You MUST respond with ONLY a JSON object (no markdown, no explanation outside th
 - Never fabricate secrets or values
 - If the request is ambiguous, set command to "" and use explanation to ask a clarifying question
 - Never generate commands that bypass authentication
+- Only generate commands for allowed subcommands: secrets, export, run, scan, user, login
 
 ## Infisical CLI Reference
 
@@ -172,6 +188,6 @@ You MUST respond with ONLY a JSON object (no markdown, no explanation outside th
 - --recursive        Fetch from all sub-folders
 - --type=TYPE        Secret type: shared or personal (default: shared)`,
 		ctx.UserEmail, ctx.ProjectID, ctx.ProjectName,
-		ctx.Environment, ctx.Path,
+		ctx.Environment, ctx.Path, keyList,
 		ctx.Environment, ctx.Path)
 }
