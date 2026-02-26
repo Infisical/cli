@@ -978,3 +978,106 @@ type GetCertificateRequestResponse struct {
 	CertificateID        *string   `json:"certificateId,omitempty"`
 	ErrorMessage         *string   `json:"errorMessage,omitempty"`
 }
+
+type InfraFile struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type InfraRun struct {
+	ID          string      `json:"id"`
+	ProjectID   string      `json:"projectId"`
+	Type        string      `json:"type"`   // "plan" or "apply"
+	Status      string      `json:"status"` // "pending","running","success","failed","awaiting_approval"
+	Logs        string      `json:"logs"`
+	PlanJson    interface{} `json:"planJson"`
+	AISummary   *string     `json:"aiSummary"`
+	TriggeredBy *string     `json:"triggeredBy"`
+	PlanRunId   *string     `json:"planRunId"`
+	CreatedAt   string      `json:"createdAt"`
+	UpdatedAt   string      `json:"updatedAt"`
+}
+
+// --- Files ---
+
+type GetInfraFilesRequest struct {
+	ProjectID string
+}
+
+type GetInfraFilesResponse struct {
+	Files []InfraFile `json:"files"`
+}
+
+type UpsertInfraFileRequest struct {
+	ProjectID string `json:"-"`
+	Name      string `json:"name"`
+	Content   string `json:"content"`
+}
+
+type UpsertInfraFileResponse struct {
+	File InfraFile `json:"file"`
+}
+
+type DeleteInfraFileRequest struct {
+	ProjectID string
+	FileName  string
+}
+
+// --- Runs ---
+
+// POST /:projectId/run — synchronous, blocks until run completes
+type TriggerInfraRunRequest struct {
+	ProjectID string `json:"-"`
+	Mode      string `json:"mode"`              // "plan", "apply", or "destroy"
+	Approved  *bool  `json:"approved,omitempty"` // true when re-triggering after approval
+}
+
+// The response from POST /run is flat (not nested under "run")
+type TriggerInfraRunResponse struct {
+	Output    string      `json:"output"`
+	Status    string      `json:"status"`
+	RunID     string      `json:"runId"`
+	PlanJson  interface{} `json:"planJson"`
+	AISummary *string     `json:"aiSummary"`
+}
+
+type GetInfraRunsRequest struct {
+	ProjectID string
+}
+
+type GetInfraRunsResponse struct {
+	Runs []InfraRun `json:"runs"`
+}
+
+type GetInfraRunRequest struct {
+	ProjectID string
+	RunID     string
+}
+
+type GetInfraRunResponse struct {
+	Run InfraRun `json:"run"`
+}
+
+// POST /:projectId/runs/:runId/approve
+type ApproveInfraRunRequest struct {
+	ProjectID string `json:"-"`
+	RunID     string `json:"-"`
+}
+
+type ApproveInfraRunResponse struct {
+	Run InfraRun `json:"run"`
+}
+
+// POST /:projectId/runs/:runId/deny
+type DenyInfraRunRequest struct {
+	ProjectID string `json:"-"`
+	RunID     string `json:"-"`
+}
+
+type DenyInfraRunResponse struct {
+	Run InfraRun `json:"run"`
+}

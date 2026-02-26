@@ -26,6 +26,12 @@ const (
 	FormatDotEnvExport string = "dotenv-export"
 )
 
+type ExportTemplateData struct {
+	Env       string
+	ProjectId string
+	Path      string
+}
+
 // exportCmd represents the export command
 var exportCmd = &cobra.Command{
 	Use:                   "export",
@@ -110,6 +116,21 @@ var exportCmd = &cobra.Command{
 		if templatePath != "" {
 			dynamicSecretLeases := NewDynamicSecretLeaseManager(nil, nil)
 
+			resolvedProjectId := projectId
+			if resolvedProjectId == "" {
+				workspaceFile, err := util.GetWorkSpaceFromFile()
+				if err != nil {
+					util.HandleError(err, "Please either run infisical init to connect to a project or pass in project id with --projectId flag")
+				}
+				resolvedProjectId = workspaceFile.WorkspaceId
+			}
+
+			templateData := &ExportTemplateData{
+				Env:       environmentName,
+				ProjectId: resolvedProjectId,
+				Path:      secretsPath,
+			}
+
 			accessToken := ""
 			if token != nil {
 				accessToken = token.Token
@@ -123,7 +144,7 @@ var exportCmd = &cobra.Command{
 			}
 
 			currentEtag := ""
-			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
+			processedTemplate, err := ProcessTemplate(1, templatePath, templateData, accessToken, &currentEtag, dynamicSecretLeases, nil)
 			if err != nil {
 				util.HandleError(err)
 			}
@@ -273,7 +294,7 @@ func init() {
 	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
 	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
-	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
+	exportCmd.Flags().String("template", "", "Path to a template file. The template receives .Env, .ProjectId, and .Path from --env, --projectId, and --path. Use them in the template (e.g. secret .ProjectId .Env .Path) so one template works for multiple environments.")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 }
 

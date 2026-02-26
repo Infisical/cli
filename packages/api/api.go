@@ -60,6 +60,14 @@ const (
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
+	operationCallGetInfraFiles                     = "CallGetInfraFiles"
+	operationCallUpsertInfraFile                   = "CallUpsertInfraFile"
+	operationCallDeleteInfraFile                   = "CallDeleteInfraFile"
+	operationCallTriggerInfraRun                   = "CallTriggerInfraRun"
+	operationCallGetInfraRuns                      = "CallGetInfraRuns"
+	operationCallGetInfraRun                       = "CallGetInfraRun"
+	operationCallApproveInfraRun                   = "CallApproveInfraRun"
+	operationCallDenyInfraRun                      = "CallDenyInfraRun"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -1096,4 +1104,156 @@ func CallGetCertificateRequest(httpClient *resty.Client, certificateRequestId st
 	}
 
 	return &resBody, nil
+}
+
+func CallGetInfraFiles(httpClient *resty.Client, request GetInfraFilesRequest) (GetInfraFilesResponse, error) {
+	var result GetInfraFilesResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/infra/%s/files", config.INFISICAL_URL, request.ProjectID))
+
+	if err != nil {
+		return GetInfraFilesResponse{}, NewGenericRequestError(operationCallGetInfraFiles, err)
+	}
+
+	if response.IsError() {
+		return GetInfraFilesResponse{}, NewAPIErrorWithResponse(operationCallGetInfraFiles, response, nil)
+	}
+
+	return result, nil
+}
+
+func CallUpsertInfraFile(httpClient *resty.Client, request UpsertInfraFileRequest) (UpsertInfraFileResponse, error) {
+	var result UpsertInfraFileResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/infra/%s/files", config.INFISICAL_URL, request.ProjectID))
+
+	if err != nil {
+		return UpsertInfraFileResponse{}, NewGenericRequestError(operationCallUpsertInfraFile, err)
+	}
+
+	if response.IsError() {
+		return UpsertInfraFileResponse{}, NewAPIErrorWithResponse(operationCallUpsertInfraFile, response, nil)
+	}
+
+	return result, nil
+}
+
+func CallDeleteInfraFile(httpClient *resty.Client, request DeleteInfraFileRequest) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v1/infra/%s/files/%s", config.INFISICAL_URL, request.ProjectID, request.FileName))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallDeleteInfraFile, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallDeleteInfraFile, response, nil)
+	}
+
+	return nil
+}
+
+func CallTriggerInfraRun(httpClient *resty.Client, request TriggerInfraRunRequest) (TriggerInfraRunResponse, error) {
+	var result TriggerInfraRunResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/infra/%s/run", config.INFISICAL_URL, request.ProjectID))
+
+	if err != nil {
+		return TriggerInfraRunResponse{}, NewGenericRequestError(operationCallTriggerInfraRun, err)
+	}
+
+	if response.IsError() {
+		return TriggerInfraRunResponse{}, NewAPIErrorWithResponse(operationCallTriggerInfraRun, response, nil)
+	}
+
+	return result, nil
+}
+
+func CallGetInfraRuns(httpClient *resty.Client, request GetInfraRunsRequest) (GetInfraRunsResponse, error) {
+	var result GetInfraRunsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/infra/%s/runs", config.INFISICAL_URL, request.ProjectID))
+
+	if err != nil {
+		return GetInfraRunsResponse{}, NewGenericRequestError(operationCallGetInfraRuns, err)
+	}
+
+	if response.IsError() {
+		return GetInfraRunsResponse{}, NewAPIErrorWithResponse(operationCallGetInfraRuns, response, nil)
+	}
+
+	return result, nil
+}
+
+func CallGetInfraRun(httpClient *resty.Client, request GetInfraRunRequest) (GetInfraRunResponse, error) {
+	var result GetInfraRunResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/infra/%s/runs/%s", config.INFISICAL_URL, request.ProjectID, request.RunID))
+
+	if err != nil {
+		return GetInfraRunResponse{}, NewGenericRequestError(operationCallGetInfraRun, err)
+	}
+
+	if response.IsError() {
+		return GetInfraRunResponse{}, NewAPIErrorWithResponse(operationCallGetInfraRun, response, nil)
+	}
+
+	return result, nil
+}
+
+func CallApproveInfraRun(httpClient *resty.Client, request ApproveInfraRunRequest) (ApproveInfraRunResponse, error) {
+	var result ApproveInfraRunResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/infra/%s/runs/%s/approve", config.INFISICAL_URL, request.ProjectID, request.RunID))
+
+	if err != nil {
+		return ApproveInfraRunResponse{}, NewGenericRequestError(operationCallApproveInfraRun, err)
+	}
+
+	if response.IsError() {
+		return ApproveInfraRunResponse{}, NewAPIErrorWithResponse(operationCallApproveInfraRun, response, nil)
+	}
+
+	return result, nil
+}
+
+func CallDenyInfraRun(httpClient *resty.Client, request DenyInfraRunRequest) (DenyInfraRunResponse, error) {
+	var result DenyInfraRunResponse
+	response, err := httpClient.
+		R().
+		SetResult(&result).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/infra/%s/runs/%s/deny", config.INFISICAL_URL, request.ProjectID, request.RunID))
+
+	if err != nil {
+		return DenyInfraRunResponse{}, NewGenericRequestError(operationCallDenyInfraRun, err)
+	}
+
+	if response.IsError() {
+		return DenyInfraRunResponse{}, NewAPIErrorWithResponse(operationCallDenyInfraRun, response, nil)
+	}
+
+	return result, nil
 }
