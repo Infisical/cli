@@ -18,7 +18,9 @@ import (
 )
 
 var kmipCmd = &cobra.Command{
-	Example:               "infisical kmip",
+	Example: `  infisical kmip
+  infisical kmip start --identity-client-id=<client-id> --identity-client-secret=<client-secret> --hostnames-or-ips=<hostnames-or-ips>
+  sudo infisical kmip systemd install --identity-client-id=<client-id> --identity-client-secret=<client-secret> --hostnames-or-ips=<hostnames-or-ips>`,
 	Short:                 "Used to manage KMIP servers",
 	Use:                   "kmip",
 	DisableFlagsInUseLine: true,
@@ -104,7 +106,7 @@ var kmipSystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd service for Infisical KMIP server",
 	Long:  "Manage systemd service for Infisical KMIP server. Use 'systemd install' to install and enable the service.",
-	Example: `sudo infisical kmip systemd install --identity-client-id=<client-id> --identity-client-secret=<client-secret>
+	Example: `  sudo infisical kmip systemd install --identity-client-id=<client-id> --identity-client-secret=<client-secret> --hostnames-or-ips=<hostnames-or-ips>
   sudo infisical kmip systemd uninstall`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
@@ -114,7 +116,7 @@ var kmipSystemdInstallCmd = &cobra.Command{
 	Use:                   "install",
 	Short:                 "Install and enable systemd service for the KMIP server (requires sudo)",
 	Long:                  "Install and enable systemd service for the KMIP server. Must be run with sudo on Linux.",
-	Example:               "sudo infisical kmip systemd install --identity-client-id=<client-id> --identity-client-secret=<client-secret>",
+	Example:               "sudo infisical kmip systemd install --identity-client-id=<client-id> --identity-client-secret=<client-secret> --hostnames-or-ips=<hostnames-or-ips>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
