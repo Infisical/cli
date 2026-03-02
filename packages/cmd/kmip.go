@@ -136,29 +136,29 @@ var kmipSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse identity client secret")
 		}
 
-		domain, err := cmd.Flags().GetString("domain")
+		domain, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "domain", []string{util.INFISICAL_API_URL_ENV_NAME}, "")
 		if err != nil {
-			util.HandleError(err, "Unable to parse domain flag")
+			util.HandleError(err, "Unable to parse domain")
 		}
 
-		listenAddress, err := cmd.Flags().GetString("listen-address")
+		listenAddress, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "listen-address", []string{INFISICAL_KMIP_LISTEN_ADDRESS_ENV_NAME}, "localhost:5696")
 		if err != nil {
-			util.HandleError(err, "Unable to parse listen-address flag")
+			util.HandleError(err, "Unable to parse listen address")
 		}
 
-		serverName, err := cmd.Flags().GetString("server-name")
+		serverName, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "server-name", []string{INFISICAL_KMIP_SERVER_NAME_ENV_NAME}, "kmip-server")
 		if err != nil {
-			util.HandleError(err, "Unable to parse server-name flag")
+			util.HandleError(err, "Unable to parse server name")
 		}
 
-		certificateTTL, err := cmd.Flags().GetString("certificate-ttl")
+		certificateTTL, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "certificate-ttl", []string{INFISICAL_KMIP_CERTIFICATE_TTL_ENV_NAME}, "1y")
 		if err != nil {
-			util.HandleError(err, "Unable to parse certificate-ttl flag")
+			util.HandleError(err, "Unable to parse certificate TTL")
 		}
 
-		hostnamesOrIps, err := cmd.Flags().GetString("hostnames-or-ips")
+		hostnamesOrIps, err := util.GetCmdFlagOrEnv(cmd, "hostnames-or-ips", []string{INFISICAL_KMIP_HOSTNAMES_OR_IPS_ENV_NAME})
 		if err != nil {
-			util.HandleError(err, "Unable to parse hostnames-or-ips flag")
+			util.HandleError(err, "Unable to parse hostnames or IPs")
 		}
 
 		err = localkmip.InstallKmipSystemdService(identityClientId, identityClientSecret, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps)
