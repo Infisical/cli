@@ -120,13 +120,16 @@ var loginCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
+		humanSsoMethods := []string{"saml", "oidc"}
+		isSsoLogin := slices.Contains(humanSsoMethods, loginMethod)
+
 		authMethodValid, strategy := util.IsAuthMethodValid(loginMethod, true)
-		if !authMethodValid {
+		if !authMethodValid && !isSsoLogin {
 			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid login method: %s", loginMethod))
 		}
 
 		// standalone user auth
-		if loginMethod == "user" {
+		if loginMethod == "user" || isSsoLogin {
 			isDirectUserLoginFlagsAndEnvsSet, err := validateDirectUserLoginFlagsAndEnvsSet(cmd, presetDomain)
 
 			if err != nil {
@@ -197,11 +200,16 @@ var loginCmd = &cobra.Command{
 
 			var userCredentialsToBeStored models.UserCredentials
 
+			organizationSlug, err := cmd.Flags().GetString("organization-slug")
+			if err != nil {
+				util.HandleError(err)
+			}
+
 			interactiveLogin := cmd.Flags().Changed("interactive")
 			useBrowserLogin := !interactiveLogin && !isDirectUserLoginFlagsAndEnvsSet
 
 			if useBrowserLogin {
-				userCredentialsToBeStored, err = browserCliLogin()
+				userCredentialsToBeStored, err = browserCliLogin(organizationSlug, loginMethod)
 				if err != nil {
 					util.PrintfStderr("Login via browser failed. %s\n", err.Error())
 					useBrowserLogin = false
@@ -402,10 +410,10 @@ func init() {
 	loginCmd.Flags().Bool("clear-domains", false, "clear all self-hosting domains from the config file")
 	loginCmd.Flags().BoolP("interactive", "i", false, "login via the command line")
 	loginCmd.Flags().Bool("plain", false, "only output the token without any formatting")
-	loginCmd.Flags().String("method", "user", "login method [user, universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]")
+	loginCmd.Flags().String("method", "user", "login method [user, saml, oidc, universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]")
 	loginCmd.Flags().String("client-id", "", "client id for universal auth")
 	loginCmd.Flags().String("client-secret", "", "client secret for universal auth")
-	loginCmd.Flags().String("organization-slug", "", "When set for machine identity login, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
+	loginCmd.Flags().String("organization-slug", "", "Organization slug. For saml/oidc user login: pre-fills the browser SSO flow for the specified org. For machine identity login: scopes the session to the specified sub-organization.")
 	loginCmd.Flags().String("machine-identity-id", "", "machine identity id for these login methods [kubernetes, azure, gcp-id-token, gcp-iam, aws-iam]")
 	loginCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	loginCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
@@ -877,7 +885,7 @@ func decodePastedBase64Token(token string) (*models.UserCredentials, error) {
 
 // Manages the browser login flow.
 // Returns a UserCredentials object on success and an error on failure
-func browserCliLogin() (models.UserCredentials, error) {
+func browserCliLogin(organizationSlug string, method string) (models.UserCredentials, error) {
 	SERVER_TIMEOUT := 10 * 60
 
 	//create listener
@@ -888,15 +896,23 @@ func browserCliLogin() (models.UserCredentials, error) {
 
 	//get callback port
 	callbackPort := listener.Addr().(*net.TCPAddr).Port
-	url := fmt.Sprintf("%s?callback_port=%d", config.INFISICAL_LOGIN_URL, callbackPort)
+	params := url.Values{}
+	params.Set("callback_port", fmt.Sprintf("%d", callbackPort))
+	if organizationSlug != "" {
+		params.Set("organization_slug", organizationSlug)
+	}
+	if method != "" && method != "user" {
+		params.Set("method", method)
+	}
+	loginUrl := fmt.Sprintf("%s?%s", config.INFISICAL_LOGIN_URL, params.Encode())
 
-	defaultPrintStatement := fmt.Sprintf("\n\nTo complete your login, open this address in your browser: %v \n", url)
+	defaultPrintStatement := fmt.Sprintf("\n\nTo complete your login, open this address in your browser: %v \n", loginUrl)
 
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-		if err := browser.OpenURL(url); err != nil {
+		if err := browser.OpenURL(loginUrl); err != nil {
 			util.PrintStderr(defaultPrintStatement)
 		} else {
-			util.PrintfStderr("\n\nPlease proceed to your browser to complete the login process.\nIf the browser doesn't open automatically, please open this address in your browser: %v \n", url)
+			util.PrintfStderr("\n\nPlease proceed to your browser to complete the login process.\nIf the browser doesn't open automatically, please open this address in your browser: %v \n", loginUrl)
 		}
 	} else {
 		util.PrintStderr(defaultPrintStatement)
