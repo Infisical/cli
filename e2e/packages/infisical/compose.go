@@ -80,7 +80,30 @@ func (s *Stack) tryReuseExistingContainers(ctx context.Context, uniqueName strin
 		}
 	}
 	if len(missingServices) > 0 {
-		slog.Info("Missing containers found, skip reusing containers", "count", len(missingServices), "name", uniqueName)
+		slog.Info("Missing containers found, removing stale containers before fresh creation", "count", len(missingServices), "name", uniqueName)
+		// Remove all stale containers to avoid name conflicts when creating fresh ones
+		for _, ctr := range containers {
+			slog.Info("Removing stale container", "id", ctr.ID[:12], "names", ctr.Names, "state", ctr.State)
+			timeout := 10
+			if err := dockerClient.ContainerStop(ctx, ctr.ID, container.StopOptions{Timeout: &timeout}); err != nil {
+				slog.Warn("Failed to stop stale container", "id", ctr.ID[:12], "error", err)
+			}
+			if err := dockerClient.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+				slog.Warn("Failed to remove stale container", "id", ctr.ID[:12], "error", err)
+			}
+		}
+		// Also remove the network to avoid conflicts
+		networks, err := dockerClient.NetworkList(ctx, network.ListOptions{
+			Filters: filters.NewArgs(
+				filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+			),
+		})
+		if err == nil {
+			for _, n := range networks {
+				slog.Info("Removing stale network", "name", n.Name)
+				_ = dockerClient.NetworkRemove(ctx, n.ID)
+			}
+		}
 		return false, nil
 	}
 
