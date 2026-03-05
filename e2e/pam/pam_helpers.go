@@ -19,14 +19,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getOutboundIP returns the host's preferred outbound IP address.
+// getOutboundIP returns a non-loopback IPv4 address of the host.
 // This IP is reachable from both Docker containers and host processes,
 // unlike "host.docker.internal" which only resolves inside Docker.
+// It enumerates local interfaces instead of dialing an external address,
+// so it works in air-gapped and network-restricted CI environments.
 func getOutboundIP(t *testing.T) string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+	addrs, err := net.InterfaceAddrs()
 	require.NoError(t, err)
-	defer conn.Close()
-	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
+			return ipNet.IP.String()
+		}
+	}
+	t.Fatal("no non-loopback IPv4 address found")
+	return ""
 }
 
 type PAMTestInfra struct {

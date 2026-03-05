@@ -30,11 +30,17 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 
 	infra := SetupPAMInfra(t, ctx)
 
+	const (
+		pgUser     = "pamuser"
+		pgPassword = "pampassword"
+		pgDatabase = "testdb"
+	)
+
 	// Start PAM-target Postgres via testcontainers
 	pgContainer, err := tcpostgres.Run(ctx, "postgres:16",
-		tcpostgres.WithDatabase("testdb"),
-		tcpostgres.WithUsername("pamuser"),
-		tcpostgres.WithPassword("pampassword"),
+		tcpostgres.WithDatabase(pgDatabase),
+		tcpostgres.WithUsername(pgUser),
+		tcpostgres.WithPassword(pgPassword),
 		tcpostgres.BasicWaitStrategies(),
 	)
 	require.NoError(t, err)
@@ -80,7 +86,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 			}{
 				Host:                  pgHost,
 				Port:                  float32(pgPort.Int()),
-				Database:              "testdb",
+				Database:              pgDatabase,
 				SslEnabled:            false,
 				SslRejectUnauthorized: false,
 			},
@@ -103,8 +109,8 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 				Password string `json:"password"`
 				Username string `json:"username"`
 			}{
-				Username: "pamuser",
-				Password: "pampassword",
+				Username: pgUser,
+				Password: pgPassword,
 			},
 		},
 	)
@@ -150,7 +156,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	require.Equal(t, helpers.WaitSuccess, result, "Database proxy should start successfully")
 
 	// Connect via pgx to the proxy and run SELECT 1
-	proxyConnStr := fmt.Sprintf("postgres://pamuser@localhost:%d/testdb?sslmode=disable", freePort)
+	proxyConnStr := fmt.Sprintf("postgres://%s@localhost:%d/%s?sslmode=disable", pgUser, freePort, pgDatabase)
 	var proxyConn *pgx.Conn
 	connectResult := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &pamCmd,
