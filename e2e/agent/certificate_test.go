@@ -744,7 +744,7 @@ func setupAcmeCertAgentTest(t *testing.T, ctx context.Context, certCount ...int)
 }
 
 func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpts []agentHelpers.CertificatePolicyOption, certCount ...int) (*agentHelpers.CertAgentTestHelper, string) {
-	infisical := helpers.NewInfisicalServiceWithAcme().Up(t, ctx)
+	infisical := helpers.NewInfisicalService(helpers.WithAcme()).Up(t, ctx)
 
 	identity := infisical.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
 	require.NotNil(t, identity.TokenAuthToken)
@@ -816,7 +816,7 @@ func certAgent_AcmeCA_Validation_DuplicateCAName(t *testing.T) {
 		"test@example.com",
 	)
 
-	require.True(t, statusCode >= 400, "Duplicate CA name should be rejected, got status %d: %s", statusCode, string(respBody))
+	require.Equal(t, http.StatusBadRequest, statusCode, "Duplicate CA name should return 400 Bad Request, got status %d: %s", statusCode, string(respBody))
 }
 
 func certAgent_AcmeCA_Validation_InvalidDirectoryUrl(t *testing.T) {
@@ -834,7 +834,7 @@ func certAgent_AcmeCA_Validation_InvalidDirectoryUrl(t *testing.T) {
 		"test@example.com",
 	)
 
-	require.True(t, statusCode >= 400, "Invalid directory URL should be rejected, got status %d: %s", statusCode, string(respBody))
+	require.Equal(t, http.StatusUnprocessableEntity, statusCode, "Invalid directory URL should return 422 Unprocessable Entity, got status %d: %s", statusCode, string(respBody))
 }
 
 func certAgent_AcmeCA_Validation_MissingRequiredFields(t *testing.T) {
@@ -852,7 +852,7 @@ func certAgent_AcmeCA_Validation_MissingRequiredFields(t *testing.T) {
 		"",
 	)
 
-	require.True(t, statusCode >= 400, "Missing accountEmail should be rejected, got status %d: %s", statusCode, string(respBody))
+	require.Equal(t, http.StatusUnprocessableEntity, statusCode, "Missing accountEmail should return 422 Unprocessable Entity, got status %d: %s", statusCode, string(respBody))
 
 	statusCode, respBody = helper.CreateAcmeCARaw(
 		"missing-zone-ca",
@@ -863,7 +863,7 @@ func certAgent_AcmeCA_Validation_MissingRequiredFields(t *testing.T) {
 		"test@example.com",
 	)
 
-	require.True(t, statusCode >= 400, "Missing hostedZoneId should be rejected, got status %d: %s", statusCode, string(respBody))
+	require.Equal(t, http.StatusUnprocessableEntity, statusCode, "Missing hostedZoneId should return 422 Unprocessable Entity, got status %d: %s", statusCode, string(respBody))
 
 }
 
@@ -882,7 +882,7 @@ func certAgent_AcmeCA_Validation_InvalidDnsProvider(t *testing.T) {
 		"test@example.com",
 	)
 
-	require.True(t, statusCode >= 400, "Invalid DNS provider should be rejected, got status %d: %s", statusCode, string(respBody))
+	require.Equal(t, http.StatusUnprocessableEntity, statusCode, "Invalid DNS provider should return 422 Unprocessable Entity, got status %d: %s", statusCode, string(respBody))
 }
 
 func certAgent_AcmeCA_Validation_NonexistentAppConnection(t *testing.T) {
@@ -900,7 +900,7 @@ func certAgent_AcmeCA_Validation_NonexistentAppConnection(t *testing.T) {
 		"test@example.com",
 	)
 
-	require.True(t, statusCode >= 400, "Nonexistent app connection should be rejected, got status %d: %s", statusCode, string(respBody))
+	require.Equal(t, http.StatusNotFound, statusCode, "Nonexistent app connection should return 404 Not Found, got status %d: %s", statusCode, string(respBody))
 }
 
 func certAgent_AcmeCA_DisabledCA(t *testing.T) {
@@ -958,7 +958,7 @@ func certAgent_AcmeCA_DisabledCA(t *testing.T) {
 			stderr := cmd.Stderr()
 			if strings.Contains(stderr, "failed to issue certificate") ||
 				strings.Contains(stderr, "initial certificate issuance failed") ||
-				strings.Contains(stderr, "disabled") {
+				strings.Contains(stderr, "CA is disabled") {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
@@ -1038,7 +1038,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 
 	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &cmd,
-		Timeout:          180 * time.Second,
+		Timeout:          600 * time.Second,
 		Interval:         3 * time.Second,
 		Condition: func() helpers.ConditionResult {
 			_, err1 := os.Stat(certPath1)

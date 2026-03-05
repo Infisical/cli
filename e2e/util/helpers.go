@@ -36,11 +36,28 @@ type InfisicalService struct {
 	provisionResult *client.ProvisionResult
 }
 
-func NewInfisicalService() *InfisicalService {
-	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
+type InfisicalServiceOption func(*infisicalServiceConfig)
+
+type infisicalServiceConfig struct {
+	withAcme bool
 }
 
-func NewInfisicalServiceWithAcme() *InfisicalService {
+func WithAcme() InfisicalServiceOption {
+	return func(c *infisicalServiceConfig) {
+		c.withAcme = true
+	}
+}
+
+func NewInfisicalService(opts ...InfisicalServiceOption) *InfisicalService {
+	cfg := &infisicalServiceConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if !cfg.withAcme {
+		return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
+	}
+
 	backendOpts := infisical.BackendOptionsFromEnv()
 	backendOpts.Dockerfile = "Dockerfile.dev"
 	svc := &InfisicalService{
@@ -419,6 +436,14 @@ func (c *Command) Stop() {
 		if c.functionCallCancel != nil {
 			c.functionCallCancel()
 		}
+
+		if c.functionCallDone != nil {
+			select {
+			case <-c.functionCallDone:
+			case <-time.After(10 * time.Second):
+			}
+		}
+
 		// Reset logger to use os.Stderr before closing the file
 		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
 		// Reset RootCmd outputs to default

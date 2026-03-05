@@ -158,6 +158,13 @@ cd e2e
 go test github.com/infisical/cli/e2e-tests/agent
 ```
 
+Some tests (e.g. certificate renewal) may take longer to complete. If you experience timeouts, you can increase the Go test timeout using the `-timeout` flag:
+
+```bash
+cd e2e
+go test github.com/infisical/cli/e2e-tests/agent -timeout 30m
+```
+
 If you're using a `.env` file (recommended), just make sure it's configured and run the tests:
 
 ```bash

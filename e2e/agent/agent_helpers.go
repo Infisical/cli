@@ -13,11 +13,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 type CertAgentTestHelper struct {
@@ -53,7 +53,7 @@ func (h *CertAgentTestHelper) CreateInternalCA() {
 			"locality":      "",
 			"maxPathLength": -1,
 			"keyAlgorithm":  "RSA_2048",
-			"notAfter":      "2030-01-01T00:00:00Z",
+			"notAfter":      time.Now().AddDate(10, 0, 0).UTC().Format(time.RFC3339),
 		},
 	}
 
@@ -400,119 +400,141 @@ func CertFilePaths(dir string) (certPath, keyPath, chainPath string) {
 		filepath.Join(dir, "chain.pem")
 }
 
+type agentConfig struct {
+	Version      string                   `yaml:"version"`
+	Infisical    agentInfisicalConfig     `yaml:"infisical"`
+	Auth         agentAuthConfig          `yaml:"auth"`
+	Certificates []agentCertificateConfig `yaml:"certificates,omitempty"`
+}
+
+type agentInfisicalConfig struct {
+	Address string `yaml:"address"`
+}
+
+type agentAuthConfig struct {
+	Type   string                   `yaml:"type"`
+	Config agentUniversalAuthConfig `yaml:"config"`
+}
+
+type agentUniversalAuthConfig struct {
+	ClientID     string `yaml:"client-id"`
+	ClientSecret string `yaml:"client-secret"`
+}
+
+type agentCertificateConfig struct {
+	ProjectSlug string                      `yaml:"project-slug"`
+	ProfileName string                      `yaml:"profile-name"`
+	CSR         string                      `yaml:"csr,omitempty"`
+	CSRPath     string                      `yaml:"csr-path,omitempty"`
+	Attributes  *agentCertificateAttributes `yaml:"attributes,omitempty"`
+	Lifecycle   agentCertificateLifecycle   `yaml:"lifecycle"`
+	FileOutput  agentCertificateFileOutput  `yaml:"file-output"`
+	PostHooks   *agentCertificatePostHooks  `yaml:"post-hooks,omitempty"`
+}
+
+type agentCertificateAttributes struct {
+	CommonName         string   `yaml:"common-name,omitempty"`
+	TTL                string   `yaml:"ttl,omitempty"`
+	KeyAlgorithm       string   `yaml:"key-algorithm,omitempty"`
+	SignatureAlgorithm string   `yaml:"signature-algorithm,omitempty"`
+	KeyUsages          []string `yaml:"key-usages,omitempty"`
+	ExtendedKeyUsages  []string `yaml:"extended-key-usages,omitempty"`
+	AltNames           []string `yaml:"alt-names,omitempty"`
+}
+
+type agentCertificateLifecycle struct {
+	RenewBeforeExpiry   string `yaml:"renew-before-expiry"`
+	StatusCheckInterval string `yaml:"status-check-interval"`
+}
+
+type agentCertificateFileOutput struct {
+	Certificate agentFileOutputEntry `yaml:"certificate"`
+	PrivateKey  agentFileOutputEntry `yaml:"private-key"`
+	Chain       agentFileOutputEntry `yaml:"chain"`
+}
+
+type agentFileOutputEntry struct {
+	Path       string `yaml:"path"`
+	Permission string `yaml:"permission,omitempty"`
+}
+
+type agentCertificatePostHooks struct {
+	OnIssuance *agentPostHookEntry `yaml:"on-issuance,omitempty"`
+	OnRenewal  *agentPostHookEntry `yaml:"on-renewal,omitempty"`
+	OnFailure  *agentPostHookEntry `yaml:"on-failure,omitempty"`
+}
+
+type agentPostHookEntry struct {
+	Command string `yaml:"command"`
+	Timeout int    `yaml:"timeout"`
+}
+
 func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) string {
 	t := h.T
 
-	certEntries := ""
+	var certs []agentCertificateConfig
 	for _, cert := range opts.Certificates {
-		certEntry := fmt.Sprintf(`  - project-slug: "%s"
-    profile-name: "%s"
-`,
-			cert.ProjectSlug,
-			cert.ProfileSlug,
-		)
-
-		if cert.CSR != "" {
-			certEntry += fmt.Sprintf("    csr: |\n")
-			for _, line := range strings.Split(strings.TrimRight(cert.CSR, "\n"), "\n") {
-				certEntry += fmt.Sprintf("      %s\n", line)
-			}
-		}
-		if cert.CSRPath != "" {
-			certEntry += fmt.Sprintf("    csr-path: \"%s\"\n", cert.CSRPath)
-		}
-
-		certEntry += fmt.Sprintf(`    attributes:
-      common-name: "%s"
-      ttl: "%s"
-`, cert.CommonName, cert.TTL)
-
-		if cert.KeyAlgorithm != "" {
-			certEntry += fmt.Sprintf("      key-algorithm: \"%s\"\n", cert.KeyAlgorithm)
-		}
-		if cert.SignatureAlgorithm != "" {
-			certEntry += fmt.Sprintf("      signature-algorithm: \"%s\"\n", cert.SignatureAlgorithm)
-		}
-		if len(cert.KeyUsages) > 0 {
-			certEntry += "      key-usages:\n"
-			for _, u := range cert.KeyUsages {
-				certEntry += fmt.Sprintf("        - \"%s\"\n", u)
-			}
-		}
-		if len(cert.ExtendedKeyUsages) > 0 {
-			certEntry += "      extended-key-usages:\n"
-			for _, u := range cert.ExtendedKeyUsages {
-				certEntry += fmt.Sprintf("        - \"%s\"\n", u)
-			}
-		}
-
-		if len(cert.AltNames) > 0 {
-			certEntry += "      alt-names:\n"
-			for _, name := range cert.AltNames {
-				certEntry += fmt.Sprintf("        - \"%s\"\n", name)
-			}
-		}
-
-		certEntry += fmt.Sprintf(`    lifecycle:
-      renew-before-expiry: "%s"
-      status-check-interval: "%s"
-`, cert.RenewBeforeExpiry, cert.StatusCheckInterval)
-
-		certEntry += fmt.Sprintf("    file-output:\n")
-		certEntry += fmt.Sprintf("      certificate:\n")
-		certEntry += fmt.Sprintf("        path: \"%s\"\n", cert.CertPath)
-		if cert.CertPermission != "" {
-			certEntry += fmt.Sprintf("        permission: \"%s\"\n", cert.CertPermission)
-		}
-		certEntry += fmt.Sprintf("      private-key:\n")
-		certEntry += fmt.Sprintf("        path: \"%s\"\n", cert.KeyPath)
-		if cert.KeyPermission != "" {
-			certEntry += fmt.Sprintf("        permission: \"%s\"\n", cert.KeyPermission)
-		}
-		certEntry += fmt.Sprintf("      chain:\n")
-		certEntry += fmt.Sprintf("        path: \"%s\"\n", cert.ChainPath)
-		if cert.ChainPermission != "" {
-			certEntry += fmt.Sprintf("        permission: \"%s\"\n", cert.ChainPermission)
+		c := agentCertificateConfig{
+			ProjectSlug: cert.ProjectSlug,
+			ProfileName: cert.ProfileSlug,
+			CSR:         cert.CSR,
+			CSRPath:     cert.CSRPath,
+			Attributes: &agentCertificateAttributes{
+				CommonName:         cert.CommonName,
+				TTL:                cert.TTL,
+				KeyAlgorithm:       cert.KeyAlgorithm,
+				SignatureAlgorithm: cert.SignatureAlgorithm,
+				KeyUsages:          cert.KeyUsages,
+				ExtendedKeyUsages:  cert.ExtendedKeyUsages,
+				AltNames:           cert.AltNames,
+			},
+			Lifecycle: agentCertificateLifecycle{
+				RenewBeforeExpiry:   cert.RenewBeforeExpiry,
+				StatusCheckInterval: cert.StatusCheckInterval,
+			},
+			FileOutput: agentCertificateFileOutput{
+				Certificate: agentFileOutputEntry{Path: cert.CertPath, Permission: cert.CertPermission},
+				PrivateKey:  agentFileOutputEntry{Path: cert.KeyPath, Permission: cert.KeyPermission},
+				Chain:       agentFileOutputEntry{Path: cert.ChainPath, Permission: cert.ChainPermission},
+			},
 		}
 
 		if cert.PostHookOnIssuance != "" || cert.PostHookOnRenewal != "" || cert.PostHookOnFailure != "" {
-			certEntry += "    post-hooks:\n"
+			c.PostHooks = &agentCertificatePostHooks{}
 			if cert.PostHookOnIssuance != "" {
-				certEntry += fmt.Sprintf(`      on-issuance:
-        command: "%s"
-        timeout: 30
-`, cert.PostHookOnIssuance)
+				c.PostHooks.OnIssuance = &agentPostHookEntry{Command: cert.PostHookOnIssuance, Timeout: 30}
 			}
 			if cert.PostHookOnRenewal != "" {
-				certEntry += fmt.Sprintf(`      on-renewal:
-        command: "%s"
-        timeout: 30
-`, cert.PostHookOnRenewal)
+				c.PostHooks.OnRenewal = &agentPostHookEntry{Command: cert.PostHookOnRenewal, Timeout: 30}
 			}
 			if cert.PostHookOnFailure != "" {
-				certEntry += fmt.Sprintf(`      on-failure:
-        command: "%s"
-        timeout: 30
-`, cert.PostHookOnFailure)
+				c.PostHooks.OnFailure = &agentPostHookEntry{Command: cert.PostHookOnFailure, Timeout: 30}
 			}
 		}
 
-		certEntries += certEntry
+		certs = append(certs, c)
 	}
 
-	config := fmt.Sprintf(`version: "v1"
-infisical:
-  address: "%s"
-auth:
-  type: "universal-auth"
-  config:
-    client-id: "%s"
-    client-secret: "%s"
-certificates:
-%s`, h.InfisicalURL, opts.ClientIDPath, opts.ClientSecretPath, certEntries)
+	cfg := agentConfig{
+		Version: "v1",
+		Infisical: agentInfisicalConfig{
+			Address: h.InfisicalURL,
+		},
+		Auth: agentAuthConfig{
+			Type: "universal-auth",
+			Config: agentUniversalAuthConfig{
+				ClientID:     opts.ClientIDPath,
+				ClientSecret: opts.ClientSecretPath,
+			},
+		},
+		Certificates: certs,
+	}
+
+	data, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
 
 	configPath := filepath.Join(h.TempDir, "agent-config.yaml")
-	err := os.WriteFile(configPath, []byte(config), 0644)
+	err = os.WriteFile(configPath, data, 0644)
 	require.NoError(t, err)
 
 	return configPath
