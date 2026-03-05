@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -216,19 +217,62 @@ type Command struct {
 	functionCallErrMu  sync.Mutex
 }
 
+// findModuleRoot walks up from the current directory to find the directory
+// containing go.mod, which is the e2e module root. Returns "" if not found.
+func findModuleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// resolveExecutablePath resolves a potentially relative executable path.
+// Since go test sets the working directory to the test package directory
+// (e.g. e2e/pam/), but .env paths are relative to the e2e module root,
+// we try the path as-is first, then resolve it relative to the module root.
+func resolveExecutablePath(execPath string) string {
+	if filepath.IsAbs(execPath) {
+		return execPath
+	}
+	// Try as-is from current working directory
+	if validateExecutable(execPath) == nil {
+		return execPath
+	}
+	// Try relative to the module root (e2e/)
+	if root := findModuleRoot(); root != "" {
+		candidate := filepath.Join(root, execPath)
+		if validateExecutable(candidate) == nil {
+			return candidate
+		}
+	}
+	// Return original path so the caller gets a meaningful error
+	return execPath
+}
+
 func findExecutable(t *testing.T) string {
 	// First, check for INFISICAL_CLI_EXECUTABLE environment variable
 	envExec := os.Getenv("INFISICAL_CLI_EXECUTABLE")
 	if envExec != "" {
-		if err := validateExecutable(envExec); err != nil {
+		resolved := resolveExecutablePath(envExec)
+		if err := validateExecutable(resolved); err != nil {
 			t.Fatalf("INFISICAL_CLI_EXECUTABLE is set to '%s' but the executable cannot be found or is not executable: %v\n"+
 				"Please ensure the path is correct and the file has execute permissions.", envExec, err)
 		}
-		return envExec
+		return resolved
 	}
 
 	// Fall back to default path
-	defaultPath := "./infisical-merge"
+	defaultPath := resolveExecutablePath("./infisical-merge")
 	if err := validateExecutable(defaultPath); err != nil {
 		t.Fatalf("Cannot find executable at default path '%s': %v\n"+
 			"Please either:\n"+

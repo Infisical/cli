@@ -24,4 +24,5 @@ output-options:
     - createSecretV4
     - getSecretByNameV4
     - listSecretsV4
-
+    - createPostgresPamResource
+    - createPostgresPamAccount

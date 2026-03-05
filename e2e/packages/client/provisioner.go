@@ -16,9 +16,11 @@ type Provisioner struct {
 }
 
 type ProvisionResult struct {
-	UserId string
-	OrgId  string
-	Token  string
+	UserId   string
+	OrgId    string
+	Token    string
+	Email    string
+	Password string
 }
 
 type ProvisionerOption func(*Provisioner)
@@ -51,10 +53,12 @@ func WithCookies(cookies ...*http.Cookie) RequestEditorFn {
 
 func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	slog.Info("Signing up Admin account ...")
+	email := faker.Email()
+	password := faker.Password()
 	signUpResp, err := p.Client.AdminSignUpWithResponse(ctx, AdminSignUpJSONRequestBody{
-		Email:     types.Email(faker.Email()),
+		Email:     types.Email(email),
 		FirstName: faker.FirstName(),
-		Password:  faker.Password(),
+		Password:  password,
 	})
 	if err != nil {
 		return nil, err
@@ -105,8 +109,10 @@ func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	}
 	slog.Info("Token successfully created")
 	return &ProvisionResult{
-		UserId: signUpResp.JSON200.User.Id.String(),
-		OrgId:  signUpResp.JSON200.Organization.Id.String(),
-		Token:  authTokenResp.JSON200.Token,
+		UserId:   signUpResp.JSON200.User.Id.String(),
+		OrgId:    signUpResp.JSON200.Organization.Id.String(),
+		Token:    authTokenResp.JSON200.Token,
+		Email:    email,
+		Password: password,
 	}, nil
 }

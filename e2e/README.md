@@ -156,7 +156,10 @@ If you're using a `.env` file (recommended), just make sure it's configured and 
 ```bash
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
+go test github.com/infisical/cli/e2e-tests/pam -timeout 15m
 ```
+
+**Note:** PAM tests use subprocess mode and require a built CLI binary. Build it first with `go build -o e2e/infisical-merge .` from the repo root.
 
 Alternatively, you can export environment variables manually:
 
