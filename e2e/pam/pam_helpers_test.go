@@ -60,7 +60,7 @@ func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
 	require.NotNil(t, identity)
 
 	// Start relay.
-	// Use the host's outbound IP so the pam db access subprocess (which runs
+	// Use the host's outbound IP so the pam access subprocess (which runs
 	// on the host) can resolve the relay address returned by the backend API.
 	relayHost := getOutboundIP(t)
 	relayName := helpers.RandomSlug(2)
@@ -121,11 +121,11 @@ func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
 	require.NotZero(t, gatewayId, "Gateway ID should be set")
 
 	// Create PAM project
-	projDesc := "e2e tests for PAM postgres"
+	projDesc := "e2e tests for PAM"
 	template := "default"
 	projectType := client.Pam
 	projectResp, err := c.CreateProjectWithResponse(ctx, client.CreateProjectJSONRequestBody{
-		ProjectName:        "pam-pg-tests",
+		ProjectName:        "pam-e2e-tests",
 		ProjectDescription: &projDesc,
 		Template:           &template,
 		Type:               &projectType,

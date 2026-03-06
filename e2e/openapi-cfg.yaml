@@ -26,3 +26,5 @@ output-options:
     - listSecretsV4
     - createPostgresPamResource
     - createPostgresPamAccount
+    - createSshPamResource
+    - createSshPamAccount
