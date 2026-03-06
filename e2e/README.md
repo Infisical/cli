@@ -171,7 +171,10 @@ If you're using a `.env` file (recommended), just make sure it's configured and 
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
 go test github.com/infisical/cli/e2e-tests/agent
+go test github.com/infisical/cli/e2e-tests/pam
 ```
+
+**Note:** PAM tests use subprocess mode and require a built CLI binary. Build it first with `go build -o e2e/infisical-merge .` from the repo root.
 
 Alternatively, you can export environment variables manually:
 
@@ -181,6 +184,7 @@ export INFISICAL_BACKEND_DIR=/path/to/infisical/backend
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
 go test github.com/infisical/cli/e2e-tests/agent
+go test github.com/infisical/cli/e2e-tests/pam
 ```
 
 **Tip:** Using a `.env` file is much more convenient than exporting variables manually. See the [Environment Variables Configuration](#environment-variables-configuration) section above for details.

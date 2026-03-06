@@ -32,3 +32,5 @@ output-options:
     - attachUniversalAuth
     - createUniversalAuthClientSecret
     - createCloudflareAppConnection
+    - createPostgresPamResource
+    - createPostgresPamAccount
