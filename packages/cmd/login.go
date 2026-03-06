@@ -232,6 +232,15 @@ var loginCmd = &cobra.Command{
 			if err != nil {
 				util.HandleError(err)
 			}
+
+			// Validate that --organization-id and --organization-slug are not both set
+			if organizationSlug != "" && isDirectUserLoginFlagsAndEnvsSet {
+				orgIdFlag, _ := util.GetCmdFlagOrEnv(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"})
+				if orgIdFlag != "" {
+					util.PrintErrorMessageAndExit("Cannot use both --organization-id and --organization-slug at the same time. Please use only one to specify the target organization.")
+				}
+			}
+
 			if organizationSlug != "" {
 				newToken, rescopeErr := rescopeTokenToOrgBySlug(userCredentialsToBeStored.JTWToken, organizationSlug)
 				if rescopeErr != nil {
@@ -929,6 +938,10 @@ func rescopeTokenToOrgBySlug(currentToken string, organizationSlug string) (stri
 	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: matchedOrgId})
 	if err != nil {
 		return "", fmt.Errorf("unable to select organization: %w", err)
+	}
+
+	if selectedOrgRes.MfaEnabled {
+		return "", fmt.Errorf("organization '%s' requires MFA verification; please log in without --organization-slug and complete the MFA challenge during interactive org selection", organizationSlug)
 	}
 
 	return selectedOrgRes.Token, nil
