@@ -901,7 +901,8 @@ func decodePastedBase64Token(token string) (*models.UserCredentials, error) {
 }
 
 // rescopeTokenToOrgBySlug resolves an organization slug to its ID using the accessible-with-sub-orgs
-// endpoint and then calls selectOrganization to get a new token scoped to that org.
+// endpoint, asks the user to confirm the matched organization, and then calls selectOrganization to
+// get a new token scoped to that org.
 func rescopeTokenToOrgBySlug(currentToken string, organizationSlug string) (string, error) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
@@ -917,14 +918,17 @@ func rescopeTokenToOrgBySlug(currentToken string, organizationSlug string) (stri
 
 	// Search for the matching organization by slug (both root orgs and sub-orgs)
 	var matchedOrgId string
+	var matchedOrgName string
 	for _, org := range orgsResponse.Organizations {
 		if org.Slug == organizationSlug {
 			matchedOrgId = org.ID
+			matchedOrgName = org.Name
 			break
 		}
 		for _, subOrg := range org.SubOrganizations {
 			if subOrg.Slug == organizationSlug {
 				matchedOrgId = subOrg.ID
+				matchedOrgName = subOrg.Name
 				break
 			}
 		}
@@ -935,6 +939,20 @@ func rescopeTokenToOrgBySlug(currentToken string, organizationSlug string) (stri
 
 	if matchedOrgId == "" {
 		return "", fmt.Errorf("organization with slug '%s' not found or not accessible", organizationSlug)
+	}
+
+	// Prompt user to confirm the organization before re-scoping
+	confirmLabel := fmt.Sprintf("You are about to scope your login to organization \"%s\" (slug: %s). Do you want to continue?", matchedOrgName, organizationSlug)
+	confirmPrompt := promptui.Select{
+		Label: confirmLabel,
+		Items: []string{"Yes", "No"},
+	}
+	_, confirmResult, promptErr := confirmPrompt.Run()
+	if promptErr != nil {
+		return "", fmt.Errorf("confirmation prompt failed: %w", promptErr)
+	}
+	if confirmResult != "Yes" {
+		return "", fmt.Errorf("organization scope selection cancelled by user")
 	}
 
 	// Call selectOrganization to get a new token scoped to the matched org
