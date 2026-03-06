@@ -60,6 +60,7 @@ const (
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
+	operationCallGetAccessibleOrgsWithSubOrgs      = "CallGetAccessibleOrganizationsWithSubOrgs"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -215,6 +216,25 @@ func CallLogin2V2(httpClient *resty.Client, request GetLoginTwoV2Request) (GetLo
 	}
 
 	return loginTwoV2Response, nil
+}
+
+func CallGetAccessibleOrganizationsWithSubOrgs(httpClient *resty.Client) (GetAccessibleOrganizationsWithSubOrgsResponse, error) {
+	var orgResponse GetAccessibleOrganizationsWithSubOrgsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&orgResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/organization/accessible-with-sub-orgs", config.INFISICAL_URL))
+
+	if err != nil {
+		return GetAccessibleOrganizationsWithSubOrgsResponse{}, NewGenericRequestError(operationCallGetAccessibleOrgsWithSubOrgs, err)
+	}
+
+	if response.IsError() {
+		return GetAccessibleOrganizationsWithSubOrgsResponse{}, NewAPIErrorWithResponse(operationCallGetAccessibleOrgsWithSubOrgs, response, nil)
+	}
+
+	return orgResponse, nil
 }
 
 func CallGetAllOrganizations(httpClient *resty.Client) (GetOrganizationsResponse, error) {

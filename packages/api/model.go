@@ -168,6 +168,23 @@ type SelectOrganizationRequest struct {
 	OrganizationId string `json:"organizationId"`
 }
 
+type SubOrganization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type OrganizationWithSubOrgs struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Slug             string            `json:"slug"`
+	SubOrganizations []SubOrganization `json:"subOrganizations"`
+}
+
+type GetAccessibleOrganizationsWithSubOrgsResponse struct {
+	Organizations []OrganizationWithSubOrgs `json:"organizations"`
+}
+
 type Secret struct {
 	SecretKeyCiphertext     string `json:"secretKeyCiphertext,omitempty"`
 	SecretKeyIV             string `json:"secretKeyIV,omitempty"`
