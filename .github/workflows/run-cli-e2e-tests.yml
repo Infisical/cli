@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: General E2E Tests
+    name: CLI End-to-End Testing
 
     steps:
       - uses: actions/checkout@v6
@@ -26,6 +26,14 @@ jobs:
         with:
           repository: infisical/infisical
           path: infisical
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
       - name: Test with the Go CLI
         run: go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/proxy github.com/infisical/cli/e2e-tests/relay
         working-directory: ./e2e
@@ -36,7 +44,7 @@ jobs:
 
   pam-test:
     runs-on: ubuntu-latest
-    name: PAM E2E Tests
+    name: PAM End-to-End Testing
 
     steps:
       - uses: actions/checkout@v6
@@ -53,6 +61,14 @@ jobs:
         with:
           repository: infisical/infisical
           path: infisical
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
       - name: Test PAM Resources
         run: go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/pam
         working-directory: ./e2e
