@@ -235,7 +235,10 @@ var loginCmd = &cobra.Command{
 
 			// Validate that --organization-id and --organization-slug are not both set
 			if organizationSlug != "" && isDirectUserLoginFlagsAndEnvsSet {
-				orgIdFlag, _ := util.GetCmdFlagOrEnv(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"})
+				orgIdFlag, orgIdErr := util.GetCmdFlagOrEnv(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"})
+				if orgIdErr != nil {
+					util.HandleError(orgIdErr)
+				}
 				if orgIdFlag != "" {
 					util.PrintErrorMessageAndExit("Cannot use both --organization-id and --organization-slug at the same time. Please use only one to specify the target organization.")
 				}
