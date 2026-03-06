@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,9 +14,15 @@ import (
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/jackc/pgx/v5"
+	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
+
+func TestMain(m *testing.M) {
+	_ = godotenv.Load("../.env")
+	os.Exit(m.Run())
+}
 
 func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
