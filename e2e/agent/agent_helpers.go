@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -16,64 +17,84 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	client "github.com/infisical/cli/e2e-tests/packages/client"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
 type CertAgentTestHelper struct {
-	T             *testing.T
-	ProjectID     string
-	ProjectSlug   string
-	ProfileSlug   string
-	ProfileID     string
-	PolicyID      string
-	CaID          string
-	IdentityToken string
-	AdminToken    string
-	InfisicalURL  string
-	TempDir       string
-	ClientID      string
-	ClientSecret  string
+	T              *testing.T
+	ProjectID      string
+	ProjectSlug    string
+	ProfileSlug    string
+	ProfileID      string
+	PolicyID       string
+	CaID           string
+	AdminToken     string
+	InfisicalURL   string
+	TempDir        string
+	ClientID       string
+	ClientSecret   string
+	IdentityClient *client.ClientWithResponses
+	AdminClient    *client.ClientWithResponses
 }
 
 func (h *CertAgentTestHelper) CreateInternalCA() {
 	t := h.T
-	body := map[string]interface{}{
-		"name":      "test-root-ca",
-		"projectId": h.ProjectID,
-		"status":    "active",
-		"configuration": map[string]interface{}{
-			"type":          "root",
-			"friendlyName":  "Test Root CA",
-			"commonName":    "Test Root CA",
-			"organization":  "Test Org",
-			"ou":            "",
-			"country":       "US",
-			"province":      "",
-			"locality":      "",
-			"maxPathLength": -1,
-			"keyAlgorithm":  "RSA_2048",
-			"notAfter":      time.Now().AddDate(10, 0, 0).UTC().Format(time.RFC3339),
+	ctx := context.Background()
+
+	friendlyName := "Test Root CA"
+	commonName := "Test Root CA"
+	organization := "Test Org"
+	ou := ""
+	country := "US"
+	province := ""
+	locality := ""
+	maxPathLength := float32(-1)
+	notAfter := time.Now().AddDate(10, 0, 0).UTC().Format(time.RFC3339)
+
+	resp, err := h.IdentityClient.CreateInternalCertificateAuthorityV1WithResponse(ctx, client.CreateInternalCertificateAuthorityV1JSONRequestBody{
+		Name:      "test-root-ca",
+		ProjectId: uuid.MustParse(h.ProjectID),
+		Status:    client.Active,
+		Configuration: struct {
+			ActiveCaCertId *openapi_types.UUID                                                          `json:"activeCaCertId"`
+			CommonName     *string                                                                      `json:"commonName,omitempty"`
+			Country        *string                                                                      `json:"country,omitempty"`
+			Dn             *string                                                                      `json:"dn"`
+			FriendlyName   *string                                                                      `json:"friendlyName,omitempty"`
+			KeyAlgorithm   client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+			Locality       *string                                                                      `json:"locality,omitempty"`
+			MaxPathLength  *float32                                                                     `json:"maxPathLength"`
+			NotAfter       *string                                                                      `json:"notAfter,omitempty"`
+			NotBefore      *string                                                                      `json:"notBefore,omitempty"`
+			Organization   *string                                                                      `json:"organization,omitempty"`
+			Ou             *string                                                                      `json:"ou,omitempty"`
+			ParentCaId     *openapi_types.UUID                                                          `json:"parentCaId"`
+			Province       *string                                                                      `json:"province,omitempty"`
+			SerialNumber   *string                                                                      `json:"serialNumber"`
+			Type           client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationType         `json:"type"`
+		}{
+			Type:          client.Root,
+			FriendlyName:  &friendlyName,
+			CommonName:    &commonName,
+			Organization:  &organization,
+			Ou:            &ou,
+			Country:       &country,
+			Province:      &province,
+			Locality:      &locality,
+			MaxPathLength: &maxPathLength,
+			KeyAlgorithm:  client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA2048,
+			NotAfter:      &notAfter,
 		},
-	}
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create internal CA: %s", string(resp.Body))
+	require.NotNil(t, resp.JSON200)
 
-	respBody := h.doPost("/v1/cert-manager/ca/internal", body)
-
-	var resp map[string]interface{}
-	err := json.Unmarshal(respBody, &resp)
-	require.NoError(t, err, "Failed to unmarshal create CA response: %s", string(respBody))
-
-	caID := ""
-	if id, ok := resp["id"].(string); ok {
-		caID = id
-	} else if ca, ok := resp["ca"].(map[string]interface{}); ok {
-		if id, ok := ca["id"].(string); ok {
-			caID = id
-		}
-	}
-	require.NotEmpty(t, caID, "CA ID should not be empty, response: %s", string(respBody))
-
-	h.CaID = caID
+	h.CaID = resp.JSON200.Id.String()
 }
 
 type CertificatePolicyOption func(*certificatePolicyConfig)
@@ -118,175 +139,206 @@ func WithAllowExtendedKeyUsages(usages ...string) CertificatePolicyOption {
 
 func (h *CertAgentTestHelper) CreateCertificatePolicy(name string, opts ...CertificatePolicyOption) {
 	t := h.T
+	ctx := context.Background()
 
 	cfg := &certificatePolicyConfig{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	subject := []map[string]interface{}{
-		{
-			"type":    "common_name",
-			"allowed": []string{"*"},
+	allAllowed := []string{"*"}
+	reqBody := client.CreateCertificatePolicyJSONRequestBody{
+		ProjectId: h.ProjectID,
+		Name:      name,
+		Subject: &[]struct {
+			Allowed  *[]string                                         `json:"allowed,omitempty"`
+			Denied   *[]string                                         `json:"denied,omitempty"`
+			Required *[]string                                         `json:"required,omitempty"`
+			Type     client.CreateCertificatePolicyJSONBodySubjectType `json:"type"`
+		}{
+			{
+				Type:    client.CreateCertificatePolicyJSONBodySubjectType("common_name"),
+				Allowed: &allAllowed,
+			},
 		},
 	}
 
-	body := map[string]interface{}{
-		"projectId": h.ProjectID,
-		"name":      name,
-		"subject":   subject,
-	}
-
 	if cfg.allowAltNames {
-		body["sans"] = []map[string]interface{}{
+		reqBody.Sans = &[]struct {
+			Allowed  *[]string                                      `json:"allowed,omitempty"`
+			Denied   *[]string                                      `json:"denied,omitempty"`
+			Required *[]string                                      `json:"required,omitempty"`
+			Type     client.CreateCertificatePolicyJSONBodySansType `json:"type"`
+		}{
 			{
-				"type":    "dns_name",
-				"allowed": []string{"*"},
+				Type:    client.CreateCertificatePolicyJSONBodySansType("dns_name"),
+				Allowed: &allAllowed,
 			},
 		}
 	}
 
 	if len(cfg.allowKeyAlgorithms) > 0 || len(cfg.allowSignatureAlgorithms) > 0 {
-		algorithms := map[string]interface{}{}
+		algos := &struct {
+			KeyAlgorithm *[]string `json:"keyAlgorithm,omitempty"`
+			Signature    *[]string `json:"signature,omitempty"`
+		}{}
 		if len(cfg.allowKeyAlgorithms) > 0 {
-			algorithms["keyAlgorithm"] = cfg.allowKeyAlgorithms
+			algos.KeyAlgorithm = &cfg.allowKeyAlgorithms
 		}
 		if len(cfg.allowSignatureAlgorithms) > 0 {
-			algorithms["signature"] = cfg.allowSignatureAlgorithms
+			algos.Signature = &cfg.allowSignatureAlgorithms
 		}
-		body["algorithms"] = algorithms
+		reqBody.Algorithms = algos
 	}
 
 	if len(cfg.allowKeyUsages) > 0 {
-		body["keyUsages"] = map[string]interface{}{
-			"allowed": cfg.allowKeyUsages,
+		allowed := make([]client.CreateCertificatePolicyJSONBodyKeyUsagesAllowed, len(cfg.allowKeyUsages))
+		for i, u := range cfg.allowKeyUsages {
+			allowed[i] = client.CreateCertificatePolicyJSONBodyKeyUsagesAllowed(u)
+		}
+		reqBody.KeyUsages = &struct {
+			Allowed  *[]client.CreateCertificatePolicyJSONBodyKeyUsagesAllowed  `json:"allowed,omitempty"`
+			Denied   *[]client.CreateCertificatePolicyJSONBodyKeyUsagesDenied   `json:"denied,omitempty"`
+			Required *[]client.CreateCertificatePolicyJSONBodyKeyUsagesRequired `json:"required,omitempty"`
+		}{
+			Allowed: &allowed,
 		}
 	}
 
 	if len(cfg.allowExtendedKeyUsages) > 0 {
-		body["extendedKeyUsages"] = map[string]interface{}{
-			"allowed": cfg.allowExtendedKeyUsages,
+		allowed := make([]client.CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed, len(cfg.allowExtendedKeyUsages))
+		for i, u := range cfg.allowExtendedKeyUsages {
+			allowed[i] = client.CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed(u)
+		}
+		reqBody.ExtendedKeyUsages = &struct {
+			Allowed  *[]client.CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed  `json:"allowed,omitempty"`
+			Denied   *[]client.CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied   `json:"denied,omitempty"`
+			Required *[]client.CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired `json:"required,omitempty"`
+		}{
+			Allowed: &allowed,
 		}
 	}
 
-	respBody := h.doPost("/v1/cert-manager/certificate-policies", body)
+	resp, err := h.IdentityClient.CreateCertificatePolicyWithResponse(ctx, reqBody)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create certificate policy: %s", string(resp.Body))
+	require.NotNil(t, resp.JSON200)
 
-	var resp map[string]interface{}
-	err := json.Unmarshal(respBody, &resp)
-	require.NoError(t, err, "Failed to unmarshal create policy response: %s", string(respBody))
-
-	policyID := ""
-	if policy, ok := resp["certificatePolicy"].(map[string]interface{}); ok {
-		if id, ok := policy["id"].(string); ok {
-			policyID = id
-		}
-	}
-	require.NotEmpty(t, policyID, "Policy ID should not be empty, response: %s", string(respBody))
-
-	h.PolicyID = policyID
+	h.PolicyID = resp.JSON200.CertificatePolicy.Id.String()
 }
 
 func (h *CertAgentTestHelper) CreateCertificateProfile(slug string) {
 	t := h.T
-	body := map[string]interface{}{
-		"projectId":           h.ProjectID,
-		"caId":                h.CaID,
-		"certificatePolicyId": h.PolicyID,
-		"slug":                slug,
-		"enrollmentType":      "api",
-		"issuerType":          "ca",
-		"apiConfig": map[string]interface{}{
-			"autoRenew": false,
+	ctx := context.Background()
+
+	caID := uuid.MustParse(h.CaID)
+	autoRenew := false
+	issuerType := client.CreateCertificateProfileJSONBodyIssuerType("ca")
+
+	resp, err := h.IdentityClient.CreateCertificateProfileWithResponse(ctx, client.CreateCertificateProfileJSONRequestBody{
+		ProjectId:           h.ProjectID,
+		CaId:                &caID,
+		CertificatePolicyId: uuid.MustParse(h.PolicyID),
+		Slug:                slug,
+		EnrollmentType:      client.CreateCertificateProfileJSONBodyEnrollmentType("api"),
+		IssuerType:          &issuerType,
+		ApiConfig: &struct {
+			AutoRenew       *bool    `json:"autoRenew,omitempty"`
+			RenewBeforeDays *float32 `json:"renewBeforeDays,omitempty"`
+		}{
+			AutoRenew: &autoRenew,
 		},
-	}
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create certificate profile: %s", string(resp.Body))
+	require.NotNil(t, resp.JSON200)
 
-	respBody := h.doPost("/v1/cert-manager/certificate-profiles", body)
-
-	var resp map[string]interface{}
-	err := json.Unmarshal(respBody, &resp)
-	require.NoError(t, err, "Failed to unmarshal create profile response: %s", string(respBody))
-
-	profileID := ""
-	profileSlug := ""
-	if profile, ok := resp["certificateProfile"].(map[string]interface{}); ok {
-		if id, ok := profile["id"].(string); ok {
-			profileID = id
-		}
-		if s, ok := profile["slug"].(string); ok {
-			profileSlug = s
-		}
-	}
-	require.NotEmpty(t, profileID, "Profile ID should not be empty, response: %s", string(respBody))
-
-	h.ProfileID = profileID
-	h.ProfileSlug = profileSlug
+	h.ProfileID = resp.JSON200.CertificateProfile.Id.String()
+	h.ProfileSlug = resp.JSON200.CertificateProfile.Slug
 }
-
-type addUniversalAuthRequest struct {
-	AccessTokenTTL          int `json:"accessTokenTTL"`
-	AccessTokenMaxTTL       int `json:"accessTokenMaxTTL"`
-	AccessTokenNumUsesLimit int `json:"accessTokenNumUsesLimit"`
-	AccessTokenTrustedIps   []struct {
-		IpAddress string `json:"ipAddress"`
-	} `json:"accessTokenTrustedIps"`
-}
-
-type createUniversalAuthClientSecretRequest struct{}
 
 func (h *CertAgentTestHelper) SetupUniversalAuth(identityID string) {
 	t := h.T
+	ctx := context.Background()
 
-	body := addUniversalAuthRequest{
-		AccessTokenTTL:          2592000,
-		AccessTokenMaxTTL:       2592000,
-		AccessTokenNumUsesLimit: 0,
-		AccessTokenTrustedIps: []struct {
+	ttl := 2592000
+	maxTTL := 2592000
+	numUses := 0
+
+	attachResp, err := h.AdminClient.AttachUniversalAuthWithResponse(ctx, identityID, client.AttachUniversalAuthJSONRequestBody{
+		AccessTokenTTL:          &ttl,
+		AccessTokenMaxTTL:       &maxTTL,
+		AccessTokenNumUsesLimit: &numUses,
+		AccessTokenTrustedIps: &[]struct {
 			IpAddress string `json:"ipAddress"`
 		}{
 			{IpAddress: "0.0.0.0/0"},
 			{IpAddress: "::/0"},
 		},
-	}
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, attachResp.StatusCode(), "Failed to attach universal auth: %s", string(attachResp.Body))
+	require.NotNil(t, attachResp.JSON200)
 
-	respBody := h.doPostWithToken(fmt.Sprintf("/v1/auth/universal-auth/identities/%s", identityID), body, h.AdminToken)
+	h.ClientID = attachResp.JSON200.IdentityUniversalAuth.ClientId
 
-	var rawResp map[string]interface{}
-	err := json.Unmarshal(respBody, &rawResp)
-	require.NoError(t, err, "Failed to unmarshal universal auth response: %s", string(respBody))
+	csResp, err := h.AdminClient.CreateUniversalAuthClientSecretWithResponse(ctx, identityID, client.CreateUniversalAuthClientSecretJSONRequestBody{})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, csResp.StatusCode(), "Failed to create universal auth client secret: %s", string(csResp.Body))
+	require.NotNil(t, csResp.JSON200)
 
-	clientID := ""
-	if id, ok := rawResp["clientId"].(string); ok {
-		clientID = id
-	} else if nested, ok := rawResp["identityUniversalAuth"].(map[string]interface{}); ok {
-		if id, ok := nested["clientId"].(string); ok {
-			clientID = id
-		}
-	}
-	require.NotEmpty(t, clientID, "Client ID should not be empty, response: %s", string(respBody))
-
-	h.ClientID = clientID
-
-	csRespBody := h.doPostWithToken(fmt.Sprintf("/v1/auth/universal-auth/identities/%s/client-secrets", identityID), createUniversalAuthClientSecretRequest{}, h.AdminToken)
-
-	var csRawResp map[string]interface{}
-	err = json.Unmarshal(csRespBody, &csRawResp)
-	require.NoError(t, err, "Failed to unmarshal client secret response: %s", string(csRespBody))
-
-	clientSecret := ""
-	if s, ok := csRawResp["clientSecret"].(string); ok {
-		clientSecret = s
-	} else if nested, ok := csRawResp["clientSecretData"].(map[string]interface{}); ok {
-		if s, ok := nested["clientSecret"].(string); ok {
-			clientSecret = s
-		}
-	}
-	require.NotEmpty(t, clientSecret, "Client secret should not be empty, response: %s", string(csRespBody))
-
-	h.ClientSecret = clientSecret
+	h.ClientSecret = csResp.JSON200.ClientSecret
 }
 
-func (h *CertAgentTestHelper) doPost(path string, body interface{}) []byte {
-	return h.doPostWithToken(path, body, h.IdentityToken)
+func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string) {
+	t := h.T
+	ctx := context.Background()
+
+	resp, err := h.IdentityClient.CreateAcmeCertificateAuthorityV1WithResponse(ctx, client.CreateAcmeCertificateAuthorityV1JSONRequestBody{
+		Name:      "test-acme-ca",
+		ProjectId: uuid.MustParse(h.ProjectID),
+		Status:    client.CreateAcmeCertificateAuthorityV1JSONBodyStatusActive,
+		Configuration: struct {
+			AccountEmail       string             `json:"accountEmail"`
+			DirectoryUrl       string             `json:"directoryUrl"`
+			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+			DnsProviderConfig  struct {
+				HostedZoneId string                                                                                `json:"hostedZoneId"`
+				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
+			} `json:"dnsProviderConfig"`
+			EabHmacKey *string `json:"eabHmacKey,omitempty"`
+			EabKid     *string `json:"eabKid,omitempty"`
+		}{
+			DnsAppConnectionId: uuid.MustParse(dnsConnectionID),
+			DnsProviderConfig: struct {
+				HostedZoneId string                                                                                `json:"hostedZoneId"`
+				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
+			}{
+				Provider:     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderCloudflare,
+				HostedZoneId: "fake-zone-id",
+			},
+			DirectoryUrl: directoryUrl,
+			AccountEmail: "test@example.com",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create ACME CA: %s", string(resp.Body))
+	require.NotNil(t, resp.JSON200)
+
+	h.CaID = resp.JSON200.Id.String()
+}
+
+func (h *CertAgentTestHelper) DisableAcmeCA(caID string) {
+	t := h.T
+	ctx := context.Background()
+
+	status := client.UpdateAcmeCertificateAuthorityV1JSONBodyStatus("disabled")
+	resp, err := h.IdentityClient.UpdateAcmeCertificateAuthorityV1WithResponse(ctx, caID, client.UpdateAcmeCertificateAuthorityV1JSONRequestBody{
+		Status: &status,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.StatusCode() >= 200 && resp.StatusCode() < 300,
+		"Failed to disable ACME CA, status %d: %s", resp.StatusCode(), string(resp.Body))
 }
 
 func (h *CertAgentTestHelper) doPostWithToken(path string, body interface{}, token string) []byte {
@@ -316,82 +368,73 @@ func (h *CertAgentTestHelper) doPostWithToken(path string, body interface{}, tok
 	return respBody
 }
 
-func (h *CertAgentTestHelper) doPostRaw(path string, body interface{}) (int, []byte) {
-	t := h.T
-
-	jsonBody, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	url := h.InfisicalURL + "/api" + path
-	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
-	require.NoError(t, err)
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.IdentityToken)
-
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	return resp.StatusCode, respBody
-}
-
-func (h *CertAgentTestHelper) doPatchWithToken(path string, body interface{}, token string) (int, []byte) {
-	t := h.T
-
-	jsonBody, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	url := h.InfisicalURL + "/api" + path
-	req, err := http.NewRequest("PATCH", url, bytes.NewReader(jsonBody))
-	require.NoError(t, err)
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	return resp.StatusCode, respBody
-}
-
 func (h *CertAgentTestHelper) CreateAcmeCARaw(name, dnsConnectionID, directoryUrl, provider, hostedZoneId, accountEmail string) (int, []byte) {
-	body := map[string]interface{}{
-		"name":      name,
-		"projectId": h.ProjectID,
-		"status":    "active",
-		"configuration": map[string]interface{}{
-			"dnsAppConnectionId": dnsConnectionID,
-			"dnsProviderConfig": map[string]interface{}{
-				"provider":     provider,
-				"hostedZoneId": hostedZoneId,
+	t := h.T
+	ctx := context.Background()
+
+	resp, err := h.IdentityClient.CreateAcmeCertificateAuthorityV1WithResponse(ctx, client.CreateAcmeCertificateAuthorityV1JSONRequestBody{
+		Name:      name,
+		ProjectId: uuid.MustParse(h.ProjectID),
+		Status:    client.CreateAcmeCertificateAuthorityV1JSONBodyStatusActive,
+		Configuration: struct {
+			AccountEmail       string             `json:"accountEmail"`
+			DirectoryUrl       string             `json:"directoryUrl"`
+			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+			DnsProviderConfig  struct {
+				HostedZoneId string                                                                                `json:"hostedZoneId"`
+				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
+			} `json:"dnsProviderConfig"`
+			EabHmacKey *string `json:"eabHmacKey,omitempty"`
+			EabKid     *string `json:"eabKid,omitempty"`
+		}{
+			DnsAppConnectionId: uuid.MustParse(dnsConnectionID),
+			DnsProviderConfig: struct {
+				HostedZoneId string                                                                                `json:"hostedZoneId"`
+				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
+			}{
+				Provider:     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider(provider),
+				HostedZoneId: hostedZoneId,
 			},
-			"directoryUrl": directoryUrl,
-			"accountEmail": accountEmail,
+			DirectoryUrl: directoryUrl,
+			AccountEmail: accountEmail,
 		},
-	}
-	return h.doPostRaw("/v1/cert-manager/ca/acme", body)
+	})
+	require.NoError(t, err)
+
+	return resp.StatusCode(), resp.Body
 }
 
-func (h *CertAgentTestHelper) DisableAcmeCA(caID string) {
+func (h *CertAgentTestHelper) CreateCloudflareAppConnection() string {
 	t := h.T
+	ctx := context.Background()
 
-	body := map[string]interface{}{
-		"status": "disabled",
+	body, err := json.Marshal(map[string]interface{}{
+		"name":   "test-cloudflare-conn",
+		"method": "api-token",
+		"credentials": map[string]interface{}{
+			"accountId": "fake-account-id",
+			"apiToken":  "fake-api-token",
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := h.AdminClient.CreateCloudflareAppConnectionWithBodyWithResponse(ctx, "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create Cloudflare connection: %s", string(resp.Body))
+
+	var parsed map[string]interface{}
+	err = json.Unmarshal(resp.Body, &parsed)
+	require.NoError(t, err)
+
+	connectionID := ""
+	if ac, ok := parsed["appConnection"].(map[string]interface{}); ok {
+		if id, ok := ac["id"].(string); ok {
+			connectionID = id
+		}
 	}
+	require.NotEmpty(t, connectionID, "Cloudflare connection ID should not be empty, response: %s", string(resp.Body))
 
-	statusCode, respBody := h.doPatchWithToken(fmt.Sprintf("/v1/cert-manager/ca/acme/%s", caID), body, h.IdentityToken)
-	require.True(t, statusCode >= 200 && statusCode < 300,
-		"Failed to disable ACME CA, status %d: %s", statusCode, string(respBody))
+	return connectionID
 }
 
 func CertFilePaths(dir string) (certPath, keyPath, chainPath string) {
@@ -829,77 +872,6 @@ func (h *CertAgentTestHelper) SetupBddNockMocks(certCount int) {
 
 	h.doPostWithToken("/__bdd_nock__/define", body, h.AdminToken)
 	t.Log("BDD nock mocks configured for Cloudflare API")
-}
-
-func (h *CertAgentTestHelper) CreateCloudflareAppConnection() string {
-	t := h.T
-
-	body := map[string]interface{}{
-		"name":   "test-cloudflare-conn",
-		"method": "api-token",
-		"credentials": map[string]interface{}{
-			"accountId": "fake-account-id",
-			"apiToken":  "fake-api-token",
-		},
-	}
-
-	respBody := h.doPostWithToken("/v1/app-connections/cloudflare", body, h.AdminToken)
-
-	var resp map[string]interface{}
-	err := json.Unmarshal(respBody, &resp)
-	require.NoError(t, err, "Failed to unmarshal create Cloudflare connection response: %s", string(respBody))
-
-	connectionID := ""
-	if ac, ok := resp["appConnection"].(map[string]interface{}); ok {
-		if id, ok := ac["id"].(string); ok {
-			connectionID = id
-		}
-	}
-	if connectionID == "" {
-		if id, ok := resp["id"].(string); ok {
-			connectionID = id
-		}
-	}
-	require.NotEmpty(t, connectionID, "Cloudflare connection ID should not be empty, response: %s", string(respBody))
-
-	return connectionID
-}
-
-func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string) {
-	t := h.T
-
-	body := map[string]interface{}{
-		"name":      "test-acme-ca",
-		"projectId": h.ProjectID,
-		"status":    "active",
-		"configuration": map[string]interface{}{
-			"dnsAppConnectionId": dnsConnectionID,
-			"dnsProviderConfig": map[string]interface{}{
-				"provider":     "cloudflare",
-				"hostedZoneId": "fake-zone-id",
-			},
-			"directoryUrl": directoryUrl,
-			"accountEmail": "test@example.com",
-		},
-	}
-
-	respBody := h.doPost("/v1/cert-manager/ca/acme", body)
-
-	var resp map[string]interface{}
-	err := json.Unmarshal(respBody, &resp)
-	require.NoError(t, err, "Failed to unmarshal create ACME CA response: %s", string(respBody))
-
-	caID := ""
-	if id, ok := resp["id"].(string); ok {
-		caID = id
-	} else if ca, ok := resp["ca"].(map[string]interface{}); ok {
-		if id, ok := ca["id"].(string); ok {
-			caID = id
-		}
-	}
-	require.NotEmpty(t, caID, "ACME CA ID should not be empty, response: %s", string(respBody))
-
-	h.CaID = caID
 }
 
 func GenerateCSR(t *testing.T, commonName string) (csrPEM string, keyPEM string) {

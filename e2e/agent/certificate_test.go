@@ -32,17 +32,6 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 	require.NotNil(t, identity.TokenAuthToken)
 	identityToken := *identity.TokenAuthToken
 
-	helper := &agentHelpers.CertAgentTestHelper{
-		T:             t,
-		IdentityToken: identityToken,
-		AdminToken:    infisical.ProvisionResult().Token,
-		InfisicalURL:  infisical.ApiUrl(t),
-		TempDir:       t.TempDir(),
-	}
-
-	helper.SetupUniversalAuth(identity.Id)
-	slog.Info("Universal auth configured", "clientID", helper.ClientID)
-
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(identityToken)
 	require.NoError(t, err)
 
@@ -52,6 +41,28 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 		client.WithRequestEditorFn(bearerAuth.Intercept),
 	)
 	require.NoError(t, err)
+
+	adminBearerAuth, err := securityprovider.NewSecurityProviderBearerToken(infisical.ProvisionResult().Token)
+	require.NoError(t, err)
+
+	adminClient, err := client.NewClientWithResponses(
+		infisical.ApiUrl(t),
+		client.WithHTTPClient(&http.Client{}),
+		client.WithRequestEditorFn(adminBearerAuth.Intercept),
+	)
+	require.NoError(t, err)
+
+	helper := &agentHelpers.CertAgentTestHelper{
+		T:              t,
+		AdminToken:     infisical.ProvisionResult().Token,
+		InfisicalURL:   infisical.ApiUrl(t),
+		TempDir:        t.TempDir(),
+		IdentityClient: identityClient,
+		AdminClient:    adminClient,
+	}
+
+	helper.SetupUniversalAuth(identity.Id)
+	slog.Info("Universal auth configured", "clientID", helper.ClientID)
 
 	projectType := client.CertManager
 	projectResp, err := identityClient.CreateProjectWithResponse(ctx, client.CreateProjectJSONRequestBody{
@@ -750,16 +761,6 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 	require.NotNil(t, identity.TokenAuthToken)
 	identityToken := *identity.TokenAuthToken
 
-	helper := &agentHelpers.CertAgentTestHelper{
-		T:             t,
-		IdentityToken: identityToken,
-		AdminToken:    infisical.ProvisionResult().Token,
-		InfisicalURL:  infisical.ApiUrl(t),
-		TempDir:       t.TempDir(),
-	}
-
-	helper.SetupUniversalAuth(identity.Id)
-
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(identityToken)
 	require.NoError(t, err)
 
@@ -769,6 +770,27 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 		client.WithRequestEditorFn(bearerAuth.Intercept),
 	)
 	require.NoError(t, err)
+
+	adminBearerAuth, err := securityprovider.NewSecurityProviderBearerToken(infisical.ProvisionResult().Token)
+	require.NoError(t, err)
+
+	adminClient, err := client.NewClientWithResponses(
+		infisical.ApiUrl(t),
+		client.WithHTTPClient(&http.Client{}),
+		client.WithRequestEditorFn(adminBearerAuth.Intercept),
+	)
+	require.NoError(t, err)
+
+	helper := &agentHelpers.CertAgentTestHelper{
+		T:              t,
+		AdminToken:     infisical.ProvisionResult().Token,
+		InfisicalURL:   infisical.ApiUrl(t),
+		TempDir:        t.TempDir(),
+		IdentityClient: identityClient,
+		AdminClient:    adminClient,
+	}
+
+	helper.SetupUniversalAuth(identity.Id)
 
 	projectType := client.CertManager
 	projectResp, err := identityClient.CreateProjectWithResponse(ctx, client.CreateProjectJSONRequestBody{
