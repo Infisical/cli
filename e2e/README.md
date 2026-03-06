@@ -151,12 +151,27 @@ cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
 ```
 
+To run the cert-manager agent tests:
+
+```bash
+cd e2e
+go test github.com/infisical/cli/e2e-tests/agent
+```
+
+Some tests (e.g. certificate renewal) may take longer to complete. If you experience timeouts, you can increase the Go test timeout using the `-timeout` flag:
+
+```bash
+cd e2e
+go test github.com/infisical/cli/e2e-tests/agent -timeout 30m
+```
+
 If you're using a `.env` file (recommended), just make sure it's configured and run the tests:
 
 ```bash
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
-go test github.com/infisical/cli/e2e-tests/pam -timeout 15m
+go test github.com/infisical/cli/e2e-tests/agent
+go test github.com/infisical/cli/e2e-tests/pam
 ```
 
 **Note:** PAM tests use subprocess mode and require a built CLI binary. Build it first with `go build -o e2e/infisical-merge .` from the repo root.
@@ -168,6 +183,8 @@ export INFISICAL_CLI_EXECUTABLE=/path/to/infisical-merge
 export INFISICAL_BACKEND_DIR=/path/to/infisical/backend
 cd e2e
 go test github.com/infisical/cli/e2e-tests/relay
+go test github.com/infisical/cli/e2e-tests/agent
+go test github.com/infisical/cli/e2e-tests/pam
 ```
 
 **Tip:** Using a `.env` file is much more convenient than exporting variables manually. See the [Environment Variables Configuration](#environment-variables-configuration) section above for details.

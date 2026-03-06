@@ -2362,9 +2362,6 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 }
 
 func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorMsg string) {
-	tm.mutex.Lock()
-	defer tm.mutex.Unlock()
-
 	state := tm.certificateStates[certificateId]
 	state.Status = "failed"
 	state.LastError = errorMsg
@@ -3320,7 +3317,7 @@ var certManagerAgentCmd = &cobra.Command{
 			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(cmd.Context())
 
 		tokenRefreshNotifier := make(chan bool)
 		sigChan := make(chan os.Signal, 1)
@@ -3398,6 +3395,12 @@ var certManagerAgentCmd = &cobra.Command{
 			select {
 			case <-tokenRefreshNotifier:
 				go tm.WriteTokenToFiles()
+			case <-ctx.Done():
+				tm.isShuttingDown = true
+				tm.cancelContext()
+				log.Info().Msg("certificate management agent context cancelled, shutting down...")
+				cancel()
+				return
 			case <-sigChan:
 				tm.isShuttingDown = true
 				tm.cancelContext()
