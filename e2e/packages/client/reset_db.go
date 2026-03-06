@@ -118,6 +118,11 @@ func resetPostgresDB(ctx context.Context, opts ResetDBOptions) error {
 		return err
 	}
 
+	if len(tables) == 0 {
+		slog.Info("No tables found in database, skipping reset (DB not yet migrated)")
+		return nil
+	}
+
 	// Build truncate statement with all tables
 	tablesToTruncate := make([]string, 0)
 	for _, table := range tables {

@@ -36,14 +36,55 @@ type InfisicalService struct {
 	provisionResult *client.ProvisionResult
 }
 
-func NewInfisicalService() *InfisicalService {
-	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
+type InfisicalServiceOption func(*infisicalServiceConfig)
+
+type infisicalServiceConfig struct {
+	withAcme bool
+}
+
+func WithAcme() InfisicalServiceOption {
+	return func(c *infisicalServiceConfig) {
+		c.withAcme = true
+	}
+}
+
+func NewInfisicalService(opts ...InfisicalServiceOption) *InfisicalService {
+	cfg := &infisicalServiceConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if !cfg.withAcme {
+		return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
+	}
+
+	backendOpts := infisical.BackendOptionsFromEnv()
+	backendOpts.Dockerfile = "Dockerfile.dev"
+	svc := &InfisicalService{
+		Stack: infisical.NewStack(
+			infisical.WithDbService(),
+			infisical.WithRedisService(),
+			infisical.WithPebbleService(),
+			infisical.WithBackendService(backendOpts),
+		),
+	}
+	svc.WithBackendEnvironment(types.NewMappingWithEquals([]string{
+		"ACME_DEVELOPMENT_MODE=true",
+		"ACME_SKIP_UPSTREAM_VALIDATION=true",
+		"BDD_NOCK_API_ENABLED=true",
+		"NODE_TLS_REJECT_UNAUTHORIZED=0",
+	}))
+	return svc
+}
+
+func PebbleInternalUrl() string {
+	return "https://pebble:14000/dir"
 }
 
 func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithEquals) *InfisicalService {
 	backend := s.Stack.Project.Services["backend"]
 	backend.Environment = backend.Environment.OverrideBy(environment)
-	fmt.Print(s.Stack.Project.Services["backend"].Environment)
+	s.Stack.Project.Services["backend"] = backend
 	return s
 }
 
@@ -395,6 +436,14 @@ func (c *Command) Stop() {
 		if c.functionCallCancel != nil {
 			c.functionCallCancel()
 		}
+
+		if c.functionCallDone != nil {
+			select {
+			case <-c.functionCallDone:
+			case <-time.After(10 * time.Second):
+			}
+		}
+
 		// Reset logger to use os.Stderr before closing the file
 		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
 		// Reset RootCmd outputs to default
