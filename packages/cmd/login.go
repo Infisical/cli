@@ -227,6 +227,19 @@ var loginCmd = &cobra.Command{
 				cliDefaultLogin(&userCredentialsToBeStored, email, password, organizationId)
 			}
 
+			// If --organization-slug is provided, re-scope the token to the specified organization/sub-organization
+			organizationSlug, err := cmd.Flags().GetString("organization-slug")
+			if err != nil {
+				util.HandleError(err)
+			}
+			if organizationSlug != "" {
+				newToken, rescopeErr := rescopeTokenToOrgBySlug(userCredentialsToBeStored.JTWToken, organizationSlug)
+				if rescopeErr != nil {
+					util.HandleError(rescopeErr, "Unable to scope login to the specified organization")
+				}
+				userCredentialsToBeStored.JTWToken = newToken
+			}
+
 			err = util.StoreUserCredsInKeyRing(&userCredentialsToBeStored)
 			if err != nil {
 				log.Error().Msgf("Unable to store your credentials in system vault")
@@ -405,7 +418,7 @@ func init() {
 	loginCmd.Flags().String("method", "user", "login method [user, universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]")
 	loginCmd.Flags().String("client-id", "", "client id for universal auth")
 	loginCmd.Flags().String("client-secret", "", "client secret for universal auth")
-	loginCmd.Flags().String("organization-slug", "", "When set for machine identity login, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
+	loginCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization. Works for both user login (including browser/SSO) and machine identity login. If left empty, the session defaults to the organization selected during login.")
 	loginCmd.Flags().String("machine-identity-id", "", "machine identity id for these login methods [kubernetes, azure, gcp-id-token, gcp-iam, aws-iam]")
 	loginCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	loginCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
@@ -873,6 +886,52 @@ func decodePastedBase64Token(token string) (*models.UserCredentials, error) {
 	}
 
 	return &loginResponse, nil
+}
+
+// rescopeTokenToOrgBySlug resolves an organization slug to its ID using the accessible-with-sub-orgs
+// endpoint and then calls selectOrganization to get a new token scoped to that org.
+func rescopeTokenToOrgBySlug(currentToken string, organizationSlug string) (string, error) {
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return "", fmt.Errorf("unable to get resty client with custom headers: %w", err)
+	}
+	httpClient.SetAuthToken(currentToken)
+
+	// Fetch all accessible organizations including sub-orgs
+	orgsResponse, err := api.CallGetAccessibleOrganizationsWithSubOrgs(httpClient)
+	if err != nil {
+		return "", fmt.Errorf("unable to fetch accessible organizations: %w", err)
+	}
+
+	// Search for the matching organization by slug (both root orgs and sub-orgs)
+	var matchedOrgId string
+	for _, org := range orgsResponse.Organizations {
+		if org.Slug == organizationSlug {
+			matchedOrgId = org.ID
+			break
+		}
+		for _, subOrg := range org.SubOrganizations {
+			if subOrg.Slug == organizationSlug {
+				matchedOrgId = subOrg.ID
+				break
+			}
+		}
+		if matchedOrgId != "" {
+			break
+		}
+	}
+
+	if matchedOrgId == "" {
+		return "", fmt.Errorf("organization with slug '%s' not found or not accessible", organizationSlug)
+	}
+
+	// Call selectOrganization to get a new token scoped to the matched org
+	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: matchedOrgId})
+	if err != nil {
+		return "", fmt.Errorf("unable to select organization: %w", err)
+	}
+
+	return selectedOrgRes.Token, nil
 }
 
 // Manages the browser login flow.
