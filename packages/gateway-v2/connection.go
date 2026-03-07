@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,6 +26,37 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 	targetURL := fmt.Sprintf("%s:%d", forwardConfig.TargetHost, forwardConfig.TargetPort)
 	caCert := forwardConfig.CACertificate
 	verifyTLS := forwardConfig.VerifyTLS
+
+	// Set up session logging if PAM session info is present
+	var sessionLogger session.SessionLogger
+	pamSessionId := forwardConfig.PAMConfig.SessionId
+	if pamSessionId != "" {
+		encryptionKey, err := forwardConfig.PAMConfig.CredentialsManager.GetPAMSessionEncryptionKey()
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to get session encryption key, proceeding without session recording")
+		} else {
+			sl, err := session.NewSessionLogger(pamSessionId, encryptionKey, forwardConfig.PAMConfig.ExpiryTime, forwardConfig.PAMConfig.ResourceType)
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to create session logger, proceeding without session recording")
+			} else {
+				sessionLogger = sl
+				log.Info().Str("sessionId", pamSessionId).Msg("Session recording enabled for HTTP proxy")
+			}
+		}
+	}
+
+	// Ensure cleanup on exit
+	defer func() {
+		if sessionLogger != nil {
+			sessionLogger.Close()
+		}
+		// Don't trigger CleanupPAMSession here — each HTTP request creates a separate
+		// connection, and we don't want each one to upload/end the session.
+		// The session cancellation signal (sent when "End Session" is clicked)
+		// handles the final log upload via HandlePAMCancellation.
+	}()
+
+	var requestCounter int
 
 	transport := &http.Transport{
 		DisableKeepAlives: false,
@@ -93,6 +125,26 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 		}
 
 		log.Info().Msgf("Received HTTP request: %s", req.URL.Path)
+
+		// Generate request ID for log correlation
+		requestCounter++
+		requestId := fmt.Sprintf("%s-%d-%d", pamSessionId, time.Now().UnixMilli(), requestCounter)
+
+		// Log the request event
+		if sessionLogger != nil {
+			if err := sessionLogger.LogHttpEvent(session.HttpEvent{
+				Timestamp: time.Now(),
+				EventType: session.HttpEventRequest,
+				RequestId: requestId,
+				Method:    req.Method,
+				URL:       req.URL.String(),
+				Headers:   req.Header,
+			}); err != nil {
+				log.Warn().Err(err).Str("requestId", requestId).Msg("Failed to log HTTP request event")
+			} else {
+				log.Info().Str("requestId", requestId).Str("method", req.Method).Str("url", req.URL.String()).Msg("Logged HTTP request event")
+			}
+		}
 
 		actionHeader := HttpProxyAction(req.Header.Get(INFISICAL_HTTP_PROXY_ACTION_HEADER))
 
@@ -185,18 +237,93 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 			continue // Continue to next request
 		}
 
-		// Write the entire response (status line, headers, body) to the connection
-		resp.Header.Del("Connection")
-
-		log.Info().Msgf("Writing response to connection: %s", resp.Status)
-
-		if err := resp.Write(conn); err != nil {
-			log.Error().Err(err).Msg("Failed to write response to connection")
-			resp.Body.Close()
-			return fmt.Errorf("failed to write response to connection: %w", err)
+		// Log the response event
+		if sessionLogger != nil {
+			if err := sessionLogger.LogHttpEvent(session.HttpEvent{
+				Timestamp: time.Now(),
+				EventType: session.HttpEventResponse,
+				RequestId: requestId,
+				Status:    resp.Status,
+				Headers:   resp.Header,
+			}); err != nil {
+				log.Warn().Err(err).Str("requestId", requestId).Msg("Failed to log HTTP response event")
+			} else {
+				log.Info().Str("requestId", requestId).Str("status", resp.Status).Msg("Logged HTTP response event")
+			}
 		}
 
-		resp.Body.Close()
+		// Inject screenshot capture script into HTML responses for PAM sessions
+		contentType := resp.Header.Get("Content-Type")
+		if pamSessionId != "" && strings.Contains(contentType, "text/html") {
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				log.Error().Err(readErr).Msg("Failed to read HTML response body for script injection")
+				conn.Write([]byte(buildHttpInternalServerError("failed to read response body")))
+				continue
+			}
+
+			html := string(bodyBytes)
+			captureScript := `<script>
+(function(){
+  if(window.__infisical_capture_loaded) return;
+  window.__infisical_capture_loaded=true;
+  var s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  s.onload=function(){
+    function capture(){
+      var el=document.documentElement;
+      var w=window.innerWidth;
+      var h=window.innerHeight;
+      html2canvas(el,{useCORS:true,scale:0.6,logging:false,width:w,height:h,x:window.scrollX,y:window.scrollY}).then(function(c){
+        c.toBlob(function(b){
+          if(b){
+            var x=new XMLHttpRequest();
+            x.open('POST','__infisical_capture',true);
+            x.setRequestHeader('Content-Type','image/jpeg');
+            x.send(b);
+          }
+        },'image/jpeg',0.5);
+      }).catch(function(){});
+    }
+    setTimeout(capture,500);
+  };
+  document.head.appendChild(s);
+})();
+</script>`
+
+			if strings.Contains(html, "</body>") {
+				html = strings.Replace(html, "</body>", captureScript+"</body>", 1)
+			} else {
+				html = html + captureScript
+			}
+
+			modifiedBody := []byte(html)
+			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(modifiedBody)))
+			resp.Header.Del("Connection")
+
+			// Write status line + headers + modified body
+			statusLine := fmt.Sprintf("HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
+			conn.Write([]byte(statusLine))
+			resp.Header.Write(conn)
+			conn.Write([]byte("\r\n"))
+			conn.Write(modifiedBody)
+
+			log.Info().Str("sessionId", pamSessionId).Msg("Injected screenshot capture script into HTML response")
+		} else {
+			// Non-HTML response or no PAM session — write as-is
+			resp.Header.Del("Connection")
+
+			log.Info().Msgf("Writing response to connection: %s", resp.Status)
+
+			if err := resp.Write(conn); err != nil {
+				log.Error().Err(err).Msg("Failed to write response to connection")
+				resp.Body.Close()
+				return fmt.Errorf("failed to write response to connection: %w", err)
+			}
+
+			resp.Body.Close()
+		}
 
 		// Check if client wants to close connection
 		if req.Header.Get("Connection") == "close" {

@@ -27,6 +27,7 @@ const (
 	ResourceTypeRedis      = "redis"
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
+	ResourceTypeWebApp     = "webapp"
 )
 
 type SessionFileInfo struct {
@@ -55,7 +56,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeKubernetes)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeKubernetes, ResourceTypeWebApp)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 
@@ -306,7 +307,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 
 		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
 	}
-	if fileInfo.ResourceType == ResourceTypeKubernetes {
+	if fileInfo.ResourceType == ResourceTypeKubernetes || fileInfo.ResourceType == ResourceTypeWebApp {
 		httpEvents, err := ReadEncryptedHttpEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to read SSH session file: %w", err)
