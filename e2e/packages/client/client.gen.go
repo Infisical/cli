@@ -229,9 +229,39 @@ const (
 	SelfSigned CreateCertificateProfileJSONBodyIssuerType = "self-signed"
 )
 
+// Defines values for CreateSshPamAccountJSONBodyCredentials0AuthMethod.
+const (
+	CreateSshPamAccountJSONBodyCredentials0AuthMethodPassword CreateSshPamAccountJSONBodyCredentials0AuthMethod = "password"
+)
+
+// Defines values for CreateSshPamAccountJSONBodyCredentials1AuthMethod.
+const (
+	CreateSshPamAccountJSONBodyCredentials1AuthMethodPublicKey CreateSshPamAccountJSONBodyCredentials1AuthMethod = "public-key"
+)
+
+// Defines values for CreateSshPamAccountJSONBodyCredentials2AuthMethod.
+const (
+	CreateSshPamAccountJSONBodyCredentials2AuthMethodCertificate CreateSshPamAccountJSONBodyCredentials2AuthMethod = "certificate"
+)
+
 // Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
 const (
 	ServiceAccountToken CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "service-account-token"
+)
+
+// Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
+const (
+	CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethodPassword CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "password"
+)
+
+// Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod.
+const (
+	CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethodPublicKey CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod = "public-key"
+)
+
+// Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod.
+const (
+	CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethodCertificate CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod = "certificate"
 )
 
 // Defines values for CreateProjectJSONBodyType.
@@ -764,6 +794,56 @@ type CreatePostgresPamAccountJSONBody struct {
 	RotationIntervalSeconds *float32           `json:"rotationIntervalSeconds"`
 }
 
+// CreateSshPamAccountJSONBody defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBody struct {
+	Credentials CreateSshPamAccountJSONBody_Credentials `json:"credentials"`
+	Description *string                                 `json:"description"`
+	FolderId    *openapi_types.UUID                     `json:"folderId,omitempty"`
+	Metadata    *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name                    string             `json:"name"`
+	RequireMfa              *bool              `json:"requireMfa,omitempty"`
+	ResourceId              openapi_types.UUID `json:"resourceId"`
+	RotationEnabled         bool               `json:"rotationEnabled"`
+	RotationIntervalSeconds *float32           `json:"rotationIntervalSeconds"`
+}
+
+// CreateSshPamAccountJSONBodyCredentials0 defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodyCredentials0 struct {
+	AuthMethod CreateSshPamAccountJSONBodyCredentials0AuthMethod `json:"authMethod"`
+	Password   string                                            `json:"password"`
+	Username   string                                            `json:"username"`
+}
+
+// CreateSshPamAccountJSONBodyCredentials0AuthMethod defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodyCredentials0AuthMethod string
+
+// CreateSshPamAccountJSONBodyCredentials1 defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodyCredentials1 struct {
+	AuthMethod CreateSshPamAccountJSONBodyCredentials1AuthMethod `json:"authMethod"`
+	PrivateKey string                                            `json:"privateKey"`
+	Username   string                                            `json:"username"`
+}
+
+// CreateSshPamAccountJSONBodyCredentials1AuthMethod defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodyCredentials1AuthMethod string
+
+// CreateSshPamAccountJSONBodyCredentials2 defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodyCredentials2 struct {
+	AuthMethod CreateSshPamAccountJSONBodyCredentials2AuthMethod `json:"authMethod"`
+	Username   string                                            `json:"username"`
+}
+
+// CreateSshPamAccountJSONBodyCredentials2AuthMethod defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodyCredentials2AuthMethod string
+
+// CreateSshPamAccountJSONBody_Credentials defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBody_Credentials struct {
+	union json.RawMessage
+}
+
 // CreateKubernetesPamResourceJSONBody defines parameters for CreateKubernetesPamResource.
 type CreateKubernetesPamResourceJSONBody struct {
 	ConnectionDetails struct {
@@ -838,6 +918,56 @@ type CreateRedisPamResourceJSONBody struct {
 		Password *string `json:"password,omitempty"`
 		Username *string `json:"username,omitempty"`
 	} `json:"rotationAccountCredentials"`
+}
+
+// CreateSshPamResourceJSONBody defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		Host string  `json:"host"`
+		Port float32 `json:"port"`
+	} `json:"connectionDetails"`
+	GatewayId openapi_types.UUID `json:"gatewayId"`
+	Metadata  *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name                       string                                                   `json:"name"`
+	ProjectId                  openapi_types.UUID                                       `json:"projectId"`
+	RotationAccountCredentials *CreateSshPamResourceJSONBody_RotationAccountCredentials `json:"rotationAccountCredentials"`
+}
+
+// CreateSshPamResourceJSONBodyRotationAccountCredentials0 defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBodyRotationAccountCredentials0 struct {
+	AuthMethod CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod `json:"authMethod"`
+	Password   string                                                            `json:"password"`
+	Username   string                                                            `json:"username"`
+}
+
+// CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod string
+
+// CreateSshPamResourceJSONBodyRotationAccountCredentials1 defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBodyRotationAccountCredentials1 struct {
+	AuthMethod CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod `json:"authMethod"`
+	PrivateKey string                                                            `json:"privateKey"`
+	Username   string                                                            `json:"username"`
+}
+
+// CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod string
+
+// CreateSshPamResourceJSONBodyRotationAccountCredentials2 defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBodyRotationAccountCredentials2 struct {
+	AuthMethod CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod `json:"authMethod"`
+	Username   string                                                            `json:"username"`
+}
+
+// CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod string
+
+// CreateSshPamResourceJSONBody_RotationAccountCredentials defines parameters for CreateSshPamResource.
+type CreateSshPamResourceJSONBody_RotationAccountCredentials struct {
+	union json.RawMessage
 }
 
 // CreateProjectJSONBody defines parameters for CreateProject.
@@ -1105,6 +1235,9 @@ type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
 // CreatePostgresPamAccountJSONRequestBody defines body for CreatePostgresPamAccount for application/json ContentType.
 type CreatePostgresPamAccountJSONRequestBody CreatePostgresPamAccountJSONBody
 
+// CreateSshPamAccountJSONRequestBody defines body for CreateSshPamAccount for application/json ContentType.
+type CreateSshPamAccountJSONRequestBody CreateSshPamAccountJSONBody
+
 // CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
 type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
 
@@ -1113,6 +1246,9 @@ type CreatePostgresPamResourceJSONRequestBody CreatePostgresPamResourceJSONBody
 
 // CreateRedisPamResourceJSONRequestBody defines body for CreateRedisPamResource for application/json ContentType.
 type CreateRedisPamResourceJSONRequestBody CreateRedisPamResourceJSONBody
+
+// CreateSshPamResourceJSONRequestBody defines body for CreateSshPamResource for application/json ContentType.
+type CreateSshPamResourceJSONRequestBody CreateSshPamResourceJSONBody
 
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody CreateProjectJSONBody
@@ -1270,6 +1406,11 @@ type ClientInterface interface {
 
 	CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateSshPamAccountWithBody request with any body
+	CreateSshPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateSshPamAccount(ctx context.Context, body CreateSshPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateKubernetesPamResourceWithBody request with any body
 	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1284,6 +1425,11 @@ type ClientInterface interface {
 	CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateSshPamResourceWithBody request with any body
+	CreateSshPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateSshPamResource(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateProjectWithBody request with any body
 	CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1647,6 +1793,30 @@ func (c *Client) CreatePostgresPamAccount(ctx context.Context, body CreatePostgr
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateSshPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSshPamAccountRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSshPamAccount(ctx context.Context, body CreateSshPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSshPamAccountRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateKubernetesPamResourceRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -1709,6 +1879,30 @@ func (c *Client) CreateRedisPamResourceWithBody(ctx context.Context, contentType
 
 func (c *Client) CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateRedisPamResourceRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSshPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSshPamResourceRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSshPamResource(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSshPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2469,6 +2663,46 @@ func NewCreatePostgresPamAccountRequestWithBody(server string, contentType strin
 	return req, nil
 }
 
+// NewCreateSshPamAccountRequest calls the generic CreateSshPamAccount builder with application/json body
+func NewCreateSshPamAccountRequest(server string, body CreateSshPamAccountJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateSshPamAccountRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateSshPamAccountRequestWithBody generates requests for CreateSshPamAccount with any type of body
+func NewCreateSshPamAccountRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/accounts/ssh")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreateKubernetesPamResourceRequest calls the generic CreateKubernetesPamResource builder with application/json body
 func NewCreateKubernetesPamResourceRequest(server string, body CreateKubernetesPamResourceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2570,6 +2804,46 @@ func NewCreateRedisPamResourceRequestWithBody(server string, contentType string,
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/pam/resources/redis")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateSshPamResourceRequest calls the generic CreateSshPamResource builder with application/json body
+func NewCreateSshPamResourceRequest(server string, body CreateSshPamResourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateSshPamResourceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateSshPamResourceRequestWithBody generates requests for CreateSshPamResource with any type of body
+func NewCreateSshPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/ssh")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3332,6 +3606,11 @@ type ClientWithResponsesInterface interface {
 
 	CreatePostgresPamAccountWithResponse(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error)
 
+	// CreateSshPamAccountWithBodyWithResponse request with any body
+	CreateSshPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error)
+
+	CreateSshPamAccountWithResponse(ctx context.Context, body CreateSshPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error)
+
 	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
 	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
@@ -3346,6 +3625,11 @@ type ClientWithResponsesInterface interface {
 	CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
 
 	CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
+
+	// CreateSshPamResourceWithBodyWithResponse request with any body
+	CreateSshPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error)
+
+	CreateSshPamResourceWithResponse(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error)
 
 	// CreateProjectWithBodyWithResponse request with any body
 	CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
@@ -4744,6 +5028,124 @@ func (r CreatePostgresPamAccountResponse) StatusCode() int {
 	return 0
 }
 
+type CreateSshPamAccountResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Account struct {
+			CreatedAt                    time.Time                                   `json:"createdAt"`
+			Credentials                  CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
+			Description                  *string                                     `json:"description"`
+			DiscoveryFingerprint         *string                                     `json:"discoveryFingerprint"`
+			EncryptedLastRotationMessage interface{}                                 `json:"encryptedLastRotationMessage"`
+			FolderId                     *openapi_types.UUID                         `json:"folderId"`
+			Id                           openapi_types.UUID                          `json:"id"`
+			InternalMetadata             interface{}                                 `json:"internalMetadata"`
+			LastRotatedAt                *time.Time                                  `json:"lastRotatedAt"`
+			LastRotationMessage          *string                                     `json:"lastRotationMessage"`
+			Metadata                     *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name       string `json:"name"`
+			ProjectId  string `json:"projectId"`
+			RequireMfa *bool  `json:"requireMfa"`
+			Resource   struct {
+				Id                            openapi_types.UUID `json:"id"`
+				Name                          string             `json:"name"`
+				ResourceType                  string             `json:"resourceType"`
+				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+			} `json:"resource"`
+			ResourceId              openapi_types.UUID                        `json:"resourceId"`
+			ResourceType            CreateSshPamAccount200AccountResourceType `json:"resourceType"`
+			RotationEnabled         *bool                                     `json:"rotationEnabled,omitempty"`
+			RotationIntervalSeconds *float32                                  `json:"rotationIntervalSeconds"`
+			RotationStatus          *string                                   `json:"rotationStatus"`
+			UpdatedAt               time.Time                                 `json:"updatedAt"`
+		} `json:"account"`
+	}
+	JSON400 *struct {
+		Details    interface{}                      `json:"details,omitempty"`
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode CreateSshPamAccount400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode CreateSshPamAccount401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                      `json:"details,omitempty"`
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode CreateSshPamAccount403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode CreateSshPamAccount404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                           `json:"error"`
+		Message    interface{}                      `json:"message,omitempty"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode CreateSshPamAccount422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode CreateSshPamAccount500StatusCode `json:"statusCode"`
+	}
+}
+type CreateSshPamAccount200AccountCredentials0 struct {
+	AuthMethod CreateSshPamAccount200AccountCredentials0AuthMethod `json:"authMethod"`
+	Username   string                                              `json:"username"`
+}
+type CreateSshPamAccount200AccountCredentials0AuthMethod string
+type CreateSshPamAccount200AccountCredentials1 struct {
+	AuthMethod CreateSshPamAccount200AccountCredentials1AuthMethod `json:"authMethod"`
+	Username   string                                              `json:"username"`
+}
+type CreateSshPamAccount200AccountCredentials1AuthMethod string
+type CreateSshPamAccount200AccountCredentials2 struct {
+	AuthMethod CreateSshPamAccount200AccountCredentials2AuthMethod `json:"authMethod"`
+	Username   string                                              `json:"username"`
+}
+type CreateSshPamAccount200AccountCredentials2AuthMethod string
+type CreateSshPamAccount_200_Account_Credentials struct {
+	union json.RawMessage
+}
+type CreateSshPamAccount200AccountResourceType string
+type CreateSshPamAccount400StatusCode float32
+type CreateSshPamAccount401StatusCode float32
+type CreateSshPamAccount403StatusCode float32
+type CreateSshPamAccount404StatusCode float32
+type CreateSshPamAccount422StatusCode float32
+type CreateSshPamAccount500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateSshPamAccountResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateSshPamAccountResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateKubernetesPamResourceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5027,6 +5429,114 @@ func (r CreateRedisPamResourceResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r CreateRedisPamResourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateSshPamResourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Resource struct {
+			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+			ConnectionDetails  struct {
+				Host string  `json:"host"`
+				Port float32 `json:"port"`
+			} `json:"connectionDetails"`
+			CreatedAt                 time.Time           `json:"createdAt"`
+			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+			Id                        openapi_types.UUID  `json:"id"`
+			Metadata                  *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name                       string                                                        `json:"name"`
+			ProjectId                  string                                                        `json:"projectId"`
+			ResourceType               CreateSshPamResource200ResourceResourceType                   `json:"resourceType"`
+			RotationAccountCredentials *CreateSshPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
+			UpdatedAt                  time.Time                                                     `json:"updatedAt"`
+		} `json:"resource"`
+	}
+	JSON400 *struct {
+		Details    interface{}                       `json:"details,omitempty"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateSshPamResource400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateSshPamResource401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                       `json:"details,omitempty"`
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateSshPamResource403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateSshPamResource404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                            `json:"error"`
+		Message    interface{}                       `json:"message,omitempty"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateSshPamResource422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                            `json:"error"`
+		Message    string                            `json:"message"`
+		ReqId      string                            `json:"reqId"`
+		StatusCode CreateSshPamResource500StatusCode `json:"statusCode"`
+	}
+}
+type CreateSshPamResource200ResourceResourceType string
+type CreateSshPamResource200ResourceRotationAccountCredentials0 struct {
+	AuthMethod CreateSshPamResource200ResourceRotationAccountCredentials0AuthMethod `json:"authMethod"`
+	Username   string                                                               `json:"username"`
+}
+type CreateSshPamResource200ResourceRotationAccountCredentials0AuthMethod string
+type CreateSshPamResource200ResourceRotationAccountCredentials1 struct {
+	AuthMethod CreateSshPamResource200ResourceRotationAccountCredentials1AuthMethod `json:"authMethod"`
+	Username   string                                                               `json:"username"`
+}
+type CreateSshPamResource200ResourceRotationAccountCredentials1AuthMethod string
+type CreateSshPamResource200ResourceRotationAccountCredentials2 struct {
+	AuthMethod CreateSshPamResource200ResourceRotationAccountCredentials2AuthMethod `json:"authMethod"`
+	Username   string                                                               `json:"username"`
+}
+type CreateSshPamResource200ResourceRotationAccountCredentials2AuthMethod string
+type CreateSshPamResource_200_Resource_RotationAccountCredentials struct {
+	union json.RawMessage
+}
+type CreateSshPamResource400StatusCode float32
+type CreateSshPamResource401StatusCode float32
+type CreateSshPamResource403StatusCode float32
+type CreateSshPamResource404StatusCode float32
+type CreateSshPamResource422StatusCode float32
+type CreateSshPamResource500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateSshPamResourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateSshPamResourceResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6163,6 +6673,23 @@ func (c *ClientWithResponses) CreatePostgresPamAccountWithResponse(ctx context.C
 	return ParseCreatePostgresPamAccountResponse(rsp)
 }
 
+// CreateSshPamAccountWithBodyWithResponse request with arbitrary body returning *CreateSshPamAccountResponse
+func (c *ClientWithResponses) CreateSshPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error) {
+	rsp, err := c.CreateSshPamAccountWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSshPamAccountResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateSshPamAccountWithResponse(ctx context.Context, body CreateSshPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error) {
+	rsp, err := c.CreateSshPamAccount(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSshPamAccountResponse(rsp)
+}
+
 // CreateKubernetesPamResourceWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamResourceResponse
 func (c *ClientWithResponses) CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
 	rsp, err := c.CreateKubernetesPamResourceWithBody(ctx, contentType, body, reqEditors...)
@@ -6212,6 +6739,23 @@ func (c *ClientWithResponses) CreateRedisPamResourceWithResponse(ctx context.Con
 		return nil, err
 	}
 	return ParseCreateRedisPamResourceResponse(rsp)
+}
+
+// CreateSshPamResourceWithBodyWithResponse request with arbitrary body returning *CreateSshPamResourceResponse
+func (c *ClientWithResponses) CreateSshPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error) {
+	rsp, err := c.CreateSshPamResourceWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSshPamResourceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateSshPamResourceWithResponse(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error) {
+	rsp, err := c.CreateSshPamResource(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSshPamResourceResponse(rsp)
 }
 
 // CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
@@ -8106,6 +8650,139 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 	return response, nil
 }
 
+// ParseCreateSshPamAccountResponse parses an HTTP response from a CreateSshPamAccountWithResponse call
+func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateSshPamAccountResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Account struct {
+				CreatedAt                    time.Time                                   `json:"createdAt"`
+				Credentials                  CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
+				Description                  *string                                     `json:"description"`
+				DiscoveryFingerprint         *string                                     `json:"discoveryFingerprint"`
+				EncryptedLastRotationMessage interface{}                                 `json:"encryptedLastRotationMessage"`
+				FolderId                     *openapi_types.UUID                         `json:"folderId"`
+				Id                           openapi_types.UUID                          `json:"id"`
+				InternalMetadata             interface{}                                 `json:"internalMetadata"`
+				LastRotatedAt                *time.Time                                  `json:"lastRotatedAt"`
+				LastRotationMessage          *string                                     `json:"lastRotationMessage"`
+				Metadata                     *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name       string `json:"name"`
+				ProjectId  string `json:"projectId"`
+				RequireMfa *bool  `json:"requireMfa"`
+				Resource   struct {
+					Id                            openapi_types.UUID `json:"id"`
+					Name                          string             `json:"name"`
+					ResourceType                  string             `json:"resourceType"`
+					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+				} `json:"resource"`
+				ResourceId              openapi_types.UUID                        `json:"resourceId"`
+				ResourceType            CreateSshPamAccount200AccountResourceType `json:"resourceType"`
+				RotationEnabled         *bool                                     `json:"rotationEnabled,omitempty"`
+				RotationIntervalSeconds *float32                                  `json:"rotationIntervalSeconds"`
+				RotationStatus          *string                                   `json:"rotationStatus"`
+				UpdatedAt               time.Time                                 `json:"updatedAt"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                      `json:"details,omitempty"`
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode CreateSshPamAccount400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode CreateSshPamAccount401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                      `json:"details,omitempty"`
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode CreateSshPamAccount403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode CreateSshPamAccount404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    interface{}                      `json:"message,omitempty"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode CreateSshPamAccount422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode CreateSshPamAccount500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateKubernetesPamResourceResponse parses an HTTP response from a CreateKubernetesPamResourceWithResponse call
 func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubernetesPamResourceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -8476,6 +9153,129 @@ func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamRes
 			Message    string                              `json:"message"`
 			ReqId      string                              `json:"reqId"`
 			StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateSshPamResourceResponse parses an HTTP response from a CreateSshPamResourceWithResponse call
+func ParseCreateSshPamResourceResponse(rsp *http.Response) (*CreateSshPamResourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateSshPamResourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Resource struct {
+				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+				ConnectionDetails  struct {
+					Host string  `json:"host"`
+					Port float32 `json:"port"`
+				} `json:"connectionDetails"`
+				CreatedAt                 time.Time           `json:"createdAt"`
+				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+				Id                        openapi_types.UUID  `json:"id"`
+				Metadata                  *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name                       string                                                        `json:"name"`
+				ProjectId                  string                                                        `json:"projectId"`
+				ResourceType               CreateSshPamResource200ResourceResourceType                   `json:"resourceType"`
+				RotationAccountCredentials *CreateSshPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
+				UpdatedAt                  time.Time                                                     `json:"updatedAt"`
+			} `json:"resource"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                       `json:"details,omitempty"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateSshPamResource400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateSshPamResource401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                       `json:"details,omitempty"`
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateSshPamResource403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateSshPamResource404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                            `json:"error"`
+			Message    interface{}                       `json:"message,omitempty"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateSshPamResource422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                            `json:"error"`
+			Message    string                            `json:"message"`
+			ReqId      string                            `json:"reqId"`
+			StatusCode CreateSshPamResource500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
