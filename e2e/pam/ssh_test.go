@@ -32,14 +32,6 @@ const (
 	sshPassword = "testpass"
 )
 
-// sshTestCase defines a declarative SSH auth test.
-// To add a new auth method: add a case to the table in TestPAM_SSH
-// and handle it in runSSHAuthTest.
-type sshTestCase struct {
-	Name   string
-	Method string // "password", "public-key", "certificate"
-}
-
 func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string) (testcontainers.Container, int) {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -229,14 +221,14 @@ func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, c
 //   - password:    uses hardcoded testuser/testpass from entrypoint; account gets username + password
 //   - public-key:  container gets SSH_AUTHORIZED_KEY (generated ed25519); account gets username + privateKey
 //   - certificate: container configured via curl | bash (ssh-ca-setup endpoint); account gets just username
-func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceHost string, tc sshTestCase) {
+func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceHost string, method string) {
 	containerEnv := map[string]string{}
 	accountCreds := map[string]interface{}{
-		"authMethod": tc.Method,
+		"authMethod": method,
 		"username":   sshUser,
 	}
 
-	switch tc.Method {
+	switch method {
 	case "password":
 		accountCreds["password"] = sshPassword
 
@@ -258,19 +250,19 @@ func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, reso
 	}
 
 	container, sshPort := startSSHContainer(t, ctx, containerEnv)
-	slog.Info("SSH container started", "method", tc.Method, "host", resourceHost, "port", sshPort)
+	slog.Info("SSH container started", "method", method, "host", resourceHost, "port", sshPort)
 
-	resourceName := fmt.Sprintf("ssh-%s-resource", tc.Method)
+	resourceName := fmt.Sprintf("ssh-%s-resource", method)
 	resourceId := createSSHPamResource(t, ctx, infra, resourceName, resourceHost, sshPort)
 
-	if tc.Method == "certificate" {
+	if method == "certificate" {
 		configureCertAuth(t, ctx, infra, container, sshPort, resourceId)
 	}
 
-	accountName := fmt.Sprintf("ssh-%s-account", tc.Method)
+	accountName := fmt.Sprintf("ssh-%s-account", method)
 	createSSHPamAccount(t, ctx, infra, resourceId, accountName, accountCreds)
 
-	marker := fmt.Sprintf("hello-%s", tc.Method)
+	marker := fmt.Sprintf("hello-%s", method)
 	runSSHSessionAndVerify(t, ctx, infra, resourceName, accountName, "echo "+marker, marker)
 }
 
@@ -283,15 +275,10 @@ func TestPAM_SSH(t *testing.T) {
 
 	resourceHost := getOutboundIP(t)
 
-	tests := []sshTestCase{
-		{Name: "PasswordAuth", Method: "password"},
-		{Name: "PublicKeyAuth", Method: "public-key"},
-		{Name: "CertificateAuth", Method: "certificate"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.Name, func(t *testing.T) {
-			runSSHAuthTest(t, ctx, infra, resourceHost, tc)
+	methods := []string{"password", "public-key", "certificate"}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			runSSHAuthTest(t, ctx, infra, resourceHost, method)
 		})
 	}
 }
