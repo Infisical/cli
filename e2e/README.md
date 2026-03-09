@@ -176,6 +176,37 @@ go test github.com/infisical/cli/e2e-tests/pam
 
 **Note:** PAM tests use subprocess mode and require a built CLI binary. Build it first with `go build -o e2e/infisical-merge .` from the repo root.
 
+### Running PAM tests
+
+The PAM tests validate end-to-end access through the PAM system. Each test spins up the required Docker containers, creates PAM resources and accounts, then verifies connectivity through the CLI.
+
+To run all PAM tests:
+
+```bash
+cd e2e
+go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/pam
+```
+
+To run a specific test (e.g., only SSH or only Postgres):
+
+```bash
+cd e2e
+go test -v -timeout 30m -count=1 -run TestPAM_SSH github.com/infisical/cli/e2e-tests/pam
+go test -v -timeout 30m -count=1 -run TestPAM_Postgres github.com/infisical/cli/e2e-tests/pam
+```
+
+To run a specific sub-test (e.g., only certificate auth within SSH):
+
+```bash
+cd e2e
+go test -v -timeout 30m -count=1 -run TestPAM_SSH/certificate github.com/infisical/cli/e2e-tests/pam
+```
+
+**Prerequisites:**
+- Docker must be running (tests use testcontainers to start resource containers)
+- A built CLI binary (see note above)
+- `INFISICAL_BACKEND_DIR` must be set (see [Setting the `INFISICAL_BACKEND_DIR` value](#setting-the-infisical_backend_dir-value))
+
 Alternatively, you can export environment variables manually:
 
 ```bash
