@@ -1,4 +1,4 @@
-package pam_test
+package pam
 
 import (
 	"context"
