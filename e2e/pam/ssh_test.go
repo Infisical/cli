@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -129,10 +130,9 @@ func runSSHSessionAndVerify(t *testing.T, ctx context.Context, infra *PAMTestInf
 			"--duration", "5m",
 		},
 		Env: map[string]string{
-			"HOME":                infra.SharedHomeDir,
-			"INFISICAL_API_URL":   infra.Infisical.ApiUrl(t),
-			"INFISICAL_LOG_LEVEL": "debug",
-			"PATH":                "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+			"HOME":              infra.SharedHomeDir,
+			"INFISICAL_API_URL": infra.Infisical.ApiUrl(t),
+			"PATH":              os.Getenv("PATH"),
 		},
 	}
 	pamCmd.Start(ctx)
