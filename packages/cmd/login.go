@@ -241,6 +241,10 @@ var loginCmd = &cobra.Command{
 				util.HandleError(err, "Unable to write write to Infisical Config file. Please try again")
 			}
 
+			// Identify the user in PostHog and alias the anonymous machine ID
+			// so that pre-login CLI events are merged into the same person record
+			Telemetry.IdentifyUser(userCredentialsToBeStored.Email)
+
 			// clear backed up secrets from prev account
 			util.DeleteBackupSecrets()
 
