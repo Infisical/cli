@@ -56,6 +56,35 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 	}
 }
 
+// IdentifyUser sends a PostHog identify call to enrich the person record
+// with user properties, and aliases the anonymous machine ID to the user's
+// email so that pre-login CLI events are merged into the same person.
+func (t *Telemetry) IdentifyUser(email string) {
+	if !t.isEnabled || email == "" {
+		return
+	}
+
+	// Identify the user with their email as the distinctId
+	t.posthogClient.Enqueue(posthog.Identify{
+		DistinctId: email,
+		Properties: posthog.NewProperties().
+			Set("email", email),
+	})
+
+	// Alias the anonymous machine ID to the user's email so that
+	// any events captured before login are linked to this person
+	machineId, err := machineid.ID()
+	if err == nil && machineId != "" {
+		anonymousId := "anonymous_cli_" + machineId
+		t.posthogClient.Enqueue(posthog.Alias{
+			DistinctId: email,
+			Alias:      anonymousId,
+		})
+	}
+
+	defer t.posthogClient.Close()
+}
+
 func (t *Telemetry) GetDistinctId() (string, error) {
 	var distinctId string
 	var outputErr error
