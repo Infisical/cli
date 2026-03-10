@@ -1,6 +1,8 @@
 package telemetry
 
 import (
+	"fmt"
+
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/denisbrodbeck/machineid"
 	"github.com/posthog/posthog-go"
@@ -89,25 +91,29 @@ func (t *Telemetry) IdentifyUser(email string) {
 
 func (t *Telemetry) GetDistinctId() (string, error) {
 	var distinctId string
-	var outputErr error
 
 	machineId, err := machineid.ID()
 	if err != nil {
-		outputErr = err
+		log.Debug().Err(err).Msg("failed to get machine ID for telemetry")
 	}
 
 	infisicalConfig, err := util.GetConfigFile()
 	if err != nil {
-		outputErr = err
+		log.Debug().Err(err).Msg("failed to get config file for telemetry")
 	}
 
 	if infisicalConfig.LoggedInUserEmail != "" {
 		distinctId = infisicalConfig.LoggedInUserEmail
 	} else if machineId != "" {
 		distinctId = "anonymous_cli_" + machineId
-	} else {
-		distinctId = ""
 	}
 
-	return distinctId, outputErr
+	// Only return an error if we could not resolve any distinctId.
+	// Non-critical errors (e.g. machineid failure when email is available)
+	// are logged above but should not prevent event capture.
+	if distinctId == "" {
+		return "", fmt.Errorf("unable to resolve a distinct ID for telemetry")
+	}
+
+	return distinctId, nil
 }
