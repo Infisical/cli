@@ -82,8 +82,9 @@ func (t *Telemetry) IdentifyUser(email string) {
 		})
 	}
 
-	// Note: no Close() here — the subsequent CaptureEvent call in the login
-	// flow will flush and close the client after enqueuing the login event.
+	// Note: no Close() here — the caller is responsible for ensuring
+	// CaptureEvent (which calls Close) runs after IdentifyUser to flush
+	// all enqueued events (Identify, Alias, and Capture).
 }
 
 func (t *Telemetry) GetDistinctId() (string, error) {
