@@ -1,7 +1,7 @@
 package telemetry
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/denisbrodbeck/machineid"
@@ -112,7 +112,7 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	// Non-critical errors (e.g. machineid failure when email is available)
 	// are logged above but should not prevent event capture.
 	if distinctId == "" {
-		return "", fmt.Errorf("unable to resolve a distinct ID for telemetry")
+		return "", errors.New("unable to resolve a distinct ID for telemetry")
 	}
 
 	return distinctId, nil
