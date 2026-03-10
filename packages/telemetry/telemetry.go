@@ -82,7 +82,8 @@ func (t *Telemetry) IdentifyUser(email string) {
 		})
 	}
 
-	defer t.posthogClient.Close()
+	// Note: no Close() here — the subsequent CaptureEvent call in the login
+	// flow will flush and close the client after enqueuing the login event.
 }
 
 func (t *Telemetry) GetDistinctId() (string, error) {
