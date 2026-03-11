@@ -652,7 +652,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 				PrintErrorMessageAndExit(err.Error())
 			}
 			if strings.TrimSpace(value) == "" {
-				PrintErrorMessageAndExit(fmt.Sprintf("Secret key '%s' has an empty value", key))
+				PrintWarning(fmt.Sprintf("Secret key '%s' has an empty value", key))
 			}
 			secretArgs = append(secretArgs, fmt.Sprintf("%s=%s", key, value))
 		}
@@ -705,8 +705,8 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 
 	for _, arg := range secretArgs {
 		splitKeyValueFromArg := strings.SplitN(arg, "=", 2)
-		if splitKeyValueFromArg[0] == "" || splitKeyValueFromArg[1] == "" {
-			PrintErrorMessageAndExit("ensure that each secret has a none empty key and value. Modify the input and try again")
+		if splitKeyValueFromArg[0] == "" {
+			PrintErrorMessageAndExit("ensure that each secret has a non empty key. Modify the input and try again")
 		}
 
 		if unicode.IsNumber(rune(splitKeyValueFromArg[0][0])) {
