@@ -22,6 +22,213 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials.
+const (
+	CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentialsFalse CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials = false
+)
+
+// Defines values for CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider.
+const (
+	CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderAzureDns    CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "azure-dns"
+	CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderCloudflare  CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "cloudflare"
+	CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderDnsMadeEasy CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "dns-made-easy"
+	CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderRoute53     CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "route53"
+)
+
+// Defines values for CreateAcmeCertificateAuthorityV1JSONBodyStatus.
+const (
+	CreateAcmeCertificateAuthorityV1JSONBodyStatusActive             CreateAcmeCertificateAuthorityV1JSONBodyStatus = "active"
+	CreateAcmeCertificateAuthorityV1JSONBodyStatusDisabled           CreateAcmeCertificateAuthorityV1JSONBodyStatus = "disabled"
+	CreateAcmeCertificateAuthorityV1JSONBodyStatusPendingCertificate CreateAcmeCertificateAuthorityV1JSONBodyStatus = "pending-certificate"
+)
+
+// Defines values for UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider.
+const (
+	UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderAzureDns    UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "azure-dns"
+	UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderCloudflare  UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "cloudflare"
+	UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderDnsMadeEasy UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "dns-made-easy"
+	UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProviderRoute53     UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider = "route53"
+)
+
+// Defines values for UpdateAcmeCertificateAuthorityV1JSONBodyStatus.
+const (
+	UpdateAcmeCertificateAuthorityV1JSONBodyStatusActive             UpdateAcmeCertificateAuthorityV1JSONBodyStatus = "active"
+	UpdateAcmeCertificateAuthorityV1JSONBodyStatusDisabled           UpdateAcmeCertificateAuthorityV1JSONBodyStatus = "disabled"
+	UpdateAcmeCertificateAuthorityV1JSONBodyStatusPendingCertificate UpdateAcmeCertificateAuthorityV1JSONBodyStatus = "pending-certificate"
+)
+
+// Defines values for CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm.
+const (
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECPrime256v1 CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_prime256v1"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECSecp384r1  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_secp384r1"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECSecp521r1  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_secp521r1"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA2048      CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_2048"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA3072      CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_3072"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA4096      CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_4096"
+)
+
+// Defines values for CreateInternalCertificateAuthorityV1JSONBodyConfigurationType.
+const (
+	Intermediate CreateInternalCertificateAuthorityV1JSONBodyConfigurationType = "intermediate"
+	Root         CreateInternalCertificateAuthorityV1JSONBodyConfigurationType = "root"
+)
+
+// Defines values for CreateInternalCertificateAuthorityV1JSONBodyStatus.
+const (
+	Active             CreateInternalCertificateAuthorityV1JSONBodyStatus = "active"
+	Disabled           CreateInternalCertificateAuthorityV1JSONBodyStatus = "disabled"
+	PendingCertificate CreateInternalCertificateAuthorityV1JSONBodyStatus = "pending-certificate"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyBasicConstraintsIsCA.
+const (
+	Allowed  CreateCertificatePolicyJSONBodyBasicConstraintsIsCA = "allowed"
+	Denied   CreateCertificatePolicyJSONBodyBasicConstraintsIsCA = "denied"
+	Required CreateCertificatePolicyJSONBodyBasicConstraintsIsCA = "required"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed.
+const (
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedClientAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "client_auth"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedCodeSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "code_signing"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedEmailProtection CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "email_protection"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedOcspSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "ocsp_signing"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedServerAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "server_auth"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedTimeStamping    CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "time_stamping"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied.
+const (
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedClientAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "client_auth"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedCodeSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "code_signing"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedEmailProtection CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "email_protection"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedOcspSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "ocsp_signing"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedServerAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "server_auth"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedTimeStamping    CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "time_stamping"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired.
+const (
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredClientAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "client_auth"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredCodeSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "code_signing"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredEmailProtection CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "email_protection"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredOcspSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "ocsp_signing"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredServerAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "server_auth"
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredTimeStamping    CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "time_stamping"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyKeyUsagesAllowed.
+const (
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedCrlSign          CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "crl_sign"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedDataEncipherment CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "data_encipherment"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedDecipherOnly     CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "decipher_only"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedDigitalSignature CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "digital_signature"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedEncipherOnly     CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "encipher_only"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedKeyAgreement     CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "key_agreement"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedKeyCertSign      CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "key_cert_sign"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedKeyEncipherment  CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "key_encipherment"
+	CreateCertificatePolicyJSONBodyKeyUsagesAllowedNonRepudiation   CreateCertificatePolicyJSONBodyKeyUsagesAllowed = "non_repudiation"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyKeyUsagesDenied.
+const (
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedCrlSign          CreateCertificatePolicyJSONBodyKeyUsagesDenied = "crl_sign"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedDataEncipherment CreateCertificatePolicyJSONBodyKeyUsagesDenied = "data_encipherment"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedDecipherOnly     CreateCertificatePolicyJSONBodyKeyUsagesDenied = "decipher_only"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedDigitalSignature CreateCertificatePolicyJSONBodyKeyUsagesDenied = "digital_signature"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedEncipherOnly     CreateCertificatePolicyJSONBodyKeyUsagesDenied = "encipher_only"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedKeyAgreement     CreateCertificatePolicyJSONBodyKeyUsagesDenied = "key_agreement"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedKeyCertSign      CreateCertificatePolicyJSONBodyKeyUsagesDenied = "key_cert_sign"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedKeyEncipherment  CreateCertificatePolicyJSONBodyKeyUsagesDenied = "key_encipherment"
+	CreateCertificatePolicyJSONBodyKeyUsagesDeniedNonRepudiation   CreateCertificatePolicyJSONBodyKeyUsagesDenied = "non_repudiation"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodyKeyUsagesRequired.
+const (
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredCrlSign          CreateCertificatePolicyJSONBodyKeyUsagesRequired = "crl_sign"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredDataEncipherment CreateCertificatePolicyJSONBodyKeyUsagesRequired = "data_encipherment"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredDecipherOnly     CreateCertificatePolicyJSONBodyKeyUsagesRequired = "decipher_only"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredDigitalSignature CreateCertificatePolicyJSONBodyKeyUsagesRequired = "digital_signature"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredEncipherOnly     CreateCertificatePolicyJSONBodyKeyUsagesRequired = "encipher_only"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredKeyAgreement     CreateCertificatePolicyJSONBodyKeyUsagesRequired = "key_agreement"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredKeyCertSign      CreateCertificatePolicyJSONBodyKeyUsagesRequired = "key_cert_sign"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredKeyEncipherment  CreateCertificatePolicyJSONBodyKeyUsagesRequired = "key_encipherment"
+	CreateCertificatePolicyJSONBodyKeyUsagesRequiredNonRepudiation   CreateCertificatePolicyJSONBodyKeyUsagesRequired = "non_repudiation"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodySansType.
+const (
+	DnsName   CreateCertificatePolicyJSONBodySansType = "dns_name"
+	Email     CreateCertificatePolicyJSONBodySansType = "email"
+	IpAddress CreateCertificatePolicyJSONBodySansType = "ip_address"
+	Uri       CreateCertificatePolicyJSONBodySansType = "uri"
+)
+
+// Defines values for CreateCertificatePolicyJSONBodySubjectType.
+const (
+	CommonName         CreateCertificatePolicyJSONBodySubjectType = "common_name"
+	Country            CreateCertificatePolicyJSONBodySubjectType = "country"
+	Locality           CreateCertificatePolicyJSONBodySubjectType = "locality"
+	Organization       CreateCertificatePolicyJSONBodySubjectType = "organization"
+	OrganizationalUnit CreateCertificatePolicyJSONBodySubjectType = "organizational_unit"
+	State              CreateCertificatePolicyJSONBodySubjectType = "state"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages.
+const (
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesClientAuth      CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "client_auth"
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesCodeSigning     CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "code_signing"
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesEmailProtection CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "email_protection"
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesOcspSigning     CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "ocsp_signing"
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesServerAuth      CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "server_auth"
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesTimeStamping    CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "time_stamping"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm.
+const (
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECPrime256v1 CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_prime256v1"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECSecp384r1  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_secp384r1"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA2048      CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_2048"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA3072      CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_3072"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA4096      CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_4096"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyDefaultsKeyUsages.
+const (
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesCrlSign          CreateCertificateProfileJSONBodyDefaultsKeyUsages = "crl_sign"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesDataEncipherment CreateCertificateProfileJSONBodyDefaultsKeyUsages = "data_encipherment"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesDecipherOnly     CreateCertificateProfileJSONBodyDefaultsKeyUsages = "decipher_only"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesDigitalSignature CreateCertificateProfileJSONBodyDefaultsKeyUsages = "digital_signature"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesEncipherOnly     CreateCertificateProfileJSONBodyDefaultsKeyUsages = "encipher_only"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesKeyAgreement     CreateCertificateProfileJSONBodyDefaultsKeyUsages = "key_agreement"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesKeyCertSign      CreateCertificateProfileJSONBodyDefaultsKeyUsages = "key_cert_sign"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesKeyEncipherment  CreateCertificateProfileJSONBodyDefaultsKeyUsages = "key_encipherment"
+	CreateCertificateProfileJSONBodyDefaultsKeyUsagesNonRepudiation   CreateCertificateProfileJSONBodyDefaultsKeyUsages = "non_repudiation"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm.
+const (
+	ECDSASHA256 CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA256"
+	ECDSASHA384 CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA384"
+	ECDSASHA512 CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA512"
+	RSASHA256   CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA256"
+	RSASHA384   CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA384"
+	RSASHA512   CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA512"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyEnrollmentType.
+const (
+	Acme CreateCertificateProfileJSONBodyEnrollmentType = "acme"
+	Api  CreateCertificateProfileJSONBodyEnrollmentType = "api"
+	Est  CreateCertificateProfileJSONBodyEnrollmentType = "est"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyIssuerType.
+const (
+	Ca         CreateCertificateProfileJSONBodyIssuerType = "ca"
+	SelfSigned CreateCertificateProfileJSONBodyIssuerType = "self-signed"
+)
+
 // Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
 const (
 	ServiceAccountToken CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "service-account-token"
@@ -59,6 +266,12 @@ const (
 const (
 	ListSecretsV4ParamsRecursiveFalse ListSecretsV4ParamsRecursive = "false"
 	ListSecretsV4ParamsRecursiveTrue  ListSecretsV4ParamsRecursive = "true"
+)
+
+// Defines values for ListSecretsV4ParamsIncludePersonalOverrides.
+const (
+	ListSecretsV4ParamsIncludePersonalOverridesFalse ListSecretsV4ParamsIncludePersonalOverrides = "false"
+	ListSecretsV4ParamsIncludePersonalOverridesTrue  ListSecretsV4ParamsIncludePersonalOverrides = "true"
 )
 
 // Defines values for ListSecretsV4ParamsIncludeImports.
@@ -117,6 +330,38 @@ type AdminSignUpJSONBody struct {
 	Password  string              `json:"password"`
 }
 
+// CreateCloudflareAppConnectionJSONBody defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBody struct {
+	// Description An optional description for the Cloudflare Connection.
+	Description *string `json:"description"`
+
+	// GatewayId Not supported for Cloudflare Connections.
+	GatewayId *CreateCloudflareAppConnectionJSONBody_GatewayId `json:"gatewayId,omitempty"`
+
+	// IsPlatformManagedCredentials Not supported for Cloudflare Connections.
+	IsPlatformManagedCredentials *CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials `json:"isPlatformManagedCredentials,omitempty"`
+
+	// Name The name of the Cloudflare Connection to create. Must be slug-friendly.
+	Name string `json:"name"`
+
+	// ProjectId The ID of the project to create the Cloudflare Connection in.
+	ProjectId *string `json:"projectId,omitempty"`
+}
+
+// CreateCloudflareAppConnectionJSONBodyGatewayId0 defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyGatewayId0 = interface{}
+
+// CreateCloudflareAppConnectionJSONBodyGatewayId1 defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyGatewayId1 = interface{}
+
+// CreateCloudflareAppConnectionJSONBody_GatewayId defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBody_GatewayId struct {
+	union json.RawMessage
+}
+
+// CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials bool
+
 // AttachTokenAuthJSONBody defines parameters for AttachTokenAuth.
 type AttachTokenAuthJSONBody struct {
 	// AccessTokenMaxTTL The maximum lifetime for an access token in seconds.
@@ -139,9 +384,347 @@ type CreateTokenAuthTokenJSONBody struct {
 	// Name The name of the token to create.
 	Name *string `json:"name,omitempty"`
 
-	// SubOrganizationName The sub organization name to scope the token to.
-	SubOrganizationName *string `json:"subOrganizationName,omitempty"`
+	// OrganizationSlug The sub organization name to scope the token to.
+	OrganizationSlug *string `json:"organizationSlug,omitempty"`
 }
+
+// AttachUniversalAuthJSONBody defines parameters for AttachUniversalAuth.
+type AttachUniversalAuthJSONBody struct {
+	// AccessTokenMaxTTL The maximum lifetime for an access token in seconds. This value will be referenced at renewal time.
+	AccessTokenMaxTTL *int `json:"accessTokenMaxTTL,omitempty"`
+
+	// AccessTokenNumUsesLimit The maximum number of times that an access token can be used; a value of 0 implies infinite number of uses.
+	AccessTokenNumUsesLimit *int `json:"accessTokenNumUsesLimit,omitempty"`
+
+	// AccessTokenPeriod The period for an access token in seconds. This value will be referenced at renewal time. Default value is 0.
+	AccessTokenPeriod *int `json:"accessTokenPeriod,omitempty"`
+
+	// AccessTokenTTL The lifetime for an access token in seconds. This value will be referenced at renewal time.
+	AccessTokenTTL *int `json:"accessTokenTTL,omitempty"`
+
+	// AccessTokenTrustedIps A list of IPs or CIDR ranges that access tokens can be used from. You can use 0.0.0.0/0, to allow usage from any network address.
+	AccessTokenTrustedIps *[]struct {
+		IpAddress string `json:"ipAddress"`
+	} `json:"accessTokenTrustedIps,omitempty"`
+
+	// ClientSecretTrustedIps A list of IPs or CIDR ranges that the Client Secret can be used from together with the Client ID to get back an access token. You can use 0.0.0.0/0, to allow usage from any network address.
+	ClientSecretTrustedIps *[]struct {
+		IpAddress string `json:"ipAddress"`
+	} `json:"clientSecretTrustedIps,omitempty"`
+
+	// LockoutCounterResetSeconds How long to wait from the most recent failed login until resetting the lockout counter.
+	LockoutCounterResetSeconds *float32 `json:"lockoutCounterResetSeconds,omitempty"`
+
+	// LockoutDurationSeconds How long an identity auth method lockout lasts.
+	LockoutDurationSeconds *float32 `json:"lockoutDurationSeconds,omitempty"`
+
+	// LockoutEnabled Whether the lockout feature is enabled.
+	LockoutEnabled *bool `json:"lockoutEnabled,omitempty"`
+
+	// LockoutThreshold The amount of times login must fail before locking the identity auth method.
+	LockoutThreshold *float32 `json:"lockoutThreshold,omitempty"`
+}
+
+// CreateUniversalAuthClientSecretJSONBody defines parameters for CreateUniversalAuthClientSecret.
+type CreateUniversalAuthClientSecretJSONBody struct {
+	// Description The description of the client secret.
+	Description *string `json:"description,omitempty"`
+
+	// NumUsesLimit The maximum number of times that the client secret can be used; a value of 0 implies infinite number of uses.
+	NumUsesLimit *float32 `json:"numUsesLimit,omitempty"`
+
+	// Ttl The lifetime for the client secret in seconds.
+	Ttl *float32 `json:"ttl,omitempty"`
+}
+
+// CreateAcmeCertificateAuthorityV1JSONBody defines parameters for CreateAcmeCertificateAuthorityV1.
+type CreateAcmeCertificateAuthorityV1JSONBody struct {
+	Configuration struct {
+		// AccountEmail The email address for the ACME Certificate Authority.
+		AccountEmail string `json:"accountEmail"`
+
+		// DirectoryUrl The directory URL for the ACME Certificate Authority.
+		DirectoryUrl string `json:"directoryUrl"`
+
+		// DnsAppConnectionId The ID of the App Connection to use for creating and managing DNS TXT records required for ACME domain validation. This connection must have permissions to create and delete TXT records in your DNS provider (e.g., Route53) for the ACME challenge process.
+		DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+		DnsProviderConfig  struct {
+			// HostedZoneId The hosted zone ID for the ACME Certificate Authority.
+			HostedZoneId string `json:"hostedZoneId"`
+
+			// Provider The DNS provider for the ACME Certificate Authority.
+			Provider CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
+		} `json:"dnsProviderConfig"`
+
+		// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+		EabHmacKey *string `json:"eabHmacKey,omitempty"`
+
+		// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+		EabKid *string `json:"eabKid,omitempty"`
+	} `json:"configuration"`
+
+	// Name The name of the ACME-compatible CA Certificate Authority to create. Must be slug-friendly.
+	Name string `json:"name"`
+
+	// ProjectId The ID of the project to create the Certificate Authority in.
+	ProjectId openapi_types.UUID `json:"projectId"`
+
+	// Status The status of the ACME-compatible CA Certificate Authority.
+	Status CreateAcmeCertificateAuthorityV1JSONBodyStatus `json:"status"`
+}
+
+// CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider defines parameters for CreateAcmeCertificateAuthorityV1.
+type CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider string
+
+// CreateAcmeCertificateAuthorityV1JSONBodyStatus defines parameters for CreateAcmeCertificateAuthorityV1.
+type CreateAcmeCertificateAuthorityV1JSONBodyStatus string
+
+// UpdateAcmeCertificateAuthorityV1JSONBody defines parameters for UpdateAcmeCertificateAuthorityV1.
+type UpdateAcmeCertificateAuthorityV1JSONBody struct {
+	Configuration *struct {
+		// AccountEmail The email address for the ACME Certificate Authority.
+		AccountEmail string `json:"accountEmail"`
+
+		// DirectoryUrl The directory URL for the ACME Certificate Authority.
+		DirectoryUrl string `json:"directoryUrl"`
+
+		// DnsAppConnectionId The ID of the App Connection to use for creating and managing DNS TXT records required for ACME domain validation. This connection must have permissions to create and delete TXT records in your DNS provider (e.g., Route53) for the ACME challenge process.
+		DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+		DnsProviderConfig  struct {
+			// HostedZoneId The hosted zone ID for the ACME Certificate Authority.
+			HostedZoneId string `json:"hostedZoneId"`
+
+			// Provider The DNS provider for the ACME Certificate Authority.
+			Provider UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
+		} `json:"dnsProviderConfig"`
+
+		// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+		EabHmacKey *string `json:"eabHmacKey,omitempty"`
+
+		// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+		EabKid *string `json:"eabKid,omitempty"`
+	} `json:"configuration,omitempty"`
+
+	// Status The updated status of the ACME-compatible CA Certificate Authority.
+	Status *UpdateAcmeCertificateAuthorityV1JSONBodyStatus `json:"status,omitempty"`
+}
+
+// UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider defines parameters for UpdateAcmeCertificateAuthorityV1.
+type UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider string
+
+// UpdateAcmeCertificateAuthorityV1JSONBodyStatus defines parameters for UpdateAcmeCertificateAuthorityV1.
+type UpdateAcmeCertificateAuthorityV1JSONBodyStatus string
+
+// CreateInternalCertificateAuthorityV1JSONBody defines parameters for CreateInternalCertificateAuthorityV1.
+type CreateInternalCertificateAuthorityV1JSONBody struct {
+	Configuration struct {
+		ActiveCaCertId *openapi_types.UUID `json:"activeCaCertId"`
+
+		// CommonName The common name (CN) for the CA.
+		CommonName *string `json:"commonName,omitempty"`
+
+		// Country The country name (C) for the CA.
+		Country *string `json:"country,omitempty"`
+		Dn      *string `json:"dn"`
+
+		// FriendlyName A friendly name for the CA.
+		FriendlyName *string `json:"friendlyName,omitempty"`
+
+		// KeyAlgorithm The type of public key algorithm and size, in bits, of the key pair for the CA; when you create an intermediate CA, you must use a key algorithm supported by the parent CA.
+		KeyAlgorithm CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+
+		// Locality The locality name for the CA.
+		Locality *string `json:"locality,omitempty"`
+
+		// MaxPathLength The maximum number of intermediate CAs that may follow this CA in the certificate / CA chain. A maxPathLength of -1 implies no path limit on the chain.
+		MaxPathLength *float32 `json:"maxPathLength"`
+
+		// NotAfter The date and time when the CA expires in YYYY-MM-DDTHH:mm:ss.sssZ format.
+		NotAfter *string `json:"notAfter,omitempty"`
+
+		// NotBefore The date and time when the CA becomes valid in YYYY-MM-DDTHH:mm:ss.sssZ format.
+		NotBefore *string `json:"notBefore,omitempty"`
+
+		// Organization The organization (O) for the CA.
+		Organization *string `json:"organization,omitempty"`
+
+		// Ou The organization unit (OU) for the CA.
+		Ou         *string             `json:"ou,omitempty"`
+		ParentCaId *openapi_types.UUID `json:"parentCaId"`
+
+		// Province The state of province name for the CA.
+		Province     *string `json:"province,omitempty"`
+		SerialNumber *string `json:"serialNumber"`
+
+		// Type The type of CA to create.
+		Type CreateInternalCertificateAuthorityV1JSONBodyConfigurationType `json:"type"`
+	} `json:"configuration"`
+
+	// Name The name of the Internal Certificate Authority to create. Must be slug-friendly.
+	Name string `json:"name"`
+
+	// ProjectId The ID of the project to create the Certificate Authority in.
+	ProjectId openapi_types.UUID `json:"projectId"`
+
+	// Status The status of the Internal Certificate Authority.
+	Status CreateInternalCertificateAuthorityV1JSONBodyStatus `json:"status"`
+}
+
+// CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm defines parameters for CreateInternalCertificateAuthorityV1.
+type CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm string
+
+// CreateInternalCertificateAuthorityV1JSONBodyConfigurationType defines parameters for CreateInternalCertificateAuthorityV1.
+type CreateInternalCertificateAuthorityV1JSONBodyConfigurationType string
+
+// CreateInternalCertificateAuthorityV1JSONBodyStatus defines parameters for CreateInternalCertificateAuthorityV1.
+type CreateInternalCertificateAuthorityV1JSONBodyStatus string
+
+// CreateCertificatePolicyJSONBody defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBody struct {
+	Algorithms *struct {
+		KeyAlgorithm *[]string `json:"keyAlgorithm,omitempty"`
+		Signature    *[]string `json:"signature,omitempty"`
+	} `json:"algorithms,omitempty"`
+	BasicConstraints *struct {
+		IsCA          *CreateCertificatePolicyJSONBodyBasicConstraintsIsCA `json:"isCA,omitempty"`
+		MaxPathLength *int                                                 `json:"maxPathLength,omitempty"`
+	} `json:"basicConstraints"`
+	Description       *string `json:"description,omitempty"`
+	ExtendedKeyUsages *struct {
+		Allowed  *[]CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed  `json:"allowed,omitempty"`
+		Denied   *[]CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied   `json:"denied,omitempty"`
+		Required *[]CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired `json:"required,omitempty"`
+	} `json:"extendedKeyUsages,omitempty"`
+	KeyUsages *struct {
+		Allowed  *[]CreateCertificatePolicyJSONBodyKeyUsagesAllowed  `json:"allowed,omitempty"`
+		Denied   *[]CreateCertificatePolicyJSONBodyKeyUsagesDenied   `json:"denied,omitempty"`
+		Required *[]CreateCertificatePolicyJSONBodyKeyUsagesRequired `json:"required,omitempty"`
+	} `json:"keyUsages,omitempty"`
+	Name      string `json:"name"`
+	ProjectId string `json:"projectId"`
+	Sans      *[]struct {
+		Allowed  *[]string                               `json:"allowed,omitempty"`
+		Denied   *[]string                               `json:"denied,omitempty"`
+		Required *[]string                               `json:"required,omitempty"`
+		Type     CreateCertificatePolicyJSONBodySansType `json:"type"`
+	} `json:"sans,omitempty"`
+	Subject *[]struct {
+		Allowed  *[]string                                  `json:"allowed,omitempty"`
+		Denied   *[]string                                  `json:"denied,omitempty"`
+		Required *[]string                                  `json:"required,omitempty"`
+		Type     CreateCertificatePolicyJSONBodySubjectType `json:"type"`
+	} `json:"subject,omitempty"`
+	Validity *struct {
+		Max *string `json:"max,omitempty"`
+	} `json:"validity,omitempty"`
+}
+
+// CreateCertificatePolicyJSONBodyBasicConstraintsIsCA defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyBasicConstraintsIsCA string
+
+// CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed string
+
+// CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied string
+
+// CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired string
+
+// CreateCertificatePolicyJSONBodyKeyUsagesAllowed defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyKeyUsagesAllowed string
+
+// CreateCertificatePolicyJSONBodyKeyUsagesDenied defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyKeyUsagesDenied string
+
+// CreateCertificatePolicyJSONBodyKeyUsagesRequired defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodyKeyUsagesRequired string
+
+// CreateCertificatePolicyJSONBodySansType defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodySansType string
+
+// CreateCertificatePolicyJSONBodySubjectType defines parameters for CreateCertificatePolicy.
+type CreateCertificatePolicyJSONBodySubjectType string
+
+// CreateCertificateProfileJSONBody defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBody struct {
+	AcmeConfig *struct {
+		SkipDnsOwnershipVerification *bool `json:"skipDnsOwnershipVerification,omitempty"`
+		SkipEabBinding               *bool `json:"skipEabBinding,omitempty"`
+	} `json:"acmeConfig,omitempty"`
+	ApiConfig *struct {
+		AutoRenew       *bool    `json:"autoRenew,omitempty"`
+		RenewBeforeDays *float32 `json:"renewBeforeDays,omitempty"`
+	} `json:"apiConfig,omitempty"`
+	CaId                *openapi_types.UUID `json:"caId,omitempty"`
+	CertificatePolicyId openapi_types.UUID  `json:"certificatePolicyId"`
+	Defaults            *struct {
+		BasicConstraints *struct {
+			IsCA       bool `json:"isCA"`
+			PathLength *int `json:"pathLength,omitempty"`
+		} `json:"basicConstraints,omitempty"`
+		CommonName         *string                                                      `json:"commonName,omitempty"`
+		Country            *string                                                      `json:"country,omitempty"`
+		ExtendedKeyUsages  *[]CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages `json:"extendedKeyUsages,omitempty"`
+		KeyAlgorithm       *CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm        `json:"keyAlgorithm,omitempty"`
+		KeyUsages          *[]CreateCertificateProfileJSONBodyDefaultsKeyUsages         `json:"keyUsages,omitempty"`
+		Locality           *string                                                      `json:"locality,omitempty"`
+		Organization       *string                                                      `json:"organization,omitempty"`
+		OrganizationalUnit *string                                                      `json:"organizationalUnit,omitempty"`
+		SignatureAlgorithm *CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm  `json:"signatureAlgorithm,omitempty"`
+		State              *string                                                      `json:"state,omitempty"`
+		TtlDays            *int                                                         `json:"ttlDays,omitempty"`
+	} `json:"defaults"`
+	Description    *string                                        `json:"description,omitempty"`
+	EnrollmentType CreateCertificateProfileJSONBodyEnrollmentType `json:"enrollmentType"`
+	EstConfig      *struct {
+		CaChain                      *string `json:"caChain,omitempty"`
+		DisableBootstrapCaValidation *bool   `json:"disableBootstrapCaValidation,omitempty"`
+		Passphrase                   string  `json:"passphrase"`
+	} `json:"estConfig,omitempty"`
+	ExternalConfigs *CreateCertificateProfileJSONBody_ExternalConfigs `json:"externalConfigs"`
+	IssuerType      *CreateCertificateProfileJSONBodyIssuerType       `json:"issuerType,omitempty"`
+	ProjectId       string                                            `json:"projectId"`
+	Slug            string                                            `json:"slug"`
+}
+
+// CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages string
+
+// CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm string
+
+// CreateCertificateProfileJSONBodyDefaultsKeyUsages defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyDefaultsKeyUsages string
+
+// CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm string
+
+// CreateCertificateProfileJSONBodyEnrollmentType defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyEnrollmentType string
+
+// CreateCertificateProfileJSONBodyExternalConfigs0 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs0 struct {
+	// Template Certificate template name for Azure AD CS
+	Template string `json:"template"`
+}
+
+// CreateCertificateProfileJSONBodyExternalConfigs1 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs1 = map[string]interface{}
+
+// CreateCertificateProfileJSONBodyExternalConfigs2 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs2 = map[string]interface{}
+
+// CreateCertificateProfileJSONBodyExternalConfigs3 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs3 = map[string]interface{}
+
+// CreateCertificateProfileJSONBody_ExternalConfigs defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBody_ExternalConfigs struct {
+	union json.RawMessage
+}
+
+// CreateCertificateProfileJSONBodyIssuerType defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyIssuerType string
 
 // CreateMachineIdentityJSONBody defines parameters for CreateMachineIdentity.
 type CreateMachineIdentityJSONBody struct {
@@ -162,6 +745,25 @@ type CreateMachineIdentityJSONBody struct {
 	Role *string `json:"role,omitempty"`
 }
 
+// CreatePostgresPamAccountJSONBody defines parameters for CreatePostgresPamAccount.
+type CreatePostgresPamAccountJSONBody struct {
+	Credentials struct {
+		Password string `json:"password"`
+		Username string `json:"username"`
+	} `json:"credentials"`
+	Description *string             `json:"description"`
+	FolderId    *openapi_types.UUID `json:"folderId,omitempty"`
+	Metadata    *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name                    string             `json:"name"`
+	RequireMfa              *bool              `json:"requireMfa,omitempty"`
+	ResourceId              openapi_types.UUID `json:"resourceId"`
+	RotationEnabled         bool               `json:"rotationEnabled"`
+	RotationIntervalSeconds *float32           `json:"rotationIntervalSeconds"`
+}
+
 // CreateKubernetesPamResourceJSONBody defines parameters for CreateKubernetesPamResource.
 type CreateKubernetesPamResourceJSONBody struct {
 	ConnectionDetails struct {
@@ -169,7 +771,11 @@ type CreateKubernetesPamResourceJSONBody struct {
 		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 		Url                   string  `json:"url"`
 	} `json:"connectionDetails"`
-	GatewayId                  openapi_types.UUID                                              `json:"gatewayId"`
+	GatewayId openapi_types.UUID `json:"gatewayId"`
+	Metadata  *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
 	Name                       string                                                          `json:"name"`
 	ProjectId                  openapi_types.UUID                                              `json:"projectId"`
 	RotationAccountCredentials *CreateKubernetesPamResourceJSONBody_RotationAccountCredentials `json:"rotationAccountCredentials"`
@@ -189,6 +795,29 @@ type CreateKubernetesPamResourceJSONBody_RotationAccountCredentials struct {
 	union json.RawMessage
 }
 
+// CreatePostgresPamResourceJSONBody defines parameters for CreatePostgresPamResource.
+type CreatePostgresPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		Database              string  `json:"database"`
+		Host                  string  `json:"host"`
+		Port                  float32 `json:"port"`
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslEnabled            bool    `json:"sslEnabled"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+	} `json:"connectionDetails"`
+	GatewayId openapi_types.UUID `json:"gatewayId"`
+	Metadata  *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name                       string             `json:"name"`
+	ProjectId                  openapi_types.UUID `json:"projectId"`
+	RotationAccountCredentials *struct {
+		Password string `json:"password"`
+		Username string `json:"username"`
+	} `json:"rotationAccountCredentials"`
+}
+
 // CreateRedisPamResourceJSONBody defines parameters for CreateRedisPamResource.
 type CreateRedisPamResourceJSONBody struct {
 	ConnectionDetails struct {
@@ -198,7 +827,11 @@ type CreateRedisPamResourceJSONBody struct {
 		SslEnabled            bool    `json:"sslEnabled"`
 		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 	} `json:"connectionDetails"`
-	GatewayId                  openapi_types.UUID `json:"gatewayId"`
+	GatewayId openapi_types.UUID `json:"gatewayId"`
+	Metadata  *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
 	Name                       string             `json:"name"`
 	ProjectId                  openapi_types.UUID `json:"projectId"`
 	RotationAccountCredentials *struct {
@@ -241,7 +874,7 @@ type SelectOrganizationV3JSONBodyUserAgent string
 
 // ListSecretsV4Params defines parameters for ListSecretsV4.
 type ListSecretsV4Params struct {
-	// MetadataFilter The secret metadata key-value pairs to filter secrets by. When querying for multiple metadata pairs, the query is treated as an AND operation. Secret metadata format is key=value1,value=value2|key=value3,value=value4.
+	// MetadataFilter Unencrypted secret metadata key-value pairs used to filter secrets. Only metadata with unencrypted values is supported. When querying for multiple metadata pairs, the query is treated as an AND operation. Secret metadata format is key=value1,value=value2|key=value3,value=value4.
 	MetadataFilter *string `form:"metadataFilter,omitempty" json:"metadataFilter,omitempty"`
 
 	// ProjectId The ID of the project to list secrets from.
@@ -262,8 +895,11 @@ type ListSecretsV4Params struct {
 	// Recursive Whether or not to fetch all secrets from the specified base path, and all of its subdirectories. Note, the max depth is 20 deep.
 	Recursive *ListSecretsV4ParamsRecursive `form:"recursive,omitempty" json:"recursive,omitempty"`
 
+	// IncludePersonalOverrides Whether or not to include personal secrets in the response. When enabled, personal secrets will be included in the response. Shared secrets will still be included, but personal secrets will take priority, and the corresponding shared secrets will be replaced with the personal secrets.
+	IncludePersonalOverrides *ListSecretsV4ParamsIncludePersonalOverrides `form:"includePersonalOverrides,omitempty" json:"includePersonalOverrides,omitempty"`
+
 	// IncludeImports Weather to include imported secrets or not.
-	IncludeImports *ListSecretsV4ParamsIncludeImports `form:"include_imports,omitempty" json:"include_imports,omitempty"`
+	IncludeImports *ListSecretsV4ParamsIncludeImports `form:"includeImports,omitempty" json:"includeImports,omitempty"`
 
 	// TagSlugs The comma separated tag slugs to filter secrets.
 	TagSlugs *string `form:"tagSlugs,omitempty" json:"tagSlugs,omitempty"`
@@ -277,6 +913,9 @@ type ListSecretsV4ParamsExpandSecretReferences string
 
 // ListSecretsV4ParamsRecursive defines parameters for ListSecretsV4.
 type ListSecretsV4ParamsRecursive string
+
+// ListSecretsV4ParamsIncludePersonalOverrides defines parameters for ListSecretsV4.
+type ListSecretsV4ParamsIncludePersonalOverrides string
 
 // ListSecretsV4ParamsIncludeImports defines parameters for ListSecretsV4.
 type ListSecretsV4ParamsIncludeImports string
@@ -323,7 +962,7 @@ type GetSecretByNameV4Params struct {
 	ExpandSecretReferences *GetSecretByNameV4ParamsExpandSecretReferences `form:"expandSecretReferences,omitempty" json:"expandSecretReferences,omitempty"`
 
 	// IncludeImports Weather to include imported secrets or not.
-	IncludeImports *GetSecretByNameV4ParamsIncludeImports `form:"include_imports,omitempty" json:"include_imports,omitempty"`
+	IncludeImports *GetSecretByNameV4ParamsIncludeImports `form:"includeImports,omitempty" json:"includeImports,omitempty"`
 }
 
 // GetSecretByNameV4ParamsType defines parameters for GetSecretByNameV4.
@@ -353,8 +992,9 @@ type UpdateSecretV4JSONBody struct {
 	// SecretComment Update comment to the secret.
 	SecretComment  *string `json:"secretComment,omitempty"`
 	SecretMetadata *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
+		IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+		Key         string  `json:"key"`
+		Value       *string `json:"value,omitempty"`
 	} `json:"secretMetadata,omitempty"`
 
 	// SecretPath The default path for secrets to update or upsert, if not provided in the secret details.
@@ -396,8 +1036,9 @@ type CreateSecretV4JSONBody struct {
 	// SecretComment Attach a comment to the secret.
 	SecretComment  *string `json:"secretComment,omitempty"`
 	SecretMetadata *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
+		IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+		Key         string  `json:"key"`
+		Value       *string `json:"value,omitempty"`
 	} `json:"secretMetadata,omitempty"`
 
 	// SecretPath The path to create the secret in.
@@ -413,7 +1054,7 @@ type CreateSecretV4JSONBody struct {
 	SecretValue string `json:"secretValue"`
 
 	// SkipMultilineEncoding Skip multiline encoding for the secret value.
-	SkipMultilineEncoding *bool `json:"skipMultilineEncoding,omitempty"`
+	SkipMultilineEncoding *bool `json:"skipMultilineEncoding"`
 
 	// TagIds The ID of the tags to be attached to the created secret.
 	TagIds *[]string `json:"tagIds,omitempty"`
@@ -428,17 +1069,47 @@ type CreateSecretV4JSONBodyType string
 // AdminSignUpJSONRequestBody defines body for AdminSignUp for application/json ContentType.
 type AdminSignUpJSONRequestBody AdminSignUpJSONBody
 
+// CreateCloudflareAppConnectionJSONRequestBody defines body for CreateCloudflareAppConnection for application/json ContentType.
+type CreateCloudflareAppConnectionJSONRequestBody CreateCloudflareAppConnectionJSONBody
+
 // AttachTokenAuthJSONRequestBody defines body for AttachTokenAuth for application/json ContentType.
 type AttachTokenAuthJSONRequestBody AttachTokenAuthJSONBody
 
 // CreateTokenAuthTokenJSONRequestBody defines body for CreateTokenAuthToken for application/json ContentType.
 type CreateTokenAuthTokenJSONRequestBody CreateTokenAuthTokenJSONBody
 
+// AttachUniversalAuthJSONRequestBody defines body for AttachUniversalAuth for application/json ContentType.
+type AttachUniversalAuthJSONRequestBody AttachUniversalAuthJSONBody
+
+// CreateUniversalAuthClientSecretJSONRequestBody defines body for CreateUniversalAuthClientSecret for application/json ContentType.
+type CreateUniversalAuthClientSecretJSONRequestBody CreateUniversalAuthClientSecretJSONBody
+
+// CreateAcmeCertificateAuthorityV1JSONRequestBody defines body for CreateAcmeCertificateAuthorityV1 for application/json ContentType.
+type CreateAcmeCertificateAuthorityV1JSONRequestBody CreateAcmeCertificateAuthorityV1JSONBody
+
+// UpdateAcmeCertificateAuthorityV1JSONRequestBody defines body for UpdateAcmeCertificateAuthorityV1 for application/json ContentType.
+type UpdateAcmeCertificateAuthorityV1JSONRequestBody UpdateAcmeCertificateAuthorityV1JSONBody
+
+// CreateInternalCertificateAuthorityV1JSONRequestBody defines body for CreateInternalCertificateAuthorityV1 for application/json ContentType.
+type CreateInternalCertificateAuthorityV1JSONRequestBody CreateInternalCertificateAuthorityV1JSONBody
+
+// CreateCertificatePolicyJSONRequestBody defines body for CreateCertificatePolicy for application/json ContentType.
+type CreateCertificatePolicyJSONRequestBody CreateCertificatePolicyJSONBody
+
+// CreateCertificateProfileJSONRequestBody defines body for CreateCertificateProfile for application/json ContentType.
+type CreateCertificateProfileJSONRequestBody CreateCertificateProfileJSONBody
+
 // CreateMachineIdentityJSONRequestBody defines body for CreateMachineIdentity for application/json ContentType.
 type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
 
+// CreatePostgresPamAccountJSONRequestBody defines body for CreatePostgresPamAccount for application/json ContentType.
+type CreatePostgresPamAccountJSONRequestBody CreatePostgresPamAccountJSONBody
+
 // CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
 type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
+
+// CreatePostgresPamResourceJSONRequestBody defines body for CreatePostgresPamResource for application/json ContentType.
+type CreatePostgresPamResourceJSONRequestBody CreatePostgresPamResourceJSONBody
 
 // CreateRedisPamResourceJSONRequestBody defines body for CreateRedisPamResource for application/json ContentType.
 type CreateRedisPamResourceJSONRequestBody CreateRedisPamResourceJSONBody
@@ -536,6 +1207,11 @@ type ClientInterface interface {
 
 	AdminSignUp(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateCloudflareAppConnectionWithBody request with any body
+	CreateCloudflareAppConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateCloudflareAppConnection(ctx context.Context, body CreateCloudflareAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// RefreshAuthToken request
 	RefreshAuthToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -549,15 +1225,60 @@ type ClientInterface interface {
 
 	CreateTokenAuthToken(ctx context.Context, identityId string, body CreateTokenAuthTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// AttachUniversalAuthWithBody request with any body
+	AttachUniversalAuthWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AttachUniversalAuth(ctx context.Context, identityId string, body AttachUniversalAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateUniversalAuthClientSecretWithBody request with any body
+	CreateUniversalAuthClientSecretWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateUniversalAuthClientSecret(ctx context.Context, identityId string, body CreateUniversalAuthClientSecretJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateAcmeCertificateAuthorityV1WithBody request with any body
+	CreateAcmeCertificateAuthorityV1WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateAcmeCertificateAuthorityV1(ctx context.Context, body CreateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateAcmeCertificateAuthorityV1WithBody request with any body
+	UpdateAcmeCertificateAuthorityV1WithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateAcmeCertificateAuthorityV1(ctx context.Context, id string, body UpdateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateInternalCertificateAuthorityV1WithBody request with any body
+	CreateInternalCertificateAuthorityV1WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateInternalCertificateAuthorityV1(ctx context.Context, body CreateInternalCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateCertificatePolicyWithBody request with any body
+	CreateCertificatePolicyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateCertificatePolicy(ctx context.Context, body CreateCertificatePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateCertificateProfileWithBody request with any body
+	CreateCertificateProfileWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateCertificateProfile(ctx context.Context, body CreateCertificateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateMachineIdentityWithBody request with any body
 	CreateMachineIdentityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateMachineIdentity(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreatePostgresPamAccountWithBody request with any body
+	CreatePostgresPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateKubernetesPamResourceWithBody request with any body
 	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreatePostgresPamResourceWithBody request with any body
+	CreatePostgresPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreatePostgresPamResource(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateRedisPamResourceWithBody request with any body
 	CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -616,6 +1337,30 @@ func (c *Client) AdminSignUpWithBody(ctx context.Context, contentType string, bo
 
 func (c *Client) AdminSignUp(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAdminSignUpRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCloudflareAppConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCloudflareAppConnectionRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCloudflareAppConnection(ctx context.Context, body CreateCloudflareAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCloudflareAppConnectionRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -686,6 +1431,174 @@ func (c *Client) CreateTokenAuthToken(ctx context.Context, identityId string, bo
 	return c.Client.Do(req)
 }
 
+func (c *Client) AttachUniversalAuthWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAttachUniversalAuthRequestWithBody(c.Server, identityId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AttachUniversalAuth(ctx context.Context, identityId string, body AttachUniversalAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAttachUniversalAuthRequest(c.Server, identityId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateUniversalAuthClientSecretWithBody(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateUniversalAuthClientSecretRequestWithBody(c.Server, identityId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateUniversalAuthClientSecret(ctx context.Context, identityId string, body CreateUniversalAuthClientSecretJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateUniversalAuthClientSecretRequest(c.Server, identityId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAcmeCertificateAuthorityV1WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAcmeCertificateAuthorityV1RequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAcmeCertificateAuthorityV1(ctx context.Context, body CreateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAcmeCertificateAuthorityV1Request(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateAcmeCertificateAuthorityV1WithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateAcmeCertificateAuthorityV1RequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateAcmeCertificateAuthorityV1(ctx context.Context, id string, body UpdateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateAcmeCertificateAuthorityV1Request(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateInternalCertificateAuthorityV1WithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateInternalCertificateAuthorityV1RequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateInternalCertificateAuthorityV1(ctx context.Context, body CreateInternalCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateInternalCertificateAuthorityV1Request(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCertificatePolicyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCertificatePolicyRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCertificatePolicy(ctx context.Context, body CreateCertificatePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCertificatePolicyRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCertificateProfileWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCertificateProfileRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCertificateProfile(ctx context.Context, body CreateCertificateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCertificateProfileRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateMachineIdentityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateMachineIdentityRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -710,6 +1623,30 @@ func (c *Client) CreateMachineIdentity(ctx context.Context, body CreateMachineId
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreatePostgresPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePostgresPamAccountRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePostgresPamAccountRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateKubernetesPamResourceRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -724,6 +1661,30 @@ func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, conten
 
 func (c *Client) CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateKubernetesPamResourceRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePostgresPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePostgresPamResourceRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePostgresPamResource(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePostgresPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -966,6 +1927,46 @@ func NewAdminSignUpRequestWithBody(server string, contentType string, body io.Re
 	return req, nil
 }
 
+// NewCreateCloudflareAppConnectionRequest calls the generic CreateCloudflareAppConnection builder with application/json body
+func NewCreateCloudflareAppConnectionRequest(server string, body CreateCloudflareAppConnectionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateCloudflareAppConnectionRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateCloudflareAppConnectionRequestWithBody generates requests for CreateCloudflareAppConnection with any type of body
+func NewCreateCloudflareAppConnectionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/app-connections/cloudflare")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewRefreshAuthTokenRequest generates requests for RefreshAuthToken
 func NewRefreshAuthTokenRequest(server string) (*http.Request, error) {
 	var err error
@@ -1087,6 +2088,307 @@ func NewCreateTokenAuthTokenRequestWithBody(server string, identityId string, co
 	return req, nil
 }
 
+// NewAttachUniversalAuthRequest calls the generic AttachUniversalAuth builder with application/json body
+func NewAttachUniversalAuthRequest(server string, identityId string, body AttachUniversalAuthJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAttachUniversalAuthRequestWithBody(server, identityId, "application/json", bodyReader)
+}
+
+// NewAttachUniversalAuthRequestWithBody generates requests for AttachUniversalAuth with any type of body
+func NewAttachUniversalAuthRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/universal-auth/identities/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateUniversalAuthClientSecretRequest calls the generic CreateUniversalAuthClientSecret builder with application/json body
+func NewCreateUniversalAuthClientSecretRequest(server string, identityId string, body CreateUniversalAuthClientSecretJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateUniversalAuthClientSecretRequestWithBody(server, identityId, "application/json", bodyReader)
+}
+
+// NewCreateUniversalAuthClientSecretRequestWithBody generates requests for CreateUniversalAuthClientSecret with any type of body
+func NewCreateUniversalAuthClientSecretRequestWithBody(server string, identityId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "identityId", runtime.ParamLocationPath, identityId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/universal-auth/identities/%s/client-secrets", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateAcmeCertificateAuthorityV1Request calls the generic CreateAcmeCertificateAuthorityV1 builder with application/json body
+func NewCreateAcmeCertificateAuthorityV1Request(server string, body CreateAcmeCertificateAuthorityV1JSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateAcmeCertificateAuthorityV1RequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateAcmeCertificateAuthorityV1RequestWithBody generates requests for CreateAcmeCertificateAuthorityV1 with any type of body
+func NewCreateAcmeCertificateAuthorityV1RequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/cert-manager/ca/acme")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewUpdateAcmeCertificateAuthorityV1Request calls the generic UpdateAcmeCertificateAuthorityV1 builder with application/json body
+func NewUpdateAcmeCertificateAuthorityV1Request(server string, id string, body UpdateAcmeCertificateAuthorityV1JSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateAcmeCertificateAuthorityV1RequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewUpdateAcmeCertificateAuthorityV1RequestWithBody generates requests for UpdateAcmeCertificateAuthorityV1 with any type of body
+func NewUpdateAcmeCertificateAuthorityV1RequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/cert-manager/ca/acme/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateInternalCertificateAuthorityV1Request calls the generic CreateInternalCertificateAuthorityV1 builder with application/json body
+func NewCreateInternalCertificateAuthorityV1Request(server string, body CreateInternalCertificateAuthorityV1JSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateInternalCertificateAuthorityV1RequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateInternalCertificateAuthorityV1RequestWithBody generates requests for CreateInternalCertificateAuthorityV1 with any type of body
+func NewCreateInternalCertificateAuthorityV1RequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/cert-manager/ca/internal")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateCertificatePolicyRequest calls the generic CreateCertificatePolicy builder with application/json body
+func NewCreateCertificatePolicyRequest(server string, body CreateCertificatePolicyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateCertificatePolicyRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateCertificatePolicyRequestWithBody generates requests for CreateCertificatePolicy with any type of body
+func NewCreateCertificatePolicyRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/cert-manager/certificate-policies")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateCertificateProfileRequest calls the generic CreateCertificateProfile builder with application/json body
+func NewCreateCertificateProfileRequest(server string, body CreateCertificateProfileJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateCertificateProfileRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateCertificateProfileRequestWithBody generates requests for CreateCertificateProfile with any type of body
+func NewCreateCertificateProfileRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/cert-manager/certificate-profiles")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreateMachineIdentityRequest calls the generic CreateMachineIdentity builder with application/json body
 func NewCreateMachineIdentityRequest(server string, body CreateMachineIdentityJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -1127,6 +2429,46 @@ func NewCreateMachineIdentityRequestWithBody(server string, contentType string, 
 	return req, nil
 }
 
+// NewCreatePostgresPamAccountRequest calls the generic CreatePostgresPamAccount builder with application/json body
+func NewCreatePostgresPamAccountRequest(server string, body CreatePostgresPamAccountJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreatePostgresPamAccountRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreatePostgresPamAccountRequestWithBody generates requests for CreatePostgresPamAccount with any type of body
+func NewCreatePostgresPamAccountRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/accounts/postgres")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreateKubernetesPamResourceRequest calls the generic CreateKubernetesPamResource builder with application/json body
 func NewCreateKubernetesPamResourceRequest(server string, body CreateKubernetesPamResourceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -1148,6 +2490,46 @@ func NewCreateKubernetesPamResourceRequestWithBody(server string, contentType st
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/pam/resources/kubernetes")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreatePostgresPamResourceRequest calls the generic CreatePostgresPamResource builder with application/json body
+func NewCreatePostgresPamResourceRequest(server string, body CreatePostgresPamResourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreatePostgresPamResourceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreatePostgresPamResourceRequestWithBody generates requests for CreatePostgresPamResource with any type of body
+func NewCreatePostgresPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/postgres")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1475,9 +2857,25 @@ func NewListSecretsV4Request(server string, params *ListSecretsV4Params) (*http.
 
 		}
 
+		if params.IncludePersonalOverrides != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "includePersonalOverrides", runtime.ParamLocationQuery, *params.IncludePersonalOverrides); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
 		if params.IncludeImports != nil {
 
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "include_imports", runtime.ParamLocationQuery, *params.IncludeImports); err != nil {
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "includeImports", runtime.ParamLocationQuery, *params.IncludeImports); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -1704,7 +3102,7 @@ func NewGetSecretByNameV4Request(server string, secretName string, params *GetSe
 
 		if params.IncludeImports != nil {
 
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "include_imports", runtime.ParamLocationQuery, *params.IncludeImports); err != nil {
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "includeImports", runtime.ParamLocationQuery, *params.IncludeImports); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -1871,6 +3269,11 @@ type ClientWithResponsesInterface interface {
 
 	AdminSignUpWithResponse(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*AdminSignUpResponse, error)
 
+	// CreateCloudflareAppConnectionWithBodyWithResponse request with any body
+	CreateCloudflareAppConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCloudflareAppConnectionResponse, error)
+
+	CreateCloudflareAppConnectionWithResponse(ctx context.Context, body CreateCloudflareAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCloudflareAppConnectionResponse, error)
+
 	// RefreshAuthTokenWithResponse request
 	RefreshAuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RefreshAuthTokenResponse, error)
 
@@ -1884,15 +3287,60 @@ type ClientWithResponsesInterface interface {
 
 	CreateTokenAuthTokenWithResponse(ctx context.Context, identityId string, body CreateTokenAuthTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTokenAuthTokenResponse, error)
 
+	// AttachUniversalAuthWithBodyWithResponse request with any body
+	AttachUniversalAuthWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachUniversalAuthResponse, error)
+
+	AttachUniversalAuthWithResponse(ctx context.Context, identityId string, body AttachUniversalAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachUniversalAuthResponse, error)
+
+	// CreateUniversalAuthClientSecretWithBodyWithResponse request with any body
+	CreateUniversalAuthClientSecretWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateUniversalAuthClientSecretResponse, error)
+
+	CreateUniversalAuthClientSecretWithResponse(ctx context.Context, identityId string, body CreateUniversalAuthClientSecretJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUniversalAuthClientSecretResponse, error)
+
+	// CreateAcmeCertificateAuthorityV1WithBodyWithResponse request with any body
+	CreateAcmeCertificateAuthorityV1WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAcmeCertificateAuthorityV1Response, error)
+
+	CreateAcmeCertificateAuthorityV1WithResponse(ctx context.Context, body CreateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAcmeCertificateAuthorityV1Response, error)
+
+	// UpdateAcmeCertificateAuthorityV1WithBodyWithResponse request with any body
+	UpdateAcmeCertificateAuthorityV1WithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateAcmeCertificateAuthorityV1Response, error)
+
+	UpdateAcmeCertificateAuthorityV1WithResponse(ctx context.Context, id string, body UpdateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateAcmeCertificateAuthorityV1Response, error)
+
+	// CreateInternalCertificateAuthorityV1WithBodyWithResponse request with any body
+	CreateInternalCertificateAuthorityV1WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateInternalCertificateAuthorityV1Response, error)
+
+	CreateInternalCertificateAuthorityV1WithResponse(ctx context.Context, body CreateInternalCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*CreateInternalCertificateAuthorityV1Response, error)
+
+	// CreateCertificatePolicyWithBodyWithResponse request with any body
+	CreateCertificatePolicyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCertificatePolicyResponse, error)
+
+	CreateCertificatePolicyWithResponse(ctx context.Context, body CreateCertificatePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCertificatePolicyResponse, error)
+
+	// CreateCertificateProfileWithBodyWithResponse request with any body
+	CreateCertificateProfileWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCertificateProfileResponse, error)
+
+	CreateCertificateProfileWithResponse(ctx context.Context, body CreateCertificateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCertificateProfileResponse, error)
+
 	// CreateMachineIdentityWithBodyWithResponse request with any body
 	CreateMachineIdentityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
 
 	CreateMachineIdentityWithResponse(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
 
+	// CreatePostgresPamAccountWithBodyWithResponse request with any body
+	CreatePostgresPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error)
+
+	CreatePostgresPamAccountWithResponse(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error)
+
 	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
 	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
 	CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
+
+	// CreatePostgresPamResourceWithBodyWithResponse request with any body
+	CreatePostgresPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error)
+
+	CreatePostgresPamResourceWithResponse(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error)
 
 	// CreateRedisPamResourceWithBodyWithResponse request with any body
 	CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
@@ -2058,6 +3506,103 @@ func (r AdminSignUpResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r AdminSignUpResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateCloudflareAppConnectionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		AppConnection CreateCloudflareAppConnection_200_AppConnection `json:"appConnection"`
+	}
+	JSON400 *struct {
+		Details    interface{}                                `json:"details,omitempty"`
+		Error      string                                     `json:"error"`
+		Message    string                                     `json:"message"`
+		ReqId      string                                     `json:"reqId"`
+		StatusCode CreateCloudflareAppConnection400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                     `json:"error"`
+		Message    string                                     `json:"message"`
+		ReqId      string                                     `json:"reqId"`
+		StatusCode CreateCloudflareAppConnection401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                `json:"details,omitempty"`
+		Error      string                                     `json:"error"`
+		Message    string                                     `json:"message"`
+		ReqId      string                                     `json:"reqId"`
+		StatusCode CreateCloudflareAppConnection403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                     `json:"error"`
+		Message    string                                     `json:"message"`
+		ReqId      string                                     `json:"reqId"`
+		StatusCode CreateCloudflareAppConnection404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                     `json:"error"`
+		Message    interface{}                                `json:"message,omitempty"`
+		ReqId      string                                     `json:"reqId"`
+		StatusCode CreateCloudflareAppConnection422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                     `json:"error"`
+		Message    string                                     `json:"message"`
+		ReqId      string                                     `json:"reqId"`
+		StatusCode CreateCloudflareAppConnection500StatusCode `json:"statusCode"`
+	}
+}
+type CreateCloudflareAppConnection200AppConnection0 struct {
+	App         CreateCloudflareAppConnection200AppConnection0App `json:"app"`
+	CreatedAt   time.Time                                         `json:"createdAt"`
+	Credentials struct {
+		AccountId string `json:"accountId"`
+	} `json:"credentials"`
+	CredentialsHash              *string                                              `json:"credentialsHash,omitempty"`
+	Description                  *string                                              `json:"description"`
+	GatewayId                    *openapi_types.UUID                                  `json:"gatewayId"`
+	Id                           openapi_types.UUID                                   `json:"id"`
+	IsPlatformManagedCredentials *bool                                                `json:"isPlatformManagedCredentials"`
+	Method                       CreateCloudflareAppConnection200AppConnection0Method `json:"method"`
+	Name                         string                                               `json:"name"`
+	OrgId                        openapi_types.UUID                                   `json:"orgId"`
+	Project                      *struct {
+		Id   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+		Type string `json:"type"`
+	} `json:"project"`
+	ProjectId *string   `json:"projectId"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Version   *float32  `json:"version,omitempty"`
+}
+type CreateCloudflareAppConnection200AppConnection0App string
+type CreateCloudflareAppConnection200AppConnection0Method string
+type CreateCloudflareAppConnection_200_AppConnection struct {
+	union json.RawMessage
+}
+type CreateCloudflareAppConnection400StatusCode float32
+type CreateCloudflareAppConnection401StatusCode float32
+type CreateCloudflareAppConnection403StatusCode float32
+type CreateCloudflareAppConnection404StatusCode float32
+type CreateCloudflareAppConnection422StatusCode float32
+type CreateCloudflareAppConnection500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateCloudflareAppConnectionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCloudflareAppConnectionResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2302,6 +3847,718 @@ func (r CreateTokenAuthTokenResponse) StatusCode() int {
 	return 0
 }
 
+type AttachUniversalAuthResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		IdentityUniversalAuth struct {
+			AccessTokenMaxTTL          *float32           `json:"accessTokenMaxTTL,omitempty"`
+			AccessTokenNumUsesLimit    *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+			AccessTokenPeriod          *float32           `json:"accessTokenPeriod,omitempty"`
+			AccessTokenTTL             *float32           `json:"accessTokenTTL,omitempty"`
+			AccessTokenTrustedIps      interface{}        `json:"accessTokenTrustedIps,omitempty"`
+			ClientId                   string             `json:"clientId"`
+			ClientSecretTrustedIps     interface{}        `json:"clientSecretTrustedIps,omitempty"`
+			CreatedAt                  time.Time          `json:"createdAt"`
+			Id                         openapi_types.UUID `json:"id"`
+			IdentityId                 openapi_types.UUID `json:"identityId"`
+			LockoutCounterResetSeconds *float32           `json:"lockoutCounterResetSeconds,omitempty"`
+			LockoutDurationSeconds     *float32           `json:"lockoutDurationSeconds,omitempty"`
+			LockoutEnabled             *bool              `json:"lockoutEnabled,omitempty"`
+			LockoutThreshold           *float32           `json:"lockoutThreshold,omitempty"`
+			UpdatedAt                  time.Time          `json:"updatedAt"`
+		} `json:"identityUniversalAuth"`
+	}
+	JSON400 *struct {
+		Details    interface{}                      `json:"details,omitempty"`
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode AttachUniversalAuth400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode AttachUniversalAuth401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                      `json:"details,omitempty"`
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode AttachUniversalAuth403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode AttachUniversalAuth404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                           `json:"error"`
+		Message    interface{}                      `json:"message,omitempty"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode AttachUniversalAuth422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                           `json:"error"`
+		Message    string                           `json:"message"`
+		ReqId      string                           `json:"reqId"`
+		StatusCode AttachUniversalAuth500StatusCode `json:"statusCode"`
+	}
+}
+type AttachUniversalAuth400StatusCode float32
+type AttachUniversalAuth401StatusCode float32
+type AttachUniversalAuth403StatusCode float32
+type AttachUniversalAuth404StatusCode float32
+type AttachUniversalAuth422StatusCode float32
+type AttachUniversalAuth500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r AttachUniversalAuthResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AttachUniversalAuthResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateUniversalAuthClientSecretResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		ClientSecret     string `json:"clientSecret"`
+		ClientSecretData struct {
+			ClientSecretNumUses      *float32           `json:"clientSecretNumUses,omitempty"`
+			ClientSecretNumUsesLimit *float32           `json:"clientSecretNumUsesLimit,omitempty"`
+			ClientSecretPrefix       string             `json:"clientSecretPrefix"`
+			ClientSecretTTL          *float32           `json:"clientSecretTTL,omitempty"`
+			CreatedAt                time.Time          `json:"createdAt"`
+			Description              string             `json:"description"`
+			Id                       string             `json:"id"`
+			IdentityUAId             openapi_types.UUID `json:"identityUAId"`
+			IsClientSecretRevoked    *bool              `json:"isClientSecretRevoked,omitempty"`
+			UpdatedAt                time.Time          `json:"updatedAt"`
+		} `json:"clientSecretData"`
+	}
+	JSON400 *struct {
+		Details    interface{}                                  `json:"details,omitempty"`
+		Error      string                                       `json:"error"`
+		Message    string                                       `json:"message"`
+		ReqId      string                                       `json:"reqId"`
+		StatusCode CreateUniversalAuthClientSecret400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                       `json:"error"`
+		Message    string                                       `json:"message"`
+		ReqId      string                                       `json:"reqId"`
+		StatusCode CreateUniversalAuthClientSecret401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                  `json:"details,omitempty"`
+		Error      string                                       `json:"error"`
+		Message    string                                       `json:"message"`
+		ReqId      string                                       `json:"reqId"`
+		StatusCode CreateUniversalAuthClientSecret403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                       `json:"error"`
+		Message    string                                       `json:"message"`
+		ReqId      string                                       `json:"reqId"`
+		StatusCode CreateUniversalAuthClientSecret404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                       `json:"error"`
+		Message    interface{}                                  `json:"message,omitempty"`
+		ReqId      string                                       `json:"reqId"`
+		StatusCode CreateUniversalAuthClientSecret422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                       `json:"error"`
+		Message    string                                       `json:"message"`
+		ReqId      string                                       `json:"reqId"`
+		StatusCode CreateUniversalAuthClientSecret500StatusCode `json:"statusCode"`
+	}
+}
+type CreateUniversalAuthClientSecret400StatusCode float32
+type CreateUniversalAuthClientSecret401StatusCode float32
+type CreateUniversalAuthClientSecret403StatusCode float32
+type CreateUniversalAuthClientSecret404StatusCode float32
+type CreateUniversalAuthClientSecret422StatusCode float32
+type CreateUniversalAuthClientSecret500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateUniversalAuthClientSecretResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateUniversalAuthClientSecretResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateAcmeCertificateAuthorityV1Response struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Configuration struct {
+			// AccountEmail The email address for the ACME Certificate Authority.
+			AccountEmail string `json:"accountEmail"`
+
+			// DirectoryUrl The directory URL for the ACME Certificate Authority.
+			DirectoryUrl string `json:"directoryUrl"`
+
+			// DnsAppConnectionId The ID of the App Connection to use for creating and managing DNS TXT records required for ACME domain validation. This connection must have permissions to create and delete TXT records in your DNS provider (e.g., Route53) for the ACME challenge process.
+			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+			DnsProviderConfig  struct {
+				// HostedZoneId The hosted zone ID for the ACME Certificate Authority.
+				HostedZoneId string `json:"hostedZoneId"`
+
+				// Provider The DNS provider for the ACME Certificate Authority.
+				Provider CreateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
+			} `json:"dnsProviderConfig"`
+
+			// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+			EabHmacKey *string `json:"eabHmacKey,omitempty"`
+
+			// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+			EabKid *string `json:"eabKid,omitempty"`
+		} `json:"configuration"`
+		EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
+		Id                   openapi_types.UUID                        `json:"id"`
+		Name                 string                                    `json:"name"`
+		ProjectId            string                                    `json:"projectId"`
+		Status               CreateAcmeCertificateAuthorityV1200Status `json:"status"`
+		Type                 CreateAcmeCertificateAuthorityV1200Type   `json:"type"`
+	}
+	JSON400 *struct {
+		Details    interface{}                                   `json:"details,omitempty"`
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode CreateAcmeCertificateAuthorityV1400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode CreateAcmeCertificateAuthorityV1401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                   `json:"details,omitempty"`
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode CreateAcmeCertificateAuthorityV1403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode CreateAcmeCertificateAuthorityV1404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                        `json:"error"`
+		Message    interface{}                                   `json:"message,omitempty"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode CreateAcmeCertificateAuthorityV1422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode CreateAcmeCertificateAuthorityV1500StatusCode `json:"statusCode"`
+	}
+}
+type CreateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider string
+type CreateAcmeCertificateAuthorityV1200Status string
+type CreateAcmeCertificateAuthorityV1200Type string
+type CreateAcmeCertificateAuthorityV1400StatusCode float32
+type CreateAcmeCertificateAuthorityV1401StatusCode float32
+type CreateAcmeCertificateAuthorityV1403StatusCode float32
+type CreateAcmeCertificateAuthorityV1404StatusCode float32
+type CreateAcmeCertificateAuthorityV1422StatusCode float32
+type CreateAcmeCertificateAuthorityV1500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateAcmeCertificateAuthorityV1Response) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateAcmeCertificateAuthorityV1Response) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type UpdateAcmeCertificateAuthorityV1Response struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Configuration struct {
+			// AccountEmail The email address for the ACME Certificate Authority.
+			AccountEmail string `json:"accountEmail"`
+
+			// DirectoryUrl The directory URL for the ACME Certificate Authority.
+			DirectoryUrl string `json:"directoryUrl"`
+
+			// DnsAppConnectionId The ID of the App Connection to use for creating and managing DNS TXT records required for ACME domain validation. This connection must have permissions to create and delete TXT records in your DNS provider (e.g., Route53) for the ACME challenge process.
+			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+			DnsProviderConfig  struct {
+				// HostedZoneId The hosted zone ID for the ACME Certificate Authority.
+				HostedZoneId string `json:"hostedZoneId"`
+
+				// Provider The DNS provider for the ACME Certificate Authority.
+				Provider UpdateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
+			} `json:"dnsProviderConfig"`
+
+			// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+			EabHmacKey *string `json:"eabHmacKey,omitempty"`
+
+			// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+			EabKid *string `json:"eabKid,omitempty"`
+		} `json:"configuration"`
+		EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
+		Id                   openapi_types.UUID                        `json:"id"`
+		Name                 string                                    `json:"name"`
+		ProjectId            string                                    `json:"projectId"`
+		Status               UpdateAcmeCertificateAuthorityV1200Status `json:"status"`
+		Type                 UpdateAcmeCertificateAuthorityV1200Type   `json:"type"`
+	}
+	JSON400 *struct {
+		Details    interface{}                                   `json:"details,omitempty"`
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode UpdateAcmeCertificateAuthorityV1400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode UpdateAcmeCertificateAuthorityV1401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                   `json:"details,omitempty"`
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode UpdateAcmeCertificateAuthorityV1403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode UpdateAcmeCertificateAuthorityV1404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                        `json:"error"`
+		Message    interface{}                                   `json:"message,omitempty"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode UpdateAcmeCertificateAuthorityV1422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                        `json:"error"`
+		Message    string                                        `json:"message"`
+		ReqId      string                                        `json:"reqId"`
+		StatusCode UpdateAcmeCertificateAuthorityV1500StatusCode `json:"statusCode"`
+	}
+}
+type UpdateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider string
+type UpdateAcmeCertificateAuthorityV1200Status string
+type UpdateAcmeCertificateAuthorityV1200Type string
+type UpdateAcmeCertificateAuthorityV1400StatusCode float32
+type UpdateAcmeCertificateAuthorityV1401StatusCode float32
+type UpdateAcmeCertificateAuthorityV1403StatusCode float32
+type UpdateAcmeCertificateAuthorityV1404StatusCode float32
+type UpdateAcmeCertificateAuthorityV1422StatusCode float32
+type UpdateAcmeCertificateAuthorityV1500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r UpdateAcmeCertificateAuthorityV1Response) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateAcmeCertificateAuthorityV1Response) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateInternalCertificateAuthorityV1Response struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Configuration struct {
+			ActiveCaCertId *openapi_types.UUID `json:"activeCaCertId"`
+
+			// CommonName The common name (CN) for the CA.
+			CommonName *string `json:"commonName,omitempty"`
+
+			// Country The country name (C) for the CA.
+			Country *string `json:"country,omitempty"`
+			Dn      *string `json:"dn"`
+
+			// FriendlyName A friendly name for the CA.
+			FriendlyName *string `json:"friendlyName,omitempty"`
+
+			// KeyAlgorithm The type of public key algorithm and size, in bits, of the key pair for the CA; when you create an intermediate CA, you must use a key algorithm supported by the parent CA.
+			KeyAlgorithm CreateInternalCertificateAuthorityV1200ConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+
+			// Locality The locality name for the CA.
+			Locality *string `json:"locality,omitempty"`
+
+			// MaxPathLength The maximum number of intermediate CAs that may follow this CA in the certificate / CA chain. A maxPathLength of -1 implies no path limit on the chain.
+			MaxPathLength *float32 `json:"maxPathLength"`
+
+			// NotAfter The date and time when the CA expires in YYYY-MM-DDTHH:mm:ss.sssZ format.
+			NotAfter *string `json:"notAfter,omitempty"`
+
+			// NotBefore The date and time when the CA becomes valid in YYYY-MM-DDTHH:mm:ss.sssZ format.
+			NotBefore *string `json:"notBefore,omitempty"`
+
+			// Organization The organization (O) for the CA.
+			Organization *string `json:"organization,omitempty"`
+
+			// Ou The organization unit (OU) for the CA.
+			Ou         *string             `json:"ou,omitempty"`
+			ParentCaId *openapi_types.UUID `json:"parentCaId"`
+
+			// Province The state of province name for the CA.
+			Province     *string `json:"province,omitempty"`
+			SerialNumber *string `json:"serialNumber"`
+
+			// Type The type of CA to create.
+			Type CreateInternalCertificateAuthorityV1200ConfigurationType `json:"type"`
+		} `json:"configuration"`
+		EnableDirectIssuance *bool                                         `json:"enableDirectIssuance,omitempty"`
+		Id                   openapi_types.UUID                            `json:"id"`
+		Name                 string                                        `json:"name"`
+		ProjectId            string                                        `json:"projectId"`
+		Status               CreateInternalCertificateAuthorityV1200Status `json:"status"`
+		Type                 CreateInternalCertificateAuthorityV1200Type   `json:"type"`
+	}
+	JSON400 *struct {
+		Details    interface{}                                       `json:"details,omitempty"`
+		Error      string                                            `json:"error"`
+		Message    string                                            `json:"message"`
+		ReqId      string                                            `json:"reqId"`
+		StatusCode CreateInternalCertificateAuthorityV1400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                            `json:"error"`
+		Message    string                                            `json:"message"`
+		ReqId      string                                            `json:"reqId"`
+		StatusCode CreateInternalCertificateAuthorityV1401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                                       `json:"details,omitempty"`
+		Error      string                                            `json:"error"`
+		Message    string                                            `json:"message"`
+		ReqId      string                                            `json:"reqId"`
+		StatusCode CreateInternalCertificateAuthorityV1403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                            `json:"error"`
+		Message    string                                            `json:"message"`
+		ReqId      string                                            `json:"reqId"`
+		StatusCode CreateInternalCertificateAuthorityV1404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                            `json:"error"`
+		Message    interface{}                                       `json:"message,omitempty"`
+		ReqId      string                                            `json:"reqId"`
+		StatusCode CreateInternalCertificateAuthorityV1422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                            `json:"error"`
+		Message    string                                            `json:"message"`
+		ReqId      string                                            `json:"reqId"`
+		StatusCode CreateInternalCertificateAuthorityV1500StatusCode `json:"statusCode"`
+	}
+}
+type CreateInternalCertificateAuthorityV1200ConfigurationKeyAlgorithm string
+type CreateInternalCertificateAuthorityV1200ConfigurationType string
+type CreateInternalCertificateAuthorityV1200Status string
+type CreateInternalCertificateAuthorityV1200Type string
+type CreateInternalCertificateAuthorityV1400StatusCode float32
+type CreateInternalCertificateAuthorityV1401StatusCode float32
+type CreateInternalCertificateAuthorityV1403StatusCode float32
+type CreateInternalCertificateAuthorityV1404StatusCode float32
+type CreateInternalCertificateAuthorityV1422StatusCode float32
+type CreateInternalCertificateAuthorityV1500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateInternalCertificateAuthorityV1Response) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateInternalCertificateAuthorityV1Response) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateCertificatePolicyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		CertificatePolicy struct {
+			Algorithms *struct {
+				KeyAlgorithm *[]string `json:"keyAlgorithm,omitempty"`
+				Signature    *[]string `json:"signature,omitempty"`
+			} `json:"algorithms,omitempty"`
+			BasicConstraints *struct {
+				IsCA          *CreateCertificatePolicy200CertificatePolicyBasicConstraintsIsCA `json:"isCA,omitempty"`
+				MaxPathLength *int                                                             `json:"maxPathLength,omitempty"`
+			} `json:"basicConstraints"`
+			CreatedAt         time.Time `json:"createdAt"`
+			Description       *string   `json:"description"`
+			ExtendedKeyUsages *struct {
+				Allowed  *[]CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesAllowed  `json:"allowed,omitempty"`
+				Denied   *[]CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesDenied   `json:"denied,omitempty"`
+				Required *[]CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesRequired `json:"required,omitempty"`
+			} `json:"extendedKeyUsages,omitempty"`
+			Id        openapi_types.UUID `json:"id"`
+			KeyUsages *struct {
+				Allowed  *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesAllowed  `json:"allowed,omitempty"`
+				Denied   *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesDenied   `json:"denied,omitempty"`
+				Required *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesRequired `json:"required,omitempty"`
+			} `json:"keyUsages,omitempty"`
+			Name      string             `json:"name"`
+			ProjectId openapi_types.UUID `json:"projectId"`
+			Sans      *[]struct {
+				Allowed  *[]string                                           `json:"allowed,omitempty"`
+				Denied   *[]string                                           `json:"denied,omitempty"`
+				Required *[]string                                           `json:"required,omitempty"`
+				Type     CreateCertificatePolicy200CertificatePolicySansType `json:"type"`
+			} `json:"sans,omitempty"`
+			Subject *[]struct {
+				Allowed  *[]string                                              `json:"allowed,omitempty"`
+				Denied   *[]string                                              `json:"denied,omitempty"`
+				Required *[]string                                              `json:"required,omitempty"`
+				Type     CreateCertificatePolicy200CertificatePolicySubjectType `json:"type"`
+			} `json:"subject,omitempty"`
+			UpdatedAt time.Time `json:"updatedAt"`
+			Validity  *struct {
+				Max *string `json:"max,omitempty"`
+			} `json:"validity,omitempty"`
+		} `json:"certificatePolicy"`
+	}
+	JSON400 *struct {
+		Details    interface{}                          `json:"details,omitempty"`
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateCertificatePolicy400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateCertificatePolicy401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                          `json:"details,omitempty"`
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateCertificatePolicy403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateCertificatePolicy404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                               `json:"error"`
+		Message    interface{}                          `json:"message,omitempty"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateCertificatePolicy422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateCertificatePolicy500StatusCode `json:"statusCode"`
+	}
+}
+type CreateCertificatePolicy200CertificatePolicyBasicConstraintsIsCA string
+type CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesAllowed string
+type CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesDenied string
+type CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesRequired string
+type CreateCertificatePolicy200CertificatePolicyKeyUsagesAllowed string
+type CreateCertificatePolicy200CertificatePolicyKeyUsagesDenied string
+type CreateCertificatePolicy200CertificatePolicyKeyUsagesRequired string
+type CreateCertificatePolicy200CertificatePolicySansType string
+type CreateCertificatePolicy200CertificatePolicySubjectType string
+type CreateCertificatePolicy400StatusCode float32
+type CreateCertificatePolicy401StatusCode float32
+type CreateCertificatePolicy403StatusCode float32
+type CreateCertificatePolicy404StatusCode float32
+type CreateCertificatePolicy422StatusCode float32
+type CreateCertificatePolicy500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateCertificatePolicyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCertificatePolicyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateCertificateProfileResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		CertificateProfile struct {
+			AcmeConfigId        *openapi_types.UUID `json:"acmeConfigId"`
+			ApiConfigId         *openapi_types.UUID `json:"apiConfigId"`
+			CaId                *openapi_types.UUID `json:"caId"`
+			CertificatePolicyId openapi_types.UUID  `json:"certificatePolicyId"`
+			CreatedAt           time.Time           `json:"createdAt"`
+			Defaults            *struct {
+				BasicConstraints *struct {
+					IsCA       bool     `json:"isCA"`
+					PathLength *float32 `json:"pathLength,omitempty"`
+				} `json:"basicConstraints,omitempty"`
+				CommonName         *string                                                                   `json:"commonName,omitempty"`
+				Country            *string                                                                   `json:"country,omitempty"`
+				ExtendedKeyUsages  *[]CreateCertificateProfile200CertificateProfileDefaultsExtendedKeyUsages `json:"extendedKeyUsages,omitempty"`
+				KeyAlgorithm       *CreateCertificateProfile200CertificateProfileDefaultsKeyAlgorithm        `json:"keyAlgorithm,omitempty"`
+				KeyUsages          *[]CreateCertificateProfile200CertificateProfileDefaultsKeyUsages         `json:"keyUsages,omitempty"`
+				Locality           *string                                                                   `json:"locality,omitempty"`
+				Organization       *string                                                                   `json:"organization,omitempty"`
+				OrganizationalUnit *string                                                                   `json:"organizationalUnit,omitempty"`
+				SignatureAlgorithm *CreateCertificateProfile200CertificateProfileDefaultsSignatureAlgorithm  `json:"signatureAlgorithm,omitempty"`
+				State              *string                                                                   `json:"state,omitempty"`
+				TtlDays            *float32                                                                  `json:"ttlDays,omitempty"`
+			} `json:"defaults"`
+			Description     *string                                                          `json:"description"`
+			EnrollmentType  string                                                           `json:"enrollmentType"`
+			EstConfigId     *openapi_types.UUID                                              `json:"estConfigId"`
+			ExternalConfigs *CreateCertificateProfile_200_CertificateProfile_ExternalConfigs `json:"externalConfigs"`
+			Id              openapi_types.UUID                                               `json:"id"`
+			IssuerType      *string                                                          `json:"issuerType,omitempty"`
+			ProjectId       string                                                           `json:"projectId"`
+			Slug            string                                                           `json:"slug"`
+			UpdatedAt       time.Time                                                        `json:"updatedAt"`
+		} `json:"certificateProfile"`
+	}
+	JSON400 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateCertificateProfile400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateCertificateProfile401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateCertificateProfile403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateCertificateProfile404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                `json:"error"`
+		Message    interface{}                           `json:"message,omitempty"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateCertificateProfile422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateCertificateProfile500StatusCode `json:"statusCode"`
+	}
+}
+type CreateCertificateProfile200CertificateProfileDefaultsExtendedKeyUsages string
+type CreateCertificateProfile200CertificateProfileDefaultsKeyAlgorithm string
+type CreateCertificateProfile200CertificateProfileDefaultsKeyUsages string
+type CreateCertificateProfile200CertificateProfileDefaultsSignatureAlgorithm string
+type CreateCertificateProfile200CertificateProfileExternalConfigs0 struct {
+	// Template Certificate template name for Azure AD CS
+	Template string `json:"template"`
+}
+type CreateCertificateProfile200CertificateProfileExternalConfigs1 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs2 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs3 = map[string]interface{}
+type CreateCertificateProfile_200_CertificateProfile_ExternalConfigs struct {
+	union json.RawMessage
+}
+type CreateCertificateProfile400StatusCode float32
+type CreateCertificateProfile401StatusCode float32
+type CreateCertificateProfile403StatusCode float32
+type CreateCertificateProfile404StatusCode float32
+type CreateCertificateProfile422StatusCode float32
+type CreateCertificateProfile500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateCertificateProfileResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCertificateProfileResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateMachineIdentityResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2385,20 +4642,129 @@ func (r CreateMachineIdentityResponse) StatusCode() int {
 	return 0
 }
 
+type CreatePostgresPamAccountResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Account struct {
+			CreatedAt   time.Time `json:"createdAt"`
+			Credentials struct {
+				Username string `json:"username"`
+			} `json:"credentials"`
+			Description                  *string             `json:"description"`
+			DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+			FolderId                     *openapi_types.UUID `json:"folderId"`
+			Id                           openapi_types.UUID  `json:"id"`
+			InternalMetadata             interface{}         `json:"internalMetadata"`
+			LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
+			LastRotationMessage          *string             `json:"lastRotationMessage"`
+			Metadata                     *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name       string `json:"name"`
+			ProjectId  string `json:"projectId"`
+			RequireMfa *bool  `json:"requireMfa"`
+			Resource   struct {
+				Id                            openapi_types.UUID `json:"id"`
+				Name                          string             `json:"name"`
+				ResourceType                  string             `json:"resourceType"`
+				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+			} `json:"resource"`
+			ResourceId              openapi_types.UUID                             `json:"resourceId"`
+			ResourceType            CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
+			RotationEnabled         *bool                                          `json:"rotationEnabled,omitempty"`
+			RotationIntervalSeconds *float32                                       `json:"rotationIntervalSeconds"`
+			RotationStatus          *string                                        `json:"rotationStatus"`
+			UpdatedAt               time.Time                                      `json:"updatedAt"`
+		} `json:"account"`
+	}
+	JSON400 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePostgresPamAccount400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePostgresPamAccount401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePostgresPamAccount403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePostgresPamAccount404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                `json:"error"`
+		Message    interface{}                           `json:"message,omitempty"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePostgresPamAccount422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePostgresPamAccount500StatusCode `json:"statusCode"`
+	}
+}
+type CreatePostgresPamAccount200AccountResourceType string
+type CreatePostgresPamAccount400StatusCode float32
+type CreatePostgresPamAccount401StatusCode float32
+type CreatePostgresPamAccount403StatusCode float32
+type CreatePostgresPamAccount404StatusCode float32
+type CreatePostgresPamAccount422StatusCode float32
+type CreatePostgresPamAccount500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreatePostgresPamAccountResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePostgresPamAccountResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateKubernetesPamResourceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Resource struct {
-			ConnectionDetails struct {
+			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+			ConnectionDetails  struct {
 				SslCertificate        *string `json:"sslCertificate,omitempty"`
 				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 				Url                   string  `json:"url"`
 			} `json:"connectionDetails"`
-			CreatedAt                  time.Time                                                            `json:"createdAt"`
-			EncryptedResourceMetadata  interface{}                                                          `json:"encryptedResourceMetadata"`
-			GatewayId                  *openapi_types.UUID                                                  `json:"gatewayId"`
-			Id                         openapi_types.UUID                                                   `json:"id"`
+			CreatedAt                 time.Time           `json:"createdAt"`
+			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+			Id                        openapi_types.UUID  `json:"id"`
+			Metadata                  *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
 			Name                       string                                                               `json:"name"`
 			ProjectId                  string                                                               `json:"projectId"`
 			ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
@@ -2476,22 +4842,125 @@ func (r CreateKubernetesPamResourceResponse) StatusCode() int {
 	return 0
 }
 
-type CreateRedisPamResourceResponse struct {
+type CreatePostgresPamResourceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Resource struct {
-			ConnectionDetails struct {
+			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+			ConnectionDetails  struct {
+				Database              string  `json:"database"`
 				Host                  string  `json:"host"`
 				Port                  float32 `json:"port"`
 				SslCertificate        *string `json:"sslCertificate,omitempty"`
 				SslEnabled            bool    `json:"sslEnabled"`
 				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 			} `json:"connectionDetails"`
-			CreatedAt                  time.Time                                     `json:"createdAt"`
-			EncryptedResourceMetadata  interface{}                                   `json:"encryptedResourceMetadata"`
-			GatewayId                  *openapi_types.UUID                           `json:"gatewayId"`
-			Id                         openapi_types.UUID                            `json:"id"`
+			CreatedAt                 time.Time           `json:"createdAt"`
+			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+			Id                        openapi_types.UUID  `json:"id"`
+			Metadata                  *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name                       string                                           `json:"name"`
+			ProjectId                  string                                           `json:"projectId"`
+			ResourceType               CreatePostgresPamResource200ResourceResourceType `json:"resourceType"`
+			RotationAccountCredentials *struct {
+				Username string `json:"username"`
+			} `json:"rotationAccountCredentials"`
+			UpdatedAt time.Time `json:"updatedAt"`
+		} `json:"resource"`
+	}
+	JSON400 *struct {
+		Details    interface{}                            `json:"details,omitempty"`
+		Error      string                                 `json:"error"`
+		Message    string                                 `json:"message"`
+		ReqId      string                                 `json:"reqId"`
+		StatusCode CreatePostgresPamResource400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                 `json:"error"`
+		Message    string                                 `json:"message"`
+		ReqId      string                                 `json:"reqId"`
+		StatusCode CreatePostgresPamResource401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                            `json:"details,omitempty"`
+		Error      string                                 `json:"error"`
+		Message    string                                 `json:"message"`
+		ReqId      string                                 `json:"reqId"`
+		StatusCode CreatePostgresPamResource403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                 `json:"error"`
+		Message    string                                 `json:"message"`
+		ReqId      string                                 `json:"reqId"`
+		StatusCode CreatePostgresPamResource404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                 `json:"error"`
+		Message    interface{}                            `json:"message,omitempty"`
+		ReqId      string                                 `json:"reqId"`
+		StatusCode CreatePostgresPamResource422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                 `json:"error"`
+		Message    string                                 `json:"message"`
+		ReqId      string                                 `json:"reqId"`
+		StatusCode CreatePostgresPamResource500StatusCode `json:"statusCode"`
+	}
+}
+type CreatePostgresPamResource200ResourceResourceType string
+type CreatePostgresPamResource400StatusCode float32
+type CreatePostgresPamResource401StatusCode float32
+type CreatePostgresPamResource403StatusCode float32
+type CreatePostgresPamResource404StatusCode float32
+type CreatePostgresPamResource422StatusCode float32
+type CreatePostgresPamResource500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreatePostgresPamResourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePostgresPamResourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateRedisPamResourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Resource struct {
+			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+			ConnectionDetails  struct {
+				Host                  string  `json:"host"`
+				Port                  float32 `json:"port"`
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslEnabled            bool    `json:"sslEnabled"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+			} `json:"connectionDetails"`
+			CreatedAt                 time.Time           `json:"createdAt"`
+			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+			Id                        openapi_types.UUID  `json:"id"`
+			Metadata                  *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
 			Name                       string                                        `json:"name"`
 			ProjectId                  string                                        `json:"projectId"`
 			ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
@@ -2569,13 +5038,14 @@ type CreateProjectResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Project struct {
-			UnderscoreId           string    `json:"_id"`
-			AuditLogsRetentionDays *float32  `json:"auditLogsRetentionDays"`
-			AutoCapitalization     *bool     `json:"autoCapitalization"`
-			CreatedAt              time.Time `json:"createdAt"`
-			DefaultProduct         *string   `json:"defaultProduct"`
-			Description            *string   `json:"description"`
-			Environments           []struct {
+			UnderscoreId                                string    `json:"_id"`
+			AuditLogsRetentionDays                      *float32  `json:"auditLogsRetentionDays"`
+			AutoCapitalization                          *bool     `json:"autoCapitalization"`
+			CreatedAt                                   time.Time `json:"createdAt"`
+			DefaultProduct                              *string   `json:"defaultProduct"`
+			Description                                 *string   `json:"description"`
+			EnforceEncryptedSecretManagerSecretMetadata *bool     `json:"enforceEncryptedSecretManagerSecretMetadata"`
+			Environments                                []struct {
 				Id   string `json:"id"`
 				Name string `json:"name"`
 				Slug string `json:"slug"`
@@ -2905,8 +5375,9 @@ type ListSecretsV4Response struct {
 				SecretComment   string              `json:"secretComment"`
 				SecretKey       string              `json:"secretKey"`
 				SecretMetadata  *[]struct {
-					Key   string  `json:"key"`
-					Value *string `json:"value,omitempty"`
+					IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+					Key         string  `json:"key"`
+					Value       *string `json:"value,omitempty"`
 				} `json:"secretMetadata,omitempty"`
 				SecretReminderNote       *string  `json:"secretReminderNote"`
 				SecretReminderRepeatDays *float32 `json:"secretReminderRepeatDays"`
@@ -2935,8 +5406,9 @@ type ListSecretsV4Response struct {
 			SecretComment   string              `json:"secretComment"`
 			SecretKey       string              `json:"secretKey"`
 			SecretMetadata  *[]struct {
-				Key   string  `json:"key"`
-				Value *string `json:"value,omitempty"`
+				IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+				Key         string  `json:"key"`
+				Value       *string `json:"value,omitempty"`
 			} `json:"secretMetadata,omitempty"`
 			SecretPath               *string  `json:"secretPath,omitempty"`
 			SecretReminderNote       *string  `json:"secretReminderNote"`
@@ -3152,8 +5624,9 @@ type GetSecretByNameV4Response struct {
 			SecretComment   string              `json:"secretComment"`
 			SecretKey       string              `json:"secretKey"`
 			SecretMetadata  *[]struct {
-				Key   string  `json:"key"`
-				Value *string `json:"value,omitempty"`
+				IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+				Key         string  `json:"key"`
+				Value       *string `json:"value,omitempty"`
 			} `json:"secretMetadata,omitempty"`
 			SecretPath               string   `json:"secretPath"`
 			SecretReminderNote       *string  `json:"secretReminderNote"`
@@ -3477,6 +5950,23 @@ func (c *ClientWithResponses) AdminSignUpWithResponse(ctx context.Context, body 
 	return ParseAdminSignUpResponse(rsp)
 }
 
+// CreateCloudflareAppConnectionWithBodyWithResponse request with arbitrary body returning *CreateCloudflareAppConnectionResponse
+func (c *ClientWithResponses) CreateCloudflareAppConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCloudflareAppConnectionResponse, error) {
+	rsp, err := c.CreateCloudflareAppConnectionWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCloudflareAppConnectionResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateCloudflareAppConnectionWithResponse(ctx context.Context, body CreateCloudflareAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCloudflareAppConnectionResponse, error) {
+	rsp, err := c.CreateCloudflareAppConnection(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCloudflareAppConnectionResponse(rsp)
+}
+
 // RefreshAuthTokenWithResponse request returning *RefreshAuthTokenResponse
 func (c *ClientWithResponses) RefreshAuthTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RefreshAuthTokenResponse, error) {
 	rsp, err := c.RefreshAuthToken(ctx, reqEditors...)
@@ -3520,6 +6010,125 @@ func (c *ClientWithResponses) CreateTokenAuthTokenWithResponse(ctx context.Conte
 	return ParseCreateTokenAuthTokenResponse(rsp)
 }
 
+// AttachUniversalAuthWithBodyWithResponse request with arbitrary body returning *AttachUniversalAuthResponse
+func (c *ClientWithResponses) AttachUniversalAuthWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachUniversalAuthResponse, error) {
+	rsp, err := c.AttachUniversalAuthWithBody(ctx, identityId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAttachUniversalAuthResponse(rsp)
+}
+
+func (c *ClientWithResponses) AttachUniversalAuthWithResponse(ctx context.Context, identityId string, body AttachUniversalAuthJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachUniversalAuthResponse, error) {
+	rsp, err := c.AttachUniversalAuth(ctx, identityId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAttachUniversalAuthResponse(rsp)
+}
+
+// CreateUniversalAuthClientSecretWithBodyWithResponse request with arbitrary body returning *CreateUniversalAuthClientSecretResponse
+func (c *ClientWithResponses) CreateUniversalAuthClientSecretWithBodyWithResponse(ctx context.Context, identityId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateUniversalAuthClientSecretResponse, error) {
+	rsp, err := c.CreateUniversalAuthClientSecretWithBody(ctx, identityId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateUniversalAuthClientSecretResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateUniversalAuthClientSecretWithResponse(ctx context.Context, identityId string, body CreateUniversalAuthClientSecretJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUniversalAuthClientSecretResponse, error) {
+	rsp, err := c.CreateUniversalAuthClientSecret(ctx, identityId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateUniversalAuthClientSecretResponse(rsp)
+}
+
+// CreateAcmeCertificateAuthorityV1WithBodyWithResponse request with arbitrary body returning *CreateAcmeCertificateAuthorityV1Response
+func (c *ClientWithResponses) CreateAcmeCertificateAuthorityV1WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAcmeCertificateAuthorityV1Response, error) {
+	rsp, err := c.CreateAcmeCertificateAuthorityV1WithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAcmeCertificateAuthorityV1Response(rsp)
+}
+
+func (c *ClientWithResponses) CreateAcmeCertificateAuthorityV1WithResponse(ctx context.Context, body CreateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAcmeCertificateAuthorityV1Response, error) {
+	rsp, err := c.CreateAcmeCertificateAuthorityV1(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAcmeCertificateAuthorityV1Response(rsp)
+}
+
+// UpdateAcmeCertificateAuthorityV1WithBodyWithResponse request with arbitrary body returning *UpdateAcmeCertificateAuthorityV1Response
+func (c *ClientWithResponses) UpdateAcmeCertificateAuthorityV1WithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateAcmeCertificateAuthorityV1Response, error) {
+	rsp, err := c.UpdateAcmeCertificateAuthorityV1WithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateAcmeCertificateAuthorityV1Response(rsp)
+}
+
+func (c *ClientWithResponses) UpdateAcmeCertificateAuthorityV1WithResponse(ctx context.Context, id string, body UpdateAcmeCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateAcmeCertificateAuthorityV1Response, error) {
+	rsp, err := c.UpdateAcmeCertificateAuthorityV1(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateAcmeCertificateAuthorityV1Response(rsp)
+}
+
+// CreateInternalCertificateAuthorityV1WithBodyWithResponse request with arbitrary body returning *CreateInternalCertificateAuthorityV1Response
+func (c *ClientWithResponses) CreateInternalCertificateAuthorityV1WithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateInternalCertificateAuthorityV1Response, error) {
+	rsp, err := c.CreateInternalCertificateAuthorityV1WithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateInternalCertificateAuthorityV1Response(rsp)
+}
+
+func (c *ClientWithResponses) CreateInternalCertificateAuthorityV1WithResponse(ctx context.Context, body CreateInternalCertificateAuthorityV1JSONRequestBody, reqEditors ...RequestEditorFn) (*CreateInternalCertificateAuthorityV1Response, error) {
+	rsp, err := c.CreateInternalCertificateAuthorityV1(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateInternalCertificateAuthorityV1Response(rsp)
+}
+
+// CreateCertificatePolicyWithBodyWithResponse request with arbitrary body returning *CreateCertificatePolicyResponse
+func (c *ClientWithResponses) CreateCertificatePolicyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCertificatePolicyResponse, error) {
+	rsp, err := c.CreateCertificatePolicyWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCertificatePolicyResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateCertificatePolicyWithResponse(ctx context.Context, body CreateCertificatePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCertificatePolicyResponse, error) {
+	rsp, err := c.CreateCertificatePolicy(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCertificatePolicyResponse(rsp)
+}
+
+// CreateCertificateProfileWithBodyWithResponse request with arbitrary body returning *CreateCertificateProfileResponse
+func (c *ClientWithResponses) CreateCertificateProfileWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCertificateProfileResponse, error) {
+	rsp, err := c.CreateCertificateProfileWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCertificateProfileResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateCertificateProfileWithResponse(ctx context.Context, body CreateCertificateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCertificateProfileResponse, error) {
+	rsp, err := c.CreateCertificateProfile(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCertificateProfileResponse(rsp)
+}
+
 // CreateMachineIdentityWithBodyWithResponse request with arbitrary body returning *CreateMachineIdentityResponse
 func (c *ClientWithResponses) CreateMachineIdentityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error) {
 	rsp, err := c.CreateMachineIdentityWithBody(ctx, contentType, body, reqEditors...)
@@ -3537,6 +6146,23 @@ func (c *ClientWithResponses) CreateMachineIdentityWithResponse(ctx context.Cont
 	return ParseCreateMachineIdentityResponse(rsp)
 }
 
+// CreatePostgresPamAccountWithBodyWithResponse request with arbitrary body returning *CreatePostgresPamAccountResponse
+func (c *ClientWithResponses) CreatePostgresPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error) {
+	rsp, err := c.CreatePostgresPamAccountWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePostgresPamAccountResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreatePostgresPamAccountWithResponse(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error) {
+	rsp, err := c.CreatePostgresPamAccount(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePostgresPamAccountResponse(rsp)
+}
+
 // CreateKubernetesPamResourceWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamResourceResponse
 func (c *ClientWithResponses) CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
 	rsp, err := c.CreateKubernetesPamResourceWithBody(ctx, contentType, body, reqEditors...)
@@ -3552,6 +6178,23 @@ func (c *ClientWithResponses) CreateKubernetesPamResourceWithResponse(ctx contex
 		return nil, err
 	}
 	return ParseCreateKubernetesPamResourceResponse(rsp)
+}
+
+// CreatePostgresPamResourceWithBodyWithResponse request with arbitrary body returning *CreatePostgresPamResourceResponse
+func (c *ClientWithResponses) CreatePostgresPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error) {
+	rsp, err := c.CreatePostgresPamResourceWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePostgresPamResourceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreatePostgresPamResourceWithResponse(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error) {
+	rsp, err := c.CreatePostgresPamResource(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePostgresPamResourceResponse(rsp)
 }
 
 // CreateRedisPamResourceWithBodyWithResponse request with arbitrary body returning *CreateRedisPamResourceResponse
@@ -3842,6 +6485,108 @@ func ParseAdminSignUpResponse(rsp *http.Response) (*AdminSignUpResponse, error) 
 			Message    string                   `json:"message"`
 			ReqId      string                   `json:"reqId"`
 			StatusCode AdminSignUp500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateCloudflareAppConnectionResponse parses an HTTP response from a CreateCloudflareAppConnectionWithResponse call
+func ParseCreateCloudflareAppConnectionResponse(rsp *http.Response) (*CreateCloudflareAppConnectionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCloudflareAppConnectionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			AppConnection CreateCloudflareAppConnection_200_AppConnection `json:"appConnection"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                                `json:"details,omitempty"`
+			Error      string                                     `json:"error"`
+			Message    string                                     `json:"message"`
+			ReqId      string                                     `json:"reqId"`
+			StatusCode CreateCloudflareAppConnection400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                     `json:"error"`
+			Message    string                                     `json:"message"`
+			ReqId      string                                     `json:"reqId"`
+			StatusCode CreateCloudflareAppConnection401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                `json:"details,omitempty"`
+			Error      string                                     `json:"error"`
+			Message    string                                     `json:"message"`
+			ReqId      string                                     `json:"reqId"`
+			StatusCode CreateCloudflareAppConnection403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                     `json:"error"`
+			Message    string                                     `json:"message"`
+			ReqId      string                                     `json:"reqId"`
+			StatusCode CreateCloudflareAppConnection404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                     `json:"error"`
+			Message    interface{}                                `json:"message,omitempty"`
+			ReqId      string                                     `json:"reqId"`
+			StatusCode CreateCloudflareAppConnection422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                     `json:"error"`
+			Message    string                                     `json:"message"`
+			ReqId      string                                     `json:"reqId"`
+			StatusCode CreateCloudflareAppConnection500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -4192,6 +6937,923 @@ func ParseCreateTokenAuthTokenResponse(rsp *http.Response) (*CreateTokenAuthToke
 	return response, nil
 }
 
+// ParseAttachUniversalAuthResponse parses an HTTP response from a AttachUniversalAuthWithResponse call
+func ParseAttachUniversalAuthResponse(rsp *http.Response) (*AttachUniversalAuthResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AttachUniversalAuthResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			IdentityUniversalAuth struct {
+				AccessTokenMaxTTL          *float32           `json:"accessTokenMaxTTL,omitempty"`
+				AccessTokenNumUsesLimit    *float32           `json:"accessTokenNumUsesLimit,omitempty"`
+				AccessTokenPeriod          *float32           `json:"accessTokenPeriod,omitempty"`
+				AccessTokenTTL             *float32           `json:"accessTokenTTL,omitempty"`
+				AccessTokenTrustedIps      interface{}        `json:"accessTokenTrustedIps,omitempty"`
+				ClientId                   string             `json:"clientId"`
+				ClientSecretTrustedIps     interface{}        `json:"clientSecretTrustedIps,omitempty"`
+				CreatedAt                  time.Time          `json:"createdAt"`
+				Id                         openapi_types.UUID `json:"id"`
+				IdentityId                 openapi_types.UUID `json:"identityId"`
+				LockoutCounterResetSeconds *float32           `json:"lockoutCounterResetSeconds,omitempty"`
+				LockoutDurationSeconds     *float32           `json:"lockoutDurationSeconds,omitempty"`
+				LockoutEnabled             *bool              `json:"lockoutEnabled,omitempty"`
+				LockoutThreshold           *float32           `json:"lockoutThreshold,omitempty"`
+				UpdatedAt                  time.Time          `json:"updatedAt"`
+			} `json:"identityUniversalAuth"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                      `json:"details,omitempty"`
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode AttachUniversalAuth400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode AttachUniversalAuth401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                      `json:"details,omitempty"`
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode AttachUniversalAuth403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode AttachUniversalAuth404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    interface{}                      `json:"message,omitempty"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode AttachUniversalAuth422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                           `json:"error"`
+			Message    string                           `json:"message"`
+			ReqId      string                           `json:"reqId"`
+			StatusCode AttachUniversalAuth500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateUniversalAuthClientSecretResponse parses an HTTP response from a CreateUniversalAuthClientSecretWithResponse call
+func ParseCreateUniversalAuthClientSecretResponse(rsp *http.Response) (*CreateUniversalAuthClientSecretResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateUniversalAuthClientSecretResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			ClientSecret     string `json:"clientSecret"`
+			ClientSecretData struct {
+				ClientSecretNumUses      *float32           `json:"clientSecretNumUses,omitempty"`
+				ClientSecretNumUsesLimit *float32           `json:"clientSecretNumUsesLimit,omitempty"`
+				ClientSecretPrefix       string             `json:"clientSecretPrefix"`
+				ClientSecretTTL          *float32           `json:"clientSecretTTL,omitempty"`
+				CreatedAt                time.Time          `json:"createdAt"`
+				Description              string             `json:"description"`
+				Id                       string             `json:"id"`
+				IdentityUAId             openapi_types.UUID `json:"identityUAId"`
+				IsClientSecretRevoked    *bool              `json:"isClientSecretRevoked,omitempty"`
+				UpdatedAt                time.Time          `json:"updatedAt"`
+			} `json:"clientSecretData"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                                  `json:"details,omitempty"`
+			Error      string                                       `json:"error"`
+			Message    string                                       `json:"message"`
+			ReqId      string                                       `json:"reqId"`
+			StatusCode CreateUniversalAuthClientSecret400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                       `json:"error"`
+			Message    string                                       `json:"message"`
+			ReqId      string                                       `json:"reqId"`
+			StatusCode CreateUniversalAuthClientSecret401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                  `json:"details,omitempty"`
+			Error      string                                       `json:"error"`
+			Message    string                                       `json:"message"`
+			ReqId      string                                       `json:"reqId"`
+			StatusCode CreateUniversalAuthClientSecret403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                       `json:"error"`
+			Message    string                                       `json:"message"`
+			ReqId      string                                       `json:"reqId"`
+			StatusCode CreateUniversalAuthClientSecret404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                       `json:"error"`
+			Message    interface{}                                  `json:"message,omitempty"`
+			ReqId      string                                       `json:"reqId"`
+			StatusCode CreateUniversalAuthClientSecret422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                       `json:"error"`
+			Message    string                                       `json:"message"`
+			ReqId      string                                       `json:"reqId"`
+			StatusCode CreateUniversalAuthClientSecret500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateAcmeCertificateAuthorityV1Response parses an HTTP response from a CreateAcmeCertificateAuthorityV1WithResponse call
+func ParseCreateAcmeCertificateAuthorityV1Response(rsp *http.Response) (*CreateAcmeCertificateAuthorityV1Response, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateAcmeCertificateAuthorityV1Response{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Configuration struct {
+				// AccountEmail The email address for the ACME Certificate Authority.
+				AccountEmail string `json:"accountEmail"`
+
+				// DirectoryUrl The directory URL for the ACME Certificate Authority.
+				DirectoryUrl string `json:"directoryUrl"`
+
+				// DnsAppConnectionId The ID of the App Connection to use for creating and managing DNS TXT records required for ACME domain validation. This connection must have permissions to create and delete TXT records in your DNS provider (e.g., Route53) for the ACME challenge process.
+				DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+				DnsProviderConfig  struct {
+					// HostedZoneId The hosted zone ID for the ACME Certificate Authority.
+					HostedZoneId string `json:"hostedZoneId"`
+
+					// Provider The DNS provider for the ACME Certificate Authority.
+					Provider CreateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
+				} `json:"dnsProviderConfig"`
+
+				// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+				EabHmacKey *string `json:"eabHmacKey,omitempty"`
+
+				// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+				EabKid *string `json:"eabKid,omitempty"`
+			} `json:"configuration"`
+			EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
+			Id                   openapi_types.UUID                        `json:"id"`
+			Name                 string                                    `json:"name"`
+			ProjectId            string                                    `json:"projectId"`
+			Status               CreateAcmeCertificateAuthorityV1200Status `json:"status"`
+			Type                 CreateAcmeCertificateAuthorityV1200Type   `json:"type"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                                   `json:"details,omitempty"`
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode CreateAcmeCertificateAuthorityV1400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode CreateAcmeCertificateAuthorityV1401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                   `json:"details,omitempty"`
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode CreateAcmeCertificateAuthorityV1403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode CreateAcmeCertificateAuthorityV1404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    interface{}                                   `json:"message,omitempty"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode CreateAcmeCertificateAuthorityV1422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode CreateAcmeCertificateAuthorityV1500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateAcmeCertificateAuthorityV1Response parses an HTTP response from a UpdateAcmeCertificateAuthorityV1WithResponse call
+func ParseUpdateAcmeCertificateAuthorityV1Response(rsp *http.Response) (*UpdateAcmeCertificateAuthorityV1Response, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateAcmeCertificateAuthorityV1Response{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Configuration struct {
+				// AccountEmail The email address for the ACME Certificate Authority.
+				AccountEmail string `json:"accountEmail"`
+
+				// DirectoryUrl The directory URL for the ACME Certificate Authority.
+				DirectoryUrl string `json:"directoryUrl"`
+
+				// DnsAppConnectionId The ID of the App Connection to use for creating and managing DNS TXT records required for ACME domain validation. This connection must have permissions to create and delete TXT records in your DNS provider (e.g., Route53) for the ACME challenge process.
+				DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
+				DnsProviderConfig  struct {
+					// HostedZoneId The hosted zone ID for the ACME Certificate Authority.
+					HostedZoneId string `json:"hostedZoneId"`
+
+					// Provider The DNS provider for the ACME Certificate Authority.
+					Provider UpdateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
+				} `json:"dnsProviderConfig"`
+
+				// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+				EabHmacKey *string `json:"eabHmacKey,omitempty"`
+
+				// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
+				EabKid *string `json:"eabKid,omitempty"`
+			} `json:"configuration"`
+			EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
+			Id                   openapi_types.UUID                        `json:"id"`
+			Name                 string                                    `json:"name"`
+			ProjectId            string                                    `json:"projectId"`
+			Status               UpdateAcmeCertificateAuthorityV1200Status `json:"status"`
+			Type                 UpdateAcmeCertificateAuthorityV1200Type   `json:"type"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                                   `json:"details,omitempty"`
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode UpdateAcmeCertificateAuthorityV1400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode UpdateAcmeCertificateAuthorityV1401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                   `json:"details,omitempty"`
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode UpdateAcmeCertificateAuthorityV1403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode UpdateAcmeCertificateAuthorityV1404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    interface{}                                   `json:"message,omitempty"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode UpdateAcmeCertificateAuthorityV1422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                        `json:"error"`
+			Message    string                                        `json:"message"`
+			ReqId      string                                        `json:"reqId"`
+			StatusCode UpdateAcmeCertificateAuthorityV1500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateInternalCertificateAuthorityV1Response parses an HTTP response from a CreateInternalCertificateAuthorityV1WithResponse call
+func ParseCreateInternalCertificateAuthorityV1Response(rsp *http.Response) (*CreateInternalCertificateAuthorityV1Response, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateInternalCertificateAuthorityV1Response{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Configuration struct {
+				ActiveCaCertId *openapi_types.UUID `json:"activeCaCertId"`
+
+				// CommonName The common name (CN) for the CA.
+				CommonName *string `json:"commonName,omitempty"`
+
+				// Country The country name (C) for the CA.
+				Country *string `json:"country,omitempty"`
+				Dn      *string `json:"dn"`
+
+				// FriendlyName A friendly name for the CA.
+				FriendlyName *string `json:"friendlyName,omitempty"`
+
+				// KeyAlgorithm The type of public key algorithm and size, in bits, of the key pair for the CA; when you create an intermediate CA, you must use a key algorithm supported by the parent CA.
+				KeyAlgorithm CreateInternalCertificateAuthorityV1200ConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+
+				// Locality The locality name for the CA.
+				Locality *string `json:"locality,omitempty"`
+
+				// MaxPathLength The maximum number of intermediate CAs that may follow this CA in the certificate / CA chain. A maxPathLength of -1 implies no path limit on the chain.
+				MaxPathLength *float32 `json:"maxPathLength"`
+
+				// NotAfter The date and time when the CA expires in YYYY-MM-DDTHH:mm:ss.sssZ format.
+				NotAfter *string `json:"notAfter,omitempty"`
+
+				// NotBefore The date and time when the CA becomes valid in YYYY-MM-DDTHH:mm:ss.sssZ format.
+				NotBefore *string `json:"notBefore,omitempty"`
+
+				// Organization The organization (O) for the CA.
+				Organization *string `json:"organization,omitempty"`
+
+				// Ou The organization unit (OU) for the CA.
+				Ou         *string             `json:"ou,omitempty"`
+				ParentCaId *openapi_types.UUID `json:"parentCaId"`
+
+				// Province The state of province name for the CA.
+				Province     *string `json:"province,omitempty"`
+				SerialNumber *string `json:"serialNumber"`
+
+				// Type The type of CA to create.
+				Type CreateInternalCertificateAuthorityV1200ConfigurationType `json:"type"`
+			} `json:"configuration"`
+			EnableDirectIssuance *bool                                         `json:"enableDirectIssuance,omitempty"`
+			Id                   openapi_types.UUID                            `json:"id"`
+			Name                 string                                        `json:"name"`
+			ProjectId            string                                        `json:"projectId"`
+			Status               CreateInternalCertificateAuthorityV1200Status `json:"status"`
+			Type                 CreateInternalCertificateAuthorityV1200Type   `json:"type"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                                       `json:"details,omitempty"`
+			Error      string                                            `json:"error"`
+			Message    string                                            `json:"message"`
+			ReqId      string                                            `json:"reqId"`
+			StatusCode CreateInternalCertificateAuthorityV1400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                            `json:"error"`
+			Message    string                                            `json:"message"`
+			ReqId      string                                            `json:"reqId"`
+			StatusCode CreateInternalCertificateAuthorityV1401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                                       `json:"details,omitempty"`
+			Error      string                                            `json:"error"`
+			Message    string                                            `json:"message"`
+			ReqId      string                                            `json:"reqId"`
+			StatusCode CreateInternalCertificateAuthorityV1403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                            `json:"error"`
+			Message    string                                            `json:"message"`
+			ReqId      string                                            `json:"reqId"`
+			StatusCode CreateInternalCertificateAuthorityV1404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                            `json:"error"`
+			Message    interface{}                                       `json:"message,omitempty"`
+			ReqId      string                                            `json:"reqId"`
+			StatusCode CreateInternalCertificateAuthorityV1422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                            `json:"error"`
+			Message    string                                            `json:"message"`
+			ReqId      string                                            `json:"reqId"`
+			StatusCode CreateInternalCertificateAuthorityV1500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateCertificatePolicyResponse parses an HTTP response from a CreateCertificatePolicyWithResponse call
+func ParseCreateCertificatePolicyResponse(rsp *http.Response) (*CreateCertificatePolicyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCertificatePolicyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			CertificatePolicy struct {
+				Algorithms *struct {
+					KeyAlgorithm *[]string `json:"keyAlgorithm,omitempty"`
+					Signature    *[]string `json:"signature,omitempty"`
+				} `json:"algorithms,omitempty"`
+				BasicConstraints *struct {
+					IsCA          *CreateCertificatePolicy200CertificatePolicyBasicConstraintsIsCA `json:"isCA,omitempty"`
+					MaxPathLength *int                                                             `json:"maxPathLength,omitempty"`
+				} `json:"basicConstraints"`
+				CreatedAt         time.Time `json:"createdAt"`
+				Description       *string   `json:"description"`
+				ExtendedKeyUsages *struct {
+					Allowed  *[]CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesAllowed  `json:"allowed,omitempty"`
+					Denied   *[]CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesDenied   `json:"denied,omitempty"`
+					Required *[]CreateCertificatePolicy200CertificatePolicyExtendedKeyUsagesRequired `json:"required,omitempty"`
+				} `json:"extendedKeyUsages,omitempty"`
+				Id        openapi_types.UUID `json:"id"`
+				KeyUsages *struct {
+					Allowed  *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesAllowed  `json:"allowed,omitempty"`
+					Denied   *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesDenied   `json:"denied,omitempty"`
+					Required *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesRequired `json:"required,omitempty"`
+				} `json:"keyUsages,omitempty"`
+				Name      string             `json:"name"`
+				ProjectId openapi_types.UUID `json:"projectId"`
+				Sans      *[]struct {
+					Allowed  *[]string                                           `json:"allowed,omitempty"`
+					Denied   *[]string                                           `json:"denied,omitempty"`
+					Required *[]string                                           `json:"required,omitempty"`
+					Type     CreateCertificatePolicy200CertificatePolicySansType `json:"type"`
+				} `json:"sans,omitempty"`
+				Subject *[]struct {
+					Allowed  *[]string                                              `json:"allowed,omitempty"`
+					Denied   *[]string                                              `json:"denied,omitempty"`
+					Required *[]string                                              `json:"required,omitempty"`
+					Type     CreateCertificatePolicy200CertificatePolicySubjectType `json:"type"`
+				} `json:"subject,omitempty"`
+				UpdatedAt time.Time `json:"updatedAt"`
+				Validity  *struct {
+					Max *string `json:"max,omitempty"`
+				} `json:"validity,omitempty"`
+			} `json:"certificatePolicy"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                          `json:"details,omitempty"`
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateCertificatePolicy400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateCertificatePolicy401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                          `json:"details,omitempty"`
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateCertificatePolicy403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateCertificatePolicy404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    interface{}                          `json:"message,omitempty"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateCertificatePolicy422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateCertificatePolicy500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateCertificateProfileResponse parses an HTTP response from a CreateCertificateProfileWithResponse call
+func ParseCreateCertificateProfileResponse(rsp *http.Response) (*CreateCertificateProfileResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCertificateProfileResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			CertificateProfile struct {
+				AcmeConfigId        *openapi_types.UUID `json:"acmeConfigId"`
+				ApiConfigId         *openapi_types.UUID `json:"apiConfigId"`
+				CaId                *openapi_types.UUID `json:"caId"`
+				CertificatePolicyId openapi_types.UUID  `json:"certificatePolicyId"`
+				CreatedAt           time.Time           `json:"createdAt"`
+				Defaults            *struct {
+					BasicConstraints *struct {
+						IsCA       bool     `json:"isCA"`
+						PathLength *float32 `json:"pathLength,omitempty"`
+					} `json:"basicConstraints,omitempty"`
+					CommonName         *string                                                                   `json:"commonName,omitempty"`
+					Country            *string                                                                   `json:"country,omitempty"`
+					ExtendedKeyUsages  *[]CreateCertificateProfile200CertificateProfileDefaultsExtendedKeyUsages `json:"extendedKeyUsages,omitempty"`
+					KeyAlgorithm       *CreateCertificateProfile200CertificateProfileDefaultsKeyAlgorithm        `json:"keyAlgorithm,omitempty"`
+					KeyUsages          *[]CreateCertificateProfile200CertificateProfileDefaultsKeyUsages         `json:"keyUsages,omitempty"`
+					Locality           *string                                                                   `json:"locality,omitempty"`
+					Organization       *string                                                                   `json:"organization,omitempty"`
+					OrganizationalUnit *string                                                                   `json:"organizationalUnit,omitempty"`
+					SignatureAlgorithm *CreateCertificateProfile200CertificateProfileDefaultsSignatureAlgorithm  `json:"signatureAlgorithm,omitempty"`
+					State              *string                                                                   `json:"state,omitempty"`
+					TtlDays            *float32                                                                  `json:"ttlDays,omitempty"`
+				} `json:"defaults"`
+				Description     *string                                                          `json:"description"`
+				EnrollmentType  string                                                           `json:"enrollmentType"`
+				EstConfigId     *openapi_types.UUID                                              `json:"estConfigId"`
+				ExternalConfigs *CreateCertificateProfile_200_CertificateProfile_ExternalConfigs `json:"externalConfigs"`
+				Id              openapi_types.UUID                                               `json:"id"`
+				IssuerType      *string                                                          `json:"issuerType,omitempty"`
+				ProjectId       string                                                           `json:"projectId"`
+				Slug            string                                                           `json:"slug"`
+				UpdatedAt       time.Time                                                        `json:"updatedAt"`
+			} `json:"certificateProfile"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateCertificateProfile400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateCertificateProfile401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateCertificateProfile403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateCertificateProfile404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    interface{}                           `json:"message,omitempty"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateCertificateProfile422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateCertificateProfile500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateMachineIdentityResponse parses an HTTP response from a CreateMachineIdentityWithResponse call
 func ParseCreateMachineIdentityResponse(rsp *http.Response) (*CreateMachineIdentityResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4309,6 +7971,141 @@ func ParseCreateMachineIdentityResponse(rsp *http.Response) (*CreateMachineIdent
 	return response, nil
 }
 
+// ParseCreatePostgresPamAccountResponse parses an HTTP response from a CreatePostgresPamAccountWithResponse call
+func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresPamAccountResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePostgresPamAccountResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Account struct {
+				CreatedAt   time.Time `json:"createdAt"`
+				Credentials struct {
+					Username string `json:"username"`
+				} `json:"credentials"`
+				Description                  *string             `json:"description"`
+				DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+				FolderId                     *openapi_types.UUID `json:"folderId"`
+				Id                           openapi_types.UUID  `json:"id"`
+				InternalMetadata             interface{}         `json:"internalMetadata"`
+				LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
+				LastRotationMessage          *string             `json:"lastRotationMessage"`
+				Metadata                     *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name       string `json:"name"`
+				ProjectId  string `json:"projectId"`
+				RequireMfa *bool  `json:"requireMfa"`
+				Resource   struct {
+					Id                            openapi_types.UUID `json:"id"`
+					Name                          string             `json:"name"`
+					ResourceType                  string             `json:"resourceType"`
+					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+				} `json:"resource"`
+				ResourceId              openapi_types.UUID                             `json:"resourceId"`
+				ResourceType            CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
+				RotationEnabled         *bool                                          `json:"rotationEnabled,omitempty"`
+				RotationIntervalSeconds *float32                                       `json:"rotationIntervalSeconds"`
+				RotationStatus          *string                                        `json:"rotationStatus"`
+				UpdatedAt               time.Time                                      `json:"updatedAt"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePostgresPamAccount400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePostgresPamAccount401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePostgresPamAccount403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePostgresPamAccount404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    interface{}                           `json:"message,omitempty"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePostgresPamAccount422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePostgresPamAccount500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateKubernetesPamResourceResponse parses an HTTP response from a CreateKubernetesPamResourceWithResponse call
 func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubernetesPamResourceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4326,15 +8123,22 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Resource struct {
-				ConnectionDetails struct {
+				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+				ConnectionDetails  struct {
 					SslCertificate        *string `json:"sslCertificate,omitempty"`
 					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 					Url                   string  `json:"url"`
 				} `json:"connectionDetails"`
-				CreatedAt                  time.Time                                                            `json:"createdAt"`
-				EncryptedResourceMetadata  interface{}                                                          `json:"encryptedResourceMetadata"`
-				GatewayId                  *openapi_types.UUID                                                  `json:"gatewayId"`
-				Id                         openapi_types.UUID                                                   `json:"id"`
+				CreatedAt                 time.Time           `json:"createdAt"`
+				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+				Id                        openapi_types.UUID  `json:"id"`
+				Metadata                  *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
 				Name                       string                                                               `json:"name"`
 				ProjectId                  string                                                               `json:"projectId"`
 				ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
@@ -4426,6 +8230,135 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 	return response, nil
 }
 
+// ParseCreatePostgresPamResourceResponse parses an HTTP response from a CreatePostgresPamResourceWithResponse call
+func ParseCreatePostgresPamResourceResponse(rsp *http.Response) (*CreatePostgresPamResourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePostgresPamResourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Resource struct {
+				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+				ConnectionDetails  struct {
+					Database              string  `json:"database"`
+					Host                  string  `json:"host"`
+					Port                  float32 `json:"port"`
+					SslCertificate        *string `json:"sslCertificate,omitempty"`
+					SslEnabled            bool    `json:"sslEnabled"`
+					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				} `json:"connectionDetails"`
+				CreatedAt                 time.Time           `json:"createdAt"`
+				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+				Id                        openapi_types.UUID  `json:"id"`
+				Metadata                  *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name                       string                                           `json:"name"`
+				ProjectId                  string                                           `json:"projectId"`
+				ResourceType               CreatePostgresPamResource200ResourceResourceType `json:"resourceType"`
+				RotationAccountCredentials *struct {
+					Username string `json:"username"`
+				} `json:"rotationAccountCredentials"`
+				UpdatedAt time.Time `json:"updatedAt"`
+			} `json:"resource"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                            `json:"details,omitempty"`
+			Error      string                                 `json:"error"`
+			Message    string                                 `json:"message"`
+			ReqId      string                                 `json:"reqId"`
+			StatusCode CreatePostgresPamResource400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                 `json:"error"`
+			Message    string                                 `json:"message"`
+			ReqId      string                                 `json:"reqId"`
+			StatusCode CreatePostgresPamResource401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                            `json:"details,omitempty"`
+			Error      string                                 `json:"error"`
+			Message    string                                 `json:"message"`
+			ReqId      string                                 `json:"reqId"`
+			StatusCode CreatePostgresPamResource403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                 `json:"error"`
+			Message    string                                 `json:"message"`
+			ReqId      string                                 `json:"reqId"`
+			StatusCode CreatePostgresPamResource404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                 `json:"error"`
+			Message    interface{}                            `json:"message,omitempty"`
+			ReqId      string                                 `json:"reqId"`
+			StatusCode CreatePostgresPamResource422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                 `json:"error"`
+			Message    string                                 `json:"message"`
+			ReqId      string                                 `json:"reqId"`
+			StatusCode CreatePostgresPamResource500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateRedisPamResourceResponse parses an HTTP response from a CreateRedisPamResourceWithResponse call
 func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamResourceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4443,17 +8376,24 @@ func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamRes
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Resource struct {
-				ConnectionDetails struct {
+				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
+				ConnectionDetails  struct {
 					Host                  string  `json:"host"`
 					Port                  float32 `json:"port"`
 					SslCertificate        *string `json:"sslCertificate,omitempty"`
 					SslEnabled            bool    `json:"sslEnabled"`
 					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 				} `json:"connectionDetails"`
-				CreatedAt                  time.Time                                     `json:"createdAt"`
-				EncryptedResourceMetadata  interface{}                                   `json:"encryptedResourceMetadata"`
-				GatewayId                  *openapi_types.UUID                           `json:"gatewayId"`
-				Id                         openapi_types.UUID                            `json:"id"`
+				CreatedAt                 time.Time           `json:"createdAt"`
+				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
+				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
+				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
+				Id                        openapi_types.UUID  `json:"id"`
+				Metadata                  *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
 				Name                       string                                        `json:"name"`
 				ProjectId                  string                                        `json:"projectId"`
 				ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
@@ -4564,13 +8504,14 @@ func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, err
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Project struct {
-				UnderscoreId           string    `json:"_id"`
-				AuditLogsRetentionDays *float32  `json:"auditLogsRetentionDays"`
-				AutoCapitalization     *bool     `json:"autoCapitalization"`
-				CreatedAt              time.Time `json:"createdAt"`
-				DefaultProduct         *string   `json:"defaultProduct"`
-				Description            *string   `json:"description"`
-				Environments           []struct {
+				UnderscoreId                                string    `json:"_id"`
+				AuditLogsRetentionDays                      *float32  `json:"auditLogsRetentionDays"`
+				AutoCapitalization                          *bool     `json:"autoCapitalization"`
+				CreatedAt                                   time.Time `json:"createdAt"`
+				DefaultProduct                              *string   `json:"defaultProduct"`
+				Description                                 *string   `json:"description"`
+				EnforceEncryptedSecretManagerSecretMetadata *bool     `json:"enforceEncryptedSecretManagerSecretMetadata"`
+				Environments                                []struct {
 					Id   string `json:"id"`
 					Name string `json:"name"`
 					Slug string `json:"slug"`
@@ -5036,8 +8977,9 @@ func ParseListSecretsV4Response(rsp *http.Response) (*ListSecretsV4Response, err
 					SecretComment   string              `json:"secretComment"`
 					SecretKey       string              `json:"secretKey"`
 					SecretMetadata  *[]struct {
-						Key   string  `json:"key"`
-						Value *string `json:"value,omitempty"`
+						IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+						Key         string  `json:"key"`
+						Value       *string `json:"value,omitempty"`
 					} `json:"secretMetadata,omitempty"`
 					SecretReminderNote       *string  `json:"secretReminderNote"`
 					SecretReminderRepeatDays *float32 `json:"secretReminderRepeatDays"`
@@ -5066,8 +9008,9 @@ func ParseListSecretsV4Response(rsp *http.Response) (*ListSecretsV4Response, err
 				SecretComment   string              `json:"secretComment"`
 				SecretKey       string              `json:"secretKey"`
 				SecretMetadata  *[]struct {
-					Key   string  `json:"key"`
-					Value *string `json:"value,omitempty"`
+					IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+					Key         string  `json:"key"`
+					Value       *string `json:"value,omitempty"`
 				} `json:"secretMetadata,omitempty"`
 				SecretPath               *string  `json:"secretPath,omitempty"`
 				SecretReminderNote       *string  `json:"secretReminderNote"`
@@ -5306,8 +9249,9 @@ func ParseGetSecretByNameV4Response(rsp *http.Response) (*GetSecretByNameV4Respo
 				SecretComment   string              `json:"secretComment"`
 				SecretKey       string              `json:"secretKey"`
 				SecretMetadata  *[]struct {
-					Key   string  `json:"key"`
-					Value *string `json:"value,omitempty"`
+					IsEncrypted *bool   `json:"isEncrypted,omitempty"`
+					Key         string  `json:"key"`
+					Value       *string `json:"value,omitempty"`
 				} `json:"secretMetadata,omitempty"`
 				SecretPath               string   `json:"secretPath"`
 				SecretReminderNote       *string  `json:"secretReminderNote"`

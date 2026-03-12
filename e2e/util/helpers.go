@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -36,14 +37,55 @@ type InfisicalService struct {
 	provisionResult *client.ProvisionResult
 }
 
-func NewInfisicalService() *InfisicalService {
-	return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
+type InfisicalServiceOption func(*infisicalServiceConfig)
+
+type infisicalServiceConfig struct {
+	withAcme bool
+}
+
+func WithAcme() InfisicalServiceOption {
+	return func(c *infisicalServiceConfig) {
+		c.withAcme = true
+	}
+}
+
+func NewInfisicalService(opts ...InfisicalServiceOption) *InfisicalService {
+	cfg := &infisicalServiceConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if !cfg.withAcme {
+		return &InfisicalService{Stack: infisical.NewStack(infisical.WithDefaultStackFromEnv())}
+	}
+
+	backendOpts := infisical.BackendOptionsFromEnv()
+	backendOpts.Dockerfile = "Dockerfile.dev"
+	svc := &InfisicalService{
+		Stack: infisical.NewStack(
+			infisical.WithDbService(),
+			infisical.WithRedisService(),
+			infisical.WithPebbleService(),
+			infisical.WithBackendService(backendOpts),
+		),
+	}
+	svc.WithBackendEnvironment(types.NewMappingWithEquals([]string{
+		"ACME_DEVELOPMENT_MODE=true",
+		"ACME_SKIP_UPSTREAM_VALIDATION=true",
+		"BDD_NOCK_API_ENABLED=true",
+		"NODE_TLS_REJECT_UNAUTHORIZED=0",
+	}))
+	return svc
+}
+
+func PebbleInternalUrl() string {
+	return "https://pebble:14000/dir"
 }
 
 func (s *InfisicalService) WithBackendEnvironment(environment types.MappingWithEquals) *InfisicalService {
 	backend := s.Stack.Project.Services["backend"]
 	backend.Environment = backend.Environment.OverrideBy(environment)
-	fmt.Print(s.Stack.Project.Services["backend"].Environment)
+	s.Stack.Project.Services["backend"] = backend
 	return s
 }
 
@@ -216,19 +258,62 @@ type Command struct {
 	functionCallErrMu  sync.Mutex
 }
 
+// findModuleRoot walks up from the current directory to find the directory
+// containing go.mod, which is the e2e module root. Returns "" if not found.
+func findModuleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// resolveExecutablePath resolves a potentially relative executable path.
+// Since go test sets the working directory to the test package directory
+// (e.g. e2e/pam/), but .env paths are relative to the e2e module root,
+// we try the path as-is first, then resolve it relative to the module root.
+func resolveExecutablePath(execPath string) string {
+	if filepath.IsAbs(execPath) {
+		return execPath
+	}
+	// Try as-is from current working directory
+	if validateExecutable(execPath) == nil {
+		return execPath
+	}
+	// Try relative to the module root (e2e/)
+	if root := findModuleRoot(); root != "" {
+		candidate := filepath.Join(root, execPath)
+		if validateExecutable(candidate) == nil {
+			return candidate
+		}
+	}
+	// Return original path so the caller gets a meaningful error
+	return execPath
+}
+
 func findExecutable(t *testing.T) string {
 	// First, check for INFISICAL_CLI_EXECUTABLE environment variable
 	envExec := os.Getenv("INFISICAL_CLI_EXECUTABLE")
 	if envExec != "" {
-		if err := validateExecutable(envExec); err != nil {
+		resolved := resolveExecutablePath(envExec)
+		if err := validateExecutable(resolved); err != nil {
 			t.Fatalf("INFISICAL_CLI_EXECUTABLE is set to '%s' but the executable cannot be found or is not executable: %v\n"+
 				"Please ensure the path is correct and the file has execute permissions.", envExec, err)
 		}
-		return envExec
+		return resolved
 	}
 
 	// Fall back to default path
-	defaultPath := "./infisical-merge"
+	defaultPath := resolveExecutablePath("./infisical-merge")
 	if err := validateExecutable(defaultPath); err != nil {
 		t.Fatalf("Cannot find executable at default path '%s': %v\n"+
 			"Please either:\n"+
@@ -395,6 +480,14 @@ func (c *Command) Stop() {
 		if c.functionCallCancel != nil {
 			c.functionCallCancel()
 		}
+
+		if c.functionCallDone != nil {
+			select {
+			case <-c.functionCallDone:
+			case <-time.After(10 * time.Second):
+			}
+		}
+
 		// Reset logger to use os.Stderr before closing the file
 		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
 		// Reset RootCmd outputs to default

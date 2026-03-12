@@ -24,4 +24,13 @@ output-options:
     - createSecretV4
     - getSecretByNameV4
     - listSecretsV4
-
+    - createInternalCertificateAuthorityV1
+    - createAcmeCertificateAuthorityV1
+    - updateAcmeCertificateAuthorityV1
+    - createCertificatePolicy
+    - createCertificateProfile
+    - attachUniversalAuth
+    - createUniversalAuthClientSecret
+    - createCloudflareAppConnection
+    - createPostgresPamResource
+    - createPostgresPamAccount
