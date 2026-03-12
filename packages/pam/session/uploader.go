@@ -24,6 +24,7 @@ var ErrSessionFileNotFound = errors.New("session file not found")
 const (
 	ResourceTypePostgres   = "postgres"
 	ResourceTypeMysql      = "mysql"
+	ResourceTypeMssql      = "mssql"
 	ResourceTypeRedis      = "redis"
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
@@ -55,7 +56,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeKubernetes)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 
