@@ -37,20 +37,29 @@ func (p *MssqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 
 	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL PAM session started")
 
-	// Connect to backend
-	serverConn, err := net.Dial("tcp", p.config.TargetAddr)
+	// === PHASE 1: Handle client handshake (proxy acts as MSSQL server) ===
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Starting client handshake...")
+	if err := p.handleClientHandshake(clientConn); err != nil {
+		return fmt.Errorf("client handshake failed: %w", err)
+	}
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Client handshake completed")
+
+	// === PHASE 2: Connect to server and authenticate (proxy acts as MSSQL client) ===
+	serverConn, loginResponse, err := p.connectAndAuthenticateToServer()
 	if err != nil {
-		return fmt.Errorf("failed to connect to server: %w", err)
+		return fmt.Errorf("server connection failed: %w", err)
 	}
 	defer serverConn.Close()
 
-	// Handle PRELOGIN and LOGIN
-	serverConn, err = p.handleStartup(clientConn, serverConn)
-	if err != nil {
-		return fmt.Errorf("startup failed: %w", err)
+	// === PHASE 3: Forward server's login response to client ===
+	for _, pkt := range loginResponse {
+		if err := pkt.Write(clientConn); err != nil {
+			return fmt.Errorf("forward login response to client: %w", err)
+		}
 	}
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Forwarded login response to client")
 
-	// Proxy traffic
+	// === PHASE 4: Proxy traffic - just pipe bytes ===
 	errCh := make(chan error, 2)
 	go p.proxyToServer(clientConn, serverConn, errCh)
 	go p.proxyToClient(serverConn, clientConn, errCh)
@@ -67,136 +76,172 @@ func (p *MssqlProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	return nil
 }
 
-func (p *MssqlProxy) handleStartup(clientConn, serverConn net.Conn) (net.Conn, error) {
+// handleClientHandshake handles the client's PRELOGIN and LOGIN7, responding as a server
+func (p *MssqlProxy) handleClientHandshake(clientConn net.Conn) error {
 	// 1. Read client PRELOGIN
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Waiting for client PRELOGIN...")
 	clientPrelogin, err := ReadAllPackets(clientConn)
 	if err != nil {
-		return nil, fmt.Errorf("read client prelogin: %w", err)
+		return fmt.Errorf("read client prelogin: %w", err)
 	}
 	if len(clientPrelogin) == 0 || clientPrelogin[0].Type != PacketTypePrelogin {
-		return nil, fmt.Errorf("expected PRELOGIN from client")
+		return fmt.Errorf("expected PRELOGIN from client, got 0x%02X", clientPrelogin[0].Type)
 	}
 
-	// Forward to server
-	for _, pkt := range clientPrelogin {
-		if err := pkt.Write(serverConn); err != nil {
-			return nil, fmt.Errorf("forward prelogin: %w", err)
-		}
-	}
-
-	// 2. Read server PRELOGIN response
-	serverPrelogin, err := ReadAllPackets(serverConn)
-	if err != nil {
-		return nil, fmt.Errorf("read server prelogin: %w", err)
-	}
-
-	// Check for unsupported features in client PRELOGIN
+	// Check for unsupported features
 	clientPayload := CombinePayloads(clientPrelogin)
 	if err := CheckPreloginSupported(clientPayload); err != nil {
-		return nil, err
+		return err
 	}
 
-	// Check if TLS required
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Received client PRELOGIN")
+
+	// 2. Send our own PRELOGIN response (no encryption)
+	preloginResp := BuildPreloginResponse(EncryptNotSup)
+	respPkt := &TDSPacket{
+		Type:     PacketTypeTabularResult,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  preloginResp,
+	}
+	if err := respPkt.Write(clientConn); err != nil {
+		return fmt.Errorf("send prelogin response: %w", err)
+	}
+
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Sent PRELOGIN response (no encryption)")
+
+	// 3. Read client LOGIN7
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Waiting for client LOGIN7...")
+	loginPackets, err := ReadAllPackets(clientConn)
+	if err != nil {
+		return fmt.Errorf("read login: %w", err)
+	}
+	if len(loginPackets) == 0 {
+		return fmt.Errorf("no login packet received")
+	}
+
+	if loginPackets[0].Type == PacketTypeSSPI {
+		return fmt.Errorf("Windows/SSPI authentication is not supported; use SQL authentication")
+	}
+	if loginPackets[0].Type != PacketTypeLogin7 {
+		return fmt.Errorf("expected LOGIN7 from client, got packet type 0x%02X", loginPackets[0].Type)
+	}
+
+	// Parse LOGIN7 to validate (we don't use client's credentials)
+	loginPayload := CombinePayloads(loginPackets)
+	loginMsg, err := ParseLogin7(loginPayload)
+	if err != nil {
+		return fmt.Errorf("parse login: %w", err)
+	}
+
+	if err := CheckLogin7Supported(loginMsg); err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Str("clientUser", loginMsg.Username).
+		Msg("Received client LOGIN7")
+
+	return nil
+}
+
+// connectAndAuthenticateToServer connects to the real server and authenticates with injected credentials
+// Returns the server connection and the login response to forward to client
+func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, error) {
+	// Connect to backend
+	serverConn, err := net.Dial("tcp", p.config.TargetAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial server: %w", err)
+	}
+
+	// 1. Send our PRELOGIN to server
+	preloginReq := BuildPreloginRequest(EncryptNotSup)
+	preloginPkt := &TDSPacket{
+		Type:     PacketTypePrelogin,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  preloginReq,
+	}
+	if err := preloginPkt.Write(serverConn); err != nil {
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("send prelogin to server: %w", err)
+	}
+
+	// 2. Read server's PRELOGIN response
+	serverPrelogin, err := ReadAllPackets(serverConn)
+	if err != nil {
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("read server prelogin: %w", err)
+	}
+
 	serverPayload := CombinePayloads(serverPrelogin)
 	serverEnc := GetPreloginEncryption(serverPayload)
-	needTLS := serverEnc == EncryptOn || serverEnc == EncryptReq
 
-	// Forward to client
-	for _, pkt := range serverPrelogin {
-		if err := pkt.Write(clientConn); err != nil {
-			return nil, fmt.Errorf("forward prelogin response: %w", err)
-		}
-	}
+	log.Debug().
+		Str("sessionID", p.config.SessionID).
+		Uint8("serverEnc", serverEnc).
+		Msg("Received server PRELOGIN response")
 
-	// 3. TLS handshake with server if needed
-	if needTLS {
+	// 3. Handle TLS if server requires it
+	if serverEnc == EncryptOn || serverEnc == EncryptReq {
 		if p.config.TLSConfig == nil {
-			return nil, fmt.Errorf("server requires TLS but no TLS configuration provided")
+			serverConn.Close()
+			return nil, nil, fmt.Errorf("server requires TLS but no TLS configuration provided")
 		}
 		tlsConn := tls.Client(serverConn, p.config.TLSConfig)
 		if err := tlsConn.Handshake(); err != nil {
-			return nil, fmt.Errorf("TLS handshake: %w", err)
+			serverConn.Close()
+			return nil, nil, fmt.Errorf("TLS handshake: %w", err)
 		}
 		serverConn = tlsConn
 		log.Debug().Str("sessionID", p.config.SessionID).Msg("TLS established with server")
 	}
 
-	// 4. Read client LOGIN7 (or SSPI which we don't support)
-	loginPackets, err := ReadAllPackets(clientConn)
-	if err != nil {
-		return nil, fmt.Errorf("read login: %w", err)
-	}
-	if len(loginPackets) == 0 {
-		return nil, fmt.Errorf("no login packet received")
-	}
-
-	// Reject SSPI packet type (Windows auth continuation)
-	if loginPackets[0].Type == PacketTypeSSPI {
-		return nil, fmt.Errorf("Windows/SSPI authentication is not supported; use SQL authentication")
-	}
-	if loginPackets[0].Type != PacketTypeLogin7 {
-		return nil, fmt.Errorf("expected LOGIN7 from client, got packet type 0x%02X", loginPackets[0].Type)
+	// 4. Send LOGIN7 with injected credentials
+	loginMsg := &Login7Message{
+		Username: p.config.InjectUsername,
+		Password: p.config.InjectPassword,
+		Database: p.config.InjectDatabase,
+		AppName:  "Infisical PAM Proxy",
+		Hostname: "infisical-proxy",
 	}
 
-	// Parse and modify LOGIN7
-	loginPayload := CombinePayloads(loginPackets)
-	loginMsg, err := ParseLogin7(loginPayload)
-	if err != nil {
-		return nil, fmt.Errorf("parse login: %w", err)
+	loginPkt := &TDSPacket{
+		Type:     PacketTypeLogin7,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  loginMsg.Encode(),
 	}
-
-	// Check for unsupported auth methods in LOGIN7
-	if err := CheckLogin7Supported(loginMsg); err != nil {
-		return nil, err
+	if err := loginPkt.Write(serverConn); err != nil {
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("send login to server: %w", err)
 	}
 
 	log.Debug().
 		Str("sessionID", p.config.SessionID).
-		Str("origUser", loginMsg.Username).
-		Msg("Injecting credentials")
+		Str("user", p.config.InjectUsername).
+		Msg("Sent LOGIN7 to server")
 
-	// Inject our credentials
-	loginMsg.Username = p.config.InjectUsername
-	loginMsg.Password = p.config.InjectPassword
-	if p.config.InjectDatabase != "" {
-		loginMsg.Database = p.config.InjectDatabase
-	}
-
-	// Send modified LOGIN7
-	newLogin := &TDSPacket{
-		Type:     PacketTypeLogin7,
-		Status:   StatusEOM,
-		PacketID: loginPackets[0].PacketID,
-		Payload:  loginMsg.Encode(),
-	}
-	if err := newLogin.Write(serverConn); err != nil {
-		return nil, fmt.Errorf("send login: %w", err)
-	}
-
-	// 5. Read login response
+	// 5. Read login response - forward to client
 	response, err := ReadAllPackets(serverConn)
 	if err != nil {
-		return nil, fmt.Errorf("read login response: %w", err)
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("read login response: %w", err)
 	}
 
-	// Forward response to client
-	for _, pkt := range response {
-		if err := pkt.Write(clientConn); err != nil {
-			return nil, fmt.Errorf("forward login response: %w", err)
-		}
-	}
-
-	// Check for success
 	respPayload := CombinePayloads(response)
 	if ContainsToken(respPayload, TokenError) {
-		return nil, fmt.Errorf("authentication failed")
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("server authentication failed")
 	}
 	if !ContainsToken(respPayload, TokenLoginAck) {
-		return nil, fmt.Errorf("no login ack received")
+		serverConn.Close()
+		return nil, nil, fmt.Errorf("no login ack from server")
 	}
 
-	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL authentication successful")
-	return serverConn, nil
+	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL server authentication successful")
+	return serverConn, response, nil
 }
 
 func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
@@ -206,7 +251,7 @@ func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
 		}
 	}()
 
-	var sqlBatchBuf []byte // accumulate multi-packet SQL_BATCH
+	var sqlBatchBuf []byte
 
 	for {
 		pkt, err := ReadPacket(client)
@@ -215,12 +260,11 @@ func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
 			return
 		}
 
+		// Only allow packet types that can be session recorded
 		switch pkt.Type {
 		case PacketTypeSQLBatch:
-			// Accumulate payload across packets
+			// SQL queries - log them
 			sqlBatchBuf = append(sqlBatchBuf, pkt.Payload...)
-
-			// Log when we have the complete message
 			if pkt.IsEOM() {
 				sql := ExtractSQL(sqlBatchBuf)
 				if sql != "" {
@@ -230,7 +274,7 @@ func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
 						Output:    "OK",
 					})
 				}
-				sqlBatchBuf = nil // reset for next query
+				sqlBatchBuf = nil
 			}
 
 		case PacketTypeRPCRequest:
@@ -254,11 +298,10 @@ func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
 			return
 
 		default:
-			log.Warn().Str("sessionID", p.config.SessionID).Uint8("packetType", pkt.Type).Msg("Unsupported packet type")
-			errCh <- fmt.Errorf("unsupported packet type: 0x%02X", pkt.Type)
-			return
+			// Allow other packet types (like TabularResult for responses) to pass through
 		}
 
+		// Forward packet to server
 		if err := pkt.Write(server); err != nil {
 			errCh <- err
 			return

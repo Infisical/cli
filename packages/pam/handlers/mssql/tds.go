@@ -11,26 +11,27 @@ const (
 	TDSHeaderSize   = 8
 	Login7FixedSize = 94
 
-	// Packet types - client to server
-	PacketTypeSQLBatch    = 0x01 // Supported - logged
-	PacketTypeRPCRequest  = 0x03 // Not supported - cannot reliably extract procedure name/params
-	PacketTypeAttention   = 0x06 // Not supported - cancel signal
-	PacketTypeBulkLoad    = 0x07 // Not supported - bulk insert
-	PacketTypeTransMgrReq = 0x0E // Not supported - distributed transactions
-	PacketTypeLogin7      = 0x10 // Supported - auth
-	PacketTypeSSPI        = 0x11 // Not supported - Windows auth
-	PacketTypePrelogin    = 0x12 // Supported - handshake
-
-	// Packet types - server to client
+	// Packet types - supported (can be session recorded)
+	PacketTypeSQLBatch      = 0x01
 	PacketTypeTabularResult = 0x04
+	PacketTypeLogin7        = 0x10
+	PacketTypeSSPI          = 0x11
+	PacketTypePrelogin      = 0x12
+
+	// Packet types - unsupported (cannot reliably record)
+	PacketTypeRPCRequest  = 0x03 // Stored procedures - complex binary format
+	PacketTypeAttention   = 0x06 // Cancel signal
+	PacketTypeBulkLoad    = 0x07 // Bulk insert
+	PacketTypeTransMgrReq = 0x0E // Distributed transactions
 
 	// Status flags
 	StatusEOM = 0x01
 
 	// Encryption options
-	EncryptOff = 0x00
-	EncryptOn  = 0x01
-	EncryptReq = 0x03
+	EncryptOff    = 0x00
+	EncryptOn     = 0x01
+	EncryptNotSup = 0x02
+	EncryptReq    = 0x03
 
 	// Token types
 	TokenLoginAck = 0xAD
@@ -38,12 +39,12 @@ const (
 
 	// PRELOGIN options
 	PreloginEncryption = 0x01
-	PreloginFedAuthReq = 0x06 // Federated auth - not supported
+	PreloginFedAuthReq = 0x06
 	PreloginTerminator = 0xFF
 
 	// Safety limits
-	MaxPacketSize = 32767 + TDSHeaderSize // TDS max packet size
-	MaxPackets    = 100                   // Max packets per message (prevent infinite loops)
+	MaxPacketSize = 32767 + TDSHeaderSize
+	MaxPackets    = 100
 )
 
 // TDSPacket represents a TDS packet
@@ -162,6 +163,56 @@ func GetPreloginEncryption(payload []byte) uint8 {
 	return EncryptOff
 }
 
+// BuildPreloginRequest builds a PRELOGIN packet payload for client mode
+func BuildPreloginRequest(encryption uint8) []byte {
+	// PRELOGIN format:
+	// Options: token(1) + offset(2) + length(2) per option, terminated by 0xFF
+	// Data: option values at specified offsets
+	//
+	// We include: VERSION (0x00), ENCRYPTION (0x01), TERMINATOR (0xFF)
+
+	// Header: 2 options + terminator = 5 + 5 + 1 = 11 bytes
+	// Data: VERSION (6 bytes) + ENCRYPTION (1 byte) = 7 bytes
+	// Total: 18 bytes
+
+	const headerSize = 11
+	const dataStart = headerSize
+
+	buf := make([]byte, 18)
+
+	// Option 0: VERSION at offset 11, length 6
+	buf[0] = 0x00                                     // VERSION token
+	binary.BigEndian.PutUint16(buf[1:3], dataStart)   // offset
+	binary.BigEndian.PutUint16(buf[3:5], 6)           // length
+
+	// Option 1: ENCRYPTION at offset 17, length 1
+	buf[5] = PreloginEncryption                       // ENCRYPTION token
+	binary.BigEndian.PutUint16(buf[6:8], dataStart+6) // offset
+	binary.BigEndian.PutUint16(buf[8:10], 1)          // length
+
+	// Terminator
+	buf[10] = PreloginTerminator
+
+	// Data: VERSION = 0x0F 0x00 0x07 0xD0 0x00 0x00 (SQL Server 2019-ish)
+	buf[11] = 0x0F
+	buf[12] = 0x00
+	buf[13] = 0x07
+	buf[14] = 0xD0
+	buf[15] = 0x00
+	buf[16] = 0x00
+
+	// Data: ENCRYPTION
+	buf[17] = encryption
+
+	return buf
+}
+
+// BuildPreloginResponse builds a PRELOGIN response payload for server mode
+func BuildPreloginResponse(encryption uint8) []byte {
+	// Same format as request
+	return BuildPreloginRequest(encryption)
+}
+
 // CheckPreloginSupported returns an error if PRELOGIN contains unsupported options
 func CheckPreloginSupported(payload []byte) error {
 	// PRELOGIN option format: token(1) + offset(2) + length(2) = 5 bytes per option
@@ -265,6 +316,14 @@ func ParseLogin7(payload []byte) (*Login7Message, error) {
 
 // Encode serializes the LOGIN7 message
 func (m *Login7Message) Encode() []byte {
+	// Set required defaults if not specified
+	if m.Header.TDSVersion == 0 {
+		m.Header.TDSVersion = 0x74000004 // TDS 7.4
+	}
+	if m.Header.PacketSize == 0 {
+		m.Header.PacketSize = 4096
+	}
+
 	hostname := encodeUTF16(m.Hostname)
 	username := encodeUTF16(m.Username)
 	password := manglePassword(m.Password)
