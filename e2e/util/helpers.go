@@ -243,6 +243,7 @@ type Command struct {
 	Env                map[string]string
 	RunMethod          RunMethod
 	DisableTempHomeDir bool
+	Stdin              io.Reader
 
 	stdoutFilePath string
 	stdoutFile     *os.File
@@ -417,6 +418,9 @@ func (c *Command) Start(ctx context.Context) {
 
 		c.cmd.Stdout = c.stdoutFile
 		c.cmd.Stderr = c.stderrFile
+		if c.Stdin != nil {
+			c.cmd.Stdin = c.Stdin
+		}
 
 		err := c.cmd.Start()
 		go func() {

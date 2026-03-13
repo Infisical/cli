@@ -34,3 +34,5 @@ output-options:
     - createCloudflareAppConnection
     - createPostgresPamResource
     - createPostgresPamAccount
+    - createSshPamResource
+    - createSshPamAccount
