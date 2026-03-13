@@ -241,8 +241,17 @@ var loginCmd = &cobra.Command{
 				util.HandleError(err, "Unable to write write to Infisical Config file. Please try again")
 			}
 
+			// Identify the user in PostHog and alias the anonymous machine ID
+			// so that pre-login CLI events are merged into the same person record
+			Telemetry.IdentifyUser(userCredentialsToBeStored.Email)
+
 			// clear backed up secrets from prev account
 			util.DeleteBackupSecrets()
+
+			// Capture login event and flush the PostHog client (including Identify/Alias
+			// events enqueued by IdentifyUser above). This must run before any early
+			// returns so that all enqueued events are flushed via CaptureEvent's Close().
+			Telemetry.CaptureEvent("cli-command:login", posthog.NewProperties().Set("infisical-backend", config.INFISICAL_URL).Set("version", util.CLI_VERSION))
 
 			if plainOutput {
 				util.PrintlnStdout(userCredentialsToBeStored.JTWToken)
@@ -260,8 +269,6 @@ var loginCmd = &cobra.Command{
 			plainBold.Println("\nQuick links")
 			util.PrintlnStderr("- Learn to inject secrets into your application at https://infisical.com/docs/cli/usage")
 			util.PrintlnStderr("- Stuck? Join our slack for quick support https://infisical.com/slack")
-
-			Telemetry.CaptureEvent("cli-command:login", posthog.NewProperties().Set("infisical-backend", config.INFISICAL_URL).Set("version", util.CLI_VERSION))
 		} else {
 			sdkAuthenticator := util.NewSdkAuthenticator(infisicalClient, cmd)
 
