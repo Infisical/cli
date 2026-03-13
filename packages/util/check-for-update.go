@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -164,13 +165,41 @@ func getReleasePublishedAt(repoOwner string, repoName string, version string) (t
 }
 
 func GetUpdateInstructions() string {
-	os := runtime.GOOS
-	switch os {
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = ""
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	return getUpdateInstructions(runtime.GOOS, execPath)
+}
+
+func getUpdateInstructions(goos string, execPath string) string {
+	p := strings.ToLower(execPath)
+	isNpm := strings.Contains(p, "node_modules")
+
+	switch goos {
 	case "darwin":
+		if isNpm {
+			return "To update, run: npm update -g @infisical/cli"
+		}
 		return "To update, run: brew update && brew upgrade infisical"
 	case "windows":
+		if isNpm {
+			return "To update, run: npm update -g @infisical/cli"
+		}
+		if strings.Contains(p, "scoop") {
+			return "To update, run: scoop update infisical"
+		}
+		if strings.Contains(p, "winget") {
+			return "To update, run: winget upgrade Infisical.Infisical"
+		}
 		return "To update, run: scoop update infisical"
 	case "linux":
+		if isNpm {
+			return "To update, run: npm update -g @infisical/cli"
+		}
 		pkgManager := getLinuxPackageManager()
 		switch pkgManager {
 		case "apt-get":

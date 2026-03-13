@@ -1,0 +1,117 @@
+name: Test Update Instructions
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24.13"
+      - name: Run unit tests
+        run: go test ./packages/util/ -run TestGetUpdateInstructions -v
+
+  integration-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24.13"
+      - name: Build test helper
+        run: go build -o update-hint.exe ./test/update-hint
+
+      - name: Test scoop path detection
+        shell: pwsh
+        run: |
+          $scoopPath = "$env:USERPROFILE\scoop\apps\infisical\current"
+          New-Item -ItemType Directory -Force -Path $scoopPath | Out-Null
+          Copy-Item update-hint.exe "$scoopPath\update-hint.exe"
+          $output = & "$scoopPath\update-hint.exe"
+          Write-Host "Output: $output"
+          if ($output -notmatch "scoop update infisical") {
+            Write-Error "Expected 'scoop update infisical', got: $output"
+            exit 1
+          }
+
+      - name: Test npm path detection
+        shell: pwsh
+        run: |
+          $npmPath = "$env:APPDATA\npm\node_modules\@infisical\cli\bin"
+          New-Item -ItemType Directory -Force -Path $npmPath | Out-Null
+          Copy-Item update-hint.exe "$npmPath\update-hint.exe"
+          $output = & "$npmPath\update-hint.exe"
+          Write-Host "Output: $output"
+          if ($output -notmatch "npm update -g @infisical/cli") {
+            Write-Error "Expected 'npm update -g @infisical/cli', got: $output"
+            exit 1
+          }
+
+      - name: Test winget path detection
+        shell: pwsh
+        run: |
+          $wingetPath = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+          New-Item -ItemType Directory -Force -Path $wingetPath | Out-Null
+          Copy-Item update-hint.exe "$wingetPath\update-hint.exe"
+          $output = & "$wingetPath\update-hint.exe"
+          Write-Host "Output: $output"
+          if ($output -notmatch "winget upgrade Infisical.Infisical") {
+            Write-Error "Expected 'winget upgrade Infisical.Infisical', got: $output"
+            exit 1
+          }
+
+  integration-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24.13"
+      - name: Build test helper
+        run: go build -o update-hint ./test/update-hint
+
+      - name: Test brew path detection
+        run: |
+          mkdir -p /tmp/homebrew/bin
+          cp update-hint /tmp/homebrew/bin/update-hint
+          output=$(/tmp/homebrew/bin/update-hint)
+          echo "Output: $output"
+          echo "$output" | grep -q "brew update" || (echo "Expected brew instruction, got: $output" && exit 1)
+
+      - name: Test npm path detection (via symlink, as npm installs it)
+        run: |
+          mkdir -p /tmp/node_modules/@infisical/cli/bin /tmp/bin
+          cp update-hint /tmp/node_modules/@infisical/cli/bin/update-hint
+          ln -sf /tmp/node_modules/@infisical/cli/bin/update-hint /tmp/bin/update-hint
+          output=$(/tmp/bin/update-hint)
+          echo "Output: $output"
+          echo "$output" | grep -q "npm update -g @infisical/cli" || (echo "Expected npm instruction, got: $output" && exit 1)
+
+  integration-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24.13"
+      - name: Build test helper
+        run: go build -o update-hint ./test/update-hint
+
+      - name: Test apt path detection
+        run: |
+          sudo cp update-hint /usr/bin/update-hint
+          output=$(/usr/bin/update-hint)
+          echo "Output: $output"
+          echo "$output" | grep -q "apt-get" || (echo "Expected apt-get instruction, got: $output" && exit 1)
+
+      - name: Test npm path detection
+        run: |
+          mkdir -p $HOME/.npm-global/lib/node_modules/@infisical/cli/bin
+          cp update-hint $HOME/.npm-global/lib/node_modules/@infisical/cli/bin/update-hint
+          output=$($HOME/.npm-global/lib/node_modules/@infisical/cli/bin/update-hint)
+          echo "Output: $output"
+          echo "$output" | grep -q "npm update -g @infisical/cli" || (echo "Expected npm instruction, got: $output" && exit 1)
