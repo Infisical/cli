@@ -827,7 +827,8 @@ type PAMAccessApprovalRequestResponse struct {
 }
 
 type PAMSessionCredentialsResponse struct {
-	Credentials PAMSessionCredentials `json:"credentials"`
+	Credentials  PAMSessionCredentials `json:"credentials"`
+	SharedSecret string                `json:"sharedSecret,omitempty"`
 }
 
 type PAMSessionCredentials struct {

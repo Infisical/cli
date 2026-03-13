@@ -39,6 +39,7 @@ type RelayConfig struct {
 	// Server Ports
 	SSHPort string
 	TLSPort string
+	WSPort  string
 
 	// Network Configuration
 	Host string
@@ -67,6 +68,7 @@ type Relay struct {
 	// Server listeners
 	sshListener net.Listener
 	tlsListener net.Listener
+	wsListener  net.Listener
 }
 
 func NewRelay(config *RelayConfig) (*Relay, error) {
@@ -187,6 +189,11 @@ func (r *Relay) Start(ctx context.Context) error {
 
 	// Start TLS server
 	go r.startTLSServer()
+
+	// Start WebSocket server (if configured)
+	if r.config.WSPort != "" {
+		go r.startWSServer()
+	}
 
 	log.Info().Msg("Relay server started successfully")
 
@@ -591,6 +598,9 @@ func (r *Relay) cleanup() {
 	}
 	if r.tlsListener != nil {
 		r.tlsListener.Close()
+	}
+	if r.wsListener != nil {
+		r.wsListener.Close()
 	}
 
 	log.Info().Msg("Relay server shutdown complete")

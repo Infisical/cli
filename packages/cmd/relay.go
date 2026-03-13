@@ -53,6 +53,7 @@ var relayStartCmd = &cobra.Command{
 			RelayName: relayName,
 			SSHPort:   "2222",
 			TLSPort:   "8443",
+			WSPort:    "8444",
 			Host:      host,
 			Type:      instanceType,
 		})
