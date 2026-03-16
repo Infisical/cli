@@ -900,6 +900,23 @@ func secretTemplateFunction(accessToken string, currentEtag *string) func(string
 	}
 }
 
+func secretTemplateByProjectSlugFunction(accessToken string, currentEtag *string) func(string, string, string, ...string) ([]models.SingleEnvironmentVariable, error) {
+	return func(projectSlug, envSlug, secretPath string, args ...string) ([]models.SingleEnvironmentVariable, error) {
+		httpClient, err := util.GetRestyClientWithCustomHeaders()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create HTTP client: %v", err)
+		}
+		httpClient.SetAuthToken(accessToken)
+
+		project, err := api.CallGetProjectBySlug(httpClient, projectSlug)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project by slug: %v", err)
+		}
+
+		return secretTemplateFunction(accessToken, currentEtag)(project.ID, envSlug, secretPath, args...)
+	}
+}
+
 func getSingleSecretTemplateFunction(accessToken string, currentEtag *string) func(string, string, string, string) (models.SingleEnvironmentVariable, error) {
 	return func(projectID, envSlug, secretPath, secretName string) (models.SingleEnvironmentVariable, error) {
 		secret, etag, err := util.GetSinglePlainTextSecretByNameV3(accessToken, projectID, envSlug, secretPath, secretName)
@@ -975,21 +992,31 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 	}
 }
 
-func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
+func newTemplateFunctions(accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager, templateId int) template.FuncMap {
 
-	// custom template function to fetch secrets from Infisical
 	secretFunction := secretTemplateFunction(accessToken, currentEtag)
+	secretByProjectSlugFunction := secretTemplateByProjectSlugFunction(accessToken, currentEtag)
 	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretManager, agentManager, templateId, currentEtag)
 	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, currentEtag)
+
 	funcs := template.FuncMap{
-		"secret":          secretFunction, // depreciated
-		"listSecrets":     secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
+		"secret":         secretFunction,        // deprecated
+		"dynamic_secret": dynamicSecretFunction, // deprecated
+
+		"listSecrets":              secretFunction,
+		"listSecretsByProjectSlug": secretByProjectSlugFunction,
+		"getSecretByName":          getSingleSecretFunction,
+		"dynamicSecret":            dynamicSecretFunction,
 	}
 
+	return funcs
+}
+
+func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
+	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretManager, agentManager, templateId)
+
 	templateName := path.Base(templatePath)
-	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(funcs)).ParseFiles(templatePath)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).ParseFiles(templatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -1011,18 +1038,10 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 	templateString := string(decoded)
 
-	secretFunction := secretTemplateFunction(accessToken, currentEtag) // TODO: Fix this
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaseManager, agentManager, templateId, currentEtag)
-	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, currentEtag)
-	funcs := template.FuncMap{
-		"secret":          secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
-	}
-
 	templateName := "base64Template"
+	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretLeaseManager, agentManager, templateId)
 
-	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(funcs)).Parse(templateString)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).Parse(templateString)
 	if err != nil {
 		return nil, err
 	}
@@ -1037,18 +1056,11 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 func ProcessLiteralTemplate(templateId int, templateString string, data interface{}, accessToken string, currentEtag *string, dynamicSecretLeaseManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
 
-	secretFunction := secretTemplateFunction(accessToken, currentEtag)
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaseManager, agentManager, templateId, currentEtag)
-	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, currentEtag)
-	funcs := template.FuncMap{
-		"secret":          secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
-	}
+	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretLeaseManager, agentManager, templateId)
 
 	templateName := "literalTemplate"
 
-	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(funcs)).Parse(templateString)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).Parse(templateString)
 	if err != nil {
 		return nil, err
 	}
