@@ -27,6 +27,7 @@ const (
 	ResourceTypeRedis      = "redis"
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
+	ResourceTypeWebApp     = "webapp"
 )
 
 type SessionFileInfo struct {
@@ -55,7 +56,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeKubernetes)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeKubernetes, ResourceTypeWebApp)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 
@@ -274,6 +275,12 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 	encryptionKey, err := su.credentialsManager.GetPAMSessionEncryptionKey()
 	if err != nil {
 		return fmt.Errorf("failed to get encryption key: %w", err)
+	}
+
+	// WebApp sessions don't produce uploadable log events — skip upload.
+	if fileInfo.ResourceType == ResourceTypeWebApp {
+		log.Debug().Str("sessionId", fileInfo.SessionID).Msg("Skipping log upload for WebApp session")
+		return nil
 	}
 
 	// Use resource type to determine how to read the file

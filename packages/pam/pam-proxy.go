@@ -14,6 +14,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -39,6 +40,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
+		session.ResourceTypeWebApp,
 	}
 }
 
@@ -144,7 +146,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	}
 
 	serverName := credentials.Host
-	if pamConfig.ResourceType == session.ResourceTypeKubernetes {
+	if pamConfig.ResourceType == session.ResourceTypeKubernetes || pamConfig.ResourceType == session.ResourceTypeWebApp {
 		parsed, err := url.Parse(credentials.Url)
 		if err != nil {
 			return fmt.Errorf("failed to parse URL: %w", err)
@@ -259,6 +261,20 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", kubernetesConfig.TargetApiServer).
 			Msg("Starting Kubernetes PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeWebApp:
+		webappConfig := webapp.WebAppProxyConfig{
+			URL:                   credentials.Url,
+			SSLRejectUnauthorized: credentials.SSLRejectUnauthorized,
+			SSLCertificate:        credentials.SSLCertificate,
+			SessionID:             pamConfig.SessionId,
+			SessionLogger:         sessionLogger,
+		}
+		proxy := webapp.NewWebAppProxy(webappConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("url", credentials.Url).
+			Msg("Starting WebApp PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
