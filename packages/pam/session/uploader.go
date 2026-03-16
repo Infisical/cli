@@ -277,12 +277,6 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
-	// WebApp sessions don't produce uploadable log events — skip upload.
-	if fileInfo.ResourceType == ResourceTypeWebApp {
-		log.Debug().Str("sessionId", fileInfo.SessionID).Msg("Skipping log upload for WebApp session")
-		return nil
-	}
-
 	// Use resource type to determine how to read the file
 	if fileInfo.ResourceType == ResourceTypeSSH {
 		// SSH session - read as terminal events
@@ -297,7 +291,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 			Int("eventCount", len(terminalEvents)).
 			Msg("Uploading terminal session events")
 
-		var logs []api.UploadTerminalEvent
+		logs := make([]api.UploadTerminalEvent, 0, len(terminalEvents))
 		for _, event := range terminalEvents {
 			logs = append(logs, api.UploadTerminalEvent{
 				Timestamp:   event.Timestamp,
@@ -313,19 +307,19 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 
 		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
 	}
-	if fileInfo.ResourceType == ResourceTypeKubernetes {
+	if fileInfo.ResourceType == ResourceTypeKubernetes || fileInfo.ResourceType == ResourceTypeWebApp {
 		httpEvents, err := ReadEncryptedHttpEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
-			return fmt.Errorf("failed to read SSH session file: %w", err)
+			return fmt.Errorf("failed to read HTTP session file: %w", err)
 		}
 
 		log.Debug().
 			Str("sessionId", fileInfo.SessionID).
 			Str("resourceType", fileInfo.ResourceType).
 			Int("eventCount", len(httpEvents)).
-			Msg("Uploading terminal session events")
+			Msg("Uploading HTTP session events")
 
-		var logs []api.UploadHttpEvent
+		logs := make([]api.UploadHttpEvent, 0, len(httpEvents))
 		for _, event := range httpEvents {
 			logs = append(logs, api.UploadHttpEvent{
 				Timestamp: event.Timestamp,
@@ -363,7 +357,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		Int("entryCount", len(entries)).
 		Msg("Uploading database session logs")
 
-	var logs []api.UploadSessionLogEntry
+	logs := make([]api.UploadSessionLogEntry, 0, len(entries))
 	for _, entry := range entries {
 		logs = append(logs, api.UploadSessionLogEntry{
 			Timestamp: entry.Timestamp,

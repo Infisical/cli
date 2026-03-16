@@ -25,6 +25,9 @@ const (
 	MsgTypeResize    byte = 0x0A // payload: JSON {"width":n,"height":n}
 	MsgTypeNavigate  byte = 0x0B // payload: JSON {"url":"..."}
 
+	// Agent → Go handler only
+	MsgTypeHttpEvent byte = 0x0C // payload: JSON session.HttpEvent
+
 	// Either direction
 	MsgTypeClose byte = 0xFF // payload: empty
 )

@@ -41,11 +41,13 @@ const MSG_KEY_CHAR   = 0x08;
 const MSG_SCROLL     = 0x09;
 const MSG_RESIZE     = 0x0A;
 const MSG_NAVIGATE   = 0x0B;
+const MSG_HTTP_EVENT = 0x0C;
 const MSG_CLOSE      = 0xFF;
 
 const targetUrl = process.env.WEBAPP_URL;
 const sslRejectUnauthorized = process.env.WEBAPP_SSL_REJECT_UNAUTHORIZED !== "false";
 const hasSslCertificate = Boolean(process.env.WEBAPP_SSL_CERTIFICATE);
+const MAX_RECORDED_BODY_BYTES = 64 * 1024;
 
 const SPECIAL_KEY_CODES = {
   Backspace: 8,
@@ -66,7 +68,6 @@ const SPECIAL_KEY_CODES = {
 
 function getKeyEventParams({ key, code, modifiers = 0 }) {
   const keyCode = SPECIAL_KEY_CODES[key] ?? (key && key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
-  const isPrintable = key && key.length === 1;
   const isSpecial = Object.prototype.hasOwnProperty.call(SPECIAL_KEY_CODES, key);
 
   return {
@@ -75,7 +76,6 @@ function getKeyEventParams({ key, code, modifiers = 0 }) {
     modifiers,
     windowsVirtualKeyCode: keyCode,
     nativeVirtualKeyCode: keyCode,
-    ...(isPrintable ? { text: key, unmodifiedText: key } : {}),
     ...(isSpecial ? { text: "", unmodifiedText: "" } : {}),
   };
 }
@@ -100,6 +100,39 @@ function writeMessage(type, payload) {
 
 function writeJsonMessage(type, obj) {
   writeMessage(type, Buffer.from(JSON.stringify(obj)));
+}
+
+function toMultiValueHeaders(headers) {
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? value.map(String) : [String(value)],
+    ])
+  );
+}
+
+function getHeaderValue(headers, name) {
+  const values = headers?.[name] ?? headers?.[name.toLowerCase()] ?? headers?.[name.toUpperCase()];
+  if (!values || values.length === 0) return "";
+  return values[0];
+}
+
+function isTextLikeContentType(contentType) {
+  if (!contentType) return false;
+  const normalized = contentType.toLowerCase();
+  return normalized.startsWith("text/")
+    || normalized.includes("json")
+    || normalized.includes("xml")
+    || normalized.includes("javascript")
+    || normalized.includes("form-urlencoded");
+}
+
+function encodeBody(bodyBuffer) {
+  if (!bodyBuffer || bodyBuffer.length === 0) return undefined;
+  const truncated = bodyBuffer.length > MAX_RECORDED_BODY_BYTES
+    ? bodyBuffer.subarray(0, MAX_RECORDED_BODY_BYTES)
+    : bodyBuffer;
+  return truncated.toString("base64");
 }
 
 // Stdin buffering — TCP streams arrive in arbitrary chunks.
@@ -151,6 +184,63 @@ async function main() {
 
   const page = await context.newPage();
   const client = await context.newCDPSession(page);
+  let requestCounter = 0;
+  const requestIds = new WeakMap();
+
+  page.on("request", async (request) => {
+    try {
+      const url = request.url();
+      if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+
+      const requestId = `${++requestCounter}`;
+      requestIds.set(request, requestId);
+
+      const headers = toMultiValueHeaders(
+        typeof request.allHeaders === "function" ? await request.allHeaders() : await request.headers()
+      );
+
+      writeJsonMessage(MSG_HTTP_EVENT, {
+        timestamp: new Date().toISOString(),
+        requestId,
+        eventType: "request",
+        headers,
+        method: request.method(),
+        url,
+        body: encodeBody(request.postDataBuffer?.() ?? null)
+      });
+    } catch (err) {
+      process.stderr.write(`playwright-agent: failed to record request event: ${err.message}\n`);
+    }
+  });
+
+  page.on("response", async (response) => {
+    try {
+      const url = response.url();
+      if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+
+      const request = response.request();
+      const requestId = requestIds.get(request) ?? `${++requestCounter}`;
+      const headers = toMultiValueHeaders(
+        typeof response.allHeaders === "function" ? await response.allHeaders() : await response.headers()
+      );
+
+      let body;
+      if (isTextLikeContentType(getHeaderValue(headers, "content-type"))) {
+        body = encodeBody(await response.body());
+      }
+
+      writeJsonMessage(MSG_HTTP_EVENT, {
+        timestamp: new Date().toISOString(),
+        requestId,
+        eventType: "response",
+        headers,
+        status: `${response.status()} ${response.statusText()}`.trim(),
+        body
+      });
+    } catch (err) {
+      process.stderr.write(`playwright-agent: failed to record response event: ${err.message}\n`);
+    }
+  });
 
   // Navigate to target
   await page.goto(targetUrl, { waitUntil: "load", timeout: 30000 });

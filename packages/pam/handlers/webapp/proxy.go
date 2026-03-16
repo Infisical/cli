@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
-)
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
@@ -113,9 +113,37 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn *tls.Conn) erro
 	}()
 
 	// subprocess stdout → relay conn: frames + page-info (agent → backend)
+	// or HTTP events (agent → Go session logger only)
 	go func() {
-		_, copyErr := io.Copy(conn, stdout)
-		errCh <- fmt.Errorf("stdout→conn closed: %w", copyErr)
+		for {
+			msgType, payload, readErr := ReadMessage(stdout)
+			if readErr != nil {
+				errCh <- fmt.Errorf("stdout message stream closed: %w", readErr)
+				return
+			}
+
+			switch msgType {
+			case MsgTypeFrame, MsgTypePageInfo:
+				if writeErr := WriteMessage(conn, msgType, payload); writeErr != nil {
+					errCh <- fmt.Errorf("forwarding agent message 0x%02x: %w", msgType, writeErr)
+					return
+				}
+			case MsgTypeHttpEvent:
+				var event session.HttpEvent
+				if err := json.Unmarshal(payload, &event); err != nil {
+					log.Error().Err(err).Str("sessionId", p.config.SessionID).Msg("Failed to decode WebApp HTTP event")
+					continue
+				}
+				if err := p.config.SessionLogger.LogHttpEvent(event); err != nil {
+					log.Error().Err(err).Str("sessionId", p.config.SessionID).Msg("Failed to log WebApp HTTP event")
+				}
+			default:
+				log.Debug().
+					Str("sessionId", p.config.SessionID).
+					Uint8("msgType", msgType).
+					Msg("Ignoring unknown WebApp agent message type")
+			}
+		}
 	}()
 
 	// wait for the agent process to exit
