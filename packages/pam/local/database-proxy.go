@@ -122,7 +122,7 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 	case session.ResourceTypeMysql:
 		util.PrintfStderr("mysql://%s@localhost:%d/%s", username, proxy.port, database)
 	case session.ResourceTypeMssql:
-		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s", username, proxy.port, database)
+		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}

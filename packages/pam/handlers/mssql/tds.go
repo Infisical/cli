@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
+	"time"
 )
 
 const (
@@ -34,8 +36,12 @@ const (
 	EncryptReq    = 0x03
 
 	// Token types
-	TokenLoginAck = 0xAD
-	TokenError    = 0xAA
+	TokenLoginAck   = 0xAD
+	TokenError      = 0xAA
+	TokenInfo       = 0xAB
+	TokenDone       = 0xFD
+	TokenDoneProc   = 0xFE
+	TokenDoneInProc = 0xFF
 
 	// PRELOGIN options
 	PreloginEncryption = 0x01
@@ -96,23 +102,20 @@ func ReadPacket(r io.Reader) (*TDSPacket, error) {
 func (p *TDSPacket) Write(w io.Writer) error {
 	p.Length = uint16(TDSHeaderSize + len(p.Payload))
 
-	header := make([]byte, TDSHeaderSize)
-	header[0] = p.Type
-	header[1] = p.Status
-	binary.BigEndian.PutUint16(header[2:4], p.Length)
-	binary.BigEndian.PutUint16(header[4:6], p.SPID)
-	header[6] = p.PacketID
-	header[7] = p.Window
+	// Write header + payload as a single write.
+	// This is important for TLS connections where each Write call
+	// produces a separate TLS record.
+	buf := make([]byte, p.Length)
+	buf[0] = p.Type
+	buf[1] = p.Status
+	binary.BigEndian.PutUint16(buf[2:4], p.Length)
+	binary.BigEndian.PutUint16(buf[4:6], p.SPID)
+	buf[6] = p.PacketID
+	buf[7] = p.Window
+	copy(buf[TDSHeaderSize:], p.Payload)
 
-	if _, err := w.Write(header); err != nil {
-		return err
-	}
-	if len(p.Payload) > 0 {
-		if _, err := w.Write(p.Payload); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := w.Write(buf)
+	return err
 }
 
 // IsEOM returns true if this is the last packet of a message
@@ -181,9 +184,9 @@ func BuildPreloginRequest(encryption uint8) []byte {
 	buf := make([]byte, 18)
 
 	// Option 0: VERSION at offset 11, length 6
-	buf[0] = 0x00                                     // VERSION token
-	binary.BigEndian.PutUint16(buf[1:3], dataStart)   // offset
-	binary.BigEndian.PutUint16(buf[3:5], 6)           // length
+	buf[0] = 0x00                                   // VERSION token
+	binary.BigEndian.PutUint16(buf[1:3], dataStart) // offset
+	binary.BigEndian.PutUint16(buf[3:5], 6)         // length
 
 	// Option 1: ENCRYPTION at offset 17, length 1
 	buf[5] = PreloginEncryption                       // ENCRYPTION token
@@ -314,6 +317,16 @@ func ParseLogin7(payload []byte) (*Login7Message, error) {
 	return msg, nil
 }
 
+// LOGIN7 option flags
+const (
+	// OptionFlags1
+	fUseDB   = 0x20
+	fSetLang = 0x80
+
+	// OptionFlags2
+	fODBC = 0x02
+)
+
 // Encode serializes the LOGIN7 message
 func (m *Login7Message) Encode() []byte {
 	// Set required defaults if not specified
@@ -324,11 +337,16 @@ func (m *Login7Message) Encode() []byte {
 		m.Header.PacketSize = 4096
 	}
 
+	// Set required option flags
+	m.Header.OptionFlags1 = fUseDB | fSetLang
+	m.Header.OptionFlags2 = fODBC
+
 	hostname := encodeUTF16(m.Hostname)
 	username := encodeUTF16(m.Username)
 	password := manglePassword(m.Password)
 	appname := encodeUTF16(m.AppName)
 	database := encodeUTF16(m.Database)
+	cltIntName := encodeUTF16("ODBC") // Client interface name
 
 	// Calculate offsets
 	offset := uint16(Login7FixedSize)
@@ -356,7 +374,8 @@ func (m *Login7Message) Encode() []byte {
 	m.Header.ExtensionLength = 0
 
 	m.Header.CltIntNameOffset = offset
-	m.Header.CltIntNameLength = 0
+	m.Header.CltIntNameLength = uint16(len(cltIntName) / 2)
+	offset += uint16(len(cltIntName))
 
 	m.Header.LanguageOffset = offset
 	m.Header.LanguageLength = 0
@@ -376,11 +395,14 @@ func (m *Login7Message) Encode() []byte {
 	m.Header.Length = uint32(offset)
 
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, &m.Header)
+	if err := binary.Write(&buf, binary.LittleEndian, &m.Header); err != nil {
+		panic(fmt.Sprintf("unexpected error encoding LOGIN7 header: %v", err))
+	}
 	buf.Write(hostname)
 	buf.Write(username)
 	buf.Write(password)
 	buf.Write(appname)
+	buf.Write(cltIntName)
 	buf.Write(database)
 
 	return buf.Bytes()
@@ -440,6 +462,154 @@ func ContainsToken(payload []byte, token byte) bool {
 	return false
 }
 
+// ParseResponseOutcome analyzes a TDS response payload and returns the outcome.
+// Returns (hasError, errorMessage, rowsAffected).
+// The TDS token stream contains ERROR tokens (0xAA) for failures and DONE tokens (0xFD) for completion.
+func ParseResponseOutcome(payload []byte) (hasError bool, errorMsg string, rowsAffected int64) {
+	if len(payload) < 2 {
+		return false, "", 0
+	}
+
+	i := 0
+	for i < len(payload) {
+		token := payload[i]
+		i++
+
+		switch token {
+		case TokenError:
+			// ERROR token format:
+			// 1 byte token (0xAA)
+			// 2 bytes length (not including token and length)
+			// 4 bytes error number
+			// 1 byte state
+			// 1 byte class (severity)
+			// 2 bytes message length (in characters)
+			// variable message (UTF-16LE)
+			// ... more fields follow
+			if i+8 > len(payload) {
+				return true, "error parsing response", 0
+			}
+			length := int(binary.LittleEndian.Uint16(payload[i : i+2]))
+			if i+2+length > len(payload) {
+				return true, "error parsing response", 0
+			}
+
+			errorNum := binary.LittleEndian.Uint32(payload[i+2 : i+6])
+			// state := payload[i+6]
+			// class := payload[i+7]
+			msgLen := int(binary.LittleEndian.Uint16(payload[i+8 : i+10]))
+
+			if i+10+msgLen*2 > len(payload) {
+				return true, fmt.Sprintf("error %d", errorNum), 0
+			}
+
+			// Extract UTF-16LE message
+			msgBytes := payload[i+10 : i+10+msgLen*2]
+			runes := make([]rune, 0, msgLen)
+			for j := 0; j+1 < len(msgBytes); j += 2 {
+				r := rune(binary.LittleEndian.Uint16(msgBytes[j:]))
+				if r == 0 {
+					break
+				}
+				runes = append(runes, r)
+			}
+			errorMsg = string(runes)
+			hasError = true
+			i += 2 + length
+
+		case TokenDone, TokenDoneProc, TokenDoneInProc:
+			// DONE token format:
+			// 1 byte token
+			// 2 bytes status
+			// 2 bytes curcmd
+			// 8 bytes done row count (only if DONE_COUNT flag is set)
+			if i+4 > len(payload) {
+				break
+			}
+			status := binary.LittleEndian.Uint16(payload[i : i+2])
+			i += 4 // skip status and curcmd
+
+			// Check if DONE_COUNT flag (0x10) is set
+			if status&0x10 != 0 && i+8 <= len(payload) {
+				rowsAffected = int64(binary.LittleEndian.Uint64(payload[i : i+8]))
+				i += 8
+			}
+
+			// Check if DONE_ERROR flag (0x02) is set
+			if status&0x02 != 0 {
+				hasError = true
+				if errorMsg == "" {
+					errorMsg = "query failed"
+				}
+			}
+
+		case TokenInfo:
+			// INFO token has same structure as ERROR, skip it
+			if i+2 > len(payload) {
+				return hasError, errorMsg, rowsAffected
+			}
+			length := int(binary.LittleEndian.Uint16(payload[i : i+2]))
+			i += 2 + length
+
+		default:
+			// Unknown token - we can't reliably skip it without knowing its length
+			// Just continue scanning for known tokens
+			continue
+		}
+	}
+
+	return hasError, errorMsg, rowsAffected
+}
+
+// ExtractRPCText extracts readable text from an RPC request payload by
+// scanning for UTF-16LE strings. This captures the procedure name,
+// SQL text (for sp_executesql), and parameter values without needing
+// to fully parse the RPC binary format.
+func ExtractRPCText(payload []byte) string {
+	if len(payload) < 6 {
+		return "RPC"
+	}
+
+	// Skip ALL_HEADERS
+	allHeadersLen := binary.LittleEndian.Uint32(payload[0:4])
+	if allHeadersLen < 4 || int(allHeadersLen) > len(payload) {
+		allHeadersLen = 0
+	}
+
+	// Scan the payload for UTF-16LE strings (runs of printable chars)
+	data := payload[allHeadersLen:]
+	var parts []string
+	var current []rune
+	for i := 0; i+1 < len(data); i += 2 {
+		r := rune(binary.LittleEndian.Uint16(data[i:]))
+		if r >= 0x20 && r < 0xFFFE {
+			current = append(current, r)
+		} else {
+			if len(current) >= 3 {
+				parts = append(parts, string(current))
+			}
+			current = current[:0]
+		}
+	}
+	if len(current) >= 3 {
+		parts = append(parts, string(current))
+	}
+
+	if len(parts) == 0 {
+		return "RPC"
+	}
+
+	result := parts[0]
+	for _, p := range parts[1:] {
+		joined := result + " " + p
+		if len(joined) > 4096 {
+			break
+		}
+		result = joined
+	}
+	return result
+}
+
 // ExtractSQL extracts SQL text from a SQL_BATCH packet payload.
 // SQL_BATCH format: ALL_HEADERS (4-byte total length + headers) followed by UTF-16LE SQL text
 func ExtractSQL(payload []byte) string {
@@ -473,4 +643,131 @@ func ExtractSQL(payload []byte) string {
 		runes = append(runes, r)
 	}
 	return string(runes)
+}
+
+// PassthroughConn wraps a connection and allows switching the underlying conn.
+// Used for TLS handshake where we need to switch from TDS-wrapped I/O to direct I/O.
+type PassthroughConn struct {
+	Conn net.Conn
+}
+
+func (c *PassthroughConn) Read(b []byte) (int, error)  { return c.Conn.Read(b) }
+func (c *PassthroughConn) Write(b []byte) (int, error) { return c.Conn.Write(b) }
+func (c *PassthroughConn) Close() error                { return c.Conn.Close() }
+func (c *PassthroughConn) LocalAddr() net.Addr         { return c.Conn.LocalAddr() }
+func (c *PassthroughConn) RemoteAddr() net.Addr        { return c.Conn.RemoteAddr() }
+func (c *PassthroughConn) SetDeadline(t time.Time) error {
+	return c.Conn.SetDeadline(t)
+}
+func (c *PassthroughConn) SetReadDeadline(t time.Time) error {
+	return c.Conn.SetReadDeadline(t)
+}
+func (c *PassthroughConn) SetWriteDeadline(t time.Time) error {
+	return c.Conn.SetWriteDeadline(t)
+}
+
+// TLSHandshakeConn wraps TLS handshake data inside TDS PRELOGIN packets.
+// This is required because MSSQL performs TLS handshake within the TDS protocol
+// rather than as a separate layer.
+type TLSHandshakeConn struct {
+	conn      net.Conn
+	packetSeq uint8
+	readBuf   bytes.Buffer
+}
+
+// NewTLSHandshakeConn creates a wrapper that encapsulates TLS handshake
+// data within TDS PRELOGIN packets.
+func NewTLSHandshakeConn(conn net.Conn) *TLSHandshakeConn {
+	return &TLSHandshakeConn{
+		conn:      conn,
+		packetSeq: 1,
+	}
+}
+
+// Read reads TLS data from TDS PRELOGIN packets.
+func (c *TLSHandshakeConn) Read(b []byte) (int, error) {
+	// Drain buffered data first
+	if c.readBuf.Len() > 0 {
+		return c.readBuf.Read(b)
+	}
+
+	// Read a TDS packet header
+	header := make([]byte, TDSHeaderSize)
+	if _, err := io.ReadFull(c.conn, header); err != nil {
+		return 0, err
+	}
+
+	length := binary.BigEndian.Uint16(header[2:4])
+	if length < TDSHeaderSize {
+		return 0, fmt.Errorf("invalid TDS packet length: %d", length)
+	}
+
+	// Read the packet payload
+	payloadLen := int(length) - TDSHeaderSize
+	if payloadLen > 0 {
+		payload := make([]byte, payloadLen)
+		if _, err := io.ReadFull(c.conn, payload); err != nil {
+			return 0, err
+		}
+		c.readBuf.Write(payload)
+	}
+
+	return c.readBuf.Read(b)
+}
+
+// Write wraps TLS data in TDS PRELOGIN packets and sends them.
+func (c *TLSHandshakeConn) Write(b []byte) (int, error) {
+	const maxPayload = 4088 // TDS packet size (4096) minus header (8)
+
+	total := 0
+	for len(b) > 0 {
+		chunk := b
+		if len(chunk) > maxPayload {
+			chunk = b[:maxPayload]
+		}
+		b = b[len(chunk):]
+
+		// Determine status: EOM if this is the last chunk
+		status := uint8(0)
+		if len(b) == 0 {
+			status = StatusEOM
+		}
+
+		// Build TDS packet
+		pktLen := uint16(TDSHeaderSize + len(chunk))
+		header := make([]byte, TDSHeaderSize)
+		header[0] = PacketTypePrelogin
+		header[1] = status
+		binary.BigEndian.PutUint16(header[2:4], pktLen)
+		header[4] = 0 // SPID high
+		header[5] = 0 // SPID low
+		header[6] = c.packetSeq
+		header[7] = 0 // Window
+
+		c.packetSeq++
+
+		// Write header + payload
+		if _, err := c.conn.Write(header); err != nil {
+			return total, err
+		}
+		if _, err := c.conn.Write(chunk); err != nil {
+			return total, err
+		}
+		total += len(chunk)
+	}
+
+	return total, nil
+}
+
+func (c *TLSHandshakeConn) Close() error         { return c.conn.Close() }
+func (c *TLSHandshakeConn) LocalAddr() net.Addr  { return c.conn.LocalAddr() }
+func (c *TLSHandshakeConn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
+func (c *TLSHandshakeConn) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+func (c *TLSHandshakeConn) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+func (c *TLSHandshakeConn) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
 }

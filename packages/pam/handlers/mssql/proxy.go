@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -23,8 +24,15 @@ type MssqlProxyConfig struct {
 	SessionLogger  session.SessionLogger
 }
 
+type pendingQuery struct {
+	sql       string
+	timestamp time.Time
+}
+
 type MssqlProxy struct {
-	config MssqlProxyConfig
+	config       MssqlProxyConfig
+	mu           sync.Mutex
+	pendingQuery *pendingQuery
 }
 
 func NewMssqlProxy(config MssqlProxyConfig) *MssqlProxy {
@@ -86,12 +94,6 @@ func (p *MssqlProxy) handleClientHandshake(clientConn net.Conn) error {
 	}
 	if len(clientPrelogin) == 0 || clientPrelogin[0].Type != PacketTypePrelogin {
 		return fmt.Errorf("expected PRELOGIN from client, got 0x%02X", clientPrelogin[0].Type)
-	}
-
-	// Check for unsupported features
-	clientPayload := CombinePayloads(clientPrelogin)
-	if err := CheckPreloginSupported(clientPayload); err != nil {
-		return err
 	}
 
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Received client PRELOGIN")
@@ -156,7 +158,11 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 	}
 
 	// 1. Send our PRELOGIN to server
-	preloginReq := BuildPreloginRequest(EncryptNotSup)
+	encOption := uint8(EncryptNotSup)
+	if p.config.EnableTLS {
+		encOption = EncryptOn
+	}
+	preloginReq := BuildPreloginRequest(encOption)
 	preloginPkt := &TDSPacket{
 		Type:     PacketTypePrelogin,
 		Status:   StatusEOM,
@@ -167,35 +173,62 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		serverConn.Close()
 		return nil, nil, fmt.Errorf("send prelogin to server: %w", err)
 	}
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Uint8("encOption", encOption).
+		Msg("Sent PRELOGIN to server")
 
 	// 2. Read server's PRELOGIN response
-	serverPrelogin, err := ReadAllPackets(serverConn)
+	serverPreloginPkts, err := ReadAllPackets(serverConn)
 	if err != nil {
 		serverConn.Close()
 		return nil, nil, fmt.Errorf("read server prelogin: %w", err)
 	}
 
-	serverPayload := CombinePayloads(serverPrelogin)
-	serverEnc := GetPreloginEncryption(serverPayload)
-
-	log.Debug().
-		Str("sessionID", p.config.SessionID).
-		Uint8("serverEnc", serverEnc).
-		Msg("Received server PRELOGIN response")
-
-	// 3. Handle TLS if server requires it
-	if serverEnc == EncryptOn || serverEnc == EncryptReq {
+	// 3. Handle TLS based on EnableTLS config
+	if p.config.EnableTLS {
 		if p.config.TLSConfig == nil {
 			serverConn.Close()
-			return nil, nil, fmt.Errorf("server requires TLS but no TLS configuration provided")
+			return nil, nil, fmt.Errorf("TLS requested but no TLS configuration provided")
 		}
-		tlsConn := tls.Client(serverConn, p.config.TLSConfig)
+
+		// Check server's encryption response
+		serverPayload := CombinePayloads(serverPreloginPkts)
+		serverEnc := GetPreloginEncryption(serverPayload)
+
+		log.Info().
+			Str("sessionID", p.config.SessionID).
+			Uint8("serverEnc", serverEnc).
+			Msg("Server PRELOGIN encryption response")
+
+		if serverEnc == EncryptNotSup {
+			serverConn.Close()
+			return nil, nil, fmt.Errorf("server does not support TLS encryption")
+		}
+
+		// MSSQL performs TLS handshake wrapped inside TDS PRELOGIN packets.
+		// We use a passthrough conn that initially points to TLSHandshakeConn,
+		// then switches to the raw connection after handshake completes.
+		handshakeConn := NewTLSHandshakeConn(serverConn)
+		passthrough := &PassthroughConn{Conn: handshakeConn}
+		tlsConn := tls.Client(passthrough, p.config.TLSConfig)
+
 		if err := tlsConn.Handshake(); err != nil {
 			serverConn.Close()
-			return nil, nil, fmt.Errorf("TLS handshake: %w", err)
+			return nil, nil, fmt.Errorf("TLS handshake with server failed: %w", err)
 		}
+
+		log.Info().
+			Str("sessionID", p.config.SessionID).
+			Uint16("tlsVersion", tlsConn.ConnectionState().Version).
+			Str("cipherSuite", tls.CipherSuiteName(tlsConn.ConnectionState().CipherSuite)).
+			Msg("TLS handshake completed")
+
+		// After TLS handshake, switch the passthrough to point directly to the
+		// raw TCP connection. TLS records will now go directly to TCP.
+		passthrough.Conn = serverConn
 		serverConn = tlsConn
-		log.Debug().Str("sessionID", p.config.SessionID).Msg("TLS established with server")
+		log.Info().Str("sessionID", p.config.SessionID).Msg("TLS established with server")
 	}
 
 	// 4. Send LOGIN7 with injected credentials
@@ -218,17 +251,23 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		return nil, nil, fmt.Errorf("send login to server: %w", err)
 	}
 
-	log.Debug().
+	log.Info().
 		Str("sessionID", p.config.SessionID).
 		Str("user", p.config.InjectUsername).
+		Int("loginPktLen", len(loginPkt.Payload)+TDSHeaderSize).
 		Msg("Sent LOGIN7 to server")
 
 	// 5. Read login response - forward to client
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Waiting for login response...")
 	response, err := ReadAllPackets(serverConn)
 	if err != nil {
 		serverConn.Close()
 		return nil, nil, fmt.Errorf("read login response: %w", err)
 	}
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Int("responsePackets", len(response)).
+		Msg("Received login response")
 
 	respPayload := CombinePayloads(response)
 	if ContainsToken(respPayload, TokenError) {
@@ -251,7 +290,8 @@ func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
 		}
 	}()
 
-	var sqlBatchBuf []byte
+	var payloadBuf []byte
+	var currentPktType uint8
 
 	for {
 		pkt, err := ReadPacket(client)
@@ -260,48 +300,62 @@ func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
 			return
 		}
 
-		// Only allow packet types that can be session recorded
 		switch pkt.Type {
 		case PacketTypeSQLBatch:
-			// SQL queries - log them
-			sqlBatchBuf = append(sqlBatchBuf, pkt.Payload...)
+			currentPktType = pkt.Type
+			payloadBuf = append(payloadBuf, pkt.Payload...)
 			if pkt.IsEOM() {
-				sql := ExtractSQL(sqlBatchBuf)
+				sql := ExtractSQL(payloadBuf)
 				if sql != "" {
-					p.config.SessionLogger.LogEntry(session.SessionLogEntry{
-						Timestamp: time.Now(),
-						Input:     sql,
-						Output:    "OK",
-					})
+					p.mu.Lock()
+					p.pendingQuery = &pendingQuery{
+						sql:       sql,
+						timestamp: time.Now(),
+					}
+					p.mu.Unlock()
 				}
-				sqlBatchBuf = nil
+				payloadBuf = nil
 			}
 
 		case PacketTypeRPCRequest:
-			log.Warn().Str("sessionID", p.config.SessionID).Msg("RPC requests (stored procedures) are not supported")
-			errCh <- fmt.Errorf("RPC requests (stored procedures) are not supported; use direct SQL queries")
-			return
+			currentPktType = pkt.Type
+			payloadBuf = append(payloadBuf, pkt.Payload...)
+			if pkt.IsEOM() {
+				rpcName := ExtractRPCText(payloadBuf)
+				p.mu.Lock()
+				p.pendingQuery = &pendingQuery{
+					sql:       rpcName,
+					timestamp: time.Now(),
+				}
+				p.mu.Unlock()
+				payloadBuf = nil
+			}
 
 		case PacketTypeBulkLoad:
-			log.Warn().Str("sessionID", p.config.SessionID).Msg("Bulk load operations are not supported")
-			errCh <- fmt.Errorf("bulk load operations are not supported")
-			return
-
-		case PacketTypeTransMgrReq:
-			log.Warn().Str("sessionID", p.config.SessionID).Msg("Distributed transactions are not supported")
-			errCh <- fmt.Errorf("distributed transactions are not supported")
-			return
+			if currentPktType != PacketTypeBulkLoad {
+				currentPktType = PacketTypeBulkLoad
+				p.mu.Lock()
+				p.pendingQuery = &pendingQuery{
+					sql:       "BULK INSERT",
+					timestamp: time.Now(),
+				}
+				p.mu.Unlock()
+			}
 
 		case PacketTypeAttention:
-			log.Warn().Str("sessionID", p.config.SessionID).Msg("Attention/cancel requests are not supported")
-			errCh <- fmt.Errorf("attention/cancel requests are not supported")
-			return
+			// Attention/cancel signal - let it through
+
+		case PacketTypeTransMgrReq:
+			// Transaction management (BEGIN/COMMIT/ROLLBACK) - let it through
 
 		default:
-			// Allow other packet types (like TabularResult for responses) to pass through
+			log.Warn().
+				Str("sessionID", p.config.SessionID).
+				Uint8("packetType", pkt.Type).
+				Msg("Blocked unrecognized packet type (cannot be session recorded)")
+			continue
 		}
 
-		// Forward packet to server
 		if err := pkt.Write(server); err != nil {
 			errCh <- err
 			return
@@ -316,12 +370,51 @@ func (p *MssqlProxy) proxyToClient(server, client net.Conn, errCh chan error) {
 		}
 	}()
 
+	var responseBuf []byte
+
 	for {
 		pkt, err := ReadPacket(server)
 		if err != nil {
 			errCh <- err
 			return
 		}
+
+		// Accumulate response packets for TabularResult responses
+		if pkt.Type == PacketTypeTabularResult {
+			responseBuf = append(responseBuf, pkt.Payload...)
+
+			if pkt.IsEOM() {
+				p.mu.Lock()
+				pending := p.pendingQuery
+				p.pendingQuery = nil
+				p.mu.Unlock()
+
+				if pending != nil {
+					hasError, errorMsg, rowsAffected := ParseResponseOutcome(responseBuf)
+
+					var output string
+					if hasError {
+						if errorMsg != "" {
+							output = fmt.Sprintf("ERROR: %s", errorMsg)
+						} else {
+							output = "ERROR"
+						}
+					} else if rowsAffected > 0 {
+						output = fmt.Sprintf("OK (%d rows affected)", rowsAffected)
+					} else {
+						output = "OK"
+					}
+
+					p.config.SessionLogger.LogEntry(session.SessionLogEntry{
+						Timestamp: pending.timestamp,
+						Input:     pending.sql,
+						Output:    output,
+					})
+				}
+				responseBuf = nil
+			}
+		}
+
 		if err := pkt.Write(client); err != nil {
 			errCh <- err
 			return
