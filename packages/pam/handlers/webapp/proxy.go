@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -17,6 +18,12 @@ import (
 
 //go:embed playwright-agent.js
 var playwrightAgentJS []byte
+
+//go:embed vendor/rrweb-record.min.js
+var rrwebRecordJS []byte
+
+//go:embed vendor/rrweb-bootstrap.js
+var rrwebBootstrapJS []byte
 
 // WebAppProxyConfig holds the connection details for a WebApp PAM session.
 type WebAppProxyConfig struct {
@@ -39,7 +46,7 @@ func NewWebAppProxy(config WebAppProxyConfig) *WebAppProxy {
 
 // HandleConnection is the entry point called from HandlePAMProxy.
 //
-// It writes the embedded playwright-agent.js to a temp file, spawns
+// It writes any supporting browser assets to a temp dir, spawns
 // `node playwright-agent.js`, then simply pipes:
 //
 //	relay conn → subprocess stdin  (input events from backend → browser)
@@ -78,6 +85,24 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn *tls.Conn) erro
 	if p.config.SSLCertificate != "" {
 		env = append(env, "WEBAPP_SSL_CERTIFICATE="+p.config.SSLCertificate)
 	}
+
+	tempDir, err := os.MkdirTemp("", "infisical-webapp-agent-*")
+	if err != nil {
+		return fmt.Errorf("creating webapp agent temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	rrwebRecordPath := filepath.Join(tempDir, "rrweb-record.min.js")
+	if err := os.WriteFile(rrwebRecordPath, rrwebRecordJS, 0600); err != nil {
+		return fmt.Errorf("writing rrweb recorder bundle: %w", err)
+	}
+	env = append(env, "WEBAPP_RRWEB_RECORD_PATH="+rrwebRecordPath)
+
+	rrwebBootstrapPath := filepath.Join(tempDir, "rrweb-bootstrap.js")
+	if err := os.WriteFile(rrwebBootstrapPath, rrwebBootstrapJS, 0600); err != nil {
+		return fmt.Errorf("writing rrweb bootstrap bundle: %w", err)
+	}
+	env = append(env, "WEBAPP_RRWEB_BOOTSTRAP_PATH="+rrwebBootstrapPath)
 
 	cmd := exec.CommandContext(ctx, "node", "-e", string(playwrightAgentJS))
 	cmd.Env = env

@@ -989,7 +989,7 @@ func CallUploadPamSessionReplayTrace(httpClient *resty.Client, sessionId string,
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
-		SetHeader("Content-Type", "application/zip").
+		SetHeader("Content-Type", "application/octet-stream").
 		SetBody(trace).
 		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/replay-trace", config.INFISICAL_URL, sessionId))
 

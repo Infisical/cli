@@ -1,9 +1,5 @@
 "use strict";
 
-const fs = require("node:fs/promises");
-const os = require("node:os");
-const path = require("node:path");
-
 /**
  * playwright-agent.js
  *
@@ -52,6 +48,8 @@ const MSG_CLOSE      = 0xFF;
 const targetUrl = process.env.WEBAPP_URL;
 const sslRejectUnauthorized = process.env.WEBAPP_SSL_REJECT_UNAUTHORIZED !== "false";
 const hasSslCertificate = Boolean(process.env.WEBAPP_SSL_CERTIFICATE);
+const rrwebRecordPath = process.env.WEBAPP_RRWEB_RECORD_PATH;
+const rrwebBootstrapPath = process.env.WEBAPP_RRWEB_BOOTSTRAP_PATH;
 const MAX_RECORDED_BODY_BYTES = 64 * 1024;
 
 const SPECIAL_KEY_CODES = {
@@ -87,6 +85,16 @@ function getKeyEventParams({ key, code, modifiers = 0 }) {
 
 if (!targetUrl) {
   process.stderr.write("playwright-agent: WEBAPP_URL is required\n");
+  process.exit(1);
+}
+
+if (!rrwebRecordPath) {
+  process.stderr.write("playwright-agent: WEBAPP_RRWEB_RECORD_PATH is required\n");
+  process.exit(1);
+}
+
+if (!rrwebBootstrapPath) {
+  process.stderr.write("playwright-agent: WEBAPP_RRWEB_BOOTSTRAP_PATH is required\n");
   process.exit(1);
 }
 
@@ -201,7 +209,8 @@ async function main() {
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: !sslRejectUnauthorized || hasSslCertificate,
   });
-  await context.tracing.start({ screenshots: true, snapshots: true });
+  await context.addInitScript({ path: rrwebRecordPath });
+  await context.addInitScript({ path: rrwebBootstrapPath });
 
   const page = await context.newPage();
   const client = await context.newCDPSession(page);
@@ -209,17 +218,79 @@ async function main() {
   const requestIds = new WeakMap();
   let pageInfoInterval;
   let shuttingDown = false;
+  const recordedRRWebEvents = [];
+  const seenRRWebEventKeys = new Set();
 
-  async function stopTracingAndEmitReplayTrace() {
-    const tracePath = path.join(os.tmpdir(), `infisical-pam-trace-${process.pid}-${Date.now()}.zip`);
+  function appendRRWebEvents(events, reason) {
+    for (const event of events) {
+      const key = JSON.stringify(event);
+      if (seenRRWebEventKeys.has(key)) continue;
+      seenRRWebEventKeys.add(key);
+      recordedRRWebEvents.push(event);
+    }
+  }
+
+  await page.exposeBinding("__infisicalFlushRRWebEvents", async (_source, events, reason = "pagehide") => {
+    if (!Array.isArray(events)) return;
+    appendRRWebEvents(events, reason);
+  });
+
+  async function flushRRWebEventsFromPage(reason) {
     try {
-      await context.tracing.stop({ path: tracePath });
-      const traceBytes = await fs.readFile(tracePath);
-      await writeMessageAndWait(MSG_REPLAY_TRACE, traceBytes);
+      const events = await page.evaluate(() => {
+        const events = window.__INFISICAL_RRWEB_EVENTS || [];
+        window.__INFISICAL_RRWEB_EVENTS = [];
+        return events;
+      });
+
+      appendRRWebEvents(events, reason);
+    } catch (err) {
+      process.stderr.write(`playwright-agent: failed to flush rrweb events (${reason}): ${err.message}\n`);
+    }
+  }
+
+  async function ensureRRWebRecorderStarted() {
+    try {
+      await page.addScriptTag({ path: rrwebRecordPath });
+    } catch (err) {
+      process.stderr.write(`playwright-agent: failed to inject rrweb bundle: ${err.message}\n`);
+    }
+
+    try {
+      await page.evaluate(() => {
+        window.__INFISICAL_RRWEB_EVENTS = window.__INFISICAL_RRWEB_EVENTS || [];
+
+        if (typeof window.rrwebRecord !== "function") {
+          throw new Error("rrwebRecord global missing");
+        }
+
+        if (!window.__INFISICAL_RRWEB_STOP) {
+          window.__INFISICAL_RRWEB_STOP = window.rrwebRecord({
+            emit(event) {
+              window.__INFISICAL_RRWEB_EVENTS.push(event);
+            }
+          });
+        }
+
+        if (typeof window.rrwebRecord.takeFullSnapshot === "function") {
+          window.rrwebRecord.takeFullSnapshot(true);
+        }
+      });
+    } catch (err) {
+      process.stderr.write(`playwright-agent: failed to start rrweb recorder: ${err.message}\n`);
+    }
+  }
+
+  async function emitReplayTrace() {
+    try {
+      await flushRRWebEventsFromPage("shutdown");
+      const replayBytes = Buffer.from(JSON.stringify({
+        format: "rrweb",
+        events: recordedRRWebEvents,
+      }));
+      await writeMessageAndWait(MSG_REPLAY_TRACE, replayBytes);
     } catch (err) {
       process.stderr.write(`playwright-agent: failed to persist replay trace: ${err.message}\n`);
-    } finally {
-      await fs.unlink(tracePath).catch(() => {});
     }
   }
 
@@ -235,7 +306,7 @@ async function main() {
       // Session may already be shutting down.
     }
 
-    await stopTracingAndEmitReplayTrace();
+    await emitReplayTrace();
     await browser.close();
     process.stderr.write(`playwright-agent: shutdown complete (${reason})\n`);
     process.exit(0);
@@ -296,8 +367,13 @@ async function main() {
     }
   });
 
+  page.on("load", async () => {
+    await ensureRRWebRecorderStarted();
+  });
+
   // Navigate to target
   await page.goto(targetUrl, { waitUntil: "load", timeout: 30000 });
+  await ensureRRWebRecorderStarted();
 
   // Send initial page info
   writeJsonMessage(MSG_PAGE_INFO, { url: page.url(), title: await page.title() });
@@ -311,11 +387,8 @@ async function main() {
     quality: 95,
   });
 
-  let frameCount = 0;
   client.on("Page.screencastFrame", async ({ data, sessionId }) => {
-    frameCount += 1;
     const jpegBytes = Buffer.from(data, "base64");
-    process.stderr.write(`playwright-agent: frame #${frameCount} size=${jpegBytes.length} bytes\n`);
     writeMessage(MSG_FRAME, jpegBytes);
     // Ack so Chrome sends the next frame.
     try {
@@ -418,7 +491,9 @@ async function main() {
 
         case MSG_NAVIGATE: {
           const { url } = JSON.parse(payload.toString());
+          await flushRRWebEventsFromPage(`before navigate to ${url}`);
           await page.goto(url, { waitUntil: "load", timeout: 30000 });
+          await ensureRRWebRecorderStarted();
           break;
         }
 
