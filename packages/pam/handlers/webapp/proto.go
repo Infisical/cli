@@ -26,7 +26,8 @@ const (
 	MsgTypeNavigate  byte = 0x0B // payload: JSON {"url":"..."}
 
 	// Agent → Go handler only
-	MsgTypeHttpEvent byte = 0x0C // payload: JSON session.HttpEvent
+	MsgTypeHttpEvent   byte = 0x0C // payload: JSON session.HttpEvent
+	MsgTypeReplayTrace byte = 0x0D // payload: Playwright trace zip bytes
 
 	// Either direction
 	MsgTypeClose byte = 0xFF // payload: empty

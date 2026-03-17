@@ -35,6 +35,7 @@ type SessionFileInfo struct {
 	ExpiresAt    time.Time
 	Filename     string
 	ResourceType string // ResourceTypeSSH, ResourceTypePostgres, ResourceTypeMysql (empty for legacy files)
+	ArtifactKind string
 }
 
 type SessionUploader struct {
@@ -54,11 +55,31 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 }
 
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
-	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
-	// Build regex pattern using constants
 	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeKubernetes, ResourceTypeWebApp)
+	replayTraceRegex := regexp.MustCompile(fmt.Sprintf(`^pam_replay_trace_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
+	matches := replayTraceRegex.FindStringSubmatch(filename)
+	if len(matches) == 4 {
+		sessionID := matches[1]
+		resourceType := matches[2]
+		timestampStr := matches[3]
+
+		timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid timestamp in filename %s: %w", filename, err)
+		}
+
+		return &SessionFileInfo{
+			SessionID:    sessionID,
+			ExpiresAt:    time.Unix(timestamp, 0),
+			Filename:     filename,
+			ResourceType: resourceType,
+			ArtifactKind: ArtifactKindReplayTrace,
+		}, nil
+	}
+
+	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
-	matches := newFormatRegex.FindStringSubmatch(filename)
+	matches = newFormatRegex.FindStringSubmatch(filename)
 
 	if len(matches) == 4 {
 		sessionID := matches[1]
@@ -75,6 +96,7 @@ func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 			ExpiresAt:    time.Unix(timestamp, 0),
 			Filename:     filename,
 			ResourceType: resourceType,
+			ArtifactKind: ArtifactKindLogs,
 		}, nil
 	}
 
@@ -98,6 +120,7 @@ func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 		ExpiresAt:    time.Unix(timestamp, 0),
 		Filename:     filename,
 		ResourceType: "", // Empty for legacy files (assume database format)
+		ArtifactKind: ArtifactKindLogs,
 	}, nil
 }
 
@@ -216,6 +239,23 @@ func ReadEncryptedHttpEventsFromFile(filename string, encryptionKey string) ([]H
 	return readEncryptedEntries[HttpEvent](filename, encryptionKey)
 }
 
+func ReadEncryptedArtifactFromFile(filename string, encryptionKey string) ([]byte, error) {
+	recordingDir := GetSessionRecordingDir()
+	fullPath := filepath.Join(recordingDir, filename)
+
+	encryptedData, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read artifact file: %w", err)
+	}
+
+	decryptedData, err := DecryptData(encryptedData, encryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt artifact file: %w", err)
+	}
+
+	return decryptedData, nil
+}
+
 func (su *SessionUploader) Start() {
 	su.startOnce.Do(su.startUploadRoutine)
 }
@@ -249,7 +289,13 @@ func (su *SessionUploader) uploadExpiredSessionFiles() {
 		return
 	}
 
+	processedSessions := make(map[string]struct{}, len(expiredFiles))
 	for _, fileInfo := range expiredFiles {
+		if _, alreadyProcessed := processedSessions[fileInfo.SessionID]; alreadyProcessed {
+			continue
+		}
+		processedSessions[fileInfo.SessionID] = struct{}{}
+
 		log.Info().
 			Str("sessionId", fileInfo.SessionID).
 			Str("filename", fileInfo.Filename).
@@ -275,6 +321,21 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 	encryptionKey, err := su.credentialsManager.GetPAMSessionEncryptionKey()
 	if err != nil {
 		return fmt.Errorf("failed to get encryption key: %w", err)
+	}
+
+	if fileInfo.ArtifactKind == ArtifactKindReplayTrace {
+		traceBytes, err := ReadEncryptedArtifactFromFile(fileInfo.Filename, encryptionKey)
+		if err != nil {
+			return fmt.Errorf("failed to read replay trace file: %w", err)
+		}
+
+		log.Debug().
+			Str("sessionId", fileInfo.SessionID).
+			Str("resourceType", fileInfo.ResourceType).
+			Int("traceSizeBytes", len(traceBytes)).
+			Msg("Uploading replay trace artifact")
+
+		return api.CallUploadPamSessionReplayTrace(su.httpClient, fileInfo.SessionID, traceBytes)
 	}
 
 	// Use resource type to determine how to read the file
@@ -373,23 +434,55 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 	return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, request)
 }
 
-func FindSessionFileBySessionID(sessionID string) (*SessionFileInfo, error) {
+func FindSessionFilesBySessionID(sessionID string) ([]*SessionFileInfo, error) {
 	allFiles, err := ListSessionFiles()
 	if err != nil {
 		return nil, err
 	}
 
+	var sessionFiles []*SessionFileInfo
 	for _, file := range allFiles {
 		if file.SessionID == sessionID {
-			return file, nil
+			sessionFiles = append(sessionFiles, file)
 		}
 	}
 
-	return nil, ErrSessionFileNotFound
+	if len(sessionFiles) == 0 {
+		return nil, ErrSessionFileNotFound
+	}
+
+	return sessionFiles, nil
+}
+
+func waitForReplayTraceArtifact(sessionID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		fileInfos, err := FindSessionFilesBySessionID(sessionID)
+		if err == nil {
+			for _, fileInfo := range fileInfos {
+				if fileInfo.ArtifactKind == ArtifactKindReplayTrace {
+					return nil
+				}
+			}
+		} else if !errors.Is(err, ErrSessionFileNotFound) {
+			return err
+		}
+
+		if time.Now().After(deadline) {
+			return nil
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func (su *SessionUploader) UploadSessionLogsBySessionID(sessionID string) error {
-	fileInfo, err := FindSessionFileBySessionID(sessionID)
+	if err := waitForReplayTraceArtifact(sessionID, 5*time.Second); err != nil {
+		return fmt.Errorf("failed waiting for replay trace artifact: %w", err)
+	}
+
+	fileInfos, err := FindSessionFilesBySessionID(sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionFileNotFound) {
 			log.Debug().Str("sessionId", sessionID).Msg("Session file not found, skipping upload")
@@ -398,21 +491,30 @@ func (su *SessionUploader) UploadSessionLogsBySessionID(sessionID string) error 
 		return fmt.Errorf("failed to find session file: %w", err)
 	}
 
-	log.Info().Str("sessionId", sessionID).Str("filename", fileInfo.Filename).Msg("Uploading session logs for terminating session")
+	for _, fileInfo := range fileInfos {
+		log.Info().
+			Str("sessionId", sessionID).
+			Str("filename", fileInfo.Filename).
+			Str("artifactKind", fileInfo.ArtifactKind).
+			Msg("Uploading session artifact for terminating session")
 
-	if err := su.uploadSessionFile(fileInfo); err != nil {
-		return fmt.Errorf("failed to upload session logs: %w", err)
+		if err := su.uploadSessionFile(fileInfo); err != nil {
+			return fmt.Errorf("failed to upload session artifact %s: %w", fileInfo.Filename, err)
+		}
+
+		recordingDir := GetSessionRecordingDir()
+		fullPath := filepath.Join(recordingDir, fileInfo.Filename)
+		if err := os.Remove(fullPath); err != nil {
+			log.Warn().Err(err).Str("filename", fileInfo.Filename).Msg("Failed to delete uploaded session artifact")
+			return fmt.Errorf("failed to delete uploaded session artifact: %w", err)
+		}
+
+		log.Info().
+			Str("sessionId", sessionID).
+			Str("filename", fileInfo.Filename).
+			Str("artifactKind", fileInfo.ArtifactKind).
+			Msg("Successfully uploaded and deleted session artifact")
 	}
-
-	// Delete the uploaded file
-	recordingDir := GetSessionRecordingDir()
-	fullPath := filepath.Join(recordingDir, fileInfo.Filename)
-	if err := os.Remove(fullPath); err != nil {
-		log.Warn().Err(err).Str("filename", fileInfo.Filename).Msg("Failed to delete uploaded session file")
-		return fmt.Errorf("failed to delete uploaded session file: %w", err)
-	}
-
-	log.Info().Str("sessionId", sessionID).Str("filename", fileInfo.Filename).Msg("Successfully uploaded and deleted session file")
 	return nil
 }
 

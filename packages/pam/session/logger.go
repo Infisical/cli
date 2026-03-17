@@ -64,11 +64,13 @@ type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
 	LogTerminalEvent(event TerminalEvent) error
 	LogHttpEvent(event HttpEvent) error
+	LogReplayTrace(trace []byte) error
 	Close() error
 }
 
 type EncryptedSessionLogger struct {
 	sessionID     string
+	resourceType  string
 	encryptionKey string
 	expiresAt     time.Time
 	file          *os.File
@@ -81,6 +83,11 @@ type RequestResponsePair struct {
 	Input     string    `json:"input"`
 	Output    string    `json:"output"`
 }
+
+const (
+	ArtifactKindLogs        = "logs"
+	ArtifactKindReplayTrace = "replay_trace"
+)
 
 var (
 	sessionMutexes     = make(map[string]*sessionMutexInfo)
@@ -187,14 +194,7 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 		return nil, fmt.Errorf("failed to create session recording directory: %w", err)
 	}
 
-	// Use new filename format with resource type if provided
-	var filename string
-	if resourceType != "" {
-		filename = fmt.Sprintf("pam_session_%s_%s_expires_%d.enc", sessionID, resourceType, expiresAt.Unix())
-	} else {
-		// Legacy format for backwards compatibility
-		filename = fmt.Sprintf("pam_session_%s_expires_%d.enc", sessionID, expiresAt.Unix())
-	}
+	filename := buildSessionLogFilename(sessionID, expiresAt, resourceType)
 	fullPath := filepath.Join(recordingDir, filename)
 
 	// Open file in append mode to support multiple connections per session
@@ -205,11 +205,27 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 
 	return &EncryptedSessionLogger{
 		sessionID:     sessionID,
+		resourceType:  resourceType,
 		encryptionKey: encryptionKey,
 		expiresAt:     expiresAt,
 		file:          file,
 		sessionStart:  time.Now(),
 	}, nil
+}
+
+func buildSessionLogFilename(sessionID string, expiresAt time.Time, resourceType string) string {
+	if resourceType != "" {
+		return fmt.Sprintf("pam_session_%s_%s_expires_%d.enc", sessionID, resourceType, expiresAt.Unix())
+	}
+	// Legacy format for backwards compatibility
+	return fmt.Sprintf("pam_session_%s_expires_%d.enc", sessionID, expiresAt.Unix())
+}
+
+func buildSessionReplayTraceFilename(sessionID string, expiresAt time.Time, resourceType string) string {
+	if resourceType == "" {
+		resourceType = ResourceTypeWebApp
+	}
+	return fmt.Sprintf("pam_replay_trace_%s_%s_expires_%d.enc", sessionID, resourceType, expiresAt.Unix())
 }
 
 func (sl *EncryptedSessionLogger) writeEvent(productEventData func() ([]byte, error)) error {
@@ -275,6 +291,30 @@ func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
 		return json.Marshal(event)
 	})
+}
+
+func (sl *EncryptedSessionLogger) LogReplayTrace(trace []byte) error {
+	if len(trace) == 0 {
+		return nil
+	}
+
+	encryptedData, err := EncryptData(trace, sl.encryptionKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt replay trace: %w", err)
+	}
+
+	recordingDir := GetSessionRecordingDir()
+	fullPath := filepath.Join(recordingDir, buildSessionReplayTraceFilename(sl.sessionID, sl.expiresAt, sl.resourceType))
+
+	sessionMutex := getSessionMutex(sl.sessionID, sl.expiresAt)
+	sessionMutex.Lock()
+	defer sessionMutex.Unlock()
+
+	if err := os.WriteFile(fullPath, encryptedData, 0600); err != nil {
+		return fmt.Errorf("failed to write replay trace: %w", err)
+	}
+
+	return nil
 }
 
 func (sl *EncryptedSessionLogger) Close() error {

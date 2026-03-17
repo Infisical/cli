@@ -103,13 +103,15 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn *tls.Conn) erro
 		Int("pid", cmd.Process.Pid).
 		Msg("WebApp PAM session started")
 
-	errCh := make(chan error, 3)
+	stdinDoneCh := make(chan error, 1)
+	stdoutDoneCh := make(chan error, 1)
+	waitDoneCh := make(chan error, 1)
 
 	// relay conn → subprocess stdin: input events (backend → agent)
 	go func() {
 		_, copyErr := io.Copy(stdin, conn)
 		stdin.Close()
-		errCh <- fmt.Errorf("conn→stdin closed: %w", copyErr)
+		stdinDoneCh <- copyErr
 	}()
 
 	// subprocess stdout → relay conn: frames + page-info (agent → backend)
@@ -118,14 +120,14 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn *tls.Conn) erro
 		for {
 			msgType, payload, readErr := ReadMessage(stdout)
 			if readErr != nil {
-				errCh <- fmt.Errorf("stdout message stream closed: %w", readErr)
+				stdoutDoneCh <- readErr
 				return
 			}
 
 			switch msgType {
 			case MsgTypeFrame, MsgTypePageInfo:
 				if writeErr := WriteMessage(conn, msgType, payload); writeErr != nil {
-					errCh <- fmt.Errorf("forwarding agent message 0x%02x: %w", msgType, writeErr)
+					stdoutDoneCh <- fmt.Errorf("forwarding agent message 0x%02x: %w", msgType, writeErr)
 					return
 				}
 			case MsgTypeHttpEvent:
@@ -136,6 +138,10 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn *tls.Conn) erro
 				}
 				if err := p.config.SessionLogger.LogHttpEvent(event); err != nil {
 					log.Error().Err(err).Str("sessionId", p.config.SessionID).Msg("Failed to log WebApp HTTP event")
+				}
+			case MsgTypeReplayTrace:
+				if err := p.config.SessionLogger.LogReplayTrace(payload); err != nil {
+					log.Error().Err(err).Str("sessionId", p.config.SessionID).Msg("Failed to persist WebApp replay trace")
 				}
 			default:
 				log.Debug().
@@ -149,17 +155,43 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn *tls.Conn) erro
 	// wait for the agent process to exit
 	go func() {
 		if waitErr := cmd.Wait(); waitErr != nil {
-			errCh <- fmt.Errorf("playwright agent exited: %w", waitErr)
+			waitDoneCh <- fmt.Errorf("playwright agent exited: %w", waitErr)
 		} else {
-			errCh <- fmt.Errorf("playwright agent exited normally")
+			waitDoneCh <- nil
 		}
 	}()
 
-	select {
-	case err := <-errCh:
-		log.Info().Err(err).Str("sessionId", p.config.SessionID).Msg("WebApp session ended")
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for {
+		select {
+		case copyErr := <-stdinDoneCh:
+			if copyErr != nil {
+				log.Info().
+					Err(copyErr).
+					Str("sessionId", p.config.SessionID).
+					Msg("WebApp relay input stream closed with error")
+				return nil
+			}
+
+			log.Debug().
+				Str("sessionId", p.config.SessionID).
+				Msg("WebApp relay input stream closed cleanly; waiting for agent shutdown")
+		case readErr := <-stdoutDoneCh:
+			if readErr != nil {
+				log.Info().
+					Err(readErr).
+					Str("sessionId", p.config.SessionID).
+					Msg("WebApp agent stdout stream closed")
+			}
+			return nil
+		case waitErr := <-waitDoneCh:
+			if waitErr != nil {
+				log.Info().Err(waitErr).Str("sessionId", p.config.SessionID).Msg("WebApp session ended")
+			} else {
+				log.Info().Str("sessionId", p.config.SessionID).Msg("WebApp session ended cleanly")
+			}
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }

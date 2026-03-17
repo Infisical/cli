@@ -52,6 +52,7 @@ const (
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
+	operationCallUploadPamSessionReplayTrace       = "CallUploadPamSessionReplayTrace"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
@@ -979,6 +980,25 @@ func CallUploadPamSessionLogs(httpClient *resty.Client, sessionId string, reques
 
 	if response.IsError() {
 		return NewAPIErrorWithResponse(operationCallUploadPamSessionLog, response, nil)
+	}
+
+	return nil
+}
+
+func CallUploadPamSessionReplayTrace(httpClient *resty.Client, sessionId string, trace []byte) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("Content-Type", "application/zip").
+		SetBody(trace).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/replay-trace", config.INFISICAL_URL, sessionId))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallUploadPamSessionReplayTrace, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallUploadPamSessionReplayTrace, response, nil)
 	}
 
 	return nil

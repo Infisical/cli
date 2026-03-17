@@ -1,5 +1,9 @@
 "use strict";
 
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+
 /**
  * playwright-agent.js
  *
@@ -42,6 +46,7 @@ const MSG_SCROLL     = 0x09;
 const MSG_RESIZE     = 0x0A;
 const MSG_NAVIGATE   = 0x0B;
 const MSG_HTTP_EVENT = 0x0C;
+const MSG_REPLAY_TRACE = 0x0D;
 const MSG_CLOSE      = 0xFF;
 
 const targetUrl = process.env.WEBAPP_URL;
@@ -96,6 +101,21 @@ function writeMessage(type, payload) {
   buf[4] = type;
   payload.copy(buf, 5);
   process.stdout.write(buf);
+}
+
+function writeMessageAndWait(type, payload) {
+  const totalLen = 1 + payload.length;
+  const buf = Buffer.allocUnsafe(4 + 1 + payload.length);
+  buf.writeUInt32BE(totalLen, 0);
+  buf[4] = type;
+  payload.copy(buf, 5);
+
+  return new Promise((resolve, reject) => {
+    process.stdout.write(buf, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 }
 
 function writeJsonMessage(type, obj) {
@@ -181,11 +201,45 @@ async function main() {
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: !sslRejectUnauthorized || hasSslCertificate,
   });
+  await context.tracing.start({ screenshots: true, snapshots: true });
 
   const page = await context.newPage();
   const client = await context.newCDPSession(page);
   let requestCounter = 0;
   const requestIds = new WeakMap();
+  let pageInfoInterval;
+  let shuttingDown = false;
+
+  async function stopTracingAndEmitReplayTrace() {
+    const tracePath = path.join(os.tmpdir(), `infisical-pam-trace-${process.pid}-${Date.now()}.zip`);
+    try {
+      await context.tracing.stop({ path: tracePath });
+      const traceBytes = await fs.readFile(tracePath);
+      await writeMessageAndWait(MSG_REPLAY_TRACE, traceBytes);
+    } catch (err) {
+      process.stderr.write(`playwright-agent: failed to persist replay trace: ${err.message}\n`);
+    } finally {
+      await fs.unlink(tracePath).catch(() => {});
+    }
+  }
+
+  async function shutdown(reason) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    if (pageInfoInterval) clearInterval(pageInfoInterval);
+
+    try {
+      await client.send("Page.stopScreencast");
+    } catch {
+      // Session may already be shutting down.
+    }
+
+    await stopTracingAndEmitReplayTrace();
+    await browser.close();
+    process.stderr.write(`playwright-agent: shutdown complete (${reason})\n`);
+    process.exit(0);
+  }
 
   page.on("request", async (request) => {
     try {
@@ -273,7 +327,7 @@ async function main() {
 
   // Poll for URL/title changes every 2 s and emit PAGE_INFO on change.
   let lastUrl = page.url();
-  const pageInfoInterval = setInterval(async () => {
+  pageInfoInterval = setInterval(async () => {
     try {
       const currentUrl = page.url();
       if (currentUrl !== lastUrl) {
@@ -294,9 +348,7 @@ async function main() {
       switch (msgType) {
 
         case MSG_CLOSE:
-          clearInterval(pageInfoInterval);
-          await browser.close();
-          process.exit(0);
+          await shutdown("close message");
           break;
 
         case MSG_MOUSE_MOVE: {
@@ -380,15 +432,11 @@ async function main() {
 
   // Keep process alive until stdin closes (Go handler closed connection).
   process.stdin.on("end", async () => {
-    clearInterval(pageInfoInterval);
-    await browser.close();
-    process.exit(0);
+    await shutdown("stdin closed");
   });
 
   process.on("SIGTERM", async () => {
-    clearInterval(pageInfoInterval);
-    await browser.close();
-    process.exit(0);
+    await shutdown("sigterm");
   });
 }
 
