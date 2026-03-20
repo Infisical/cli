@@ -261,10 +261,6 @@ func TestWriteUpdateCheckCache_AtomicWrite(t *testing.T) {
 	}
 	tmpFile.Close()
 
-	if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
-		t.Fatalf("failed to chmod: %v", err)
-	}
-
 	if err := os.Rename(tmpFile.Name(), cachePath); err != nil {
 		t.Fatalf("failed to rename: %v", err)
 	}

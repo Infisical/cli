@@ -199,11 +199,6 @@ func writeUpdateCheckCache(cache *UpdateCheckCache) error {
 		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to set file permissions: %w", err)
-	}
-
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename temp file: %w", err)
