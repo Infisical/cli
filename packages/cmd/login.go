@@ -457,9 +457,13 @@ func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, shouldPr
 
 	preconfiguredUrl := strings.TrimSuffix(presetDomain, "/api")
 
-	// If the domain flag was explicitly set by the user, use it directly (even for US/EU cloud URLs)
-	// Otherwise, only use the preset domain if it's not a default cloud URL
-	shouldUsePresetDomain := preconfiguredUrl != "" && (domainFlagExplicitlySet || (preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL))
+	// Treat INFISICAL_API_URL env var as an explicit domain choice, same as --domain flag
+	_, infisicalApiUrlEnvSet := os.LookupEnv("INFISICAL_API_URL")
+
+	// If the domain flag was explicitly set by the user, or INFISICAL_API_URL env var is set,
+	// use it directly (even for US/EU cloud URLs).
+	// Otherwise, only use the preset domain if it's not a default cloud URL.
+	shouldUsePresetDomain := preconfiguredUrl != "" && (domainFlagExplicitlySet || infisicalApiUrlEnvSet || (preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL))
 
 	if shouldUsePresetDomain {
 		parsedDomain := strings.TrimSuffix(strings.Trim(preconfiguredUrl, "/"), "/api")
