@@ -14,6 +14,7 @@ require (
 	github.com/fatih/semgroup v1.2.0
 	github.com/gitleaks/go-gitdiff v0.9.1
 	github.com/go-mysql-org/go-mysql v1.13.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
 	github.com/infisical/go-sdk v0.6.8

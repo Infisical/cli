@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/zalando/go-keyring"
 )
 
@@ -83,17 +84,8 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 			}
 		}
 
-		// check to to see if the JWT is still valid
-		httpClient, err := GetRestyClientWithCustomHeaders()
-		if err != nil {
-			return LoggedInUserDetails{}, fmt.Errorf("getCurrentLoggedInUserDetails: unable to get client with custom headers [err=%s]", err)
-		}
+		isAuthenticated := !IsJWTExpired(userCreds.JTWToken)
 
-		httpClient.
-			SetAuthToken(userCreds.JTWToken).
-			SetHeader("Accept", "application/json")
-
-		isAuthenticated := api.CallIsAuthenticated(httpClient)
 		// TODO: add refresh token
 		// if !isAuthenticated {
 		// 	accessTokenResponse, err := api.CallGetNewAccessTokenWithRefreshToken(httpClient, userCreds.RefreshToken)
@@ -101,11 +93,6 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 		// 		isAuthenticated = true
 		// 		userCreds.JTWToken = accessTokenResponse.Token
 		// 	}
-		// }
-
-		// err = StoreUserCredsInKeyRing(&userCreds)
-		// if err != nil {
-		// 	log.Debug().Msg("unable to store your user credentials with new access token")
 		// }
 
 		if !isAuthenticated {
@@ -124,4 +111,18 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 	} else {
 		return LoggedInUserDetails{}, nil
 	}
+}
+
+func IsJWTExpired(token string) bool {
+	parser := jwt.NewParser()
+	claims := &jwt.RegisteredClaims{}
+	_, _, err := parser.ParseUnverified(token, claims)
+	if err != nil {
+		return true
+	}
+	if claims.ExpiresAt == nil {
+		return true
+	}
+	// 30-second buffer to avoid race between local check and subsequent API call
+	return claims.ExpiresAt.Before(time.Now().Add(30 * time.Second))
 }
