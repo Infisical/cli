@@ -43,7 +43,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetProjectIdFromFlag(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -171,7 +171,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetProjectIdFromFlag(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -342,7 +342,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetProjectIdFromFlag(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -477,7 +477,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetProjectIdFromFlag(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -605,7 +605,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetProjectIdFromFlag(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -705,7 +705,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 func init() {
 	dynamicSecretLeaseCreateCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseCreateCmd.Flags().String("token", "", "Create dynamic secret leases using machine identity access token")
-	dynamicSecretLeaseCreateCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseCreateCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth. Can also be set via INFISICAL_PROJECT_ID env variable")
 	dynamicSecretLeaseCreateCmd.Flags().String("project-slug", "", "Manually set the project-slug to create lease in")
 	dynamicSecretLeaseCreateCmd.Flags().String("ttl", "", "The lease lifetime TTL. If not provided the default TTL of dynamic secret will be used.")
 	dynamicSecretLeaseCreateCmd.Flags().Bool("plain", false, "Print leased credentials without formatting, one per line")
@@ -720,14 +720,14 @@ func init() {
 
 	dynamicSecretLeaseListCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseListCmd.Flags().String("token", "", "Fetch dynamic secret leases machine identity access token")
-	dynamicSecretLeaseListCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseListCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth. Can also be set via INFISICAL_PROJECT_ID env variable")
 	dynamicSecretLeaseListCmd.Flags().String("project-slug", "", "Manually set the project-slug to list leases from")
 	util.AddOutputFlagsToCmd(dynamicSecretLeaseListCmd, "The output to format the dynamic secret leases in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseListCmd)
 
 	dynamicSecretLeaseRenewCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseRenewCmd.Flags().String("token", "", "Renew dynamic secrets machine identity access token")
-	dynamicSecretLeaseRenewCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseRenewCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth. Can also be set via INFISICAL_PROJECT_ID env variable")
 	dynamicSecretLeaseRenewCmd.Flags().String("project-slug", "", "Manually set the project-slug to renew lease in")
 	dynamicSecretLeaseRenewCmd.Flags().String("ttl", "", "The lease lifetime TTL. If not provided the default TTL of dynamic secret will be used.")
 	util.AddOutputFlagsToCmd(dynamicSecretLeaseRenewCmd, "The output to format the dynamic secret lease renewal in.")
@@ -735,7 +735,7 @@ func init() {
 
 	dynamicSecretLeaseRevokeCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseRevokeCmd.Flags().String("token", "", "Delete dynamic secrets using machine identity access token")
-	dynamicSecretLeaseRevokeCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseRevokeCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth. Can also be set via INFISICAL_PROJECT_ID env variable")
 	dynamicSecretLeaseRevokeCmd.Flags().String("project-slug", "", "Manually set the project-slug to revoke lease from")
 	util.AddOutputFlagsToCmd(dynamicSecretLeaseRevokeCmd, "The output to format the dynamic secret lease revocation in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseRevokeCmd)
@@ -743,7 +743,7 @@ func init() {
 	dynamicSecretCmd.AddCommand(dynamicSecretLeaseCmd)
 
 	dynamicSecretCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	dynamicSecretCmd.Flags().String("projectId", "", "Manually set the projectId to fetch dynamic-secret when using machine identity based auth")
+	dynamicSecretCmd.Flags().String("projectId", "", "Manually set the projectId to fetch dynamic-secret when using machine identity based auth. Can also be set via INFISICAL_PROJECT_ID env variable")
 	dynamicSecretCmd.Flags().String("project-slug", "", "Manually set the project-slug to fetch dynamic-secret from")
 	dynamicSecretCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	dynamicSecretCmd.Flags().String("path", "/", "get dynamic secret within a folder path")
