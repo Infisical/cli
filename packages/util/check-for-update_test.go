@@ -47,14 +47,24 @@ func TestIsCacheFresh(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "urgent bypasses TTL and needs updating",
+			name: "urgent with expired short TTL needs updating",
 			cache: &UpdateCheckCache{
-				LastCheckTime:         time.Now(),
+				LastCheckTime:         time.Now().Add(-10 * time.Minute),
 				LatestVersion:         "2.0.0",
 				CurrentVersionAtCheck: CLI_VERSION,
 				IsUrgent:              true,
 			},
 			expected: false,
+		},
+		{
+			name: "urgent with recent check is still fresh",
+			cache: &UpdateCheckCache{
+				LastCheckTime:         time.Now().Add(-2 * time.Minute),
+				LatestVersion:         "2.0.0",
+				CurrentVersionAtCheck: CLI_VERSION,
+				IsUrgent:              true,
+			},
+			expected: true,
 		},
 		{
 			name: "expired TTL (>24h) needs updating",

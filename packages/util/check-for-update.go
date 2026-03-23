@@ -23,6 +23,7 @@ var githubHTTPClient = &http.Client{Timeout: 8 * time.Second}
 var updateCheckWg sync.WaitGroup
 
 const updateCheckCacheTTL = 24 * time.Hour
+const urgentUpdateCheckCacheTTL = 5 * time.Minute
 
 type UpdateCheckCache struct {
 	LastCheckTime             time.Time `json:"lastCheckTime"`
@@ -62,10 +63,11 @@ func isCacheFresh(cache *UpdateCheckCache) bool {
 	if cache == nil || cache.LatestVersion == "" || cache.CurrentVersionAtCheck != CLI_VERSION {
 		return false
 	}
+	ttl := updateCheckCacheTTL
 	if cache.IsUrgent {
-		return false
+		ttl = urgentUpdateCheckCacheTTL
 	}
-	return time.Since(cache.LastCheckTime) < updateCheckCacheTTL
+	return time.Since(cache.LastCheckTime) < ttl
 }
 
 // displayCachedUpdateNotice prints an update notification from cached data.

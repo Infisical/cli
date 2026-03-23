@@ -2,6 +2,11 @@ name: Build and release CLI
 
 on:
   workflow_dispatch:
+    inputs:
+      is_urgent:
+        description: "Mark this release as urgent (bypasses 48h grace period for update notifications)"
+        type: boolean
+        default: false
 
   push:
     # run only against tags
@@ -123,6 +128,14 @@ jobs:
           FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Mark release as urgent
+        if: ${{ inputs.is_urgent == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+        run: |
+          CURRENT_BODY=$(gh release view "${{ github.ref_name }}" --json body -q .body)
+          gh release edit "${{ github.ref_name }}" --notes "${CURRENT_BODY}
+          <!-- #urgent -->"
       - uses: actions/setup-python@v4
         with:
           python-version: "3.12"
