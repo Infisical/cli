@@ -27,11 +27,14 @@ func UserInitCmd() {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
 				terminalOut := string(buf)
-				if strings.Contains(terminalOut, "Which Infisical organization would you like to select a project from?") && step < 0  {
+				if strings.Contains(terminalOut, "Which Infisical organization would you like to select a project from?") && step < 0 {
 					step += 1
 					stepChan <- step
-				} else if strings.Contains(terminalOut, "Which of your Infisical projects would you like to connect this project to?") && step < 1 {
-					step += 1;
+				} else if strings.Contains(terminalOut, "Which scope within") && step < 1 {
+					step += 1
+					stepChan <- step
+				} else if strings.Contains(terminalOut, "Which of your Infisical projects would you like to connect this project to?") && step < 2 {
+					step += 1
 					stepChan <- step
 				}
 			}
@@ -44,9 +47,11 @@ func UserInitCmd() {
 
 	for i := range stepChan {
 		switch i {
-		case 0: 
+		case 0:
 			ptmx.Write([]byte("\n"))
 		case 1:
+			ptmx.Write([]byte("\n"))
+		case 2:
 			ptmx.Write([]byte("\n"))
 		}
 	}

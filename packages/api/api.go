@@ -23,6 +23,7 @@ const (
 	operationCallLogin2V3                          = "CallLogin2V3"
 	operationCallLoginV3                           = "CallLoginV3"
 	operationCallGetAllOrganizations               = "CallGetAllOrganizations"
+	operationCallGetAllOrganizationsWithSubOrgs    = "CallGetAllOrganizationsWithSubOrgs"
 	operationCallSelectOrganization                = "CallSelectOrganization"
 	operationCallGetAllWorkSpacesUserBelongsTo     = "CallGetAllWorkSpacesUserBelongsTo"
 	operationCallGetProjectById                    = "CallGetProjectById"
@@ -63,6 +64,7 @@ const (
 )
 
 var ErrNotFound = errors.New("resource not found")
+var ErrEndpointNotSupported = errors.New("endpoint not supported by this Infisical instance")
 
 func CallGetEncryptedWorkspaceKey(httpClient *resty.Client, request GetEncryptedWorkspaceKeyRequest) (GetEncryptedWorkspaceKeyResponse, error) {
 	endpoint := fmt.Sprintf("%v/v2/workspace/%v/encrypted-key", config.INFISICAL_URL, request.WorkspaceId)
@@ -215,6 +217,31 @@ func CallLogin2V2(httpClient *resty.Client, request GetLoginTwoV2Request) (GetLo
 	}
 
 	return loginTwoV2Response, nil
+}
+
+func CallGetAllOrganizationsWithSubOrgs(httpClient *resty.Client) (GetOrganizationsWithSubOrgsResponse, error) {
+	var resp GetOrganizationsWithSubOrgsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resp).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/organization/accessible-with-sub-orgs", config.INFISICAL_URL))
+
+	if err != nil {
+		return GetOrganizationsWithSubOrgsResponse{}, NewGenericRequestError(operationCallGetAllOrganizationsWithSubOrgs, err)
+	}
+
+	// 404 means this Infisical instance doesn't support the endpoint yet (older self-hosted).
+	// Check before the generic IsError() so we can return the sentinel instead of an API error.
+	if response.StatusCode() == http.StatusNotFound {
+		return GetOrganizationsWithSubOrgsResponse{}, ErrEndpointNotSupported
+	}
+
+	if response.IsError() {
+		return GetOrganizationsWithSubOrgsResponse{}, NewAPIErrorWithResponse(operationCallGetAllOrganizationsWithSubOrgs, response, nil)
+	}
+
+	return resp, nil
 }
 
 func CallGetAllOrganizations(httpClient *resty.Client) (GetOrganizationsResponse, error) {

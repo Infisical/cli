@@ -713,27 +713,10 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizatio
 	selectedOrganizationId := organizationId
 
 	if selectedOrganizationId == "" {
-		organizationResponse, err := api.CallGetAllOrganizations(httpClient)
-
+		selectedOrganizationId, err = pickOrganization(httpClient, "Which Infisical organization would you like to log into?")
 		if err != nil {
-			util.HandleError(err, "Unable to pull organizations that belong to you")
+			util.HandleError(err, "Unable to select organization")
 		}
-
-		organizations := organizationResponse.Organizations
-
-		organizationNames := util.GetOrganizationsNameList(organizationResponse)
-
-		prompt := promptui.Select{
-			Label: "Which Infisical organization would you like to log into?",
-			Items: organizationNames,
-		}
-
-		index, _, err := prompt.Run()
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		selectedOrganizationId = organizations[index].ID
 	}
 
 	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganizationId})
