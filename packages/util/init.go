@@ -8,10 +8,9 @@ import (
 	"github.com/Infisical/infisical-merge/packages/models"
 )
 
-// OrgPickerItem pairs a display label with the org ID to pass to CallSelectOrganization.
+// OrgPickerItem holds the org ID to pass to CallSelectOrganization.
 type OrgPickerItem struct {
-	ID    string
-	Label string
+	ID string
 }
 
 // BuildOrgRootLabels returns first-prompt labels: org name with sub-org count when present.
@@ -39,11 +38,11 @@ func BuildSubOrgPickerItems(rootID, rootName string, subs []api.SubOrganization)
 	labels := make([]string, 0, 1+len(subs))
 
 	rootLabel := fmt.Sprintf("%s (organization)", rootName)
-	items = append(items, OrgPickerItem{ID: rootID, Label: rootLabel})
+	items = append(items, OrgPickerItem{ID: rootID})
 	labels = append(labels, rootLabel)
 
 	for _, sub := range subs {
-		items = append(items, OrgPickerItem{ID: sub.ID, Label: sub.Name})
+		items = append(items, OrgPickerItem{ID: sub.ID})
 		labels = append(labels, sub.Name)
 	}
 	return items, labels

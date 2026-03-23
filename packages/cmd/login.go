@@ -713,7 +713,7 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizatio
 	selectedOrganizationId := organizationId
 
 	if selectedOrganizationId == "" {
-		selectedOrganizationId, err = pickOrganization(httpClient, "Which Infisical organization would you like to log into?")
+		selectedOrganizationId, err = pickOrganization(httpClient, "Which Infisical organization would you like to log into?", email)
 		if err != nil {
 			util.HandleError(err, "Unable to select organization")
 		}

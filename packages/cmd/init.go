@@ -57,7 +57,7 @@ var initCmd = &cobra.Command{
 		}
 		httpClient.SetAuthToken(userCreds.UserCredentials.JTWToken)
 
-		selectedOrgID, err := pickOrganization(httpClient, "Which Infisical organization would you like to select a project from?")
+		selectedOrgID, err := pickOrganization(httpClient, "Which Infisical organization would you like to select a project from?", userCreds.UserCredentials.Email)
 		if err != nil {
 			util.HandleError(err, "Unable to select organization")
 		}
@@ -153,7 +153,7 @@ func init() {
 // GET /v1/organization is always used as the source of truth for the org list.
 // GET /v1/organization/accessible-with-sub-orgs is used only to enrich entries with sub-org
 // counts and the second-level picker — if it fails or omits an org, that org still appears.
-func pickOrganization(httpClient *resty.Client, label string) (string, error) {
+func pickOrganization(httpClient *resty.Client, label string, username string) (string, error) {
 	orgResp, err := api.CallGetAllOrganizations(httpClient)
 	if err != nil {
 		return "", err
@@ -166,7 +166,7 @@ func pickOrganization(httpClient *resty.Client, label string) (string, error) {
 	// Best-effort: enrich with sub-org data. Ignore any error — the flat list is enough.
 	subOrgMap := map[string][]api.SubOrganization{}
 	if subOrgsResp, err := api.CallGetAllOrganizationsWithSubOrgs(httpClient); err != nil {
-		log.Debug().Err(err).Msg("Failed to fetch sub-org data; falling back to flat org list")
+		log.Debug().Err(err).Str("username", username).Msg("Failed to fetch sub-org data; falling back to flat org list")
 	} else {
 		for _, o := range subOrgsResp.Organizations {
 			subOrgMap[o.ID] = o.SubOrganizations
