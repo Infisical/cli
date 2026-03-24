@@ -1,0 +1,20 @@
+name: Mark latest release as urgent
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mark-urgent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark latest release as urgent
+        env:
+          GH_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
+          CURRENT_BODY=$(gh api repos/${{ github.repository }}/releases/latest --jq '.body')
+          gh release edit "$LATEST_TAG" --repo "${{ github.repository }}" --notes "${CURRENT_BODY}
+          <!-- #urgent -->"
