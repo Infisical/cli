@@ -81,10 +81,6 @@ func InstallKmipSystemdService(clientId, clientSecret, domain, listenAddress, se
 		return fmt.Errorf("failed to reload systemd: %v", err)
 	}
 
-	log.Info().Msg("Successfully installed systemd service")
-	log.Info().Msg("To start the service, run: sudo systemctl start infisical-kmip")
-	log.Info().Msg("To enable the service on boot, run: sudo systemctl enable infisical-kmip")
-
 	return nil
 }
 

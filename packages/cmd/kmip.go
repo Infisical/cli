@@ -191,7 +191,7 @@ var kmipSystemdUninstallCmd = &cobra.Command{
 		}
 
 		if os.Geteuid() != 0 {
-			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+			util.HandleError(fmt.Errorf("systemd service uninstallation requires root/sudo privileges"))
 		}
 
 		if err := localkmip.UninstallKmipSystemdService(); err != nil {
