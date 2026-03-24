@@ -1,15 +1,20 @@
-name: Build and release CLI (Urgent)
+name: Mark latest release as urgent
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
-  release:
-    uses: ./.github/workflows/release_build_infisical_cli.yml
-    with:
-      is_urgent: true
-    secrets: inherit
+  mark-urgent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark latest release as urgent
+        env:
+          GH_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
+          CURRENT_BODY=$(gh api repos/${{ github.repository }}/releases/latest --jq '.body')
+          gh release edit "$LATEST_TAG" --repo "${{ github.repository }}" --notes "${CURRENT_BODY}
+          <!-- #urgent -->"
