@@ -11,6 +11,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
@@ -38,6 +39,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypePostgres,
 		session.ResourceTypeMysql,
 		session.ResourceTypeMssql,
+		session.ResourceTypeMongoDB,
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
@@ -229,6 +231,25 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mssqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MSSQL PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeMongoDB:
+		mongodbConfig := mongodb.MongoDBProxyConfig{
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+
+		proxy := mongodb.NewMongoDBProxy(mongodbConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", mongodbConfig.TargetAddr).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting MongoDB PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeRedis:
 		redisConfig := redis.RedisProxyConfig{

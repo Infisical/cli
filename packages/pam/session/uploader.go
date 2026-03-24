@@ -26,6 +26,7 @@ const (
 	ResourceTypeMysql      = "mysql"
 	ResourceTypeMssql      = "mssql"
 	ResourceTypeRedis      = "redis"
+	ResourceTypeMongoDB    = "mongodb"
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
 )

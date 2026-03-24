@@ -123,6 +123,11 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		util.PrintfStderr("mysql://%s@localhost:%d/%s", username, proxy.port, database)
 	case session.ResourceTypeMssql:
 		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
+	case session.ResourceTypeMongoDB:
+		// No credentials in connection string — the proxy handles auth to the real server.
+		// MongoDB SCRAM is a mutual auth protocol (the client verifies the server's signature),
+		// so we can't fake it on the proxy side. Clients connect without credentials instead.
+		util.PrintfStderr("mongodb://localhost:%d/%s", proxy.port, database)
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}
