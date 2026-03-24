@@ -2,9 +2,10 @@ name: Build and release CLI
 
 on:
   workflow_dispatch:
+
+  workflow_call:
     inputs:
       is_urgent:
-        description: "Mark this release as urgent (bypasses 48h grace period for update notifications)"
         type: boolean
         default: false
 
