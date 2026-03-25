@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Infisical/infisical.git"
+    "url": "https://github.com/Infisical/cli.git"
   },
   "author": "Infisical Inc, <daniel@infisical.com>",
   "scripts": {
