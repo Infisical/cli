@@ -164,16 +164,16 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	}
 
 	// Best-effort: enrich with sub-org data. Ignore any error — the flat list is enough.
-	subOrgMap := map[string][]api.SubOrganization{}
+	subOrgsByOrgID := map[string][]api.SubOrganization{}
 	if subOrgsResp, err := api.CallGetAllOrganizationsWithSubOrgs(httpClient); err != nil {
 		log.Debug().Err(err).Str("username", username).Msg("Failed to fetch sub-org data; falling back to flat org list")
 	} else {
 		for _, o := range subOrgsResp.Organizations {
-			subOrgMap[o.ID] = o.SubOrganizations
+			subOrgsByOrgID[o.ID] = o.SubOrganizations
 		}
 	}
 
-	labels := util.BuildOrgRootLabels(orgs, subOrgMap)
+	labels := util.BuildOrgRootLabels(orgs, subOrgsByOrgID)
 
 	prompt1 := promptui.Select{
 		Label: label,
@@ -186,7 +186,7 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	}
 
 	selectedOrg := orgs[index]
-	subs := subOrgMap[selectedOrg.ID]
+	subs := subOrgsByOrgID[selectedOrg.ID]
 
 	if len(subs) == 0 {
 		return selectedOrg.ID, nil
@@ -195,7 +195,7 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	// Second prompt: root org itself or one of its sub-orgs
 	subItems, subLabels := util.BuildSubOrgPickerItems(selectedOrg.ID, selectedOrg.Name, subs)
 	prompt2 := promptui.Select{
-		Label: fmt.Sprintf("Which scope within %s?", selectedOrg.Name),
+		Label: fmt.Sprintf("Which organization or sub-organization within %s?", selectedOrg.Name),
 		Items: subLabels,
 		Size:  7,
 	}

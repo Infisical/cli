@@ -14,11 +14,11 @@ type OrgPickerItem struct {
 }
 
 // BuildOrgRootLabels returns first-prompt labels: org name with sub-org count when present.
-// orgs is the flat list from GET /v1/organization; subOrgMap is keyed by org ID.
-func BuildOrgRootLabels(orgs []api.Organization, subOrgMap map[string][]api.SubOrganization) []string {
+// orgs is the flat list from GET /v1/organization; subOrgsByOrgID is keyed by org ID.
+func BuildOrgRootLabels(orgs []api.Organization, subOrgsByOrgID map[string][]api.SubOrganization) []string {
 	labels := make([]string, len(orgs))
 	for i, org := range orgs {
-		n := len(subOrgMap[org.ID])
+		n := len(subOrgsByOrgID[org.ID])
 		switch n {
 		case 0:
 			labels[i] = org.Name
