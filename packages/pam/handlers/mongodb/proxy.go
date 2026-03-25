@@ -258,19 +258,37 @@ func (p *MongoDBProxy) proxyToServer(client, server net.Conn, errCh chan error) 
 			return
 		}
 
-		// Extract command info for audit logging
-		if msg.Header.OpCode == OpMsg {
-			body, parseErr := ParseOpMsgBody(msg.Payload)
-			if parseErr == nil {
-				summary := SummarizeCommand(body)
-				p.mu.Lock()
-				p.pendingQuery = &pendingQuery{
-					summary:   summary,
-					timestamp: time.Now(),
-				}
-				p.mu.Unlock()
-			}
+		// Block non-OP_MSG opcodes — only OP_MSG should flow during the relay phase.
+		// We advertised maxWireVersion:17 in our hello, so modern drivers won't send legacy
+		// opcodes. But if something unexpected arrives, we block it rather than let it through
+		// unlogged. This matches MSSQL's approach of blocking unrecognized packet types.
+		if msg.Header.OpCode != OpMsg {
+			log.Warn().
+				Str("sessionID", p.config.SessionID).
+				Int32("opCode", msg.Header.OpCode).
+				Msg("Blocked non-OP_MSG opcode (cannot be session recorded)")
+			continue
 		}
+
+		// Parse for audit logging. If parsing fails, block the message —
+		// if we can't log it, we don't let it through. This prevents a crafted
+		// message from executing on the server without an audit record.
+		sections, parseErr := ParseOpMsgSections(msg.Payload)
+		if parseErr != nil {
+			log.Warn().
+				Str("sessionID", p.config.SessionID).
+				Err(parseErr).
+				Msg("Blocked OP_MSG that failed to parse (cannot be session recorded)")
+			continue
+		}
+
+		summary := SummarizeCommand(sections)
+		p.mu.Lock()
+		p.pendingQuery = &pendingQuery{
+			summary:   summary,
+			timestamp: time.Now(),
+		}
+		p.mu.Unlock()
 
 		if err := WriteMessage(server, msg); err != nil {
 			errCh <- err
@@ -301,7 +319,7 @@ func (p *MongoDBProxy) proxyToClient(server, client net.Conn, errCh chan error) 
 			p.mu.Unlock()
 
 			if pending != nil {
-				output := parseResponseStatus(msg.Payload)
+				output := summarizeResponse(msg.Payload)
 				p.config.SessionLogger.LogEntry(session.SessionLogEntry{
 					Timestamp: pending.timestamp,
 					Input:     pending.summary,
@@ -317,48 +335,45 @@ func (p *MongoDBProxy) proxyToClient(server, client net.Conn, errCh chan error) 
 	}
 }
 
-// parseResponseStatus extracts a human-readable status from an OP_MSG response.
-// Returns "OK", "OK (N documents)", or "ERROR: <message>".
-func parseResponseStatus(payload []byte) string {
+// responseInternalFields are replica set / session metadata fields in server responses
+// that are not useful for audit logging.
+var responseInternalFields = map[string]bool{
+	"$clusterTime":  true,
+	"operationTime": true,
+	"electionId":    true,
+	"setName":       true,
+	"setVersion":    true,
+	"$configTime":   true,
+	"$topologyTime": true,
+}
+
+// summarizeResponse serializes the server response as extended JSON for audit logging.
+// Unlike the previous implementation that only returned "OK" / "ERROR", this captures
+// full response data — including documents returned by find/aggregate, write results (n,
+// nModified), and error details. This is important for audit: if a user reads sensitive
+// data via db.users.find(), the audit log should show what they actually got back.
+func summarizeResponse(payload []byte) string {
 	body, err := ParseOpMsgBody(payload)
 	if err != nil {
-		return "OK"
+		return "(failed to parse response)"
 	}
 
-	// Check the ok field
-	okVal, lookupErr := body.LookupErr("ok")
-	if lookupErr == nil {
-		var ok float64
-		switch okVal.Type {
-		case bson.TypeDouble:
-			ok = okVal.Double()
-		case bson.TypeInt32:
-			ok = float64(okVal.Int32())
-		case bson.TypeInt64:
-			ok = float64(okVal.Int64())
-		}
-		if ok != 1 {
-			errmsg := "unknown error"
-			if v, e := body.LookupErr("errmsg"); e == nil {
-				errmsg = v.StringValue()
-			}
-			return fmt.Sprintf("ERROR: %s", errmsg)
+	elems, err := body.Elements()
+	if err != nil {
+		return "(failed to read response elements)"
+	}
+
+	// Filter out replica set metadata, keep everything relevant to the operation
+	filtered := bson.D{}
+	for _, elem := range elems {
+		if !responseInternalFields[elem.Key()] {
+			filtered = append(filtered, bson.E{Key: elem.Key(), Value: elem.Value()})
 		}
 	}
 
-	// For write operations, check n (number of affected documents)
-	if nVal, e := body.LookupErr("n"); e == nil {
-		var n int64
-		switch nVal.Type {
-		case bson.TypeInt32:
-			n = int64(nVal.Int32())
-		case bson.TypeInt64:
-			n = nVal.Int64()
-		}
-		if n > 0 {
-			return fmt.Sprintf("OK (%d documents)", n)
-		}
+	jsonBytes, err := bson.MarshalExtJSON(filtered, false, false)
+	if err != nil {
+		return "(failed to serialize response)"
 	}
-
-	return "OK"
+	return string(jsonBytes)
 }

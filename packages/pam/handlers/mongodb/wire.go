@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -134,6 +135,99 @@ func ParseOpMsgBody(payload []byte) (bson.Raw, error) {
 	return nil, fmt.Errorf("no body section (kind 0) found in OP_MSG")
 }
 
+// OpMsgSections holds all parsed sections from an OP_MSG payload.
+type OpMsgSections struct {
+	Body         bson.Raw
+	DocSequences map[string][]bson.Raw // identifier -> documents (used by bulk ops like insertMany)
+}
+
+// ParseOpMsgSections extracts all sections from an OP_MSG payload.
+// Unlike ParseOpMsgBody, this also parses kind-1 document sequence sections so that
+// the actual documents in bulk operations (insert, update, delete) are available for logging.
+func ParseOpMsgSections(payload []byte) (*OpMsgSections, error) {
+	if len(payload) < 4 {
+		return nil, fmt.Errorf("OP_MSG payload too short: %d bytes", len(payload))
+	}
+
+	flagBits := binary.LittleEndian.Uint32(payload[:4])
+	hasChecksum := flagBits&FlagChecksumPresent != 0
+
+	sectionEnd := len(payload)
+	if hasChecksum {
+		sectionEnd -= 4
+	}
+
+	sections := &OpMsgSections{
+		DocSequences: make(map[string][]bson.Raw),
+	}
+
+	pos := 4 // Skip flagBits
+	for pos < sectionEnd {
+		kind := payload[pos]
+		pos++
+
+		switch kind {
+		case SectionBody:
+			if pos+4 > sectionEnd {
+				return nil, fmt.Errorf("section body truncated at offset %d", pos)
+			}
+			docLen := int(binary.LittleEndian.Uint32(payload[pos : pos+4]))
+			if docLen < 5 || pos+docLen > sectionEnd {
+				return nil, fmt.Errorf("invalid BSON document length %d at offset %d", docLen, pos)
+			}
+			sections.Body = bson.Raw(payload[pos : pos+docLen])
+			pos += docLen
+
+		case SectionDocumentSequence:
+			// Kind-1 layout: [4 bytes total sequence length] [null-terminated identifier] [BSON docs...]
+			if pos+4 > sectionEnd {
+				return nil, fmt.Errorf("section document sequence truncated at offset %d", pos)
+			}
+			seqLen := int(binary.LittleEndian.Uint32(payload[pos : pos+4]))
+			if seqLen < 5 || pos+seqLen > sectionEnd {
+				return nil, fmt.Errorf("invalid document sequence length %d at offset %d", seqLen, pos)
+			}
+			seqEnd := pos + seqLen
+			pos += 4 // skip length field
+
+			// Read null-terminated identifier (e.g., "documents", "updates", "deletes")
+			identStart := pos
+			for pos < seqEnd && payload[pos] != 0 {
+				pos++
+			}
+			if pos >= seqEnd {
+				return nil, fmt.Errorf("document sequence missing null terminator for identifier")
+			}
+			identifier := string(payload[identStart:pos])
+			pos++ // skip null byte
+
+			// Read BSON documents until seqEnd
+			var docs []bson.Raw
+			for pos < seqEnd {
+				if pos+4 > seqEnd {
+					break
+				}
+				docLen := int(binary.LittleEndian.Uint32(payload[pos : pos+4]))
+				if docLen < 5 || pos+docLen > seqEnd {
+					break
+				}
+				docs = append(docs, bson.Raw(payload[pos:pos+docLen]))
+				pos += docLen
+			}
+			sections.DocSequences[identifier] = docs
+
+		default:
+			return nil, fmt.Errorf("unknown OP_MSG section kind %d at offset %d", kind, pos-1)
+		}
+	}
+
+	if sections.Body == nil {
+		return nil, fmt.Errorf("no body section (kind 0) found in OP_MSG")
+	}
+
+	return sections, nil
+}
+
 // BuildOpMsg builds a complete MongoDB OP_MSG wire message from a BSON command document.
 func BuildOpMsg(requestID, responseTo int32, doc bson.D) ([]byte, error) {
 	docBytes, err := bson.Marshal(doc)
@@ -166,42 +260,78 @@ func ExtractCommandName(body bson.Raw) string {
 	return elems[0].Key()
 }
 
-// SummarizeCommand returns a short human-readable summary of a MongoDB command
-// for audit logging. Example: "find users {age: {$gt: 25}}".
-func SummarizeCommand(body bson.Raw) string {
+// internalFields are MongoDB session/cluster metadata fields that add noise to audit logs.
+// Note: $db is intentionally NOT in this list — it shows which database a command targets,
+// which is critical for audit (a user could query a different database than expected).
+var internalFields = map[string]bool{
+	"lsid":            true,
+	"$clusterTime":    true,
+	"apiVersion":      true,
+	"$readPreference": true,
+	"txnNumber":       true,
+	"autocommit":      true,
+}
+
+// SummarizeCommand returns a human-readable audit log entry for a MongoDB command.
+//
+// Format: "<command> <collection> <body fields as JSON> [<seqName>: [<docs as JSON>]]"
+// Example: `insert students {"ordered":true} documents: [{"name":"Amit","age":20,...}, ...]`
+//
+// Document sequences (kind-1 OP_MSG sections) carry the actual documents for bulk operations
+// like insertMany — these are parsed separately and included here so the audit log contains
+// the real data, not just field names.
+func SummarizeCommand(sections *OpMsgSections) string {
+	body := sections.Body
 	cmdName := ExtractCommandName(body)
 	if cmdName == "" {
 		return "(unknown command)"
 	}
 
-	// For the command value, try to get the collection name (for CRUD commands it's the first value)
 	elems, _ := body.Elements()
 	if len(elems) == 0 {
 		return cmdName
 	}
 
-	// The first element's value is often the collection name (string) for CRUD commands
-	firstVal := elems[0].Value()
-	if firstVal.Type == bson.TypeString {
-		collection := firstVal.StringValue()
-		// Build a summary from remaining fields (skip $db and lsid which are metadata)
-		summary := fmt.Sprintf("%s %s", cmdName, collection)
-		for _, elem := range elems[1:] {
-			key := elem.Key()
-			if key == "$db" || key == "lsid" || key == "$clusterTime" || key == "apiVersion" {
-				continue
-			}
-			summary += fmt.Sprintf(" {%s: ...}", key)
-			// Cap summary length to keep audit logs readable
-			if len(summary) > 4096 {
-				summary = summary[:4096] + "..."
-				break
-			}
-		}
-		return summary
+	// The first element's value is the collection name for CRUD commands (find, insert, etc.)
+	collection := ""
+	if firstVal := elems[0].Value(); firstVal.Type == bson.TypeString {
+		collection = firstVal.StringValue()
 	}
 
-	return cmdName
+	// Collect non-internal body fields with their actual values
+	bodyDoc := bson.D{}
+	for _, elem := range elems[1:] {
+		if !internalFields[elem.Key()] {
+			bodyDoc = append(bodyDoc, bson.E{Key: elem.Key(), Value: elem.Value()})
+		}
+	}
+
+	var parts []string
+	parts = append(parts, cmdName)
+	if collection != "" {
+		parts = append(parts, collection)
+	}
+	if len(bodyDoc) > 0 {
+		if jsonBytes, err := bson.MarshalExtJSON(bodyDoc, false, false); err == nil {
+			parts = append(parts, string(jsonBytes))
+		}
+	}
+
+	// Add document sequences — these hold the actual documents for bulk operations
+	// (e.g., the inserted documents in insertMany, update specs in updateMany)
+	for seqID, docs := range sections.DocSequences {
+		docStrs := make([]string, 0, len(docs))
+		for _, doc := range docs {
+			if jsonBytes, err := bson.MarshalExtJSON(doc, false, false); err == nil {
+				docStrs = append(docStrs, string(jsonBytes))
+			}
+		}
+		if len(docStrs) > 0 {
+			parts = append(parts, fmt.Sprintf("%s: [%s]", seqID, strings.Join(docStrs, ", ")))
+		}
+	}
+
+	return strings.Join(parts, " ")
 }
 
 // BuildOpReply builds a legacy OP_REPLY message (opCode 1) for responding to OP_QUERY.
