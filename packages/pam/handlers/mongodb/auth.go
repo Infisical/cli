@@ -18,16 +18,28 @@ func nextRequestID() int32 {
 	return requestIDCounter.Add(1)
 }
 
-// authenticateScramSHA256 performs SCRAM-SHA-256 authentication against a MongoDB server.
+// authenticateScram performs SCRAM authentication against a MongoDB server using the
+// specified mechanism ("SCRAM-SHA-256" or "SCRAM-SHA-1").
 //
-// We only support SCRAM-SHA-256 (not SCRAM-SHA-1) since it's the default mechanism
-// for MongoDB 4.0+ (released 2018). Older servers are not supported.
+// The mechanism is selected based on what the server advertises in its hello response
+// via saslSupportedMechs. SCRAM-SHA-256 is preferred when available, with SCRAM-SHA-1
+// as a fallback (e.g. DigitalOcean managed MongoDB only supports SHA-1).
 //
 // The authDB parameter specifies which database contains the user account. This is
 // typically the application database, but may be "admin" depending on how the user
 // was created. The correct value is provided by the backend via InjectDatabase.
-func authenticateScramSHA256(conn io.ReadWriter, username, password, authDB string) error {
-	client, err := scram.SHA256.NewClient(username, password, "")
+func authenticateScram(conn io.ReadWriter, username, password, authDB, mechanism string) error {
+	var hashGen scram.HashGeneratorFcn
+	switch mechanism {
+	case "SCRAM-SHA-1":
+		hashGen = scram.SHA1
+	case "SCRAM-SHA-256":
+		hashGen = scram.SHA256
+	default:
+		return fmt.Errorf("unsupported SCRAM mechanism: %s", mechanism)
+	}
+
+	client, err := hashGen.NewClient(username, password, "")
 	if err != nil {
 		return fmt.Errorf("create SCRAM client: %w", err)
 	}
@@ -42,7 +54,7 @@ func authenticateScramSHA256(conn io.ReadWriter, username, password, authDB stri
 	log.Debug().Msg("MongoDB auth: sending saslStart")
 	saslStartDoc := bson.D{
 		{Key: "saslStart", Value: int32(1)},
-		{Key: "mechanism", Value: "SCRAM-SHA-256"},
+		{Key: "mechanism", Value: mechanism},
 		{Key: "payload", Value: []byte(clientFirst)},
 		{Key: "$db", Value: authDB},
 	}
@@ -134,7 +146,7 @@ func authenticateScramSHA256(conn io.ReadWriter, username, password, authDB stri
 		}
 	}
 
-	log.Info().Msg("MongoDB SCRAM-SHA-256 authentication successful")
+	log.Info().Str("mechanism", mechanism).Msg("MongoDB SCRAM authentication successful")
 	return nil
 }
 

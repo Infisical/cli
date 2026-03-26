@@ -159,7 +159,7 @@ func (p *MongoDBProxy) handleClientHandshake(clientConn net.Conn) error {
 }
 
 // connectAndAuthenticateToServer dials the real MongoDB server and authenticates
-// using injected credentials via SCRAM-SHA-256.
+// using injected credentials via SCRAM (SHA-256 preferred, SHA-1 fallback).
 func (p *MongoDBProxy) connectAndAuthenticateToServer() (net.Conn, error) {
 	var serverConn net.Conn
 	var err error
@@ -211,7 +211,8 @@ func (p *MongoDBProxy) connectAndAuthenticateToServer() (net.Conn, error) {
 		return nil, fmt.Errorf("read server hello response: %w", err)
 	}
 
-	// Validate the server responded successfully
+	// Validate the server responded successfully and extract supported auth mechanisms
+	mechanism := "SCRAM-SHA-256" // default
 	if helloResp.Header.OpCode == OpMsg {
 		body, parseErr := ParseOpMsgBody(helloResp.Payload)
 		if parseErr == nil {
@@ -229,13 +230,38 @@ func (p *MongoDBProxy) connectAndAuthenticateToServer() (net.Conn, error) {
 					return nil, fmt.Errorf("server hello failed")
 				}
 			}
+
+			// Parse saslSupportedMechs to pick the best auth mechanism
+			if mechsVal, mechErr := body.LookupErr("saslSupportedMechs"); mechErr == nil {
+				mechs, arrErr := mechsVal.Array().Values()
+				if arrErr == nil {
+					hasSHA256 := false
+					hasSHA1 := false
+					for _, v := range mechs {
+						m := v.StringValue()
+						if m == "SCRAM-SHA-256" {
+							hasSHA256 = true
+						} else if m == "SCRAM-SHA-1" {
+							hasSHA1 = true
+						}
+					}
+					if hasSHA256 {
+						mechanism = "SCRAM-SHA-256"
+					} else if hasSHA1 {
+						mechanism = "SCRAM-SHA-1"
+					}
+				}
+			}
 		}
 	}
 
-	log.Info().Str("sessionID", p.config.SessionID).Msg("Server hello successful, starting SCRAM-SHA-256 auth")
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Str("mechanism", mechanism).
+		Msg("Server hello successful, starting SCRAM auth")
 
 	// Authenticate with injected credentials
-	if err := authenticateScramSHA256(serverConn, p.config.InjectUsername, p.config.InjectPassword, p.config.InjectDatabase); err != nil {
+	if err := authenticateScram(serverConn, p.config.InjectUsername, p.config.InjectPassword, p.config.InjectDatabase, mechanism); err != nil {
 		serverConn.Close()
 		return nil, fmt.Errorf("authentication failed: %w", err)
 	}
