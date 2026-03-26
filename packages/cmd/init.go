@@ -195,7 +195,7 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	// Second prompt: root org itself or one of its sub-orgs
 	subItems, subLabels := util.BuildSubOrgPickerItems(selectedOrg.ID, selectedOrg.Name, subs)
 	prompt2 := promptui.Select{
-		Label: fmt.Sprintf("Select the root or sub-organization within %s:", selectedOrg.Name),
+		Label: fmt.Sprintf("Select the root or sub-organization within %s", selectedOrg.Name),
 		Items: subLabels,
 		Size:  7,
 	}
