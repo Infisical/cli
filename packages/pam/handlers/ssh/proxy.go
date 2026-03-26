@@ -28,11 +28,11 @@ type SSHProxyConfig struct {
 
 // SSHProxy handles proxying SSH connections with credential injection
 type SSHProxy struct {
-	config             SSHProxyConfig
-	mutex              sync.Mutex
-	sessionData        []byte                      // Store session data for logging
-	inputBuffer        []byte                      // Buffer for input data to batch keystrokes
-	inputChannelType   session.TerminalChannelType // Channel type for buffered input
+	config           SSHProxyConfig
+	mutex            sync.Mutex
+	sessionData      []byte                      // Store session data for logging
+	inputBuffer      []byte                      // Buffer for input data to batch keystrokes
+	inputChannelType session.TerminalChannelType // Channel type for buffered input
 }
 
 // channelState holds per-channel state for tracking session type
@@ -510,7 +510,9 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 	}
 }
 
-// bufferInput accumulates input data and logs only when newline or control chars are encountered
+// bufferInput accumulates input data and logs the effective command after processing edits.
+// It interprets control characters (backspace, Ctrl+C/U/W) so that the logged command
+// reflects what the user actually sent, not the raw keystrokes.
 func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.TerminalChannelType) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -518,12 +520,36 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 	p.inputChannelType = channelType
 
 	for _, b := range data {
-		p.inputBuffer = append(p.inputBuffer, b)
-
-		// Check if we should flush the buffer
-		// CR (0x0D), LF (0x0A), or if buffer gets too large
-		if b == 0x0D || b == 0x0A || len(p.inputBuffer) >= 1024 {
+		switch b {
+		case 0x7F, 0x08: // DEL (backspace on most terminals) or BS
+			if len(p.inputBuffer) > 0 {
+				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
+			}
+		case 0x03: // Ctrl+C - cancel current input
+			p.inputBuffer = p.inputBuffer[:0]
+		case 0x15: // Ctrl+U - clear line
+			p.inputBuffer = p.inputBuffer[:0]
+		case 0x17: // Ctrl+W - delete previous word
+			// Skip trailing spaces
+			for len(p.inputBuffer) > 0 && p.inputBuffer[len(p.inputBuffer)-1] == ' ' {
+				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
+			}
+			// Delete until next space or start
+			for len(p.inputBuffer) > 0 && p.inputBuffer[len(p.inputBuffer)-1] != ' ' {
+				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
+			}
+		case 0x0D, 0x0A: // CR or LF - flush the buffer
+			p.inputBuffer = append(p.inputBuffer, b)
 			p.flushInputBufferUnsafe(sessionID)
+		default:
+			// Only buffer printable characters and tab
+			if b >= 0x20 || b == 0x09 {
+				p.inputBuffer = append(p.inputBuffer, b)
+			}
+			// Safety: flush if buffer gets too large
+			if len(p.inputBuffer) >= 1024 {
+				p.flushInputBufferUnsafe(sessionID)
+			}
 		}
 	}
 }
