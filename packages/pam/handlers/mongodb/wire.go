@@ -98,9 +98,6 @@ func ParseOpMsgBody(payload []byte) (bson.Raw, error) {
 
 	pos := 4 // Skip flagBits
 	for pos < sectionEnd {
-		if pos >= sectionEnd {
-			break
-		}
 		kind := payload[pos]
 		pos++
 

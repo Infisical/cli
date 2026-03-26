@@ -185,13 +185,13 @@ func (p *MongoDBProxy) connectAndAuthenticateToServer() (net.Conn, error) {
 	// Send hello to the real server
 	helloDoc := bson.D{
 		{Key: "hello", Value: int32(1)},
-		{Key: "$db", Value: "admin"},
+		{Key: "$db", Value: p.config.InjectDatabase},
 	}
 	// Include saslSupportedMechs to let the server tell us what it supports
 	if p.config.InjectUsername != "" {
 		helloDoc = append(helloDoc, bson.E{
 			Key:   "saslSupportedMechs",
-			Value: fmt.Sprintf("admin.%s", p.config.InjectUsername),
+			Value: fmt.Sprintf("%s.%s", p.config.InjectDatabase, p.config.InjectUsername),
 		})
 	}
 
@@ -235,7 +235,7 @@ func (p *MongoDBProxy) connectAndAuthenticateToServer() (net.Conn, error) {
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Server hello successful, starting SCRAM-SHA-256 auth")
 
 	// Authenticate with injected credentials
-	if err := authenticateScramSHA256(serverConn, p.config.InjectUsername, p.config.InjectPassword); err != nil {
+	if err := authenticateScramSHA256(serverConn, p.config.InjectUsername, p.config.InjectPassword, p.config.InjectDatabase); err != nil {
 		serverConn.Close()
 		return nil, fmt.Errorf("authentication failed: %w", err)
 	}
@@ -319,7 +319,7 @@ func (p *MongoDBProxy) proxyToClient(server, client net.Conn, errCh chan error) 
 			p.mu.Unlock()
 
 			if pending != nil {
-				output := summarizeResponse(msg.Payload)
+				output := formatResponse(msg.Payload)
 				p.config.SessionLogger.LogEntry(session.SessionLogEntry{
 					Timestamp: pending.timestamp,
 					Input:     pending.summary,
@@ -347,12 +347,11 @@ var responseInternalFields = map[string]bool{
 	"$topologyTime": true,
 }
 
-// summarizeResponse serializes the server response as extended JSON for audit logging.
-// Unlike the previous implementation that only returned "OK" / "ERROR", this captures
-// full response data — including documents returned by find/aggregate, write results (n,
-// nModified), and error details. This is important for audit: if a user reads sensitive
-// data via db.users.find(), the audit log should show what they actually got back.
-func summarizeResponse(payload []byte) string {
+// formatResponse serializes the server response as extended JSON for audit logging.
+// This captures full response data — including documents returned by find/aggregate,
+// write results (n, nModified), and error details. Full data is intentional: if a user
+// reads sensitive data via db.users.find(), the audit log should show what they got back.
+func formatResponse(payload []byte) string {
 	body, err := ParseOpMsgBody(payload)
 	if err != nil {
 		return "(failed to parse response)"

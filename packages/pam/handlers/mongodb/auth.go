@@ -23,10 +23,10 @@ func nextRequestID() int32 {
 // We only support SCRAM-SHA-256 (not SCRAM-SHA-1) since it's the default mechanism
 // for MongoDB 4.0+ (released 2018). Older servers are not supported.
 //
-// Authentication always happens against the "admin" database, which is MongoDB's default
-// for user accounts. This is separate from InjectDatabase, which is the target database
-// the user queries after connecting.
-func authenticateScramSHA256(conn io.ReadWriter, username, password string) error {
+// The authDB parameter specifies which database contains the user account. This is
+// typically the application database, but may be "admin" depending on how the user
+// was created. The correct value is provided by the backend via InjectDatabase.
+func authenticateScramSHA256(conn io.ReadWriter, username, password, authDB string) error {
 	client, err := scram.SHA256.NewClient(username, password, "")
 	if err != nil {
 		return fmt.Errorf("create SCRAM client: %w", err)
@@ -44,7 +44,7 @@ func authenticateScramSHA256(conn io.ReadWriter, username, password string) erro
 		{Key: "saslStart", Value: int32(1)},
 		{Key: "mechanism", Value: "SCRAM-SHA-256"},
 		{Key: "payload", Value: []byte(clientFirst)},
-		{Key: "$db", Value: "admin"},
+		{Key: "$db", Value: authDB},
 	}
 	saslStartBytes, err := BuildOpMsg(nextRequestID(), 0, saslStartDoc)
 	if err != nil {
@@ -78,7 +78,7 @@ func authenticateScramSHA256(conn io.ReadWriter, username, password string) erro
 		{Key: "saslContinue", Value: int32(1)},
 		{Key: "conversationId", Value: conversationID},
 		{Key: "payload", Value: []byte(clientFinal)},
-		{Key: "$db", Value: "admin"},
+		{Key: "$db", Value: authDB},
 	}
 	saslContinueBytes, err := BuildOpMsg(nextRequestID(), 0, saslContinueDoc)
 	if err != nil {
@@ -111,7 +111,7 @@ func authenticateScramSHA256(conn io.ReadWriter, username, password string) erro
 			{Key: "saslContinue", Value: int32(1)},
 			{Key: "conversationId", Value: conversationID},
 			{Key: "payload", Value: []byte{}},
-			{Key: "$db", Value: "admin"},
+			{Key: "$db", Value: authDB},
 		}
 		finalBytes, err := BuildOpMsg(nextRequestID(), 0, finalDoc)
 		if err != nil {
