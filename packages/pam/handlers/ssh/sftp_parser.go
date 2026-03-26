@@ -65,6 +65,14 @@ func (p *SFTPParser) Parse(data []byte) []SFTPOperation {
 		}
 	}
 
+	// Compact buffer to release consumed memory
+	// Without this, the backing array grows indefinitely during long sessions
+	if len(p.buffer) > 0 {
+		p.buffer = append([]byte(nil), p.buffer...)
+	} else {
+		p.buffer = p.buffer[:0]
+	}
+
 	return operations
 }
 
