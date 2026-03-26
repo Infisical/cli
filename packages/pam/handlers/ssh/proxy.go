@@ -28,12 +28,19 @@ type SSHProxyConfig struct {
 
 // SSHProxy handles proxying SSH connections with credential injection
 type SSHProxy struct {
-	config          SSHProxyConfig
+	config             SSHProxyConfig
+	mutex              sync.Mutex
+	sessionData        []byte                      // Store session data for logging
+	inputBuffer        []byte                      // Buffer for input data to batch keystrokes
+	inputChannelType   session.TerminalChannelType // Channel type for buffered input
+}
+
+// channelState holds per-channel state for tracking session type
+type channelState struct {
 	mutex           sync.Mutex
-	sessionData     []byte // Store session data for logging
-	inputBuffer     []byte // Buffer for input data to batch keystrokes
-	isBinarySession bool   // True if this is SFTP/SCP binary protocol (don't log raw data)
-	sftpParser      *SFTPParser // Parser for SFTP protocol to extract file operations
+	channelType     session.TerminalChannelType // Type of channel (terminal, exec, sftp)
+	isBinarySession bool                        // True if this channel is SFTP/SCP binary protocol
+	sftpParser      *SFTPParser                 // Parser for SFTP protocol to extract file operations
 }
 
 // NewSSHProxy creates a new SSH proxy instance
@@ -222,22 +229,25 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		Str("channelType", channelType).
 		Msg("SSH channel established")
 
+	// Create per-channel state for tracking binary sessions (SFTP/SCP)
+	chState := &channelState{}
+
 	// Handle requests for this channel (pty-req, shell, exec, etc.)
-	go p.handleChannelRequests(clientRequests, serverChannel, sessionID, channelType)
-	go p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType)
+	go p.handleChannelRequests(clientRequests, serverChannel, sessionID, channelType, chState)
+	go p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType, chState)
 
 	// Proxy data bidirectionally with logging
 	errChan := make(chan error, 2)
 
 	// Client to Server
 	go func() {
-		err := p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true)
+		err := p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true, chState)
 		errChan <- err
 	}()
 
 	// Server to Client
 	go func() {
-		err := p.proxyData(serverChannel, clientChannel, "server→client", sessionID, false)
+		err := p.proxyData(serverChannel, clientChannel, "server→client", sessionID, false, chState)
 		errChan <- err
 	}()
 
@@ -258,7 +268,7 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 }
 
 // handleChannelRequests handles channel-specific requests (pty, shell, exec, etc.)
-func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetChannel ssh.Channel, sessionID string, channelType string) {
+func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetChannel ssh.Channel, sessionID string, channelType string, chState *channelState) {
 	for req := range requests {
 		log.Debug().
 			Str("sessionID", sessionID).
@@ -278,15 +288,17 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 					// Determine the type of operation for better logging
 					opType := "exec"
+					chState.mutex.Lock()
+					chState.channelType = session.TerminalChannelExec
 					if strings.HasPrefix(command, "scp ") {
 						opType = "scp"
-						// Mark as binary session so we don't log the raw file data
-						p.mutex.Lock()
-						p.isBinarySession = true
-						p.mutex.Unlock()
+						// Mark this channel as binary so we don't log the raw file data
+						chState.isBinarySession = true
+						chState.channelType = session.TerminalChannelSFTP // SCP is file transfer
 					} else if strings.Contains(command, "sftp") {
 						opType = "sftp"
 					}
+					chState.mutex.Unlock()
 
 					log.Info().
 						Str("sessionID", sessionID).
@@ -296,27 +308,31 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 					// Log the exec command to the session recording
 					var logMessage string
+					var channelType session.TerminalChannelType
 					if opType == "scp" {
+						channelType = session.TerminalChannelSFTP
 						// Parse SCP command for more readable logging
 						// scp -t /path = receiving file TO server
 						// scp -f /path = sending file FROM server
 						if strings.Contains(command, " -t ") {
 							path := extractSCPPath(command)
-							logMessage = fmt.Sprintf("[SCP UPLOAD] Uploading file to: %s\n", path)
+							logMessage = fmt.Sprintf("Uploaded file: %s\n", path)
 						} else if strings.Contains(command, " -f ") {
 							path := extractSCPPath(command)
-							logMessage = fmt.Sprintf("[SCP DOWNLOAD] Downloading file from: %s\n", path)
+							logMessage = fmt.Sprintf("Downloaded file: %s\n", path)
 						} else {
 							logMessage = fmt.Sprintf("$ %s\n", command)
 						}
 					} else {
+						channelType = session.TerminalChannelExec
 						logMessage = fmt.Sprintf("$ %s\n", command)
 					}
 
 					event := session.TerminalEvent{
-						Timestamp: time.Now(),
-						EventType: session.TerminalEventInput,
-						Data:      []byte(logMessage),
+						Timestamp:   time.Now(),
+						EventType:   session.TerminalEventInput,
+						ChannelType: channelType,
+						Data:        []byte(logMessage),
 					}
 					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
 						log.Error().Err(err).
@@ -327,6 +343,9 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 				}
 			}
 		case "shell":
+			chState.mutex.Lock()
+			chState.channelType = session.TerminalChannelShell
+			chState.mutex.Unlock()
 			log.Info().
 				Str("sessionID", sessionID).
 				Msg("SSH interactive shell requested")
@@ -344,15 +363,17 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 					// Log SFTP sessions and set up SFTP parser for file operation logging
 					if subsystem == "sftp" {
-						p.mutex.Lock()
-						p.isBinarySession = true
-						p.sftpParser = NewSFTPParser()
-						p.mutex.Unlock()
+						chState.mutex.Lock()
+						chState.channelType = session.TerminalChannelSFTP
+						chState.isBinarySession = true
+						chState.sftpParser = NewSFTPParser()
+						chState.mutex.Unlock()
 
 						event := session.TerminalEvent{
-							Timestamp: time.Now(),
-							EventType: session.TerminalEventInput,
-							Data:      []byte("File transfer session started\n"),
+							Timestamp:   time.Now(),
+							EventType:   session.TerminalEventInput,
+							ChannelType: session.TerminalChannelSFTP,
+							Data:        []byte("File transfer session started\n"),
 						}
 						if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
 							log.Error().Err(err).
@@ -401,7 +422,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 }
 
 // proxyData proxies data between channels with optional logging
-func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool) error {
+func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool, chState *channelState) error {
 	buf := make([]byte, 32*1024) // 32KB buffer
 
 	// Flush any remaining input buffer on exit
@@ -414,11 +435,12 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
-			// Check if this is a binary session (SFTP/SCP)
-			p.mutex.Lock()
-			isBinary := p.isBinarySession
-			sftpParser := p.sftpParser
-			p.mutex.Unlock()
+			// Check if this channel is a binary session (SFTP/SCP)
+			chState.mutex.Lock()
+			isBinary := chState.isBinarySession
+			sftpParser := chState.sftpParser
+			channelType := chState.channelType
+			chState.mutex.Unlock()
 
 			if isBinary && sftpParser != nil && logInput {
 				// Parse SFTP packets from client->server direction to extract file operations
@@ -427,9 +449,10 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 					// Log each SFTP operation
 					logMsg := FormatOperation(op) + "\n"
 					event := session.TerminalEvent{
-						Timestamp: time.Now(),
-						EventType: session.TerminalEventInput,
-						Data:      []byte(logMsg),
+						Timestamp:   time.Now(),
+						EventType:   session.TerminalEventInput,
+						ChannelType: session.TerminalChannelSFTP,
+						Data:        []byte(logMsg),
 					}
 					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
 						log.Error().Err(err).
@@ -448,13 +471,14 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 			} else if !isBinary {
 				// Regular terminal session logging
 				if logInput {
-					p.bufferInput(buf[:n], sessionID)
+					p.bufferInput(buf[:n], sessionID, channelType)
 				} else {
 					// For output, log immediately as before
 					event := session.TerminalEvent{
-						Timestamp: time.Now(),
-						EventType: session.TerminalEventOutput,
-						Data:      make([]byte, n),
+						Timestamp:   time.Now(),
+						EventType:   session.TerminalEventOutput,
+						ChannelType: channelType,
+						Data:        make([]byte, n),
 					}
 					copy(event.Data, buf[:n])
 
@@ -487,9 +511,11 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 }
 
 // bufferInput accumulates input data and logs only when newline or control chars are encountered
-func (p *SSHProxy) bufferInput(data []byte, sessionID string) {
+func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.TerminalChannelType) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+
+	p.inputChannelType = channelType
 
 	for _, b := range data {
 		p.inputBuffer = append(p.inputBuffer, b)
@@ -516,9 +542,10 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 	}
 
 	event := session.TerminalEvent{
-		Timestamp: time.Now(),
-		EventType: session.TerminalEventInput,
-		Data:      make([]byte, len(p.inputBuffer)),
+		Timestamp:   time.Now(),
+		EventType:   session.TerminalEventInput,
+		ChannelType: p.inputChannelType,
+		Data:        make([]byte, len(p.inputBuffer)),
 	}
 	copy(event.Data, p.inputBuffer)
 

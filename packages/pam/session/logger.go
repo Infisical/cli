@@ -32,12 +32,22 @@ const (
 	TerminalEventOutput TerminalEventType = "output" // Data from server to user
 )
 
+// TerminalChannelType represents the type of SSH channel
+type TerminalChannelType string
+
+const (
+	TerminalChannelShell TerminalChannelType = "terminal" // Interactive shell session
+	TerminalChannelExec  TerminalChannelType = "exec"     // Single command execution
+	TerminalChannelSFTP  TerminalChannelType = "sftp"     // SFTP file transfer
+)
+
 // TerminalEvent represents a single event in a terminal session
 type TerminalEvent struct {
-	Timestamp   time.Time         `json:"timestamp"`
-	EventType   TerminalEventType `json:"eventType"`
-	Data        []byte            `json:"data"`        // Raw terminal data
-	ElapsedTime float64           `json:"elapsedTime"` // Seconds since session start (for replay)
+	Timestamp   time.Time            `json:"timestamp"`
+	EventType   TerminalEventType    `json:"eventType"`
+	ChannelType TerminalChannelType  `json:"channelType,omitempty"` // Type of SSH channel
+	Data        []byte               `json:"data"`                  // Raw terminal data
+	ElapsedTime float64              `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
 type HttpEventType string

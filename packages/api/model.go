@@ -868,6 +868,7 @@ type UploadSessionLogEntry struct {
 type UploadTerminalEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"eventType"`
+	ChannelType string    `json:"channelType,omitempty"`
 	Data        []byte    `json:"data"`
 	ElapsedTime float64   `json:"elapsedTime"`
 }

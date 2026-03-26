@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -207,31 +208,15 @@ func (p *SSHProxyServer) launchSSHClient(username string) error {
 
 // formatSSHArgs formats SSH arguments for logging, quoting args with spaces
 func formatSSHArgs(args []string) string {
-	var formatted []string
-	for _, arg := range args {
-		if containsSpace(arg) {
-			formatted = append(formatted, fmt.Sprintf("%q", arg))
+	formatted := make([]string, len(args))
+	for i, arg := range args {
+		if strings.ContainsRune(arg, ' ') {
+			formatted[i] = fmt.Sprintf("%q", arg)
 		} else {
-			formatted = append(formatted, arg)
+			formatted[i] = arg
 		}
 	}
-	result := ""
-	for i, f := range formatted {
-		if i > 0 {
-			result += " "
-		}
-		result += f
-	}
-	return result
-}
-
-func containsSpace(s string) bool {
-	for _, c := range s {
-		if c == ' ' {
-			return true
-		}
-	}
-	return false
+	return strings.Join(formatted, " ")
 }
 
 func (p *SSHProxyServer) waitForSSHCompletion() {
