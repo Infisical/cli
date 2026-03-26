@@ -57,7 +57,7 @@ var initCmd = &cobra.Command{
 		}
 		httpClient.SetAuthToken(userCreds.UserCredentials.JTWToken)
 
-		selectedOrgID, err := pickOrganization(httpClient, "Which Infisical organization would you like to select a project from?", userCreds.UserCredentials.Email)
+		selectedOrgID, selectedSubOrgName, err := pickOrganization(httpClient, "Which Infisical organization would you like to select a project from?", userCreds.UserCredentials.Email)
 		if err != nil {
 			util.HandleError(err, "Unable to select organization")
 		}
@@ -122,7 +122,7 @@ var initCmd = &cobra.Command{
 			util.HandleError(err, "Unable to pull projects that belong to you")
 		}
 
-		filteredWorkspaces, workspaceNames := util.GetWorkspacesInOrganization(workspaceResponse, selectedOrgID)
+		filteredWorkspaces, workspaceNames := util.GetWorkspacesInOrganization(workspaceResponse, selectedOrgID, selectedSubOrgName)
 
 		prompt := promptui.Select{
 			Label: "Which of your Infisical projects would you like to connect this project to?",
@@ -153,10 +153,10 @@ func init() {
 // GET /v1/organization is always used as the source of truth for the org list.
 // GET /v1/organization/accessible-with-sub-orgs is used only to enrich entries with sub-org
 // counts and the second-level picker — if it fails or omits an org, that org still appears.
-func pickOrganization(httpClient *resty.Client, label string, username string) (string, error) {
+func pickOrganization(httpClient *resty.Client, label string, username string) (string, *string, error) {
 	orgResp, err := api.CallGetAllOrganizations(httpClient)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	orgs := orgResp.Organizations
 	if len(orgs) == 0 {
@@ -182,28 +182,33 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	}
 	index, _, err := prompt1.Run()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	selectedOrg := orgs[index]
 	subs := subOrgsByOrgID[selectedOrg.ID]
 
 	if len(subs) == 0 {
-		return selectedOrg.ID, nil
+		return selectedOrg.ID, nil, nil
 	}
 
 	// Second prompt: root org itself or one of its sub-orgs
 	subItems, subLabels := util.BuildSubOrgPickerItems(selectedOrg.ID, selectedOrg.Name, subs)
 	prompt2 := promptui.Select{
-		Label: fmt.Sprintf("Which organization or sub-organization within %s?", selectedOrg.Name),
+		Label: fmt.Sprintf("Select the root or sub-organization within %s:", selectedOrg.Name),
 		Items: subLabels,
 		Size:  7,
 	}
 	subIndex, _, err := prompt2.Run()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return subItems[subIndex].ID, nil
+	// Root org item is explicitly labeled with "(organization)"; any other selection is a sub-org name.
+	if subIndex == 0 {
+		return subItems[subIndex].ID, nil, nil
+	}
+	selectedSubOrgName := subs[subIndex-1].Name
+	return subItems[subIndex].ID, &selectedSubOrgName, nil
 }
 
 func writeWorkspaceFile(selectedWorkspace models.Workspace) error {

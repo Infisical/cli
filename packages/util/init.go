@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -48,21 +49,25 @@ func BuildSubOrgPickerItems(rootID, rootName string, subs []api.SubOrganization)
 	return items, labels
 }
 
-func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, orgId string) ([]models.Workspace, []string) {
+func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, orgID string, selectedSubOrgName *string) ([]models.Workspace, []string) {
 	workspaces := workspaceResponse.Workspaces
 
 	var filteredWorkspaces []models.Workspace
 	var workspaceNames []string
 
 	for _, workspace := range workspaces {
-		if workspace.OrganizationId == orgId {
+		if workspace.OrganizationId == orgID {
 			filteredWorkspaces = append(filteredWorkspaces, workspace)
 			workspaceNames = append(workspaceNames, workspace.Name)
 		}
 	}
 
 	if len(filteredWorkspaces) == 0 {
-		message := fmt.Sprintf("You don't have any projects created in Infisical organization. You must first create a project at %s", config.INFISICAL_URL)
+		var scopeHint string
+		if selectedSubOrgName != nil && strings.TrimSpace(*selectedSubOrgName) != "" {
+			scopeHint = fmt.Sprintf(" (sub-organization: %s)", strings.TrimSpace(*selectedSubOrgName))
+		}
+		message := fmt.Sprintf("You don't have any projects created in this organization%s. You must first create a project at %s", scopeHint, config.INFISICAL_URL)
 		PrintErrorMessageAndExit(message)
 	}
 

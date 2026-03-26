@@ -26,11 +26,11 @@ func UserInitCmd() {
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
-				terminalOut := string(buf)
+				terminalOut := string(buf[:n])
 				if strings.Contains(terminalOut, "Which Infisical organization would you like to select a project from?") && step < 0 {
 					step += 1
 					stepChan <- step
-				} else if strings.Contains(terminalOut, "Which organization or sub-organization within") && step < 1 {
+				} else if strings.Contains(terminalOut, "Select the root or sub-organization within") && step < 1 {
 					step += 1
 					stepChan <- step
 				} else if strings.Contains(terminalOut, "Which of your Infisical projects would you like to connect this project to?") && step < 2 {
