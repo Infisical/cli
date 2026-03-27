@@ -9,6 +9,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
+	"go.mongodb.org/mongo-driver/event"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
@@ -58,20 +59,46 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 
 func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, error) {
 	isSRV := p.config.Port == 0
+	targetAddr := fmt.Sprintf("%s:%d", p.config.Host, p.config.Port)
+
+	// Verify raw TCP connectivity first (same pattern as other PAM handlers).
+	// This surfaces network errors immediately instead of waiting for the
+	// driver's 10-second server selection timeout.
+	if !isSRV {
+		log.Debug().Str("target", targetAddr).Msg("Testing TCP connectivity to MongoDB target")
+		testConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("cannot reach MongoDB at %s: %w", targetAddr, err)
+		}
+		testConn.Close()
+		log.Debug().Str("target", targetAddr).Msg("TCP connectivity to MongoDB target verified")
+	}
 
 	var opts *options.ClientOptions
 	if isSRV {
 		opts = options.Client().ApplyURI(fmt.Sprintf("mongodb+srv://%s/", p.config.Host))
 	} else {
 		opts = options.Client().
-			SetHosts([]string{fmt.Sprintf("%s:%d", p.config.Host, p.config.Port)}).
+			SetHosts([]string{targetAddr}).
 			SetDirect(true)
 	}
 
 	opts.SetMaxPoolSize(1)
 	opts.SetReadPreference(readpref.Primary())
-	opts.SetConnectTimeout(30 * time.Second)
-	opts.SetServerSelectionTimeout(30 * time.Second)
+	opts.SetConnectTimeout(5 * time.Second)
+	opts.SetServerSelectionTimeout(10 * time.Second)
+	opts.SetHeartbeatInterval(2 * time.Second)
+
+	// Log handshake failures so auth/TLS errors are visible instead of
+	// being buried inside a generic "server selection timeout".
+	opts.SetServerMonitor(&event.ServerMonitor{
+		ServerHeartbeatFailed: func(e *event.ServerHeartbeatFailedEvent) {
+			log.Error().
+				Err(e.Failure).
+				Str("address", e.ConnectionID).
+				Msg("MongoDB server heartbeat failed")
+		},
+	})
 
 	if p.config.InjectUsername != "" && p.config.InjectPassword != "" {
 		opts.SetAuth(options.Credential{
