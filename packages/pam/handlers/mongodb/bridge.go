@@ -106,6 +106,13 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		return fmt.Errorf("failed to merge document sequences: %w", err)
 	}
 
+	// moreToCome (bit 1): the client will send more messages before expecting
+	// a response. Execute the command for its side-effects but do NOT reply.
+	if msg.FlagBits&flagMoreToCome != 0 {
+		_, _ = b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
+		return nil // read next message without responding
+	}
+
 	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
 	if err != nil {
 		return err

@@ -15,6 +15,11 @@ const (
 	opMsgOpCode    int32 = 2013
 	headerLength         = 16
 	maxMessageSize       = 48 * 1024 * 1024 // 48MB
+
+	// OP_MSG flag bits
+	flagChecksumPresent uint32 = 1 << 0  // Message includes a trailing checksum
+	flagMoreToCome      uint32 = 1 << 1  // Sender will send more messages (no response expected)
+	flagExhaustAllowed  uint32 = 1 << 16 // Client accepts exhaust-style responses
 )
 
 // opQuery represents a parsed legacy OP_QUERY message.
@@ -99,7 +104,7 @@ func parseOpMsg(hdr *wireHeader, raw []byte) (*opMsg, error) {
 	msg.FlagBits = binary.LittleEndian.Uint32(data[0:4])
 	pos := 4
 
-	hasChecksum := msg.FlagBits&1 != 0
+	hasChecksum := msg.FlagBits&flagChecksumPresent != 0
 	endPos := len(data)
 	if hasChecksum {
 		endPos -= 4
