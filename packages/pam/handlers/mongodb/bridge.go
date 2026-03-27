@@ -29,6 +29,18 @@ var driverManagedFields = []string{
 	"autocommit",
 }
 
+// Fields to strip from logged input — driver/protocol noise, not user intent.
+// We keep $db so admins can see database switches (e.g. "use prodDB").
+var logNoiseFields = []string{
+	"$clusterTime",
+	"lsid",
+	"$readPreference",
+	"txnNumber",
+	"startTransaction",
+	"autocommit",
+	"apiVersion",
+}
+
 // Fields to strip from hello/isMaster commands before forwarding via RunCommand.
 // - client, compression, saslSupportedMechs, speculativeAuthenticate: only allowed
 //   in the first hello on a connection (our mongo.Client already sent these).
@@ -220,7 +232,9 @@ func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, cmdD
 		rawResp = sanitizeHelloResponse(rawResp)
 	}
 
-	b.logCommand(cmdName, dbName, cmdDoc, rawResp)
+	if !isInternalCommand(cmdName) {
+		b.logCommand(cmdName, dbName, cmdDoc, rawResp)
+	}
 	return rawResp, nil
 }
 
@@ -235,6 +249,16 @@ func isAuthCommand(cmdName string) bool {
 func isHelloCommand(cmdName string) bool {
 	switch strings.ToLower(cmdName) {
 	case "hello", "ismaster":
+		return true
+	}
+	return false
+}
+
+// isInternalCommand returns true for protocol-level commands that are not
+// user-initiated activity and should be excluded from session logs.
+func isInternalCommand(cmdName string) bool {
+	switch strings.ToLower(cmdName) {
+	case "ismaster", "hello", "ping":
 		return true
 	}
 	return false
@@ -288,7 +312,11 @@ func sanitizeHelloResponse(raw bson.Raw) bson.Raw {
 }
 
 func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response bson.Raw) {
-	input := bsonToJSON(command)
+	cleanCmd, err := stripFields(command, logNoiseFields...)
+	if err != nil {
+		cleanCmd = command
+	}
+	input := bsonToJSON(cleanCmd)
 	output := formatResponseSummary(cmdName, response)
 
 	if err := b.sessionLogger.LogEntry(session.SessionLogEntry{
