@@ -10,10 +10,23 @@ import (
 )
 
 const (
+	opReplyOpCode  int32 = 1
+	opQueryOpCode  int32 = 2004
 	opMsgOpCode    int32 = 2013
 	headerLength         = 16
 	maxMessageSize       = 48 * 1024 * 1024 // 48MB
 )
+
+// opQuery represents a parsed legacy OP_QUERY message.
+// mongosh still sends OP_QUERY for the initial isMaster/hello handshake.
+type opQuery struct {
+	Header     wireHeader
+	Flags      int32
+	Collection string // fullCollectionName, e.g. "admin.$cmd"
+	Skip       int32
+	Return     int32
+	Query      bson.Raw
+}
 
 type wireHeader struct {
 	MessageLength int32
@@ -160,6 +173,87 @@ func parseOpMsg(hdr *wireHeader, raw []byte) (*opMsg, error) {
 	}
 
 	return msg, nil
+}
+
+// parseOpQuery extracts the query document from a legacy OP_QUERY message.
+func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
+	data := raw[headerLength:]
+	// Minimum: 4 (flags) + 1 (empty cstring) + 4 (skip) + 4 (return) + 5 (minimal BSON) = 18
+	if len(data) < 18 {
+		return nil, fmt.Errorf("OP_QUERY too short: %d bytes", len(data))
+	}
+
+	flags := int32(binary.LittleEndian.Uint32(data[0:4]))
+	pos := 4
+
+	// Read null-terminated collection name
+	nullIdx := pos
+	for nullIdx < len(data) && data[nullIdx] != 0 {
+		nullIdx++
+	}
+	if nullIdx >= len(data) {
+		return nil, fmt.Errorf("unterminated collection name in OP_QUERY")
+	}
+	collection := string(data[pos:nullIdx])
+	pos = nullIdx + 1
+
+	if pos+8 > len(data) {
+		return nil, fmt.Errorf("truncated OP_QUERY after collection name")
+	}
+	skip := int32(binary.LittleEndian.Uint32(data[pos : pos+4]))
+	ret := int32(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+	pos += 8
+
+	if pos+4 > len(data) {
+		return nil, fmt.Errorf("truncated OP_QUERY: no query document")
+	}
+	docLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+	if docLen < 5 || pos+docLen > len(data) {
+		return nil, fmt.Errorf("invalid query document length: %d", docLen)
+	}
+	query := bson.Raw(data[pos : pos+docLen])
+
+	return &opQuery{
+		Header:     *hdr,
+		Flags:      flags,
+		Collection: collection,
+		Skip:       skip,
+		Return:     ret,
+		Query:      query,
+	}, nil
+}
+
+// dbFromCollection extracts the database name from a fullCollectionName like "admin.$cmd".
+func dbFromCollection(collection string) string {
+	for i, c := range collection {
+		if c == '.' {
+			return collection[:i]
+		}
+	}
+	return collection
+}
+
+// buildOpReply builds a legacy OP_REPLY wrapping a single BSON document.
+func buildOpReply(responseTo int32, doc bson.Raw) []byte {
+	// header(16) + responseFlags(4) + cursorID(8) + startingFrom(4) + numberReturned(4) + doc
+	totalLen := headerLength + 20 + len(doc)
+	msg := make([]byte, totalLen)
+
+	binary.LittleEndian.PutUint32(msg[0:4], uint32(totalLen))
+	binary.LittleEndian.PutUint32(msg[4:8], uint32(nextRequestID()))
+	binary.LittleEndian.PutUint32(msg[8:12], uint32(responseTo))
+	binary.LittleEndian.PutUint32(msg[12:16], uint32(opReplyOpCode))
+	// responseFlags = 8 (AwaitCapable)
+	binary.LittleEndian.PutUint32(msg[16:20], 8)
+	// cursorID = 0
+	binary.LittleEndian.PutUint64(msg[20:28], 0)
+	// startingFrom = 0
+	binary.LittleEndian.PutUint32(msg[28:32], 0)
+	// numberReturned = 1
+	binary.LittleEndian.PutUint32(msg[32:36], 1)
+	copy(msg[36:], doc)
+
+	return msg
 }
 
 // buildOpMsgReply wraps a BSON document in an OP_MSG response.

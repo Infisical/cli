@@ -42,64 +42,105 @@ func (b *bridge) run(ctx context.Context) error {
 			return fmt.Errorf("failed to read client message: %w", err)
 		}
 
-		msg, err := parseOpMsg(hdr, raw)
-		if err != nil {
-			return fmt.Errorf("failed to parse OP_MSG: %w", err)
-		}
-
-		cmdName := getCommandName(msg.Body)
-		dbName := getStringField(msg.Body, "$db")
-		if dbName == "" {
-			dbName = b.defaultDB
-		}
-
-		// Intercept auth commands — respond with fake success
-		if isAuthCommand(cmdName) {
-			if err := b.handleAuthCommand(msg); err != nil {
-				return fmt.Errorf("failed to handle auth command: %w", err)
+		switch hdr.OpCode {
+		case opMsgOpCode:
+			if err := b.handleOpMsg(ctx, hdr, raw); err != nil {
+				return err
 			}
-			continue
-		}
-
-		// Merge Kind 1 document sequences into the body for RunCommand
-		merged, err := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
-		if err != nil {
-			return fmt.Errorf("failed to merge document sequences: %w", err)
-		}
-
-		// Strip $db — RunCommand adds it from the Database() call
-		stripped, err := stripFields(merged, "$db")
-		if err != nil {
-			return fmt.Errorf("failed to strip $db: %w", err)
-		}
-
-		// Execute on the real server
-		rawResp, cmdErr := b.client.Database(dbName).RunCommand(ctx, stripped).Raw()
-
-		if rawResp == nil {
-			// Network / context error — no response from server
-			if cmdErr != nil {
-				log.Error().Err(cmdErr).Str("cmd", cmdName).Msg("RunCommand failed with no response")
-				return fmt.Errorf("RunCommand failed: %w", cmdErr)
+		case opQueryOpCode:
+			if err := b.handleOpQuery(ctx, hdr, raw); err != nil {
+				return err
 			}
-			return fmt.Errorf("RunCommand returned nil response")
-		}
-
-		// For hello/isMaster, strip fields that would cause the client
-		// to attempt compression or authentication through us
-		if isHelloCommand(cmdName) {
-			rawResp = sanitizeHelloResponse(rawResp)
-		}
-
-		// Session recording
-		b.logCommand(cmdName, dbName, merged, rawResp)
-
-		// Send response back to client
-		reply := buildOpMsgReply(msg.Header.RequestID, rawResp)
-		if err := writeWireMessage(b.clientConn, reply); err != nil {
-			return fmt.Errorf("failed to write response to client: %w", err)
+		default:
+			return fmt.Errorf("unsupported opcode %d", hdr.OpCode)
 		}
 	}
+}
+
+func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) error {
+	msg, err := parseOpMsg(hdr, raw)
+	if err != nil {
+		return fmt.Errorf("failed to parse OP_MSG: %w", err)
+	}
+
+	cmdName := getCommandName(msg.Body)
+	dbName := getStringField(msg.Body, "$db")
+	if dbName == "" {
+		dbName = b.defaultDB
+	}
+
+	// Intercept auth commands — respond with fake success
+	if isAuthCommand(cmdName) {
+		return b.handleAuthCommand(msg)
+	}
+
+	// Merge Kind 1 document sequences into the body for RunCommand
+	merged, err := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
+	if err != nil {
+		return fmt.Errorf("failed to merge document sequences: %w", err)
+	}
+
+	// Strip $db — RunCommand adds it from the Database() call
+	stripped, err := stripFields(merged, "$db")
+	if err != nil {
+		return fmt.Errorf("failed to strip $db: %w", err)
+	}
+
+	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, merged, stripped)
+	if err != nil {
+		return err
+	}
+
+	reply := buildOpMsgReply(msg.Header.RequestID, rawResp)
+	return writeWireMessage(b.clientConn, reply)
+}
+
+func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte) error {
+	q, err := parseOpQuery(hdr, raw)
+	if err != nil {
+		return fmt.Errorf("failed to parse OP_QUERY: %w", err)
+	}
+
+	cmdName := getCommandName(q.Query)
+	dbName := dbFromCollection(q.Collection)
+	if dbName == "" {
+		dbName = b.defaultDB
+	}
+
+	// Strip $db if present (shouldn't be in OP_QUERY, but be safe)
+	stripped, err := stripFields(q.Query, "$db")
+	if err != nil {
+		return fmt.Errorf("failed to strip fields from OP_QUERY: %w", err)
+	}
+
+	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, q.Query, stripped)
+	if err != nil {
+		return err
+	}
+
+	// OP_QUERY expects an OP_REPLY response
+	reply := buildOpReply(q.Header.RequestID, rawResp)
+	return writeWireMessage(b.clientConn, reply)
+}
+
+// executeAndLog runs the command via RunCommand, sanitizes hello responses, and logs.
+func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, logDoc, execDoc bson.Raw) (bson.Raw, error) {
+	rawResp, cmdErr := b.client.Database(dbName).RunCommand(ctx, execDoc).Raw()
+
+	if rawResp == nil {
+		if cmdErr != nil {
+			log.Error().Err(cmdErr).Str("cmd", cmdName).Msg("RunCommand failed with no response")
+			return nil, fmt.Errorf("RunCommand failed: %w", cmdErr)
+		}
+		return nil, fmt.Errorf("RunCommand returned nil response")
+	}
+
+	if isHelloCommand(cmdName) {
+		rawResp = sanitizeHelloResponse(rawResp)
+	}
+
+	b.logCommand(cmdName, dbName, logDoc, rawResp)
+	return rawResp, nil
 }
 
 // isAuthCommand returns true for commands we intercept to fake authentication.
