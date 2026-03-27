@@ -2,7 +2,9 @@ package mongodb
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -10,11 +12,8 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
+	"github.com/xdg-go/scram"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/event"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 type MongoDBProxyConfig struct {
@@ -51,106 +50,381 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 
 	// Respond to the client's initial hello/ismaster BEFORE connecting to the
 	// target. mongosh sends ismaster immediately and times out in 2 seconds
-	// (serverSelectionTimeoutMS). connectToTarget can take 1-5s for remote
+	// (serverSelectionTimeoutMS). connectToServer can take 1-5s for remote
 	// servers, so the bridge wouldn't start in time.
 	if err := handleInitialHandshake(clientConn); err != nil {
 		return fmt.Errorf("failed to handle initial handshake: %w", err)
 	}
 
-	client, err := p.connectToTarget(ctx)
+	serverConn, err := p.connectToServer()
 	if err != nil {
 		return fmt.Errorf("failed to connect to target MongoDB: %w", err)
 	}
-	defer func() {
-		disconnectCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = client.Disconnect(disconnectCtx)
-	}()
+	defer serverConn.Close()
 
-	b := newBridge(client, clientConn, p.config.SessionLogger, p.config.InjectDatabase)
+	b := newBridge(serverConn, clientConn, p.config.SessionLogger, p.config.InjectDatabase)
 	return b.run(ctx)
 }
 
-func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, error) {
+// connectToServer establishes a direct TCP/TLS connection to the MongoDB server
+// and authenticates using SCRAM. This avoids the overhead of the Go mongo driver's
+// connection pooling, heartbeats, and topology monitoring — matching the approach
+// used by the Postgres, MySQL, MSSQL, and Redis handlers.
+func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
 	isSRV := p.config.Port == 0
-	targetAddr := fmt.Sprintf("%s:%d", p.config.Host, p.config.Port)
 
-	// Verify raw TCP connectivity first (same pattern as other PAM handlers).
-	// This surfaces network errors immediately instead of waiting for the
-	// driver's 10-second server selection timeout.
-	if !isSRV {
-		log.Debug().Str("target", targetAddr).Msg("Testing TCP connectivity to MongoDB target")
-		testConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
-		if err != nil {
-			return nil, fmt.Errorf("cannot reach MongoDB at %s: %w", targetAddr, err)
-		}
-		testConn.Close()
-		log.Debug().Str("target", targetAddr).Msg("TCP connectivity to MongoDB target verified")
-	}
+	var host string
+	var port int
+	var authSource string
 
-	var opts *options.ClientOptions
 	if isSRV {
-		opts = options.Client().ApplyURI(fmt.Sprintf("mongodb+srv://%s/", p.config.Host))
+		resolvedHost, resolvedPort, opts, err := resolveSRV(p.config.Host)
+		if err != nil {
+			return nil, fmt.Errorf("SRV resolution failed: %w", err)
+		}
+		host = resolvedHost
+		port = resolvedPort
+		authSource = opts["authSource"]
+		if authSource == "" {
+			authSource = "admin"
+		}
 	} else {
-		opts = options.Client().
-			SetHosts([]string{targetAddr}).
-			SetDirect(true)
+		host = p.config.Host
+		port = p.config.Port
+		authSource = "admin"
 	}
 
-	opts.SetMaxPoolSize(1)
-	opts.SetReadPreference(readpref.Primary())
-	opts.SetConnectTimeout(10 * time.Second)
-	opts.SetServerSelectionTimeout(15 * time.Second)
-	opts.SetHeartbeatInterval(30 * time.Second)
+	targetAddr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
-	// Log handshake failures so auth/TLS errors are visible instead of
-	// being buried inside a generic "server selection timeout".
-	// Suppress "context canceled" errors which are expected during shutdown.
-	opts.SetServerMonitor(&event.ServerMonitor{
-		ServerHeartbeatFailed: func(e *event.ServerHeartbeatFailedEvent) {
-			if e.Failure != nil && !strings.Contains(e.Failure.Error(), "context canceled") {
-				log.Error().
-					Err(e.Failure).
-					Str("address", e.ConnectionID).
-					Msg("MongoDB server heartbeat failed")
-			}
-		},
-	})
-
-	if p.config.InjectUsername != "" && p.config.InjectPassword != "" {
-		opts.SetAuth(options.Credential{
-			Username:   p.config.InjectUsername,
-			Password:   p.config.InjectPassword,
-			AuthSource: "admin",
-		})
-	}
+	var conn net.Conn
+	var err error
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
 
 	if p.config.EnableTLS || isSRV {
 		tlsCfg := &tls.Config{}
 		if p.config.TLSConfig != nil {
 			tlsCfg = p.config.TLSConfig.Clone()
 		}
-		opts.SetTLSConfig(tlsCfg)
+		// For SRV, the certificate is issued for the resolved hostname (e.g.
+		// "shard-00-00.abc.mongodb.net"), not the SRV record hostname (e.g.
+		// "cluster0.abc.mongodb.net"). Override ServerName to match.
+		if isSRV {
+			tlsCfg.ServerName = host
+		} else if tlsCfg.ServerName == "" {
+			tlsCfg.ServerName = p.config.Host
+		}
+		conn, err = tls.DialWithDialer(dialer, "tcp", targetAddr, tlsCfg)
+	} else {
+		conn, err = dialer.Dial("tcp", targetAddr)
 	}
 
-	client, err := mongo.Connect(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create MongoDB client: %w", err)
+		return nil, fmt.Errorf("failed to connect to %s: %w", targetAddr, err)
 	}
 
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(ctx)
-		return nil, fmt.Errorf("failed to verify MongoDB connection: %w", err)
+	if p.config.InjectUsername != "" && p.config.InjectPassword != "" {
+		if err := p.authenticateWithServer(conn, authSource); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("authentication failed: %w", err)
+		}
 	}
 
 	log.Info().
 		Str("sessionID", p.config.SessionID).
-		Str("host", p.config.Host).
-		Int("port", p.config.Port).
+		Str("host", host).
+		Int("port", port).
 		Bool("srv", isSRV).
 		Msg("Connected to target MongoDB")
 
-	return client, nil
+	return conn, nil
+}
+
+// resolveSRV resolves a MongoDB SRV hostname to an actual host:port and connection options.
+func resolveSRV(hostname string) (host string, port int, opts map[string]string, err error) {
+	_, addrs, err := net.LookupSRV("mongodb", "tcp", hostname)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("SRV lookup failed for %s: %w", hostname, err)
+	}
+	if len(addrs) == 0 {
+		return "", 0, nil, fmt.Errorf("no SRV records found for %s", hostname)
+	}
+
+	host = strings.TrimSuffix(addrs[0].Target, ".")
+	port = int(addrs[0].Port)
+
+	// Parse TXT record for connection options (authSource, replicaSet, etc.)
+	opts = make(map[string]string)
+	txts, txtErr := net.LookupTXT(hostname)
+	if txtErr == nil {
+		for _, txt := range txts {
+			for _, pair := range strings.Split(txt, "&") {
+				k, v, ok := strings.Cut(pair, "=")
+				if ok {
+					opts[k] = v
+				}
+			}
+		}
+	}
+
+	log.Debug().
+		Str("hostname", hostname).
+		Str("resolved", fmt.Sprintf("%s:%d", host, port)).
+		Interface("opts", opts).
+		Msg("SRV resolution complete")
+
+	return host, port, opts, nil
+}
+
+// authenticateWithServer performs SCRAM authentication against the MongoDB server.
+// Sends hello to discover supported mechanisms, then performs the SCRAM exchange.
+func (p *MongoDBProxy) authenticateWithServer(conn net.Conn, authSource string) error {
+	// Send hello to discover supported auth mechanisms
+	helloCmd, err := bson.Marshal(bson.D{
+		{Key: "hello", Value: 1},
+		{Key: "saslSupportedMechs", Value: fmt.Sprintf("%s.%s", authSource, p.config.InjectUsername)},
+		{Key: "$db", Value: authSource},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal hello: %w", err)
+	}
+
+	helloResp, err := sendCommand(conn, helloCmd)
+	if err != nil {
+		return fmt.Errorf("hello failed: %w", err)
+	}
+
+	mechanism := pickSCRAMMechanism(helloResp)
+	if mechanism == "" {
+		return fmt.Errorf("server does not support SCRAM authentication")
+	}
+
+	log.Debug().Str("mechanism", mechanism).Msg("Using SCRAM mechanism for MongoDB auth")
+
+	// Create SCRAM client. SHA-1 requires pre-hashed password (MD5 digest),
+	// SHA-256 uses SASLprep on the plain password.
+	var hashGen scram.HashGeneratorFcn
+	var client *scram.Client
+
+	switch mechanism {
+	case "SCRAM-SHA-256":
+		hashGen = scram.SHA256
+		client, err = hashGen.NewClient(p.config.InjectUsername, p.config.InjectPassword, "")
+	case "SCRAM-SHA-1":
+		hashGen = scram.SHA1
+		pw := mongoPasswordDigest(p.config.InjectUsername, p.config.InjectPassword)
+		client, err = hashGen.NewClientUnprepped(p.config.InjectUsername, pw, "")
+	default:
+		return fmt.Errorf("unsupported SCRAM mechanism: %s", mechanism)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to create SCRAM client: %w", err)
+	}
+
+	conv := client.NewConversation()
+
+	// Step 1: client-first-message -> saslStart
+	clientFirst, err := conv.Step("")
+	if err != nil {
+		return fmt.Errorf("SCRAM step 1 failed: %w", err)
+	}
+
+	saslStartCmd, err := bson.Marshal(bson.D{
+		{Key: "saslStart", Value: 1},
+		{Key: "mechanism", Value: mechanism},
+		{Key: "payload", Value: []byte(clientFirst)},
+		{Key: "$db", Value: authSource},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal saslStart: %w", err)
+	}
+
+	saslStartResp, err := sendCommand(conn, saslStartCmd)
+	if err != nil {
+		return fmt.Errorf("saslStart failed: %w", err)
+	}
+
+	if err := checkCommandOk(saslStartResp); err != nil {
+		return fmt.Errorf("saslStart error: %w", err)
+	}
+
+	serverPayload, convID, err := extractSASLResponse(saslStartResp)
+	if err != nil {
+		return fmt.Errorf("failed to parse saslStart response: %w", err)
+	}
+
+	// Step 2: server-first-message -> client-final-message via saslContinue
+	clientFinal, err := conv.Step(serverPayload)
+	if err != nil {
+		return fmt.Errorf("SCRAM step 2 failed: %w", err)
+	}
+
+	saslContinueCmd, err := bson.Marshal(bson.D{
+		{Key: "saslContinue", Value: 1},
+		{Key: "conversationId", Value: convID},
+		{Key: "payload", Value: []byte(clientFinal)},
+		{Key: "$db", Value: authSource},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal saslContinue: %w", err)
+	}
+
+	saslContinueResp, err := sendCommand(conn, saslContinueCmd)
+	if err != nil {
+		return fmt.Errorf("saslContinue failed: %w", err)
+	}
+
+	if err := checkCommandOk(saslContinueResp); err != nil {
+		return fmt.Errorf("saslContinue error: %w", err)
+	}
+
+	serverFinal, _, err := extractSASLResponse(saslContinueResp)
+	if err != nil {
+		return fmt.Errorf("failed to parse saslContinue response: %w", err)
+	}
+
+	// Step 3: verify server signature
+	_, err = conv.Step(serverFinal)
+	if err != nil {
+		return fmt.Errorf("SCRAM server verification failed: %w", err)
+	}
+
+	// Some servers send done:false and require one more empty saslContinue
+	if !isDone(saslContinueResp) {
+		finalCmd, err := bson.Marshal(bson.D{
+			{Key: "saslContinue", Value: 1},
+			{Key: "conversationId", Value: convID},
+			{Key: "payload", Value: []byte{}},
+			{Key: "$db", Value: authSource},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal final saslContinue: %w", err)
+		}
+
+		finalResp, err := sendCommand(conn, finalCmd)
+		if err != nil {
+			return fmt.Errorf("final saslContinue failed: %w", err)
+		}
+
+		if err := checkCommandOk(finalResp); err != nil {
+			return fmt.Errorf("final saslContinue error: %w", err)
+		}
+	}
+
+	log.Debug().Str("mechanism", mechanism).Msg("SCRAM authentication successful")
+	return nil
+}
+
+// sendCommand sends a BSON command as OP_MSG and reads the response document.
+func sendCommand(conn net.Conn, cmdDoc bson.Raw) (bson.Raw, error) {
+	msg := buildOpMsgReply(0, cmdDoc) // responseTo=0 for requests
+	if err := writeWireMessage(conn, msg); err != nil {
+		return nil, fmt.Errorf("failed to send command: %w", err)
+	}
+
+	hdr, raw, err := readWireMessage(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if hdr.OpCode == opMsgOpCode {
+		respMsg, err := parseOpMsg(hdr, raw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse response OP_MSG: %w", err)
+		}
+		return respMsg.Body, nil
+	}
+
+	return nil, fmt.Errorf("unexpected response opcode: %d", hdr.OpCode)
+}
+
+func pickSCRAMMechanism(helloResp bson.Raw) string {
+	var doc bson.M
+	if err := bson.Unmarshal(helloResp, &doc); err != nil {
+		return "SCRAM-SHA-256"
+	}
+
+	mechs, ok := doc["saslSupportedMechs"]
+	if !ok {
+		return "SCRAM-SHA-256"
+	}
+
+	mechArr, ok := mechs.(bson.A)
+	if !ok {
+		return "SCRAM-SHA-256"
+	}
+
+	hasSHA256 := false
+	hasSHA1 := false
+	for _, v := range mechArr {
+		str, ok := v.(string)
+		if !ok {
+			continue
+		}
+		switch str {
+		case "SCRAM-SHA-256":
+			hasSHA256 = true
+		case "SCRAM-SHA-1":
+			hasSHA1 = true
+		}
+	}
+
+	if hasSHA256 {
+		return "SCRAM-SHA-256"
+	}
+	if hasSHA1 {
+		return "SCRAM-SHA-1"
+	}
+	return ""
+}
+
+func checkCommandOk(resp bson.Raw) error {
+	var doc bson.M
+	if err := bson.Unmarshal(resp, &doc); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if toFloat64(doc["ok"]) != 1 {
+		errmsg, _ := doc["errmsg"].(string)
+		return fmt.Errorf("command failed: %s", errmsg)
+	}
+	return nil
+}
+
+func extractSASLResponse(resp bson.Raw) (payload string, convID int32, err error) {
+	payloadVal, err := resp.LookupErr("payload")
+	if err != nil {
+		return "", 0, fmt.Errorf("missing payload field")
+	}
+
+	_, payloadBytes, ok := payloadVal.BinaryOK()
+	if !ok {
+		return "", 0, fmt.Errorf("payload is not binary")
+	}
+
+	convIDVal, err := resp.LookupErr("conversationId")
+	if err != nil {
+		return "", 0, fmt.Errorf("missing conversationId field")
+	}
+	convID = convIDVal.Int32()
+
+	return string(payloadBytes), convID, nil
+}
+
+func isDone(resp bson.Raw) bool {
+	var doc bson.M
+	if err := bson.Unmarshal(resp, &doc); err != nil {
+		return false
+	}
+	done, _ := doc["done"].(bool)
+	return done
+}
+
+// mongoPasswordDigest computes the MD5 digest used by SCRAM-SHA-1.
+// MongoDB SCRAM-SHA-1 requires md5(username:mongo:password) as the password input.
+func mongoPasswordDigest(username, password string) string {
+	h := md5.New()
+	h.Write([]byte(username + ":mongo:" + password))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // handleInitialHandshake reads the client's first message (OP_QUERY ismaster
@@ -158,7 +432,7 @@ func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, erro
 // satisfies mongosh's 2-second serverSelectionTimeoutMS while we connect to
 // the real target in the background.
 func handleInitialHandshake(conn net.Conn) error {
-	hdr, raw, err := readWireMessage(conn)
+	hdr, _, err := readWireMessage(conn)
 	if err != nil {
 		return fmt.Errorf("failed to read initial client message: %w", err)
 	}
@@ -190,8 +464,6 @@ func handleInitialHandshake(conn net.Conn) error {
 	case opMsgOpCode:
 		reply = buildOpMsgReply(hdr.RequestID, syntheticHello)
 	default:
-		// Unexpected first message — let the bridge handle it.
-		// Put the bytes back... actually we can't, so just respond generically.
 		reply = buildOpMsgReply(hdr.RequestID, syntheticHello)
 	}
 
@@ -199,7 +471,6 @@ func handleInitialHandshake(conn net.Conn) error {
 		return fmt.Errorf("failed to write initial handshake response: %w", err)
 	}
 
-	_ = raw // consumed the first message
 	log.Debug().Msg("Sent synthetic hello response for initial handshake")
 	return nil
 }

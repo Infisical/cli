@@ -228,16 +228,6 @@ func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
 	}, nil
 }
 
-// dbFromCollection extracts the database name from a fullCollectionName like "admin.$cmd".
-func dbFromCollection(collection string) string {
-	for i, c := range collection {
-		if c == '.' {
-			return collection[:i]
-		}
-	}
-	return collection
-}
-
 // buildOpReply builds a legacy OP_REPLY wrapping a single BSON document.
 func buildOpReply(responseTo int32, doc bson.Raw) []byte {
 	// header(16) + responseFlags(4) + cursorID(8) + startingFrom(4) + numberReturned(4) + doc

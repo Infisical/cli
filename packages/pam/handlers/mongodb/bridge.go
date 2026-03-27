@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,22 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// Fields that the mongo.Client's RunCommand adds automatically.
-// We must strip these from every client command to avoid BSON duplicate-field errors.
-var driverManagedFields = []string{
-	"$db",
-	"lsid",
-	"$clusterTime",
-	"$readPreference",
-	"txnNumber",
-	"startTransaction",
-	"autocommit",
-}
-
-// Fields to strip from logged input — driver/protocol noise, not user intent.
+// Fields to strip from logged input — protocol noise, not user intent.
 // We keep $db so admins can see database switches (e.g. "use prodDB").
 var logNoiseFields = []string{
 	"$clusterTime",
@@ -41,32 +29,16 @@ var logNoiseFields = []string{
 	"apiVersion",
 }
 
-// Fields to strip from hello/isMaster commands before forwarding via RunCommand.
-// - client, compression, saslSupportedMechs, speculativeAuthenticate: only allowed
-//   in the first hello on a connection (our mongo.Client already sent these).
-// - topologyVersion, maxAwaitTimeMS: used for monitoring long-polls. If forwarded,
-//   the server blocks for up to maxAwaitTimeMS (typically 10s), stalling the bridge
-//   and causing mongosh to mark the server as unknown. Stripping these makes the
-//   server respond immediately.
-var helloFieldsToStrip = []string{
-	"client",
-	"compression",
-	"saslSupportedMechs",
-	"speculativeAuthenticate",
-	"topologyVersion",
-	"maxAwaitTimeMS",
-}
-
 type bridge struct {
-	client        *mongo.Client
+	serverConn    net.Conn
 	clientConn    net.Conn
 	sessionLogger session.SessionLogger
 	defaultDB     string
 }
 
-func newBridge(client *mongo.Client, clientConn net.Conn, logger session.SessionLogger, defaultDB string) *bridge {
+func newBridge(serverConn net.Conn, clientConn net.Conn, logger session.SessionLogger, defaultDB string) *bridge {
 	return &bridge{
-		client:        client,
+		serverConn:    serverConn,
 		clientConn:    clientConn,
 		sessionLogger: logger,
 		defaultDB:     defaultDB,
@@ -92,24 +64,27 @@ func (b *bridge) run(ctx context.Context) error {
 			Int32("opcode", hdr.OpCode).
 			Int32("requestID", hdr.RequestID).
 			Int32("msgLen", hdr.MessageLength).
-			Msg("[WIRE] ← client message")
+			Msg("[WIRE] <- client message")
 
 		switch hdr.OpCode {
 		case opMsgOpCode:
-			if err := b.handleOpMsg(ctx, hdr, raw); err != nil {
+			if err := b.handleOpMsg(hdr, raw); err != nil {
 				return err
 			}
 		case opQueryOpCode:
-			if err := b.handleOpQuery(ctx, hdr, raw); err != nil {
+			if err := b.handleOpQuery(hdr, raw); err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("unsupported opcode %d", hdr.OpCode)
+			// Forward unknown opcodes transparently
+			if err := b.forwardRaw(raw); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) error {
+func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 	msg, err := parseOpMsg(hdr, raw)
 	if err != nil {
 		return fmt.Errorf("failed to parse OP_MSG: %w", err)
@@ -126,142 +101,100 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		Str("db", dbName).
 		Uint32("flagBits", msg.FlagBits).
 		Bool("moreToCome", msg.FlagBits&flagMoreToCome != 0).
-		Int("docSequences", len(msg.DocumentSequences)).
-		Msg("[WIRE] ← OP_MSG")
+		Msg("[WIRE] <- OP_MSG")
 
+	// Intercept auth commands — the proxy already authenticated with the server
 	if isAuthCommand(cmdName) {
-		log.Debug().Str("cmd", cmdName).Msg("[WIRE] → fake auth response")
+		log.Debug().Str("cmd", cmdName).Msg("[WIRE] -> fake auth response")
 		return b.handleAuthCommand(msg)
 	}
 
-	// Merge Kind 1 document sequences into the body
-	cmdDoc, err := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
-	if err != nil {
-		return fmt.Errorf("failed to merge document sequences: %w", err)
+	// Forward the raw wire message to the server
+	if err := writeWireMessage(b.serverConn, raw); err != nil {
+		return fmt.Errorf("failed to forward to server: %w", err)
 	}
 
-	// moreToCome (bit 1): the client will send more messages before expecting
-	// a response. Execute the command for its side-effects but do NOT reply.
+	// moreToCome: server won't send a response
 	if msg.FlagBits&flagMoreToCome != 0 {
-		log.Debug().Str("cmd", cmdName).Msg("[WIRE] moreToCome set, executing without response")
-		_, _ = b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
-		return nil // read next message without responding
+		log.Debug().Str("cmd", cmdName).Msg("[WIRE] moreToCome set, no response expected")
+		if !isInternalCommand(cmdName) {
+			cmdDoc, _ := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
+			b.logCommand(cmdName, dbName, cmdDoc, nil)
+		}
+		return nil
 	}
 
-	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
+	// Read server response
+	respHdr, respRaw, err := readWireMessage(b.serverConn)
 	if err != nil {
-		log.Error().Err(err).Str("cmd", cmdName).Msg("[WIRE] executeAndLog failed")
-		return err
+		return fmt.Errorf("failed to read server response: %w", err)
 	}
 
-	reply := buildOpMsgReply(msg.Header.RequestID, rawResp)
 	log.Debug().
-		Str("cmd", cmdName).
-		Int("respBsonLen", len(rawResp)).
-		Int("replyWireLen", len(reply)).
-		Int32("responseTo", msg.Header.RequestID).
-		Msg("[WIRE] → OP_MSG response")
-	return writeWireMessage(b.clientConn, reply)
+		Int32("opcode", respHdr.OpCode).
+		Int32("responseTo", respHdr.ResponseTo).
+		Int32("msgLen", respHdr.MessageLength).
+		Msg("[WIRE] -> server response")
+
+	// Sanitize hello/ismaster responses to prevent the client from attempting
+	// authentication through the proxy (we already authed on its behalf).
+	if isHelloCommand(cmdName) && respHdr.OpCode == opMsgOpCode {
+		if sanitized, err := sanitizeHelloWireMessage(respHdr, respRaw); err == nil {
+			respRaw = sanitized
+		} else {
+			log.Warn().Err(err).Msg("Failed to sanitize hello response, forwarding as-is")
+		}
+	}
+
+	// Log user commands for session recording
+	if !isInternalCommand(cmdName) {
+		var respBody bson.Raw
+		if respHdr.OpCode == opMsgOpCode {
+			if respMsg, parseErr := parseOpMsg(respHdr, respRaw); parseErr == nil {
+				respBody = respMsg.Body
+			}
+		}
+		cmdDoc, _ := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
+		b.logCommand(cmdName, dbName, cmdDoc, respBody)
+	}
+
+	return writeWireMessage(b.clientConn, respRaw)
 }
 
-func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte) error {
+func (b *bridge) handleOpQuery(hdr *wireHeader, raw []byte) error {
 	q, err := parseOpQuery(hdr, raw)
 	if err != nil {
 		return fmt.Errorf("failed to parse OP_QUERY: %w", err)
 	}
 
 	cmdName := getCommandName(q.Query)
-	dbName := dbFromCollection(q.Collection)
-	if dbName == "" {
-		dbName = b.defaultDB
-	}
-
 	log.Debug().
 		Str("cmd", cmdName).
-		Str("db", dbName).
 		Str("collection", q.Collection).
-		Msg("[WIRE] ← OP_QUERY")
+		Msg("[WIRE] <- OP_QUERY")
 
-	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, q.Query)
+	if err := writeWireMessage(b.serverConn, raw); err != nil {
+		return fmt.Errorf("failed to forward OP_QUERY: %w", err)
+	}
+
+	_, respRaw, err := readWireMessage(b.serverConn)
 	if err != nil {
-		log.Error().Err(err).Str("cmd", cmdName).Msg("[WIRE] OP_QUERY failed")
-		return err
+		return fmt.Errorf("failed to read OP_QUERY response: %w", err)
 	}
 
-	reply := buildOpReply(q.Header.RequestID, rawResp)
-	log.Debug().
-		Str("cmd", cmdName).
-		Int("respBsonLen", len(rawResp)).
-		Int("replyWireLen", len(reply)).
-		Msg("[WIRE] → OP_REPLY response")
-	return writeWireMessage(b.clientConn, reply)
+	return writeWireMessage(b.clientConn, respRaw)
 }
 
-// executeAndLog strips driver-managed fields, executes via RunCommand,
-// sanitizes hello responses, and records the command to the session log.
-func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, cmdDoc bson.Raw) (bson.Raw, error) {
-	// Strip all fields that the driver adds automatically to avoid duplicates.
-	fieldsToStrip := append([]string{}, driverManagedFields...)
-	if isHelloCommand(cmdName) {
-		fieldsToStrip = append(fieldsToStrip, helloFieldsToStrip...)
+// forwardRaw forwards a raw wire message to the server and sends the response back.
+func (b *bridge) forwardRaw(raw []byte) error {
+	if err := writeWireMessage(b.serverConn, raw); err != nil {
+		return fmt.Errorf("failed to forward raw message: %w", err)
 	}
-
-	execDoc, err := stripFields(cmdDoc, fieldsToStrip...)
+	_, respRaw, err := readWireMessage(b.serverConn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare command for execution: %w", err)
+		return fmt.Errorf("failed to read raw response: %w", err)
 	}
-
-	rawResp, cmdErr := b.client.Database(dbName).RunCommand(ctx, execDoc).Raw()
-
-	log.Debug().
-		Str("cmd", cmdName).
-		Bool("hasResp", rawResp != nil).
-		Bool("hasErr", cmdErr != nil).
-		Int("respBytes", len(rawResp)).
-		Msg("[WIRE] RunCommand result")
-
-	if rawResp == nil {
-		if cmdErr != nil {
-			log.Error().Err(cmdErr).Str("cmd", cmdName).Msg("RunCommand failed with no response")
-			return nil, fmt.Errorf("RunCommand failed: %w", cmdErr)
-		}
-		return nil, fmt.Errorf("RunCommand returned nil response")
-	}
-
-	if isHelloCommand(cmdName) {
-		rawResp = sanitizeHelloResponse(rawResp)
-	}
-
-	if !isInternalCommand(cmdName) {
-		b.logCommand(cmdName, dbName, cmdDoc, rawResp)
-	}
-	return rawResp, nil
-}
-
-func isAuthCommand(cmdName string) bool {
-	switch strings.ToLower(cmdName) {
-	case "saslstart", "saslcontinue", "authenticate", "logout":
-		return true
-	}
-	return false
-}
-
-func isHelloCommand(cmdName string) bool {
-	switch strings.ToLower(cmdName) {
-	case "hello", "ismaster":
-		return true
-	}
-	return false
-}
-
-// isInternalCommand returns true for protocol-level commands that are not
-// user-initiated activity and should be excluded from session logs.
-func isInternalCommand(cmdName string) bool {
-	switch strings.ToLower(cmdName) {
-	case "ismaster", "hello", "ping":
-		return true
-	}
-	return false
+	return writeWireMessage(b.clientConn, respRaw)
 }
 
 // handleAuthCommand responds with fake success since the proxy handles auth.
@@ -292,12 +225,17 @@ func (b *bridge) handleAuthCommand(msg *opMsg) error {
 	return writeWireMessage(b.clientConn, reply)
 }
 
-// sanitizeHelloResponse strips fields that would make the client attempt
-// compression or authentication through the proxy.
-func sanitizeHelloResponse(raw bson.Raw) bson.Raw {
+// sanitizeHelloWireMessage strips auth-related fields from a hello response
+// to prevent the client from attempting authentication through the proxy.
+func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
+	msg, err := parseOpMsg(hdr, raw)
+	if err != nil {
+		return nil, err
+	}
+
 	var doc bson.M
-	if err := bson.Unmarshal(raw, &doc); err != nil {
-		return raw
+	if err := bson.Unmarshal(msg.Body, &doc); err != nil {
+		return nil, err
 	}
 
 	delete(doc, "compression")
@@ -306,18 +244,37 @@ func sanitizeHelloResponse(raw bson.Raw) bson.Raw {
 
 	sanitized, err := bson.Marshal(doc)
 	if err != nil {
-		return raw
+		return nil, err
 	}
-	return sanitized
+
+	// Rebuild the OP_MSG with sanitized body, preserving original header IDs
+	totalLen := headerLength + 4 + 1 + len(sanitized)
+	reply := make([]byte, totalLen)
+	binary.LittleEndian.PutUint32(reply[0:4], uint32(totalLen))
+	binary.LittleEndian.PutUint32(reply[4:8], uint32(hdr.RequestID))
+	binary.LittleEndian.PutUint32(reply[8:12], uint32(hdr.ResponseTo))
+	binary.LittleEndian.PutUint32(reply[12:16], uint32(opMsgOpCode))
+	binary.LittleEndian.PutUint32(reply[16:20], 0) // flagBits
+	reply[20] = 0                                   // Kind 0
+	copy(reply[21:], sanitized)
+
+	return reply, nil
 }
 
 func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response bson.Raw) {
-	cleanCmd, err := stripFields(command, logNoiseFields...)
-	if err != nil {
-		cleanCmd = command
+	var input string
+	if command != nil {
+		cleanCmd, err := stripFields(command, logNoiseFields...)
+		if err != nil {
+			cleanCmd = command
+		}
+		input = bsonToJSON(cleanCmd)
 	}
-	input := bsonToJSON(cleanCmd)
-	output := formatResponseSummary(cmdName, response)
+
+	output := ""
+	if response != nil {
+		output = formatResponseSummary(cmdName, response)
+	}
 
 	if err := b.sessionLogger.LogEntry(session.SessionLogEntry{
 		Timestamp: time.Now(),
@@ -329,6 +286,32 @@ func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response b
 			Str("db", dbName).
 			Msg("Failed to write MongoDB session log entry")
 	}
+}
+
+func isAuthCommand(cmdName string) bool {
+	switch strings.ToLower(cmdName) {
+	case "saslstart", "saslcontinue", "authenticate", "logout":
+		return true
+	}
+	return false
+}
+
+func isHelloCommand(cmdName string) bool {
+	switch strings.ToLower(cmdName) {
+	case "hello", "ismaster":
+		return true
+	}
+	return false
+}
+
+// isInternalCommand returns true for protocol-level commands that are not
+// user-initiated activity and should be excluded from session logs.
+func isInternalCommand(cmdName string) bool {
+	switch strings.ToLower(cmdName) {
+	case "ismaster", "hello", "ping":
+		return true
+	}
+	return false
 }
 
 func bsonToJSON(raw bson.Raw) string {
