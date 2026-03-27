@@ -3,7 +3,9 @@ package mongodb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -14,6 +16,27 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
+// Fields that the mongo.Client's RunCommand adds automatically.
+// We must strip these from every client command to avoid BSON duplicate-field errors.
+var driverManagedFields = []string{
+	"$db",
+	"lsid",
+	"$clusterTime",
+	"$readPreference",
+	"txnNumber",
+	"startTransaction",
+	"autocommit",
+}
+
+// Fields only allowed in the first hello on a connection.
+// Our mongo.Client already sent these during its own handshake.
+var firstHelloOnlyFields = []string{
+	"client",
+	"compression",
+	"saslSupportedMechs",
+	"speculativeAuthenticate",
+}
 
 type bridge struct {
 	client        *mongo.Client
@@ -39,6 +62,10 @@ func (b *bridge) run(ctx context.Context) error {
 
 		hdr, raw, err := readWireMessage(b.clientConn)
 		if err != nil {
+			if isConnectionClosed(err) {
+				log.Debug().Msg("MongoDB client disconnected")
+				return nil
+			}
 			return fmt.Errorf("failed to read client message: %w", err)
 		}
 
@@ -69,24 +96,17 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		dbName = b.defaultDB
 	}
 
-	// Intercept auth commands — respond with fake success
 	if isAuthCommand(cmdName) {
 		return b.handleAuthCommand(msg)
 	}
 
-	// Merge Kind 1 document sequences into the body for RunCommand
-	merged, err := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
+	// Merge Kind 1 document sequences into the body
+	cmdDoc, err := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
 	if err != nil {
 		return fmt.Errorf("failed to merge document sequences: %w", err)
 	}
 
-	// Strip $db — RunCommand adds it from the Database() call
-	stripped, err := stripFields(merged, "$db")
-	if err != nil {
-		return fmt.Errorf("failed to strip $db: %w", err)
-	}
-
-	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, merged, stripped)
+	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
 	if err != nil {
 		return err
 	}
@@ -107,32 +127,27 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 		dbName = b.defaultDB
 	}
 
-	// Strip $db if present (shouldn't be in OP_QUERY, but be safe)
-	stripped, err := stripFields(q.Query, "$db")
-	if err != nil {
-		return fmt.Errorf("failed to strip fields from OP_QUERY: %w", err)
-	}
-
-	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, q.Query, stripped)
+	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, q.Query)
 	if err != nil {
 		return err
 	}
 
-	// OP_QUERY expects an OP_REPLY response
 	reply := buildOpReply(q.Header.RequestID, rawResp)
 	return writeWireMessage(b.clientConn, reply)
 }
 
-// executeAndLog runs the command via RunCommand, sanitizes hello responses, and logs.
-func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, logDoc, execDoc bson.Raw) (bson.Raw, error) {
-	// For hello/isMaster, strip fields that are only allowed on the first
-	// hello of a connection — our mongo.Client already sent its own hello.
+// executeAndLog strips driver-managed fields, executes via RunCommand,
+// sanitizes hello responses, and records the command to the session log.
+func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, cmdDoc bson.Raw) (bson.Raw, error) {
+	// Strip all fields that the driver adds automatically to avoid duplicates.
+	fieldsToStrip := append([]string{}, driverManagedFields...)
 	if isHelloCommand(cmdName) {
-		var err error
-		execDoc, err = stripFields(execDoc, "client", "compression", "saslSupportedMechs", "speculativeAuthenticate")
-		if err != nil {
-			return nil, fmt.Errorf("failed to sanitize hello command: %w", err)
-		}
+		fieldsToStrip = append(fieldsToStrip, firstHelloOnlyFields...)
+	}
+
+	execDoc, err := stripFields(cmdDoc, fieldsToStrip...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare command for execution: %w", err)
 	}
 
 	rawResp, cmdErr := b.client.Database(dbName).RunCommand(ctx, execDoc).Raw()
@@ -149,11 +164,10 @@ func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, logD
 		rawResp = sanitizeHelloResponse(rawResp)
 	}
 
-	b.logCommand(cmdName, dbName, logDoc, rawResp)
+	b.logCommand(cmdName, dbName, cmdDoc, rawResp)
 	return rawResp, nil
 }
 
-// isAuthCommand returns true for commands we intercept to fake authentication.
 func isAuthCommand(cmdName string) bool {
 	switch strings.ToLower(cmdName) {
 	case "saslstart", "saslcontinue", "authenticate", "logout":
@@ -170,8 +184,7 @@ func isHelloCommand(cmdName string) bool {
 	return false
 }
 
-// handleAuthCommand responds to authentication commands with fake success,
-// since the proxy authenticates to the real server on behalf of the user.
+// handleAuthCommand responds with fake success since the proxy handles auth.
 func (b *bridge) handleAuthCommand(msg *opMsg) error {
 	cmdName := strings.ToLower(getCommandName(msg.Body))
 
@@ -186,7 +199,7 @@ func (b *bridge) handleAuthCommand(msg *opMsg) error {
 			{Key: "conversationId", Value: int32(1)},
 			{Key: "payload", Value: primitive.Binary{Data: []byte{}}},
 		})
-	default: // authenticate, logout
+	default:
 		resp, err = bson.Marshal(bson.D{
 			{Key: "ok", Value: 1},
 		})
@@ -218,7 +231,6 @@ func sanitizeHelloResponse(raw bson.Raw) bson.Raw {
 	return sanitized
 }
 
-// logCommand records a command and its response summary to the session log.
 func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response bson.Raw) {
 	input := bsonToJSON(command)
 	output := formatResponseSummary(cmdName, response)
@@ -235,7 +247,6 @@ func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response b
 	}
 }
 
-// bsonToJSON converts a raw BSON document to a JSON string for logging.
 func bsonToJSON(raw bson.Raw) string {
 	if len(raw) == 0 {
 		return "{}"
@@ -251,7 +262,6 @@ func bsonToJSON(raw bson.Raw) string {
 	return string(data)
 }
 
-// formatResponseSummary produces a human-readable summary of a command response.
 func formatResponseSummary(cmdName string, response bson.Raw) string {
 	var result bson.M
 	if err := bson.Unmarshal(response, &result); err != nil {
@@ -313,4 +323,18 @@ func toFloat64(v interface{}) float64 {
 	default:
 		return 0
 	}
+}
+
+// isConnectionClosed returns true for errors that indicate a normal client disconnect.
+func isConnectionClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	if strings.Contains(err.Error(), "use of closed network connection") {
+		return true
+	}
+	return false
 }

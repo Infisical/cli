@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -51,7 +52,12 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 	if err != nil {
 		return fmt.Errorf("failed to connect to target MongoDB: %w", err)
 	}
-	defer client.Disconnect(ctx)
+	defer func() {
+		// Use a fresh context so disconnect succeeds even if ctx is already cancelled
+		disconnectCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = client.Disconnect(disconnectCtx)
+	}()
 
 	b := newBridge(client, clientConn, p.config.SessionLogger, p.config.InjectDatabase)
 	return b.run(ctx)
@@ -91,12 +97,15 @@ func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, erro
 
 	// Log handshake failures so auth/TLS errors are visible instead of
 	// being buried inside a generic "server selection timeout".
+	// Suppress "context canceled" errors which are expected during shutdown.
 	opts.SetServerMonitor(&event.ServerMonitor{
 		ServerHeartbeatFailed: func(e *event.ServerHeartbeatFailedEvent) {
-			log.Error().
-				Err(e.Failure).
-				Str("address", e.ConnectionID).
-				Msg("MongoDB server heartbeat failed")
+			if e.Failure != nil && !strings.Contains(e.Failure.Error(), "context canceled") {
+				log.Error().
+					Err(e.Failure).
+					Str("address", e.ConnectionID).
+					Msg("MongoDB server heartbeat failed")
+			}
 		},
 	})
 
