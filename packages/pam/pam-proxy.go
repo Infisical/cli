@@ -11,6 +11,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
@@ -41,6 +42,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
+		session.ResourceTypeMongodb,
 	}
 }
 
@@ -280,6 +282,26 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", kubernetesConfig.TargetApiServer).
 			Msg("Starting Kubernetes PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeMongodb:
+		mongoConfig := mongodb.MongoDBProxyConfig{
+			Host:           credentials.Host,
+			Port:           credentials.Port,
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+		proxy := mongodb.NewMongoDBProxy(mongoConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("host", credentials.Host).
+			Int("port", credentials.Port).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting MongoDB PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
