@@ -29,13 +29,20 @@ var driverManagedFields = []string{
 	"autocommit",
 }
 
-// Fields only allowed in the first hello on a connection.
-// Our mongo.Client already sent these during its own handshake.
-var firstHelloOnlyFields = []string{
+// Fields to strip from hello/isMaster commands before forwarding via RunCommand.
+// - client, compression, saslSupportedMechs, speculativeAuthenticate: only allowed
+//   in the first hello on a connection (our mongo.Client already sent these).
+// - topologyVersion, maxAwaitTimeMS: used for monitoring long-polls. If forwarded,
+//   the server blocks for up to maxAwaitTimeMS (typically 10s), stalling the bridge
+//   and causing mongosh to mark the server as unknown. Stripping these makes the
+//   server respond immediately.
+var helloFieldsToStrip = []string{
 	"client",
 	"compression",
 	"saslSupportedMechs",
 	"speculativeAuthenticate",
+	"topologyVersion",
+	"maxAwaitTimeMS",
 }
 
 type bridge struct {
@@ -69,6 +76,12 @@ func (b *bridge) run(ctx context.Context) error {
 			return fmt.Errorf("failed to read client message: %w", err)
 		}
 
+		log.Debug().
+			Int32("opcode", hdr.OpCode).
+			Int32("requestID", hdr.RequestID).
+			Int32("msgLen", hdr.MessageLength).
+			Msg("[WIRE] ← client message")
+
 		switch hdr.OpCode {
 		case opMsgOpCode:
 			if err := b.handleOpMsg(ctx, hdr, raw); err != nil {
@@ -96,7 +109,16 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		dbName = b.defaultDB
 	}
 
+	log.Debug().
+		Str("cmd", cmdName).
+		Str("db", dbName).
+		Uint32("flagBits", msg.FlagBits).
+		Bool("moreToCome", msg.FlagBits&flagMoreToCome != 0).
+		Int("docSequences", len(msg.DocumentSequences)).
+		Msg("[WIRE] ← OP_MSG")
+
 	if isAuthCommand(cmdName) {
+		log.Debug().Str("cmd", cmdName).Msg("[WIRE] → fake auth response")
 		return b.handleAuthCommand(msg)
 	}
 
@@ -109,16 +131,24 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 	// moreToCome (bit 1): the client will send more messages before expecting
 	// a response. Execute the command for its side-effects but do NOT reply.
 	if msg.FlagBits&flagMoreToCome != 0 {
+		log.Debug().Str("cmd", cmdName).Msg("[WIRE] moreToCome set, executing without response")
 		_, _ = b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
 		return nil // read next message without responding
 	}
 
 	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, cmdDoc)
 	if err != nil {
+		log.Error().Err(err).Str("cmd", cmdName).Msg("[WIRE] executeAndLog failed")
 		return err
 	}
 
 	reply := buildOpMsgReply(msg.Header.RequestID, rawResp)
+	log.Debug().
+		Str("cmd", cmdName).
+		Int("respBsonLen", len(rawResp)).
+		Int("replyWireLen", len(reply)).
+		Int32("responseTo", msg.Header.RequestID).
+		Msg("[WIRE] → OP_MSG response")
 	return writeWireMessage(b.clientConn, reply)
 }
 
@@ -134,12 +164,24 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 		dbName = b.defaultDB
 	}
 
+	log.Debug().
+		Str("cmd", cmdName).
+		Str("db", dbName).
+		Str("collection", q.Collection).
+		Msg("[WIRE] ← OP_QUERY")
+
 	rawResp, err := b.executeAndLog(ctx, cmdName, dbName, q.Query)
 	if err != nil {
+		log.Error().Err(err).Str("cmd", cmdName).Msg("[WIRE] OP_QUERY failed")
 		return err
 	}
 
 	reply := buildOpReply(q.Header.RequestID, rawResp)
+	log.Debug().
+		Str("cmd", cmdName).
+		Int("respBsonLen", len(rawResp)).
+		Int("replyWireLen", len(reply)).
+		Msg("[WIRE] → OP_REPLY response")
 	return writeWireMessage(b.clientConn, reply)
 }
 
@@ -149,7 +191,7 @@ func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, cmdD
 	// Strip all fields that the driver adds automatically to avoid duplicates.
 	fieldsToStrip := append([]string{}, driverManagedFields...)
 	if isHelloCommand(cmdName) {
-		fieldsToStrip = append(fieldsToStrip, firstHelloOnlyFields...)
+		fieldsToStrip = append(fieldsToStrip, helloFieldsToStrip...)
 	}
 
 	execDoc, err := stripFields(cmdDoc, fieldsToStrip...)
@@ -158,6 +200,13 @@ func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, cmdD
 	}
 
 	rawResp, cmdErr := b.client.Database(dbName).RunCommand(ctx, execDoc).Raw()
+
+	log.Debug().
+		Str("cmd", cmdName).
+		Bool("hasResp", rawResp != nil).
+		Bool("hasErr", cmdErr != nil).
+		Int("respBytes", len(rawResp)).
+		Msg("[WIRE] RunCommand result")
 
 	if rawResp == nil {
 		if cmdErr != nil {

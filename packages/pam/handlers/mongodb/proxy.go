@@ -10,6 +10,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/event"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -48,12 +49,19 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 		Str("sessionID", p.config.SessionID).
 		Msg("New MongoDB connection for PAM session")
 
+	// Respond to the client's initial hello/ismaster BEFORE connecting to the
+	// target. mongosh sends ismaster immediately and times out in 2 seconds
+	// (serverSelectionTimeoutMS). connectToTarget can take 1-5s for remote
+	// servers, so the bridge wouldn't start in time.
+	if err := handleInitialHandshake(clientConn); err != nil {
+		return fmt.Errorf("failed to handle initial handshake: %w", err)
+	}
+
 	client, err := p.connectToTarget(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to connect to target MongoDB: %w", err)
 	}
 	defer func() {
-		// Use a fresh context so disconnect succeeds even if ctx is already cancelled
 		disconnectCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = client.Disconnect(disconnectCtx)
@@ -143,4 +151,55 @@ func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, erro
 		Msg("Connected to target MongoDB")
 
 	return client, nil
+}
+
+// handleInitialHandshake reads the client's first message (OP_QUERY ismaster
+// or OP_MSG hello) and responds with a synthetic hello immediately. This
+// satisfies mongosh's 2-second serverSelectionTimeoutMS while we connect to
+// the real target in the background.
+func handleInitialHandshake(conn net.Conn) error {
+	hdr, raw, err := readWireMessage(conn)
+	if err != nil {
+		return fmt.Errorf("failed to read initial client message: %w", err)
+	}
+
+	log.Debug().
+		Int32("opcode", hdr.OpCode).
+		Int32("requestID", hdr.RequestID).
+		Msg("Initial handshake message from client")
+
+	syntheticHello, err := bson.Marshal(bson.D{
+		{Key: "ismaster", Value: true},
+		{Key: "isWritablePrimary", Value: true},
+		{Key: "maxBsonObjectSize", Value: int32(16777216)},
+		{Key: "maxMessageSizeBytes", Value: int32(48000000)},
+		{Key: "maxWriteBatchSize", Value: int32(100000)},
+		{Key: "maxWireVersion", Value: int32(21)},
+		{Key: "minWireVersion", Value: int32(0)},
+		{Key: "readOnly", Value: false},
+		{Key: "ok", Value: 1.0},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal synthetic hello: %w", err)
+	}
+
+	var reply []byte
+	switch hdr.OpCode {
+	case opQueryOpCode:
+		reply = buildOpReply(hdr.RequestID, syntheticHello)
+	case opMsgOpCode:
+		reply = buildOpMsgReply(hdr.RequestID, syntheticHello)
+	default:
+		// Unexpected first message — let the bridge handle it.
+		// Put the bytes back... actually we can't, so just respond generically.
+		reply = buildOpMsgReply(hdr.RequestID, syntheticHello)
+	}
+
+	if err := writeWireMessage(conn, reply); err != nil {
+		return fmt.Errorf("failed to write initial handshake response: %w", err)
+	}
+
+	_ = raw // consumed the first message
+	log.Debug().Msg("Sent synthetic hello response for initial handshake")
+	return nil
 }
