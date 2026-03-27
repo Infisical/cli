@@ -72,7 +72,7 @@ func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, erro
 	// driver's 10-second server selection timeout.
 	if !isSRV {
 		log.Debug().Str("target", targetAddr).Msg("Testing TCP connectivity to MongoDB target")
-		testConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
+		testConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
 		if err != nil {
 			return nil, fmt.Errorf("cannot reach MongoDB at %s: %w", targetAddr, err)
 		}
@@ -91,9 +91,9 @@ func (p *MongoDBProxy) connectToTarget(ctx context.Context) (*mongo.Client, erro
 
 	opts.SetMaxPoolSize(1)
 	opts.SetReadPreference(readpref.Primary())
-	opts.SetConnectTimeout(5 * time.Second)
-	opts.SetServerSelectionTimeout(10 * time.Second)
-	opts.SetHeartbeatInterval(2 * time.Second)
+	opts.SetConnectTimeout(10 * time.Second)
+	opts.SetServerSelectionTimeout(15 * time.Second)
+	opts.SetHeartbeatInterval(30 * time.Second)
 
 	// Log handshake failures so auth/TLS errors are visible instead of
 	// being buried inside a generic "server selection timeout".
