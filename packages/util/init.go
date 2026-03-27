@@ -2,43 +2,72 @@ package util
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
 )
 
-func GetOrganizationsNameList(organizationResponse api.GetOrganizationsResponse) []string {
-	organizations := organizationResponse.Organizations
-
-	if len(organizations) == 0 {
-		message := fmt.Sprintf("You don't have any organization created in Infisical. You must first create a organization at %s", config.INFISICAL_URL)
-		PrintErrorMessageAndExit(message)
-	}
-
-	var organizationNames []string
-	for _, workspace := range organizations {
-		organizationNames = append(organizationNames, workspace.Name)
-	}
-
-	return organizationNames
+// OrgPickerItem holds the org ID to pass to CallSelectOrganization.
+type OrgPickerItem struct {
+	ID string
 }
 
-func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, orgId string) ([]models.Workspace, []string) {
+// BuildOrgRootLabels returns first-prompt labels: org name with sub-org count when present.
+// orgs is the flat list from GET /v1/organization; subOrgsByOrgID is keyed by org ID.
+func BuildOrgRootLabels(orgs []api.Organization, subOrgsByOrgID map[string][]api.SubOrganization) []string {
+	labels := make([]string, len(orgs))
+	for i, org := range orgs {
+		n := len(subOrgsByOrgID[org.ID])
+		switch n {
+		case 0:
+			labels[i] = org.Name
+		case 1:
+			labels[i] = fmt.Sprintf("%s (1 sub-org)", org.Name)
+		default:
+			labels[i] = fmt.Sprintf("%s (%d sub-orgs)", org.Name, n)
+		}
+	}
+	return labels
+}
+
+// BuildSubOrgPickerItems returns items + labels for the second prompt.
+// The first item is always the root org itself, followed by each sub-org.
+func BuildSubOrgPickerItems(rootID, rootName string, subs []api.SubOrganization) ([]OrgPickerItem, []string) {
+	items := make([]OrgPickerItem, 0, 1+len(subs))
+	labels := make([]string, 0, 1+len(subs))
+
+	rootLabel := fmt.Sprintf("%s (organization)", rootName)
+	items = append(items, OrgPickerItem{ID: rootID})
+	labels = append(labels, rootLabel)
+
+	for _, sub := range subs {
+		items = append(items, OrgPickerItem{ID: sub.ID})
+		labels = append(labels, sub.Name)
+	}
+	return items, labels
+}
+
+func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, orgID string, selectedSubOrgName *string) ([]models.Workspace, []string) {
 	workspaces := workspaceResponse.Workspaces
 
 	var filteredWorkspaces []models.Workspace
 	var workspaceNames []string
 
 	for _, workspace := range workspaces {
-		if workspace.OrganizationId == orgId {
+		if workspace.OrganizationId == orgID {
 			filteredWorkspaces = append(filteredWorkspaces, workspace)
 			workspaceNames = append(workspaceNames, workspace.Name)
 		}
 	}
 
 	if len(filteredWorkspaces) == 0 {
-		message := fmt.Sprintf("You don't have any projects created in Infisical organization. You must first create a project at %s", config.INFISICAL_URL)
+		var scopeHint string
+		if selectedSubOrgName != nil && strings.TrimSpace(*selectedSubOrgName) != "" {
+			scopeHint = fmt.Sprintf(" (sub-organization: %s)", strings.TrimSpace(*selectedSubOrgName))
+		}
+		message := fmt.Sprintf("You don't have any projects created in this organization%s. You must first create a project at %s", scopeHint, config.INFISICAL_URL)
 		PrintErrorMessageAndExit(message)
 	}
 

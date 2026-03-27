@@ -15,8 +15,8 @@ func UserInitCmd() {
 	ptmx, err := pty.Start(c)
 	if err != nil {
 		log.Fatalf("error running CLI command: %v", err)
-    }
- 	defer func() { _ = ptmx.Close() }()
+	}
+	defer func() { _ = ptmx.Close() }()
 
 	stepChan := make(chan int, 10)
 
@@ -26,12 +26,15 @@ func UserInitCmd() {
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
-				terminalOut := string(buf)
-				if strings.Contains(terminalOut, "Which Infisical organization would you like to select a project from?") && step < 0  {
+				terminalOut := string(buf[:n])
+				if strings.Contains(terminalOut, "Which Infisical organization would you like to select a project from?") && step < 0 {
 					step += 1
 					stepChan <- step
-				} else if strings.Contains(terminalOut, "Which of your Infisical projects would you like to connect this project to?") && step < 1 {
-					step += 1;
+				} else if strings.Contains(terminalOut, "Select the root or sub-organization within") && step < 1 {
+					step += 1
+					stepChan <- step
+				} else if strings.Contains(terminalOut, "Which of your Infisical projects would you like to connect this project to?") && step < 2 {
+					step += 1
 					stepChan <- step
 				}
 			}
@@ -44,9 +47,11 @@ func UserInitCmd() {
 
 	for i := range stepChan {
 		switch i {
-		case 0: 
+		case 0:
 			ptmx.Write([]byte("\n"))
 		case 1:
+			ptmx.Write([]byte("\n"))
+		case 2:
 			ptmx.Write([]byte("\n"))
 		}
 	}
@@ -65,8 +70,8 @@ func UserLoginCmd() {
 	ptmx, err := pty.Start(c)
 	if err != nil {
 		log.Fatalf("error running CLI command: %v", err)
-    }
- 	defer func() { _ = ptmx.Close() }()
+	}
+	defer func() { _ = ptmx.Close() }()
 
 	stepChan := make(chan int, 10)
 
@@ -78,19 +83,19 @@ func UserLoginCmd() {
 			if n > 0 {
 				terminalOut := string(buf)
 				if strings.Contains(terminalOut, "Infisical Cloud") && step < 0 {
-					step += 1;
+					step += 1
 					stepChan <- step
 				} else if strings.Contains(terminalOut, "Email") && step < 1 {
-					step += 1;
+					step += 1
 					stepChan <- step
 				} else if strings.Contains(terminalOut, "Password") && step < 2 {
-					step += 1;
+					step += 1
 					stepChan <- step
 				} else if strings.Contains(terminalOut, "Infisical organization") && step < 3 {
-					step += 1;
+					step += 1
 					stepChan <- step
 				} else if strings.Contains(terminalOut, "Enter passphrase") && step < 4 {
-					step += 1;
+					step += 1
 					stepChan <- step
 				}
 			}
