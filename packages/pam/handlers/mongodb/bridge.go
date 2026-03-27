@@ -125,6 +125,16 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 
 // executeAndLog runs the command via RunCommand, sanitizes hello responses, and logs.
 func (b *bridge) executeAndLog(ctx context.Context, cmdName, dbName string, logDoc, execDoc bson.Raw) (bson.Raw, error) {
+	// For hello/isMaster, strip fields that are only allowed on the first
+	// hello of a connection — our mongo.Client already sent its own hello.
+	if isHelloCommand(cmdName) {
+		var err error
+		execDoc, err = stripFields(execDoc, "client", "compression", "saslSupportedMechs", "speculativeAuthenticate")
+		if err != nil {
+			return nil, fmt.Errorf("failed to sanitize hello command: %w", err)
+		}
+	}
+
 	rawResp, cmdErr := b.client.Database(dbName).RunCommand(ctx, execDoc).Raw()
 
 	if rawResp == nil {
