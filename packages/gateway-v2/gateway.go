@@ -83,6 +83,11 @@ type GatewayConfig struct {
 	ReconnectDelay time.Duration
 }
 
+type pamSessionEntry struct {
+	cancel context.CancelFunc
+	conn   *tls.Conn
+}
+
 type Gateway struct {
 	GatewayID string
 
@@ -110,6 +115,10 @@ type Gateway struct {
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
 	notifyOnce       sync.Once
+
+	// PAM session registry for active proxy connections
+	pamSessions   map[string]*pamSessionEntry
+	pamSessionsMu sync.Mutex
 }
 
 // NewGateway creates a new gateway instance
@@ -137,7 +146,35 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		cancel:                cancel,
 		pamCredentialsManager: pamCredentialsManager,
 		pamSessionUploader:    session.NewSessionUploader(httpClient, pamCredentialsManager),
+		pamSessions:           make(map[string]*pamSessionEntry),
 	}, nil
+}
+
+// RegisterPAMSession registers an active PAM session for cancellation support
+func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) {
+	g.pamSessionsMu.Lock()
+	defer g.pamSessionsMu.Unlock()
+	g.pamSessions[sessionID] = &pamSessionEntry{cancel: cancel, conn: conn}
+}
+
+// DeregisterPAMSession removes a PAM session from the registry
+func (g *Gateway) DeregisterPAMSession(sessionID string) {
+	g.pamSessionsMu.Lock()
+	defer g.pamSessionsMu.Unlock()
+	delete(g.pamSessions, sessionID)
+}
+
+// CancelPAMSession kills an active PAM session by closing its connection and cancelling its context
+func (g *Gateway) CancelPAMSession(sessionID string) bool {
+	g.pamSessionsMu.Lock()
+	entry, ok := g.pamSessions[sessionID]
+	g.pamSessionsMu.Unlock()
+	if !ok {
+		return false
+	}
+	entry.conn.Close()
+	entry.cancel()
+	return true
 }
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
@@ -608,7 +645,10 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAM {
-		if err := pam.HandlePAMProxy(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
+		g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		defer g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId)
+		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
@@ -617,7 +657,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
-		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
 		}
 		return
