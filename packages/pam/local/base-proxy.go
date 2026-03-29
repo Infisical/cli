@@ -271,13 +271,6 @@ func (b *BaseProxyServer) FallbackToAPITermination() {
 // It prints a message and triggers proxy shutdown so the CLI process exits
 // cleanly instead of hanging with a dead backend connection.
 func (b *BaseProxyServer) HandleGatewayDisconnect() {
-	select {
-	case <-b.shutdownCh:
-		// Shutdown already initiated (e.g., user Ctrl+C), nothing to do
-		return
-	default:
-	}
-
 	b.shutdownOnce.Do(func() {
 		fmt.Println("\nConnection to session lost. Shutting down proxy...")
 		close(b.shutdownCh)

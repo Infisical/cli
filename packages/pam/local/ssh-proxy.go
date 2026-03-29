@@ -340,8 +340,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 	}()
 
 	select {
-	case <-errCh:
-		p.HandleGatewayDisconnect()
+	case err := <-errCh:
+		if err != nil {
+			p.HandleGatewayDisconnect()
+		}
 	case <-connCtx.Done():
 		log.Debug().Msg("Connection cancelled by context")
 	}
