@@ -68,7 +68,7 @@ func RootCmdStdoutWriter() io.Writer {
 func isStructuredOutputRequested(cmd *cobra.Command) bool {
 	structuredFormats := map[string]bool{"json": true, "csv": true, "yaml": true}
 
-	for _, flagName := range []string{"format", "output"} {
+	for _, flagName := range []string{"format", "output", "report-format"} {
 		if f := cmd.Flags().Lookup(flagName); f != nil && f.Changed {
 			if structuredFormats[strings.ToLower(f.Value.String())] {
 				return true
