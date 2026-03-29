@@ -59,5 +59,5 @@ var tokenRenewCmd = &cobra.Command{
 func init() {
 	tokenCmd.AddCommand(tokenRenewCmd)
 
-	rootCmd.AddCommand(tokenCmd)
+	RootCmd.AddCommand(tokenCmd)
 }

@@ -13,6 +13,7 @@ import (
 	"path"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -558,11 +560,59 @@ func GenerateETagFromSecrets(secrets []models.SingleEnvironmentVariable) string 
 
 func IsDevelopmentMode() bool {
 	return CLI_VERSION == "devel"
+
+}
+
+// HandleMFASession opens a browser for MFA verification and polls until completion
+func HandleMFASession(httpClient *resty.Client, mfaSessionId string, mfaMethod string, infisicalURL string) error {
+	// Construct MFA URL
+	mfaURL := fmt.Sprintf("%s/mfa-session/%s", strings.TrimSuffix(infisicalURL, "/api"), mfaSessionId)
+
+	// Display MFA message
+	PrintfStderr("\n🔐 MFA Verification Required (%s)\n", mfaMethod)
+	PrintfStderr("→ %s\n", mfaURL)
+
+	// Try to open browser
+	if err := OpenBrowser(mfaURL); err != nil {
+		log.Debug().Err(err).Msg("Failed to open browser automatically")
+	} else {
+		PrintlnStderr("✓ Browser opened automatically")
+	}
+
+	PrintlnStderr("⏳ Waiting for MFA verification...\n")
+
+	// Poll for MFA completion
+	maxAttempts := 150 // 5 minutes at 2s intervals
+	pollInterval := 2 * time.Second
+
+	for i := 0; i < maxAttempts; i++ {
+		time.Sleep(pollInterval)
+
+		status, err := api.CallGetMFASessionStatus(httpClient, mfaSessionId)
+		if err != nil {
+			// Check if it's a 404 (session expired)
+			if apiErr, ok := err.(*api.APIError); ok {
+				if apiErr.StatusCode == 404 {
+					return fmt.Errorf("MFA session expired. Please try again")
+				}
+			}
+			// Continue polling on other errors
+			log.Debug().Err(err).Msg("Error polling MFA status, will retry")
+			continue
+		}
+
+		if status.Status == api.MFASessionStatusActive {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("MFA verification timeout. Please try again")
 }
 
 // OpenBrowser attempts to open a URL in the user's default browser
 func OpenBrowser(url string) error {
 	var cmd *exec.Cmd
+
 	switch runtime.GOOS {
 	case "darwin":
 		cmd = exec.Command("open", url)
@@ -571,5 +621,61 @@ func OpenBrowser(url string) error {
 	default: // linux and others
 		cmd = exec.Command("xdg-open", url)
 	}
+
 	return cmd.Start()
+}
+
+// ParseTimeDurationString converts a string representation of a polling interval to a time.Duration
+func ParseTimeDurationString(pollingInterval string, allowLessThanOneSecond bool) (time.Duration, error) {
+	length := len(pollingInterval)
+	if length < 2 {
+		return 0, fmt.Errorf("invalid format")
+	}
+
+	splitIndex := length
+	for i := length - 1; i >= 0; i-- {
+		if pollingInterval[i] >= '0' && pollingInterval[i] <= '9' {
+			splitIndex = i + 1
+			break
+		}
+	}
+
+	if splitIndex == 0 || splitIndex == length {
+		return 0, fmt.Errorf("invalid format: must contain both number and unit")
+	}
+
+	numberPart := pollingInterval[:splitIndex]
+	unit := pollingInterval[splitIndex:]
+
+	number, err := strconv.Atoi(numberPart)
+	if err != nil {
+		return 0, err
+	}
+
+	if number <= 0 {
+		return 0, fmt.Errorf("polling interval must be greater than 0")
+	}
+
+	switch unit {
+	case "s":
+		if number < 60 && !IsDevelopmentMode() && !allowLessThanOneSecond {
+			return 0, fmt.Errorf("polling interval must be at least 60 seconds")
+		}
+		return time.Duration(number) * time.Second, nil
+	case "ms":
+		if number < 1000 && !IsDevelopmentMode() && !allowLessThanOneSecond {
+			return 0, fmt.Errorf("polling interval must be at least 1000 milliseconds")
+		}
+		return time.Duration(number) * time.Millisecond, nil
+	case "m":
+		return time.Duration(number) * time.Minute, nil
+	case "h":
+		return time.Duration(number) * time.Hour, nil
+	case "d":
+		return time.Duration(number) * 24 * time.Hour, nil
+	case "w":
+		return time.Duration(number) * 7 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("invalid time unit")
+	}
 }

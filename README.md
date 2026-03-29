@@ -55,14 +55,14 @@ sudo apt-get install -y infisical
 _Alpine:_
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.alpine.sh' | bash
+wget -qO- 'https://artifacts-cli.infisical.com/setup.apk.sh' | sudo sh
 sudo apk add infisical
 ```
 
 _RHEL/CentOS:_
 
 ```bash
-curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.rpm.sh' | sudo -E bash
+curl -1sLf 'https://artifacts-cli.infisical.com/setup.rpm.sh' | sudo -E bash
 sudo yum install infisical
 ```
 

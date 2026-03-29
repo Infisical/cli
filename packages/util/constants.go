@@ -48,6 +48,7 @@ const (
 
 	// Generic env variable used for auth methods that require a machine identity ID
 	INFISICAL_MACHINE_IDENTITY_ID_NAME = "INFISICAL_MACHINE_IDENTITY_ID"
+	INFISICAL_API_URL_ENV_NAME         = "INFISICAL_API_URL"
 
 	SECRET_TYPE_PERSONAL      = "personal"
 	SECRET_TYPE_SHARED        = "shared"
@@ -65,6 +66,8 @@ const (
 	KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME  = "KUBERNETES_SERVICE_PORT_HTTPS"
 	KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 	KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH   = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+	UPDATE_CHECK_CACHE_FILE_NAME = "update-check.json"
 )
 
 var (

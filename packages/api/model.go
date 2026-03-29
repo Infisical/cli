@@ -151,11 +151,30 @@ type GetCertificateProfileResponse struct {
 	CertificateProfile CertificateProfile `json:"certificateProfile"`
 }
 
+type Organization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type GetOrganizationsResponse struct {
-	Organizations []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"organizations"`
+	Organizations []Organization `json:"organizations"`
+}
+
+type SubOrganization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type OrganizationWithSubOrgs struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Slug             string            `json:"slug"`
+	SubOrganizations []SubOrganization `json:"subOrganizations"`
+}
+
+type GetOrganizationsWithSubOrgsResponse struct {
+	Organizations []OrganizationWithSubOrgs `json:"organizations"`
 }
 
 type SelectOrganizationResponse struct {
@@ -787,9 +806,11 @@ type RegisterGatewayResponse struct {
 }
 
 type PAMAccessRequest struct {
-	Duration    string `json:"duration,omitempty"`
-	AccountPath string `json:"accountPath,omitempty"`
-	ProjectId   string `json:"projectId,omitempty"`
+	Duration     string `json:"duration,omitempty"`
+	ResourceName string `json:"resourceName,omitempty"`
+	AccountName  string `json:"accountName,omitempty"`
+	ProjectId    string `json:"projectId,omitempty"`
+	MfaSessionId string `json:"mfaSessionId,omitempty"`
 }
 
 type PAMAccessResponse struct {
@@ -806,7 +827,8 @@ type PAMAccessResponse struct {
 }
 
 type PAMAccessApprovalRequestPayloadRequestData struct {
-	AccountPath    string `json:"accountPath"`
+	ResourceName   string `json:"resourceName,omitempty"`
+	AccountName    string `json:"accountName,omitempty"`
 	AccessDuration string `json:"accessDuration"`
 }
 
@@ -841,6 +863,18 @@ type PAMSessionCredentials struct {
 	Certificate           string `json:"certificate,omitempty"`
 	Url                   string `json:"url,omitempty"`
 	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
+}
+
+type MFASessionStatus string
+
+const (
+	MFASessionStatusPending MFASessionStatus = "PENDING"
+	MFASessionStatusActive  MFASessionStatus = "ACTIVE"
+)
+
+type MFASessionStatusResponse struct {
+	Status    MFASessionStatus `json:"status"`
+	MfaMethod string           `json:"mfaMethod"`
 }
 
 type UploadSessionLogEntry struct {

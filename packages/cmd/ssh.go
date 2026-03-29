@@ -382,7 +382,7 @@ func issueCredentials(cmd *cobra.Command, args []string) {
 			util.HandleError(err, "Failed to write Signed Key to file")
 		}
 
-		fmt.Println("Successfully wrote SSH certificate to:", signedKeyPath)
+		util.PrintlnStderr("Successfully wrote SSH certificate to:", signedKeyPath)
 	}
 
 	// Add SSH credentials to the SSH agent if needed
@@ -392,7 +392,7 @@ func issueCredentials(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Failed to add keys to SSH agent")
 		} else {
-			fmt.Println("The SSH key and certificate have been successfully added to your ssh-agent.")
+			util.PrintlnStderr("The SSH key and certificate have been successfully added to your ssh-agent.")
 		}
 	}
 }
@@ -604,7 +604,7 @@ func signKey(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to write Signed Key to file")
 	}
 
-	fmt.Println("Successfully wrote SSH certificate to:", signedKeyPath)
+	util.PrintlnStderr("Successfully wrote SSH certificate to:", signedKeyPath)
 }
 
 func sshConnect(cmd *cobra.Command, args []string) {
@@ -818,7 +818,7 @@ func sshConnect(cmd *cobra.Command, args []string) {
 				util.HandleError(err, "Failed to write Host CA to known_hosts")
 			}
 
-			fmt.Printf("Successfully wrote Host CA entry to %s\n", knownHostsPath)
+			util.PrintfStderr("Successfully wrote Host CA entry to %s\n", knownHostsPath)
 		}
 	}
 
@@ -835,7 +835,7 @@ func sshConnect(cmd *cobra.Command, args []string) {
 		if err != nil {
 			util.HandleError(err, "Failed to write signed cert")
 		}
-		fmt.Printf("Successfully wrote credentials to %s, %s, and %s\n", privateKeyPath, publicKeyPath, signedKeyPath)
+		util.PrintfStderr("Successfully wrote credentials to %s, %s, and %s\n", privateKeyPath, publicKeyPath, signedKeyPath)
 		return
 	}
 
@@ -844,11 +844,11 @@ func sshConnect(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, "Failed to add credentials to SSH agent")
 	}
-	fmt.Println("✔ SSH credentials successfully added to agent")
+	util.PrintlnStderr("✔ SSH credentials successfully added to agent")
 
 	// Connect to host using system ssh and agent
 	target := fmt.Sprintf("%s@%s", selectedLoginUser, selectedHost.Hostname)
-	fmt.Printf("Connecting to %s...\n", target)
+	util.PrintfStderr("Connecting to %s...\n", target)
 
 	sshCmd := exec.Command("ssh", target)
 	sshCmd.Stdin = os.Stdin
@@ -1020,7 +1020,7 @@ func sshAddHost(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to register SSH host")
 	}
 
-	fmt.Println("✅ Successfully registered host:", host.Hostname)
+	util.PrintlnStderr("✅ Successfully registered host:", host.Hostname)
 
 	if writeUserCaToFile {
 		publicKey, err := client.Ssh().GetSshHostUserCaPublicKey(host.ID)
@@ -1032,7 +1032,7 @@ func sshAddHost(cmd *cobra.Command, args []string) {
 			util.HandleError(err, "Failed to write User CA public key to file")
 		}
 
-		fmt.Println("📁 Wrote User CA public key to:", userCaOutFilePath)
+		util.PrintlnStderr("📁 Wrote User CA public key to:", userCaOutFilePath)
 	}
 
 	if writeHostCertToFile {
@@ -1049,7 +1049,7 @@ func sshAddHost(cmd *cobra.Command, args []string) {
 		if err := writeToFile(certOutPath, res.SignedKey, 0644); err != nil {
 			util.HandleError(err, "Failed to write SSH host certificate to file")
 		}
-		fmt.Println("📁 Wrote host certificate to:", certOutPath)
+		util.PrintlnStderr("📁 Wrote host certificate to:", certOutPath)
 	}
 
 	if configureSshd {
@@ -1092,7 +1092,7 @@ func sshAddHost(cmd *cobra.Command, args []string) {
 		if err := os.WriteFile(sshdConfig, []byte(strings.Join(lines, "\n")), 0644); err != nil {
 			util.HandleError(err, "Failed to update sshd_config")
 		}
-		fmt.Println("📄 Updated sshd_config entries")
+		util.PrintlnStderr("📄 Updated sshd_config entries")
 	}
 }
 
@@ -1138,5 +1138,5 @@ func init() {
 
 	sshCmd.AddCommand(sshAddHostCmd)
 
-	rootCmd.AddCommand(sshCmd)
+	RootCmd.AddCommand(sshCmd)
 }

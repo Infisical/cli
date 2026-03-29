@@ -1,0 +1,526 @@
+package infisical
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/compose"
+	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+type Stack struct {
+	Project *types.Project
+
+	dockerCompose compose.ComposeStack
+}
+
+type StackOption func(*Stack)
+
+type BackendOptions struct {
+	BackendDir string
+	Dockerfile string
+}
+
+func (s *Stack) tryReuseExistingContainers(ctx context.Context, uniqueName string) (bool, error) {
+	log.Printf("Trying to reuse existing container: %s", uniqueName)
+	// Try to lookup for existing container with the same name
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return false, err
+	}
+	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+		),
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(containers) == 0 {
+		slog.Info("No containers found, skip reusing containers", "name", uniqueName)
+		return false, nil
+	}
+
+	services := make([]string, 0, len(s.Project.Services))
+	for name := range s.Project.Services {
+		services = append(services, name)
+	}
+
+	missingServices := make(map[string]int, len(services))
+	for _, service := range services {
+		missingServices[service] = 1
+	}
+	for _, c := range containers {
+		if c.State == container.StateRunning {
+			serviceName, ok := c.Labels[api.ServiceLabel]
+			if !ok {
+				continue
+			}
+			_, ok = missingServices[serviceName]
+			if ok {
+				delete(missingServices, serviceName)
+			}
+		}
+	}
+	if len(missingServices) > 0 {
+		slog.Info("Missing containers found, removing stale containers before fresh creation", "count", len(missingServices), "name", uniqueName)
+		// Remove all stale containers to avoid name conflicts when creating fresh ones
+		for _, ctr := range containers {
+			slog.Info("Removing stale container", "id", ctr.ID[:12], "names", ctr.Names, "state", ctr.State)
+			timeout := 10
+			if err := dockerClient.ContainerStop(ctx, ctr.ID, container.StopOptions{Timeout: &timeout}); err != nil {
+				slog.Warn("Failed to stop stale container", "id", ctr.ID[:12], "error", err)
+			}
+			if err := dockerClient.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+				slog.Warn("Failed to remove stale container", "id", ctr.ID[:12], "error", err)
+			}
+		}
+		// Also remove the network to avoid conflicts
+		networks, err := dockerClient.NetworkList(ctx, network.ListOptions{
+			Filters: filters.NewArgs(
+				filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, uniqueName)),
+			),
+		})
+		if err == nil {
+			for _, n := range networks {
+				slog.Info("Removing stale network", "name", n.Name)
+				_ = dockerClient.NetworkRemove(ctx, n.ID)
+			}
+		}
+		return false, nil
+	}
+
+	provider, err := testcontainers.NewDockerProvider(testcontainers.WithLogger(log.Default()))
+	if err != nil {
+		return false, err
+	}
+	s.dockerCompose = &RunningCompose{
+		name:       uniqueName,
+		client:     dockerClient,
+		provider:   provider,
+		services:   services,
+		containers: make(map[string]*testcontainers.DockerContainer),
+	}
+	slog.Info("Found existing running containers", "name", uniqueName)
+	// Found existing compose, reuse instead
+	return true, s.dockerCompose.Up(ctx)
+}
+
+func (s *Stack) Up(ctx context.Context) error {
+	data, err := s.Project.MarshalYAML()
+	if err != nil {
+		return err
+	}
+	hashBytes := sha1.Sum(data)
+	hashHex := hex.EncodeToString(hashBytes[:])
+	uniqueName := fmt.Sprintf("infisical-cli-bdd-%s", hashHex)
+
+	disableCache := os.Getenv("CLI_E2E_DISABLE_COMPOSE_CACHE") == "1"
+
+	// If containers were already created in this test run, just reset the DB.
+	if s.dockerCompose != nil {
+		slog.Info("Reusing containers from current test run", "name", uniqueName)
+		return s.dockerCompose.Up(ctx)
+	}
+
+	// Try to reuse containers from a previous run (unless cache is disabled).
+	if !disableCache {
+		reused, err := s.tryReuseExistingContainers(ctx, uniqueName)
+		if err != nil {
+			slog.Warn("Failed to reuse existing containers, tearing down and recreating",
+				"name", uniqueName, "error", err)
+			if s.dockerCompose != nil {
+				if err := s.DownWithForce(ctx, true); err != nil {
+					slog.Warn("Failed to tear down stale containers", "error", err)
+				}
+			}
+		} else if reused {
+			return nil
+		}
+	} else {
+		slog.Info("Compose cache disabled, building fresh containers", "name", uniqueName)
+	}
+
+	if err := s.buildAndUp(ctx, data, uniqueName); err != nil {
+		slog.Warn("First compose up failed, removing stale images and retrying",
+			"name", uniqueName, "error", err)
+		s.DownWithForce(ctx, true) //nolint:errcheck
+		if err := removeStaleImages(ctx, uniqueName); err != nil {
+			slog.Warn("Failed to remove stale images", "error", err)
+		}
+		return s.buildAndUp(ctx, data, uniqueName)
+	}
+	return nil
+}
+
+func (s *Stack) buildAndUp(ctx context.Context, data []byte, uniqueName string) error {
+	dockerCompose, err := compose.NewDockerComposeWith(
+		compose.WithStackReaders(bytes.NewReader(data)),
+		compose.StackIdentifier(uniqueName),
+	)
+	if err != nil {
+		return err
+	}
+	waited := dockerCompose.WaitForService(
+		"backend",
+		wait.ForHTTP("/api/status").
+			WithPort("4000/tcp").
+			WithStartupTimeout(5*time.Minute),
+	)
+	s.dockerCompose = waited
+	return s.dockerCompose.Up(ctx)
+}
+
+func (s *Stack) Down(ctx context.Context) error {
+	return s.dockerCompose.Down(ctx)
+}
+
+// DownWithForce tears down all containers and optionally removes volumes.
+// This works even when using container reuse (RunningCompose).
+func (s *Stack) DownWithForce(ctx context.Context, removeVolumes bool) error {
+	if rc, ok := s.dockerCompose.(*RunningCompose); ok {
+		return rc.DownWithForce(ctx, removeVolumes)
+	}
+	// For regular compose stacks, use the standard Down with options
+	opts := []compose.StackDownOption{compose.RemoveOrphans(true)}
+	if removeVolumes {
+		opts = append(opts, compose.RemoveVolumes(true))
+	}
+	return s.dockerCompose.Down(ctx, opts...)
+}
+
+func (s *Stack) Compose() compose.ComposeStack {
+	return s.dockerCompose
+}
+
+func (s *Stack) ApiUrl(ctx context.Context) (string, error) {
+	backend, err := s.dockerCompose.ServiceContainer(ctx, "backend")
+	if err != nil {
+		return "", err
+	}
+	host, err := backend.Host(ctx)
+	if err != nil {
+		return "", err
+	}
+	port, err := backend.MappedPort(ctx, "4000")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("http://%s:%s", host, port.Port()), nil
+}
+
+func BackendOptionsFromEnv() BackendOptions {
+	backendDir, found := os.LookupEnv("INFISICAL_BACKEND_DIR")
+	if !found {
+		panic("INFISICAL_BACKEND_DIR not set, in order fo the e2e tests to work, you need to set the INFISICAL_BACKEND_DIR environment variable to the path of the backend directory, e.g. /Users/your-username/code/infisical/backend")
+	}
+	dockerfile, found := os.LookupEnv("INFISICAL_BACKEND_DOCKERFILE")
+	if !found {
+		dockerfile = "Dockerfile"
+	}
+	return BackendOptions{
+		BackendDir: backendDir,
+		Dockerfile: dockerfile,
+	}
+}
+
+func NewStack(options ...StackOption) *Stack {
+	s := &Stack{
+		Project: &types.Project{},
+	}
+	for _, o := range options {
+		o(s)
+	}
+	return s
+}
+
+func WithDbService() StackOption {
+	return func(s *Stack) {
+		if s.Project.Services == nil {
+			s.Project.Services = types.Services{}
+		}
+		s.Project.Services["db"] = types.ServiceConfig{
+			Image: "postgres:14-alpine",
+			Ports: []types.ServicePortConfig{{Published: "", Target: 5432}},
+			Environment: types.NewMappingWithEquals([]string{
+				"POSTGRES_DB=infisical",
+				"POSTGRES_USER=infisical",
+				"POSTGRES_PASSWORD=infisical",
+			}),
+		}
+	}
+}
+
+func WithRedisService() StackOption {
+	return func(s *Stack) {
+		if s.Project.Services == nil {
+			s.Project.Services = types.Services{}
+		}
+		s.Project.Services["redis"] = types.ServiceConfig{
+			Image: "redis:8.4.0",
+			Ports: []types.ServicePortConfig{{Published: "", Target: 6379}},
+			Environment: types.NewMappingWithEquals([]string{
+				"ALLOW_EMPTY_PASSWORD=yes",
+			}),
+		}
+	}
+}
+
+func WithPebbleService() StackOption {
+	return func(s *Stack) {
+		if s.Project.Services == nil {
+			s.Project.Services = types.Services{}
+		}
+		s.Project.Services["pebble"] = types.ServiceConfig{
+			Image: "ghcr.io/letsencrypt/pebble:latest",
+			Ports: []types.ServicePortConfig{{Published: "", Target: 14000}},
+			Environment: types.NewMappingWithEquals([]string{
+				"PEBBLE_VA_ALWAYS_VALID=1",
+				"PEBBLE_VA_NOSLEEP=1",
+			}),
+			Command: types.ShellCommand{"-config", "test/config/pebble-config.json", "-strict"},
+		}
+	}
+}
+
+func WithBackendService(options BackendOptions) StackOption {
+	return func(s *Stack) {
+		if s.Project.Services == nil {
+			s.Project.Services = types.Services{}
+		}
+		dockerfile := options.Dockerfile
+		if dockerfile == "" {
+			dockerfile = "Dockerfile"
+		}
+		s.Project.Services["backend"] = types.ServiceConfig{
+			Build: &types.BuildConfig{
+				Context:    options.BackendDir,
+				Dockerfile: dockerfile,
+			},
+			Ports: []types.ServicePortConfig{
+				{Target: 4000}, // Let Docker assign a random host port to avoid conflicts
+				{Target: 9229},
+			},
+			Environment: types.NewMappingWithEquals([]string{
+				"NODE_ENV=development",
+				"ENCRYPTION_KEY=6c1fe4e407b8911c104518103505b218",
+				"AUTH_SECRET=5lrMXKKWCVocS/uerPsl7V+TX/aaUaI7iDkgl3tSmLE=",
+				"DB_CONNECTION_URI=postgres://infisical:infisical@db:5432/infisical",
+				"REDIS_URL=redis://redis:6379",
+				// TODO: maybe we should generate a random port before passing in so that we can know the port number in
+				// 		 the site url ahead?
+				"SITE_URL=http://localhost:8080",
+				"OTEL_TELEMETRY_COLLECTION_ENABLED=false",
+				"ENABLE_MSSQL_SECRET_ROTATION_ENCRYPT=true",
+			}),
+			Volumes: []types.ServiceVolumeConfig{
+				{Source: filepath.Join(options.BackendDir, "src"), Target: "/app/src", Type: types.VolumeTypeBind},
+			},
+			DependsOn: types.DependsOnConfig{
+				"db":    types.ServiceDependency{Condition: "service_started"},
+				"redis": types.ServiceDependency{Condition: "service_started"},
+			},
+			ExtraHosts: map[string][]string{
+				"host.docker.internal": {
+					"host-gateway",
+				},
+			},
+		}
+	}
+}
+
+func WithBackendServiceFromEnv() StackOption {
+	return WithBackendService(BackendOptionsFromEnv())
+}
+
+func WithDefaultStack(backendOptions BackendOptions) StackOption {
+	return func(s *Stack) {
+		for _, o := range []StackOption{WithDbService(), WithRedisService(), WithBackendService(backendOptions)} {
+			o(s)
+		}
+	}
+}
+
+func WithDefaultStackFromEnv() StackOption {
+	return WithDefaultStack(BackendOptionsFromEnv())
+}
+
+type RunningCompose struct {
+	name           string
+	services       []string
+	client         *testcontainers.DockerClient
+	provider       *testcontainers.DockerProvider
+	containers     map[string]*testcontainers.DockerContainer
+	containersLock sync.Mutex
+}
+
+func (c *RunningCompose) Up(ctx context.Context, opts ...compose.StackUpOption) error {
+	return Reset(ctx, c)
+}
+
+func (c *RunningCompose) Down(ctx context.Context, opts ...compose.StackDownOption) error {
+	// For the case of running compose, we probably want to reuse it, so just do nothing here
+	return nil
+}
+
+// DownWithForce tears down all containers and optionally removes volumes.
+// Unlike Down(), this actually removes containers even when using RunningCompose.
+func (c *RunningCompose) DownWithForce(ctx context.Context, removeVolumes bool) error {
+	slog.Info("Force tearing down compose stack", "name", c.name, "removeVolumes", removeVolumes)
+
+	containers, err := c.client.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+		),
+	})
+	if err != nil {
+		return fmt.Errorf("container list: %w", err)
+	}
+
+	imageIDs := make(map[string]struct{})
+	for _, ctr := range containers {
+		if ctr.ImageID != "" {
+			imageIDs[ctr.ImageID] = struct{}{}
+		}
+	}
+
+	// Stop and remove all containers
+	for _, ctr := range containers {
+		slog.Info("Stopping and removing container", "id", ctr.ID[:12], "name", ctr.Names)
+		timeout := 10
+		if err := c.client.ContainerStop(ctx, ctr.ID, container.StopOptions{Timeout: &timeout}); err != nil {
+			slog.Warn("Failed to stop container", "id", ctr.ID[:12], "error", err)
+		}
+		if err := c.client.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true, RemoveVolumes: removeVolumes}); err != nil {
+			slog.Warn("Failed to remove container", "id", ctr.ID[:12], "error", err)
+		}
+	}
+
+	for imgID := range imageIDs {
+		slog.Info("Removing stale image", "id", imgID[:12])
+		if _, err := c.client.ImageRemove(ctx, imgID, image.RemoveOptions{Force: true}); err != nil {
+			slog.Warn("Failed to remove image (may be shared)", "id", imgID[:12], "error", err)
+		}
+	}
+
+	// Remove the network
+	networks, err := c.client.NetworkList(ctx, network.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+		),
+	})
+	if err != nil {
+		slog.Warn("Failed to list networks", "error", err)
+	} else {
+		for _, network := range networks {
+			slog.Info("Removing network", "name", network.Name)
+			if err := c.client.NetworkRemove(ctx, network.ID); err != nil {
+				slog.Warn("Failed to remove network", "name", network.Name, "error", err)
+			}
+		}
+	}
+
+	// Clear the cached containers
+	c.containersLock.Lock()
+	c.containers = make(map[string]*testcontainers.DockerContainer)
+	c.containersLock.Unlock()
+
+	slog.Info("Compose stack torn down", "name", c.name)
+	return nil
+}
+
+func removeStaleImages(ctx context.Context, projectName string) error {
+	dockerClient, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return err
+	}
+
+	images, err := dockerClient.ImageList(ctx, image.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("reference", fmt.Sprintf("%s-*", projectName)),
+		),
+	})
+	if err != nil {
+		return fmt.Errorf("image list: %w", err)
+	}
+
+	for _, img := range images {
+		slog.Info("Removing stale compose image", "id", img.ID[:19], "tags", img.RepoTags)
+		if _, err := dockerClient.ImageRemove(ctx, img.ID, image.RemoveOptions{Force: true}); err != nil {
+			slog.Warn("Failed to remove image", "id", img.ID[:19], "error", err)
+		}
+	}
+	return nil
+}
+
+func (c *RunningCompose) Services() []string {
+	return c.services
+}
+
+func (c *RunningCompose) WaitForService(s string, strategy wait.Strategy) compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) WithEnv(m map[string]string) compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) WithOsEnv() compose.ComposeStack {
+	panic("Cannot modify running compose")
+}
+
+func (c *RunningCompose) cachedContainer(svcName string) *testcontainers.DockerContainer {
+	c.containersLock.Lock()
+	defer c.containersLock.Unlock()
+
+	return c.containers[svcName]
+}
+
+func (c *RunningCompose) ServiceContainer(ctx context.Context, svcName string) (*testcontainers.DockerContainer, error) {
+	if ctr := c.cachedContainer(svcName); ctr != nil {
+		return ctr, nil
+	}
+
+	containers, err := c.client.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ProjectLabel, c.name)),
+			filters.Arg("label", fmt.Sprintf("%s=%s", api.ServiceLabel, svcName)),
+		),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("container list: %w", err)
+	}
+
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("no container found for service name %s", svcName)
+	}
+
+	ctr, err := c.provider.ContainerFromType(ctx, containers[0])
+	if err != nil {
+		return nil, fmt.Errorf("container from type: %w", err)
+	}
+
+	c.containersLock.Lock()
+	defer c.containersLock.Unlock()
+	c.containers[svcName] = ctr
+	return ctr, nil
+}

@@ -1,0 +1,145 @@
+#!/bin/bash
+set -eo pipefail
+
+cd dist || { echo "Failed to cd into dist"; exit 1; }
+
+# Validate signing key ID is configured
+if [ -z "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" ]; then
+    echo "Error: INFISICAL_CLI_REPO_SIGNING_KEY_ID not set"
+    exit 1
+fi
+
+# Validate required environment variables for S3 uploads
+validate_s3_env() {
+    local missing=()
+    [ -z "$INFISICAL_CLI_S3_BUCKET" ] && missing+=("INFISICAL_CLI_S3_BUCKET")
+    [ -z "$AWS_ACCESS_KEY_ID" ] && missing+=("AWS_ACCESS_KEY_ID")
+    [ -z "$AWS_SECRET_ACCESS_KEY" ] && missing+=("AWS_SECRET_ACCESS_KEY")
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Error: Missing required environment variables for S3 uploads: ${missing[*]}"
+        exit 1
+    fi
+}
+
+validate_s3_env
+
+# ============================================
+# APK - Upload to S3 and generate APKINDEX
+# ============================================
+if ls *.apk 1> /dev/null 2>&1; then
+    echo "Processing APK packages..."
+    
+    # Create local directory structure
+    mkdir -p apk-staging/stable/main/x86_64
+    mkdir -p apk-staging/stable/main/aarch64
+    
+    # Sort APK files by architecture and rename to Alpine naming convention
+    # Alpine expects: <pkgname>-<version>.apk (e.g., infisical-0.43.54.apk)
+    # GoReleaser creates: <pkgname>_<version>_linux_<arch>.apk
+    for i in *.apk; do
+        [ -f "$i" ] || break
+        
+        # Extract package name and version from .PKGINFO inside the APK
+        pkgname=$(tar -xzf "$i" -O .PKGINFO 2>/dev/null | grep "^pkgname" | cut -d' ' -f3)
+        pkgver=$(tar -xzf "$i" -O .PKGINFO 2>/dev/null | grep "^pkgver" | cut -d' ' -f3)
+        
+        if [ -z "$pkgname" ] || [ -z "$pkgver" ]; then
+            echo "Error: Failed to extract package info from $i"
+            exit 1
+        fi
+        
+        alpine_filename="${pkgname}-${pkgver}.apk"
+        
+        if [[ "$i" == *"aarch64"* ]] || [[ "$i" == *"arm64"* ]]; then
+            echo "Copying $i to aarch64/ as $alpine_filename"
+            cp "$i" "apk-staging/stable/main/aarch64/${alpine_filename}"
+        elif [[ "$i" == *"x86_64"* ]] || [[ "$i" == *"amd64"* ]]; then
+            echo "Copying $i to x86_64/ as $alpine_filename"
+            cp "$i" "apk-staging/stable/main/x86_64/${alpine_filename}"
+        else
+            echo "Warning: Unknown architecture for $i, skipping S3 upload"
+        fi
+    done
+    
+    # Sync existing packages from S3 (to preserve old versions)
+    echo "Syncing existing APK packages from S3..."
+    aws s3 sync "s3://$INFISICAL_CLI_S3_BUCKET/apk/" apk-staging/ --exclude "*/APKINDEX.tar.gz"
+    
+    # Validate APK private key exists
+    if [ ! -f "$APK_PRIVATE_KEY_PATH" ]; then
+        echo "Error: APK private key not found at $APK_PRIVATE_KEY_PATH"
+        exit 1
+    fi
+    
+    # Generate APKINDEX using Alpine container
+    # Note: nFPM-generated APKs don't need individual signatures.
+    # We only sign the APKINDEX, which contains checksums of all packages.
+    # Using --allow-untrusted because nFPM packages aren't signed with Alpine tools.
+    echo "Generating APKINDEX.tar.gz using Alpine container..."
+    docker run --rm \
+        -v "$(pwd)/apk-staging:/repo" \
+        -v "$APK_PRIVATE_KEY_PATH:/keys/infisical.rsa:ro" \
+        alpine:3.21 sh -c '
+            set -e
+            echo "Installing alpine-sdk..."
+            apk add --no-cache alpine-sdk || { echo "Failed to install alpine-sdk"; exit 1; }
+            
+            # Function to generate and sign index for an architecture
+            process_arch() {
+                arch_dir="$1"
+                arch_name="$2"
+                
+                if ls "/repo/stable/main/${arch_dir}"/*.apk 1> /dev/null 2>&1; then
+                    echo "Processing ${arch_name} packages..."
+                    cd "/repo/stable/main/${arch_dir}"
+                    
+                    # Generate index (--allow-untrusted for nFPM-generated packages)
+                    echo "Generating APKINDEX for ${arch_name}..."
+                    apk index --allow-untrusted -o APKINDEX.tar.gz *.apk
+                    
+                    # Sign the index
+                    abuild-sign -k /keys/infisical.rsa APKINDEX.tar.gz
+                    echo "${arch_name} APKINDEX signed successfully"
+                fi
+            }
+            
+            process_arch "x86_64" "x86_64"
+            process_arch "aarch64" "aarch64"
+        '
+    
+    # Upload everything to S3
+    echo "Uploading APK repository to S3..."
+    aws s3 sync apk-staging/ "s3://$INFISICAL_CLI_S3_BUCKET/apk/"
+    
+    echo "APK packages uploaded successfully"
+fi
+
+for i in *.deb; do
+    [ -f "$i" ] || break
+    deb-s3 upload --bucket=$INFISICAL_CLI_S3_BUCKET --prefix=deb --visibility=private --sign=$INFISICAL_CLI_REPO_SIGNING_KEY_ID --preserve-versions $i
+done
+
+
+# ============================================
+# RPM - Upload to S3 and regenerate repo metadata
+# ============================================
+for i in *.rpm; do
+    [ -f "$i" ] || break
+    
+    # Sign the RPM package
+    rpmsign --addsign --key-id="$INFISICAL_CLI_REPO_SIGNING_KEY_ID" "$i"
+    
+    # Upload to S3
+    aws s3 cp "$i" "s3://$INFISICAL_CLI_S3_BUCKET/rpm/Packages/"
+done
+
+# Regenerate RPM repository metadata with mkrepo
+# Note: mkrepo uses boto3 which automatically reads AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY from environment variables set in the workflow
+if ls *.rpm 1> /dev/null 2>&1; then
+    export GPG_SIGN_KEY=$INFISICAL_CLI_REPO_SIGNING_KEY_ID
+    mkrepo "s3://$INFISICAL_CLI_S3_BUCKET/rpm" \
+        --s3-region="us-east-1" \
+        --sign
+fi

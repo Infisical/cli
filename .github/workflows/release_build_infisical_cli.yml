@@ -10,10 +10,13 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # Required for NPM OIDC auth for releases
 
 jobs:
   validate-tag-branch:
     uses: ./.github/workflows/pre-tag-validation.yml
+  cli-tests:
+    uses: ./.github/workflows/run-cli-e2e-tests.yml
 
   # cli-integration-tests:
   #   name: Run tests before deployment
@@ -36,6 +39,7 @@ jobs:
       # - cli-integration-tests
       - goreleaser
       - validate-tag-branch
+      - cli-tests
     steps:
       - uses: actions/checkout@v3
         with:
@@ -53,9 +57,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
         with:
-          node-version: 20
+          node-version: '24.14.0'
           cache: "npm"
           cache-dependency-path: ./npm/package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
       - name: Install dependencies
         working-directory: ${{ env.working-directory }}
         run: npm install --ignore-scripts
@@ -64,32 +70,19 @@ jobs:
         working-directory: ${{ env.working-directory }}
         run: npm version ${{ env.CLI_VERSION }} --allow-same-version --no-git-tag-version
 
-      - name: Setup NPM
-        working-directory: ${{ env.working-directory }}
-        run: |
-          echo 'registry="https://registry.npmjs.org/"' > ./.npmrc
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ./.npmrc
-
-          echo 'registry="https://registry.npmjs.org/"' > ~/.npmrc
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Pack NPM
         working-directory: ${{ env.working-directory }}
         run: npm pack
 
       - name: Publish NPM
         working-directory: ${{ env.working-directory }}
-        run: npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public --registry=https://registry.npmjs.org/
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
     needs:
       - validate-tag-branch
+      - cli-tests
     steps:
       - uses: actions/checkout@v3
         with:
@@ -108,7 +101,7 @@ jobs:
       - run: echo "Ref name ${{github.ref_name}}"
       - uses: actions/setup-go@v3
         with:
-          go-version: ">=1.24.11"
+          go-version: "1.24.13"
           cache: true
           cache-dependency-path: go.sum
       - name: Setup for libssl1.0-dev
@@ -133,7 +126,14 @@ jobs:
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - uses: actions/setup-python@v4
-      - run: pip install --upgrade cloudsmith-cli
+        with:
+          python-version: "3.12"
+      - name: Install mkrepo and dependencies
+        run: pip install mkrepo univers boto3
+      - name: Install AWS CLI
+        run: pip install awscli
+      - name: Install rpm-sign
+        run: sudo apt-get install -y rpm
       - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252
         with:
           ruby-version: "3.3" # Not needed with a .ruby-version, .tool-versions or mise.toml
@@ -145,16 +145,22 @@ jobs:
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_KEY_PASSPHRASE: ${{ secrets.GPG_SIGNING_KEY_PASSPHRASE }}
-      - name: Publish to CloudSmith
-        run: sh upload_to_cloudsmith.sh
+      - name: Configure APK Signing Key
+        run: |
+          echo -n "$APK_PRIVATE_KEY" | base64 --decode > /tmp/infisical-apk.rsa
+          chmod 600 /tmp/infisical-apk.rsa
         env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+          APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+      - name: Publish packages to repositories
+        run: bash upload_to_s3.sh
+        env:
           INFISICAL_CLI_S3_BUCKET: ${{ secrets.INFISICAL_CLI_S3_BUCKET }}
           INFISICAL_CLI_REPO_SIGNING_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_SIGNING_KEY_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
+          APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
       - name: Invalidate Cloudfront cache
-        run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/deb/dists/stable/*'
+        run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/Packages/*' '/rpm/repodata/*' '/deb/dists/stable/*' '/apk/stable/main/*'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
@@ -165,6 +171,7 @@ jobs:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
+      - cli-tests
     steps:
       - uses: actions/checkout@v3
         with:
@@ -176,7 +183,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: ">=1.24.11"
+          go-version: "1.24.13"
           cache: true
           cache-dependency-path: go.sum
 
@@ -196,3 +203,5 @@ jobs:
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+

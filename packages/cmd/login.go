@@ -73,6 +73,11 @@ var loginCmd = &cobra.Command{
 		presetDomain := config.INFISICAL_URL
 
 		clearSelfHostedDomains, err := cmd.Flags().GetBool("clear-domains")
+
+		if err != nil {
+			util.HandleError(err)
+		}
+		silentMode, err := cmd.Flags().GetBool("silent")
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -90,7 +95,7 @@ var loginCmd = &cobra.Command{
 				util.HandleError(err)
 			}
 
-			fmt.Println("Cleared all self-hosted domains from the config file")
+			util.PrintlnStderr("Cleared all self-hosted domains from the config file")
 			return
 		}
 
@@ -147,7 +152,9 @@ var loginCmd = &cobra.Command{
 				}
 			}
 
-			usePresetDomain, err := usePresetDomain(presetDomain)
+			domainFlagExplicitlySet := cmd.Flags().Changed("domain")
+			shouldPrintInfo := !silentMode && !plainOutput
+			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet, shouldPrintInfo)
 
 			if err != nil {
 				util.HandleError(err)
@@ -196,7 +203,7 @@ var loginCmd = &cobra.Command{
 			if useBrowserLogin {
 				userCredentialsToBeStored, err = browserCliLogin()
 				if err != nil {
-					fmt.Printf("Login via browser failed. %s\n", err.Error())
+					util.PrintfStderr("Login via browser failed. %s\n", err.Error())
 					useBrowserLogin = false
 				}
 			}
@@ -234,11 +241,20 @@ var loginCmd = &cobra.Command{
 				util.HandleError(err, "Unable to write write to Infisical Config file. Please try again")
 			}
 
+			// Identify the user in PostHog and alias the anonymous machine ID
+			// so that pre-login CLI events are merged into the same person record
+			Telemetry.IdentifyUser(userCredentialsToBeStored.Email)
+
 			// clear backed up secrets from prev account
 			util.DeleteBackupSecrets()
 
+			// Capture login event and flush the PostHog client (including Identify/Alias
+			// events enqueued by IdentifyUser above). This must run before any early
+			// returns so that all enqueued events are flushed via CaptureEvent's Close().
+			Telemetry.CaptureEvent("cli-command:login", posthog.NewProperties().Set("infisical-backend", config.INFISICAL_URL).Set("version", util.CLI_VERSION))
+
 			if plainOutput {
-				fmt.Println(userCredentialsToBeStored.JTWToken)
+				util.PrintlnStdout(userCredentialsToBeStored.JTWToken)
 				return
 			}
 
@@ -251,10 +267,8 @@ var loginCmd = &cobra.Command{
 			plainBold := color.New(color.Bold)
 
 			plainBold.Println("\nQuick links")
-			fmt.Println("- Learn to inject secrets into your application at https://infisical.com/docs/cli/usage")
-			fmt.Println("- Stuck? Join our slack for quick support https://infisical.com/slack")
-
-			Telemetry.CaptureEvent("cli-command:login", posthog.NewProperties().Set("infisical-backend", config.INFISICAL_URL).Set("version", util.CLI_VERSION))
+			util.PrintlnStderr("- Learn to inject secrets into your application at https://infisical.com/docs/cli/usage")
+			util.PrintlnStderr("- Stuck? Join our slack for quick support https://infisical.com/slack")
 		} else {
 			sdkAuthenticator := util.NewSdkAuthenticator(infisicalClient, cmd)
 
@@ -284,7 +298,7 @@ var loginCmd = &cobra.Command{
 			}
 
 			if plainOutput {
-				fmt.Println(credential.AccessToken)
+				util.PrintlnStdout(credential.AccessToken)
 				return
 			}
 
@@ -312,7 +326,7 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email st
 
 		_, loginTwoResponse, err := getFreshUserCredentialsWithSrp(email, password)
 		if err != nil {
-			fmt.Println("Unable to authenticate with the provided credentials, please try again")
+			util.PrintlnStderr("Unable to authenticate with the provided credentials, please try again")
 			log.Debug().Err(err)
 			//return here
 			util.HandleError(err)
@@ -339,7 +353,7 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email st
 				} else if mfaErrorResponse != nil {
 					if mfaErrorResponse.Context.Code == "mfa_invalid" {
 						msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
-						fmt.Println(msg)
+						util.PrintlnStderr(msg)
 						if i == 5 {
 							util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
 							break
@@ -391,13 +405,14 @@ func setDomainConfig(domain string) {
 }
 
 func init() {
-	rootCmd.AddCommand(loginCmd)
+	RootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().Bool("clear-domains", false, "clear all self-hosting domains from the config file")
 	loginCmd.Flags().BoolP("interactive", "i", false, "login via the command line")
 	loginCmd.Flags().Bool("plain", false, "only output the token without any formatting")
 	loginCmd.Flags().String("method", "user", "login method [user, universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]")
 	loginCmd.Flags().String("client-id", "", "client id for universal auth")
 	loginCmd.Flags().String("client-secret", "", "client secret for universal auth")
+	loginCmd.Flags().String("organization-slug", "", "When set for machine identity login, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	loginCmd.Flags().String("machine-identity-id", "", "machine identity id for these login methods [kubernetes, azure, gcp-id-token, gcp-iam, aws-iam]")
 	loginCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	loginCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
@@ -434,7 +449,7 @@ func DomainOverridePrompt() (bool, error) {
 	return selectedOption == OVERRIDE, err
 }
 
-func usePresetDomain(presetDomain string) (bool, error) {
+func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, shouldPrintInfo bool) (bool, error) {
 	infisicalConfig, err := util.GetConfigFile()
 	if err != nil {
 		return false, fmt.Errorf("askForDomain: unable to get config file because [err=%s]", err)
@@ -442,7 +457,11 @@ func usePresetDomain(presetDomain string) (bool, error) {
 
 	preconfiguredUrl := strings.TrimSuffix(presetDomain, "/api")
 
-	if preconfiguredUrl != "" && preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL {
+	// If the domain flag was explicitly set by the user, use it directly (even for US/EU cloud URLs)
+	// Otherwise, only use the preset domain if it's not a default cloud URL
+	shouldUsePresetDomain := preconfiguredUrl != "" && (domainFlagExplicitlySet || (preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL))
+
+	if shouldUsePresetDomain {
 		parsedDomain := strings.TrimSuffix(strings.Trim(preconfiguredUrl, "/"), "/api")
 
 		_, err := url.ParseRequestURI(parsedDomain)
@@ -453,19 +472,24 @@ func usePresetDomain(presetDomain string) (bool, error) {
 		config.INFISICAL_URL = fmt.Sprintf("%s/api", parsedDomain)
 		config.INFISICAL_LOGIN_URL = fmt.Sprintf("%s/login", parsedDomain)
 
-		if !slices.Contains(infisicalConfig.Domains, parsedDomain) {
-			infisicalConfig.Domains = append(infisicalConfig.Domains, parsedDomain)
-			err = util.WriteConfigFile(&infisicalConfig)
+		// Only save non-cloud domains to the config file
+		if parsedDomain != util.INFISICAL_DEFAULT_US_URL && parsedDomain != util.INFISICAL_DEFAULT_EU_URL {
+			if !slices.Contains(infisicalConfig.Domains, parsedDomain) {
+				infisicalConfig.Domains = append(infisicalConfig.Domains, parsedDomain)
+				err = util.WriteConfigFile(&infisicalConfig)
 
-			if err != nil {
-				return false, fmt.Errorf("askForDomain: unable to write domains to config file because [err=%s]", err)
+				if err != nil {
+					return false, fmt.Errorf("askForDomain: unable to write domains to config file because [err=%s]", err)
+				}
 			}
 		}
 
 		whilte := color.New(color.FgGreen)
 		boldWhite := whilte.Add(color.Bold)
 		time.Sleep(time.Second * 1)
-		boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
+		if shouldPrintInfo {
+			boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
+		}
 
 		return true, nil
 	}
@@ -578,7 +602,7 @@ func getLoginCredentials(cmd *cobra.Command, directUserLoginFlags bool) (email s
 }
 
 func askForLoginCredentials() (email string, password string, err error) {
-	fmt.Println("Enter Credentials...")
+	util.PrintlnStderr("Enter Credentials...")
 	emailPrompt := promptui.Prompt{
 		Label:    "Email",
 		Validate: validateEmailInput,
@@ -689,27 +713,10 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizatio
 	selectedOrganizationId := organizationId
 
 	if selectedOrganizationId == "" {
-		organizationResponse, err := api.CallGetAllOrganizations(httpClient)
-
+		selectedOrganizationId, _, err = pickOrganization(httpClient, "Which Infisical organization would you like to log into?", email)
 		if err != nil {
-			util.HandleError(err, "Unable to pull organizations that belong to you")
+			util.HandleError(err, "Unable to select organization")
 		}
-
-		organizations := organizationResponse.Organizations
-
-		organizationNames := util.GetOrganizationsNameList(organizationResponse)
-
-		prompt := promptui.Select{
-			Label: "Which Infisical organization would you like to log into?",
-			Items: organizationNames,
-		}
-
-		index, _, err := prompt.Run()
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		selectedOrganizationId = organizations[index].ID
 	}
 
 	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganizationId})
@@ -738,7 +745,7 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizatio
 			} else if mfaErrorResponse != nil {
 				if mfaErrorResponse.Context.Code == "mfa_invalid" {
 					msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
-					fmt.Println(msg)
+					util.PrintlnStderr(msg)
 					if i == 5 {
 						util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
 						break
@@ -801,14 +808,14 @@ func askForMFACode(mfaMethod string) string {
 
 func askToPasteJwtToken(success chan models.UserCredentials, failure chan error) {
 	time.Sleep(time.Second * 5)
-	fmt.Println("\n\nOnce login is completed via browser, the CLI should be authenticated automatically.")
-	fmt.Println("However, if browser fails to communicate with the CLI, please paste the token from the browser below.")
+	util.PrintlnStderr("\n\nOnce login is completed via browser, the CLI should be authenticated automatically.")
+	util.PrintlnStderr("However, if browser fails to communicate with the CLI, please paste the token from the browser below.")
 
-	fmt.Print("\n\nPaste your browser token here: ")
+	util.PrintStderr("\n\nPaste your browser token here: ")
 	bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		failure <- err
-		fmt.Println("\nError reading input:", err)
+		util.PrintlnStderr("\nError reading input:", err)
 		os.Exit(1)
 	}
 
@@ -817,7 +824,7 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 	userCredentials, err := decodePastedBase64Token(infisicalPastedToken)
 	if err != nil {
 		failure <- err
-		fmt.Println("Invalid user credentials provided", err)
+		util.PrintlnStderr("Invalid user credentials provided", err)
 		os.Exit(1)
 	}
 
@@ -825,7 +832,7 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		failure <- err
-		fmt.Println("Error getting resty client with custom headers", err)
+		util.PrintlnStderr("Error getting resty client with custom headers", err)
 		os.Exit(1)
 	}
 
@@ -835,7 +842,7 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 
 	isAuthenticated := api.CallIsAuthenticated(httpClient)
 	if !isAuthenticated {
-		fmt.Println("Invalid user credentials provided", err)
+		util.PrintlnStderr("Invalid user credentials provided", err)
 		failure <- err
 		os.Exit(1)
 	}
@@ -877,12 +884,12 @@ func browserCliLogin() (models.UserCredentials, error) {
 
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		if err := browser.OpenURL(url); err != nil {
-			fmt.Print(defaultPrintStatement)
+			util.PrintStderr(defaultPrintStatement)
 		} else {
-			fmt.Printf("\n\nPlease proceed to your browser to complete the login process.\nIf the browser doesn't open automatically, please open this address in your browser: %v \n", url)
+			util.PrintfStderr("\n\nPlease proceed to your browser to complete the login process.\nIf the browser doesn't open automatically, please open this address in your browser: %v \n", url)
 		}
 	} else {
-		fmt.Print(defaultPrintStatement)
+		util.PrintStderr(defaultPrintStatement)
 	}
 
 	//flow channels
@@ -917,7 +924,7 @@ func browserCliLogin() (models.UserCredentials, error) {
 		select {
 		case loginResponse := <-success:
 			_ = closeListener(&listener)
-			fmt.Println("\n\nBrowser login successful")
+			util.PrintlnStderr("\n\nBrowser login successful")
 			return loginResponse, nil
 
 		case err := <-failure:

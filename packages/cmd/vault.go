@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"encoding/base64"
-	"fmt"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -66,7 +65,7 @@ var vaultSetCmd = &cobra.Command{
 				return
 			}
 
-			fmt.Printf("\nSuccessfully, switched vault backend from [%s] to [%s]. Please login in again to store your login details in the new vault with [infisical login]\n", currentVaultBackend, wantedVaultTypeName)
+			util.PrintfStderr("\nSuccessfully, switched vault backend from [%s] to [%s]. Please login in again to store your login details in the new vault with [infisical login]\n", currentVaultBackend, wantedVaultTypeName)
 
 			Telemetry.CaptureEvent("cli-command:vault set", posthog.NewProperties().Set("currentVault", currentVaultBackend).Set("wantedVault", wantedVaultTypeName).Set("version", util.CLI_VERSION))
 		} else {
@@ -91,9 +90,9 @@ var vaultCmd = &cobra.Command{
 }
 
 func printAvailableVaultBackends() {
-	fmt.Printf("Vaults are used to securely store your login details locally. Available vaults:")
+	util.PrintfStderr("Vaults are used to securely store your login details locally. Available vaults:")
 	for _, vaultType := range AvailableVaults {
-		fmt.Printf("\n- %s (%s)", vaultType.Name, vaultType.Description)
+		util.PrintfStderr("\n- %s (%s)", vaultType.Name, vaultType.Description)
 	}
 
 	currentVaultBackend, err := util.GetCurrentVaultBackend()
@@ -103,11 +102,11 @@ func printAvailableVaultBackends() {
 
 	Telemetry.CaptureEvent("cli-command:vault", posthog.NewProperties().Set("currentVault", currentVaultBackend).Set("version", util.CLI_VERSION))
 
-	fmt.Printf("\n\nYou are currently using [%s] vault to store your login credentials\n", string(currentVaultBackend))
+	util.PrintfStderr("\n\nYou are currently using [%s] vault to store your login credentials\n", string(currentVaultBackend))
 }
 
 func init() {
 	vaultCmd.AddCommand(vaultSetCmd)
 
-	rootCmd.AddCommand(vaultCmd)
+	RootCmd.AddCommand(vaultCmd)
 }

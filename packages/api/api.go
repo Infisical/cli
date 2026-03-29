@@ -23,6 +23,7 @@ const (
 	operationCallLogin2V3                          = "CallLogin2V3"
 	operationCallLoginV3                           = "CallLoginV3"
 	operationCallGetAllOrganizations               = "CallGetAllOrganizations"
+	operationCallGetAllOrganizationsWithSubOrgs    = "CallGetAllOrganizationsWithSubOrgs"
 	operationCallSelectOrganization                = "CallSelectOrganization"
 	operationCallGetAllWorkSpacesUserBelongsTo     = "CallGetAllWorkSpacesUserBelongsTo"
 	operationCallGetProjectById                    = "CallGetProjectById"
@@ -53,6 +54,7 @@ const (
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
+	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
@@ -214,6 +216,29 @@ func CallLogin2V2(httpClient *resty.Client, request GetLoginTwoV2Request) (GetLo
 	}
 
 	return loginTwoV2Response, nil
+}
+
+func CallGetAllOrganizationsWithSubOrgs(httpClient *resty.Client) (GetOrganizationsWithSubOrgsResponse, error) {
+	var resp GetOrganizationsWithSubOrgsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resp).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/organization/accessible-with-sub-orgs", config.INFISICAL_URL))
+
+	if err != nil {
+		return GetOrganizationsWithSubOrgsResponse{}, NewGenericRequestError(operationCallGetAllOrganizationsWithSubOrgs, err)
+	}
+
+	if response.StatusCode() == http.StatusNotFound {
+		return GetOrganizationsWithSubOrgsResponse{}, ErrNotFound
+	}
+
+	if response.IsError() {
+		return GetOrganizationsWithSubOrgsResponse{}, NewAPIErrorWithResponse(operationCallGetAllOrganizationsWithSubOrgs, response, nil)
+	}
+
+	return resp, nil
 }
 
 func CallGetAllOrganizations(httpClient *resty.Client) (GetOrganizationsResponse, error) {
@@ -998,6 +1023,25 @@ func CallPAMSessionTermination(httpClient *resty.Client, sessionId string) error
 	}
 
 	return nil
+}
+
+func CallGetMFASessionStatus(httpClient *resty.Client, mfaSessionId string) (MFASessionStatusResponse, error) {
+	var mfaSessionStatusResponse MFASessionStatusResponse
+	response, err := httpClient.
+		R().
+		SetResult(&mfaSessionStatusResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v2/mfa-sessions/%s/status", config.INFISICAL_URL, mfaSessionId))
+
+	if err != nil {
+		return MFASessionStatusResponse{}, NewGenericRequestError(operationCallGetMFASessionStatus, err)
+	}
+
+	if response.IsError() {
+		return MFASessionStatusResponse{}, NewAPIErrorWithResponse(operationCallGetMFASessionStatus, response, nil)
+	}
+
+	return mfaSessionStatusResponse, nil
 }
 
 func CallIssueCertificate(httpClient *resty.Client, request IssueCertificateRequest) (*CertificateResponse, error) {

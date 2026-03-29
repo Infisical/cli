@@ -28,6 +28,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/go-resty/resty/v2"
 	infisicalSdk "github.com/infisical/go-sdk"
@@ -38,6 +39,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
 	"github.com/spf13/cobra"
@@ -90,13 +92,13 @@ type RetryConfig struct {
 }
 
 type Config struct {
-	Version       string                   `yaml:"version,omitempty"`
-	Infisical     InfisicalConfig          `yaml:"infisical"`
-	Auth          AuthConfig               `yaml:"auth"`
-	Sinks         []Sink                   `yaml:"sinks"`
-	Cache         CacheConfig              `yaml:"cache,omitempty"`
-	Templates     []Template               `yaml:"templates"`
-	Certificates  []AgentCertificateConfig `yaml:"certificates,omitempty"`
+	Version      string                   `yaml:"version,omitempty"`
+	Infisical    InfisicalConfig          `yaml:"infisical"`
+	Auth         AuthConfig               `yaml:"auth"`
+	Sinks        []Sink                   `yaml:"sinks"`
+	Cache        CacheConfig              `yaml:"cache,omitempty"`
+	Templates    []Template               `yaml:"templates"`
+	Certificates []AgentCertificateConfig `yaml:"certificates,omitempty"`
 }
 
 type TemplateWithID struct {
@@ -195,10 +197,10 @@ type Template struct {
 }
 
 type CertificateLifecycleConfig struct {
-	RenewBeforeExpiry string `yaml:"renew-before-expiry"`
-	StatusCheckInterval string `yaml:"status-check-interval"`
+	RenewBeforeExpiry    string `yaml:"renew-before-expiry"`
+	StatusCheckInterval  string `yaml:"status-check-interval"`
 	FailureRetryInterval string `yaml:"failure-retry-interval,omitempty"`
-	MaxFailureRetries int `yaml:"max-failure-retries,omitempty"`
+	MaxFailureRetries    int    `yaml:"max-failure-retries,omitempty"`
 }
 
 type CertificateAttributes struct {
@@ -343,7 +345,10 @@ func NewCacheManager(ctx context.Context, cacheConfig *CacheConfig) (*CacheManag
 		return &CacheManager{}, fmt.Errorf("unable to read service account token: %v. Please ensure the file exists and is not empty", err)
 	}
 
-	encryptionKey := sha256.Sum256(serviceAccountToken)
+	hash := sha256.Sum256(serviceAccountToken)
+	encryptionKey := memguard.NewBufferFromBytes(hash[:]) // the hash (source) is wiped after copied to the secure buffer
+
+	defer encryptionKey.Destroy()
 
 	cacheStorage, err := cache.NewEncryptedStorage(cache.EncryptedStorageOptions{
 		DBPath:        cacheConfig.Persistent.Path,
@@ -895,6 +900,23 @@ func secretTemplateFunction(accessToken string, currentEtag *string) func(string
 	}
 }
 
+func secretTemplateByProjectSlugFunction(accessToken string, currentEtag *string) func(string, string, string, ...string) ([]models.SingleEnvironmentVariable, error) {
+	return func(projectSlug, envSlug, secretPath string, args ...string) ([]models.SingleEnvironmentVariable, error) {
+		httpClient, err := util.GetRestyClientWithCustomHeaders()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create HTTP client: %v", err)
+		}
+		httpClient.SetAuthToken(accessToken)
+
+		project, err := api.CallGetProjectBySlug(httpClient, projectSlug)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get project by slug: %v", err)
+		}
+
+		return secretTemplateFunction(accessToken, currentEtag)(project.ID, envSlug, secretPath, args...)
+	}
+}
+
 func getSingleSecretTemplateFunction(accessToken string, currentEtag *string) func(string, string, string, string) (models.SingleEnvironmentVariable, error) {
 	return func(projectID, envSlug, secretPath, secretName string) (models.SingleEnvironmentVariable, error) {
 		secret, etag, err := util.GetSinglePlainTextSecretByNameV3(accessToken, projectID, envSlug, secretPath, secretName)
@@ -970,27 +992,31 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 	}
 }
 
-func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
+func newTemplateFunctions(accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager, templateId int) template.FuncMap {
 
-	// custom template function to fetch secrets from Infisical
 	secretFunction := secretTemplateFunction(accessToken, currentEtag)
+	secretByProjectSlugFunction := secretTemplateByProjectSlugFunction(accessToken, currentEtag)
 	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretManager, agentManager, templateId, currentEtag)
 	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, currentEtag)
+
 	funcs := template.FuncMap{
-		"secret":          secretFunction, // depreciated
-		"listSecrets":     secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
-		"minus": func(a, b int) int {
-			return a - b
-		},
-		"add": func(a, b int) int {
-			return a + b
-		},
+		"secret":         secretFunction,        // deprecated
+		"dynamic_secret": dynamicSecretFunction, // deprecated
+
+		"listSecrets":              secretFunction,
+		"listSecretsByProjectSlug": secretByProjectSlugFunction,
+		"getSecretByName":          getSingleSecretFunction,
+		"dynamicSecret":            dynamicSecretFunction,
 	}
 
+	return funcs
+}
+
+func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
+	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretManager, agentManager, templateId)
+
 	templateName := path.Base(templatePath)
-	tmpl, err := template.New(templateName).Funcs(funcs).ParseFiles(templatePath)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).ParseFiles(templatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -1012,18 +1038,10 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 	templateString := string(decoded)
 
-	secretFunction := secretTemplateFunction(accessToken, currentEtag) // TODO: Fix this
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaseManager, agentManager, templateId, currentEtag)
-	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, currentEtag)
-	funcs := template.FuncMap{
-		"secret":          secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
-	}
-
 	templateName := "base64Template"
+	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretLeaseManager, agentManager, templateId)
 
-	tmpl, err := template.New(templateName).Funcs(funcs).Parse(templateString)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).Parse(templateString)
 	if err != nil {
 		return nil, err
 	}
@@ -1038,18 +1056,11 @@ func ProcessBase64Template(templateId int, encodedTemplate string, data interfac
 
 func ProcessLiteralTemplate(templateId int, templateString string, data interface{}, accessToken string, currentEtag *string, dynamicSecretLeaseManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
 
-	secretFunction := secretTemplateFunction(accessToken, currentEtag)
-	dynamicSecretFunction := dynamicSecretTemplateFunction(accessToken, dynamicSecretLeaseManager, agentManager, templateId, currentEtag)
-	getSingleSecretFunction := getSingleSecretTemplateFunction(accessToken, currentEtag)
-	funcs := template.FuncMap{
-		"secret":          secretFunction,
-		"dynamic_secret":  dynamicSecretFunction,
-		"getSecretByName": getSingleSecretFunction,
-	}
+	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretLeaseManager, agentManager, templateId)
 
 	templateName := "literalTemplate"
 
-	tmpl, err := template.New(templateName).Funcs(funcs).Parse(templateString)
+	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).Parse(templateString)
 	if err != nil {
 		return nil, err
 	}
@@ -2000,7 +2011,6 @@ func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) 
 	return nil
 }
 
-
 func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
 	for i := range *certificates {
 		cert := &(*certificates)[i]
@@ -2085,7 +2095,6 @@ func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.Certif
 	if certificate.FileConfig.Chain.OmitRoot != nil && !*certificate.FileConfig.Chain.OmitRoot {
 		removeRoots = false
 	}
-
 
 	attributes.RemoveRootsFromChain = removeRoots
 	hasAny = true
@@ -2365,9 +2374,6 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 }
 
 func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorMsg string) {
-	tm.mutex.Lock()
-	defer tm.mutex.Unlock()
-
 	state := tm.certificateStates[certificateId]
 	state.Status = "failed"
 	state.LastError = errorMsg
@@ -3207,7 +3213,6 @@ var agentCmd = &cobra.Command{
 						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
 						exitCode = 1
 					}
-
 				}
 
 				os.Exit(exitCode)
@@ -3324,7 +3329,7 @@ var certManagerAgentCmd = &cobra.Command{
 			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(cmd.Context())
 
 		tokenRefreshNotifier := make(chan bool)
 		sigChan := make(chan os.Signal, 1)
@@ -3402,6 +3407,12 @@ var certManagerAgentCmd = &cobra.Command{
 			select {
 			case <-tokenRefreshNotifier:
 				go tm.WriteTokenToFiles()
+			case <-ctx.Done():
+				tm.isShuttingDown = true
+				tm.cancelContext()
+				log.Info().Msg("certificate management agent context cancelled, shutting down...")
+				cancel()
+				return
 			case <-sigChan:
 				tm.isShuttingDown = true
 				tm.cancelContext()
@@ -3449,6 +3460,6 @@ func init() {
 	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")
 	certManagerCmd.AddCommand(certManagerAgentCmd)
 
-	rootCmd.AddCommand(agentCmd)
-	rootCmd.AddCommand(certManagerCmd)
+	RootCmd.AddCommand(agentCmd)
+	RootCmd.AddCommand(certManagerCmd)
 }
