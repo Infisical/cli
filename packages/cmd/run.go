@@ -526,6 +526,11 @@ func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, proje
 	// check to see if there are any reserved key words in secrets to inject
 	filterReservedEnvVars(secretsByKey)
 
+	// expose the project ID so downstream tools and CI/CD pipelines can reference it
+	if request.WorkspaceId != "" {
+		environmentVariables[util.INFISICAL_PROJECT_ID_NAME] = request.WorkspaceId
+	}
+
 	// now add infisical secrets
 	for k, v := range secretsByKey {
 		environmentVariables[k] = v.Value
