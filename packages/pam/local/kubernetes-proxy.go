@@ -335,6 +335,7 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 
 	select {
 	case <-errCh:
+		p.HandleGatewayDisconnect()
 	case <-connCtx.Done():
 		log.Info().Msg("Connection cancelled by context")
 	}

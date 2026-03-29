@@ -262,6 +262,29 @@ func (b *BaseProxyServer) FallbackToAPITermination() {
 	}
 }
 
+// HandleGatewayDisconnect should be called when a gateway connection drops unexpectedly
+// (i.e., not initiated by the user via Ctrl+C). This happens when:
+//   - An administrator terminates the session from the Infisical UI
+//   - The session expires on the gateway side
+//   - The gateway or relay goes down
+//
+// It prints a message and triggers proxy shutdown so the CLI process exits
+// cleanly instead of hanging with a dead backend connection.
+func (b *BaseProxyServer) HandleGatewayDisconnect() {
+	select {
+	case <-b.shutdownCh:
+		// Shutdown already initiated (e.g., user Ctrl+C), nothing to do
+		return
+	default:
+	}
+
+	b.shutdownOnce.Do(func() {
+		fmt.Println("\nConnection to session lost. Shutting down proxy...")
+		close(b.shutdownCh)
+		b.cancel()
+	})
+}
+
 // WaitForConnectionsWithTimeout waits for active connections to close with a timeout
 func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 	done := make(chan struct{})

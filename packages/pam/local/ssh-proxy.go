@@ -341,6 +341,7 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 
 	select {
 	case <-errCh:
+		p.HandleGatewayDisconnect()
 	case <-connCtx.Done():
 		log.Debug().Msg("Connection cancelled by context")
 	}
