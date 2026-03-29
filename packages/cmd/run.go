@@ -157,15 +157,19 @@ var runCmd = &cobra.Command{
 				injectableEnvironment = pathEnvironment
 			} else {
 				// Merge: later paths override earlier paths for duplicate keys
+				prevLen := len(injectableEnvironment.Variables)
 				injectableEnvironment.Variables = mergeEnvVars(injectableEnvironment.Variables, pathEnvironment.Variables)
-				injectableEnvironment.SecretsCount += pathEnvironment.SecretsCount
+				newKeys := len(injectableEnvironment.Variables) - prevLen
+				injectableEnvironment.SecretsCount += newKeys
 			}
 		}
 
 		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
 
 		if watchMode {
-			// Watch mode uses the first path for change detection
+			if len(secretsPaths) > 1 {
+				util.PrintWarning("Watch mode currently only monitors the first path for changes. Secrets from all paths are loaded on initial run, but hot reloads will only detect changes in: " + secretsPaths[0])
+			}
 			watchRequest := models.GetAllSecretsParameters{
 				Environment:            environmentName,
 				WorkspaceId:            projectId,
