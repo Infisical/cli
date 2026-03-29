@@ -82,6 +82,21 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		// Resolve project ID from workspace config if not provided via flag
+		if projectId == "" {
+			if projectConfigDir != "" {
+				workspaceConfig, configErr := util.GetWorkSpaceFromFilePath(projectConfigDir)
+				if configErr == nil {
+					projectId = workspaceConfig.WorkspaceId
+				}
+			} else {
+				workspaceConfig, configErr := util.GetWorkSpaceFromFile()
+				if configErr == nil {
+					projectId = workspaceConfig.WorkspaceId
+				}
+			}
+		}
+
 		command, err := cmd.Flags().GetString("command")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -526,14 +541,14 @@ func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, proje
 	// check to see if there are any reserved key words in secrets to inject
 	filterReservedEnvVars(secretsByKey)
 
-	// expose the project ID so downstream tools and CI/CD pipelines can reference it
-	if request.WorkspaceId != "" {
-		environmentVariables[util.INFISICAL_PROJECT_ID_NAME] = request.WorkspaceId
-	}
-
 	// now add infisical secrets
 	for k, v := range secretsByKey {
 		environmentVariables[k] = v.Value
+	}
+
+	// expose the project ID after secrets so it cannot be overwritten by user secrets
+	if request.WorkspaceId != "" {
+		environmentVariables[util.INFISICAL_PROJECT_ID_NAME] = request.WorkspaceId
 	}
 
 	env := make([]string, 0, len(environmentVariables))
