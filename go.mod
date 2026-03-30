@@ -40,7 +40,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/wasilibs/go-re2 v1.10.0
 	github.com/xdg-go/scram v1.1.2
-	go.mongodb.org/mongo-driver v1.17.9
+	go.mongodb.org/mongo-driver v1.10.0
 	golang.org/x/crypto v0.43.0
 	golang.org/x/exp v0.0.0-20250228200357-dead58393ab7
 	golang.org/x/sys v0.37.0

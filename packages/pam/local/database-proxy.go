@@ -124,7 +124,7 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 	case session.ResourceTypeMssql:
 		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	case session.ResourceTypeMongodb:
-		util.PrintfStderr("mongodb://localhost:%d/%s", proxy.port, database)
+		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=20000", proxy.port, database)
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}
@@ -239,7 +239,9 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 		p.activeConnections.Done()
 	}()
 
+	connStart := time.Now() // [DIAG-CONNPOOL]
 	log.Info().Msgf("New connection from %s", clientConn.RemoteAddr())
+	log.Info().Str("client", clientConn.RemoteAddr().String()).Msg("[DIAG-CONNPOOL] client TCP accepted, starting relay+gateway setup") // [DIAG-CONNPOOL]
 
 	select {
 	case <-p.ctx.Done():
@@ -248,21 +250,26 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 	default:
 	}
 
+	relayStart := time.Now() // [DIAG-CONNPOOL]
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
 		return
 	}
 	defer relayConn.Close()
+	log.Info().Dur("elapsed_ms", time.Since(relayStart)).Msg("[DIAG-CONNPOOL] relay connection established") // [DIAG-CONNPOOL]
 
+	gwStart := time.Now() // [DIAG-CONNPOOL]
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway")
 		return
 	}
 	defer gatewayConn.Close()
+	log.Info().Dur("elapsed_ms", time.Since(gwStart)).Msg("[DIAG-CONNPOOL] gateway connection established") // [DIAG-CONNPOOL]
 
 	log.Info().Msg("Established connection to database resource")
+	log.Info().Dur("total_setup_ms", time.Since(connStart)).Str("client", clientConn.RemoteAddr().String()).Msg("[DIAG-CONNPOOL] full proxy chain ready (relay+gateway)") // [DIAG-CONNPOOL]
 
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()

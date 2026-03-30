@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	opReplyOpCode  int32 = 1
 	opQueryOpCode  int32 = 2004
 	opMsgOpCode    int32 = 2013
 	headerLength         = 16
@@ -23,7 +22,7 @@ const (
 )
 
 // opQuery represents a parsed legacy OP_QUERY message.
-// mongosh still sends OP_QUERY for the initial isMaster/hello handshake.
+// Clients using older wire protocol versions send OP_QUERY for the initial handshake.
 type opQuery struct {
 	Header     wireHeader
 	Flags      int32
@@ -228,31 +227,8 @@ func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
 	}, nil
 }
 
-// buildOpReply builds a legacy OP_REPLY wrapping a single BSON document.
-func buildOpReply(responseTo int32, doc bson.Raw) []byte {
-	// header(16) + responseFlags(4) + cursorID(8) + startingFrom(4) + numberReturned(4) + doc
-	totalLen := headerLength + 20 + len(doc)
-	msg := make([]byte, totalLen)
-
-	binary.LittleEndian.PutUint32(msg[0:4], uint32(totalLen))
-	binary.LittleEndian.PutUint32(msg[4:8], uint32(nextRequestID()))
-	binary.LittleEndian.PutUint32(msg[8:12], uint32(responseTo))
-	binary.LittleEndian.PutUint32(msg[12:16], uint32(opReplyOpCode))
-	// responseFlags = 8 (AwaitCapable)
-	binary.LittleEndian.PutUint32(msg[16:20], 8)
-	// cursorID = 0
-	binary.LittleEndian.PutUint64(msg[20:28], 0)
-	// startingFrom = 0
-	binary.LittleEndian.PutUint32(msg[28:32], 0)
-	// numberReturned = 1
-	binary.LittleEndian.PutUint32(msg[32:36], 1)
-	copy(msg[36:], doc)
-
-	return msg
-}
-
-// buildOpMsgReply wraps a BSON document in an OP_MSG response.
-func buildOpMsgReply(responseTo int32, doc bson.Raw) []byte {
+// buildOpMsg wraps a BSON document in an OP_MSG response.
+func buildOpMsg(responseTo int32, doc bson.Raw) []byte {
 	totalLen := headerLength + 4 + 1 + len(doc) // header + flagBits + kind byte + doc
 	msg := make([]byte, totalLen)
 
@@ -261,7 +237,7 @@ func buildOpMsgReply(responseTo int32, doc bson.Raw) []byte {
 	binary.LittleEndian.PutUint32(msg[8:12], uint32(responseTo))
 	binary.LittleEndian.PutUint32(msg[12:16], uint32(opMsgOpCode))
 	binary.LittleEndian.PutUint32(msg[16:20], 0) // flagBits = 0
-	msg[20] = 0                                   // Kind 0
+	msg[20] = 0                                  // Kind 0
 	copy(msg[21:], doc)
 
 	return msg
@@ -342,4 +318,19 @@ func mergeDocumentSequences(body bson.Raw, sequences []documentSequence) (bson.R
 	}
 
 	return bson.Marshal(doc)
+}
+
+func toFloat64(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int32:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
 }

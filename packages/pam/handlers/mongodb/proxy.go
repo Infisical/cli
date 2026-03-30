@@ -16,6 +16,9 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
+// MongoDBProxyConfig configures the MongoDB proxy.
+// Host and Port are separate (unlike TargetAddr in other handlers) because
+// SRV resolution discovers the port from DNS, not from config.
 type MongoDBProxyConfig struct {
 	Host           string
 	Port           int // 0 means SRV (mongodb+srv://)
@@ -48,14 +51,6 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 		Str("sessionID", p.config.SessionID).
 		Msg("New MongoDB connection for PAM session")
 
-	// Respond to the client's initial hello/ismaster BEFORE connecting to the
-	// target. mongosh sends ismaster immediately and times out in 2 seconds
-	// (serverSelectionTimeoutMS). connectToServer can take 1-5s for remote
-	// servers, so the bridge wouldn't start in time.
-	if err := handleInitialHandshake(clientConn); err != nil {
-		return fmt.Errorf("failed to handle initial handshake: %w", err)
-	}
-
 	serverConn, err := p.connectToServer()
 	if err != nil {
 		return fmt.Errorf("failed to connect to target MongoDB: %w", err)
@@ -71,6 +66,7 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 // connection pooling, heartbeats, and topology monitoring — matching the approach
 // used by the Postgres, MySQL, MSSQL, and Redis handlers.
 func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
+	totalStart := time.Now() // [DIAG-CONNPOOL]
 	isSRV := p.config.Port == 0
 
 	var host string
@@ -78,10 +74,12 @@ func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
 	var authSource string
 
 	if isSRV {
+		srvStart := time.Now() // [DIAG-CONNPOOL]
 		resolvedHost, resolvedPort, opts, err := resolveSRV(p.config.Host)
 		if err != nil {
 			return nil, fmt.Errorf("SRV resolution failed: %w", err)
 		}
+		log.Info().Dur("elapsed_ms", time.Since(srvStart)).Str("resolved", fmt.Sprintf("%s:%d", resolvedHost, resolvedPort)).Msg("[DIAG-CONNPOOL] SRV resolution complete") // [DIAG-CONNPOOL]
 		host = resolvedHost
 		port = resolvedPort
 		authSource = opts["authSource"]
@@ -100,6 +98,7 @@ func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
 	var err error
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 
+	dialStart := time.Now() // [DIAG-CONNPOOL]
 	if p.config.EnableTLS || isSRV {
 		tlsCfg := &tls.Config{}
 		if p.config.TLSConfig != nil {
@@ -117,16 +116,19 @@ func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
 	} else {
 		conn, err = dialer.Dial("tcp", targetAddr)
 	}
+	log.Info().Dur("elapsed_ms", time.Since(dialStart)).Str("target", targetAddr).Bool("tls", p.config.EnableTLS || isSRV).Msg("[DIAG-CONNPOOL] TCP/TLS dial complete") // [DIAG-CONNPOOL]
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s: %w", targetAddr, err)
 	}
 
 	if p.config.InjectUsername != "" && p.config.InjectPassword != "" {
+		authStart := time.Now() // [DIAG-CONNPOOL]
 		if err := p.authenticateWithServer(conn, authSource); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
+		log.Info().Dur("elapsed_ms", time.Since(authStart)).Msg("[DIAG-CONNPOOL] SCRAM auth complete") // [DIAG-CONNPOOL]
 	}
 
 	log.Info().
@@ -134,6 +136,7 @@ func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
 		Str("host", host).
 		Int("port", port).
 		Bool("srv", isSRV).
+		Dur("total_connect_ms", time.Since(totalStart)). // [DIAG-CONNPOOL]
 		Msg("Connected to target MongoDB")
 
 	return conn, nil
@@ -316,7 +319,7 @@ func (p *MongoDBProxy) authenticateWithServer(conn net.Conn, authSource string) 
 
 // sendCommand sends a BSON command as OP_MSG and reads the response document.
 func sendCommand(conn net.Conn, cmdDoc bson.Raw) (bson.Raw, error) {
-	msg := buildOpMsgReply(0, cmdDoc) // responseTo=0 for requests
+	msg := buildOpMsg(0, cmdDoc) // responseTo=0 for requests
 	if err := writeWireMessage(conn, msg); err != nil {
 		return nil, fmt.Errorf("failed to send command: %w", err)
 	}
@@ -425,52 +428,4 @@ func mongoPasswordDigest(username, password string) string {
 	h := md5.New()
 	h.Write([]byte(username + ":mongo:" + password))
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// handleInitialHandshake reads the client's first message (OP_QUERY ismaster
-// or OP_MSG hello) and responds with a synthetic hello immediately. This
-// satisfies mongosh's 2-second serverSelectionTimeoutMS while we connect to
-// the real target in the background.
-func handleInitialHandshake(conn net.Conn) error {
-	hdr, _, err := readWireMessage(conn)
-	if err != nil {
-		return fmt.Errorf("failed to read initial client message: %w", err)
-	}
-
-	log.Debug().
-		Int32("opcode", hdr.OpCode).
-		Int32("requestID", hdr.RequestID).
-		Msg("Initial handshake message from client")
-
-	syntheticHello, err := bson.Marshal(bson.D{
-		{Key: "ismaster", Value: true},
-		{Key: "isWritablePrimary", Value: true},
-		{Key: "maxBsonObjectSize", Value: int32(16777216)},
-		{Key: "maxMessageSizeBytes", Value: int32(48000000)},
-		{Key: "maxWriteBatchSize", Value: int32(100000)},
-		{Key: "maxWireVersion", Value: int32(21)},
-		{Key: "minWireVersion", Value: int32(0)},
-		{Key: "readOnly", Value: false},
-		{Key: "ok", Value: 1.0},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal synthetic hello: %w", err)
-	}
-
-	var reply []byte
-	switch hdr.OpCode {
-	case opQueryOpCode:
-		reply = buildOpReply(hdr.RequestID, syntheticHello)
-	case opMsgOpCode:
-		reply = buildOpMsgReply(hdr.RequestID, syntheticHello)
-	default:
-		reply = buildOpMsgReply(hdr.RequestID, syntheticHello)
-	}
-
-	if err := writeWireMessage(conn, reply); err != nil {
-		return fmt.Errorf("failed to write initial handshake response: %w", err)
-	}
-
-	log.Debug().Msg("Sent synthetic hello response for initial handshake")
-	return nil
 }

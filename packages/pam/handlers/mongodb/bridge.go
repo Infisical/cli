@@ -3,7 +3,6 @@ package mongodb
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,11 +45,20 @@ func newBridge(serverConn net.Conn, clientConn net.Conn, logger session.SessionL
 }
 
 func (b *bridge) run(ctx context.Context) error {
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	bridgeStart := time.Now()                                                                                                                                              // [DIAG-CONNPOOL]
+	log.Info().Str("client", b.clientConn.RemoteAddr().String()).Str("server", b.serverConn.RemoteAddr().String()).Msg("[DIAG-CONNPOOL] bridge started, proxying traffic") // [DIAG-CONNPOOL]
+	defer func() {                                                                                                                                                         // [DIAG-CONNPOOL]
+		log.Info().Dur("lifetime_ms", time.Since(bridgeStart)).Str("client", b.clientConn.RemoteAddr().String()).Msg("[DIAG-CONNPOOL] bridge ended") // [DIAG-CONNPOOL]
+	}() // [DIAG-CONNPOOL]
 
+	// Close connections when context is cancelled to unblock blocking reads.
+	go func() {
+		<-ctx.Done()
+		b.clientConn.Close()
+		b.serverConn.Close()
+	}()
+
+	for {
 		hdr, raw, err := readWireMessage(b.clientConn)
 		if err != nil {
 			if isConnectionClosed(err) {
@@ -107,6 +115,15 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 	if isAuthCommand(cmdName) {
 		log.Debug().Str("cmd", cmdName).Msg("[WIRE] -> fake auth response")
 		return b.handleAuthCommand(msg)
+	}
+
+	// Strip "client" metadata from hello/ismaster requests — the proxy already
+	// sent the first hello during authenticateWithServer, and MongoDB only
+	// allows client metadata in the first hello on a connection.
+	if isHelloCommand(cmdName) {
+		if sanitized, err := sanitizeHelloRequest(hdr, raw); err == nil {
+			raw = sanitized
+		}
 	}
 
 	// Forward the raw wire message to the server
@@ -173,6 +190,14 @@ func (b *bridge) handleOpQuery(hdr *wireHeader, raw []byte) error {
 		Str("collection", q.Collection).
 		Msg("[WIRE] <- OP_QUERY")
 
+	// Strip first-hello-only fields from ismaster/hello OP_QUERY requests.
+	// The proxy already sent the first hello during authentication.
+	if isHelloCommand(cmdName) {
+		if sanitized, err := sanitizeOpQueryHelloRequest(q); err == nil {
+			raw = sanitized
+		}
+	}
+
 	if err := writeWireMessage(b.serverConn, raw); err != nil {
 		return fmt.Errorf("failed to forward OP_QUERY: %w", err)
 	}
@@ -221,8 +246,66 @@ func (b *bridge) handleAuthCommand(msg *opMsg) error {
 		return fmt.Errorf("failed to marshal auth response: %w", err)
 	}
 
-	reply := buildOpMsgReply(msg.Header.RequestID, resp)
+	reply := buildOpMsg(msg.Header.RequestID, resp)
 	return writeWireMessage(b.clientConn, reply)
+}
+
+// sanitizeOpQueryHelloRequest strips first-hello-only fields from an OP_QUERY
+// ismaster/hello request. OP_QUERY format:
+// header(16) + flags(4) + collection(null-terminated) + skip(4) + return(4) + query(BSON)
+func sanitizeOpQueryHelloRequest(q *opQuery) ([]byte, error) {
+	stripped, err := stripFields(q.Query, "client", "compression", "saslSupportedMechs", "speculativeAuthenticate")
+	if err != nil {
+		return nil, err
+	}
+
+	collection := q.Collection
+	// header(16) + flags(4) + collection + null(1) + skip(4) + return(4) + doc
+	totalLen := headerLength + 4 + len(collection) + 1 + 4 + 4 + len(stripped)
+	out := make([]byte, totalLen)
+
+	binary.LittleEndian.PutUint32(out[0:4], uint32(totalLen))
+	binary.LittleEndian.PutUint32(out[4:8], uint32(q.Header.RequestID))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(q.Header.ResponseTo))
+	binary.LittleEndian.PutUint32(out[12:16], uint32(opQueryOpCode))
+	binary.LittleEndian.PutUint32(out[16:20], uint32(q.Flags))
+	copy(out[20:], collection)
+	pos := 20 + len(collection)
+	out[pos] = 0 // null terminator
+	pos++
+	binary.LittleEndian.PutUint32(out[pos:pos+4], uint32(q.Skip))
+	binary.LittleEndian.PutUint32(out[pos+4:pos+8], uint32(q.Return))
+	copy(out[pos+8:], stripped)
+
+	return out, nil
+}
+
+// sanitizeHelloRequest strips fields from a hello/ismaster request that must
+// only appear in the first hello on a connection (which the proxy already sent
+// during authentication). See MongoDB spec: "client metadata document may only
+// be sent in the first hello".
+func sanitizeHelloRequest(hdr *wireHeader, raw []byte) ([]byte, error) {
+	msg, err := parseOpMsg(hdr, raw)
+	if err != nil {
+		return nil, err
+	}
+
+	stripped, err := stripFields(msg.Body, "client", "compression", "saslSupportedMechs", "speculativeAuthenticate")
+	if err != nil {
+		return nil, err
+	}
+
+	totalLen := headerLength + 4 + 1 + len(stripped)
+	out := make([]byte, totalLen)
+	binary.LittleEndian.PutUint32(out[0:4], uint32(totalLen))
+	binary.LittleEndian.PutUint32(out[4:8], uint32(hdr.RequestID))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(hdr.ResponseTo))
+	binary.LittleEndian.PutUint32(out[12:16], uint32(opMsgOpCode))
+	binary.LittleEndian.PutUint32(out[16:20], msg.FlagBits)
+	out[20] = 0 // Kind 0
+	copy(out[21:], stripped)
+
+	return out, nil
 }
 
 // sanitizeHelloWireMessage strips auth-related fields from a hello response
@@ -255,7 +338,7 @@ func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint32(reply[8:12], uint32(hdr.ResponseTo))
 	binary.LittleEndian.PutUint32(reply[12:16], uint32(opMsgOpCode))
 	binary.LittleEndian.PutUint32(reply[16:20], 0) // flagBits
-	reply[20] = 0                                   // Kind 0
+	reply[20] = 0                                  // Kind 0
 	copy(reply[21:], sanitized)
 
 	return reply, nil
@@ -318,11 +401,7 @@ func bsonToJSON(raw bson.Raw) string {
 	if len(raw) == 0 {
 		return "{}"
 	}
-	var m bson.M
-	if err := bson.Unmarshal(raw, &m); err != nil {
-		return "{}"
-	}
-	data, err := json.Marshal(m)
+	data, err := bson.MarshalExtJSON(raw, false, false)
 	if err != nil {
 		return "{}"
 	}
@@ -375,21 +454,6 @@ func formatResponseSummary(cmdName string, response bson.Raw) string {
 	}
 
 	return "SUCCESS"
-}
-
-func toFloat64(v interface{}) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case int32:
-		return float64(n)
-	case int64:
-		return float64(n)
-	case int:
-		return float64(n)
-	default:
-		return 0
-	}
 }
 
 // isConnectionClosed returns true for errors that indicate a normal client disconnect.
