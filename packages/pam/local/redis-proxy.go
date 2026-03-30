@@ -250,8 +250,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	gatewayErrCh := make(chan error, 1)
-	clientErrCh := make(chan error, 1)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
 	// Gateway → Client: if this side closes first, the gateway dropped the connection
 	go func() {
@@ -281,14 +280,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 		clientErrCh <- err
 	}()
 
-	select {
-	case <-gatewayErrCh:
-		p.HandleGatewayDisconnect()
-	case <-clientErrCh:
-		// Normal client disconnect, proxy stays running
-	case <-connCtx.Done():
-		log.Info().Msg("Connection cancelled by context")
-	}
+	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

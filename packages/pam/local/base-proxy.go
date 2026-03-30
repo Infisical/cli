@@ -278,6 +278,25 @@ func (b *BaseProxyServer) HandleGatewayDisconnect() {
 	})
 }
 
+// NewDisconnectChannels creates the error channels used to distinguish gateway
+// disconnects from normal client disconnects.
+func (b *BaseProxyServer) NewDisconnectChannels() (gatewayErrCh, clientErrCh chan error) {
+	return make(chan error, 1), make(chan error, 1)
+}
+
+// WaitForDisconnect blocks until either the gateway or client side of a proxied
+// connection closes. If the gateway disconnects, the proxy shuts down.
+func (b *BaseProxyServer) WaitForDisconnect(gatewayErrCh, clientErrCh <-chan error, connCtx context.Context) {
+	select {
+	case <-gatewayErrCh:
+		b.HandleGatewayDisconnect()
+	case <-clientErrCh:
+		// Normal client disconnect, proxy stays running
+	case <-connCtx.Done():
+		log.Info().Msg("Connection cancelled by context")
+	}
+}
+
 // WaitForConnectionsWithTimeout waits for active connections to close with a timeout
 func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 	done := make(chan struct{})
