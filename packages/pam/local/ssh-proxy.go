@@ -25,6 +25,7 @@ type SSHProxyServer struct {
 	port            int
 	sshProcess      *exec.Cmd
 	options         SSHAccessOptions
+	sshExitCode     int // Exit code from SSH process (for exec mode)
 }
 
 // SSHAccessOptions configures SSH access behavior
@@ -227,11 +228,14 @@ func (p *SSHProxyServer) waitForSSHCompletion() {
 	err := p.sshProcess.Wait()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			log.Debug().Msgf("SSH client exited with code: %d", exitErr.ExitCode())
+			p.sshExitCode = exitErr.ExitCode()
+			log.Debug().Msgf("SSH client exited with code: %d", p.sshExitCode)
 		} else {
 			log.Error().Err(err).Msg("Error waiting for SSH client")
+			p.sshExitCode = 1
 		}
 	} else {
+		p.sshExitCode = 0
 		log.Debug().Msg("SSH client exited successfully")
 	}
 }
@@ -264,7 +268,8 @@ func (p *SSHProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Debug().Msg("SSH proxy shutdown complete")
-		os.Exit(0)
+
+		os.Exit(p.sshExitCode)
 	})
 }
 

@@ -110,7 +110,7 @@ var pamSshAccessCmd = &cobra.Command{
 	Use:                   "access",
 	Short:                 "Start interactive SSH session to PAM account",
 	Long:                  "Start an interactive SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
-	Example:               "infisical pam ssh access --resource prod-servers --account root --duration 1h",
+	Example:               "infisical pam ssh access --resource prod-servers --account root --project-id <project-uuid> --duration 1h",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -124,10 +124,10 @@ var pamSshExecCmd = &cobra.Command{
 	Long: `Execute a single command on a PAM-managed SSH account and return the output.
 This is useful for CI/CD pipelines and scripting where interactive sessions are not needed.`,
 	Example: `  # Run a command and get output
-  infisical pam ssh exec "ls -la /var/log" --resource prod-servers --account root
+  infisical pam ssh exec "ls -la /var/log" --resource prod-servers --account root --project-id <project-uuid>
 
   # Use in a script
-  OUTPUT=$(infisical pam ssh exec "cat /etc/hostname" --resource prod-servers --account root)`,
+  OUTPUT=$(infisical pam ssh exec "cat /etc/hostname" --resource prod-servers --account root --project-id <project-uuid>)`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -144,7 +144,7 @@ var pamSshProxyCmd = &cobra.Command{
 This is useful for file transfers using SCP, SFTP, rsync, or other SSH-based tools.
 The proxy prints connection details and waits until terminated with Ctrl+C.`,
 	Example: `  # Start the proxy
-  infisical pam ssh proxy --resource prod-servers --account root
+  infisical pam ssh proxy --resource prod-servers --account root --project-id <project-uuid>
 
   # Then in another terminal, use SCP:
   scp -P <port> -o StrictHostKeyChecking=no local-file.txt root@127.0.0.1:/remote/path/
