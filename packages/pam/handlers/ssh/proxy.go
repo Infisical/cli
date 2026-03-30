@@ -286,30 +286,27 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 				if len(req.Payload) >= 4+cmdLen {
 					command := string(req.Payload[4 : 4+cmdLen])
 
-					// Determine the type of operation for better logging
-					opType := "exec"
+					// Determine the type of operation
+					isSCP := strings.HasPrefix(command, "scp ")
 					chState.mutex.Lock()
-					chState.channelType = session.TerminalChannelExec
-					if strings.HasPrefix(command, "scp ") {
-						opType = "scp"
+					if isSCP {
 						// Mark this channel as binary so we don't log the raw file data
 						chState.isBinarySession = true
 						chState.channelType = session.TerminalChannelSFTP // SCP is file transfer
-					} else if strings.Contains(command, "sftp") {
-						opType = "sftp"
+					} else {
+						chState.channelType = session.TerminalChannelExec
 					}
 					chState.mutex.Unlock()
 
 					log.Info().
 						Str("sessionID", sessionID).
 						Str("command", command).
-						Str("opType", opType).
 						Msg("SSH exec command")
 
 					// Log the exec command to the session recording
 					var logMessage string
 					var channelType session.TerminalChannelType
-					if opType == "scp" {
+					if isSCP {
 						channelType = session.TerminalChannelSFTP
 						// Parse SCP command for more readable logging
 						// scp -t /path = receiving file TO server
