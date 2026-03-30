@@ -124,7 +124,7 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 	case session.ResourceTypeMssql:
 		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	case session.ResourceTypeMongodb:
-		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=20000", proxy.port, database)
+		util.PrintfStderr("mongodb://localhost:%d/%s", proxy.port, database)
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}

@@ -83,6 +83,9 @@ func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn, gatewayName stri
 func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
 	log.Info().Str("sessionId", pamConfig.SessionId).Msg("Received session termination message")
 
+	// Close any pooled MongoDB connections for this session
+	mongodb.CloseSessionPool(pamConfig.SessionId)
+
 	if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
 	}

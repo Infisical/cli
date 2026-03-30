@@ -51,14 +51,29 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 		Str("sessionID", p.config.SessionID).
 		Msg("New MongoDB connection for PAM session")
 
-	serverConn, err := p.connectToServer()
-	if err != nil {
-		return fmt.Errorf("failed to connect to target MongoDB: %w", err)
+	// Try to reuse a pooled connection before creating a new one
+	serverConn := connPool.Get(p.config.SessionID)
+	if serverConn == nil {
+		var err error
+		serverConn, err = p.connectToServer()
+		if err != nil {
+			return fmt.Errorf("failed to connect to target MongoDB: %w", err)
+		}
 	}
-	defer serverConn.Close()
 
 	b := newBridge(serverConn, clientConn, p.config.SessionLogger, p.config.InjectDatabase)
-	return b.run(ctx)
+	err := b.run(ctx)
+
+	// Return the server connection to the pool if the client disconnected
+	// cleanly (normal driver connection cycling). If there was an error,
+	// the server connection may be in a bad state — close it instead.
+	if err == nil {
+		connPool.Put(p.config.SessionID, serverConn)
+	} else {
+		serverConn.Close()
+	}
+
+	return err
 }
 
 // connectToServer establishes a direct TCP/TLS connection to the MongoDB server
@@ -143,7 +158,14 @@ func (p *MongoDBProxy) connectToServer() (net.Conn, error) {
 }
 
 // resolveSRV resolves a MongoDB SRV hostname to an actual host:port and connection options.
+// Results are cached for 5 minutes to avoid repeated DNS lookups (which can take 100ms-8s).
 func resolveSRV(hostname string) (host string, port int, opts map[string]string, err error) {
+	// Check cache first
+	if h, p, o, ok := srvCache.get(hostname); ok {
+		log.Info().Str("hostname", hostname).Str("resolved", fmt.Sprintf("%s:%d", h, p)).Msg("[DIAG-CONNPOOL] SRV cache hit") // [DIAG-CONNPOOL]
+		return h, p, o, nil
+	}
+
 	_, addrs, err := net.LookupSRV("mongodb", "tcp", hostname)
 	if err != nil {
 		return "", 0, nil, fmt.Errorf("SRV lookup failed for %s: %w", hostname, err)
@@ -169,11 +191,13 @@ func resolveSRV(hostname string) (host string, port int, opts map[string]string,
 		}
 	}
 
+	srvCache.set(hostname, host, port, opts)
+
 	log.Debug().
 		Str("hostname", hostname).
 		Str("resolved", fmt.Sprintf("%s:%d", host, port)).
 		Interface("opts", opts).
-		Msg("SRV resolution complete")
+		Msg("SRV resolution complete (cached)")
 
 	return host, port, opts, nil
 }

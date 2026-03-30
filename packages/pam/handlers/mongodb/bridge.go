@@ -51,11 +51,13 @@ func (b *bridge) run(ctx context.Context) error {
 		log.Info().Dur("lifetime_ms", time.Since(bridgeStart)).Str("client", b.clientConn.RemoteAddr().String()).Msg("[DIAG-CONNPOOL] bridge ended") // [DIAG-CONNPOOL]
 	}() // [DIAG-CONNPOOL]
 
-	// Close connections when context is cancelled to unblock blocking reads.
+	// Close clientConn when context is cancelled to unblock blocking reads.
+	// We only close clientConn here — serverConn lifecycle is managed by the
+	// connection pool in HandleConnection (returned to pool on clean exit,
+	// closed on error).
 	go func() {
 		<-ctx.Done()
 		b.clientConn.Close()
-		b.serverConn.Close()
 	}()
 
 	for {
