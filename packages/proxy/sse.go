@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -40,13 +41,7 @@ type SSEEventData struct {
 }
 
 type SSESubscriptionRequest struct {
-	ProjectId string                        `json:"projectId"`
-	Register  []SSESubscriptionRegisterItem `json:"register"`
-}
-
-type SSESubscriptionRegisterItem struct {
-	EnvironmentSlug string `json:"environmentSlug"`
-	SecretPath      string `json:"secretPath" default:"/"`
+	ProjectId string `json:"projectId"`
 }
 
 type universalAuthLoginRequest struct {
@@ -60,6 +55,11 @@ type universalAuthLoginResponse struct {
 	TokenType   string `json:"tokenType"`
 }
 
+// SSESecretCacheFunc is a callback invoked after an SSE event fetches a secret from the API.
+// It receives the request, response body, and event data so the caller can cache the result
+// using the same approach as regular proxy requests.
+type SSESecretCacheFunc func(req *http.Request, resp *http.Response, bodyBytes []byte, event SSEEvent)
+
 // SSEAuthState manages authentication state for SSE operations.
 // It holds a reusable token and credentials for re-authentication.
 type SSEAuthState struct {
@@ -70,9 +70,8 @@ type SSEAuthState struct {
 	domainURL    *url.URL
 }
 
-func NewSSEAuthState(token, clientId, clientSecret string, domainURL *url.URL) *SSEAuthState {
+func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL) *SSEAuthState {
 	return &SSEAuthState{
-		token:        token,
 		clientId:     clientId,
 		clientSecret: clientSecret,
 		domainURL:    domainURL,
@@ -102,8 +101,6 @@ func (s *SSEAuthState) RefreshToken() (string, error) {
 	return newToken, nil
 }
 
-var errCacheEmpty = errors.New("cache is empty, no projects/environments to subscribe to")
-
 // CallUniversalAuthLogin authenticates a machine identity via universal auth.
 // Uses net/http directly (not resty) since the proxy module does not depend on resty.
 func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string) (string, error) {
@@ -118,7 +115,16 @@ func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string) (
 		return "", fmt.Errorf("failed to marshal login request: %w", err)
 	}
 
-	resp, err := http.Post(loginURL.String(), "application/json", bytes.NewReader(reqBody))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL.String(), bytes.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to call universal auth login: %w", err)
 	}
@@ -137,73 +143,160 @@ func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string) (
 	return loginResp.AccessToken, nil
 }
 
-// StartSSEListener starts the SSE event listener with exponential backoff reconnection.
-// It connects to the Infisical SSE endpoint and processes events to invalidate/refresh the cache.
-// On 401/403, it re-authenticates using the provided client credentials.
-func StartSSEListener(ctx context.Context, cache *Cache, domainURL *url.URL, initialToken string, httpClient *http.Client, clientId, clientSecret string) {
+// SSEConnection represents a single SSE connection for a project.
+// One connection per project tracks all environments automatically.
+type SSEConnection struct {
+	ProjectID string
+	Cancel    context.CancelFunc
+}
+
+// SSEManager manages demand-driven SSE connections. Connections are opened when
+// user requests hit secrets endpoints, not eagerly at startup.
+type SSEManager struct {
+	mu               sync.Mutex
+	connections      map[string]*SSEConnection // keyed by projectID
+	cache            *Cache
+	domainURL        *url.URL
+	httpClient       *http.Client // streaming client (no timeout) for SSE connections
+	resyncHttpClient *http.Client // regular client (with timeout) for cache resync requests
+	authState        *SSEAuthState
+	onSecretFetched  SSESecretCacheFunc
+	ctx              context.Context
+}
+
+func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, resyncHttpClient *http.Client, authState *SSEAuthState, onSecretFetched SSESecretCacheFunc) *SSEManager {
+	return &SSEManager{
+		connections:      make(map[string]*SSEConnection),
+		cache:            cache,
+		domainURL:        domainURL,
+		httpClient:       httpClient,
+		resyncHttpClient: resyncHttpClient,
+		authState:        authState,
+		onSecretFetched:  onSecretFetched,
+		ctx:              ctx,
+	}
+}
+
+// EnsureSubscription ensures an SSE connection exists for the given projectId.
+// One connection per project tracks all environments, so only the projectId matters.
+// Called from the proxy handler when a secrets request is seen.
+func (m *SSEManager) EnsureSubscription(projectId string) {
+	if projectId == "" {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// connection already exists for that projectId, so we don't need to open a new one
+	if m.connections[projectId] != nil {
+		return
+	}
+
+	log.Info().
+		Str("projectId", projectId).
+		Msg("Opening new SSE connection for project")
+
+	connCtx, connCancel := context.WithCancel(m.ctx)
+	conn := &SSEConnection{
+		ProjectID: projectId,
+		Cancel:    connCancel,
+	}
+	m.connections[projectId] = conn
+
+	go m.runConnection(conn, connCtx)
+}
+
+// runConnection runs a single SSE connection with retry, cache resync, and backoff.
+// After maxRetries consecutive failures the connection is removed so the next user
+// request can re-trigger EnsureSubscription.
+func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 	const (
-		baseDelay = 1 * time.Second
-		maxDelay  = 60 * time.Second
+		maxRetries      = 5
+		baseDelay       = 2 * time.Second
+		maxDelay        = 60 * time.Second
+		healthyDuration = 30 * time.Second
 	)
 
-	authState := NewSSEAuthState(initialToken, clientId, clientSecret, domainURL)
-	currentDelay := baseDelay
+	retries := 0
 
 	for {
-		select {
-		case <-ctx.Done():
-			log.Info().Msg("SSE listener stopped")
-			return
-		default:
-		}
-
-		connStart := time.Now()
-		log.Info().Msg("Connecting to SSE event stream...")
-
-		err := connectAndProcessSSE(ctx, cache, domainURL, authState, httpClient)
-
 		if ctx.Err() != nil {
 			return
 		}
 
-		// Reset backoff if connection lasted > 30s (was a real connection, not immediate failure)
-		if time.Since(connStart) > 30*time.Second {
-			currentDelay = baseDelay
-		}
+		connStart := time.Now()
 
-		if err != nil {
-			// Re-authenticate on auth errors
-			if isAuthError(err) {
-				log.Warn().Err(err).Msg("SSE auth error, re-authenticating...")
-				newToken, authErr := authState.RefreshToken()
-				if authErr != nil {
-					log.Error().Err(authErr).Msg("Failed to re-authenticate machine identity")
-				} else {
-					_ = newToken
-					log.Info().Msg("Machine identity re-authenticated successfully")
-					currentDelay = baseDelay
-					continue
-				}
-			}
-
-			log.Error().Err(err).
-				Str("retryIn", currentDelay.String()).
-				Msg("SSE connection failed, will retry")
-		}
-
-		// Exponential backoff with jitter
-		jitter := time.Duration(rand.Int63n(int64(currentDelay) / 2))
-		select {
-		case <-time.After(currentDelay + jitter):
-		case <-ctx.Done():
+		err := connectSSEForProject(ctx, m.cache, m.domainURL, m.authState, m.httpClient, conn.ProjectID, m.onSecretFetched)
+		if ctx.Err() != nil {
 			return
 		}
 
-		currentDelay *= 2
-		if currentDelay > maxDelay {
-			currentDelay = maxDelay
+		// Connection stayed up long enough — reset retry counter
+		if time.Since(connStart) > healthyDuration {
+			retries = 0
+		}
+
+		if err == nil {
+			// Stream closed cleanly, reconnect immediately
+			continue
+		}
+
+		// Handle auth errors with one re-auth attempt
+		if isAuthError(err) {
+			log.Warn().Err(err).
+				Str("projectId", conn.ProjectID).
+				Msg("SSE auth error, re-authenticating...")
+
+			if _, authErr := m.authState.RefreshToken(); authErr == nil {
+				log.Info().Str("projectId", conn.ProjectID).
+					Msg("Machine identity re-authenticated successfully")
+				continue
+			}
+			log.Error().Str("projectId", conn.ProjectID).
+				Msg("Failed to re-authenticate machine identity")
+		}
+
+		retries++
+		if retries > maxRetries {
+			log.Error().
+				Str("projectId", conn.ProjectID).
+				Int("maxRetries", maxRetries).
+				Msg("SSE connection retries exhausted, removing connection")
+			m.removeConnection(conn.ProjectID)
+			return
+		}
+
+		log.Warn().Err(err).
+			Str("projectId", conn.ProjectID).
+			Int("retry", retries).
+			Int("maxRetries", maxRetries).
+			Msg("SSE connection lost, resyncing cache before retrying")
+
+		// Resync cache before reconnecting — we may have missed events during the outage
+		runStaticSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, 0)
+
+		// Exponential backoff with jitter
+		delay := baseDelay * time.Duration(math.Pow(2, float64(retries-1)))
+
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+		jitter := time.Duration(rand.Int63n(int64(delay) / 2))
+		select {
+		case <-time.After(delay + jitter):
+		case <-ctx.Done():
+			return
 		}
 	}
+}
+
+// removeConnection removes a connection from the map so the next user request
+// can re-trigger EnsureSubscription for this project.
+func (m *SSEManager) removeConnection(projectId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.connections, projectId)
 }
 
 type sseAuthError struct {
@@ -219,59 +312,14 @@ func isAuthError(err error) bool {
 	return errors.As(err, &authErr)
 }
 
-// connectAndProcessSSE establishes SSE connections for all cached projects and blocks until they all disconnect.
-func connectAndProcessSSE(ctx context.Context, cache *Cache, domainURL *url.URL, authState *SSEAuthState, httpClient *http.Client) error {
-	projects := cache.GetUniqueProjectEnvironments()
-	if len(projects) == 0 {
-		log.Info().Msg("No cached projects/environments yet, waiting for cache to populate...")
-		return errCacheEmpty
-	}
-
-	// One SSE connection per project and per, since the subscription API is per-project
-	sseCtx, sseCancel := context.WithCancel(ctx)
-	defer sseCancel()
-
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(projects))
-
-	for projectId, envSlugs := range projects {
-		wg.Add(1)
-		go func(projectId string, envSlugs []string) {
-			defer wg.Done()
-			err := connectSSEForProject(sseCtx, cache, domainURL, authState, httpClient, projectId, envSlugs)
-			if err != nil {
-				errCh <- err
-				sseCancel()
-			}
-		}(projectId, envSlugs)
-	}
-
-	wg.Wait()
-	close(errCh)
-
-	// Return the first error
-	for err := range errCh {
-		return err
-	}
-	return nil
-}
-
 // connectSSEForProject establishes a single SSE connection for one project and processes events.
-func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL, authState *SSEAuthState, httpClient *http.Client, projectId string, envSlugs []string) error {
+// One connection per project tracks all environments automatically.
+func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL, authState *SSEAuthState, httpClient *http.Client, projectId string, onSecretFetched SSESecretCacheFunc) error {
 	subscribeURL := *domainURL
 	subscribeURL.Path = domainURL.Path + "/api/v1/events/subscribe/project-events"
 
-	registerItems := make([]SSESubscriptionRegisterItem, 0, len(envSlugs))
-	for _, env := range envSlugs {
-		registerItems = append(registerItems, SSESubscriptionRegisterItem{
-			EnvironmentSlug: env,
-			SecretPath:      "/",
-		})
-	}
-
 	reqBody, err := json.Marshal(SSESubscriptionRequest{
 		ProjectId: projectId,
-		Register:  registerItems,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to marshal SSE subscription request: %w", err)
@@ -290,7 +338,6 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 
 	log.Info().
 		Str("projectId", projectId).
-		Strs("environments", envSlugs).
 		Msg("Subscribing to SSE events")
 
 	resp, err := httpClient.Do(req)
@@ -304,7 +351,10 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read SSE subscription response body: %w", err)
+		}
 		return fmt.Errorf("SSE subscription returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -323,7 +373,7 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 			if !ok {
 				return fmt.Errorf("SSE stream closed for project %s", projectId)
 			}
-			handleSSEEvent(cache, domainURL, httpClient, authState, event)
+			handleSSEEvent(cache, domainURL, httpClient, authState, event, onSecretFetched)
 		}
 	}
 }
@@ -373,7 +423,6 @@ func parseSSEStream(ctx context.Context, reader io.Reader, events chan<- SSEEven
 		} else if strings.HasPrefix(line, "data:") {
 			currentData.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
-		// Ignore "id:", "retry:", and comment lines (starting with ":")
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -382,7 +431,7 @@ func parseSSEStream(ctx context.Context, reader io.Reader, events chan<- SSEEven
 }
 
 // handleSSEEvent processes a single SSE event and performs cache operations.
-func handleSSEEvent(cache *Cache, domainURL *url.URL, httpClient *http.Client, authState *SSEAuthState, event SSEEvent) {
+func handleSSEEvent(cache *Cache, domainURL *url.URL, httpClient *http.Client, authState *SSEAuthState, event SSEEvent, onSecretFetched SSESecretCacheFunc) {
 	secretPath := event.Data.SecretPath
 	if secretPath == "" {
 		secretPath = "/"
@@ -404,13 +453,14 @@ func handleSSEEvent(cache *Cache, domainURL *url.URL, httpClient *http.Client, a
 	case SSEEventSecretCreate, SSEEventSecretUpdate:
 		purged := cache.PurgeByMutation(event.Data.ProjectId, event.Data.Environment, secretPath)
 		log.Info().Int("purgedCount", purged).Msg("Cache entries purged, refetching...")
-		refetchSecretsAfterSSEEvent(cache, domainURL, httpClient, authState, event)
+		refetchSecretsAfterSSEEvent(domainURL, httpClient, authState, event, onSecretFetched)
 
 	case SSEEventSecretImportMutation:
 		purged := cache.PurgeByMutation(event.Data.ProjectId, event.Data.Environment, secretPath)
 		log.Info().Int("purgedCount", purged).Msg("Cache entries purged after import mutation")
 
 	default:
+		// ping event
 		log.Warn().
 			Str("eventType", string(event.EventType)).
 			Msg("Unknown SSE event type, ignoring")
@@ -418,8 +468,8 @@ func handleSSEEvent(cache *Cache, domainURL *url.URL, httpClient *http.Client, a
 }
 
 // refetchSecretsAfterSSEEvent fetches the created/updated secret from the Infisical API
-// and stores it in the cache. Uses the machine identity token from authState.
-func refetchSecretsAfterSSEEvent(cache *Cache, domainURL *url.URL, httpClient *http.Client, authState *SSEAuthState, event SSEEvent) {
+// and delegates caching to the onSecretFetched callback.
+func refetchSecretsAfterSSEEvent(domainURL *url.URL, httpClient *http.Client, authState *SSEAuthState, event SSEEvent, onSecretFetched SSESecretCacheFunc) {
 	if event.Data.SecretKey == "" {
 		log.Warn().
 			Str("eventType", string(event.EventType)).
@@ -432,7 +482,8 @@ func refetchSecretsAfterSSEEvent(cache *Cache, domainURL *url.URL, httpClient *h
 		secretPath = "/"
 	}
 
-	resp, req, err := fetchSecretFromAPI(domainURL, httpClient, authState, event.Data.SecretKey, event.Data.ProjectId, event.Data.Environment, secretPath)
+	// This is performing the same request a user would perform when they access the secret directly
+	resp, req, err := getSecretByName(domainURL, httpClient, authState.GetToken(), event.Data.SecretKey, event.Data.ProjectId, event.Data.Environment, secretPath)
 	if err != nil {
 		log.Error().Err(err).
 			Str("secretKey", event.Data.SecretKey).
@@ -457,56 +508,10 @@ func refetchSecretsAfterSSEEvent(cache *Cache, domainURL *url.URL, httpClient *h
 		return
 	}
 
-	token := authState.GetToken()
-	cacheKey := GenerateCacheKey(req.Method, req.URL.Path, req.URL.RawQuery, token)
-
-	cachedResp := &http.Response{
-		StatusCode: resp.StatusCode,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(bytes.NewReader(bodyBytes)),
-	}
-	CopyHeaders(cachedResp.Header, resp.Header)
-
-	// I think this can also be refactored, since this is the same approach another function already uses
-	indexEntry := IndexEntry{
-		CacheKey:        cacheKey,
-		SecretPath:      secretPath,
-		EnvironmentSlug: event.Data.Environment,
-		ProjectId:       event.Data.ProjectId,
-	}
-
-	cache.Set(cacheKey, req, cachedResp, token, indexEntry)
-
-	log.Info().
-		Str("secretKey", event.Data.SecretKey).
-		Str("cacheKey", cacheKey).
-		Msg("Successfully refetched and cached secret after SSE event")
+	onSecretFetched(req, resp, bodyBytes, event)
 }
 
-// fetchSecretFromAPI calls GET /api/v4/secrets/{secretName} with the given parameters.
-// On 401/403 it refreshes the token via authState and retries once.
-// Returns the final HTTP response and the request used (for cache key generation).
-func fetchSecretFromAPI(domainURL *url.URL, httpClient *http.Client, authState *SSEAuthState, secretName, projectId, environment, secretPath string) (*http.Response, *http.Request, error) {
-	resp, req, err := doSecretGET(domainURL, httpClient, authState.GetToken(), secretName, projectId, environment, secretPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		resp.Body.Close()
-		log.Warn().Msg("Auth error during SSE refetch, refreshing token...")
-		if _, authErr := authState.RefreshToken(); authErr != nil {
-			log.Error().Err(authErr).Msg("Failed to refresh token during SSE refetch")
-			return nil, nil, authErr
-		}
-		resp, req, err = doSecretGET(domainURL, httpClient, authState.GetToken(), secretName, projectId, environment, secretPath)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return resp, req, nil
-}
-
-func doSecretGET(domainURL *url.URL, httpClient *http.Client, token, secretName, projectId, environment, secretPath string) (*http.Response, *http.Request, error) {
+func getSecretByName(domainURL *url.URL, httpClient *http.Client, token, secretName, projectId, environment, secretPath string) (*http.Response, *http.Request, error) {
 	secretURL := *domainURL
 	secretURL.Path = domainURL.Path + "/api/v4/secrets/" + url.PathEscape(secretName)
 
