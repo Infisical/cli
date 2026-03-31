@@ -439,6 +439,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 				cache.Set(cacheKey, r, cachedResp, token, indexEntry)
 
 				if sseManager != nil {
+					log.Info().Str("projectId", indexEntry.ProjectId).Msg("Ensuring SSE subscription for project")
 					// this will start the subscription using SSE for the project
 					sseManager.EnsureSubscription(indexEntry.ProjectId)
 				}
@@ -591,11 +592,18 @@ func serveCachedResponse(w http.ResponseWriter, r *http.Request, c *proxy.Cache,
 	}
 
 	if sseAuthState != nil {
-		sseToken := sseAuthState.GetToken()
-		if sseToken != token {
-			sseCacheKey := proxy.GenerateCacheKey(r.Method, r.URL.Path, r.URL.RawQuery, sseToken)
+		queryParams := r.URL.Query()
+		projectId := queryParams.Get("projectId")
+		if projectId == "" {
+			projectId = queryParams.Get("workspaceId")
+		}
+		environment := queryParams.Get("environment")
+		secretName := proxy.ExtractSecretNameFromPath(r.URL.Path)
+
+		if projectId != "" && environment != "" && secretName != "" {
+			sseCacheKey := proxy.GenerateSSECacheKey(projectId, environment, secretName)
 			if cachedResp, found := c.Get(sseCacheKey); found {
-				log.Info().Str("hash", sseCacheKey).Msg("Cache hit (SSE token)")
+				log.Info().Str("hash", sseCacheKey).Msg("Cache hit (SSE)")
 				writeCachedResponse(w, cachedResp)
 				return true
 			}
