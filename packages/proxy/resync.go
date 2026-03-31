@@ -291,12 +291,12 @@ func runStaticSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http.
 
 // StartBackgroundLoops starts the background loops for token validation and secrets refresh.
 // When sseEnabled is true, the static secrets refresh loop is disabled (SSE handles cache invalidation).
-func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, evictionStrategy string, accessTokenCheckInterval time.Duration, staticSecretsRefreshInterval time.Duration, serverSentEventsEnabled bool) {
+func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, evictionStrategy string, accessTokenCheckInterval time.Duration, staticSecretsRefreshInterval time.Duration, sseEnabled bool) {
 	tokenTicker := time.NewTicker(accessTokenCheckInterval)
 	defer tokenTicker.Stop()
 
 	var secretsTickerC <-chan time.Time
-	if !serverSentEventsEnabled {
+	if !sseEnabled {
 		secretsTicker := time.NewTicker(staticSecretsRefreshInterval)
 		defer secretsTicker.Stop()
 		secretsTickerC = secretsTicker.C
@@ -309,7 +309,7 @@ func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL,
 		Str("evictionStrategy", evictionStrategy).
 		Str("accessTokenCheckInterval", accessTokenCheckInterval.String()).
 		Str("staticSecretsRefreshInterval", staticSecretsRefreshInterval.String()).
-		Bool("serverSentEventsEnabled", serverSentEventsEnabled).
+		Bool("sseEnabled", sseEnabled).
 		Msg("Background loops started")
 
 	for {
