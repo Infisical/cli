@@ -130,6 +130,18 @@ func IsSecretsEndpoint(path string) bool {
 		path == "/api/v3/secrets" || path == "/api/v4/secrets"
 }
 
+func ExtractSecretNameFromPath(urlPath string) string {
+	for _, prefix := range []string{"/api/v4/secrets/", "/api/v3/secrets/"} {
+		if strings.HasPrefix(urlPath, prefix) {
+			name := strings.TrimPrefix(urlPath, prefix)
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 func IsCacheableRequest(path string, method string) bool {
 	if method != http.MethodGet {
 		return false
@@ -279,6 +291,14 @@ func ExtractTokenFromRequest(r *http.Request) string {
 // GenerateCacheKey generates a cache key for a request by hashing the method, path, query, and token
 func GenerateCacheKey(method, path, query, token string) string {
 	data := method + path + query + token
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
+// GenerateSSECacheKey generates a cache key for an SSE-fetched secret using
+// only its logical identity, independent of request shape or token.
+func GenerateSSECacheKey(projectId, environment, secretKey string) string {
+	data := fmt.Sprintf("sse:%s:%s:%s", projectId, environment, secretKey)
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])
 }
@@ -760,19 +780,20 @@ func (c *Cache) GetDebugInfo() CacheDebugInfo {
 
 func (c *Cache) NewSSESecretCacheFunc() SSESecretCacheFunc {
 	return func(req *http.Request, resp *http.Response, bodyBytes []byte, event SSEEvent) {
-		token := ExtractTokenFromRequest(req)
-		cacheKey := GenerateCacheKey(req.Method, req.URL.Path, req.URL.RawQuery, token)
+		cacheKey := GenerateSSECacheKey(event.Data.ProjectId, event.Data.Environment, event.Data.SecretKey)
 
-		queryParams := req.URL.Query()
-		projectId := queryParams.Get("projectId")
-		environment := queryParams.Get("environment")
-		secretPath := queryParams.Get("secretPath")
+		secretPath := event.Data.SecretPath
+		if secretPath == "" {
+			secretPath = "/"
+		}
+
+		token := ExtractTokenFromRequest(req)
 
 		indexEntry := IndexEntry{
 			CacheKey:        cacheKey,
 			SecretPath:      secretPath,
-			EnvironmentSlug: environment,
-			ProjectId:       projectId,
+			EnvironmentSlug: event.Data.Environment,
+			ProjectId:       event.Data.ProjectId,
 		}
 
 		cachedResp := &http.Response{
@@ -783,7 +804,7 @@ func (c *Cache) NewSSESecretCacheFunc() SSESecretCacheFunc {
 		CopyHeaders(cachedResp.Header, resp.Header)
 
 		c.Set(cacheKey, req, cachedResp, token, indexEntry)
-		log.Debug().
+		log.Info().
 			Str("secretKey", event.Data.SecretKey).
 			Str("cacheKey", cacheKey).
 			Msg("SSE-fetched secret cached successfully")

@@ -40,8 +40,29 @@ type SSEEventData struct {
 	SecretKey   string `json:"secretKey"`
 }
 
+type sseRawMessage struct {
+	ProjectType string            `json:"projectType"`
+	Data        sseRawMessageData `json:"data"`
+}
+
+type sseRawMessageData struct {
+	EventType string           `json:"eventType"`
+	Payload   []ssePayloadItem `json:"payload"`
+}
+
+type ssePayloadItem struct {
+	Environment string `json:"environment"`
+	SecretPath  string `json:"secretPath"`
+	SecretKey   string `json:"secretKey"`
+}
+
+type SSESubscriptionRegisterItem struct {
+	Event SSEEventType `json:"event"`
+}
+
 type SSESubscriptionRequest struct {
-	ProjectId string `json:"projectId"`
+	ProjectId string                        `json:"projectId"`
+	Register  []SSESubscriptionRegisterItem `json:"register"`
 }
 
 type universalAuthLoginRequest struct {
@@ -181,6 +202,7 @@ func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpCl
 // One connection per project tracks all environments, so only the projectId matters.
 // Called from the proxy handler when a secrets request is seen.
 func (m *SSEManager) EnsureSubscription(projectId string) {
+	log.Info().Str("projectId", projectId).Msg("Ensuring SSE subscription for project")
 	if projectId == "" {
 		return
 	}
@@ -190,6 +212,7 @@ func (m *SSEManager) EnsureSubscription(projectId string) {
 
 	// connection already exists for that projectId, so we don't need to open a new one
 	if m.connections[projectId] != nil {
+		log.Info().Str("projectId", projectId).Msg("SSE connection already exists for project, skipping")
 		return
 	}
 
@@ -309,6 +332,7 @@ func (e *sseAuthError) Error() string {
 
 func isAuthError(err error) bool {
 	var authErr *sseAuthError
+
 	return errors.As(err, &authErr)
 }
 
@@ -320,6 +344,12 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 
 	reqBody, err := json.Marshal(SSESubscriptionRequest{
 		ProjectId: projectId,
+		Register: []SSESubscriptionRegisterItem{
+			{Event: SSEEventSecretCreate},
+			{Event: SSEEventSecretUpdate},
+			{Event: SSEEventSecretDelete},
+			{Event: SSEEventSecretImportMutation},
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to marshal SSE subscription request: %w", err)
@@ -363,13 +393,14 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 		Msg("SSE connection established")
 
 	events := make(chan SSEEvent, 10)
-	go parseSSEStream(ctx, resp.Body, events)
+	go parseSSEStream(ctx, resp.Body, projectId, events)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case event, ok := <-events:
+			log.Info().Str("event", fmt.Sprintf("%+v", event)).Msg("DEBUG")
 			if !ok {
 				return fmt.Errorf("SSE stream closed for project %s", projectId)
 			}
@@ -380,12 +411,12 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 
 // parseSSEStream reads from an io.Reader and emits SSEEvent values on a channel.
 // Implements the standard SSE protocol: "event:" lines set the type, "data:" lines set the payload,
-// blank lines delimit events.
-func parseSSEStream(ctx context.Context, reader io.Reader, events chan<- SSEEvent) {
+// blank lines delimit events. The JSON body carries a nested structure with the event type and
+// a payload array; each payload item becomes a separate SSEEvent on the channel.
+func parseSSEStream(ctx context.Context, reader io.Reader, projectId string, events chan<- SSEEvent) {
 	defer close(events)
 
 	scanner := bufio.NewScanner(reader)
-	var currentEvent string
 	var currentData strings.Builder
 
 	for scanner.Scan() {
@@ -398,29 +429,32 @@ func parseSSEStream(ctx context.Context, reader io.Reader, events chan<- SSEEven
 		line := scanner.Text()
 
 		if line == "" {
-			// Blank line = event delimiter
-			if currentData.Len() > 0 && currentEvent != "" {
-				var data SSEEventData
-				if err := json.Unmarshal([]byte(currentData.String()), &data); err != nil {
+			if currentData.Len() > 0 {
+				var raw sseRawMessage
+				if err := json.Unmarshal([]byte(currentData.String()), &raw); err != nil {
 					log.Error().Err(err).
-						Str("eventType", currentEvent).
 						Str("rawData", currentData.String()).
 						Msg("Failed to parse SSE event data")
 				} else {
-					events <- SSEEvent{
-						EventType: SSEEventType(currentEvent),
-						Data:      data,
+					eventType := SSEEventType(raw.Data.EventType)
+					for _, item := range raw.Data.Payload {
+						events <- SSEEvent{
+							EventType: eventType,
+							Data: SSEEventData{
+								Environment: item.Environment,
+								SecretPath:  item.SecretPath,
+								SecretKey:   item.SecretKey,
+								ProjectId:   projectId,
+							},
+						}
 					}
 				}
 			}
-			currentEvent = ""
 			currentData.Reset()
 			continue
 		}
 
-		if strings.HasPrefix(line, "event:") {
-			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
+		if strings.HasPrefix(line, "data:") {
 			currentData.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
@@ -507,6 +541,10 @@ func refetchSecretsAfterSSEEvent(domainURL *url.URL, httpClient *http.Client, au
 		log.Error().Err(err).Msg("Failed to read refetch response body")
 		return
 	}
+
+	log.Info().
+		Str("projectId", event.Data.ProjectId).
+		Msg("Refetched secret after SSE event")
 
 	onSecretFetched(req, resp, bodyBytes, event)
 }
