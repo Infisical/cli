@@ -534,6 +534,53 @@ func (c *Cache) RemoveTokenFromIndex(token string) {
 	}
 }
 
+// GetUniqueProjectEnvironments returns unique project+environment pairs from the cache.
+// Returns a map of projectId -> []environmentSlug.
+func (c *Cache) GetUniqueProjectEnvironments() map[string][]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	pathKeys, err := c.storage.GetKeysByPrefix(prefixPath)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get path index keys for project/env extraction")
+		return nil
+	}
+
+	projectEnvSet := make(map[string]map[string]bool)
+
+	for _, key := range pathKeys {
+		// Key format: path:{projectId}:{envSlug}:{tokenHash}:{escapedSecretPath}:{cacheKey}
+		withoutPrefix := strings.TrimPrefix(key, prefixPath)
+
+		projectId, rest, ok := strings.Cut(withoutPrefix, ":")
+		if !ok {
+			log.Error().Str("key", key).Msg("Failed to split path key into projectId and envSlug")
+			continue
+		}
+		envSlug, _, ok := strings.Cut(rest, ":")
+		if !ok {
+			log.Error().Str("key", key).Msg("Failed to split path key into envSlug and rest")
+			continue
+		}
+
+		if projectEnvSet[projectId] == nil {
+			projectEnvSet[projectId] = make(map[string]bool)
+		}
+		projectEnvSet[projectId][envSlug] = true
+	}
+
+	result := make(map[string][]string, len(projectEnvSet))
+	for projectId, envs := range projectEnvSet {
+		slice := make([]string, 0, len(envs))
+		for env := range envs {
+			slice = append(slice, env)
+		}
+		result[projectId] = slice
+	}
+
+	return result
+}
+
 // PurgeByMutation purges cache entries across ALL tokens that match the mutation path
 func (c *Cache) PurgeByMutation(projectID, envSlug, mutationPath string) int {
 	c.mu.Lock()

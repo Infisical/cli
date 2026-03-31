@@ -124,6 +124,30 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid static-secrets-refresh-interval format '%s'. Use formats like 30m, 1h, 1d", staticSecretsRefreshIntervalStr))
 	}
 
+	useServerSentEvents, err := cmd.Flags().GetBool("use-server-sent-events")
+	if err != nil {
+		util.HandleError(err, "Unable to parse use-server-sent-events flag")
+	}
+
+	machineIdentityToken, err := cmd.Flags().GetString("machine-identity-token")
+	if err != nil {
+		util.HandleError(err, "Unable to parse machine-identity-token flag")
+	}
+
+	clientId, err := cmd.Flags().GetString("client-id")
+	if err != nil {
+		util.HandleError(err, "Unable to parse client-id flag")
+	}
+
+	clientSecret, err := cmd.Flags().GetString("client-secret")
+	if err != nil {
+		util.HandleError(err, "Unable to parse client-secret flag")
+	}
+
+	if useServerSentEvents && machineIdentityToken == "" {
+		util.PrintErrorMessageAndExit("--machine-identity-token is required when --use-server-sent-events is enabled")
+	}
+
 	domainURL, err := url.Parse(domain)
 	if err != nil {
 		util.HandleError(err, fmt.Sprintf("Invalid domain URL: %s", domain))
@@ -473,7 +497,12 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	resyncCtx, resyncCancel := context.WithCancel(context.Background())
 	defer resyncCancel()
 
-	go proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval)
+	go proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval, useServerSentEvents)
+
+	if useServerSentEvents {
+		go proxy.StartSSEListener(resyncCtx, cache, domainURL, machineIdentityToken, streamingClient, clientId, clientSecret)
+		log.Info().Msg("SSE listener started for real-time cache invalidation")
+	}
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -576,6 +605,9 @@ func init() {
 	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().String("tls-key-file", "", "The path to the TLS key file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().Bool("tls-enabled", true, "Whether to enable TLS for the proxy server. Defaults to true")
+	proxyStartCmd.Flags().Bool("use-server-sent-events", false, "Enable SSE (Server-Sent Events) mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled and --client-id/--client-secret are required.")
+	proxyStartCmd.Flags().String("client-id", "", "Machine identity client ID for universal auth (required when --use-sse is enabled)")
+	proxyStartCmd.Flags().String("client-secret", "", "Machine identity client secret for universal auth (required when --use-sse is enabled)")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 
