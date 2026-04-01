@@ -269,7 +269,13 @@ func (p *SSHProxyServer) gracefulShutdown() {
 
 		log.Debug().Msg("SSH proxy shutdown complete")
 
-		os.Exit(p.sshExitCode)
+		// Only propagate SSH exit code in exec mode (non-interactive)
+		// For interactive sessions, always exit 0 on clean shutdown
+		exitCode := 0
+		if p.options.ExecCommand != "" {
+			exitCode = p.sshExitCode
+		}
+		os.Exit(exitCode)
 	})
 }
 
