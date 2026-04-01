@@ -198,7 +198,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	var sseAuthState *proxy.SSEAuthState
 	if useSSE {
 		sseAuthState = proxy.NewSSEAuthState(clientId, clientSecret, domainURL)
-		sseManager = proxy.NewSSEManager(context.Background(), cache, domainURL, streamingClient, httpClient, sseAuthState, cache.NewSSESecretCacheFunc())
+		sseManager = proxy.NewSSEManager(context.Background(), cache, domainURL, streamingClient, httpClient, sseAuthState)
 		log.Info().Msg("SSE manager initialized for demand-driven cache updates")
 	}
 
@@ -217,7 +217,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		// -- Cache Check --
 
 		if isCacheable && token != "" {
-			if served := serveCachedResponse(w, r, cache, token, sseAuthState); served {
+			if served := serveCachedResponse(w, r, cache, token); served {
 				return
 			}
 		}
@@ -579,35 +579,15 @@ func printCacheDebug(cmd *cobra.Command, args []string) {
 	fmt.Println(string(output))
 }
 
-// serveCachedResponse looks up the cache for the request, first using the
-// caller's token and then, if SSE is active, using the SSE machine-identity
-// token. Returns true if a cached response was written to w.
-func serveCachedResponse(w http.ResponseWriter, r *http.Request, c *proxy.Cache, token string, sseAuthState *proxy.SSEAuthState) bool {
+// serveCachedResponse looks up the cache for the request using the caller's token.
+// Returns true if a cached response was written to w.
+func serveCachedResponse(w http.ResponseWriter, r *http.Request, c *proxy.Cache, token string) bool {
 	cacheKey := proxy.GenerateCacheKey(r.Method, r.URL.Path, r.URL.RawQuery, token)
 
 	if cachedResp, found := c.Get(cacheKey); found {
 		log.Info().Str("hash", cacheKey).Msg("Cache hit")
 		writeCachedResponse(w, cachedResp)
 		return true
-	}
-
-	if sseAuthState != nil {
-		queryParams := r.URL.Query()
-		projectId := queryParams.Get("projectId")
-		if projectId == "" {
-			projectId = queryParams.Get("workspaceId")
-		}
-		environment := queryParams.Get("environment")
-		secretName := proxy.ExtractSecretNameFromPath(r.URL.Path)
-
-		if projectId != "" && environment != "" && secretName != "" {
-			sseCacheKey := proxy.GenerateSSECacheKey(projectId, environment, secretName)
-			if cachedResp, found := c.Get(sseCacheKey); found {
-				log.Info().Str("hash", sseCacheKey).Msg("Cache hit (SSE)")
-				writeCachedResponse(w, cachedResp)
-				return true
-			}
-		}
 	}
 
 	log.Info().Str("hash", cacheKey).Msg("Cache miss")

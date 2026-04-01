@@ -55,6 +55,15 @@ type PathIndexMarker struct {
 	CacheKey string `json:"cacheKey"`
 }
 
+// CollectedCacheEntry holds the metadata of a cache entry collected before purging,
+// so it can be replayed (re-fetched) using the original request and token.
+type CollectedCacheEntry struct {
+	CacheKey   string
+	Request    *CachedRequest
+	Token      string
+	IndexEntry IndexEntry
+}
+
 // Cache is an HTTP response cache fully backed by EncryptedStorage
 type Cache struct {
 	storage *cache.EncryptedStorage
@@ -291,14 +300,6 @@ func ExtractTokenFromRequest(r *http.Request) string {
 // GenerateCacheKey generates a cache key for a request by hashing the method, path, query, and token
 func GenerateCacheKey(method, path, query, token string) string {
 	data := method + path + query + token
-	hash := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hash[:])
-}
-
-// GenerateSSECacheKey generates a cache key for an SSE-fetched secret using
-// only its logical identity, independent of request shape or token.
-func GenerateSSECacheKey(projectId, environment, secretKey string) string {
-	data := fmt.Sprintf("sse:%s:%s:%s", projectId, environment, secretKey)
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])
 }
@@ -592,6 +593,60 @@ func (c *Cache) PurgeByMutation(projectID, envSlug, mutationPath string) int {
 	return purgedCount
 }
 
+// CollectAndPurgeByMutation collects cache entries matching the mutation path, then purges them.
+// Returns the collected entries so they can be replayed with their original requests/tokens.
+func (c *Cache) CollectAndPurgeByMutation(projectID, envSlug, mutationPath string) []CollectedCacheEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var collected []CollectedCacheEntry
+
+	prefix := buildPathIndexPrefixForProject(projectID, envSlug)
+	pathKeys, err := c.storage.GetKeysByPrefix(prefix)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get path index keys for collect-and-purge")
+		return collected
+	}
+
+	for _, key := range pathKeys {
+		withoutPrefix := strings.TrimPrefix(key, prefix)
+		parts := strings.SplitN(withoutPrefix, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+
+		keySecretPath := strings.ReplaceAll(parts[1], "\\:", ":")
+		keyCacheKey := parts[2]
+
+		if !matchesPath(keySecretPath, mutationPath) {
+			continue
+		}
+
+		// Load the full entry before evicting
+		var entry StoredCacheEntry
+		if err := c.storage.Get(buildEntryKey(keyCacheKey), &entry); err == nil && entry.Request != nil {
+			requestCopy := &CachedRequest{
+				Method:     entry.Request.Method,
+				RequestURI: entry.Request.RequestURI,
+				Headers:    make(http.Header),
+				CachedAt:   entry.Request.CachedAt,
+			}
+			CopyHeaders(requestCopy.Headers, entry.Request.Headers)
+
+			collected = append(collected, CollectedCacheEntry{
+				CacheKey:   keyCacheKey,
+				Request:    requestCopy,
+				Token:      entry.Token,
+				IndexEntry: entry.Index,
+			})
+		}
+
+		c.evictEntryUnsafe(keyCacheKey)
+	}
+
+	return collected
+}
+
 // CompoundPathIndexDebugInfo represents the compound path index structure
 type CompoundPathIndexDebugInfo struct {
 	Token      string                      `json:"token"`
@@ -778,35 +833,3 @@ func (c *Cache) GetDebugInfo() CacheDebugInfo {
 	}
 }
 
-func (c *Cache) NewSSESecretCacheFunc() SSESecretCacheFunc {
-	return func(req *http.Request, resp *http.Response, bodyBytes []byte, event SSEEvent) {
-		cacheKey := GenerateSSECacheKey(event.Data.ProjectId, event.Data.Environment, event.Data.SecretKey)
-
-		secretPath := event.Data.SecretPath
-		if secretPath == "" {
-			secretPath = "/"
-		}
-
-		token := ExtractTokenFromRequest(req)
-
-		indexEntry := IndexEntry{
-			CacheKey:        cacheKey,
-			SecretPath:      secretPath,
-			EnvironmentSlug: event.Data.Environment,
-			ProjectId:       event.Data.ProjectId,
-		}
-
-		cachedResp := &http.Response{
-			StatusCode: resp.StatusCode,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(bytes.NewReader(bodyBytes)),
-		}
-		CopyHeaders(cachedResp.Header, resp.Header)
-
-		c.Set(cacheKey, req, cachedResp, token, indexEntry)
-		log.Info().
-			Str("secretKey", event.Data.SecretKey).
-			Str("cacheKey", cacheKey).
-			Msg("SSE-fetched secret cached successfully")
-	}
-}
