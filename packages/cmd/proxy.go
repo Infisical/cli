@@ -489,7 +489,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	resyncCtx, resyncCancel := context.WithCancel(context.Background())
 	defer resyncCancel()
 
-	go proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval, useSSE)
+	proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval, useSSE)
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)

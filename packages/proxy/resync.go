@@ -289,22 +289,37 @@ func runStaticSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http.
 		Msg("Static secrets refresh completed")
 }
 
-// StartBackgroundLoops starts the background loops for token validation and secrets refresh.
-// When sseEnabled is true, the static secrets refresh loop is disabled (SSE handles cache invalidation).
-func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, evictionStrategy string, accessTokenCheckInterval time.Duration, staticSecretsRefreshInterval time.Duration, sseEnabled bool) {
+func startAccessTokenValidation(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, accessTokenCheckInterval time.Duration) {
 	tokenTicker := time.NewTicker(accessTokenCheckInterval)
 	defer tokenTicker.Stop()
 
-	var secretsTickerC <-chan time.Time
-	if !sseEnabled {
-		secretsTicker := time.NewTicker(staticSecretsRefreshInterval)
-		defer secretsTicker.Stop()
-		secretsTickerC = secretsTicker.C
-	} else {
-		secretsTickerC = make(chan time.Time)
-		log.Info().Msg("Static secrets refresh disabled (SSE mode active)")
+	for {
+		select {
+		case <-tokenTicker.C:
+			runAccessTokenValidation(cache, domainURL, httpClient)
+		case <-ctx.Done():
+			return
+		}
 	}
+}
 
+func startStaticSecretsRefresh(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, staticSecretsRefreshInterval time.Duration) {
+	secretsTicker := time.NewTicker(staticSecretsRefreshInterval)
+	defer secretsTicker.Stop()
+
+	for {
+		select {
+		case <-secretsTicker.C:
+			runStaticSecretsRefresh(cache, domainURL, httpClient, staticSecretsRefreshInterval)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// StartBackgroundLoops starts the background loops for token validation and secrets refresh.
+// When sseEnabled is true, the static secrets refresh loop is disabled (SSE handles cache invalidation).
+func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, evictionStrategy string, accessTokenCheckInterval time.Duration, staticSecretsRefreshInterval time.Duration, sseEnabled bool) {
 	log.Info().
 		Str("evictionStrategy", evictionStrategy).
 		Str("accessTokenCheckInterval", accessTokenCheckInterval.String()).
@@ -312,15 +327,9 @@ func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL,
 		Bool("sseEnabled", sseEnabled).
 		Msg("Background loops started")
 
-	for {
-		select {
-		case <-tokenTicker.C:
-			runAccessTokenValidation(cache, domainURL, httpClient)
-		case <-secretsTickerC:
-			runStaticSecretsRefresh(cache, domainURL, httpClient, staticSecretsRefreshInterval)
-		case <-ctx.Done():
-			log.Info().Msg("Background loops stopped")
-			return
-		}
+	if sseEnabled {
+		go startAccessTokenValidation(ctx, cache, domainURL, httpClient, accessTokenCheckInterval)
 	}
+	go startStaticSecretsRefresh(ctx, cache, domainURL, httpClient, staticSecretsRefreshInterval)
+
 }

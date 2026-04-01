@@ -96,7 +96,10 @@ func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL, httpClie
 	}
 
 	// ensure we have a valid token
-	authState.RefreshToken()
+	_, err := authState.RefreshToken()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to refresh SSE auth token")
+	}
 
 	return authState
 }
@@ -187,6 +190,7 @@ type SSEManager struct {
 }
 
 func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, resyncHttpClient *http.Client, authState *SSEAuthState) *SSEManager {
+
 	return &SSEManager{
 		connections:      make(map[string]*SSEConnection),
 		cache:            cache,
