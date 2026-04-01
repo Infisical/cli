@@ -266,8 +266,11 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
 	}
 
-	// Let exit-status be forwarded before closing channels.
-	<-serverReqDone
+	// Brief window for exit-status to be forwarded before channel teardown.
+	select {
+	case <-serverReqDone:
+	case <-time.After(500 * time.Millisecond):
+	}
 	clientChannel.Close()
 	serverChannel.Close()
 	<-clientReqDone
