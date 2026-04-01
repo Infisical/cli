@@ -88,12 +88,17 @@ type SSEAuthState struct {
 }
 
 func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL, httpClient *http.Client) *SSEAuthState {
-	return &SSEAuthState{
+	authState := &SSEAuthState{
 		clientId:     clientId,
 		clientSecret: clientSecret,
 		domainURL:    domainURL,
 		httpClient:   httpClient,
 	}
+
+	// ensure we have a valid token
+	authState.RefreshToken()
+
+	return authState
 }
 
 func (s *SSEAuthState) GetToken() string {
@@ -398,7 +403,7 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 			if !ok {
 				return fmt.Errorf("SSE stream closed for project %s", projectId)
 			}
-			handleSSEEvent(cache, domainURL, resyncHttpClient, event)
+			handleSSEEvent(ctx, cache, domainURL, resyncHttpClient, event)
 		}
 	}
 }
@@ -459,7 +464,7 @@ func parseSSEStream(ctx context.Context, reader io.Reader, projectId string, eve
 }
 
 // handleSSEEvent processes a single SSE event and performs cache operations.
-func handleSSEEvent(cache *Cache, domainURL *url.URL, resyncHttpClient *http.Client, event SSEEvent) {
+func handleSSEEvent(ctx context.Context, cache *Cache, domainURL *url.URL, resyncHttpClient *http.Client, event SSEEvent) {
 	secretPath := event.Data.SecretPath
 	if secretPath == "" {
 		secretPath = "/"
@@ -482,7 +487,7 @@ func handleSSEEvent(cache *Cache, domainURL *url.URL, resyncHttpClient *http.Cli
 		collected := cache.CollectAndPurgeByMutation(event.Data.ProjectId, event.Data.Environment, secretPath)
 		log.Info().Int("purgedCount", len(collected)).Msg("Cache entries purged, refetching...")
 		if len(collected) > 0 {
-			go refetchSecretsAfterSSEEvent(cache, domainURL, resyncHttpClient, collected)
+			go refetchSecretsAfterSSEEvent(ctx, cache, domainURL, resyncHttpClient, collected)
 		}
 
 	case SSEEventSecretImportMutation:
@@ -500,7 +505,7 @@ func handleSSEEvent(cache *Cache, domainURL *url.URL, resyncHttpClient *http.Cli
 // refetchSecretsAfterSSEEvent replays the original cached requests to repopulate the cache.
 // Each collected entry is re-fetched using its original token and request, preserving
 // per-user cache entries rather than using the SSE machine identity token.
-func refetchSecretsAfterSSEEvent(cache *Cache, domainURL *url.URL, httpClient *http.Client, collectedEntries []CollectedCacheEntry) {
+func refetchSecretsAfterSSEEvent(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, collectedEntries []CollectedCacheEntry) {
 	refetched := 0
 	failed := 0
 
@@ -547,15 +552,6 @@ func refetchSecretsAfterSSEEvent(cache *Cache, domainURL *url.URL, httpClient *h
 
 			cache.Set(entry.CacheKey, proxyReq, cachedResp, entry.Token, entry.IndexEntry)
 			refetched++
-		} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			resp.Body.Close()
-			log.Warn().
-				Int("statusCode", resp.StatusCode).
-				Str("cacheKey", entry.CacheKey).
-				Str("requestURI", entry.Request.RequestURI).
-				Msg("Unauthorized or forbidden status during SSE refetch, skipping cache repopulation")
-			cache.EvictEntry(entry.CacheKey)
-			failed++
 		} else {
 			resp.Body.Close()
 			log.Warn().
