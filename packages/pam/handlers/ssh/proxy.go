@@ -213,8 +213,6 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		newChannel.Reject(ssh.ConnectionFailed, fmt.Sprintf("failed to open channel: %v", err))
 		return
 	}
-	defer serverChannel.Close()
-
 	// Accept the channel from client
 	clientChannel, clientRequests, err := newChannel.Accept()
 	if err != nil {
@@ -222,7 +220,6 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		serverChannel.Close()
 		return
 	}
-	defer clientChannel.Close()
 
 	log.Info().
 		Str("sessionID", sessionID).
@@ -232,9 +229,17 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 	// Create per-channel state for tracking binary sessions (SFTP/SCP)
 	chState := &channelState{}
 
-	// Handle requests for this channel (pty-req, shell, exec, etc.)
-	go p.handleChannelRequests(clientRequests, serverChannel, sessionID, channelType, chState)
-	go p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType, chState)
+	// Separate done channels to ensure exit-status is forwarded before channel teardown.
+	serverReqDone := make(chan struct{})
+	clientReqDone := make(chan struct{})
+	go func() {
+		defer close(clientReqDone)
+		p.handleChannelRequests(clientRequests, serverChannel, sessionID, channelType, chState)
+	}()
+	go func() {
+		defer close(serverReqDone)
+		p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType, chState)
+	}()
 
 	// Proxy data bidirectionally with logging
 	errChan := make(chan error, 2)
@@ -260,6 +265,12 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 	case <-ctx.Done():
 		log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
 	}
+
+	// Let exit-status be forwarded before closing channels.
+	<-serverReqDone
+	clientChannel.Close()
+	serverChannel.Close()
+	<-clientReqDone
 
 	log.Debug().
 		Str("sessionID", sessionID).
