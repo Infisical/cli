@@ -361,10 +361,9 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	errCh := make(chan error, 2)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
-	// Bidirectional data forwarding with context cancellation
-	// Client (local SSH) → Gateway (SSH proxy)
+	// Client (local SSH) → Gateway (SSH proxy): if this side closes first, the client disconnected normally
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(gatewayConn, clientConn)
@@ -375,10 +374,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		errCh <- err
+		clientErrCh <- err
 	}()
 
-	// Gateway (SSH proxy) → Client (local SSH)
+	// Gateway (SSH proxy) → Client (local SSH): if this side closes first, the gateway dropped the connection
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(clientConn, gatewayConn)
@@ -389,14 +388,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		errCh <- err
+		gatewayErrCh <- err
 	}()
 
-	select {
-	case <-errCh:
-	case <-connCtx.Done():
-		log.Debug().Msg("Connection cancelled by context")
-	}
+	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Debug().Msgf("SSH connection closed for client: %s", clientConn.RemoteAddr().String())
 }
