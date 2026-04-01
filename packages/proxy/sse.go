@@ -400,7 +400,6 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 		case <-ctx.Done():
 			return ctx.Err()
 		case event, ok := <-events:
-			log.Info().Str("event", fmt.Sprintf("%+v", event)).Msg("DEBUG")
 			if !ok {
 				return fmt.Errorf("SSE stream closed for project %s", projectId)
 			}
@@ -561,9 +560,10 @@ func getSecretByName(domainURL *url.URL, httpClient *http.Client, token, secretN
 	if secretPath != "" {
 		query.Set("secretPath", secretPath)
 	}
+
 	secretURL.RawQuery = query.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, secretURL.String(), nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, secretURL.String(), nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create secret fetch request: %w", err)
 	}
