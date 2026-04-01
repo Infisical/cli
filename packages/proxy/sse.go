@@ -84,13 +84,15 @@ type SSEAuthState struct {
 	clientId     string
 	clientSecret string
 	domainURL    *url.URL
+	httpClient   *http.Client
 }
 
-func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL) *SSEAuthState {
+func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL, httpClient *http.Client) *SSEAuthState {
 	return &SSEAuthState{
 		clientId:     clientId,
 		clientSecret: clientSecret,
 		domainURL:    domainURL,
+		httpClient:   httpClient,
 	}
 }
 
@@ -109,7 +111,7 @@ func (s *SSEAuthState) SetToken(token string) {
 func (s *SSEAuthState) RefreshToken() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	newToken, err := CallUniversalAuthLogin(s.domainURL, s.clientId, s.clientSecret)
+	newToken, err := CallUniversalAuthLogin(s.domainURL, s.clientId, s.clientSecret, s.httpClient)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +121,7 @@ func (s *SSEAuthState) RefreshToken() (string, error) {
 
 // CallUniversalAuthLogin authenticates a machine identity via universal auth.
 // Uses net/http directly (not resty) since the proxy module does not depend on resty.
-func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string) (string, error) {
+func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string, httpClient *http.Client) (string, error) {
 	loginURL := *domainURL
 	loginURL.Path = domainURL.Path + "/api/v1/auth/universal-auth/login/"
 
@@ -140,7 +142,7 @@ func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to call universal auth login: %w", err)
 	}

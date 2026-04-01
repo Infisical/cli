@@ -197,7 +197,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	var sseManager *proxy.SSEManager
 	var sseAuthState *proxy.SSEAuthState
 	if useSSE {
-		sseAuthState = proxy.NewSSEAuthState(clientId, clientSecret, domainURL)
+		sseAuthState = proxy.NewSSEAuthState(clientId, clientSecret, domainURL, httpClient)
 		sseManager = proxy.NewSSEManager(context.Background(), cache, domainURL, streamingClient, httpClient, sseAuthState)
 		log.Info().Msg("SSE manager initialized for demand-driven cache updates")
 	}
