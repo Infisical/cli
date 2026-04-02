@@ -165,8 +165,10 @@ func (s *InfisicalService) ApiUrl(t *testing.T) string {
 }
 
 type MachineIdentity struct {
-	Id             string
-	TokenAuthToken *string
+	Id                        string
+	TokenAuthToken            *string
+	UniversalAuthClientId     *string
+	UniversalAuthClientSecret *string
 }
 
 type MachineIdentityOption func(*testing.T, context.Context, *InfisicalService, *MachineIdentity)
@@ -225,6 +227,41 @@ func WithTokenAuth() MachineIdentityOption {
 		require.Equal(t, http.StatusOK, updateResp.StatusCode())
 
 		i.TokenAuthToken = &tokenResp.JSON200.AccessToken
+	}
+}
+
+func WithUniversalAuth() MachineIdentityOption {
+	return func(t *testing.T, ctx context.Context, s *InfisicalService, i *MachineIdentity) {
+		c := s.apiClient
+
+		ttl := 2592000
+		maxTTL := 2592000
+		numUses := 0
+
+		attachResp, err := c.AttachUniversalAuthWithResponse(ctx, i.Id, client.AttachUniversalAuthJSONRequestBody{
+			AccessTokenTTL:          &ttl,
+			AccessTokenMaxTTL:       &maxTTL,
+			AccessTokenNumUsesLimit: &numUses,
+			AccessTokenTrustedIps: &[]struct {
+				IpAddress string `json:"ipAddress"`
+			}{
+				{IpAddress: "0.0.0.0/0"},
+				{IpAddress: "::/0"},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, attachResp.StatusCode(), "Failed to attach universal auth: %s", string(attachResp.Body))
+		require.NotNil(t, attachResp.JSON200)
+
+		clientId := attachResp.JSON200.IdentityUniversalAuth.ClientId
+		i.UniversalAuthClientId = &clientId
+
+		csResp, err := c.CreateUniversalAuthClientSecretWithResponse(ctx, i.Id, client.CreateUniversalAuthClientSecretJSONRequestBody{})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, csResp.StatusCode(), "Failed to create universal auth client secret: %s", string(csResp.Body))
+		require.NotNil(t, csResp.JSON200)
+
+		i.UniversalAuthClientSecret = &csResp.JSON200.ClientSecret
 	}
 }
 
