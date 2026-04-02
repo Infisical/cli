@@ -247,6 +247,9 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 	// Client to Server
 	go func() {
 		err := p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true, chState)
+		// Signal the server that the client is done writing so the remote process
+		// receives EOF and can exit, which triggers exit-status delivery.
+		serverChannel.CloseWrite()
 		errChan <- err
 	}()
 
@@ -256,20 +259,29 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		errChan <- err
 	}()
 
-	// Wait for either direction to finish or context cancellation
-	select {
-	case err := <-errChan:
-		if err != nil && err != io.EOF {
-			log.Debug().Err(err).Str("sessionID", sessionID).Msg("Channel proxy error")
+	// Wait for BOTH directions to finish (or context cancellation).
+	// Previously only one direction was awaited, which caused premature teardown
+	// for SCP: the client→server copy would finish first (file data sent), but the
+	// server had not yet delivered exit-status. Waiting for both directions ensures
+	// the server's data EOF (which follows exit-status) is observed before teardown.
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errChan:
+			if err != nil && err != io.EOF {
+				log.Debug().Err(err).Str("sessionID", sessionID).Msg("Channel proxy error")
+			}
+		case <-ctx.Done():
+			log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
 		}
-	case <-ctx.Done():
-		log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
 	}
 
-	// Brief window for exit-status to be forwarded before channel teardown.
+	// Wait for the server-side channel requests handler to finish so that any
+	// remaining requests (exit-status, exit-signal) are forwarded to the client
+	// before we tear down the channels.
 	select {
 	case <-serverReqDone:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(3 * time.Second):
+		log.Debug().Str("sessionID", sessionID).Msg("Timed out waiting for server requests to complete")
 	}
 	clientChannel.Close()
 	serverChannel.Close()
