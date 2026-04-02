@@ -330,6 +330,8 @@ func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL,
 	if sseEnabled {
 		go startAccessTokenValidation(ctx, cache, domainURL, httpClient, accessTokenCheckInterval)
 	}
+
+	go startAccessTokenValidation(ctx, cache, domainURL, httpClient, accessTokenCheckInterval)
 	go startStaticSecretsRefresh(ctx, cache, domainURL, httpClient, staticSecretsRefreshInterval)
 
 }
