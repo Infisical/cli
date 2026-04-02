@@ -249,7 +249,9 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		err := p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true, chState)
 		// Signal the server that the client is done writing so the remote process
 		// receives EOF and can exit, which triggers exit-status delivery.
-		serverChannel.CloseWrite()
+		if cwErr := serverChannel.CloseWrite(); cwErr != nil {
+			log.Debug().Err(cwErr).Str("sessionID", sessionID).Msg("Failed to CloseWrite on server channel")
+		}
 		errChan <- err
 	}()
 
@@ -264,6 +266,7 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 	// for SCP: the client→server copy would finish first (file data sent), but the
 	// server had not yet delivered exit-status. Waiting for both directions ensures
 	// the server's data EOF (which follows exit-status) is observed before teardown.
+	cancelled := false
 	for i := 0; i < 2; i++ {
 		select {
 		case err := <-errChan:
@@ -271,7 +274,10 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 				log.Debug().Err(err).Str("sessionID", sessionID).Msg("Channel proxy error")
 			}
 		case <-ctx.Done():
-			log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
+			if !cancelled {
+				log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
+				cancelled = true
+			}
 		}
 	}
 
