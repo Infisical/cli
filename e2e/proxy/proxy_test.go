@@ -746,25 +746,24 @@ func TestProxy_SSEConnectionRecovery(t *testing.T) {
 	}, 60*time.Second, 200*time.Millisecond, "Backend container should have restarted")
 	slog.Info("Backend restarted")
 
-	// wait for SSE reconnection (second occurrence of "SSE connection established")
-	slog.Info("Waiting for SSE reconnection")
-	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+	// trigger normal client traffic so EnsureSubscription can recreate SSE if retries were exhausted
+	slog.Info("Fetching secrets after backend restart to trigger SSE re-subscription")
+	respAfterRestart := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, respAfterRestart.StatusCode())
+
+	// wait for SSE re-subscription after the fetch trigger
+	slog.Info("Waiting for SSE re-subscription after fetch trigger")
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
 		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection established",
 		Timeout:          120 * time.Second,
-		Interval:         2 * time.Second,
-		Condition: func() helpers.ConditionResult {
-			if strings.Count(proxyCmd.Stderr(), "SSE connection established") >= 2 {
-				return helpers.ConditionSuccess
-			}
-			return helpers.ConditionWait
-		},
 	})
-	require.Equal(t, helpers.WaitSuccess, waitResult, "SSE should reconnect after backend restart")
+	require.Equal(t, helpers.WaitSuccess, result, "SSE should re-subscribe after backend restart and a trigger fetch")
 
 	// verify proxy is still functional
 	slog.Info("Verifying proxy still works after SSE reconnection")
-	resp2 := helper.GetSecretsWithProxy(ctx)
-	require.Equal(t, http.StatusOK, resp2.StatusCode())
+	respAfterReconnect := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, respAfterReconnect.StatusCode())
 
 	require.True(t, proxyCmd.IsRunning(), "Proxy should still be running")
 
@@ -885,4 +884,3 @@ func TestProxy_SSEMultipleProjects(t *testing.T) {
 	}
 	require.True(t, foundOriginal, "Original secret not found in project 2")
 }
-

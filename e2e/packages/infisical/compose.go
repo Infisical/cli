@@ -228,6 +228,7 @@ func (s *Stack) ApiUrl(ctx context.Context) (string, error) {
 
 func BackendOptionsFromEnv() BackendOptions {
 	backendDir, found := os.LookupEnv("INFISICAL_BACKEND_DIR")
+	fmt.Println("backendDir", backendDir)
 	if !found {
 		panic("INFISICAL_BACKEND_DIR not set, in order fo the e2e tests to work, you need to set the INFISICAL_BACKEND_DIR environment variable to the path of the backend directory, e.g. /Users/your-username/code/infisical/backend")
 	}
