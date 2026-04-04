@@ -108,66 +108,113 @@ var pamSshCmd = &cobra.Command{
 
 var pamSshAccessCmd = &cobra.Command{
 	Use:                   "access",
-	Short:                 "Start SSH session to PAM account",
-	Long:                  "Start an SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
-	Example:               "infisical pam ssh access --resource prod-servers --account root --project-id b38bef10-2685-43c4-9a2c-635206d60bec --duration 1h",
+	Short:                 "Start interactive SSH session to PAM account",
+	Long:                  "Start an interactive SSH session to a PAM-managed SSH account. This command automatically launches an SSH client connected through the Infisical Gateway.",
+	Example:               "infisical pam ssh access --resource prod-servers --account root --project-id <project-uuid> --duration 1h",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		util.RequireLogin()
-
-		resourceName, _ := cmd.Flags().GetString("resource")
-		accountName, _ := cmd.Flags().GetString("account")
-
-		if resourceName == "" || accountName == "" {
-			util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
-		}
-
-		durationStr, err := cmd.Flags().GetString("duration")
-		if err != nil {
-			util.HandleError(err, "Unable to parse duration flag")
-		}
-
-		_, err = time.ParseDuration(durationStr)
-		if err != nil {
-			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
-		}
-
-		projectID, err := cmd.Flags().GetString("project-id")
-		if err != nil {
-			util.HandleError(err, "Unable to parse project-id flag")
-		}
-
-		if projectID == "" {
-			workspaceFile, err := util.GetWorkSpaceFromFile()
-			if err != nil {
-				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
-			}
-			projectID = workspaceFile.WorkspaceId
-		}
-
-		log.Debug().Msg("PAM SSH Access: Trying to fetch credentials using logged in details")
-
-		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
-		isConnected := util.ValidateInfisicalAPIConnection()
-
-		if isConnected {
-			log.Debug().Msg("PAM SSH Access: Connected to Infisical instance, checking logged in creds")
-		}
-
-		if err != nil {
-			util.HandleError(err, "Unable to get logged in user details")
-		}
-
-		if isConnected && loggedInUserDetails.LoginExpired {
-			loggedInUserDetails = util.EstablishUserLoginSession()
-		}
-
-		pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
-			ResourceName: resourceName,
-			AccountName:  accountName,
-		}, projectID, durationStr)
+		runSSHCommand(cmd, args, pam.SSHAccessOptions{})
 	},
+}
+
+var pamSshExecCmd = &cobra.Command{
+	Use:   "exec [command]",
+	Short: "Execute a command on a PAM SSH account",
+	Long: `Execute a single command on a PAM-managed SSH account and return the output.
+This is useful for CI/CD pipelines and scripting where interactive sessions are not needed.`,
+	Example: `  # Run a command and get output
+  infisical pam ssh exec "ls -la /var/log" --resource prod-servers --account root --project-id <project-uuid>
+
+  # Use in a script
+  OUTPUT=$(infisical pam ssh exec "cat /etc/hostname" --resource prod-servers --account root --project-id <project-uuid>)`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runSSHCommand(cmd, args, pam.SSHAccessOptions{
+			ExecCommand: args[0],
+		})
+	},
+}
+
+var pamSshProxyCmd = &cobra.Command{
+	Use:   "proxy",
+	Short: "Start SSH proxy for SCP, SFTP, or rsync",
+	Long: `Start an SSH proxy without launching an interactive session.
+This is useful for file transfers using SCP, SFTP, rsync, or other SSH-based tools.
+The proxy prints connection details and waits until terminated with Ctrl+C.`,
+	Example: `  # Start the proxy
+  infisical pam ssh proxy --resource prod-servers --account root --project-id <project-uuid>
+
+  # Then in another terminal, use SCP:
+  scp -P <port> -o StrictHostKeyChecking=no local-file.txt root@127.0.0.1:/remote/path/
+
+  # Or use rsync:
+  rsync -e "ssh -p <port> -o StrictHostKeyChecking=no" local-dir/ root@127.0.0.1:/remote/path/`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSSHCommand(cmd, args, pam.SSHAccessOptions{
+			ProxyOnly: true,
+		})
+	},
+}
+
+// runSSHCommand is the shared implementation for all SSH subcommands
+func runSSHCommand(cmd *cobra.Command, args []string, options pam.SSHAccessOptions) {
+	util.RequireLogin()
+
+	resourceName, _ := cmd.Flags().GetString("resource")
+	accountName, _ := cmd.Flags().GetString("account")
+
+	if resourceName == "" || accountName == "" {
+		util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
+	}
+
+	durationStr, err := cmd.Flags().GetString("duration")
+	if err != nil {
+		util.HandleError(err, "Unable to parse duration flag")
+	}
+
+	_, err = time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+	}
+
+	projectID, err := cmd.Flags().GetString("project-id")
+	if err != nil {
+		util.HandleError(err, "Unable to parse project-id flag")
+	}
+
+	if projectID == "" {
+		workspaceFile, err := util.GetWorkSpaceFromFile()
+		if err != nil {
+			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
+		}
+		projectID = workspaceFile.WorkspaceId
+	}
+
+	log.Debug().Msg("PAM SSH: Trying to fetch credentials using logged in details")
+
+	loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
+	isConnected := util.ValidateInfisicalAPIConnection()
+
+	if isConnected {
+		log.Debug().Msg("PAM SSH: Connected to Infisical instance, checking logged in creds")
+	}
+
+	if err != nil {
+		util.HandleError(err, "Unable to get logged in user details")
+	}
+
+	if isConnected && loggedInUserDetails.LoginExpired {
+		loggedInUserDetails = util.EstablishUserLoginSession()
+	}
+
+	pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
+		ResourceName: resourceName,
+		AccountName:  accountName,
+	}, projectID, durationStr, options)
 }
 
 // ==================== Kubernetes Commands ====================
@@ -340,14 +387,24 @@ func init() {
 	pamDbAccessCmd.MarkFlagRequired("resource")
 	pamDbAccessCmd.MarkFlagRequired("account")
 
-	// SSH commands
+	// SSH commands - shared flags helper
+	addSSHFlags := func(cmd *cobra.Command) {
+		cmd.Flags().String("resource", "", "Name of the PAM resource to access")
+		cmd.Flags().String("account", "", "Name of the account within the resource")
+		cmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
+		cmd.Flags().String("project-id", "", "Project ID of the account to access")
+		cmd.MarkFlagRequired("resource")
+		cmd.MarkFlagRequired("account")
+	}
+
 	pamSshCmd.AddCommand(pamSshAccessCmd)
-	pamSshAccessCmd.Flags().String("resource", "", "Name of the PAM resource to access")
-	pamSshAccessCmd.Flags().String("account", "", "Name of the account within the resource")
-	pamSshAccessCmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
-	pamSshAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
-	pamSshAccessCmd.MarkFlagRequired("resource")
-	pamSshAccessCmd.MarkFlagRequired("account")
+	addSSHFlags(pamSshAccessCmd)
+
+	pamSshCmd.AddCommand(pamSshExecCmd)
+	addSSHFlags(pamSshExecCmd)
+
+	pamSshCmd.AddCommand(pamSshProxyCmd)
+	addSSHFlags(pamSshProxyCmd)
 
 	// Kubernetes commands
 	pamKubernetesCmd.AddCommand(pamKubernetesAccessCmd)

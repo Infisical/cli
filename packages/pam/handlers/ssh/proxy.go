@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,10 +28,19 @@ type SSHProxyConfig struct {
 
 // SSHProxy handles proxying SSH connections with credential injection
 type SSHProxy struct {
-	config      SSHProxyConfig
-	mutex       sync.Mutex
-	sessionData []byte // Store session data for logging
-	inputBuffer []byte // Buffer for input data to batch keystrokes
+	config           SSHProxyConfig
+	mutex            sync.Mutex
+	sessionData      []byte                      // Store session data for logging
+	inputBuffer      []byte                      // Buffer for input data to batch keystrokes
+	inputChannelType session.TerminalChannelType // Channel type for buffered input
+}
+
+// channelState holds per-channel state for tracking session type
+type channelState struct {
+	mutex           sync.Mutex
+	channelType     session.TerminalChannelType // Type of channel (terminal, exec, sftp)
+	isBinarySession bool                        // True if this channel is SFTP/SCP binary protocol
+	sftpParser      *SFTPParser                 // Parser for SFTP protocol to extract file operations
 }
 
 // NewSSHProxy creates a new SSH proxy instance
@@ -203,8 +213,6 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		newChannel.Reject(ssh.ConnectionFailed, fmt.Sprintf("failed to open channel: %v", err))
 		return
 	}
-	defer serverChannel.Close()
-
 	// Accept the channel from client
 	clientChannel, clientRequests, err := newChannel.Accept()
 	if err != nil {
@@ -212,29 +220,39 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		serverChannel.Close()
 		return
 	}
-	defer clientChannel.Close()
 
 	log.Info().
 		Str("sessionID", sessionID).
 		Str("channelType", channelType).
 		Msg("SSH channel established")
 
-	// Handle requests for this channel (pty-req, shell, exec, etc.)
-	go p.handleChannelRequests(clientRequests, serverChannel, sessionID, channelType)
-	go p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType)
+	// Create per-channel state for tracking binary sessions (SFTP/SCP)
+	chState := &channelState{}
+
+	// Separate done channels to ensure exit-status is forwarded before channel teardown.
+	serverReqDone := make(chan struct{})
+	clientReqDone := make(chan struct{})
+	go func() {
+		defer close(clientReqDone)
+		p.handleChannelRequests(clientRequests, serverChannel, sessionID, channelType, chState)
+	}()
+	go func() {
+		defer close(serverReqDone)
+		p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType, chState)
+	}()
 
 	// Proxy data bidirectionally with logging
 	errChan := make(chan error, 2)
 
 	// Client to Server
 	go func() {
-		err := p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true)
+		err := p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true, chState)
 		errChan <- err
 	}()
 
 	// Server to Client
 	go func() {
-		err := p.proxyData(serverChannel, clientChannel, "server→client", sessionID, false)
+		err := p.proxyData(serverChannel, clientChannel, "server→client", sessionID, false, chState)
 		errChan <- err
 	}()
 
@@ -248,6 +266,15 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
 	}
 
+	// Brief window for exit-status to be forwarded before channel teardown.
+	select {
+	case <-serverReqDone:
+	case <-time.After(500 * time.Millisecond):
+	}
+	clientChannel.Close()
+	serverChannel.Close()
+	<-clientReqDone
+
 	log.Debug().
 		Str("sessionID", sessionID).
 		Str("channelType", channelType).
@@ -255,7 +282,7 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 }
 
 // handleChannelRequests handles channel-specific requests (pty, shell, exec, etc.)
-func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetChannel ssh.Channel, sessionID string, channelType string) {
+func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetChannel ssh.Channel, sessionID string, channelType string, chState *channelState) {
 	for req := range requests {
 		log.Debug().
 			Str("sessionID", sessionID).
@@ -267,22 +294,56 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 		// Log exec and shell requests for audit
 		switch req.Type {
 		case "exec":
-			if len(req.Payload) > 4 {
-				cmdLen := int(req.Payload[3])
+			// SSH exec payload format: uint32 length (big-endian) + command string
+			if len(req.Payload) >= 4 {
+				cmdLen := int(req.Payload[0])<<24 | int(req.Payload[1])<<16 | int(req.Payload[2])<<8 | int(req.Payload[3])
 				if len(req.Payload) >= 4+cmdLen {
 					command := string(req.Payload[4 : 4+cmdLen])
+
+					// Determine the type of operation
+					isSCP := strings.HasPrefix(command, "scp ")
+					chState.mutex.Lock()
+					if isSCP {
+						// Mark this channel as binary so we don't log the raw file data
+						chState.isBinarySession = true
+						chState.channelType = session.TerminalChannelSFTP // SCP is file transfer
+					} else {
+						chState.channelType = session.TerminalChannelExec
+					}
+					chState.mutex.Unlock()
+
 					log.Info().
 						Str("sessionID", sessionID).
 						Str("command", command).
 						Msg("SSH exec command")
 
 					// Log the exec command to the session recording
-					// Format it similar to how it would appear in a shell
-					commandWithPrompt := fmt.Sprintf("$ %s\n", command)
+					var logMessage string
+					var channelType session.TerminalChannelType
+					if isSCP {
+						channelType = session.TerminalChannelSFTP
+						// Parse SCP command for more readable logging
+						// scp -t /path = receiving file TO server
+						// scp -f /path = sending file FROM server
+						if strings.Contains(command, " -t ") {
+							path := extractSCPPath(command)
+							logMessage = fmt.Sprintf("Uploaded file: %s\n", path)
+						} else if strings.Contains(command, " -f ") {
+							path := extractSCPPath(command)
+							logMessage = fmt.Sprintf("Downloaded file: %s\n", path)
+						} else {
+							logMessage = fmt.Sprintf("$ %s\n", command)
+						}
+					} else {
+						channelType = session.TerminalChannelExec
+						logMessage = fmt.Sprintf("$ %s\n", command)
+					}
+
 					event := session.TerminalEvent{
-						Timestamp: time.Now(),
-						EventType: session.TerminalEventInput,
-						Data:      []byte(commandWithPrompt),
+						Timestamp:   time.Now(),
+						EventType:   session.TerminalEventInput,
+						ChannelType: channelType,
+						Data:        []byte(logMessage),
 					}
 					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
 						log.Error().Err(err).
@@ -293,9 +354,50 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 				}
 			}
 		case "shell":
+			chState.mutex.Lock()
+			chState.channelType = session.TerminalChannelShell
+			chState.mutex.Unlock()
 			log.Info().
 				Str("sessionID", sessionID).
 				Msg("SSH interactive shell requested")
+		case "subsystem":
+			// Subsystem requests are used by SFTP (and potentially other subsystems)
+			// Payload format: uint32 length (big-endian) + subsystem name
+			if len(req.Payload) >= 4 {
+				subsysLen := int(req.Payload[0])<<24 | int(req.Payload[1])<<16 | int(req.Payload[2])<<8 | int(req.Payload[3])
+				if len(req.Payload) >= 4+subsysLen {
+					subsystem := string(req.Payload[4 : 4+subsysLen])
+					log.Info().
+						Str("sessionID", sessionID).
+						Str("subsystem", subsystem).
+						Msg("SSH subsystem requested")
+
+					// Log SFTP sessions and set up SFTP parser for file operation logging
+					if subsystem == "sftp" {
+						chState.mutex.Lock()
+						chState.channelType = session.TerminalChannelSFTP
+						chState.isBinarySession = true
+						chState.sftpParser = NewSFTPParser()
+						chState.mutex.Unlock()
+
+						event := session.TerminalEvent{
+							Timestamp:   time.Now(),
+							EventType:   session.TerminalEventInput,
+							ChannelType: session.TerminalChannelSFTP,
+							Data:        []byte("File transfer session started\n"),
+						}
+						if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+							log.Error().Err(err).
+								Str("sessionID", sessionID).
+								Msg("Failed to log SFTP session start")
+						} else {
+							log.Info().
+								Str("sessionID", sessionID).
+								Msg("Successfully logged SFTP session start event")
+						}
+					}
+				}
+			}
 		case "pty-req":
 			log.Debug().
 				Str("sessionID", sessionID).
@@ -305,10 +407,19 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 		// Forward request to target channel
 		ok, err := targetChannel.SendRequest(req.Type, req.WantReply, req.Payload)
 		if err != nil {
-			log.Error().Err(err).
-				Str("sessionID", sessionID).
-				Str("requestType", req.Type).
-				Msg("Failed to forward channel request")
+			// EOF errors on exit-status/exit-signal are expected when channel closes
+			// before the status can be forwarded - this is normal, not an error
+			if err == io.EOF && (req.Type == "exit-status" || req.Type == "exit-signal") {
+				log.Debug().
+					Str("sessionID", sessionID).
+					Str("requestType", req.Type).
+					Msg("Channel closed before forwarding exit status (normal)")
+			} else {
+				log.Error().Err(err).
+					Str("sessionID", sessionID).
+					Str("requestType", req.Type).
+					Msg("Failed to forward channel request")
+			}
 			if req.WantReply {
 				req.Reply(false, nil)
 			}
@@ -322,7 +433,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 }
 
 // proxyData proxies data between channels with optional logging
-func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool) error {
+func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool, chState *channelState) error {
 	buf := make([]byte, 32*1024) // 32KB buffer
 
 	// Flush any remaining input buffer on exit
@@ -335,23 +446,59 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
-			// For input, buffer until we see newline or control chars
-			if logInput {
-				p.bufferInput(buf[:n], sessionID)
-			} else {
-				// For output, log immediately as before
-				event := session.TerminalEvent{
-					Timestamp: time.Now(),
-					EventType: session.TerminalEventOutput,
-					Data:      make([]byte, n),
-				}
-				copy(event.Data, buf[:n])
+			// Check if this channel is a binary session (SFTP/SCP)
+			chState.mutex.Lock()
+			isBinary := chState.isBinarySession
+			sftpParser := chState.sftpParser
+			channelType := chState.channelType
+			chState.mutex.Unlock()
 
-				if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
-					log.Error().Err(err).
-						Str("sessionID", sessionID).
-						Str("eventType", string(session.TerminalEventOutput)).
-						Msg("Failed to log terminal event")
+			if isBinary && sftpParser != nil && logInput {
+				// Parse SFTP packets from client->server direction to extract file operations
+				operations := sftpParser.Parse(buf[:n])
+				for _, op := range operations {
+					// Log each SFTP operation
+					logMsg := FormatOperation(op) + "\n"
+					event := session.TerminalEvent{
+						Timestamp:   time.Now(),
+						EventType:   session.TerminalEventInput,
+						ChannelType: session.TerminalChannelSFTP,
+						Data:        []byte(logMsg),
+					}
+					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+						log.Error().Err(err).
+							Str("sessionID", sessionID).
+							Str("operation", op.Type).
+							Str("path", op.Path).
+							Msg("Failed to log SFTP operation")
+					} else {
+						log.Debug().
+							Str("sessionID", sessionID).
+							Str("operation", op.Type).
+							Str("path", op.Path).
+							Msg("Logged SFTP operation")
+					}
+				}
+			} else if !isBinary {
+				// Regular terminal session logging
+				if logInput {
+					p.bufferInput(buf[:n], sessionID, channelType)
+				} else {
+					// For output, log immediately as before
+					event := session.TerminalEvent{
+						Timestamp:   time.Now(),
+						EventType:   session.TerminalEventOutput,
+						ChannelType: channelType,
+						Data:        make([]byte, n),
+					}
+					copy(event.Data, buf[:n])
+
+					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+						log.Error().Err(err).
+							Str("sessionID", sessionID).
+							Str("eventType", string(session.TerminalEventOutput)).
+							Msg("Failed to log terminal event")
+					}
 				}
 			}
 
@@ -374,18 +521,46 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 	}
 }
 
-// bufferInput accumulates input data and logs only when newline or control chars are encountered
-func (p *SSHProxy) bufferInput(data []byte, sessionID string) {
+// bufferInput accumulates input data and logs the effective command after processing edits.
+// It interprets control characters (backspace, Ctrl+C/U/W) so that the logged command
+// reflects what the user actually sent, not the raw keystrokes.
+func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.TerminalChannelType) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	for _, b := range data {
-		p.inputBuffer = append(p.inputBuffer, b)
+	p.inputChannelType = channelType
 
-		// Check if we should flush the buffer
-		// CR (0x0D), LF (0x0A), or if buffer gets too large
-		if b == 0x0D || b == 0x0A || len(p.inputBuffer) >= 1024 {
+	for _, b := range data {
+		switch b {
+		case 0x7F, 0x08: // DEL (backspace on most terminals) or BS
+			if len(p.inputBuffer) > 0 {
+				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
+			}
+		case 0x03: // Ctrl+C - cancel current input
+			p.inputBuffer = p.inputBuffer[:0]
+		case 0x15: // Ctrl+U - clear line
+			p.inputBuffer = p.inputBuffer[:0]
+		case 0x17: // Ctrl+W - delete previous word
+			// Skip trailing spaces
+			for len(p.inputBuffer) > 0 && p.inputBuffer[len(p.inputBuffer)-1] == ' ' {
+				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
+			}
+			// Delete until next space or start
+			for len(p.inputBuffer) > 0 && p.inputBuffer[len(p.inputBuffer)-1] != ' ' {
+				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
+			}
+		case 0x0D, 0x0A: // CR or LF - flush the buffer
+			p.inputBuffer = append(p.inputBuffer, b)
 			p.flushInputBufferUnsafe(sessionID)
+		default:
+			// Only buffer printable characters and tab
+			if b >= 0x20 || b == 0x09 {
+				p.inputBuffer = append(p.inputBuffer, b)
+			}
+			// Safety: flush if buffer gets too large
+			if len(p.inputBuffer) >= 1024 {
+				p.flushInputBufferUnsafe(sessionID)
+			}
 		}
 	}
 }
@@ -404,9 +579,10 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 	}
 
 	event := session.TerminalEvent{
-		Timestamp: time.Now(),
-		EventType: session.TerminalEventInput,
-		Data:      make([]byte, len(p.inputBuffer)),
+		Timestamp:   time.Now(),
+		EventType:   session.TerminalEventInput,
+		ChannelType: p.inputChannelType,
+		Data:        make([]byte, len(p.inputBuffer)),
 	}
 	copy(event.Data, p.inputBuffer)
 
@@ -419,6 +595,17 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 
 	// Clear the buffer
 	p.inputBuffer = p.inputBuffer[:0]
+}
+
+// extractSCPPath extracts the file path from an SCP command
+// SCP commands look like: scp -t /path/to/file or scp -f /path/to/file
+func extractSCPPath(command string) string {
+	parts := strings.Fields(command)
+	if len(parts) >= 3 {
+		// The path is typically the last argument
+		return parts[len(parts)-1]
+	}
+	return "<unknown path>"
 }
 
 // generateHostKey generates a temporary RSA key for the SSH server

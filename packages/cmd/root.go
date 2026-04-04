@@ -61,6 +61,23 @@ func RootCmdStdoutWriter() io.Writer {
 	return &rootCmdStdoutWriter{}
 }
 
+// isStructuredOutputRequested checks whether the command has a --format or --output
+// flag explicitly set to a machine-readable format (json, csv, yaml). When true,
+// human-oriented messages like update notifications should be suppressed to avoid
+// breaking parsers that consume the CLI output.
+func isStructuredOutputRequested(cmd *cobra.Command) bool {
+	structuredFormats := map[string]bool{"json": true, "csv": true, "yaml": true}
+
+	for _, flagName := range []string{"format", "output", "report-format"} {
+		if f := cmd.Flags().Lookup(flagName); f != nil && f.Changed {
+			if structuredFormats[strings.ToLower(f.Value.String())] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the RootCmd.
 func Execute() {
@@ -88,7 +105,7 @@ func init() {
 		config.INFISICAL_URL = util.AppendAPIEndpoint(config.INFISICAL_URL)
 
 		// util.DisplayAptInstallationChangeBannerWithWriter(silent, cmd.ErrOrStderr())
-		if !util.IsRunningInDocker() && !silent {
+		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
 		}
 

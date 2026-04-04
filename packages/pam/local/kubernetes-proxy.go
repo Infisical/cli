@@ -304,9 +304,9 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	errCh := make(chan error, 2)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
-	// Bidirectional data forwarding with context cancellation
+	// Gateway → Client: if this side closes first, the gateway dropped the connection
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(clientConn, gatewayConn)
@@ -317,9 +317,10 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		errCh <- err
+		gatewayErrCh <- err
 	}()
 
+	// Client → Gateway: if this side closes first, the client disconnected normally
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(gatewayConn, clientConn)
@@ -330,14 +331,10 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		errCh <- err
+		clientErrCh <- err
 	}()
 
-	select {
-	case <-errCh:
-	case <-connCtx.Done():
-		log.Info().Msg("Connection cancelled by context")
-	}
+	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

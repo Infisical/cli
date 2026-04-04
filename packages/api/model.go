@@ -151,11 +151,30 @@ type GetCertificateProfileResponse struct {
 	CertificateProfile CertificateProfile `json:"certificateProfile"`
 }
 
+type Organization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type GetOrganizationsResponse struct {
-	Organizations []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"organizations"`
+	Organizations []Organization `json:"organizations"`
+}
+
+type SubOrganization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type OrganizationWithSubOrgs struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Slug             string            `json:"slug"`
+	SubOrganizations []SubOrganization `json:"subOrganizations"`
+}
+
+type GetOrganizationsWithSubOrgsResponse struct {
+	Organizations []OrganizationWithSubOrgs `json:"organizations"`
 }
 
 type SelectOrganizationResponse struct {
@@ -868,6 +887,7 @@ type UploadSessionLogEntry struct {
 type UploadTerminalEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"eventType"`
+	ChannelType string    `json:"channelType,omitempty"`
 	Data        []byte    `json:"data"`
 	ElapsedTime float64   `json:"elapsedTime"`
 }

@@ -297,6 +297,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 			logs = append(logs, api.UploadTerminalEvent{
 				Timestamp:   event.Timestamp,
 				EventType:   string(event.EventType),
+				ChannelType: string(event.ChannelType),
 				Data:        event.Data,
 				ElapsedTime: event.ElapsedTime,
 			})

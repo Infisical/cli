@@ -23,6 +23,7 @@ const (
 	operationCallLogin2V3                          = "CallLogin2V3"
 	operationCallLoginV3                           = "CallLoginV3"
 	operationCallGetAllOrganizations               = "CallGetAllOrganizations"
+	operationCallGetAllOrganizationsWithSubOrgs    = "CallGetAllOrganizationsWithSubOrgs"
 	operationCallSelectOrganization                = "CallSelectOrganization"
 	operationCallGetAllWorkSpacesUserBelongsTo     = "CallGetAllWorkSpacesUserBelongsTo"
 	operationCallGetProjectById                    = "CallGetProjectById"
@@ -215,6 +216,29 @@ func CallLogin2V2(httpClient *resty.Client, request GetLoginTwoV2Request) (GetLo
 	}
 
 	return loginTwoV2Response, nil
+}
+
+func CallGetAllOrganizationsWithSubOrgs(httpClient *resty.Client) (GetOrganizationsWithSubOrgsResponse, error) {
+	var resp GetOrganizationsWithSubOrgsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resp).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/organization/accessible-with-sub-orgs", config.INFISICAL_URL))
+
+	if err != nil {
+		return GetOrganizationsWithSubOrgsResponse{}, NewGenericRequestError(operationCallGetAllOrganizationsWithSubOrgs, err)
+	}
+
+	if response.StatusCode() == http.StatusNotFound {
+		return GetOrganizationsWithSubOrgsResponse{}, ErrNotFound
+	}
+
+	if response.IsError() {
+		return GetOrganizationsWithSubOrgsResponse{}, NewAPIErrorWithResponse(operationCallGetAllOrganizationsWithSubOrgs, response, nil)
+	}
+
+	return resp, nil
 }
 
 func CallGetAllOrganizations(httpClient *resty.Client) (GetOrganizationsResponse, error) {

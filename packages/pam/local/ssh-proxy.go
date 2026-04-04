@@ -24,9 +24,17 @@ type SSHProxyServer struct {
 	server          net.Listener
 	port            int
 	sshProcess      *exec.Cmd
+	options         SSHAccessOptions
+	sshExitCode     int // Exit code from SSH process (for exec mode)
 }
 
-func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string) {
+// SSHAccessOptions configures SSH access behavior
+type SSHAccessOptions struct {
+	ExecCommand string // If set, run this command instead of interactive shell
+	ProxyOnly   bool   // If true, start proxy without launching SSH client
+}
+
+func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string, options SSHAccessOptions) {
 	httpClient := resty.New()
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", "infisical-cli")
@@ -73,6 +81,7 @@ func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 			cancel:                 cancel,
 			shutdownCh:             make(chan struct{}),
 		},
+		options: options,
 	}
 
 	if err := proxy.ValidateResourceTypeSupported(); err != nil {
@@ -116,19 +125,35 @@ func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	// Give the proxy a moment to start accepting connections
 	time.Sleep(500 * time.Millisecond)
 
-	// Launch SSH client connected to the local proxy (transparent to user)
-	err = proxy.launchSSHClient(username)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to launch SSH client")
+	if options.ProxyOnly {
+		// Proxy-only mode: print connection info and wait
+		fmt.Printf("SSH proxy listening on 127.0.0.1:%d\n", proxy.port)
+		fmt.Printf("Username: %s\n", username)
+		fmt.Printf("Session expires: %s\n", proxy.sessionExpiry.Format(time.RFC3339))
+		fmt.Println("")
+		fmt.Println("Use this proxy with SSH, SCP, SFTP, or rsync:")
+		fmt.Printf("  ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null %s@127.0.0.1\n", proxy.port, username)
+		fmt.Printf("  scp -P %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null <local-file> %s@127.0.0.1:<remote-path>\n", proxy.port, username)
+		fmt.Println("")
+		fmt.Println("Press Ctrl+C to stop the proxy.")
+
+		// Wait for context cancellation (Ctrl+C triggers gracefulShutdown which cancels context)
+		<-proxy.ctx.Done()
+	} else {
+		// Launch SSH client connected to the local proxy (transparent to user)
+		err = proxy.launchSSHClient(username)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to launch SSH client")
+			proxy.gracefulShutdown()
+			return
+		}
+
+		// Wait for SSH process to complete
+		proxy.waitForSSHCompletion()
+
+		// SSH client exited, shutdown gracefully
 		proxy.gracefulShutdown()
-		return
 	}
-
-	// Wait for SSH process to complete
-	proxy.waitForSSHCompletion()
-
-	// SSH client exited, shutdown gracefully
-	proxy.gracefulShutdown()
 }
 
 func (p *SSHProxyServer) Start(port int) error {
@@ -152,7 +177,7 @@ func (p *SSHProxyServer) Start(port int) error {
 }
 
 func (p *SSHProxyServer) launchSSHClient(username string) error {
-	// Build SSH command: ssh -p <local-port> <username>@localhost
+	// Build SSH command: ssh -p <local-port> <username>@localhost [command]
 	sshArgs := []string{
 		"-p", strconv.Itoa(p.port),
 		"-o", "StrictHostKeyChecking=no", // Skip host key verification (we're connecting to localhost)
@@ -161,12 +186,17 @@ func (p *SSHProxyServer) launchSSHClient(username string) error {
 		fmt.Sprintf("%s@127.0.0.1", username),
 	}
 
+	// If exec command is specified, append it (non-interactive mode)
+	if p.options.ExecCommand != "" {
+		sshArgs = append(sshArgs, p.options.ExecCommand)
+	}
+
 	p.sshProcess = exec.Command("ssh", sshArgs...)
 	p.sshProcess.Stdin = os.Stdin
 	p.sshProcess.Stdout = os.Stdout
 	p.sshProcess.Stderr = os.Stderr
 
-	log.Debug().Msgf("Executing: ssh %s", strings.Join(sshArgs, " "))
+	log.Debug().Msgf("Executing: ssh %s", formatSSHArgs(sshArgs))
 
 	err := p.sshProcess.Start()
 	if err != nil {
@@ -177,6 +207,19 @@ func (p *SSHProxyServer) launchSSHClient(username string) error {
 	return nil
 }
 
+// formatSSHArgs formats SSH arguments for logging, quoting args with spaces
+func formatSSHArgs(args []string) string {
+	formatted := make([]string, len(args))
+	for i, arg := range args {
+		if strings.ContainsRune(arg, ' ') {
+			formatted[i] = fmt.Sprintf("%q", arg)
+		} else {
+			formatted[i] = arg
+		}
+	}
+	return strings.Join(formatted, " ")
+}
+
 func (p *SSHProxyServer) waitForSSHCompletion() {
 	if p.sshProcess == nil {
 		return
@@ -185,11 +228,14 @@ func (p *SSHProxyServer) waitForSSHCompletion() {
 	err := p.sshProcess.Wait()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			log.Debug().Msgf("SSH client exited with code: %d", exitErr.ExitCode())
+			p.sshExitCode = exitErr.ExitCode()
+			log.Debug().Msgf("SSH client exited with code: %d", p.sshExitCode)
 		} else {
 			log.Error().Err(err).Msg("Error waiting for SSH client")
+			p.sshExitCode = 1
 		}
 	} else {
+		p.sshExitCode = 0
 		log.Debug().Msg("SSH client exited successfully")
 	}
 }
@@ -222,7 +268,14 @@ func (p *SSHProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Debug().Msg("SSH proxy shutdown complete")
-		os.Exit(0)
+
+		// Only propagate SSH exit code in exec mode (non-interactive)
+		// For interactive sessions, always exit 0 on clean shutdown
+		exitCode := 0
+		if p.options.ExecCommand != "" {
+			exitCode = p.sshExitCode
+		}
+		os.Exit(exitCode)
 	})
 }
 
@@ -308,10 +361,9 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	errCh := make(chan error, 2)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
-	// Bidirectional data forwarding with context cancellation
-	// Client (local SSH) → Gateway (SSH proxy)
+	// Client (local SSH) → Gateway (SSH proxy): if this side closes first, the client disconnected normally
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(gatewayConn, clientConn)
@@ -322,10 +374,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		errCh <- err
+		clientErrCh <- err
 	}()
 
-	// Gateway (SSH proxy) → Client (local SSH)
+	// Gateway (SSH proxy) → Client (local SSH): if this side closes first, the gateway dropped the connection
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(clientConn, gatewayConn)
@@ -336,14 +388,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		errCh <- err
+		gatewayErrCh <- err
 	}()
 
-	select {
-	case <-errCh:
-	case <-connCtx.Done():
-		log.Debug().Msg("Connection cancelled by context")
-	}
+	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Debug().Msgf("SSH connection closed for client: %s", clientConn.RemoteAddr().String())
 }
