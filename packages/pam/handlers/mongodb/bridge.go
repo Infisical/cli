@@ -206,6 +206,15 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 		Str("collection", q.Collection).
 		Msg("[WIRE] <- OP_QUERY")
 
+	// Strip client metadata from hello/isMaster — same reason as OP_MSG sanitization.
+	if isHelloCommand(cmdName) {
+		if sanitized, err := sanitizeOpQueryHello(q); err == nil {
+			raw = sanitized
+		} else {
+			log.Warn().Err(err).Msg("Failed to sanitize OP_QUERY hello, forwarding as-is")
+		}
+	}
+
 	if err := b.serverConn.Write(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward OP_QUERY: %w", err)
 	}
@@ -238,6 +247,41 @@ func replyError(conn net.Conn, requestID int32, msg string) error {
 	})
 	reply := buildOpMsgReply(requestID, errDoc)
 	return writeWireMessage(conn, reply)
+}
+
+// sanitizeOpQueryHello strips client metadata from a legacy OP_QUERY hello/isMaster.
+// OP_QUERY format: header(16) + flags(4) + collection(null-term) + skip(4) + return(4) + query(BSON)
+func sanitizeOpQueryHello(q *opQuery) ([]byte, error) {
+	var doc bson.M
+	if err := bson.Unmarshal(q.Query, &doc); err != nil {
+		return nil, err
+	}
+
+	delete(doc, "client")
+	delete(doc, "compression")
+
+	sanitized, err := bson.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Rebuild the OP_QUERY with the sanitized query document
+	collBytes := append([]byte(q.Collection), 0) // null-terminated
+	totalLen := headerLength + 4 + len(collBytes) + 4 + 4 + len(sanitized)
+	msg := make([]byte, totalLen)
+
+	binary.LittleEndian.PutUint32(msg[0:4], uint32(totalLen))
+	binary.LittleEndian.PutUint32(msg[4:8], uint32(q.Header.RequestID))
+	binary.LittleEndian.PutUint32(msg[8:12], uint32(q.Header.ResponseTo))
+	binary.LittleEndian.PutUint32(msg[12:16], uint32(opQueryOpCode))
+	binary.LittleEndian.PutUint32(msg[16:20], uint32(q.Flags))
+	copy(msg[20:], collBytes)
+	off := 20 + len(collBytes)
+	binary.LittleEndian.PutUint32(msg[off:off+4], uint32(q.Skip))
+	binary.LittleEndian.PutUint32(msg[off+4:off+8], uint32(q.Return))
+	copy(msg[off+8:], sanitized)
+
+	return msg, nil
 }
 
 // sanitizeHelloRequest strips fields from a hello request that the server
