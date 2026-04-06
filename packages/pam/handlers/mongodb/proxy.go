@@ -46,13 +46,8 @@ func (primarySelector) SelectServer(td description.Topology, candidates []descri
 }
 
 // buildURI constructs a MongoDB connection URI from the proxy config.
-//
-// If Host is already a MongoDB URI (starts with mongodb:// or mongodb+srv://),
-// credentials are injected into it. This allows users to pass connection options
-// like authSource directly in the URI.
-//
-// If Host is a plain host spec (host:port, h1:p1,h2:p2, or bare SRV hostname),
-// a URI is built from it + InjectDatabase.
+// If Host is a full URI, credentials are injected preserving any existing options.
+// If Host is a plain host spec, a URI is built from it + InjectDatabase.
 func buildURI(c MongoDBProxyConfig) string {
 	host := c.Host
 
@@ -123,21 +118,17 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 		clientOpts.SetTLSConfig(config.TLSConfig)
 	}
 
-	// For non-SRV single-host connections, enable direct connection mode.
-	// Without this, the topology uses AutomaticMode which can fail to discover
-	// standalone servers (the background hello/auth may not complete in time).
+	// For non-SRV single-host connections, use direct mode to skip topology
+	// discovery and connect immediately.
 	if clientOpts.Direct == nil && !isSRVURI(config.Host) {
 		clientOpts.SetDirect(true)
 	}
 
-	// Disable compression — critical for proxy correctness.
-	// Without this, the driver negotiates compression with the server.
-	// Then ReadWireMessage returns compressed bytes that the client can't parse.
+	// Disable compression — proxy forwards raw wire bytes that must be
+	// readable without decompression.
 	clientOpts.SetCompressors([]string{})
 
-	// Create topology config from client options.
-	// The driver handles everything: SRV resolution, TLS, SCRAM auth (from URI credentials),
-	// connection pooling, topology discovery, server selection, health monitoring.
+	// Create topology to leverage driver's connection management and auth.
 	topoConfig, err := topology.NewConfig(clientOpts, nil)
 	if err != nil {
 		return nil, fmt.Errorf("topology config: %w", err)
@@ -206,9 +197,8 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 		return fmt.Errorf("server connection: %w", err)
 	}
 	defer func() {
-		// Since we forward arbitrary client bytes through the connection,
-		// the connection state after the bridge exits is unknown.
-		// Conservatively expire every connection rather than returning to pool.
+		// Expire rather than return to pool — raw wire forwarding means
+		// the driver cannot guarantee connection state.
 		type expirable interface{ Expire() error }
 		if expirer, ok := conn.ReadWriteCloser.(expirable); ok {
 			expirer.Expire() //nolint:errcheck

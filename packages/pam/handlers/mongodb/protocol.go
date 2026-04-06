@@ -23,13 +23,10 @@ const (
 )
 
 // opQuery represents a parsed legacy OP_QUERY message.
-// mongosh still sends OP_QUERY for the initial isMaster/hello handshake.
+// Some clients still send OP_QUERY for the initial hello/isMaster handshake.
 type opQuery struct {
 	Header     wireHeader
-	Flags      int32
 	Collection string // fullCollectionName, e.g. "admin.$cmd"
-	Skip       int32
-	Return     int32
 	Query      bson.Raw
 }
 
@@ -164,12 +161,11 @@ func parseOpMsg(hdr *wireHeader, raw []byte) (*opMsg, error) {
 }
 
 // parseOpQuery extracts the query document from a legacy OP_QUERY message.
-// The ReadQuery* functions are deprecated in the driver ("use OpMsg instead"),
-// but we must still parse OP_QUERY because mongosh and older clients send it for the initial handshake.
+// We parse OP_QUERY because older clients send it during connection handshake.
 func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
 	rem := raw[headerLength:]
 
-	flags, rem, ok := wiremessage.ReadQueryFlags(rem)
+	_, rem, ok := wiremessage.ReadQueryFlags(rem)
 	if !ok {
 		return nil, fmt.Errorf("failed to read OP_QUERY flags")
 	}
@@ -179,12 +175,12 @@ func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
 		return nil, fmt.Errorf("failed to read OP_QUERY collection name")
 	}
 
-	skip, rem, ok := wiremessage.ReadQueryNumberToSkip(rem)
+	_, rem, ok = wiremessage.ReadQueryNumberToSkip(rem)
 	if !ok {
 		return nil, fmt.Errorf("failed to read OP_QUERY numberToSkip")
 	}
 
-	ret, rem, ok := wiremessage.ReadQueryNumberToReturn(rem)
+	_, rem, ok = wiremessage.ReadQueryNumberToReturn(rem)
 	if !ok {
 		return nil, fmt.Errorf("failed to read OP_QUERY numberToReturn")
 	}
@@ -196,10 +192,7 @@ func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
 
 	return &opQuery{
 		Header:     *hdr,
-		Flags:      int32(flags),
 		Collection: collection,
-		Skip:       skip,
-		Return:     ret,
 		Query:      bson.Raw(query),
 	}, nil
 }
@@ -293,9 +286,8 @@ func stripFields(doc bson.Raw, fields ...string) (bson.Raw, error) {
 	return bson.Marshal(result)
 }
 
-// mergeDocumentSequences folds Kind 1 document sequences into the command body
-// so it can be passed to RunCommand as a single document.
-// For example, an insert's Kind 1 "documents" sequence becomes the "documents" array field.
+// mergeDocumentSequences combines Kind 1 document sequences into a single
+// unified command document for logging.
 func mergeDocumentSequences(body bson.Raw, sequences []documentSequence) (bson.Raw, error) {
 	if len(sequences) == 0 {
 		return body, nil

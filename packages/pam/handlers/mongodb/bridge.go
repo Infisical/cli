@@ -18,7 +18,7 @@ import (
 )
 
 // Fields to strip from logged input — protocol noise, not user intent.
-// We keep $db so admins can see database switches (e.g. "use prodDB").
+// We keep $db so admins can see which database a command targets.
 var logNoiseFields = []string{
 	"$clusterTime",
 	"lsid",
@@ -126,8 +126,8 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 			"authentication is handled by the proxy")
 	}
 
-	// Strip client metadata from hello requests — the driver already sent its
-	// own metadata during handshake, and the server rejects a second one.
+	// Strip fields from hello requests that are incompatible with proxied
+	// (reused) connections — see stripHelloFields for the full list.
 	if isHelloCommand(cmdName) {
 		if sanitized, err := sanitizeHelloRequest(hdr, raw); err == nil {
 			raw = sanitized
@@ -136,10 +136,7 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		}
 	}
 
-	// Strip exhaustAllowed flag from client requests. The proxy reads one
-	// response per request via the driver connection, which is incompatible
-	// with exhaust cursors (where the server sends multiple responses).
-	// Without this flag, the client uses getMore for pagination instead.
+	// Strip exhaustAllowed — proxy uses single request/response semantics.
 	raw = clearExhaustAllowed(raw)
 
 	// Forward the raw wire message to the server via driver connection
@@ -147,7 +144,7 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		return fmt.Errorf("failed to forward to server: %w", err)
 	}
 
-	// moreToCome: server won't send a response
+	// moreToCome on client request: no server response expected
 	if msg.FlagBits&flagMoreToCome != 0 {
 		log.Debug().Str("cmd", cmdName).Msg("[WIRE] moreToCome set, no response expected")
 		if !isInternalCommand(cmdName) {
@@ -157,10 +154,8 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		return nil
 	}
 
-	// Read server response via driver connection.
-	// If the server responds with moreToCome (streaming hello or exhaust cursor),
-	// drain all continuation messages to keep the connection in a clean state.
-	// The last response is the one we forward to the client.
+	// Read server response. Drain any moreToCome continuations to prevent
+	// leftover data from desynchronizing the connection.
 	serverBytes, err := b.serverConn.Read(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read server response: %w", err)
@@ -182,8 +177,8 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		Int32("msgLen", respHdr.MessageLength).
 		Msg("[WIRE] -> server response")
 
-	// Sanitize hello/ismaster responses to prevent the client from attempting
-	// authentication through the proxy (we already authed on its behalf).
+	// Sanitize hello/ismaster responses — remove auth and topology fields
+	// since authentication is handled by the proxy.
 	if isHelloCommand(cmdName) && respHdr.OpCode == opMsgOpCode {
 		if sanitized, sanitizeErr := sanitizeHelloWireMessage(respHdr, serverBytes); sanitizeErr == nil {
 			serverBytes = sanitized
@@ -207,8 +202,7 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		b.logCommand(cmdName, dbName, cmdDoc, respBody)
 	}
 
-	// Strip moreToCome from responses — the proxy does single request/response,
-	// so the client must never see moreToCome (it would wait for more data).
+	// Clear moreToCome flag — proxy enforces single request/response semantics.
 	clearMoreToCome(serverBytes)
 
 	return writeWireMessage(b.clientConn, serverBytes)
@@ -226,9 +220,8 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 		Str("collection", q.Collection).
 		Msg("[WIRE] <- OP_QUERY")
 
-	// Convert OP_QUERY hello/isMaster to OP_MSG before forwarding.
-	// MongoDB 8.0+ removed OP_QUERY support entirely, and even older versions
-	// reject client metadata on reused connections.
+	// Convert OP_QUERY hello/isMaster to OP_MSG — OP_QUERY is removed in
+	// MongoDB 8.0+ and incompatible with proxied connections.
 	if isHelloCommand(cmdName) {
 		opMsg, err := convertOpQueryToOpMsg(q)
 		if err != nil {
@@ -302,14 +295,7 @@ func replyError(conn net.Conn, requestID int32, msg string) error {
 }
 
 // stripHelloFields removes fields from a hello command that are incompatible
-// with proxied (reused) connections, preserving key order so the command name
-// stays first.
-//
-// Stripped fields:
-//   - client: metadata rejected on non-first hello (MongoDB 6.1+)
-//   - compression: proxy can't handle compressed responses
-//   - topologyVersion, maxAwaitTimeMS: trigger awaitable/streaming hello where
-//     the server responds with moreToCome, incompatible with request/response proxy
+// with proxied connections, preserving key order so the command name stays first.
 func stripHelloFields(raw bson.Raw) (bson.Raw, error) {
 	var doc bson.D
 	if err := bson.Unmarshal(raw, &doc); err != nil {
@@ -387,8 +373,8 @@ func convertOpMsgResponseToOpReply(responseTo int32, serverBytes []byte) ([]byte
 	return buildOpReply(responseTo, msg.Body), nil
 }
 
-// sanitizeHelloRequest strips fields from a hello request that the server
-// rejects on a reused connection (client metadata may only be in the first hello).
+// sanitizeHelloRequest strips fields from a hello request that are incompatible
+// with proxied connections.
 func sanitizeHelloRequest(hdr *wireHeader, raw []byte) ([]byte, error) {
 	msg, err := parseOpMsg(hdr, raw)
 	if err != nil {
@@ -413,16 +399,15 @@ func sanitizeHelloRequest(hdr *wireHeader, raw []byte) ([]byte, error) {
 	return result, nil
 }
 
-// sanitizeHelloWireMessage strips auth-related fields from a hello response
-// to prevent the client from attempting authentication through the proxy.
+// sanitizeHelloWireMessage strips auth and topology fields from a hello
+// response since authentication is handled by the proxy.
 func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 	msg, err := parseOpMsg(hdr, raw)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use bson.D (ordered) to preserve field order — bson.M randomizes it,
-	// which can move "ok" away from the first position and confuse clients.
+	// bson.D preserves field order (bson.M would randomize it).
 	var doc bson.D
 	if err := bson.Unmarshal(msg.Body, &doc); err != nil {
 		return nil, err
@@ -432,7 +417,7 @@ func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 		"compression":             true,
 		"saslSupportedMechs":      true,
 		"speculativeAuthenticate": true,
-		"topologyVersion":         true, // Prevents client from attempting exhaust/streaming monitoring
+		"topologyVersion":         true, // Incompatible with request/response proxy
 	}
 
 	result := make(bson.D, 0, len(doc))
