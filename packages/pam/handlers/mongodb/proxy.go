@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
@@ -78,6 +79,18 @@ func buildURI(c MongoDBProxyConfig) string {
 	)
 }
 
+// isSRVURI returns true if the host is or will become an SRV-based connection.
+func isSRVURI(host string) bool {
+	if strings.HasPrefix(host, "mongodb+srv://") {
+		return true
+	}
+	// Plain hostname without port or comma = SRV (see buildURI)
+	if !strings.HasPrefix(host, "mongodb://") && !strings.Contains(host, ":") && !strings.Contains(host, ",") {
+		return true
+	}
+	return false
+}
+
 // injectCredentials inserts username:password into a MongoDB URI that has no credentials.
 // e.g. "mongodb+srv://cluster.abc.net/mydb?authSource=admin" becomes
 // "mongodb+srv://user:pass@cluster.abc.net/mydb?authSource=admin"
@@ -106,8 +119,15 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 
 	// Let the driver parse the URI (handles SRV resolution, TXT records, etc.)
 	clientOpts := options.Client().ApplyURI(uri)
-	if config.TLSConfig != nil {
+	if config.EnableTLS && config.TLSConfig != nil {
 		clientOpts.SetTLSConfig(config.TLSConfig)
+	}
+
+	// For non-SRV single-host connections, enable direct connection mode.
+	// Without this, the topology uses AutomaticMode which can fail to discover
+	// standalone servers (the background hello/auth may not complete in time).
+	if clientOpts.Direct == nil && !isSRVURI(config.Host) {
+		clientOpts.SetDirect(true)
 	}
 
 	// Disable compression — critical for proxy correctness.
@@ -136,9 +156,12 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 		return nil, fmt.Errorf("connect topology: %w", err)
 	}
 
-	// Select a server to verify connectivity (fail fast if unreachable)
+	// Select a server to verify connectivity (fail fast if unreachable).
+	// Use a timeout so connection errors surface instead of blocking forever.
+	selectCtx, selectCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer selectCancel()
 	selector := primarySelector{}
-	if _, err := top.SelectServer(ctx, selector); err != nil {
+	if _, err := top.SelectServer(selectCtx, selector); err != nil {
 		top.Disconnect(ctx) //nolint:errcheck
 		return nil, fmt.Errorf("server selection failed (MongoDB unreachable?): %w", err)
 	}
