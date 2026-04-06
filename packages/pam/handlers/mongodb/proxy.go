@@ -135,10 +135,10 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 	// Then ReadWireMessage returns compressed bytes that the client can't parse.
 	clientOpts.SetCompressors([]string{})
 
-	// Maintain warm pool connections so client requests get an instant checkout.
-	// Without this, expired/released connections aren't replaced proactively,
-	// forcing the next client to wait for a new TCP+TLS+auth to the server.
-	clientOpts.SetMinPoolSize(2)
+	// Don't maintain warm pool connections. The driver's internal monitoring
+	// on warm connections can leave streaming hello responses in the TCP buffer,
+	// which corrupt the connection state when the proxy checks it out.
+	// Each connection is created on demand via hello+auth.
 
 	// Create topology config from client options.
 	// The driver handles everything: SRV resolution, TLS, SCRAM auth (from URI credentials),

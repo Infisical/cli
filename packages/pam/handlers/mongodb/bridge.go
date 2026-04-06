@@ -136,6 +136,12 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		}
 	}
 
+	// Strip exhaustAllowed flag from client requests. The proxy reads one
+	// response per request via the driver connection, which is incompatible
+	// with exhaust cursors (where the server sends multiple responses).
+	// Without this flag, the client uses getMore for pagination instead.
+	raw = clearExhaustAllowed(raw)
+
 	// Forward the raw wire message to the server via driver connection
 	if err := b.serverConn.Write(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward to server: %w", err)
@@ -190,6 +196,10 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		cmdDoc, _ := mergeDocumentSequences(msg.Body, msg.DocumentSequences)
 		b.logCommand(cmdName, dbName, cmdDoc, respBody)
 	}
+
+	// Strip moreToCome from responses — the proxy does single request/response,
+	// so the client must never see moreToCome (it would wait for more data).
+	clearMoreToCome(serverBytes)
 
 	return writeWireMessage(b.clientConn, serverBytes)
 }
@@ -268,17 +278,31 @@ func replyError(conn net.Conn, requestID int32, msg string) error {
 	return writeWireMessage(conn, reply)
 }
 
-// stripHelloFields removes client metadata and compression from a BSON command
-// document, preserving key order so the command name stays first.
+// stripHelloFields removes fields from a hello command that are incompatible
+// with proxied (reused) connections, preserving key order so the command name
+// stays first.
+//
+// Stripped fields:
+//   - client: metadata rejected on non-first hello (MongoDB 6.1+)
+//   - compression: proxy can't handle compressed responses
+//   - topologyVersion, maxAwaitTimeMS: trigger awaitable/streaming hello where
+//     the server responds with moreToCome, incompatible with request/response proxy
 func stripHelloFields(raw bson.Raw) (bson.Raw, error) {
 	var doc bson.D
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return nil, err
 	}
 
+	strip := map[string]bool{
+		"client":          true,
+		"compression":     true,
+		"topologyVersion": true,
+		"maxAwaitTimeMS":  true,
+	}
+
 	result := make(bson.D, 0, len(doc))
 	for _, elem := range doc {
-		if elem.Key != "client" && elem.Key != "compression" {
+		if !strip[elem.Key] {
 			result = append(result, elem)
 		}
 	}
@@ -374,16 +398,27 @@ func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	var doc bson.M
+	// Use bson.D (ordered) to preserve field order — bson.M randomizes it,
+	// which can move "ok" away from the first position and confuse clients.
+	var doc bson.D
 	if err := bson.Unmarshal(msg.Body, &doc); err != nil {
 		return nil, err
 	}
 
-	delete(doc, "compression")
-	delete(doc, "saslSupportedMechs")
-	delete(doc, "speculativeAuthenticate")
+	strip := map[string]bool{
+		"compression":            true,
+		"saslSupportedMechs":    true,
+		"speculativeAuthenticate": true,
+	}
 
-	sanitized, err := bson.Marshal(doc)
+	result := make(bson.D, 0, len(doc))
+	for _, elem := range doc {
+		if !strip[elem.Key] {
+			result = append(result, elem)
+		}
+	}
+
+	sanitized, err := bson.Marshal(result)
 	if err != nil {
 		return nil, err
 	}
@@ -581,6 +616,37 @@ func toUint32(v interface{}) uint32 {
 		return uint32(n)
 	default:
 		return 0
+	}
+}
+
+// clearExhaustAllowed clears the exhaustAllowed flag (bit 16) from an OP_MSG's
+// flagBits so the server won't use exhaust cursors (moreToCome responses).
+func clearExhaustAllowed(raw []byte) []byte {
+	if len(raw) < headerLength+4 {
+		return raw
+	}
+	flags := binary.LittleEndian.Uint32(raw[headerLength : headerLength+4])
+	if flags&flagExhaustAllowed != 0 {
+		flags &^= flagExhaustAllowed
+		binary.LittleEndian.PutUint32(raw[headerLength:headerLength+4], flags)
+	}
+	return raw
+}
+
+// clearMoreToCome clears the moreToCome flag (bit 1) from an OP_MSG response.
+// The proxy does single request/response — the client must never see moreToCome.
+func clearMoreToCome(raw []byte) {
+	if len(raw) < headerLength+4 {
+		return
+	}
+	opcode := int32(binary.LittleEndian.Uint32(raw[12:16]))
+	if opcode != opMsgOpCode {
+		return
+	}
+	flags := binary.LittleEndian.Uint32(raw[headerLength : headerLength+4])
+	if flags&flagMoreToCome != 0 {
+		flags &^= flagMoreToCome
+		binary.LittleEndian.PutUint32(raw[headerLength:headerLength+4], flags)
 	}
 }
 

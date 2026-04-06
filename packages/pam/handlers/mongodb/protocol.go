@@ -18,7 +18,8 @@ const (
 	maxMessageSize        = 48 * 1024 * 1024 // 48MB
 
 	// OP_MSG flag bits
-	flagMoreToCome uint32 = 1 << 1 // Sender will send more messages (no response expected)
+	flagMoreToCome     uint32 = 1 << 1  // Sender will send more messages (no response expected)
+	flagExhaustAllowed uint32 = 1 << 16 // Client accepts exhaust-style responses
 )
 
 // opQuery represents a parsed legacy OP_QUERY message.
