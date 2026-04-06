@@ -244,6 +244,10 @@ func (p *DatabaseProxyServer) Run() {
 // MongoDB topology creation (SRV, TLS, auth). The gateway's GetOrCreateMongoProxy
 // creates the topology on the first connection and caches it for the session.
 // By the time the user types their mongosh command, the topology is ready.
+//
+// The connection is closed immediately after establishing — we only need it to
+// trigger topology creation, not to hold a bridge open. Holding it would check out
+// a pooled Atlas connection that blocks real clients from reusing the pool.
 func (p *DatabaseProxyServer) warmupGatewayConnection() {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
@@ -260,15 +264,11 @@ func (p *DatabaseProxyServer) warmupGatewayConnection() {
 
 	log.Debug().Msg("MongoDB warmup: connection sent to gateway, topology creation triggered")
 
-	// Keep the connection open until context is cancelled or gateway closes it.
-	// The gateway side will create the topology and then the bridge will block
-	// reading from this connection (no client data). When the session ends or
-	// context is cancelled, this connection closes naturally.
-	go func() {
-		defer gatewayConn.Close()
-		defer relayConn.Close()
-		<-p.ctx.Done()
-	}()
+	// Close immediately — the gateway creates the topology in GetOrCreateMongoProxy
+	// before starting the bridge. The bridge will fail (no client data), but the
+	// topology persists with its warm connection pool for real clients.
+	gatewayConn.Close()
+	relayConn.Close()
 }
 
 func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
