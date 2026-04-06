@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
@@ -90,11 +89,10 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		return
 	}
 
-	// For MongoDB: warm up the gateway's topology (SRV, TLS, auth) before
-	// showing the connection string. Without this, the first client connection
-	// would time out while the topology is being created.
+	// For MongoDB: trigger topology creation on the gateway in the background
+	// so it's ready (or close to ready) by the time the user connects.
 	if pamResponse.ResourceType == session.ResourceTypeMongodb {
-		proxy.warmupGatewayConnection()
+		go proxy.warmupGatewayConnection()
 	}
 
 	if port == 0 {
@@ -132,7 +130,7 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 	case session.ResourceTypeMssql:
 		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	case session.ResourceTypeMongodb:
-		util.PrintfStderr("mongodb://localhost:%d/%s", proxy.port, database)
+		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}
@@ -241,32 +239,26 @@ func (p *DatabaseProxyServer) Run() {
 	}
 }
 
-// warmupGatewayConnection sends a hello through the full proxy chain
-// (local → relay → gateway → database) to force topology creation on the
-// gateway and verify the connection works end-to-end.
+// warmupGatewayConnection opens a connection to the gateway to trigger
+// MongoDB topology creation (SRV, TLS, auth). The gateway caches the
+// topology for the session, so subsequent connections reuse it.
 func (p *DatabaseProxyServer) warmupGatewayConnection() {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to relay")
 		return
 	}
-	defer relayConn.Close()
 
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
+		relayConn.Close()
 		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to gateway")
 		return
 	}
-	defer gatewayConn.Close()
 
-	gatewayConn.SetDeadline(time.Now().Add(15 * time.Second))
-
-	if err := mongodb.Warmup(gatewayConn); err != nil {
-		log.Debug().Err(err).Msg("MongoDB warmup: failed")
-		return
-	}
-
-	log.Debug().Msg("MongoDB warmup: topology is ready")
+	log.Debug().Msg("MongoDB warmup: topology creation triggered")
+	gatewayConn.Close()
+	relayConn.Close()
 }
 
 func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
