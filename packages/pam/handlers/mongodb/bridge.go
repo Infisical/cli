@@ -14,7 +14,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/x/mongo/driver"
 )
 
 // Fields to strip from logged input — protocol noise, not user intent.
@@ -30,18 +30,20 @@ var logNoiseFields = []string{
 }
 
 type bridge struct {
-	serverConn    net.Conn
-	clientConn    net.Conn
-	sessionLogger session.SessionLogger
-	defaultDB     string
+	serverConn driver.Connection // Driver's pooled connection
+	clientConn net.Conn          // Client TCP stays the same
+	logger     session.SessionLogger
+	database   string
+	maxMsgSize uint32 // From server hello, default 48MB
 }
 
-func newBridge(serverConn net.Conn, clientConn net.Conn, logger session.SessionLogger, defaultDB string) *bridge {
+func newBridge(serverConn driver.Connection, clientConn net.Conn, logger session.SessionLogger, defaultDB string) *bridge {
 	return &bridge{
-		serverConn:    serverConn,
-		clientConn:    clientConn,
-		sessionLogger: logger,
-		defaultDB:     defaultDB,
+		serverConn: serverConn,
+		clientConn: clientConn,
+		logger:     logger,
+		database:   defaultDB,
+		maxMsgSize: 48 * 1024 * 1024, // 48MB default
 	}
 }
 
@@ -60,6 +62,20 @@ func (b *bridge) run(ctx context.Context) error {
 			return fmt.Errorf("failed to read client message: %w", err)
 		}
 
+		// Validate message size before processing
+		msgLen := uint32(hdr.MessageLength)
+		if msgLen > b.maxMsgSize {
+			log.Warn().
+				Uint32("msgLen", msgLen).
+				Uint32("maxMsgSize", b.maxMsgSize).
+				Msg("Client message exceeds max size")
+			if err := replyError(b.clientConn, hdr.RequestID,
+				fmt.Sprintf("message size %d exceeds maximum %d", msgLen, b.maxMsgSize)); err != nil {
+				return fmt.Errorf("failed to send size error: %w", err)
+			}
+			continue
+		}
+
 		log.Debug().
 			Int32("opcode", hdr.OpCode).
 			Int32("requestID", hdr.RequestID).
@@ -68,23 +84,23 @@ func (b *bridge) run(ctx context.Context) error {
 
 		switch hdr.OpCode {
 		case opMsgOpCode:
-			if err := b.handleOpMsg(hdr, raw); err != nil {
+			if err := b.handleOpMsg(ctx, hdr, raw); err != nil {
 				return err
 			}
 		case opQueryOpCode:
-			if err := b.handleOpQuery(hdr, raw); err != nil {
+			if err := b.handleOpQuery(ctx, hdr, raw); err != nil {
 				return err
 			}
 		default:
 			// Forward unknown opcodes transparently
-			if err := b.forwardRaw(raw); err != nil {
+			if err := b.forwardRaw(ctx, raw); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
+func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) error {
 	msg, err := parseOpMsg(hdr, raw)
 	if err != nil {
 		return fmt.Errorf("failed to parse OP_MSG: %w", err)
@@ -93,7 +109,7 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 	cmdName := getCommandName(msg.Body)
 	dbName := getStringField(msg.Body, "$db")
 	if dbName == "" {
-		dbName = b.defaultDB
+		dbName = b.database
 	}
 
 	log.Debug().
@@ -103,14 +119,15 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 		Bool("moreToCome", msg.FlagBits&flagMoreToCome != 0).
 		Msg("[WIRE] <- OP_MSG")
 
-	// Intercept auth commands — the proxy already authenticated with the server
+	// Block auth commands — the proxy already authenticated with the server
 	if isAuthCommand(cmdName) {
-		log.Debug().Str("cmd", cmdName).Msg("[WIRE] -> fake auth response")
-		return b.handleAuthCommand(msg)
+		log.Debug().Str("cmd", cmdName).Msg("[WIRE] -> blocking auth command")
+		return replyError(b.clientConn, msg.Header.RequestID,
+			"authentication is handled by the proxy")
 	}
 
-	// Forward the raw wire message to the server
-	if err := writeWireMessage(b.serverConn, raw); err != nil {
+	// Forward the raw wire message to the server via driver connection
+	if err := b.serverConn.WriteWireMessage(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward to server: %w", err)
 	}
 
@@ -124,11 +141,14 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 		return nil
 	}
 
-	// Read server response
-	respHdr, respRaw, err := readWireMessage(b.serverConn)
+	// Read server response via driver connection
+	serverBytes, err := b.serverConn.ReadWireMessage(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read server response: %w", err)
 	}
+
+	// Parse header from response for logging/detection
+	respHdr := parseHeaderFromBytes(serverBytes)
 
 	log.Debug().
 		Int32("opcode", respHdr.OpCode).
@@ -139,10 +159,13 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 	// Sanitize hello/ismaster responses to prevent the client from attempting
 	// authentication through the proxy (we already authed on its behalf).
 	if isHelloCommand(cmdName) && respHdr.OpCode == opMsgOpCode {
-		if sanitized, err := sanitizeHelloWireMessage(respHdr, respRaw); err == nil {
-			respRaw = sanitized
+		if sanitized, sanitizeErr := sanitizeHelloWireMessage(respHdr, serverBytes); sanitizeErr == nil {
+			serverBytes = sanitized
+
+			// Extract maxMessageSizeBytes from hello response
+			b.updateMaxMsgSize(serverBytes)
 		} else {
-			log.Warn().Err(err).Msg("Failed to sanitize hello response, forwarding as-is")
+			log.Warn().Err(sanitizeErr).Msg("Failed to sanitize hello response, forwarding as-is")
 		}
 	}
 
@@ -150,7 +173,7 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 	if !isInternalCommand(cmdName) {
 		var respBody bson.Raw
 		if respHdr.OpCode == opMsgOpCode {
-			if respMsg, parseErr := parseOpMsg(respHdr, respRaw); parseErr == nil {
+			if respMsg, parseErr := parseOpMsg(respHdr, serverBytes); parseErr == nil {
 				respBody = respMsg.Body
 			}
 		}
@@ -158,10 +181,10 @@ func (b *bridge) handleOpMsg(hdr *wireHeader, raw []byte) error {
 		b.logCommand(cmdName, dbName, cmdDoc, respBody)
 	}
 
-	return writeWireMessage(b.clientConn, respRaw)
+	return writeWireMessage(b.clientConn, serverBytes)
 }
 
-func (b *bridge) handleOpQuery(hdr *wireHeader, raw []byte) error {
+func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte) error {
 	q, err := parseOpQuery(hdr, raw)
 	if err != nil {
 		return fmt.Errorf("failed to parse OP_QUERY: %w", err)
@@ -173,56 +196,38 @@ func (b *bridge) handleOpQuery(hdr *wireHeader, raw []byte) error {
 		Str("collection", q.Collection).
 		Msg("[WIRE] <- OP_QUERY")
 
-	if err := writeWireMessage(b.serverConn, raw); err != nil {
+	if err := b.serverConn.WriteWireMessage(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward OP_QUERY: %w", err)
 	}
 
-	_, respRaw, err := readWireMessage(b.serverConn)
+	respBytes, err := b.serverConn.ReadWireMessage(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read OP_QUERY response: %w", err)
 	}
 
-	return writeWireMessage(b.clientConn, respRaw)
+	return writeWireMessage(b.clientConn, respBytes)
 }
 
 // forwardRaw forwards a raw wire message to the server and sends the response back.
-func (b *bridge) forwardRaw(raw []byte) error {
-	if err := writeWireMessage(b.serverConn, raw); err != nil {
+func (b *bridge) forwardRaw(ctx context.Context, raw []byte) error {
+	if err := b.serverConn.WriteWireMessage(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward raw message: %w", err)
 	}
-	_, respRaw, err := readWireMessage(b.serverConn)
+	respBytes, err := b.serverConn.ReadWireMessage(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read raw response: %w", err)
 	}
-	return writeWireMessage(b.clientConn, respRaw)
+	return writeWireMessage(b.clientConn, respBytes)
 }
 
-// handleAuthCommand responds with fake success since the proxy handles auth.
-func (b *bridge) handleAuthCommand(msg *opMsg) error {
-	cmdName := strings.ToLower(getCommandName(msg.Body))
-
-	var resp bson.Raw
-	var err error
-
-	switch cmdName {
-	case "saslstart", "saslcontinue":
-		resp, err = bson.Marshal(bson.D{
-			{Key: "ok", Value: 1},
-			{Key: "done", Value: true},
-			{Key: "conversationId", Value: int32(1)},
-			{Key: "payload", Value: primitive.Binary{Data: []byte{}}},
-		})
-	default:
-		resp, err = bson.Marshal(bson.D{
-			{Key: "ok", Value: 1},
-		})
-	}
-	if err != nil {
-		return fmt.Errorf("failed to marshal auth response: %w", err)
-	}
-
-	reply := buildOpMsgReply(msg.Header.RequestID, resp)
-	return writeWireMessage(b.clientConn, reply)
+// replyError sends a MongoDB wire protocol error response to the client.
+func replyError(conn net.Conn, requestID int32, msg string) error {
+	errDoc, _ := bson.Marshal(bson.D{
+		{Key: "ok", Value: int32(0)},
+		{Key: "errmsg", Value: msg},
+	})
+	reply := buildOpMsgReply(requestID, errDoc)
+	return writeWireMessage(conn, reply)
 }
 
 // sanitizeHelloWireMessage strips auth-related fields from a hello response
@@ -261,6 +266,42 @@ func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 	return reply, nil
 }
 
+// updateMaxMsgSize extracts maxMessageSizeBytes from a hello response to
+// use for validating incoming message sizes.
+func (b *bridge) updateMaxMsgSize(raw []byte) {
+	hdr := parseHeaderFromBytes(raw)
+	if hdr.OpCode != opMsgOpCode {
+		return
+	}
+	msg, err := parseOpMsg(hdr, raw)
+	if err != nil {
+		return
+	}
+	var doc bson.M
+	if err := bson.Unmarshal(msg.Body, &doc); err != nil {
+		return
+	}
+	if maxSize, ok := doc["maxMessageSizeBytes"]; ok {
+		if size := toUint32(maxSize); size > 0 {
+			b.maxMsgSize = size
+			log.Debug().Uint32("maxMsgSize", size).Msg("Updated max message size from server hello")
+		}
+	}
+}
+
+// parseHeaderFromBytes parses a wire header from raw message bytes.
+func parseHeaderFromBytes(raw []byte) *wireHeader {
+	if len(raw) < headerLength {
+		return &wireHeader{}
+	}
+	return &wireHeader{
+		MessageLength: int32(binary.LittleEndian.Uint32(raw[0:4])),
+		RequestID:     int32(binary.LittleEndian.Uint32(raw[4:8])),
+		ResponseTo:    int32(binary.LittleEndian.Uint32(raw[8:12])),
+		OpCode:        int32(binary.LittleEndian.Uint32(raw[12:16])),
+	}
+}
+
 func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response bson.Raw) {
 	var input string
 	if command != nil {
@@ -276,7 +317,7 @@ func (b *bridge) logCommand(cmdName, dbName string, command bson.Raw, response b
 		output = formatResponseSummary(cmdName, response)
 	}
 
-	if err := b.sessionLogger.LogEntry(session.SessionLogEntry{
+	if err := b.logger.LogEntry(session.SessionLogEntry{
 		Timestamp: time.Now(),
 		Input:     input,
 		Output:    output,
@@ -387,6 +428,21 @@ func toFloat64(v interface{}) float64 {
 		return float64(n)
 	case int:
 		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func toUint32(v interface{}) uint32 {
+	switch n := v.(type) {
+	case float64:
+		return uint32(n)
+	case int32:
+		return uint32(n)
+	case int64:
+		return uint32(n)
+	case int:
+		return uint32(n)
 	default:
 		return 0
 	}

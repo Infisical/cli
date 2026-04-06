@@ -89,6 +89,13 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		return
 	}
 
+	// For MongoDB: send a warmup connection to the gateway to trigger eager
+	// topology creation (SRV resolution, TLS, SCRAM auth). This runs in the
+	// background so the topology is ready before the first real client connects.
+	if pamResponse.ResourceType == session.ResourceTypeMongodb {
+		go proxy.warmupGatewayConnection()
+	}
+
 	if port == 0 {
 		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
 	} else {
@@ -231,6 +238,37 @@ func (p *DatabaseProxyServer) Run() {
 			go p.handleConnection(conn)
 		}
 	}
+}
+
+// warmupGatewayConnection sends a background connection to the gateway to trigger
+// MongoDB topology creation (SRV, TLS, auth). The gateway's GetOrCreateMongoProxy
+// creates the topology on the first connection and caches it for the session.
+// By the time the user types their mongosh command, the topology is ready.
+func (p *DatabaseProxyServer) warmupGatewayConnection() {
+	relayConn, err := p.CreateRelayConnection()
+	if err != nil {
+		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to relay")
+		return
+	}
+
+	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
+	if err != nil {
+		relayConn.Close()
+		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to gateway")
+		return
+	}
+
+	log.Debug().Msg("MongoDB warmup: connection sent to gateway, topology creation triggered")
+
+	// Keep the connection open until context is cancelled or gateway closes it.
+	// The gateway side will create the topology and then the bridge will block
+	// reading from this connection (no client data). When the session ends or
+	// context is cancelled, this connection closes naturally.
+	go func() {
+		defer gatewayConn.Close()
+		defer relayConn.Close()
+		<-p.ctx.Done()
+	}()
 }
 
 func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {

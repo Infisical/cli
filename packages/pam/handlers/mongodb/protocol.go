@@ -7,14 +7,16 @@ import (
 	"sync/atomic"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
+	"go.mongodb.org/mongo-driver/x/mongo/driver/wiremessage"
 )
 
 const (
-	opReplyOpCode  int32 = 1
-	opQueryOpCode  int32 = 2004
-	opMsgOpCode    int32 = 2013
-	headerLength         = 16
-	maxMessageSize       = 48 * 1024 * 1024 // 48MB
+	opReplyOpCode  int32  = 1
+	opQueryOpCode  int32  = 2004
+	opMsgOpCode    int32  = 2013
+	headerLength          = 16
+	maxMessageSize        = 48 * 1024 * 1024 // 48MB
 
 	// OP_MSG flag bits
 	flagChecksumPresent uint32 = 1 << 0  // Message includes a trailing checksum
@@ -69,11 +71,16 @@ func readWireMessage(r io.Reader) (*wireHeader, []byte, error) {
 		return nil, nil, err
 	}
 
+	length, reqID, resTo, opcode, _, ok := wiremessage.ReadHeader(headerBuf[:])
+	if !ok {
+		return nil, nil, fmt.Errorf("failed to parse wire message header")
+	}
+
 	hdr := wireHeader{
-		MessageLength: int32(binary.LittleEndian.Uint32(headerBuf[0:4])),
-		RequestID:     int32(binary.LittleEndian.Uint32(headerBuf[4:8])),
-		ResponseTo:    int32(binary.LittleEndian.Uint32(headerBuf[8:12])),
-		OpCode:        int32(binary.LittleEndian.Uint32(headerBuf[12:16])),
+		MessageLength: length,
+		RequestID:     reqID,
+		ResponseTo:    resTo,
+		OpCode:        int32(opcode),
 	}
 
 	if hdr.MessageLength < headerLength || hdr.MessageLength > int32(maxMessageSize) {
@@ -89,87 +96,65 @@ func readWireMessage(r io.Reader) (*wireHeader, []byte, error) {
 	return &hdr, raw, nil
 }
 
-// parseOpMsg extracts the BSON body and document sequences from an OP_MSG.
+// parseOpMsg extracts the BSON body and document sequences from an OP_MSG
+// using the driver's wiremessage package.
 func parseOpMsg(hdr *wireHeader, raw []byte) (*opMsg, error) {
 	if hdr.OpCode != opMsgOpCode {
 		return nil, fmt.Errorf("unsupported opcode %d, only OP_MSG (%d) is supported", hdr.OpCode, opMsgOpCode)
 	}
 
-	data := raw[headerLength:]
-	if len(data) < 5 {
-		return nil, fmt.Errorf("OP_MSG too short: %d bytes", len(data))
+	rem := raw[headerLength:]
+	if len(rem) < 5 {
+		return nil, fmt.Errorf("OP_MSG too short: %d bytes", len(rem))
 	}
 
 	msg := &opMsg{Header: *hdr}
-	msg.FlagBits = binary.LittleEndian.Uint32(data[0:4])
-	pos := 4
 
-	hasChecksum := msg.FlagBits&flagChecksumPresent != 0
-	endPos := len(data)
-	if hasChecksum {
-		endPos -= 4
+	flags, rem, ok := wiremessage.ReadMsgFlags(rem)
+	if !ok {
+		return nil, fmt.Errorf("failed to read OP_MSG flags")
+	}
+	msg.FlagBits = uint32(flags)
+
+	// If checksum is present, exclude the last 4 bytes from section parsing
+	hasChecksum := flags&wiremessage.ChecksumPresent != 0
+	sectionData := rem
+	if hasChecksum && len(sectionData) >= 4 {
+		sectionData = sectionData[:len(sectionData)-4]
 	}
 
-	for pos < endPos {
-		kind := data[pos]
-		pos++
+	for len(sectionData) > 0 {
+		stype, afterType, typeOk := wiremessage.ReadMsgSectionType(sectionData)
+		if !typeOk {
+			return nil, fmt.Errorf("failed to read section type")
+		}
 
-		switch kind {
-		case 0: // Kind 0: single BSON document (the command body)
-			if pos+4 > endPos {
-				return nil, fmt.Errorf("truncated Kind 0 section")
+		switch stype {
+		case wiremessage.SingleDocument:
+			doc, afterDoc, docOk := wiremessage.ReadMsgSectionSingleDocument(afterType)
+			if !docOk {
+				return nil, fmt.Errorf("failed to read Kind 0 document")
 			}
-			docLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
-			if docLen < 5 || pos+docLen > endPos {
-				return nil, fmt.Errorf("invalid Kind 0 document length: %d", docLen)
-			}
-			msg.Body = bson.Raw(data[pos : pos+docLen])
-			pos += docLen
+			msg.Body = bson.Raw(doc)
+			sectionData = afterDoc
 
-		case 1: // Kind 1: document sequence (e.g. insert documents, update specs)
-			if pos+4 > endPos {
-				return nil, fmt.Errorf("truncated Kind 1 section header")
+		case wiremessage.DocumentSequence:
+			identifier, docs, afterSeq, seqOk := wiremessage.ReadMsgSectionDocumentSequence(afterType)
+			if !seqOk {
+				return nil, fmt.Errorf("failed to read Kind 1 document sequence")
 			}
-			sectionLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
-			if sectionLen < 4 || pos+sectionLen > endPos {
-				return nil, fmt.Errorf("invalid Kind 1 section length: %d", sectionLen)
+			rawDocs := make([]bson.Raw, len(docs))
+			for i, d := range docs {
+				rawDocs[i] = bson.Raw(d)
 			}
-			sectionEnd := pos + sectionLen
-			innerPos := pos + 4 // skip the length field
-
-			// Read C-string identifier (field name, e.g. "documents", "updates")
-			identEnd := innerPos
-			for identEnd < sectionEnd && data[identEnd] != 0 {
-				identEnd++
-			}
-			if identEnd >= sectionEnd {
-				return nil, fmt.Errorf("unterminated identifier in Kind 1 section")
-			}
-			identifier := string(data[innerPos:identEnd])
-			innerPos = identEnd + 1
-
-			// Read BSON documents
-			var docs []bson.Raw
-			for innerPos < sectionEnd {
-				if innerPos+4 > sectionEnd {
-					break
-				}
-				docLen := int(binary.LittleEndian.Uint32(data[innerPos : innerPos+4]))
-				if docLen < 5 || innerPos+docLen > sectionEnd {
-					return nil, fmt.Errorf("invalid document in Kind 1 section")
-				}
-				docs = append(docs, bson.Raw(data[innerPos:innerPos+docLen]))
-				innerPos += docLen
-			}
-
 			msg.DocumentSequences = append(msg.DocumentSequences, documentSequence{
 				Identifier: identifier,
-				Documents:  docs,
+				Documents:  rawDocs,
 			})
-			pos = sectionEnd
+			sectionData = afterSeq
 
 		default:
-			return nil, fmt.Errorf("unknown section kind: %d", kind)
+			return nil, fmt.Errorf("unknown section kind: %d", stype)
 		}
 	}
 
@@ -180,51 +165,43 @@ func parseOpMsg(hdr *wireHeader, raw []byte) (*opMsg, error) {
 	return msg, nil
 }
 
-// parseOpQuery extracts the query document from a legacy OP_QUERY message.
+// parseOpQuery extracts the query document from a legacy OP_QUERY message
+// using the driver's wiremessage package.
 func parseOpQuery(hdr *wireHeader, raw []byte) (*opQuery, error) {
-	data := raw[headerLength:]
-	// Minimum: 4 (flags) + 1 (empty cstring) + 4 (skip) + 4 (return) + 5 (minimal BSON) = 18
-	if len(data) < 18 {
-		return nil, fmt.Errorf("OP_QUERY too short: %d bytes", len(data))
+	rem := raw[headerLength:]
+
+	flags, rem, ok := wiremessage.ReadQueryFlags(rem)
+	if !ok {
+		return nil, fmt.Errorf("failed to read OP_QUERY flags")
 	}
 
-	flags := int32(binary.LittleEndian.Uint32(data[0:4]))
-	pos := 4
+	collection, rem, ok := wiremessage.ReadQueryFullCollectionName(rem)
+	if !ok {
+		return nil, fmt.Errorf("failed to read OP_QUERY collection name")
+	}
 
-	// Read null-terminated collection name
-	nullIdx := pos
-	for nullIdx < len(data) && data[nullIdx] != 0 {
-		nullIdx++
+	skip, rem, ok := wiremessage.ReadQueryNumberToSkip(rem)
+	if !ok {
+		return nil, fmt.Errorf("failed to read OP_QUERY numberToSkip")
 	}
-	if nullIdx >= len(data) {
-		return nil, fmt.Errorf("unterminated collection name in OP_QUERY")
-	}
-	collection := string(data[pos:nullIdx])
-	pos = nullIdx + 1
 
-	if pos+8 > len(data) {
-		return nil, fmt.Errorf("truncated OP_QUERY after collection name")
+	ret, rem, ok := wiremessage.ReadQueryNumberToReturn(rem)
+	if !ok {
+		return nil, fmt.Errorf("failed to read OP_QUERY numberToReturn")
 	}
-	skip := int32(binary.LittleEndian.Uint32(data[pos : pos+4]))
-	ret := int32(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
-	pos += 8
 
-	if pos+4 > len(data) {
-		return nil, fmt.Errorf("truncated OP_QUERY: no query document")
+	query, _, ok := wiremessage.ReadQueryQuery(rem)
+	if !ok {
+		return nil, fmt.Errorf("failed to read OP_QUERY query document")
 	}
-	docLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
-	if docLen < 5 || pos+docLen > len(data) {
-		return nil, fmt.Errorf("invalid query document length: %d", docLen)
-	}
-	query := bson.Raw(data[pos : pos+docLen])
 
 	return &opQuery{
 		Header:     *hdr,
-		Flags:      flags,
+		Flags:      int32(flags),
 		Collection: collection,
 		Skip:       skip,
 		Return:     ret,
-		Query:      query,
+		Query:      bson.Raw(query),
 	}, nil
 }
 
@@ -272,18 +249,25 @@ func writeWireMessage(w io.Writer, msg []byte) error {
 	return err
 }
 
-// getCommandName returns the first key in the BSON document (the command name).
+// getCommandName returns the first key in the BSON document (the command name)
+// using the driver's bsoncore package.
 func getCommandName(doc bson.Raw) string {
-	elems, err := doc.Elements()
-	if err != nil || len(elems) == 0 {
+	coreDoc := bsoncore.Document(doc)
+	elem, err := coreDoc.IndexErr(0)
+	if err != nil {
 		return ""
 	}
-	return elems[0].Key()
+	key, err := elem.KeyErr()
+	if err != nil {
+		return ""
+	}
+	return key
 }
 
-// getStringField returns a string field from a BSON document, or "" if absent.
+// getStringField returns a string field from a BSON document using bsoncore.
 func getStringField(doc bson.Raw, key string) string {
-	val, err := doc.LookupErr(key)
+	coreDoc := bsoncore.Document(doc)
+	val, err := coreDoc.LookupErr(key)
 	if err != nil {
 		return ""
 	}
