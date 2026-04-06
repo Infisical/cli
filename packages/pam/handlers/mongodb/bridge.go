@@ -126,6 +126,16 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 			"authentication is handled by the proxy")
 	}
 
+	// Strip client metadata from hello requests — the driver already sent its
+	// own metadata during handshake, and the server rejects a second one.
+	if isHelloCommand(cmdName) {
+		if sanitized, err := sanitizeHelloRequest(hdr, raw); err == nil {
+			raw = sanitized
+		} else {
+			log.Warn().Err(err).Msg("Failed to sanitize hello request, forwarding as-is")
+		}
+	}
+
 	// Forward the raw wire message to the server via driver connection
 	if err := b.serverConn.Write(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward to server: %w", err)
@@ -228,6 +238,40 @@ func replyError(conn net.Conn, requestID int32, msg string) error {
 	})
 	reply := buildOpMsgReply(requestID, errDoc)
 	return writeWireMessage(conn, reply)
+}
+
+// sanitizeHelloRequest strips fields from a hello request that the server
+// rejects on a reused connection (client metadata may only be in the first hello).
+func sanitizeHelloRequest(hdr *wireHeader, raw []byte) ([]byte, error) {
+	msg, err := parseOpMsg(hdr, raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var doc bson.M
+	if err := bson.Unmarshal(msg.Body, &doc); err != nil {
+		return nil, err
+	}
+
+	delete(doc, "client")
+	delete(doc, "compression")
+
+	sanitized, err := bson.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+
+	totalLen := headerLength + 4 + 1 + len(sanitized)
+	result := make([]byte, totalLen)
+	binary.LittleEndian.PutUint32(result[0:4], uint32(totalLen))
+	binary.LittleEndian.PutUint32(result[4:8], uint32(hdr.RequestID))
+	binary.LittleEndian.PutUint32(result[8:12], uint32(hdr.ResponseTo))
+	binary.LittleEndian.PutUint32(result[12:16], uint32(opMsgOpCode))
+	binary.LittleEndian.PutUint32(result[16:20], 0) // flagBits
+	result[20] = 0                                   // Kind 0
+	copy(result[21:], sanitized)
+
+	return result, nil
 }
 
 // sanitizeHelloWireMessage strips auth-related fields from a hello response
