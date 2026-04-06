@@ -13,8 +13,8 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/x/mongo/driver"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/mnet"
 )
 
 // Fields to strip from logged input — protocol noise, not user intent.
@@ -30,14 +30,14 @@ var logNoiseFields = []string{
 }
 
 type bridge struct {
-	serverConn driver.Connection // Driver's pooled connection
-	clientConn net.Conn          // Client TCP stays the same
+	serverConn *mnet.Connection // Driver's pooled connection
+	clientConn net.Conn         // Client TCP stays the same
 	logger     session.SessionLogger
 	database   string
 	maxMsgSize uint32 // From server hello, default 48MB
 }
 
-func newBridge(serverConn driver.Connection, clientConn net.Conn, logger session.SessionLogger, defaultDB string) *bridge {
+func newBridge(serverConn *mnet.Connection, clientConn net.Conn, logger session.SessionLogger, defaultDB string) *bridge {
 	return &bridge{
 		serverConn: serverConn,
 		clientConn: clientConn,
@@ -127,7 +127,7 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 	}
 
 	// Forward the raw wire message to the server via driver connection
-	if err := b.serverConn.WriteWireMessage(ctx, raw); err != nil {
+	if err := b.serverConn.Write(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward to server: %w", err)
 	}
 
@@ -142,7 +142,7 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 	}
 
 	// Read server response via driver connection
-	serverBytes, err := b.serverConn.ReadWireMessage(ctx)
+	serverBytes, err := b.serverConn.Read(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read server response: %w", err)
 	}
@@ -196,11 +196,11 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 		Str("collection", q.Collection).
 		Msg("[WIRE] <- OP_QUERY")
 
-	if err := b.serverConn.WriteWireMessage(ctx, raw); err != nil {
+	if err := b.serverConn.Write(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward OP_QUERY: %w", err)
 	}
 
-	respBytes, err := b.serverConn.ReadWireMessage(ctx)
+	respBytes, err := b.serverConn.Read(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read OP_QUERY response: %w", err)
 	}
@@ -210,10 +210,10 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 
 // forwardRaw forwards a raw wire message to the server and sends the response back.
 func (b *bridge) forwardRaw(ctx context.Context, raw []byte) error {
-	if err := b.serverConn.WriteWireMessage(ctx, raw); err != nil {
+	if err := b.serverConn.Write(ctx, raw); err != nil {
 		return fmt.Errorf("failed to forward raw message: %w", err)
 	}
-	respBytes, err := b.serverConn.ReadWireMessage(ctx)
+	respBytes, err := b.serverConn.Read(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read raw response: %w", err)
 	}

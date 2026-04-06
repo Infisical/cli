@@ -6,9 +6,8 @@ import (
 	"io"
 	"sync/atomic"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/wiremessage"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/wiremessage"
 )
 
 const (
@@ -249,25 +248,18 @@ func writeWireMessage(w io.Writer, msg []byte) error {
 	return err
 }
 
-// getCommandName returns the first key in the BSON document (the command name)
-// using the driver's bsoncore package.
+// getCommandName returns the first key in the BSON document (the command name).
 func getCommandName(doc bson.Raw) string {
-	coreDoc := bsoncore.Document(doc)
-	elem, err := coreDoc.IndexErr(0)
+	elem, err := doc.IndexErr(0)
 	if err != nil {
 		return ""
 	}
-	key, err := elem.KeyErr()
-	if err != nil {
-		return ""
-	}
-	return key
+	return elem.Key()
 }
 
-// getStringField returns a string field from a BSON document using bsoncore.
+// getStringField returns a string field from a BSON document.
 func getStringField(doc bson.Raw, key string) string {
-	coreDoc := bsoncore.Document(doc)
-	val, err := coreDoc.LookupErr(key)
+	val, err := doc.LookupErr(key)
 	if err != nil {
 		return ""
 	}

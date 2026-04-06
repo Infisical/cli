@@ -10,11 +10,9 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
-	"go.mongodb.org/mongo-driver/mongo/description"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"go.mongodb.org/mongo-driver/x/mongo/driver"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/topology"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/description"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/topology"
 )
 
 type MongoDBProxyConfig struct {
@@ -31,6 +29,19 @@ type MongoDBProxy struct {
 	config   MongoDBProxyConfig
 	top      *topology.Topology
 	selector description.ServerSelector
+}
+
+// primarySelector selects writable (primary) servers for proxying.
+type primarySelector struct{}
+
+func (primarySelector) SelectServer(td description.Topology, candidates []description.Server) ([]description.Server, error) {
+	var result []description.Server
+	for _, s := range candidates {
+		if s.Kind == description.ServerKindRSPrimary || s.Kind == description.ServerKindStandalone || s.Kind == description.ServerKindMongos {
+			result = append(result, s)
+		}
+	}
+	return result, nil
 }
 
 // buildURI constructs a MongoDB connection URI from the proxy config.
@@ -126,7 +137,7 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 	}
 
 	// Select a server to verify connectivity (fail fast if unreachable)
-	selector := description.ReadPrefSelector(readpref.Primary())
+	selector := primarySelector{}
 	if _, err := top.SelectServer(ctx, selector); err != nil {
 		top.Disconnect(ctx) //nolint:errcheck
 		return nil, fmt.Errorf("server selection failed (MongoDB unreachable?): %w", err)
@@ -173,7 +184,8 @@ func (p *MongoDBProxy) HandleConnection(ctx context.Context, clientConn net.Conn
 		// Since we forward arbitrary client bytes through the connection,
 		// the connection state after the bridge exits is unknown.
 		// Conservatively expire every connection rather than returning to pool.
-		if expirer, ok := conn.(driver.Expirable); ok {
+		type expirable interface{ Expire() error }
+		if expirer, ok := conn.ReadWriteCloser.(expirable); ok {
 			expirer.Expire() //nolint:errcheck
 		}
 		conn.Close()
