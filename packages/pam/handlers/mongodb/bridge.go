@@ -157,10 +157,20 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 		return nil
 	}
 
-	// Read server response via driver connection
+	// Read server response via driver connection.
+	// If the server responds with moreToCome (streaming hello or exhaust cursor),
+	// drain all continuation messages to keep the connection in a clean state.
+	// The last response is the one we forward to the client.
 	serverBytes, err := b.serverConn.Read(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read server response: %w", err)
+	}
+	for hasMoreToCome(serverBytes) {
+		log.Debug().Str("cmd", cmdName).Msg("[WIRE] draining moreToCome continuation from server")
+		serverBytes, err = b.serverConn.Read(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to drain moreToCome response: %w", err)
+		}
 	}
 
 	// Parse header from response for logging/detection
@@ -234,6 +244,17 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 			return fmt.Errorf("failed to read hello response: %w", err)
 		}
 
+		// Sanitize hello response (strip auth-related fields and topologyVersion)
+		// before converting to OP_REPLY, same as the OP_MSG path.
+		respHdr := parseHeaderFromBytes(respBytes)
+		if respHdr.OpCode == opMsgOpCode {
+			if sanitized, sanitizeErr := sanitizeHelloWireMessage(respHdr, respBytes); sanitizeErr == nil {
+				respBytes = sanitized
+			} else {
+				log.Warn().Err(sanitizeErr).Msg("Failed to sanitize OP_QUERY hello response, forwarding as-is")
+			}
+		}
+
 		// Convert OP_MSG response back to OP_REPLY for the client
 		reply, err := convertOpMsgResponseToOpReply(q.Header.RequestID, respBytes)
 		if err != nil {
@@ -253,6 +274,7 @@ func (b *bridge) handleOpQuery(ctx context.Context, hdr *wireHeader, raw []byte)
 		return fmt.Errorf("failed to read OP_QUERY response: %w", err)
 	}
 
+	clearMoreToCome(respBytes)
 	return writeWireMessage(b.clientConn, respBytes)
 }
 
@@ -265,6 +287,7 @@ func (b *bridge) forwardRaw(ctx context.Context, raw []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to read raw response: %w", err)
 	}
+	clearMoreToCome(respBytes)
 	return writeWireMessage(b.clientConn, respBytes)
 }
 
@@ -406,9 +429,10 @@ func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 	}
 
 	strip := map[string]bool{
-		"compression":            true,
-		"saslSupportedMechs":    true,
+		"compression":             true,
+		"saslSupportedMechs":      true,
 		"speculativeAuthenticate": true,
+		"topologyVersion":         true, // Prevents client from attempting exhaust/streaming monitoring
 	}
 
 	result := make(bson.D, 0, len(doc))
@@ -617,6 +641,20 @@ func toUint32(v interface{}) uint32 {
 	default:
 		return 0
 	}
+}
+
+// hasMoreToCome returns true if the raw wire message is an OP_MSG with the
+// moreToCome flag set, indicating the server will send additional messages.
+func hasMoreToCome(raw []byte) bool {
+	if len(raw) < headerLength+4 {
+		return false
+	}
+	opcode := int32(binary.LittleEndian.Uint32(raw[12:16]))
+	if opcode != opMsgOpCode {
+		return false
+	}
+	flags := binary.LittleEndian.Uint32(raw[headerLength : headerLength+4])
+	return flags&flagMoreToCome != 0
 }
 
 // clearExhaustAllowed clears the exhaustAllowed flag (bit 16) from an OP_MSG's

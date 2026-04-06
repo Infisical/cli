@@ -89,11 +89,12 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		return
 	}
 
-	// For MongoDB: send a warmup connection to the gateway to trigger eager
-	// topology creation (SRV resolution, TLS, SCRAM auth). This runs in the
-	// background so the topology is ready before the first real client connects.
+	// For MongoDB: send a warmup connection through the gateway to trigger eager
+	// topology creation (SRV resolution, TLS, SCRAM auth) and verify it works.
+	// This blocks until the gateway confirms it can proxy a hello — so when the
+	// user sees the connection string, mongosh will connect on the first try.
 	if pamResponse.ResourceType == session.ResourceTypeMongodb {
-		go proxy.warmupGatewayConnection()
+		proxy.warmupGatewayConnection()
 	}
 
 	if port == 0 {
@@ -240,35 +241,79 @@ func (p *DatabaseProxyServer) Run() {
 	}
 }
 
-// warmupGatewayConnection sends a background connection to the gateway to trigger
-// MongoDB topology creation (SRV, TLS, auth). The gateway's GetOrCreateMongoProxy
-// creates the topology on the first connection and caches it for the session.
-// By the time the user types their mongosh command, the topology is ready.
-//
-// The connection is closed immediately after establishing — we only need it to
-// trigger topology creation, not to hold a bridge open. Holding it would check out
-// a pooled Atlas connection that blocks real clients from reusing the pool.
+// warmupGatewayConnection sends a MongoDB hello through the full proxy chain
+// (relay → gateway → MongoDB) to force topology creation and verify it works.
+// When this returns, the gateway's topology is warm and the first real mongosh
+// connection will succeed without the ~3-5s creation delay.
 func (p *DatabaseProxyServer) warmupGatewayConnection() {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to relay")
 		return
 	}
+	defer relayConn.Close()
 
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
-		relayConn.Close()
 		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to gateway")
 		return
 	}
+	defer gatewayConn.Close()
 
-	log.Debug().Msg("MongoDB warmup: connection sent to gateway, topology creation triggered")
+	// Set a deadline — topology creation (SRV + TLS + SCRAM) can take a while,
+	// but if it exceeds 15s something is wrong. Don't block the user forever.
+	gatewayConn.SetDeadline(time.Now().Add(15 * time.Second))
 
-	// Close immediately — the gateway creates the topology in GetOrCreateMongoProxy
-	// before starting the bridge. The bridge will fail (no client data), but the
-	// topology persists with its warm connection pool for real clients.
-	gatewayConn.Close()
-	relayConn.Close()
+	// Send a minimal MongoDB OP_MSG {hello: 1, $db: "admin"} through the pipe.
+	// The gateway will create the topology (if needed), check out a connection,
+	// forward the hello to the real server, and send the response back.
+	// Reading the response confirms the full chain works.
+	//
+	// Wire format: header(16) + flagBits(4) + kind(1) + BSON(31) = 52 bytes
+	helloMsg := []byte{
+		// --- MsgHeader ---
+		0x34, 0x00, 0x00, 0x00, // messageLength: 52
+		0x01, 0x00, 0x00, 0x00, // requestID: 1
+		0x00, 0x00, 0x00, 0x00, // responseTo: 0
+		0xDD, 0x07, 0x00, 0x00, // opCode: 2013 (OP_MSG)
+		// --- OP_MSG ---
+		0x00, 0x00, 0x00, 0x00, // flagBits: 0
+		0x00,                   // kind: 0 (body)
+		// --- BSON: {hello: 1, $db: "admin"} ---
+		0x1F, 0x00, 0x00, 0x00, // document length: 31
+		0x10,                                           // type: int32
+		0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x00,             // key: "hello"
+		0x01, 0x00, 0x00, 0x00,                         // value: 1
+		0x02,                                           // type: string
+		0x24, 0x64, 0x62, 0x00,                         // key: "$db"
+		0x06, 0x00, 0x00, 0x00,                         // string length: 6 (incl. null)
+		0x61, 0x64, 0x6D, 0x69, 0x6E, 0x00,             // value: "admin"
+		0x00, // document terminator
+	}
+
+	if _, err := gatewayConn.Write(helloMsg); err != nil {
+		log.Debug().Err(err).Msg("MongoDB warmup: failed to send hello")
+		return
+	}
+
+	// Read the response header (4 bytes = message length), then the rest.
+	var lengthBuf [4]byte
+	if _, err := io.ReadFull(gatewayConn, lengthBuf[:]); err != nil {
+		log.Debug().Err(err).Msg("MongoDB warmup: failed to read response length")
+		return
+	}
+	respLen := int(lengthBuf[0]) | int(lengthBuf[1])<<8 | int(lengthBuf[2])<<16 | int(lengthBuf[3])<<24
+	if respLen < 16 || respLen > 48*1024*1024 {
+		log.Debug().Int("respLen", respLen).Msg("MongoDB warmup: invalid response length")
+		return
+	}
+	// Drain the rest of the response (we don't need to parse it)
+	if _, err := io.CopyN(io.Discard, gatewayConn, int64(respLen-4)); err != nil {
+		log.Debug().Err(err).Msg("MongoDB warmup: failed to read response body")
+		return
+	}
+
+	log.Debug().Msg("MongoDB warmup: topology is ready")
 }
 
 func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {

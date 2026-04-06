@@ -135,11 +135,6 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 	// Then ReadWireMessage returns compressed bytes that the client can't parse.
 	clientOpts.SetCompressors([]string{})
 
-	// Don't maintain warm pool connections. The driver's internal monitoring
-	// on warm connections can leave streaming hello responses in the TCP buffer,
-	// which corrupt the connection state when the proxy checks it out.
-	// Each connection is created on demand via hello+auth.
-
 	// Create topology config from client options.
 	// The driver handles everything: SRV resolution, TLS, SCRAM auth (from URI credentials),
 	// connection pooling, topology discovery, server selection, health monitoring.
@@ -156,15 +151,26 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 		return nil, fmt.Errorf("connect topology: %w", err)
 	}
 
-	// Select a server to verify connectivity (fail fast if unreachable).
-	// Use a timeout so connection errors surface instead of blocking forever.
+	// Select a server and pre-warm a pool connection so the first client
+	// doesn't have to wait for TCP + TLS + hello + auth.
 	selectCtx, selectCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer selectCancel()
 	selector := primarySelector{}
-	if _, err := top.SelectServer(selectCtx, selector); err != nil {
+	server, err := top.SelectServer(selectCtx, selector)
+	if err != nil {
 		top.Disconnect(ctx) //nolint:errcheck
 		return nil, fmt.Errorf("server selection failed (MongoDB unreachable?): %w", err)
 	}
+
+	// Check out a connection (triggers TCP + TLS + hello + auth) then return
+	// it to the pool immediately. The next checkout will reuse this warm
+	// connection instead of creating one from scratch.
+	warmConn, err := server.Connection(selectCtx)
+	if err != nil {
+		top.Disconnect(ctx) //nolint:errcheck
+		return nil, fmt.Errorf("failed to pre-warm connection: %w", err)
+	}
+	warmConn.Close()
 
 	log.Info().
 		Str("sessionID", config.SessionID).
