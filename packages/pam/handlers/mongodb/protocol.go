@@ -320,3 +320,43 @@ func mergeDocumentSequences(body bson.Raw, sequences []documentSequence) (bson.R
 
 	return bson.Marshal(doc)
 }
+
+// Warmup sends a hello command through conn and reads the response.
+// This is used to verify that the full proxy chain is functional (the gateway
+// has created its topology and can forward commands to the database server).
+func Warmup(conn io.ReadWriter) error {
+	// Minimal OP_MSG: {hello: 1, $db: "admin"}
+	// header(16) + flagBits(4) + kind(1) + BSON(31) = 52 bytes
+	helloMsg := []byte{
+		0x34, 0x00, 0x00, 0x00, // messageLength: 52
+		0x01, 0x00, 0x00, 0x00, // requestID: 1
+		0x00, 0x00, 0x00, 0x00, // responseTo: 0
+		0xDD, 0x07, 0x00, 0x00, // opCode: 2013 (OP_MSG)
+		0x00, 0x00, 0x00, 0x00, // flagBits: 0
+		0x00,                   // kind: 0 (body)
+		// BSON: {hello: 1, $db: "admin"}
+		0x1F, 0x00, 0x00, 0x00,
+		0x10, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x02, 0x24, 0x64, 0x62, 0x00, 0x06, 0x00, 0x00, 0x00, 0x61, 0x64, 0x6D, 0x69, 0x6E, 0x00,
+		0x00,
+	}
+
+	if _, err := conn.Write(helloMsg); err != nil {
+		return fmt.Errorf("write hello: %w", err)
+	}
+
+	// Read the response: 4-byte length prefix, then the rest of the message.
+	var buf [4]byte
+	if _, err := io.ReadFull(conn, buf[:]); err != nil {
+		return fmt.Errorf("read response header: %w", err)
+	}
+	respLen := int(binary.LittleEndian.Uint32(buf[:]))
+	if respLen < headerLength || respLen > maxMessageSize {
+		return fmt.Errorf("invalid response length: %d", respLen)
+	}
+	if _, err := io.CopyN(io.Discard, conn, int64(respLen-4)); err != nil {
+		return fmt.Errorf("read response body: %w", err)
+	}
+
+	return nil
+}
