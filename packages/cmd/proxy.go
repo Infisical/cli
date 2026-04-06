@@ -129,18 +129,18 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse use-sse flag")
 	}
 
-	clientId, err := cmd.Flags().GetString("client-id")
+	clientId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse client-id flag")
 	}
 
-	clientSecret, err := cmd.Flags().GetString("client-secret")
+	clientSecret, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse client-secret flag")
 	}
 
 	if useSSE && (clientId == "" || clientSecret == "") {
-		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --use-sse is enabled")
+		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --use-sse is enabled. Set via flags or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET environment variables.")
 	}
 
 	domainURL, err := url.Parse(domain)
@@ -616,8 +616,8 @@ func init() {
 	proxyStartCmd.Flags().String("tls-key-file", "", "The path to the TLS key file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().Bool("tls-enabled", true, "Whether to enable TLS for the proxy server. Defaults to true")
 	proxyStartCmd.Flags().Bool("use-sse", false, "Enable SSE (Server-Sent Events) mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled and --client-id/--client-secret are required.")
-	proxyStartCmd.Flags().String("client-id", "", "Universal auth client ID for SSE (required when --use-sse is enabled)")
-	proxyStartCmd.Flags().String("client-secret", "", "Machine identity client secret for universal auth (required when --use-sse is enabled)")
+	proxyStartCmd.Flags().String("client-id", "", "Universal auth client ID for SSE (env: INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
+	proxyStartCmd.Flags().String("client-secret", "", "Machine identity client secret for universal auth (env: INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 
