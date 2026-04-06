@@ -151,8 +151,8 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 		return nil, fmt.Errorf("connect topology: %w", err)
 	}
 
-	// Select a server and pre-warm a pool connection so the first client
-	// doesn't have to wait for TCP + TLS + hello + auth.
+	// Verify full connectivity: server selection, TCP, TLS, and SCRAM auth.
+	// Fail fast during init rather than on the first client connection.
 	selectCtx, selectCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer selectCancel()
 	selector := primarySelector{}
@@ -161,16 +161,12 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 		top.Disconnect(ctx) //nolint:errcheck
 		return nil, fmt.Errorf("server selection failed (MongoDB unreachable?): %w", err)
 	}
-
-	// Check out a connection (triggers TCP + TLS + hello + auth) then return
-	// it to the pool immediately. The next checkout will reuse this warm
-	// connection instead of creating one from scratch.
-	warmConn, err := server.Connection(selectCtx)
+	conn, err := server.Connection(selectCtx)
 	if err != nil {
 		top.Disconnect(ctx) //nolint:errcheck
-		return nil, fmt.Errorf("failed to pre-warm connection: %w", err)
+		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
-	warmConn.Close()
+	conn.Close()
 
 	log.Info().
 		Str("sessionID", config.SessionID).
