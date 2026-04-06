@@ -89,12 +89,6 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		return
 	}
 
-	// For MongoDB: trigger topology creation on the gateway in the background
-	// so it's ready (or close to ready) by the time the user connects.
-	if pamResponse.ResourceType == session.ResourceTypeMongodb {
-		go proxy.warmupGatewayConnection()
-	}
-
 	if port == 0 {
 		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
 	} else {
@@ -237,28 +231,6 @@ func (p *DatabaseProxyServer) Run() {
 			go p.handleConnection(conn)
 		}
 	}
-}
-
-// warmupGatewayConnection opens a connection to the gateway to trigger
-// MongoDB topology creation (SRV, TLS, auth). The gateway caches the
-// topology for the session, so subsequent connections reuse it.
-func (p *DatabaseProxyServer) warmupGatewayConnection() {
-	relayConn, err := p.CreateRelayConnection()
-	if err != nil {
-		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to relay")
-		return
-	}
-
-	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
-	if err != nil {
-		relayConn.Close()
-		log.Debug().Err(err).Msg("MongoDB warmup: failed to connect to gateway")
-		return
-	}
-
-	log.Debug().Msg("MongoDB warmup: topology creation triggered")
-	gatewayConn.Close()
-	relayConn.Close()
 }
 
 func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
