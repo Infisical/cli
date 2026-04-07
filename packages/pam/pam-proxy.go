@@ -304,7 +304,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeMongodb:
 		mongoConfig := mongodb.MongoDBProxyConfig{
-			Host:           credentials.Host,
+			Host:           credentials.ConnectionString,
 			InjectUsername: credentials.Username,
 			InjectPassword: credentials.Password,
 			InjectDatabase: credentials.Database,
@@ -314,7 +314,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
-			Str("host", credentials.Host).
+			Str("connectionString", credentials.ConnectionString).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MongoDB PAM proxy")
 

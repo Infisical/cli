@@ -853,6 +853,7 @@ type PAMSessionCredentials struct {
 	Host                  string `json:"host"`
 	Port                  int    `json:"port"`
 	Database              string `json:"database"`
+	ConnectionString      string `json:"connectionString,omitempty"` // MongoDB: full URI (mongodb[+srv]://...)
 	SSLEnabled            bool   `json:"sslEnabled"`
 	SSLRejectUnauthorized bool   `json:"sslRejectUnauthorized"`
 	SSLCertificate        string `json:"sslCertificate,omitempty"`

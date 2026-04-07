@@ -20,7 +20,7 @@ type MongoDBProxyConfig struct {
 	Host           string // "host:port", "h1:p1,h2:p2", SRV hostname, or full URI (mongodb[+srv]://...)
 	InjectUsername string // Real DB username (injected, never shown to client)
 	InjectPassword string // Real DB password (injected, never shown to client)
-	InjectDatabase string // Target database (used when Host is not a URI)
+	InjectDatabase string // Target database (injected into URI path)
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
@@ -51,13 +51,13 @@ func (primarySelector) SelectServer(td description.Topology, candidates []descri
 func buildURI(c MongoDBProxyConfig) string {
 	host := c.Host
 
-	// If host is already a MongoDB URI, inject credentials into it
+	// If host is already a MongoDB URI, inject credentials and database into it
 	if strings.HasPrefix(host, "mongodb://") || strings.HasPrefix(host, "mongodb+srv://") {
-		return injectCredentials(host, c.InjectUsername, c.InjectPassword)
+		return injectCredentials(host, c.InjectUsername, c.InjectPassword, c.InjectDatabase)
 	}
 
-	// Plain host spec — build URI from parts
-	// Bare hostname (no : and no ,) = SRV, otherwise standard
+	// Plain host spec — build URI from parts using url.URL for proper escaping.
+	// Bare hostname (no : and no ,) = SRV, otherwise standard.
 	isSRV := !strings.Contains(host, ":") && !strings.Contains(host, ",")
 
 	scheme := "mongodb"
@@ -65,13 +65,13 @@ func buildURI(c MongoDBProxyConfig) string {
 		scheme = "mongodb+srv"
 	}
 
-	return fmt.Sprintf("%s://%s:%s@%s/%s",
-		scheme,
-		url.PathEscape(c.InjectUsername),
-		url.PathEscape(c.InjectPassword),
-		host,
-		url.PathEscape(c.InjectDatabase),
-	)
+	u := &url.URL{
+		Scheme: scheme,
+		User:   url.UserPassword(c.InjectUsername, c.InjectPassword),
+		Host:   host,
+		Path:   "/" + c.InjectDatabase,
+	}
+	return u.String()
 }
 
 // isSRVURI returns true if the host is or will become an SRV-based connection.
@@ -86,10 +86,11 @@ func isSRVURI(host string) bool {
 	return false
 }
 
-// injectCredentials inserts username:password into a MongoDB URI that has no credentials.
-// e.g. "mongodb+srv://cluster.abc.net/mydb?authSource=admin" becomes
+// injectCredentials inserts username:password and database into a MongoDB URI.
+// The database is only injected if the URI path is empty (no database already present).
+// e.g. "mongodb+srv://cluster.abc.net/?authSource=admin" with database "mydb" becomes
 // "mongodb+srv://user:pass@cluster.abc.net/mydb?authSource=admin"
-func injectCredentials(rawURI, username, password string) string {
+func injectCredentials(rawURI, username, password, database string) string {
 	u, err := url.Parse(rawURI)
 	if err != nil {
 		// Fallback: insert credentials after scheme://
@@ -103,6 +104,14 @@ func injectCredentials(rawURI, username, password string) string {
 	}
 
 	u.User = url.UserPassword(username, password)
+
+	// Inject database into the URI path if not already present.
+	// The backend stores the database as a separate field and validates that
+	// the connection string does not contain a database in its path.
+	if database != "" && (u.Path == "" || u.Path == "/") {
+		u.Path = "/" + database
+	}
+
 	return u.String()
 }
 
@@ -119,8 +128,9 @@ func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBPr
 	}
 
 	// For non-SRV single-host connections, use direct mode to skip topology
-	// discovery and connect immediately.
-	if clientOpts.Direct == nil && !isSRVURI(config.Host) {
+	// discovery and connect immediately. Multi-host URIs (replica sets)
+	// must use topology discovery, so direct mode is only set for single hosts.
+	if clientOpts.Direct == nil && !isSRVURI(config.Host) && len(clientOpts.Hosts) <= 1 {
 		clientOpts.SetDirect(true)
 	}
 
