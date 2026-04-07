@@ -49,6 +49,9 @@ type opMsg struct {
 	DocumentSequences []documentSequence // Kind 1 sections
 }
 
+// globalRequestID tracks IDs for proxy-generated messages (e.g. hello sanitization,
+// error replies). Starts at 1000 to avoid colliding with client-generated request IDs
+// which typically start at low values.
 var globalRequestID atomic.Int32
 
 func init() {
@@ -221,20 +224,25 @@ func buildOpReply(responseTo int32, doc bson.Raw) []byte {
 	return msg
 }
 
-// buildOpMsgReply wraps a BSON document in an OP_MSG response.
-func buildOpMsgReply(responseTo int32, doc bson.Raw) []byte {
-	totalLen := headerLength + 4 + 1 + len(doc) // header + flagBits + kind byte + doc
+// packOpMsg builds a raw OP_MSG wire message from the given header IDs and body.
+func packOpMsg(requestID, responseTo int32, body []byte) []byte {
+	totalLen := headerLength + 4 + 1 + len(body) // header + flagBits + kind byte + body
 	msg := make([]byte, totalLen)
 
 	binary.LittleEndian.PutUint32(msg[0:4], uint32(totalLen))
-	binary.LittleEndian.PutUint32(msg[4:8], uint32(nextRequestID()))
+	binary.LittleEndian.PutUint32(msg[4:8], uint32(requestID))
 	binary.LittleEndian.PutUint32(msg[8:12], uint32(responseTo))
 	binary.LittleEndian.PutUint32(msg[12:16], uint32(opMsgOpCode))
 	binary.LittleEndian.PutUint32(msg[16:20], 0) // flagBits = 0
 	msg[20] = 0                                   // Kind 0
-	copy(msg[21:], doc)
+	copy(msg[21:], body)
 
 	return msg
+}
+
+// buildOpMsgReply wraps a BSON document in an OP_MSG response.
+func buildOpMsgReply(responseTo int32, doc bson.Raw) []byte {
+	return packOpMsg(nextRequestID(), responseTo, doc)
 }
 
 func writeWireMessage(w io.Writer, msg []byte) error {

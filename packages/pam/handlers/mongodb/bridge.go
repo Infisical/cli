@@ -156,11 +156,17 @@ func (b *bridge) handleOpMsg(ctx context.Context, hdr *wireHeader, raw []byte) e
 
 	// Read server response. Drain any moreToCome continuations to prevent
 	// leftover data from desynchronizing the connection.
+	const maxDrainIterations = 1000
 	serverBytes, err := b.serverConn.Read(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to read server response: %w", err)
 	}
-	for hasMoreToCome(serverBytes) {
+	for i := 0; hasMoreToCome(serverBytes); i++ {
+		if i >= maxDrainIterations {
+			log.Warn().Str("cmd", cmdName).Int("iterations", i).
+				Msg("[WIRE] moreToCome drain exceeded limit, closing connection")
+			return fmt.Errorf("moreToCome drain exceeded %d iterations", maxDrainIterations)
+		}
 		log.Debug().Str("cmd", cmdName).Msg("[WIRE] draining moreToCome continuation from server")
 		serverBytes, err = b.serverConn.Read(ctx)
 		if err != nil {
@@ -344,17 +350,7 @@ func convertOpQueryToOpMsg(q *opQuery) ([]byte, error) {
 		return nil, err
 	}
 
-	totalLen := headerLength + 4 + 1 + len(body)
-	msg := make([]byte, totalLen)
-	binary.LittleEndian.PutUint32(msg[0:4], uint32(totalLen))
-	binary.LittleEndian.PutUint32(msg[4:8], uint32(q.Header.RequestID))
-	binary.LittleEndian.PutUint32(msg[8:12], uint32(q.Header.ResponseTo))
-	binary.LittleEndian.PutUint32(msg[12:16], uint32(opMsgOpCode))
-	binary.LittleEndian.PutUint32(msg[16:20], 0) // flagBits
-	msg[20] = 0                                   // Kind 0
-	copy(msg[21:], body)
-
-	return msg, nil
+	return packOpMsg(q.Header.RequestID, q.Header.ResponseTo, body), nil
 }
 
 // convertOpMsgResponseToOpReply wraps an OP_MSG response body as an OP_REPLY
@@ -386,17 +382,7 @@ func sanitizeHelloRequest(hdr *wireHeader, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	totalLen := headerLength + 4 + 1 + len(sanitized)
-	result := make([]byte, totalLen)
-	binary.LittleEndian.PutUint32(result[0:4], uint32(totalLen))
-	binary.LittleEndian.PutUint32(result[4:8], uint32(hdr.RequestID))
-	binary.LittleEndian.PutUint32(result[8:12], uint32(hdr.ResponseTo))
-	binary.LittleEndian.PutUint32(result[12:16], uint32(opMsgOpCode))
-	binary.LittleEndian.PutUint32(result[16:20], 0) // flagBits
-	result[20] = 0                                   // Kind 0
-	copy(result[21:], sanitized)
-
-	return result, nil
+	return packOpMsg(hdr.RequestID, hdr.ResponseTo, sanitized), nil
 }
 
 // sanitizeHelloWireMessage strips auth and topology fields from a hello
@@ -432,18 +418,7 @@ func sanitizeHelloWireMessage(hdr *wireHeader, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Rebuild the OP_MSG with sanitized body, preserving original header IDs
-	totalLen := headerLength + 4 + 1 + len(sanitized)
-	reply := make([]byte, totalLen)
-	binary.LittleEndian.PutUint32(reply[0:4], uint32(totalLen))
-	binary.LittleEndian.PutUint32(reply[4:8], uint32(hdr.RequestID))
-	binary.LittleEndian.PutUint32(reply[8:12], uint32(hdr.ResponseTo))
-	binary.LittleEndian.PutUint32(reply[12:16], uint32(opMsgOpCode))
-	binary.LittleEndian.PutUint32(reply[16:20], 0) // flagBits
-	reply[20] = 0                                   // Kind 0
-	copy(reply[21:], sanitized)
-
-	return reply, nil
+	return packOpMsg(hdr.RequestID, hdr.ResponseTo, sanitized), nil
 }
 
 // updateMaxMsgSize extracts maxMessageSizeBytes from a hello response to
