@@ -48,7 +48,7 @@ func (primarySelector) SelectServer(td description.Topology, candidates []descri
 // buildURI constructs a MongoDB connection URI from the proxy config.
 // If Host is a full URI, credentials are injected preserving any existing options.
 // If Host is a plain host spec, a URI is built from it + InjectDatabase.
-func buildURI(c MongoDBProxyConfig) string {
+func buildURI(c MongoDBProxyConfig) (string, error) {
 	host := c.Host
 
 	// If host is already a MongoDB URI, inject credentials and database into it
@@ -71,7 +71,7 @@ func buildURI(c MongoDBProxyConfig) string {
 		Host:   host,
 		Path:   "/" + c.InjectDatabase,
 	}
-	return u.String()
+	return u.String(), nil
 }
 
 // isSRVURI returns true if the host is or will become an SRV-based connection.
@@ -90,17 +90,10 @@ func isSRVURI(host string) bool {
 // The database is only injected if the URI path is empty (no database already present).
 // e.g. "mongodb+srv://cluster.abc.net/?authSource=admin" with database "mydb" becomes
 // "mongodb+srv://user:pass@cluster.abc.net/mydb?authSource=admin"
-func injectCredentials(rawURI, username, password, database string) string {
+func injectCredentials(rawURI, username, password, database string) (string, error) {
 	u, err := url.Parse(rawURI)
 	if err != nil {
-		// Fallback: insert credentials after scheme://
-		schemeEnd := strings.Index(rawURI, "://")
-		if schemeEnd == -1 {
-			return rawURI
-		}
-		return rawURI[:schemeEnd+3] +
-			url.PathEscape(username) + ":" + url.PathEscape(password) + "@" +
-			rawURI[schemeEnd+3:]
+		return "", fmt.Errorf("invalid MongoDB URI: %w", err)
 	}
 
 	u.User = url.UserPassword(username, password)
@@ -112,14 +105,17 @@ func injectCredentials(rawURI, username, password, database string) string {
 		u.Path = "/" + database
 	}
 
-	return u.String()
+	return u.String(), nil
 }
 
 // NewMongoDBProxy creates a proxy with a driver-managed topology.
 // The driver handles: SRV resolution, TLS, SCRAM auth, connection pooling,
 // topology discovery, and server selection.
 func NewMongoDBProxy(ctx context.Context, config MongoDBProxyConfig) (*MongoDBProxy, error) {
-	uri := buildURI(config)
+	uri, err := buildURI(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build MongoDB URI: %w", err)
+	}
 
 	// Let the driver parse the URI (handles SRV resolution, TXT records, etc.)
 	clientOpts := options.Client().ApplyURI(uri)
