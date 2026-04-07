@@ -151,6 +151,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
+	pamConfig.SessionUploader.RegisterSession(pamConfig.SessionId)
 
 	serverName := credentials.Host
 	if pamConfig.ResourceType == session.ResourceTypeKubernetes {
