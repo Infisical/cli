@@ -11,6 +11,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
@@ -20,12 +21,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// MongoProxyGetter returns a session-level MongoDBProxy, creating it on first call.
+// This allows the topology to be shared across multiple client connections in the same session.
+type MongoProxyGetter func(ctx context.Context, sessionID string, config mongodb.MongoDBProxyConfig) (*mongodb.MongoDBProxy, error)
+
 type GatewayPAMConfig struct {
 	SessionId          string
 	ResourceType       string
 	ExpiryTime         time.Time
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
+	GetMongoProxy      MongoProxyGetter // Session-level MongoDB proxy sharing
 }
 
 type PAMCapabilitiesResponse struct {
@@ -41,6 +47,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
+		session.ResourceTypeMongodb,
 	}
 }
 
@@ -153,12 +160,19 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	}
 
 	serverName := credentials.Host
-	if pamConfig.ResourceType == session.ResourceTypeKubernetes {
+	switch pamConfig.ResourceType {
+	case session.ResourceTypeKubernetes:
 		parsed, err := url.Parse(credentials.Url)
 		if err != nil {
 			return fmt.Errorf("failed to parse URL: %w", err)
 		}
 		serverName = parsed.Hostname()
+	case session.ResourceTypeMongodb:
+		// For MongoDB, don't set ServerName — the driver's topology sets it
+		// correctly per server (each replica set member has its own hostname).
+		// The Host field may be a URI, a bare SRV hostname, or host:port,
+		// none of which are valid TLS server names.
+		serverName = ""
 	}
 
 	tlsConfig := &tls.Config{
@@ -288,6 +302,31 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", kubernetesConfig.TargetApiServer).
 			Msg("Starting Kubernetes PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeMongodb:
+		mongoConfig := mongodb.MongoDBProxyConfig{
+			Host:           credentials.ConnectionString,
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+		}
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("connectionString", credentials.ConnectionString).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting MongoDB PAM proxy")
+
+		// Get or create session-level proxy (shared across connections).
+		// The topology is created once on the first connection and reused
+		// for subsequent connections, avoiding per-connection SRV/TLS/SCRAM overhead.
+		proxy, err := pamConfig.GetMongoProxy(ctx, pamConfig.SessionId, mongoConfig)
+		if err != nil {
+			return fmt.Errorf("MongoDB proxy init: %w", err)
+		}
+
+		return proxy.HandleConnection(ctx, conn, sessionLogger)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
 	}

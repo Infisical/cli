@@ -18,6 +18,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -119,6 +120,18 @@ type Gateway struct {
 	// PAM session registry for active proxy connections (multiple connections per session)
 	pamSessions   map[string][]*pamSessionEntry
 	pamSessionsMu sync.Mutex
+
+	// MongoDB proxy registry: one topology per session, shared across connections
+	mongoProxies   map[string]*mongoProxyEntry
+	mongoProxiesMu sync.Mutex
+}
+
+// mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
+// The first connection creates the proxy; concurrent connections wait on the channel.
+type mongoProxyEntry struct {
+	proxy *mongodb.MongoDBProxy
+	err   error
+	ready chan struct{} // closed when proxy creation completes (success or failure)
 }
 
 // NewGateway creates a new gateway instance
@@ -147,6 +160,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		pamCredentialsManager: pamCredentialsManager,
 		pamSessionUploader:    session.NewSessionUploader(httpClient, pamCredentialsManager),
 		pamSessions:           make(map[string][]*pamSessionEntry),
+		mongoProxies:          make(map[string]*mongoProxyEntry),
 	}, nil
 }
 
@@ -157,7 +171,10 @@ func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc
 	g.pamSessions[sessionID] = append(g.pamSessions[sessionID], &pamSessionEntry{cancel: cancel, conn: conn})
 }
 
-// DeregisterPAMSession removes a specific connection from the session registry
+// DeregisterPAMSession removes a specific connection from the session registry.
+// The MongoDB proxy (if any) is NOT closed here — it persists across connections
+// so that subsequent client connections (e.g. mongosh retries) find a warm topology.
+// The proxy is cleaned up on session cancellation or gateway shutdown.
 func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) {
 	g.pamSessionsMu.Lock()
 	defer g.pamSessionsMu.Unlock()
@@ -188,7 +205,62 @@ func (g *Gateway) CancelPAMSession(sessionID string) bool {
 		e.conn.Close()
 		e.cancel()
 	}
+	g.closeMongoProxy(sessionID)
 	return true
+}
+
+// GetOrCreateMongoProxy returns a session-level MongoDB proxy, creating it on first call.
+// The topology is shared across all client connections in the same PAM session.
+// Concurrent callers for the same session wait for the first creation to complete.
+func (g *Gateway) GetOrCreateMongoProxy(ctx context.Context, sessionID string, config mongodb.MongoDBProxyConfig) (*mongodb.MongoDBProxy, error) {
+	g.mongoProxiesMu.Lock()
+	entry, ok := g.mongoProxies[sessionID]
+	if ok {
+		g.mongoProxiesMu.Unlock()
+		// Wait for the creating goroutine to finish
+		<-entry.ready
+		return entry.proxy, entry.err
+	}
+
+	// First caller: create entry with pending signal, release lock, then create topology
+	entry = &mongoProxyEntry{ready: make(chan struct{})}
+	g.mongoProxies[sessionID] = entry
+	g.mongoProxiesMu.Unlock()
+
+	// Topology creation is slow (SRV, TLS, auth) — runs outside the lock.
+	// Other goroutines for this session will wait on entry.ready.
+	proxy, err := mongodb.NewMongoDBProxy(ctx, config)
+	entry.proxy = proxy
+	entry.err = err
+	close(entry.ready) // Signal all waiters
+
+	if err != nil {
+		// Creation failed — remove from registry so next attempt retries
+		g.mongoProxiesMu.Lock()
+		delete(g.mongoProxies, sessionID)
+		g.mongoProxiesMu.Unlock()
+		return nil, err
+	}
+
+	return proxy, nil
+}
+
+// closeMongoProxy closes and removes the MongoDB proxy for a session if one exists.
+func (g *Gateway) closeMongoProxy(sessionID string) {
+	g.mongoProxiesMu.Lock()
+	entry, ok := g.mongoProxies[sessionID]
+	if ok {
+		delete(g.mongoProxies, sessionID)
+	}
+	g.mongoProxiesMu.Unlock()
+
+	if ok {
+		// Wait for creation to finish before closing
+		<-entry.ready
+		if entry.proxy != nil {
+			entry.proxy.Close(context.Background()) //nolint:errcheck
+		}
+	}
 }
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
@@ -308,6 +380,17 @@ func (g *Gateway) Stop() {
 	}
 	g.isConnected = false
 	g.mu.Unlock()
+
+	// Close all MongoDB proxies
+	g.mongoProxiesMu.Lock()
+	for id, entry := range g.mongoProxies {
+		<-entry.ready
+		if entry.proxy != nil {
+			entry.proxy.Close(context.Background()) //nolint:errcheck
+		}
+		delete(g.mongoProxies, id)
+	}
+	g.mongoProxiesMu.Unlock()
 
 	// Shutdown PAM session uploader and credentials manager
 	if g.pamSessionUploader != nil {
@@ -823,6 +906,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 				ExpiryTime:         clientCert.NotAfter,
 				CredentialsManager: g.pamCredentialsManager,
 				SessionUploader:    g.pamSessionUploader,
+				GetMongoProxy:      g.GetOrCreateMongoProxy,
 			}
 		}
 	}
