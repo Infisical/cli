@@ -39,6 +39,7 @@ jobs:
         working-directory: ./e2e
         env:
           INFISICAL_BACKEND_DIR: ${{ github.workspace }}/infisical/backend
+          INFISICAL_LICENSE_KEY: ${{ secrets.INFISICAL_LICENSE_KEY }}
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-cli
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
 
@@ -65,6 +66,7 @@ jobs:
         run: go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/agent
         working-directory: ./e2e
         env:
+          INFISICAL_LICENSE_KEY: ${{ secrets.INFISICAL_LICENSE_KEY }}
           INFISICAL_BACKEND_DIR: ${{ github.workspace }}/infisical/backend
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-cli
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
@@ -100,6 +102,7 @@ jobs:
         working-directory: ./e2e
         env:
           INFISICAL_BACKEND_DIR: ${{ github.workspace }}/infisical/backend
+          INFISICAL_LICENSE_KEY: ${{ secrets.INFISICAL_LICENSE_KEY }}
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-cli
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
 
