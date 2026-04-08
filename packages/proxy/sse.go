@@ -173,15 +173,24 @@ func CallUniversalAuthLogin(domainURL *url.URL, clientId, clientSecret string, h
 // SSEConnection represents a single SSE connection for a project.
 // One connection per project tracks all environments automatically.
 type SSEConnection struct {
-	ProjectID string
-	Cancel    context.CancelFunc
+	ProjectID       string
+	EnvironmentSlug string
+	Cancel          context.CancelFunc
+}
+
+type pollingState struct {
+	cancel      context.CancelFunc
+	retryingSSE bool // true while a background SSE reconnection attempt is in progress
 }
 
 // SSEManager manages demand-driven SSE connections. Connections are opened when
 // user requests hit secrets endpoints, not eagerly at startup.
+// When SSE connections fail repeatedly for a project, the manager transitions
+// that project to a polling fallback and tracks it in pollingProjects.
 type SSEManager struct {
 	mu               sync.Mutex
-	connections      map[string]*SSEConnection // keyed by projectID
+	connections      map[string]*SSEConnection // active SSE connections
+	pollingProjects  map[string]*pollingState  // projects in polling fallback
 	cache            *Cache
 	domainURL        *url.URL
 	httpClient       *http.Client // streaming client (no timeout) for SSE connections
@@ -194,6 +203,7 @@ func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpCl
 
 	return &SSEManager{
 		connections:      make(map[string]*SSEConnection),
+		pollingProjects:  make(map[string]*pollingState),
 		cache:            cache,
 		domainURL:        domainURL,
 		httpClient:       httpClient,
@@ -205,8 +215,8 @@ func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpCl
 
 // EnsureSubscription ensures an SSE connection exists for the given projectId.
 // One connection per project tracks all environments, so only the projectId matters.
-// Called from the proxy handler when a secrets request is seen.
-func (m *SSEManager) EnsureSubscription(projectId string) {
+// If the connection is not established, the connection fall back to polling fallback
+func (m *SSEManager) EnsureSubscription(projectId, environmentSlug string) {
 	log.Info().Str("projectId", projectId).Msg("Ensuring SSE subscription for project")
 	if projectId == "" {
 		return
@@ -215,9 +225,20 @@ func (m *SSEManager) EnsureSubscription(projectId string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// connection already exists for that projectId, so we don't need to open a new one
+	// SSE connection already active — nothing to do
 	if m.connections[projectId] != nil {
 		log.Info().Str("projectId", projectId).Msg("SSE connection already exists for project, skipping")
+		return
+	}
+
+	// the project is in polling fallback mode
+	// try to connect using SSE
+	if ps, ok := m.pollingProjects[projectId]; ok {
+		if !ps.retryingSSE {
+			ps.retryingSSE = true
+			log.Info().Str("projectId", projectId).Str("envSlug", environmentSlug).Msg("Project in polling fallback, attempting SSE reconnection in background")
+			go m.attemptSSEReconnection(projectId, environmentSlug)
+		}
 		return
 	}
 
@@ -227,8 +248,9 @@ func (m *SSEManager) EnsureSubscription(projectId string) {
 
 	connCtx, connCancel := context.WithCancel(m.ctx)
 	conn := &SSEConnection{
-		ProjectID: projectId,
-		Cancel:    connCancel,
+		ProjectID:       projectId,
+		EnvironmentSlug: environmentSlug,
+		Cancel:          connCancel,
 	}
 	m.connections[projectId] = conn
 
@@ -236,8 +258,7 @@ func (m *SSEManager) EnsureSubscription(projectId string) {
 }
 
 // runConnection runs a single SSE connection with retry, cache resync, and backoff.
-// After maxRetries consecutive failures the connection is removed so the next user
-// request can re-trigger EnsureSubscription.
+// if the connection is not stablished, the connection fall back to polling fallback
 func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 	const (
 		maxRetries      = 5
@@ -255,14 +276,15 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 
 		connStart := time.Now()
 
-		err := connectSSEForProject(ctx, m.cache, m.domainURL, m.authState, m.httpClient, m.resyncHttpClient, conn.ProjectID)
+		err := connectSSEForProject(ctx, m.cache, m.domainURL, m.authState, m.httpClient, m.resyncHttpClient, m.cancelPollingIfActive, conn.ProjectID)
 		if ctx.Err() != nil {
 			return
 		}
 
-		// Connection stayed up long enough — reset retry counter
+		// Connection stayed up long enough — reset retry counter and cancel polling if active
 		if time.Since(connStart) > healthyDuration {
 			retries = 0
+			m.cancelPollingIfActive(conn.ProjectID)
 		}
 
 		if err == nil {
@@ -270,7 +292,20 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 			continue
 		}
 
-		// Handle auth errors with one re-auth attempt
+		retries++
+		if retries > maxRetries {
+			log.Warn().
+				Str("projectId", conn.ProjectID).
+				Int("maxRetries", maxRetries).
+				Msg("SSE connection retries exhausted, transitioning to polling fallback")
+
+			// the fallback to pooling only happens if the SSE connection is lost for a project
+			m.transitionToPolling(conn.ProjectID, conn.EnvironmentSlug)
+			return
+		}
+
+		// move the retry counter to the top, since it is possible
+		// to the be authenticated, but don't have the necessary roles
 		if isAuthError(err) {
 			log.Warn().Err(err).
 				Str("projectId", conn.ProjectID).
@@ -283,16 +318,7 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 			}
 			log.Error().Str("projectId", conn.ProjectID).
 				Msg("Failed to re-authenticate machine identity")
-		}
 
-		retries++
-		if retries > maxRetries {
-			log.Error().
-				Str("projectId", conn.ProjectID).
-				Int("maxRetries", maxRetries).
-				Msg("SSE connection retries exhausted, removing connection")
-			m.removeConnection(conn.ProjectID)
-			return
 		}
 
 		log.Warn().Err(err).
@@ -301,8 +327,8 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 			Int("maxRetries", maxRetries).
 			Msg("SSE connection lost, resyncing cache before retrying")
 
-		// Resync cache before reconnecting — we may have missed events during the outage
-		runStaticSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, 0)
+		// Resync project cache before reconnecting — we may have missed events during the outage
+		runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, conn.ProjectID, conn.EnvironmentSlug)
 
 		// Exponential backoff with jitter
 		delay := baseDelay * time.Duration(math.Pow(2, float64(retries-1)))
@@ -319,12 +345,77 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 	}
 }
 
-// removeConnection removes a connection from the map so the next user request
-// can re-trigger EnsureSubscription for this project.
-func (m *SSEManager) removeConnection(projectId string) {
+const pollingFallbackInterval = 5 * time.Minute
+
+// transitionToPolling moves a project from SSE mode to polling fallback.
+func (m *SSEManager) transitionToPolling(projectId, environmentSlug string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Remove SSE connection
 	delete(m.connections, projectId)
+
+	if ps, alreadyPolling := m.pollingProjects[projectId]; alreadyPolling {
+		// Already polling — this was a reconnection attempt that failed
+		ps.retryingSSE = false
+		log.Info().Str("projectId", projectId).Str("envSlug", environmentSlug).
+			Msg("SSE reconnection failed, continuing existing polling fallback")
+		return
+	}
+
+	pollCtx, pollCancel := context.WithCancel(m.ctx)
+	m.pollingProjects[projectId] = &pollingState{
+		cancel:      pollCancel,
+		retryingSSE: false,
+	}
+
+	log.Info().Str("projectId", projectId).Str("envSlug", environmentSlug).
+		Msg("Starting polling fallback for project")
+
+	// Resync the project cache immediately — events might have been missed during the outage
+	go runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug)
+
+	go startProjectPollingLoop(pollCtx, m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug, pollingFallbackInterval)
+}
+
+func (m *SSEManager) cancelPollingIfActive(projectId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if ps, ok := m.pollingProjects[projectId]; ok {
+		ps.cancel()
+		delete(m.pollingProjects, projectId)
+		log.Info().Str("projectId", projectId).Msg("Cancelled polling fallback")
+	}
+
+}
+
+// attemptSSEReconnection tries to re-establish an SSE connection for a project
+// that is currently in polling fallback mode.
+func (m *SSEManager) attemptSSEReconnection(projectId, environmentSlug string) {
+	log.Info().Str("projectId", projectId).Str("envSlug", environmentSlug).Msg("Attempting SSE reconnection from polling fallback")
+
+	m.mu.Lock()
+
+	// Re-check state: if another goroutine already created a connection, bail out
+	if m.connections[projectId] != nil {
+		if ps, ok := m.pollingProjects[projectId]; ok {
+			ps.retryingSSE = false
+		}
+		m.mu.Unlock()
+		return
+	}
+
+	connCtx, connCancel := context.WithCancel(m.ctx)
+	conn := &SSEConnection{
+		ProjectID:       projectId,
+		EnvironmentSlug: environmentSlug,
+		Cancel:          connCancel,
+	}
+	m.connections[projectId] = conn
+	m.mu.Unlock()
+
+	m.runConnection(conn, connCtx)
 }
 
 type sseAuthError struct {
@@ -343,7 +434,7 @@ func isAuthError(err error) bool {
 
 // connectSSEForProject establishes a single SSE connection for one project and processes events.
 // One connection per project tracks all environments automatically.
-func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL, authState *SSEAuthState, httpClient *http.Client, resyncHttpClient *http.Client, projectId string) error {
+func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL, authState *SSEAuthState, httpClient *http.Client, resyncHttpClient *http.Client, cancelPolling func(projectId string), projectId string) error {
 	subscribeURL := *domainURL
 	subscribeURL.Path = domainURL.Path + "/api/v1/events/subscribe/project-events"
 
@@ -396,6 +487,9 @@ func connectSSEForProject(ctx context.Context, cache *Cache, domainURL *url.URL,
 	log.Info().
 		Str("projectId", projectId).
 		Msg("SSE connection established")
+
+	// cancel the polling fallback if active
+	cancelPolling(projectId)
 
 	events := make(chan SSEEvent, 10)
 	go parseSSEStream(ctx, resp.Body, projectId, events)

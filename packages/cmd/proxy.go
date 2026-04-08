@@ -134,7 +134,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 	useSSE, err := cmd.Flags().GetBool("event-subscription-enabled")
 	if err != nil {
-		util.HandleError(err, "Unable to parse use-sse flag")
+		util.HandleError(err, "Unable to parse event-subscription-enabled flag")
 	}
 
 	clientId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
@@ -148,7 +148,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	}
 
 	if useSSE && (clientId == "" || clientSecret == "") {
-		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --use-sse is enabled. Set via flags or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET environment variables.")
+		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --event-subscription-enabled is enabled. Set via flags or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET environment variables.")
 	}
 
 	domainURL, err := url.Parse(domain)
@@ -447,12 +447,9 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 				cache.Set(cacheKey, r, cachedResp, token, indexEntry)
 
-				if useSSE {
-					if sseManager != nil {
-						log.Info().Str("projectId", indexEntry.ProjectId).Msg("Ensuring SSE subscription for project")
-						// this will start the subscription using SSE for the project
-						sseManager.EnsureSubscription(indexEntry.ProjectId)
-					}
+				if useSSE && sseManager != nil {
+					log.Info().Str("projectId", indexEntry.ProjectId).Str("envSlug", indexEntry.EnvironmentSlug).Msg("Ensuring SSE subscription for project")
+					sseManager.EnsureSubscription(indexEntry.ProjectId, indexEntry.EnvironmentSlug)
 				}
 
 				log.Debug().

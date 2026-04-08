@@ -66,7 +66,7 @@ func startProxy(t *testing.T, ctx context.Context, infisicalURL string, config P
 	}
 
 	if config.UseSSE {
-		args = append(args, "--use-sse")
+		args = append(args, "--event-subscription-enabled")
 		args = append(args, "--client-id", config.ClientID)
 		args = append(args, "--client-secret", config.ClientSecret)
 	}
@@ -883,4 +883,123 @@ func TestProxy_SSEMultipleProjects(t *testing.T) {
 		}
 	}
 	require.True(t, foundOriginal, "Original secret not found in project 2")
+}
+
+func TestProxy_SSEPollingFallbackRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	infisical, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
+
+	// create and cache a secret to trigger SSE subscription
+	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		Prefix: "SSE_POLLING_RECOVERY_",
+	})
+	helper.CreateSecretWithApi(ctx, secret)
+
+	slog.Info("Caching secret via proxy")
+	resp1 := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp1.StatusCode())
+	require.NotEmpty(t, resp1.JSON200.Secrets)
+
+	// wait for SSE connection established
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection established",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// stop the Infisical backend to break SSE connection
+	slog.Info("Stopping Infisical backend to break SSE connection")
+	backendContainer, err := infisical.Compose().ServiceContainer(ctx, "backend")
+	require.NoError(t, err)
+	err = backendContainer.Stop(ctx, nil)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		state, err := backendContainer.State(ctx)
+		if err != nil {
+			return false
+		}
+		return !state.Running
+	}, 60*time.Second, 200*time.Millisecond, "Backend container should have stopped")
+	slog.Info("Backend stopped")
+
+	// wait for SSE connection loss
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection lost",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "SSE connection loss should be detected")
+
+	// wait for SSE retries to exhaust and polling fallback to start (~62s worst case with backoff)
+	slog.Info("Waiting for SSE retries to exhaust and polling fallback to start")
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "transitioning to polling fallback",
+		Timeout:          180 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Should transition to polling fallback after retries exhausted")
+
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "Starting polling fallback for project",
+		Timeout:          10 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Polling fallback loop should start")
+
+	// restart the Infisical backend
+	slog.Info("Restarting Infisical backend")
+	err = backendContainer.Start(ctx)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		state, err := backendContainer.State(ctx)
+		if err != nil {
+			return false
+		}
+		return state.Running
+	}, 60*time.Second, 200*time.Millisecond, "Backend container should have restarted")
+	slog.Info("Backend restarted")
+
+	// trigger EnsureSubscription by making a request — detects polling, attempts SSE reconnection
+	slog.Info("Fetching secrets to trigger SSE reconnection from polling mode")
+	respAfterRestart := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, respAfterRestart.StatusCode())
+
+	// wait for SSE to re-establish (second occurrence after reconnection from polling)
+	slog.Info("Waiting for SSE reconnection from polling mode")
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		EnsureCmdRunning: proxyCmd,
+		Timeout:          120 * time.Second,
+		Interval:         1 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			if strings.Count(proxyCmd.Stderr(), "SSE connection established") >= 2 {
+				return helpers.ConditionSuccess
+			}
+			return helpers.ConditionWait
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, waitResult, "SSE should reconnect from polling fallback")
+
+	// verify polling was cancelled after SSE recovery
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "cancelled polling fallback",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Polling should be cancelled after SSE recovery")
+
+	// verify proxy is still functional
+	slog.Info("Verifying proxy still works after SSE recovery from polling")
+	respFinal := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, respFinal.StatusCode())
+	require.True(t, proxyCmd.IsRunning(), "Proxy should still be running")
+
+	// tear down compose stack for clean state in subsequent tests
+	slog.Info("Tearing down compose stack for clean state")
+	err = infisical.DownWithForce(ctx)
+	require.NoError(t, err, "Failed to tear down compose stack")
 }

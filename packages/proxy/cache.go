@@ -372,6 +372,55 @@ func (c *Cache) GetExpiredRequests(cacheTTL time.Duration) map[string]*CachedReq
 	return requests
 }
 
+// GetEntriesForProjectEnv retrieves all cache entries for a given project and environment.
+// Uses the same path index prefix as PurgeByMutation and CollectAndPurgeByMutation.
+func (c *Cache) GetEntriesForProjectEnv(projectId, envSlug string) map[string]*CachedRequest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	requests := make(map[string]*CachedRequest)
+
+	prefix := buildPathIndexPrefixForProject(projectId, envSlug)
+	pathKeys, err := c.storage.GetKeysByPrefix(prefix)
+	if err != nil {
+		log.Error().Err(err).Str("projectId", projectId).Str("envSlug", envSlug).Msg("Failed to get path index keys for project environment")
+		return requests
+	}
+
+	for _, key := range pathKeys {
+		var marker PathIndexMarker
+		if err := c.storage.Get(key, &marker); err != nil {
+			continue
+		}
+
+		cacheKey := marker.CacheKey
+		if _, exists := requests[cacheKey]; exists {
+			continue
+		}
+
+		var entry StoredCacheEntry
+		if err := c.storage.Get(buildEntryKey(cacheKey), &entry); err != nil {
+			continue
+		}
+
+		if entry.Request == nil {
+			continue
+		}
+
+		requestCopy := &CachedRequest{
+			Method:     entry.Request.Method,
+			RequestURI: entry.Request.RequestURI,
+			Headers:    make(http.Header),
+			CachedAt:   entry.Request.CachedAt,
+		}
+		CopyHeaders(requestCopy.Headers, entry.Request.Headers)
+
+		requests[cacheKey] = requestCopy
+	}
+
+	return requests
+}
+
 func (c *Cache) EvictEntry(cacheKey string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

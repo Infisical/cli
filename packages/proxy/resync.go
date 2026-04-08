@@ -289,6 +289,92 @@ func runStaticSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http.
 		Msg("Static secrets refresh completed")
 }
 
+func runProjectSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string) {
+	log.Info().Str("projectId", projectId).Str("envSlug", envSlug).Msg("Starting project secrets refresh")
+
+	requests := cache.GetEntriesForProjectEnv(projectId, envSlug)
+
+	type orderedEntry struct {
+		cacheKey string
+		request  *CachedRequest
+	}
+	ordered := make([]orderedEntry, 0, len(requests))
+	for key, req := range requests {
+		ordered = append(ordered, orderedEntry{key, req})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].request.CachedAt.Before(ordered[j].request.CachedAt)
+	})
+
+	refetched := 0
+	evicted := 0
+
+	for _, entry := range ordered {
+		time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+
+		proxyReq, err := reconstructProxyRequest(domainURL, entry.request)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("cacheKey", entry.cacheKey).
+				Str("requestURI", entry.request.RequestURI).
+				Msg("Failed to parse requestURI during project secrets refresh")
+			continue
+		}
+
+		resp, err := httpClient.Do(proxyReq)
+		if err != nil || (resp != nil && resp.StatusCode >= 500) {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			log.Error().
+				Err(err).
+				Str("cacheKey", entry.cacheKey).
+				Str("requestURI", entry.request.RequestURI).
+				Msg("Network error during project secrets refresh - keeping stale entry (optimistic strategy)")
+			continue
+		}
+
+		refetchedResult, evictedResult, rateLimited, retryAfterSeconds := handleResyncResponse(cache, entry.cacheKey, entry.request.RequestURI, resp)
+		if refetchedResult {
+			refetched++
+		}
+		if evictedResult {
+			evicted++
+		}
+
+		if rateLimited {
+			pauseDuration := time.Duration(retryAfterSeconds+2) * time.Second
+			log.Info().
+				Int("pauseSeconds", retryAfterSeconds+2).
+				Str("projectId", projectId).
+				Msg("Rate limited during project secrets refresh, pausing")
+			time.Sleep(pauseDuration)
+		}
+	}
+
+	log.Info().
+		Str("projectId", projectId).
+		Int("totalEntries", len(requests)).
+		Int("refetched", refetched).
+		Int("evicted", evicted).
+		Msg("Project secrets refresh completed")
+}
+
+func startProjectPollingLoop(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			runProjectSecretsRefresh(cache, domainURL, httpClient, projectId, envSlug)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func startAccessTokenValidation(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, accessTokenCheckInterval time.Duration) {
 	tokenTicker := time.NewTicker(accessTokenCheckInterval)
 	defer tokenTicker.Stop()
