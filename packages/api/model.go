@@ -845,8 +845,18 @@ type PAMAccessApprovalRequestResponse struct {
 	} `json:"request"`
 }
 
+type PAMPolicyRuleConfig struct {
+	Patterns []string `json:"patterns"`
+}
+
+type PAMPolicyRules struct {
+	CommandBlocking   *PAMPolicyRuleConfig `json:"command-blocking,omitempty"`
+	SessionLogMasking *PAMPolicyRuleConfig `json:"session-log-masking,omitempty"`
+}
+
 type PAMSessionCredentialsResponse struct {
 	Credentials PAMSessionCredentials `json:"credentials"`
+	PolicyRules *PAMPolicyRules       `json:"policyRules,omitempty"`
 }
 
 type PAMSessionCredentials struct {
