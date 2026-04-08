@@ -472,6 +472,10 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	if state.legacyMode {
+		return // Platform does not support batch uploads; bulk upload will happen at session end
+	}
+
 	payload, newOffset, err := readFromOffset(state.filename, encryptionKey, state.fileOffset)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for batch upload")
