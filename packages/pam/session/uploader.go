@@ -513,6 +513,12 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 			return fmt.Errorf("failed to read SSH session file: %w", err)
 		}
 
+		log.Debug().
+			Str("sessionId", fileInfo.SessionID).
+			Str("resourceType", fileInfo.ResourceType).
+			Int("eventCount", len(terminalEvents)).
+			Msg("Uploading terminal session events")
+
 		var logs []api.UploadTerminalEvent
 		for _, event := range terminalEvents {
 			logs = append(logs, api.UploadTerminalEvent{
@@ -532,6 +538,12 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		if err != nil {
 			return fmt.Errorf("failed to read Kubernetes session file: %w", err)
 		}
+
+		log.Debug().
+			Str("sessionId", fileInfo.SessionID).
+			Str("resourceType", fileInfo.ResourceType).
+			Int("eventCount", len(httpEvents)).
+			Msg("Uploading terminal session events")
 
 		var logs []api.UploadHttpEvent
 		for _, event := range httpEvents {
@@ -555,6 +567,17 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 	if err != nil {
 		return fmt.Errorf("failed to read session file: %w", err)
 	}
+
+	resourceTypeMsg := fileInfo.ResourceType
+	if resourceTypeMsg == "" {
+		resourceTypeMsg = "legacy"
+	}
+
+	log.Debug().
+		Str("sessionId", fileInfo.SessionID).
+		Str("resourceType", resourceTypeMsg).
+		Int("entryCount", len(entries)).
+		Msg("Uploading database session logs")
 
 	var logs []api.UploadSessionLogEntry
 	for _, entry := range entries {
