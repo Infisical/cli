@@ -57,6 +57,14 @@ var proxyDebugCmd = &cobra.Command{
 	Hidden:                true,
 }
 
+func initializeSSEManager(ctx context.Context, clientId, clientSecret string, cache *proxy.Cache, domainURL *url.URL, streamingClient *http.Client, httpClient *http.Client) (*proxy.SSEManager, error) {
+	sseAuthState, err := proxy.NewSSEAuthState(clientId, clientSecret, domainURL, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.NewSSEManager(context.Background(), cache, domainURL, streamingClient, httpClient, sseAuthState), nil
+}
+
 func startProxyServer(cmd *cobra.Command, args []string) {
 	domain, err := cmd.Flags().GetString("domain")
 	if err != nil {
@@ -124,7 +132,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid static-secrets-refresh-interval format '%s'. Use formats like 30m, 1h, 1d", staticSecretsRefreshIntervalStr))
 	}
 
-	useSSE, err := cmd.Flags().GetBool("use-sse")
+	useSSE, err := cmd.Flags().GetBool("event-subscription-enabled")
 	if err != nil {
 		util.HandleError(err, "Unable to parse use-sse flag")
 	}
@@ -195,10 +203,11 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	}
 
 	var sseManager *proxy.SSEManager
-	var sseAuthState *proxy.SSEAuthState
 	if useSSE {
-		sseAuthState = proxy.NewSSEAuthState(clientId, clientSecret, domainURL, httpClient)
-		sseManager = proxy.NewSSEManager(context.Background(), cache, domainURL, streamingClient, httpClient, sseAuthState)
+		sseManager, err = initializeSSEManager(context.Background(), clientId, clientSecret, cache, domainURL, streamingClient, httpClient)
+		if err != nil {
+			util.HandleError(err, "Failed to initialize SSE manager")
+		}
 		log.Info().Msg("SSE manager initialized for demand-driven cache updates")
 	}
 
@@ -438,10 +447,12 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 				cache.Set(cacheKey, r, cachedResp, token, indexEntry)
 
-				if sseManager != nil {
-					log.Info().Str("projectId", indexEntry.ProjectId).Msg("Ensuring SSE subscription for project")
-					// this will start the subscription using SSE for the project
-					sseManager.EnsureSubscription(indexEntry.ProjectId)
+				if useSSE {
+					if sseManager != nil {
+						log.Info().Str("projectId", indexEntry.ProjectId).Msg("Ensuring SSE subscription for project")
+						// this will start the subscription using SSE for the project
+						sseManager.EnsureSubscription(indexEntry.ProjectId)
+					}
 				}
 
 				log.Debug().
@@ -615,9 +626,9 @@ func init() {
 	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().String("tls-key-file", "", "The path to the TLS key file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().Bool("tls-enabled", true, "Whether to enable TLS for the proxy server. Defaults to true")
-	proxyStartCmd.Flags().Bool("use-sse", false, "Enable SSE (Server-Sent Events) mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled and --client-id/--client-secret are required.")
-	proxyStartCmd.Flags().String("client-id", "", "Universal auth client ID for SSE (env: INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
-	proxyStartCmd.Flags().String("client-secret", "", "Machine identity client secret for universal auth (env: INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
+	proxyStartCmd.Flags().Bool("event-subscription-enabled", false, "Enable Event Subscription mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled. If event subscriptions are unavailable, the proxy will fall back to a polling mechanism.  `--client id` and `--client-secret` are required when this is set to true ")
+	proxyStartCmd.Flags().String("client-id", "", "Machine identity universal auth client ID. This is required when using event subscriptions.")
+	proxyStartCmd.Flags().String("client-secret", "", "Machine identity universal auth client secret. This is required when using event subscriptions.")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 

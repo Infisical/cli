@@ -87,7 +87,7 @@ type SSEAuthState struct {
 	httpClient   *http.Client
 }
 
-func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL, httpClient *http.Client) *SSEAuthState {
+func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL, httpClient *http.Client) (*SSEAuthState, error) {
 	authState := &SSEAuthState{
 		clientId:     clientId,
 		clientSecret: clientSecret,
@@ -96,12 +96,13 @@ func NewSSEAuthState(clientId, clientSecret string, domainURL *url.URL, httpClie
 	}
 
 	// ensure we have a valid token
-	_, err := authState.RefreshToken()
+	_, err := authState.UniversalAuthLogin()
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to refresh SSE auth token")
+		log.Error().Err(err).Msg("Failed to authenticate machine identity")
+		return nil, err
 	}
 
-	return authState
+	return authState, nil
 }
 
 func (s *SSEAuthState) GetToken() string {
@@ -116,7 +117,7 @@ func (s *SSEAuthState) SetToken(token string) {
 	s.token = token
 }
 
-func (s *SSEAuthState) RefreshToken() (string, error) {
+func (s *SSEAuthState) UniversalAuthLogin() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	newToken, err := CallUniversalAuthLogin(s.domainURL, s.clientId, s.clientSecret, s.httpClient)
@@ -275,7 +276,7 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 				Str("projectId", conn.ProjectID).
 				Msg("SSE auth error, re-authenticating...")
 
-			if _, authErr := m.authState.RefreshToken(); authErr == nil {
+			if _, authErr := m.authState.UniversalAuthLogin(); authErr == nil {
 				log.Info().Str("projectId", conn.ProjectID).
 					Msg("Machine identity re-authenticated successfully")
 				continue
