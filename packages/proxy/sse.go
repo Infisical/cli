@@ -375,7 +375,20 @@ func (m *SSEManager) transitionToPolling(projectId, environmentSlug string) {
 	// Resync the project cache immediately — events might have been missed during the outage
 	go runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug)
 
-	go startProjectPollingLoop(pollCtx, m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug, pollingFallbackInterval)
+	// On each polling tick (except the first), attempt SSE reconnection
+	retrySSE := func() {
+		m.mu.Lock()
+		ps, ok := m.pollingProjects[projectId]
+		if !ok || ps.retryingSSE {
+			m.mu.Unlock()
+			return
+		}
+		ps.retryingSSE = true
+		m.mu.Unlock()
+		go m.attemptSSEReconnection(projectId, environmentSlug)
+	}
+
+	go startProjectPollingLoop(pollCtx, m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug, pollingFallbackInterval, retrySSE)
 }
 
 func (m *SSEManager) cancelPollingIfActive(projectId string) {

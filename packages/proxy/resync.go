@@ -361,14 +361,19 @@ func runProjectSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http
 		Msg("Project secrets refresh completed")
 }
 
-func startProjectPollingLoop(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string, interval time.Duration) {
+func startProjectPollingLoop(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string, interval time.Duration, onPollComplete func()) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	firstTick := true
 	for {
 		select {
 		case <-ticker.C:
 			runProjectSecretsRefresh(cache, domainURL, httpClient, projectId, envSlug)
+			if !firstTick && onPollComplete != nil {
+				onPollComplete()
+			}
+			firstTick = false
 		case <-ctx.Done():
 			return
 		}
