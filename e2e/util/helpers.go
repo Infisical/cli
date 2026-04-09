@@ -1,7 +1,9 @@
 package util
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -263,6 +265,29 @@ func WithUniversalAuth() MachineIdentityOption {
 
 		i.UniversalAuthClientSecret = &csResp.JSON200.ClientSecret
 	}
+}
+
+func (s *InfisicalService) UpdateMachineIdentityRole(t *testing.T, ctx context.Context, identityId string, role string) {
+	apiUrl := s.ApiUrl(t)
+	url := fmt.Sprintf("%s/api/v1/identities/%s", apiUrl, identityId)
+
+	body, err := json.Marshal(map[string]string{"role": role})
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.provisionResult.Token)
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.True(t, resp.StatusCode >= 200 && resp.StatusCode < 300,
+		"Failed to update identity role to '%s', status %d: %s", role, resp.StatusCode, string(respBody))
+
+	slog.Info("Updated machine identity role", "identityId", identityId, "role", role)
 }
 
 type RunMethod string

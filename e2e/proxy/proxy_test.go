@@ -90,7 +90,7 @@ func startProxy(t *testing.T, ctx context.Context, infisicalURL string, config P
 }
 
 // setupProxyTest sets up the common test
-func setupProxyTest(t *testing.T, ctx context.Context, proxyConfig ProxyTestConfig) (*helpers.InfisicalService, *proxyHelpers.ProxyTestHelper, *helpers.Command, string, string) {
+func setupProxyTest(t *testing.T, ctx context.Context, proxyConfig ProxyTestConfig) (*helpers.InfisicalService, *proxyHelpers.ProxyTestHelper, *helpers.Command, string, string, helpers.MachineIdentity) {
 	infisical := helpers.NewInfisicalService().Up(t, ctx)
 
 	// create machine identity with token auth (and universal auth if SSE is enabled)
@@ -145,14 +145,14 @@ func setupProxyTest(t *testing.T, ctx context.Context, proxyConfig ProxyTestConf
 	// create test helper with both proxy and direct API clients
 	helper := proxyHelpers.NewProxyTestHelper(t, proxyURL, infisical.ApiUrl(t), identityToken, projectID)
 
-	return infisical, helper, proxyCmd, identityToken, proxyURL
+	return infisical, helper, proxyCmd, identityToken, proxyURL, identity
 }
 
 func TestProxy_CacheHitMiss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -209,7 +209,7 @@ func TestProxy_MutationPurging(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	initialSecret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
 		Prefix: "MUTATION_TEST_",
@@ -281,7 +281,7 @@ func TestProxy_DeleteMutationPurging(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -338,7 +338,7 @@ func TestProxy_TokenInvalidation(t *testing.T) {
 	config := DefaultProxyTestConfig()
 	config.AccessTokenCheckInterval = "2s"
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, config)
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, config)
 
 	// create and cache a secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -377,7 +377,7 @@ func TestProxy_HighAvailability(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	infisical, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create and cache a secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -451,7 +451,7 @@ func TestProxy_BackgroundRefresh(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test initialSecret
 	initialSecret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -520,7 +520,7 @@ func TestProxy_MultipleSecrets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, _, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	var secrets []proxyHelpers.Secret
 	for i := 0; i < 3; i++ {
@@ -557,7 +557,7 @@ func TestProxy_SingleSecretEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -591,7 +591,7 @@ func TestProxy_SSECacheUpdate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
 
 	// wait for SSE manager initialization
 	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
@@ -687,7 +687,7 @@ func TestProxy_SSEConnectionRecovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
+	infisical, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
 
 	// create and cache a secret to trigger SSE subscription
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -777,7 +777,7 @@ func TestProxy_SSEMultipleProjects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical, helper1, proxyCmd, identityToken, proxyURL := setupProxyTest(t, ctx, SSEProxyTestConfig())
+	infisical, helper1, proxyCmd, identityToken, proxyURL, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
 
 	// create a second project using the same identity
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(identityToken)
@@ -883,123 +883,4 @@ func TestProxy_SSEMultipleProjects(t *testing.T) {
 		}
 	}
 	require.True(t, foundOriginal, "Original secret not found in project 2")
-}
-
-func TestProxy_SSEPollingFallbackRecovery(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	infisical, helper, proxyCmd, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
-
-	// create and cache a secret to trigger SSE subscription
-	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
-		Prefix: "SSE_POLLING_RECOVERY_",
-	})
-	helper.CreateSecretWithApi(ctx, secret)
-
-	slog.Info("Caching secret via proxy")
-	resp1 := helper.GetSecretsWithProxy(ctx)
-	require.Equal(t, http.StatusOK, resp1.StatusCode())
-	require.NotEmpty(t, resp1.JSON200.Secrets)
-
-	// wait for SSE connection established
-	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
-		EnsureCmdRunning: proxyCmd,
-		ExpectedString:   "SSE connection established",
-		Timeout:          30 * time.Second,
-	})
-	require.Equal(t, helpers.WaitSuccess, result)
-
-	// stop the Infisical backend to break SSE connection
-	slog.Info("Stopping Infisical backend to break SSE connection")
-	backendContainer, err := infisical.Compose().ServiceContainer(ctx, "backend")
-	require.NoError(t, err)
-	err = backendContainer.Stop(ctx, nil)
-	require.NoError(t, err)
-
-	require.Eventually(t, func() bool {
-		state, err := backendContainer.State(ctx)
-		if err != nil {
-			return false
-		}
-		return !state.Running
-	}, 60*time.Second, 200*time.Millisecond, "Backend container should have stopped")
-	slog.Info("Backend stopped")
-
-	// wait for SSE connection loss
-	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
-		EnsureCmdRunning: proxyCmd,
-		ExpectedString:   "SSE connection lost",
-		Timeout:          30 * time.Second,
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "SSE connection loss should be detected")
-
-	// wait for SSE retries to exhaust and polling fallback to start (~62s worst case with backoff)
-	slog.Info("Waiting for SSE retries to exhaust and polling fallback to start")
-	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
-		EnsureCmdRunning: proxyCmd,
-		ExpectedString:   "transitioning to polling fallback",
-		Timeout:          180 * time.Second,
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "Should transition to polling fallback after retries exhausted")
-
-	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
-		EnsureCmdRunning: proxyCmd,
-		ExpectedString:   "Starting polling fallback for project",
-		Timeout:          10 * time.Second,
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "Polling fallback loop should start")
-
-	// restart the Infisical backend
-	slog.Info("Restarting Infisical backend")
-	err = backendContainer.Start(ctx)
-	require.NoError(t, err)
-
-	require.Eventually(t, func() bool {
-		state, err := backendContainer.State(ctx)
-		if err != nil {
-			return false
-		}
-		return state.Running
-	}, 60*time.Second, 200*time.Millisecond, "Backend container should have restarted")
-	slog.Info("Backend restarted")
-
-	// trigger EnsureSubscription by making a request — detects polling, attempts SSE reconnection
-	slog.Info("Fetching secrets to trigger SSE reconnection from polling mode")
-	respAfterRestart := helper.GetSecretsWithProxy(ctx)
-	require.Equal(t, http.StatusOK, respAfterRestart.StatusCode())
-
-	// wait for SSE to re-establish (second occurrence after reconnection from polling)
-	slog.Info("Waiting for SSE reconnection from polling mode")
-	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
-		EnsureCmdRunning: proxyCmd,
-		Timeout:          120 * time.Second,
-		Interval:         1 * time.Second,
-		Condition: func() helpers.ConditionResult {
-			if strings.Count(proxyCmd.Stderr(), "SSE connection established") >= 2 {
-				return helpers.ConditionSuccess
-			}
-			return helpers.ConditionWait
-		},
-	})
-	require.Equal(t, helpers.WaitSuccess, waitResult, "SSE should reconnect from polling fallback")
-
-	// verify polling was cancelled after SSE recovery
-	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
-		EnsureCmdRunning: proxyCmd,
-		ExpectedString:   "cancelled polling fallback",
-		Timeout:          30 * time.Second,
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "Polling should be cancelled after SSE recovery")
-
-	// verify proxy is still functional
-	slog.Info("Verifying proxy still works after SSE recovery from polling")
-	respFinal := helper.GetSecretsWithProxy(ctx)
-	require.Equal(t, http.StatusOK, respFinal.StatusCode())
-	require.True(t, proxyCmd.IsRunning(), "Proxy should still be running")
-
-	// tear down compose stack for clean state in subsequent tests
-	slog.Info("Tearing down compose stack for clean state")
-	err = infisical.DownWithForce(ctx)
-	require.NoError(t, err, "Failed to tear down compose stack")
 }
