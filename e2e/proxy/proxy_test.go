@@ -26,6 +26,7 @@ type ProxyTestConfig struct {
 	TLSKeyFile                   string
 	AccessTokenCheckInterval     string
 	StaticSecretsRefreshInterval string
+	PollingFallbackInterval      string
 	UseSSE                       bool
 	ClientID                     string
 	ClientSecret                 string
@@ -45,6 +46,7 @@ func DefaultProxyTestConfig() ProxyTestConfig {
 func SSEProxyTestConfig() ProxyTestConfig {
 	config := DefaultProxyTestConfig()
 	config.UseSSE = true
+	config.PollingFallbackInterval = "10s"
 	return config
 }
 
@@ -69,6 +71,9 @@ func startProxy(t *testing.T, ctx context.Context, infisicalURL string, config P
 		args = append(args, "--event-subscription-enabled")
 		args = append(args, "--client-id", config.ClientID)
 		args = append(args, "--client-secret", config.ClientSecret)
+		if config.PollingFallbackInterval != "" {
+			args = append(args, "--polling-fallback-interval", config.PollingFallbackInterval)
+		}
 	}
 
 	proxyCmd := helpers.Command{

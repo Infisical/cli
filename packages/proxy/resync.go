@@ -362,6 +362,7 @@ func runProjectSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http
 }
 
 func startProjectPollingLoop(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string, interval time.Duration, onPollComplete func()) {
+	log.Info().Str("projectId", projectId).Str("envSlug", envSlug).Msg("Starting project polling loop")
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

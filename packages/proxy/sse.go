@@ -188,28 +188,29 @@ type pollingState struct {
 // When SSE connections fail repeatedly for a project, the manager transitions
 // that project to a polling fallback and tracks it in pollingProjects.
 type SSEManager struct {
-	mu               sync.Mutex
-	connections      map[string]*SSEConnection // active SSE connections
-	pollingProjects  map[string]*pollingState  // projects in polling fallback
-	cache            *Cache
-	domainURL        *url.URL
-	httpClient       *http.Client // streaming client (no timeout) for SSE connections
-	resyncHttpClient *http.Client // regular client (with timeout) for cache resync requests
-	authState        *SSEAuthState
-	ctx              context.Context
+	mu                      sync.Mutex
+	connections             map[string]*SSEConnection // active SSE connections
+	pollingProjects         map[string]*pollingState  // projects in polling fallback
+	cache                   *Cache
+	domainURL               *url.URL
+	httpClient              *http.Client // streaming client (no timeout) for SSE connections
+	resyncHttpClient        *http.Client // regular client (with timeout) for cache resync requests
+	authState               *SSEAuthState
+	pollingFallbackInterval time.Duration
+	ctx                     context.Context
 }
 
-func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, resyncHttpClient *http.Client, authState *SSEAuthState) *SSEManager {
-
+func NewSSEManager(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, resyncHttpClient *http.Client, authState *SSEAuthState, pollingFallbackInterval time.Duration) *SSEManager {
 	return &SSEManager{
-		connections:      make(map[string]*SSEConnection),
-		pollingProjects:  make(map[string]*pollingState),
-		cache:            cache,
-		domainURL:        domainURL,
-		httpClient:       httpClient,
-		resyncHttpClient: resyncHttpClient,
-		authState:        authState,
-		ctx:              ctx,
+		connections:             make(map[string]*SSEConnection),
+		pollingProjects:         make(map[string]*pollingState),
+		cache:                   cache,
+		domainURL:               domainURL,
+		httpClient:              httpClient,
+		resyncHttpClient:        resyncHttpClient,
+		authState:               authState,
+		pollingFallbackInterval: pollingFallbackInterval,
+		ctx:                     ctx,
 	}
 }
 
@@ -327,9 +328,6 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 			Int("maxRetries", maxRetries).
 			Msg("SSE connection lost, resyncing cache before retrying")
 
-		// Resync project cache before reconnecting — we may have missed events during the outage
-		runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, conn.ProjectID, conn.EnvironmentSlug)
-
 		// Exponential backoff with jitter
 		delay := baseDelay * time.Duration(math.Pow(2, float64(retries-1)))
 
@@ -344,8 +342,6 @@ func (m *SSEManager) runConnection(conn *SSEConnection, ctx context.Context) {
 		}
 	}
 }
-
-const pollingFallbackInterval = 5 * time.Minute
 
 // transitionToPolling moves a project from SSE mode to polling fallback.
 func (m *SSEManager) transitionToPolling(projectId, environmentSlug string) {
@@ -373,7 +369,7 @@ func (m *SSEManager) transitionToPolling(projectId, environmentSlug string) {
 		Msg("Starting polling fallback for project")
 
 	// Resync the project cache immediately — events might have been missed during the outage
-	go runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug)
+	runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug)
 
 	// On each polling tick (except the first), attempt SSE reconnection
 	retrySSE := func() {
@@ -388,7 +384,7 @@ func (m *SSEManager) transitionToPolling(projectId, environmentSlug string) {
 		go m.attemptSSEReconnection(projectId, environmentSlug)
 	}
 
-	go startProjectPollingLoop(pollCtx, m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug, pollingFallbackInterval, retrySSE)
+	go startProjectPollingLoop(pollCtx, m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug, m.pollingFallbackInterval, retrySSE)
 }
 
 func (m *SSEManager) cancelPollingIfActive(projectId string) {

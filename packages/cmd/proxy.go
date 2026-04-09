@@ -57,12 +57,12 @@ var proxyDebugCmd = &cobra.Command{
 	Hidden:                true,
 }
 
-func initializeSSEManager(ctx context.Context, clientId, clientSecret string, cache *proxy.Cache, domainURL *url.URL, streamingClient *http.Client, httpClient *http.Client) (*proxy.SSEManager, error) {
+func initializeSSEManager(ctx context.Context, clientId, clientSecret string, cache *proxy.Cache, domainURL *url.URL, streamingClient *http.Client, httpClient *http.Client, pollingFallbackInterval time.Duration) (*proxy.SSEManager, error) {
 	sseAuthState, err := proxy.NewSSEAuthState(clientId, clientSecret, domainURL, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	return proxy.NewSSEManager(context.Background(), cache, domainURL, streamingClient, httpClient, sseAuthState), nil
+	return proxy.NewSSEManager(ctx, cache, domainURL, streamingClient, httpClient, sseAuthState, pollingFallbackInterval), nil
 }
 
 func startProxyServer(cmd *cobra.Command, args []string) {
@@ -130,6 +130,16 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	staticSecretsRefreshInterval, err := util.ParseTimeDurationString(staticSecretsRefreshIntervalStr, true)
 	if err != nil {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid static-secrets-refresh-interval format '%s'. Use formats like 30m, 1h, 1d", staticSecretsRefreshIntervalStr))
+	}
+
+	pollingFallbackIntervalStr, err := cmd.Flags().GetString("polling-fallback-interval")
+	if err != nil {
+		util.HandleError(err, "Unable to parse polling-fallback-interval flag")
+	}
+
+	pollingFallbackInterval, err := util.ParseTimeDurationString(pollingFallbackIntervalStr, true)
+	if err != nil {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid polling-fallback-interval format '%s'. Use formats like 1m, 5m, 10m", pollingFallbackIntervalStr))
 	}
 
 	useSSE, err := cmd.Flags().GetBool("event-subscription-enabled")
@@ -204,7 +214,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 	var sseManager *proxy.SSEManager
 	if useSSE {
-		sseManager, err = initializeSSEManager(context.Background(), clientId, clientSecret, cache, domainURL, streamingClient, httpClient)
+		sseManager, err = initializeSSEManager(context.Background(), clientId, clientSecret, cache, domainURL, streamingClient, httpClient, pollingFallbackInterval)
 		if err != nil {
 			util.HandleError(err, "Failed to initialize SSE manager")
 		}
@@ -626,6 +636,7 @@ func init() {
 	proxyStartCmd.Flags().Bool("event-subscription-enabled", false, "Enable Event Subscription mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled. If event subscriptions are unavailable, the proxy will fall back to a polling mechanism.  `--client id` and `--client-secret` are required when this is set to true ")
 	proxyStartCmd.Flags().String("client-id", "", "Machine identity universal auth client ID. This is required when using event subscriptions.")
 	proxyStartCmd.Flags().String("client-secret", "", "Machine identity universal auth client secret. This is required when using event subscriptions.")
+	proxyStartCmd.Flags().String("polling-fallback-interval", "10m", "How often to poll for secret changes when SSE is unavailable (e.g., 1m, 5m). Defaults to 5m. Only used when --event-subscription-enabled is set.")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 
