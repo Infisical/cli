@@ -247,8 +247,8 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		p.handleChannelRequests(serverRequests, clientChannel, sessionID, channelType, chState)
 	}()
 
-	// Proxy data bidirectionally with logging
-	errChan := make(chan error, 2)
+	clientToServerDone := make(chan error, 1)
+	serverToClientDone := make(chan error, 1)
 
 	// Client to Server
 	go func() {
@@ -258,20 +258,36 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		} else {
 			err = p.proxyData(clientChannel, serverChannel, "client→server", sessionID, true, chState)
 		}
-		errChan <- err
+		// Send EOF so the remote process exits and delivers exit-status.
+		serverChannel.CloseWrite() //nolint:errcheck
+		clientToServerDone <- err
 	}()
 
 	// Server to Client
 	go func() {
 		err := p.proxyData(serverChannel, clientChannel, "server→client", sessionID, false, chState)
-		errChan <- err
+		serverToClientDone <- err
 	}()
 
-	// Wait for either direction to finish or context cancellation
+	// When client→server finishes first (SCP), wait for server→client to deliver
+	// the response. When server→client finishes first (exec), proceed immediately
+	// since the client→server goroutine may be blocked on stdin that never arrives.
 	select {
-	case err := <-errChan:
+	case err := <-clientToServerDone:
 		if err != nil && err != io.EOF {
-			log.Debug().Err(err).Str("sessionID", sessionID).Msg("Channel proxy error")
+			log.Debug().Err(err).Str("sessionID", sessionID).Msg("client→server proxy error")
+		}
+		select {
+		case err := <-serverToClientDone:
+			if err != nil && err != io.EOF {
+				log.Debug().Err(err).Str("sessionID", sessionID).Msg("server→client proxy error")
+			}
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+		}
+	case err := <-serverToClientDone:
+		if err != nil && err != io.EOF {
+			log.Debug().Err(err).Str("sessionID", sessionID).Msg("server→client proxy error")
 		}
 	case <-ctx.Done():
 		log.Info().Str("sessionID", sessionID).Msg("Channel cancelled by context")
@@ -280,7 +296,7 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 	// Brief window for exit-status to be forwarded before channel teardown.
 	select {
 	case <-serverReqDone:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(3 * time.Second):
 	}
 	clientChannel.Close()
 	serverChannel.Close()

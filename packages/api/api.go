@@ -54,6 +54,7 @@ const (
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
+	operationCallUploadPamSessionEventBatch        = "CallUploadPamSessionEventBatch"
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
@@ -1005,6 +1006,23 @@ func CallUploadPamSessionLogs(httpClient *resty.Client, sessionId string, reques
 		return NewAPIErrorWithResponse(operationCallUploadPamSessionLog, response, nil)
 	}
 
+	return nil
+}
+
+func CallUploadPamSessionEventBatch(httpClient *resty.Client, sessionId string, startOffset int64, data []byte) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("Content-Type", "application/octet-stream").
+		SetBody(data).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/event-batches?startOffset=%d", config.INFISICAL_URL, sessionId, startOffset))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallUploadPamSessionEventBatch, err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallUploadPamSessionEventBatch, response, nil)
+	}
 	return nil
 }
 
