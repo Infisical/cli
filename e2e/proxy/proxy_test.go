@@ -68,7 +68,7 @@ func startProxy(t *testing.T, ctx context.Context, infisicalURL string, config P
 	}
 
 	if config.UseSSE {
-		args = append(args, "--event-subscription-enabled")
+		args = append(args, "--enable-event-subscriptions")
 		args = append(args, "--client-id", config.ClientID)
 		args = append(args, "--client-secret", config.ClientSecret)
 		if config.PollingFallbackInterval != "" {

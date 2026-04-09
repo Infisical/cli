@@ -369,7 +369,7 @@ func (m *SSEManager) transitionToPolling(projectId, environmentSlug string) {
 		Msg("Starting polling fallback for project")
 
 	// Resync the project cache immediately — events might have been missed during the outage
-	runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug)
+	go runProjectSecretsRefresh(m.cache, m.domainURL, m.resyncHttpClient, projectId, environmentSlug)
 
 	// On each polling tick (except the first), attempt SSE reconnection
 	retrySSE := func() {

@@ -142,9 +142,9 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid polling-fallback-interval format '%s'. Use formats like 1m, 5m, 10m", pollingFallbackIntervalStr))
 	}
 
-	useSSE, err := cmd.Flags().GetBool("event-subscription-enabled")
+	useSSE, err := cmd.Flags().GetBool("enable-event-subscriptions")
 	if err != nil {
-		util.HandleError(err, "Unable to parse event-subscription-enabled flag")
+		util.HandleError(err, "Unable to parse enable-event-subscriptions flag")
 	}
 
 	clientId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
@@ -158,7 +158,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	}
 
 	if useSSE && (clientId == "" || clientSecret == "") {
-		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --event-subscription-enabled is enabled. Set via flags or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET environment variables.")
+		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --enable-event-subscriptions is enabled. Set via flags or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET environment variables.")
 	}
 
 	domainURL, err := url.Parse(domain)
@@ -633,10 +633,10 @@ func init() {
 	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().String("tls-key-file", "", "The path to the TLS key file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().Bool("tls-enabled", true, "Whether to enable TLS for the proxy server. Defaults to true")
-	proxyStartCmd.Flags().Bool("event-subscription-enabled", false, "Enable Event Subscription mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled. If event subscriptions are unavailable, the proxy will fall back to a polling mechanism.  `--client id` and `--client-secret` are required when this is set to true ")
+	proxyStartCmd.Flags().Bool("enable-event-subscriptions", false, "Enable Event Subscription mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled. If event subscriptions are unavailable, the proxy will fall back to a polling mechanism.  `--client id` and `--client-secret` are required when this is set to true ")
 	proxyStartCmd.Flags().String("client-id", "", "Machine identity universal auth client ID. This is required when using event subscriptions.")
 	proxyStartCmd.Flags().String("client-secret", "", "Machine identity universal auth client secret. This is required when using event subscriptions.")
-	proxyStartCmd.Flags().String("polling-fallback-interval", "10m", "How often to poll for secret changes when SSE is unavailable (e.g., 1m, 5m). Defaults to 5m. Only used when --event-subscription-enabled is set.")
+	proxyStartCmd.Flags().String("polling-fallback-interval", "10m", "How often to poll for secret changes when SSE is unavailable (e.g., 1m, 5m). Defaults to 5m. Only used when --enable-event-subscriptions is set.")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 
