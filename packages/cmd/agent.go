@@ -2502,32 +2502,32 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 		time.Sleep(1 * time.Second)
 	}
 
-	const maxIssuanceAttempts = 3
 	for _, cert := range tm.certificates {
 		cert := cert
 		displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
-		var lastErr error
-		for attempt := 1; attempt <= maxIssuanceAttempts; attempt++ {
+		maxRetries := cert.Certificate.Lifecycle.MaxFailureRetries
+		retryForever := maxRetries == 0
+
+		baseDelay := 2 * time.Second
+		if d, err := parseDurationWithDays(cert.Certificate.Lifecycle.FailureRetryInterval); err == nil && d > 0 {
+			baseDelay = d
+		}
+
+		const maxBackoff = 5 * time.Minute
+		for attempt := 1; retryForever || attempt <= maxRetries; attempt++ {
 			if err := tm.IssueCertificate(cert.ID, &cert.Certificate); err != nil {
-				lastErr = err
 				log.Error().
 					Str("Certificate", displayName).
 					Int("attempt", attempt).
-					Int("maxAttempts", maxIssuanceAttempts).
 					Msgf("initial certificate issuance failed: %v", err)
-				if attempt < maxIssuanceAttempts {
-					backoff := time.Duration(1<<uint(attempt-1)) * 2 * time.Second
-					time.Sleep(backoff)
+				backoff := baseDelay * time.Duration(1<<uint(min(attempt-1, 8)))
+				if backoff > maxBackoff {
+					backoff = maxBackoff
 				}
+				time.Sleep(backoff)
 			} else {
-				lastErr = nil
 				break
 			}
-		}
-		if lastErr != nil {
-			log.Error().
-				Str("Certificate", displayName).
-				Msgf("all %d issuance attempts failed, will retry on next renewal check", maxIssuanceAttempts)
 		}
 	}
 

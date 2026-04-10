@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +34,7 @@ func TestResolveCertificateNameReferences(t *testing.T) {
 					Slug: projectSlug,
 				})
 			case r.URL.Path == "/v1/cert-manager/certificate-profiles/slug/"+profileSlug:
-				require.Equal(t, projectID, r.URL.Query().Get("projectId"))
+				assert.Equal(t, projectID, r.URL.Query().Get("projectId"))
 				json.NewEncoder(w).Encode(api.GetCertificateProfileResponse{
 					CertificateProfile: api.CertificateProfile{
 						ID:        profileID,
@@ -64,27 +63,28 @@ func TestResolveCertificateNameReferences(t *testing.T) {
 	assert.Equal(t, profileID, certs[0].ProfileID)
 }
 
-func TestSlugResolutionCompletesBeforeIssuance(t *testing.T) {
+// TestConcurrentIssuanceBlocksOnSlugResolution simulates the race
+// condition that existed before the fix: slug resolution and certificate
+// issuance starting concurrently. The mock server delays the slug
+// resolution response by 200ms. A goroutine fires the issuance POST
+// immediately (mimicking the old MonitorCertificates goroutine). The
+// server rejects any issuance POST that arrives before slug resolution
+// has completed, proving the ordering guarantee matters.
+func TestConcurrentIssuanceBlocksOnSlugResolution(t *testing.T) {
 	const (
-		projectSlug    = "infra-z-c-pk"
-		projectID      = "proj-uuid-aaaa"
-		profileSlug    = "crdb"
-		profileID      = "profile-uuid-bbbb"
-		slugDelay      = 200 * time.Millisecond
+		projectSlug = "infra-z-c-pk"
+		projectID   = "proj-uuid-aaaa"
+		profileSlug = "crdb"
+		profileID   = "profile-uuid-bbbb"
+		slugDelay   = 200 * time.Millisecond
 	)
 
-	var (
-		mu              sync.Mutex
-		requestOrder    []string
-		slugResolved    atomic.Bool
-	)
+	var slugResolved atomic.Bool
+	var issuanceReceivedBeforeResolution atomic.Bool
 
 	server := httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			mu.Lock()
-			requestOrder = append(requestOrder, r.Method+" "+r.URL.Path)
-			mu.Unlock()
 
 			switch {
 			case r.URL.Path == "/v1/projects/slug/"+projectSlug:
@@ -106,14 +106,23 @@ func TestSlugResolutionCompletesBeforeIssuance(t *testing.T) {
 				})
 
 			case r.URL.Path == "/v1/cert-manager/certificates":
-				assert.True(t, slugResolved.Load(),
-					"cert issuance POST fired before slug resolution completed")
-
+				if !slugResolved.Load() {
+					issuanceReceivedBeforeResolution.Store(true)
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					json.NewEncoder(w).Encode(map[string]string{
+						"message": "Invalid uuid",
+					})
+					return
+				}
 				var req api.IssueCertificateRequest
 				json.NewDecoder(r.Body).Decode(&req)
-				assert.Equal(t, profileID, req.ProfileID,
-					"profileId should be the resolved UUID, not the slug")
-
+				if req.ProfileID != profileID {
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					json.NewEncoder(w).Encode(map[string]string{
+						"message": "Invalid uuid",
+					})
+					return
+				}
 				json.NewEncoder(w).Encode(api.CertificateResponse{
 					Certificate: &api.CertificateData{
 						CertificateID: "cert-id-1",
@@ -147,44 +156,71 @@ func TestSlugResolutionCompletesBeforeIssuance(t *testing.T) {
 
 	httpClient := resty.New()
 
+	// Simulate the fixed code path: resolve first, then issue.
+	// This mirrors the merged goroutine in certManagerAgentCmd.
 	err := resolveCertificateNameReferences(&certs, httpClient)
 	require.NoError(t, err)
-	require.Equal(t, profileID, certs[0].ProfileID,
-		"ProfileID must be set after resolution")
+	require.Equal(t, profileID, certs[0].ProfileID)
 
 	request := api.IssueCertificateRequest{
 		ProfileID: certs[0].ProfileID,
+		Attributes: &api.CertificateAttributes{
+			CommonName: "node",
+			TTL:        "2160h",
+		},
 	}
-	if certs[0].Attributes != nil {
-		request.Attributes = &api.CertificateAttributes{
-			CommonName: certs[0].Attributes.CommonName,
-			TTL:        certs[0].Attributes.TTL,
-		}
-	}
-
 	resp, err := api.CallIssueCertificate(httpClient, request)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Certificate)
 
-	mu.Lock()
-	order := make([]string, len(requestOrder))
-	copy(order, requestOrder)
-	mu.Unlock()
+	assert.False(t, issuanceReceivedBeforeResolution.Load(),
+		"issuance POST must not arrive before slug resolution completes")
 
-	require.GreaterOrEqual(t, len(order), 3,
-		"expected at least 3 requests (project slug, profile slug, issue cert)")
+	// Now simulate the OLD buggy code path: fire issuance concurrently
+	// with resolution. The server should reject it because slug
+	// resolution hasn't completed when the POST arrives.
+	slugResolved.Store(false)
+	issuanceReceivedBeforeResolution.Store(false)
 
-	var profileIdx, issueIdx int
-	for i, req := range order {
-		if req == "GET /v1/cert-manager/certificate-profiles/slug/"+profileSlug {
-			profileIdx = i
-		}
-		if req == "POST /v1/cert-manager/certificates" {
-			issueIdx = i
-		}
+	unresolvedCerts := []AgentCertificateConfig{
+		{
+			ProjectName: projectSlug,
+			ProfileName: profileSlug,
+			Attributes: &CertificateAttributes{
+				CommonName: "node",
+				TTL:        "2160h",
+			},
+		},
 	}
-	assert.Less(t, profileIdx, issueIdx,
-		"profile slug resolution must complete before certificate issuance")
+
+	earlyIssuanceFailed := make(chan bool, 1)
+
+	// Goroutine 1: start resolving (takes 200ms due to server delay)
+	go func() {
+		resolveClient := resty.New()
+		resolveCertificateNameReferences(&unresolvedCerts, resolveClient)
+	}()
+
+	// Goroutine 2: fire issuance immediately with unresolved slug
+	// (ProfileID is still empty — mimics old MonitorCertificates)
+	go func() {
+		issueClient := resty.New()
+		earlyReq := api.IssueCertificateRequest{
+			ProfileID: unresolvedCerts[0].ProfileID,
+			Attributes: &api.CertificateAttributes{
+				CommonName: "node",
+				TTL:        "2160h",
+			},
+		}
+		_, err := api.CallIssueCertificate(issueClient, earlyReq)
+		earlyIssuanceFailed <- (err != nil)
+	}()
+
+	failed := <-earlyIssuanceFailed
+	assert.True(t, failed,
+		"issuance with unresolved ProfileID should fail (422)")
+	assert.True(t, issuanceReceivedBeforeResolution.Load(),
+		"server should have seen the issuance POST before slug resolution finished")
 }
 
 func TestResolveCertificateNameReferences_MultipleProfiles(t *testing.T) {
