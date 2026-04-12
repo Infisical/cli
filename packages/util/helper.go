@@ -328,7 +328,10 @@ func GetInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err erro
 // token or user session). Returns ("", nil) when --project-slug is absent.
 func ResolveProjectSlug(cmd *cobra.Command) (string, error) {
 	projectSlug, err := cmd.Flags().GetString("project-slug")
-	if err != nil || projectSlug == "" {
+	if err != nil {
+		return "", fmt.Errorf("unable to read --project-slug flag: %w", err)
+	}
+	if projectSlug == "" {
 		return "", nil
 	}
 
@@ -338,7 +341,11 @@ func ResolveProjectSlug(cmd *cobra.Command) (string, error) {
 	}
 
 	var authToken string
-	if token, _ := GetInfisicalToken(cmd); token != nil {
+	token, tokenErr := GetInfisicalToken(cmd)
+	if tokenErr != nil {
+		return "", fmt.Errorf("unable to retrieve auth token for slug resolution: %w", tokenErr)
+	}
+	if token != nil {
 		authToken = token.Token
 	} else {
 		RequireLogin()
