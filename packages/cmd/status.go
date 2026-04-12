@@ -63,7 +63,8 @@ func getStatus(cmd *cobra.Command) statusOutput {
 
 		// Try to extract expiry from machine token if it's a JWT
 		if expiry, ok := extractJWTExpiry(token.Token); ok {
-			if expiry.Before(time.Now()) {
+			// Use the same 30-second safety buffer as user session checks
+			if expiry.Before(time.Now().Add(30 * time.Second)) {
 				status.SessionValid = false
 			}
 			status.ExpiresAt = expiry.UTC().Format(time.RFC3339)
@@ -92,11 +93,11 @@ func getStatus(cmd *cobra.Command) statusOutput {
 		status.ExpiresAt = expiry.UTC().Format(time.RFC3339)
 	}
 
-	// Read domain from config file
+	// Read domain from config file and ensure it's the API URL
 	configFile, err := util.GetConfigFile()
 	if err == nil {
 		if configFile.LoggedInUserDomain != "" {
-			status.Domain = configFile.LoggedInUserDomain
+			status.Domain = util.AppendAPIEndpoint(configFile.LoggedInUserDomain)
 		}
 	}
 
@@ -172,7 +173,11 @@ func printStatusHuman(status statusOutput) {
 	}
 
 	if !status.SessionValid {
-		util.PrintfStdout("\nSession expired. Run %s to re-authenticate.\n", bold("infisical login"))
+		if status.AuthMethod == "user" {
+			util.PrintfStdout("\nSession expired. Run %s to re-authenticate.\n", bold("infisical login"))
+		} else {
+			util.PrintfStdout("\nToken expired or about to expire. Rotate or re-issue your %s token.\n", bold(status.AuthMethod))
+		}
 	}
 }
 
