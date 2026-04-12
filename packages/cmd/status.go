@@ -178,5 +178,6 @@ func printStatusHuman(status statusOutput) {
 
 func init() {
 	statusCmd.Flags().Bool("json", false, "Output status in JSON format")
+	statusCmd.Flags().String("token", "", "Check status using machine identity access token")
 	RootCmd.AddCommand(statusCmd)
 }
