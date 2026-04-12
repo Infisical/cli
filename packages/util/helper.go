@@ -343,7 +343,13 @@ func ResolveProjectSlug(cmd *cobra.Command) (string, error) {
 	var authToken string
 	token, tokenErr := GetInfisicalToken(cmd)
 	if tokenErr != nil {
-		return "", fmt.Errorf("unable to retrieve auth token for slug resolution: %w", tokenErr)
+		// If the error is because the command doesn't define --token flag,
+		// fall through to user auth instead of failing
+		if cmd.Flags().Lookup("token") == nil {
+			token = nil
+		} else {
+			return "", fmt.Errorf("unable to retrieve auth token for slug resolution: %w", tokenErr)
+		}
 	}
 	if token != nil {
 		authToken = token.Token
