@@ -43,6 +43,12 @@ var secretsCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
+		}
+
 		secretsPath, err := cmd.Flags().GetString("path")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -196,6 +202,12 @@ var secretsSetCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
+		}
+
 		if token == nil && projectId == "" {
 			_, err := util.GetWorkSpaceFromFile()
 			if err != nil {
@@ -346,6 +358,12 @@ var secretsDeleteCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
+		}
+
 		secretsPath, err := cmd.Flags().GetString("path")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -457,6 +475,12 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 	projectId, err := cmd.Flags().GetString("projectId")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
+	}
+
+	if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+		util.HandleError(err)
+	} else if resolved != "" {
+		projectId = resolved
 	}
 
 	secretsPath, err := cmd.Flags().GetString("path")
@@ -600,6 +624,12 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 	projectId, err := cmd.Flags().GetString("projectId")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
+	}
+
+	if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+		util.HandleError(err)
+	} else if resolved != "" {
+		projectId = resolved
 	}
 
 	tagSlugs, err := cmd.Flags().GetString("tags")
@@ -813,11 +843,13 @@ func init() {
 	// not doing this one
 	secretsGenerateExampleEnvCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsGenerateExampleEnvCmd.Flags().String("projectId", "", "manually set the projectId when using machine identity based auth")
+	secretsGenerateExampleEnvCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	secretsGenerateExampleEnvCmd.Flags().String("path", "/", "Fetch secrets from within a folder path")
 	secretsCmd.AddCommand(secretsGenerateExampleEnvCmd)
 
 	secretsGetCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsGetCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	secretsGetCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	secretsGetCmd.Flags().String("path", "/", "get secrets within a folder path")
 	secretsGetCmd.Flags().Bool("plain", false, "print values without formatting, one per line")
 	secretsGetCmd.Flags().Bool("raw-value", false, "deprecated. Returns only the value of secret, only works with one secret. Use --plain instead")
@@ -832,6 +864,7 @@ func init() {
 	secretsCmd.AddCommand(secretsSetCmd)
 	secretsSetCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsSetCmd.Flags().String("projectId", "", "manually set the project ID to for setting secrets when using machine identity based auth")
+	secretsSetCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	secretsSetCmd.Flags().String("path", "/", "set secrets within a folder path")
 	secretsSetCmd.Flags().String("type", util.SECRET_TYPE_SHARED, "the type of secret to create: personal or shared")
 	secretsSetCmd.Flags().String("file", "", "Load secrets from the specified file. File format: .env or YAML (comments: # or //). This option is mutually exclusive with command-line secrets arguments.")
@@ -840,6 +873,7 @@ func init() {
 	secretsDeleteCmd.Flags().String("type", "personal", "the type of secret to delete: personal or shared  (default: personal)")
 	secretsDeleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsDeleteCmd.Flags().String("projectId", "", "manually set the projectId to delete secrets from when using machine identity based auth")
+	secretsDeleteCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	secretsDeleteCmd.Flags().String("path", "/", "get secrets within a folder path")
 	util.AddOutputFlagsToCmd(secretsDeleteCmd, "The output to format the secrets in.")
 	secretsCmd.AddCommand(secretsDeleteCmd)
@@ -851,6 +885,7 @@ func init() {
 	getCmd.Flags().StringP("path", "p", "/", "The path from where folders should be fetched from")
 	getCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	getCmd.Flags().String("projectId", "", "manually set the projectId to fetch folders from when using machine identity based auth")
+	getCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	util.AddOutputFlagsToCmd(getCmd, "The output to format the folders in.")
 	folderCmd.AddCommand(getCmd)
 
@@ -859,6 +894,7 @@ func init() {
 	createCmd.Flags().StringP("name", "n", "", "Name of the folder to be created in selected `--path`")
 	createCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	createCmd.Flags().String("projectId", "", "manually set the project ID for creating folders in when using machine identity based auth")
+	createCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	util.AddOutputFlagsToCmd(createCmd, "The output to format the folders in.")
 	folderCmd.AddCommand(createCmd)
 
@@ -866,6 +902,7 @@ func init() {
 	deleteCmd.Flags().StringP("path", "p", "/", "Path to the folder to be deleted")
 	deleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	deleteCmd.Flags().String("projectId", "", "manually set the projectId to delete folders when using machine identity based auth")
+	deleteCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	deleteCmd.Flags().StringP("name", "n", "", "Name of the folder to be deleted within selected `--path`")
 	util.AddOutputFlagsToCmd(deleteCmd, "The output to format the folders in.")
 	folderCmd.AddCommand(deleteCmd)
@@ -876,6 +913,7 @@ func init() {
 
 	secretsCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsCmd.Flags().String("projectId", "", "manually set the projectId to fetch secrets when using machine identity based auth")
+	secretsCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	secretsCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	secretsCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets, and process your referenced secrets")
 	secretsCmd.Flags().Bool("include-imports", true, "Imported linked secrets ")

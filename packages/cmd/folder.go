@@ -38,6 +38,12 @@ var getCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
+		}
+
 		token, err := util.GetInfisicalToken(cmd)
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -113,6 +119,12 @@ var createCmd = &cobra.Command{
 		projectId, err := cmd.Flags().GetString("projectId")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
+		}
+
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
 		}
 
 		folderPath, err := cmd.Flags().GetString("path")
@@ -205,6 +217,12 @@ var deleteCmd = &cobra.Command{
 		projectId, err := cmd.Flags().GetString("projectId")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
+		}
+
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
 		}
 
 		folderPath, err := cmd.Flags().GetString("path")
