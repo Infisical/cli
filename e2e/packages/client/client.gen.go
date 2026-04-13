@@ -22,6 +22,11 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled.
+const (
+	CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabledFalse CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled = false
+)
+
 // Defines values for CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials.
 const (
 	CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentialsFalse CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials = false
@@ -221,6 +226,7 @@ const (
 	Acme CreateCertificateProfileJSONBodyEnrollmentType = "acme"
 	Api  CreateCertificateProfileJSONBodyEnrollmentType = "api"
 	Est  CreateCertificateProfileJSONBodyEnrollmentType = "est"
+	Scep CreateCertificateProfileJSONBodyEnrollmentType = "scep"
 )
 
 // Defines values for CreateCertificateProfileJSONBodyIssuerType.
@@ -336,8 +342,8 @@ const (
 
 // Defines values for GetSecretByNameV4ParamsIncludeImports.
 const (
-	False GetSecretByNameV4ParamsIncludeImports = "false"
-	True  GetSecretByNameV4ParamsIncludeImports = "true"
+	GetSecretByNameV4ParamsIncludeImportsFalse GetSecretByNameV4ParamsIncludeImports = "false"
+	GetSecretByNameV4ParamsIncludeImportsTrue  GetSecretByNameV4ParamsIncludeImports = "true"
 )
 
 // Defines values for UpdateSecretV4JSONBodyType.
@@ -368,6 +374,9 @@ type CreateCloudflareAppConnectionJSONBody struct {
 	// GatewayId Not supported for Cloudflare Connections.
 	GatewayId *CreateCloudflareAppConnectionJSONBody_GatewayId `json:"gatewayId,omitempty"`
 
+	// IsAutoRotationEnabled Not supported for Cloudflare Connections.
+	IsAutoRotationEnabled *CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled `json:"isAutoRotationEnabled,omitempty"`
+
 	// IsPlatformManagedCredentials Not supported for Cloudflare Connections.
 	IsPlatformManagedCredentials *CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials `json:"isPlatformManagedCredentials,omitempty"`
 
@@ -376,6 +385,9 @@ type CreateCloudflareAppConnectionJSONBody struct {
 
 	// ProjectId The ID of the project to create the Cloudflare Connection in.
 	ProjectId *string `json:"projectId,omitempty"`
+
+	// Rotation Not supported for Cloudflare Connections.
+	Rotation *CreateCloudflareAppConnectionJSONBody_Rotation `json:"rotation,omitempty"`
 }
 
 // CreateCloudflareAppConnectionJSONBodyGatewayId0 defines parameters for CreateCloudflareAppConnection.
@@ -389,8 +401,22 @@ type CreateCloudflareAppConnectionJSONBody_GatewayId struct {
 	union json.RawMessage
 }
 
+// CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled bool
+
 // CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials defines parameters for CreateCloudflareAppConnection.
 type CreateCloudflareAppConnectionJSONBodyIsPlatformManagedCredentials bool
+
+// CreateCloudflareAppConnectionJSONBodyRotation0 defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyRotation0 = interface{}
+
+// CreateCloudflareAppConnectionJSONBodyRotation1 defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyRotation1 = interface{}
+
+// CreateCloudflareAppConnectionJSONBody_Rotation defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBody_Rotation struct {
+	union json.RawMessage
+}
 
 // AttachTokenAuthJSONBody defines parameters for AttachTokenAuth.
 type AttachTokenAuthJSONBody struct {
@@ -486,6 +512,9 @@ type CreateAcmeCertificateAuthorityV1JSONBody struct {
 			Provider CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 		} `json:"dnsProviderConfig"`
 
+		// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
+		DnsResolver *string `json:"dnsResolver,omitempty"`
+
 		// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 		EabHmacKey *string `json:"eabHmacKey,omitempty"`
 
@@ -527,6 +556,9 @@ type UpdateAcmeCertificateAuthorityV1JSONBody struct {
 			// Provider The DNS provider for the ACME Certificate Authority.
 			Provider UpdateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 		} `json:"dnsProviderConfig"`
+
+		// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
+		DnsResolver *string `json:"dnsResolver,omitempty"`
 
 		// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 		EabHmacKey *string `json:"eabHmacKey,omitempty"`
@@ -715,7 +747,12 @@ type CreateCertificateProfileJSONBody struct {
 	ExternalConfigs *CreateCertificateProfileJSONBody_ExternalConfigs `json:"externalConfigs"`
 	IssuerType      *CreateCertificateProfileJSONBodyIssuerType       `json:"issuerType,omitempty"`
 	ProjectId       string                                            `json:"projectId"`
-	Slug            string                                            `json:"slug"`
+	ScepConfig      *struct {
+		AllowCertBasedRenewal   *bool  `json:"allowCertBasedRenewal,omitempty"`
+		ChallengePassword       string `json:"challengePassword"`
+		IncludeCaCertInResponse *bool  `json:"includeCaCertInResponse,omitempty"`
+	} `json:"scepConfig,omitempty"`
+	Slug string `json:"slug"`
 }
 
 // CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages defines parameters for CreateCertificateProfile.
@@ -787,11 +824,26 @@ type CreatePostgresPamAccountJSONBody struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
-	Name                    string             `json:"name"`
-	RequireMfa              *bool              `json:"requireMfa,omitempty"`
-	ResourceId              openapi_types.UUID `json:"resourceId"`
-	RotationEnabled         bool               `json:"rotationEnabled"`
-	RotationIntervalSeconds *float32           `json:"rotationIntervalSeconds"`
+	Name       string             `json:"name"`
+	RequireMfa *bool              `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID `json:"resourceId"`
+}
+
+// CreateRedisPamAccountJSONBody defines parameters for CreateRedisPamAccount.
+type CreateRedisPamAccountJSONBody struct {
+	Credentials struct {
+		Password *string `json:"password,omitempty"`
+		Username *string `json:"username,omitempty"`
+	} `json:"credentials"`
+	Description *string             `json:"description"`
+	FolderId    *openapi_types.UUID `json:"folderId,omitempty"`
+	Metadata    *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name       string             `json:"name"`
+	RequireMfa *bool              `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID `json:"resourceId"`
 }
 
 // CreateSshPamAccountJSONBody defines parameters for CreateSshPamAccount.
@@ -803,11 +855,9 @@ type CreateSshPamAccountJSONBody struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
-	Name                    string             `json:"name"`
-	RequireMfa              *bool              `json:"requireMfa,omitempty"`
-	ResourceId              openapi_types.UUID `json:"resourceId"`
-	RotationEnabled         bool               `json:"rotationEnabled"`
-	RotationIntervalSeconds *float32           `json:"rotationIntervalSeconds"`
+	Name       string             `json:"name"`
+	RequireMfa *bool              `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID `json:"resourceId"`
 }
 
 // CreateSshPamAccountJSONBodyCredentials0 defines parameters for CreateSshPamAccount.
@@ -1235,6 +1285,9 @@ type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
 // CreatePostgresPamAccountJSONRequestBody defines body for CreatePostgresPamAccount for application/json ContentType.
 type CreatePostgresPamAccountJSONRequestBody CreatePostgresPamAccountJSONBody
 
+// CreateRedisPamAccountJSONRequestBody defines body for CreateRedisPamAccount for application/json ContentType.
+type CreateRedisPamAccountJSONRequestBody CreateRedisPamAccountJSONBody
+
 // CreateSshPamAccountJSONRequestBody defines body for CreateSshPamAccount for application/json ContentType.
 type CreateSshPamAccountJSONRequestBody CreateSshPamAccountJSONBody
 
@@ -1405,6 +1458,11 @@ type ClientInterface interface {
 	CreatePostgresPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateRedisPamAccountWithBody request with any body
+	CreateRedisPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateRedisPamAccount(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateSshPamAccountWithBody request with any body
 	CreateSshPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1783,6 +1841,30 @@ func (c *Client) CreatePostgresPamAccountWithBody(ctx context.Context, contentTy
 
 func (c *Client) CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreatePostgresPamAccountRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateRedisPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRedisPamAccountRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateRedisPamAccount(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRedisPamAccountRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2644,6 +2726,46 @@ func NewCreatePostgresPamAccountRequestWithBody(server string, contentType strin
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/pam/accounts/postgres")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateRedisPamAccountRequest calls the generic CreateRedisPamAccount builder with application/json body
+func NewCreateRedisPamAccountRequest(server string, body CreateRedisPamAccountJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateRedisPamAccountRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateRedisPamAccountRequestWithBody generates requests for CreateRedisPamAccount with any type of body
+func NewCreateRedisPamAccountRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/accounts/redis")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3606,6 +3728,11 @@ type ClientWithResponsesInterface interface {
 
 	CreatePostgresPamAccountWithResponse(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error)
 
+	// CreateRedisPamAccountWithBodyWithResponse request with any body
+	CreateRedisPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error)
+
+	CreateRedisPamAccountWithResponse(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error)
+
 	// CreateSshPamAccountWithBodyWithResponse request with any body
 	CreateSshPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error)
 
@@ -3851,6 +3978,7 @@ type CreateCloudflareAppConnection200AppConnection0 struct {
 	Description                  *string                                              `json:"description"`
 	GatewayId                    *openapi_types.UUID                                  `json:"gatewayId"`
 	Id                           openapi_types.UUID                                   `json:"id"`
+	IsAutoRotationEnabled        *bool                                                `json:"isAutoRotationEnabled,omitempty"`
 	IsPlatformManagedCredentials *bool                                                `json:"isPlatformManagedCredentials"`
 	Method                       CreateCloudflareAppConnection200AppConnection0Method `json:"method"`
 	Name                         string                                               `json:"name"`
@@ -3861,12 +3989,37 @@ type CreateCloudflareAppConnection200AppConnection0 struct {
 		Slug string `json:"slug"`
 		Type string `json:"type"`
 	} `json:"project"`
-	ProjectId *string   `json:"projectId"`
+	ProjectId *string `json:"projectId"`
+
+	// Rotation The credential rotation configuration, if configured.
+	Rotation *struct {
+		// LastRotationMessage The message from the last rotation attempt.
+		LastRotationMessage *string `json:"lastRotationMessage"`
+
+		// NextRotationAt The next scheduled rotation time.
+		NextRotationAt *time.Time `json:"nextRotationAt"`
+
+		// RotateAtUtc The UTC time of day at which rotation should occur.
+		RotateAtUtc struct {
+			// Hours The hour (0-23) at which to rotate.
+			Hours float32 `json:"hours"`
+
+			// Minutes The minute (0-59) at which to rotate.
+			Minutes float32 `json:"minutes"`
+		} `json:"rotateAtUtc"`
+
+		// RotationInterval The interval in days between credential rotations.
+		RotationInterval float32 `json:"rotationInterval"`
+
+		// RotationStatus The status of the last rotation attempt.
+		RotationStatus CreateCloudflareAppConnection200AppConnection0RotationRotationStatus `json:"rotationStatus"`
+	} `json:"rotation,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	Version   *float32  `json:"version,omitempty"`
 }
 type CreateCloudflareAppConnection200AppConnection0App string
 type CreateCloudflareAppConnection200AppConnection0Method string
+type CreateCloudflareAppConnection200AppConnection0RotationRotationStatus string
 type CreateCloudflareAppConnection_200_AppConnection struct {
 	union json.RawMessage
 }
@@ -4316,6 +4469,9 @@ type CreateAcmeCertificateAuthorityV1Response struct {
 				Provider CreateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
 
+			// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
+			DnsResolver *string `json:"dnsResolver,omitempty"`
+
 			// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 			EabHmacKey *string `json:"eabHmacKey,omitempty"`
 
@@ -4414,6 +4570,9 @@ type UpdateAcmeCertificateAuthorityV1Response struct {
 				// Provider The DNS provider for the ACME Certificate Authority.
 				Provider UpdateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
+
+			// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
+			DnsResolver *string `json:"dnsResolver,omitempty"`
 
 			// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 			EabHmacKey *string `json:"eabHmacKey,omitempty"`
@@ -4763,6 +4922,7 @@ type CreateCertificateProfileResponse struct {
 			Id              openapi_types.UUID                                               `json:"id"`
 			IssuerType      *string                                                          `json:"issuerType,omitempty"`
 			ProjectId       string                                                           `json:"projectId"`
+			ScepConfigId    *openapi_types.UUID                                              `json:"scepConfigId"`
 			Slug            string                                                           `json:"slug"`
 			UpdatedAt       time.Time                                                        `json:"updatedAt"`
 		} `json:"certificateProfile"`
@@ -4957,12 +5117,10 @@ type CreatePostgresPamAccountResponse struct {
 				ResourceType                  string             `json:"resourceType"`
 				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 			} `json:"resource"`
-			ResourceId              openapi_types.UUID                             `json:"resourceId"`
-			ResourceType            CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
-			RotationEnabled         *bool                                          `json:"rotationEnabled,omitempty"`
-			RotationIntervalSeconds *float32                                       `json:"rotationIntervalSeconds"`
-			RotationStatus          *string                                        `json:"rotationStatus"`
-			UpdatedAt               time.Time                                      `json:"updatedAt"`
+			ResourceId     openapi_types.UUID                             `json:"resourceId"`
+			ResourceType   CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
+			RotationStatus *string                                        `json:"rotationStatus"`
+			UpdatedAt      time.Time                                      `json:"updatedAt"`
 		} `json:"account"`
 	}
 	JSON400 *struct {
@@ -5028,6 +5186,106 @@ func (r CreatePostgresPamAccountResponse) StatusCode() int {
 	return 0
 }
 
+type CreateRedisPamAccountResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Account struct {
+			CreatedAt   time.Time `json:"createdAt"`
+			Credentials struct {
+				Username *string `json:"username,omitempty"`
+			} `json:"credentials"`
+			Description                  *string             `json:"description"`
+			DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+			FolderId                     *openapi_types.UUID `json:"folderId"`
+			Id                           openapi_types.UUID  `json:"id"`
+			InternalMetadata             interface{}         `json:"internalMetadata"`
+			LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
+			LastRotationMessage          *string             `json:"lastRotationMessage"`
+			Metadata                     *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name       string `json:"name"`
+			ProjectId  string `json:"projectId"`
+			RequireMfa *bool  `json:"requireMfa"`
+			Resource   struct {
+				Id                            openapi_types.UUID `json:"id"`
+				Name                          string             `json:"name"`
+				ResourceType                  string             `json:"resourceType"`
+				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+			} `json:"resource"`
+			ResourceId     openapi_types.UUID                          `json:"resourceId"`
+			ResourceType   CreateRedisPamAccount200AccountResourceType `json:"resourceType"`
+			RotationStatus *string                                     `json:"rotationStatus"`
+			UpdatedAt      time.Time                                   `json:"updatedAt"`
+		} `json:"account"`
+	}
+	JSON400 *struct {
+		Details    interface{}                        `json:"details,omitempty"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateRedisPamAccount400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateRedisPamAccount401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                        `json:"details,omitempty"`
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateRedisPamAccount403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateRedisPamAccount404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                             `json:"error"`
+		Message    interface{}                        `json:"message,omitempty"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateRedisPamAccount422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                             `json:"error"`
+		Message    string                             `json:"message"`
+		ReqId      string                             `json:"reqId"`
+		StatusCode CreateRedisPamAccount500StatusCode `json:"statusCode"`
+	}
+}
+type CreateRedisPamAccount200AccountResourceType string
+type CreateRedisPamAccount400StatusCode float32
+type CreateRedisPamAccount401StatusCode float32
+type CreateRedisPamAccount403StatusCode float32
+type CreateRedisPamAccount404StatusCode float32
+type CreateRedisPamAccount422StatusCode float32
+type CreateRedisPamAccount500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateRedisPamAccountResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateRedisPamAccountResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateSshPamAccountResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5057,12 +5315,10 @@ type CreateSshPamAccountResponse struct {
 				ResourceType                  string             `json:"resourceType"`
 				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 			} `json:"resource"`
-			ResourceId              openapi_types.UUID                        `json:"resourceId"`
-			ResourceType            CreateSshPamAccount200AccountResourceType `json:"resourceType"`
-			RotationEnabled         *bool                                     `json:"rotationEnabled,omitempty"`
-			RotationIntervalSeconds *float32                                  `json:"rotationIntervalSeconds"`
-			RotationStatus          *string                                   `json:"rotationStatus"`
-			UpdatedAt               time.Time                                 `json:"updatedAt"`
+			ResourceId     openapi_types.UUID                        `json:"resourceId"`
+			ResourceType   CreateSshPamAccount200AccountResourceType `json:"resourceType"`
+			RotationStatus *string                                   `json:"rotationStatus"`
+			UpdatedAt      time.Time                                 `json:"updatedAt"`
 		} `json:"account"`
 	}
 	JSON400 *struct {
@@ -5718,16 +5974,18 @@ type ListGatewaysResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *[]struct {
-		CreatedAt time.Time          `json:"createdAt"`
-		Heartbeat *time.Time         `json:"heartbeat"`
-		Id        openapi_types.UUID `json:"id"`
-		Identity  struct {
+		ConnectedResourcesCount float32            `json:"connectedResourcesCount"`
+		CreatedAt               time.Time          `json:"createdAt"`
+		Heartbeat               *time.Time         `json:"heartbeat"`
+		Id                      openapi_types.UUID `json:"id"`
+		Identity                struct {
 			Id   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"identity"`
-		IdentityId openapi_types.UUID `json:"identityId"`
-		Name       string             `json:"name"`
-		UpdatedAt  time.Time          `json:"updatedAt"`
+		IdentityId            openapi_types.UUID `json:"identityId"`
+		LastHealthCheckStatus *string            `json:"lastHealthCheckStatus"`
+		Name                  string             `json:"name"`
+		UpdatedAt             time.Time          `json:"updatedAt"`
 	}
 	JSON400 *struct {
 		Details    interface{}               `json:"details,omitempty"`
@@ -6671,6 +6929,23 @@ func (c *ClientWithResponses) CreatePostgresPamAccountWithResponse(ctx context.C
 		return nil, err
 	}
 	return ParseCreatePostgresPamAccountResponse(rsp)
+}
+
+// CreateRedisPamAccountWithBodyWithResponse request with arbitrary body returning *CreateRedisPamAccountResponse
+func (c *ClientWithResponses) CreateRedisPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error) {
+	rsp, err := c.CreateRedisPamAccountWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateRedisPamAccountResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateRedisPamAccountWithResponse(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error) {
+	rsp, err := c.CreateRedisPamAccount(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateRedisPamAccountResponse(rsp)
 }
 
 // CreateSshPamAccountWithBodyWithResponse request with arbitrary body returning *CreateSshPamAccountResponse
@@ -7746,6 +8021,9 @@ func ParseCreateAcmeCertificateAuthorityV1Response(rsp *http.Response) (*CreateA
 					Provider CreateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
 				} `json:"dnsProviderConfig"`
 
+				// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
+				DnsResolver *string `json:"dnsResolver,omitempty"`
+
 				// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 				EabHmacKey *string `json:"eabHmacKey,omitempty"`
 
@@ -7875,6 +8153,9 @@ func ParseUpdateAcmeCertificateAuthorityV1Response(rsp *http.Response) (*UpdateA
 					// Provider The DNS provider for the ACME Certificate Authority.
 					Provider UpdateAcmeCertificateAuthorityV1200ConfigurationDnsProviderConfigProvider `json:"provider"`
 				} `json:"dnsProviderConfig"`
+
+				// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
+				DnsResolver *string `json:"dnsResolver,omitempty"`
 
 				// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 				EabHmacKey *string `json:"eabHmacKey,omitempty"`
@@ -8310,6 +8591,7 @@ func ParseCreateCertificateProfileResponse(rsp *http.Response) (*CreateCertifica
 				Id              openapi_types.UUID                                               `json:"id"`
 				IssuerType      *string                                                          `json:"issuerType,omitempty"`
 				ProjectId       string                                                           `json:"projectId"`
+				ScepConfigId    *openapi_types.UUID                                              `json:"scepConfigId"`
 				Slug            string                                                           `json:"slug"`
 				UpdatedAt       time.Time                                                        `json:"updatedAt"`
 			} `json:"certificateProfile"`
@@ -8558,12 +8840,10 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 					ResourceType                  string             `json:"resourceType"`
 					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 				} `json:"resource"`
-				ResourceId              openapi_types.UUID                             `json:"resourceId"`
-				ResourceType            CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
-				RotationEnabled         *bool                                          `json:"rotationEnabled,omitempty"`
-				RotationIntervalSeconds *float32                                       `json:"rotationIntervalSeconds"`
-				RotationStatus          *string                                        `json:"rotationStatus"`
-				UpdatedAt               time.Time                                      `json:"updatedAt"`
+				ResourceId     openapi_types.UUID                             `json:"resourceId"`
+				ResourceType   CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
+				RotationStatus *string                                        `json:"rotationStatus"`
+				UpdatedAt      time.Time                                      `json:"updatedAt"`
 			} `json:"account"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -8650,6 +8930,139 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 	return response, nil
 }
 
+// ParseCreateRedisPamAccountResponse parses an HTTP response from a CreateRedisPamAccountWithResponse call
+func ParseCreateRedisPamAccountResponse(rsp *http.Response) (*CreateRedisPamAccountResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateRedisPamAccountResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Account struct {
+				CreatedAt   time.Time `json:"createdAt"`
+				Credentials struct {
+					Username *string `json:"username,omitempty"`
+				} `json:"credentials"`
+				Description                  *string             `json:"description"`
+				DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+				FolderId                     *openapi_types.UUID `json:"folderId"`
+				Id                           openapi_types.UUID  `json:"id"`
+				InternalMetadata             interface{}         `json:"internalMetadata"`
+				LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
+				LastRotationMessage          *string             `json:"lastRotationMessage"`
+				Metadata                     *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name       string `json:"name"`
+				ProjectId  string `json:"projectId"`
+				RequireMfa *bool  `json:"requireMfa"`
+				Resource   struct {
+					Id                            openapi_types.UUID `json:"id"`
+					Name                          string             `json:"name"`
+					ResourceType                  string             `json:"resourceType"`
+					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+				} `json:"resource"`
+				ResourceId     openapi_types.UUID                          `json:"resourceId"`
+				ResourceType   CreateRedisPamAccount200AccountResourceType `json:"resourceType"`
+				RotationStatus *string                                     `json:"rotationStatus"`
+				UpdatedAt      time.Time                                   `json:"updatedAt"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                        `json:"details,omitempty"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateRedisPamAccount400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateRedisPamAccount401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                        `json:"details,omitempty"`
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateRedisPamAccount403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateRedisPamAccount404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                             `json:"error"`
+			Message    interface{}                        `json:"message,omitempty"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateRedisPamAccount422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                             `json:"error"`
+			Message    string                             `json:"message"`
+			ReqId      string                             `json:"reqId"`
+			StatusCode CreateRedisPamAccount500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateSshPamAccountResponse parses an HTTP response from a CreateSshPamAccountWithResponse call
 func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -8691,12 +9104,10 @@ func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountR
 					ResourceType                  string             `json:"resourceType"`
 					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 				} `json:"resource"`
-				ResourceId              openapi_types.UUID                        `json:"resourceId"`
-				ResourceType            CreateSshPamAccount200AccountResourceType `json:"resourceType"`
-				RotationEnabled         *bool                                     `json:"rotationEnabled,omitempty"`
-				RotationIntervalSeconds *float32                                  `json:"rotationIntervalSeconds"`
-				RotationStatus          *string                                   `json:"rotationStatus"`
-				UpdatedAt               time.Time                                 `json:"updatedAt"`
+				ResourceId     openapi_types.UUID                        `json:"resourceId"`
+				ResourceType   CreateSshPamAccount200AccountResourceType `json:"resourceType"`
+				RotationStatus *string                                   `json:"rotationStatus"`
+				UpdatedAt      time.Time                                 `json:"updatedAt"`
 			} `json:"account"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -9542,16 +9953,18 @@ func ParseListGatewaysResponse(rsp *http.Response) (*ListGatewaysResponse, error
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest []struct {
-			CreatedAt time.Time          `json:"createdAt"`
-			Heartbeat *time.Time         `json:"heartbeat"`
-			Id        openapi_types.UUID `json:"id"`
-			Identity  struct {
+			ConnectedResourcesCount float32            `json:"connectedResourcesCount"`
+			CreatedAt               time.Time          `json:"createdAt"`
+			Heartbeat               *time.Time         `json:"heartbeat"`
+			Id                      openapi_types.UUID `json:"id"`
+			Identity                struct {
 				Id   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"identity"`
-			IdentityId openapi_types.UUID `json:"identityId"`
-			Name       string             `json:"name"`
-			UpdatedAt  time.Time          `json:"updatedAt"`
+			IdentityId            openapi_types.UUID `json:"identityId"`
+			LastHealthCheckStatus *string            `json:"lastHealthCheckStatus"`
+			Name                  string             `json:"name"`
+			UpdatedAt             time.Time          `json:"updatedAt"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

@@ -95,9 +95,8 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	pgAcctResp, err := infra.ApiClient.CreatePostgresPamAccountWithResponse(
 		ctx,
 		client.CreatePostgresPamAccountJSONRequestBody{
-			ResourceId:      resourceId,
-			Name:            accountName,
-			RotationEnabled: false,
+			ResourceId: resourceId,
+			Name:       accountName,
 			Credentials: struct {
 				Password string `json:"password"`
 				Username string `json:"username"`
