@@ -1,6 +1,6 @@
 module github.com/Infisical/infisical-merge
 
-go 1.25.8
+go 1.25.9
 
 require (
 	github.com/BobuSumisu/aho-corasick v1.0.3
