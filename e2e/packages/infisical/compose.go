@@ -319,7 +319,7 @@ func WithBackendService(options BackendOptions) StackOption {
 				{Target: 9229},
 			},
 			Environment: types.NewMappingWithEquals([]string{
-				"NODE_ENV=development",
+				"NODE_ENV=production",
 				"ENCRYPTION_KEY=6c1fe4e407b8911c104518103505b218",
 				"AUTH_SECRET=5lrMXKKWCVocS/uerPsl7V+TX/aaUaI7iDkgl3tSmLE=",
 				"DB_CONNECTION_URI=postgres://infisical:infisical@db:5432/infisical",
