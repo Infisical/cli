@@ -302,12 +302,13 @@ func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string)
 			AccountEmail       string             `json:"accountEmail"`
 			DirectoryUrl       string             `json:"directoryUrl"`
 			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
-			DnsProviderConfig  struct {
+			DnsProviderConfig struct {
 				HostedZoneId string                                                                                `json:"hostedZoneId"`
 				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
-			EabHmacKey *string `json:"eabHmacKey,omitempty"`
-			EabKid     *string `json:"eabKid,omitempty"`
+			DnsResolver *string `json:"dnsResolver,omitempty"`
+			EabHmacKey  *string `json:"eabHmacKey,omitempty"`
+			EabKid      *string `json:"eabKid,omitempty"`
 		}{
 			DnsAppConnectionId: uuid.MustParse(dnsConnectionID),
 			DnsProviderConfig: struct {
@@ -380,12 +381,13 @@ func (h *CertAgentTestHelper) CreateAcmeCARaw(name, dnsConnectionID, directoryUr
 			AccountEmail       string             `json:"accountEmail"`
 			DirectoryUrl       string             `json:"directoryUrl"`
 			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
-			DnsProviderConfig  struct {
+			DnsProviderConfig struct {
 				HostedZoneId string                                                                                `json:"hostedZoneId"`
 				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
-			EabHmacKey *string `json:"eabHmacKey,omitempty"`
-			EabKid     *string `json:"eabKid,omitempty"`
+			DnsResolver *string `json:"dnsResolver,omitempty"`
+			EabHmacKey  *string `json:"eabHmacKey,omitempty"`
+			EabKid      *string `json:"eabKid,omitempty"`
 		}{
 			DnsAppConnectionId: uuid.MustParse(dnsConnectionID),
 			DnsProviderConfig: struct {
