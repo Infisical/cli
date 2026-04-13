@@ -210,9 +210,92 @@ var gatewayStartCmd = &cobra.Command{
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		gatewayName, err := util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
-		if err != nil {
-			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
+		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+
+		// --- Enrollment token path ---
+		if enrollMethod == "static" {
+			enrollToken, err := cmd.Flags().GetString("token")
+			if err != nil || enrollToken == "" {
+				util.HandleError(errors.New("--token is required when --enroll-method=static"))
+			}
+
+			relayName, _ := util.GetRelayName(cmd, false, "")
+
+			domain, _ := cmd.Flags().GetString("domain")
+			if domain != "" {
+				config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
+			}
+
+			httpClient, err := util.GetRestyClientWithCustomHeaders()
+			if err != nil {
+				util.HandleError(err, "unable to create HTTP client")
+			}
+
+			log.Info().Msg("Enrolling gateway with enrollment token...")
+			enrollResp, err := api.CallEnrollGateway(httpClient, api.EnrollGatewayRequest{
+				Token:     enrollToken,
+				RelayName: relayName,
+			})
+			if err != nil {
+				util.HandleError(err, "enrollment failed")
+			}
+
+			if err := gatewayv2.SaveAccessToken(enrollResp.AccessToken); err != nil {
+				util.HandleError(err, "failed to save gateway access token")
+			}
+
+			if domain != "" {
+				if err := gatewayv2.SaveDomain(domain); err != nil {
+					util.HandleError(err, "failed to save domain to config")
+				}
+			}
+
+			log.Info().Msgf("Gateway enrolled successfully. Access token saved to %s", gatewayv2.GetConfPathDisplay())
+			log.Info().Msg("Starting gateway...")
+		}
+
+		// --- Stored token / post-enrollment path ---
+		// --domain flag takes priority; fall back to domain saved at enrollment time.
+		if enrollMethod != "static" {
+			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
+				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
+			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(); storedDomain != "" {
+				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
+			}
+		}
+
+		// Only use the stored token when no explicit identity credentials are provided.
+		// If --token or --auth-method is set, the user wants the identity-based path.
+		var runningWithStoredToken bool
+		if enrollMethod == "static" {
+			// Just enrolled above; use the freshly saved token.
+			runningWithStoredToken = true
+		} else {
+			explicitToken, _ := util.GetInfisicalToken(cmd)
+			explicitAuthMethod, _ := cmd.Flags().GetString("auth-method")
+			hasExplicitCreds := explicitToken != nil || explicitAuthMethod != ""
+
+			storedToken, loadErr := gatewayv2.LoadStoredAccessToken()
+			if loadErr != nil {
+				util.HandleError(loadErr, "failed to load stored gateway access token")
+			}
+
+			if storedToken != "" && !hasExplicitCreds {
+				log.Info().Msg("Using stored gateway access token")
+				runningWithStoredToken = true
+			}
+		}
+
+		var gatewayName string
+		var err error
+		if !runningWithStoredToken {
+			gatewayName, err = util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
+			if err != nil {
+				util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
+			}
+		} else {
+			// Name was set at enrollment time and is stored in the backend; not needed for cert refresh.
+			gatewayName, _ = util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
 		}
 
 		pamSessionRecordingPath, err := util.GetCmdFlagOrEnv(cmd, "pam-session-recording-path", []string{gatewayv2.INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME})
@@ -220,22 +303,39 @@ var gatewayStartCmd = &cobra.Command{
 			session.SetSessionRecordingPath(pamSessionRecordingPath)
 		}
 
-		infisicalClient, cancelSdk, err := getInfisicalSdkInstance(cmd)
-		if err != nil {
-			util.HandleError(err, "unable to get infisical client")
-		}
-		defer cancelSdk()
-
 		var accessToken atomic.Value
-		accessToken.Store(infisicalClient.Auth().GetAccessToken())
+		cancelSdk := func() {}                              // noop by default
+		var sdkTokenGetter func() string                    // nil when using stored token
+		if runningWithStoredToken {
+			loadedToken, loadErr := gatewayv2.LoadStoredAccessToken()
+			if loadErr != nil || loadedToken == "" {
+				util.HandleError(errors.New("no stored access token found"))
+			}
+			accessToken.Store(loadedToken)
+		} else {
+			infisicalClient, sdkCancel, sdkErr := getInfisicalSdkInstance(cmd)
+			if sdkErr != nil {
+				util.HandleError(sdkErr, "unable to get infisical client")
+			}
+			cancelSdk = sdkCancel
+			defer cancelSdk()
+			accessToken.Store(infisicalClient.Auth().GetAccessToken())
+			sdkTokenGetter = infisicalClient.Auth().GetAccessToken
+		}
 
 		if accessToken.Load().(string) == "" {
 			util.HandleError(errors.New("no access token found"))
 		}
 
-		relayName, err := util.GetRelayName(cmd, false, accessToken.Load().(string))
-		if err != nil {
-			util.HandleError(err, "unable to get relay name")
+		var relayName string
+		if runningWithStoredToken {
+			// For enrollment-flow gateways, relay is optional — the backend uses the relay stored at enrollment time.
+			relayName, _ = util.GetRelayName(cmd, false, "")
+		} else {
+			relayName, err = util.GetRelayName(cmd, false, accessToken.Load().(string))
+			if err != nil {
+				util.HandleError(err, "unable to get relay name")
+			}
 		}
 
 		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
@@ -275,29 +375,31 @@ var gatewayStartCmd = &cobra.Command{
 			}
 		}()
 
-		// Token refresh goroutine - runs every 10 seconds
-		go func() {
-			tokenRefreshTicker := time.NewTicker(10 * time.Second)
-			defer tokenRefreshTicker.Stop()
+		// Token refresh goroutine - runs every 10 seconds (SDK-managed tokens only)
+		if sdkTokenGetter != nil {
+			go func() {
+				tokenRefreshTicker := time.NewTicker(10 * time.Second)
+				defer tokenRefreshTicker.Stop()
 
-			for {
-				select {
-				case <-tokenRefreshTicker.C:
-					if ctx.Err() != nil {
+				for {
+					select {
+					case <-tokenRefreshTicker.C:
+						if ctx.Err() != nil {
+							return
+						}
+
+						newToken := sdkTokenGetter()
+						if newToken != "" && newToken != accessToken.Load().(string) {
+							accessToken.Store(newToken)
+							gatewayInstance.SetToken(newToken)
+						}
+
+					case <-ctx.Done():
 						return
 					}
-
-					newToken := infisicalClient.Auth().GetAccessToken()
-					if newToken != "" && newToken != accessToken.Load().(string) {
-						accessToken.Store(newToken)
-						gatewayInstance.SetToken(newToken)
-					}
-
-				case <-ctx.Done():
-					return
 				}
-			}
-		}()
+			}()
+		}
 
 		err = gatewayInstance.Start(ctx)
 		if err != nil {
@@ -398,15 +500,6 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
 		}
 
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		if token == nil {
-			util.HandleError(errors.New("Token not found"))
-		}
-
 		domain, err := cmd.Flags().GetString("domain")
 		if err != nil {
 			util.HandleError(err, "Unable to parse domain flag")
@@ -429,14 +522,54 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse log-file flag")
 		}
 
-		relayName, err := util.GetRelayName(cmd, false, token.Token)
-		if err != nil {
-			util.HandleError(err, "unable to get relay name")
-		}
+		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
-		err = gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile)
-		if err != nil {
-			util.HandleError(err, "Unable to install systemd service")
+		if enrollMethod == "static" {
+			// --- Enrollment token path ---
+			enrollToken, flagErr := cmd.Flags().GetString("token")
+			if flagErr != nil || enrollToken == "" {
+				util.HandleError(errors.New("--token is required when --enroll-method=static"))
+			}
+
+			relayName, _ := util.GetRelayName(cmd, false, "")
+
+			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
+			if clientErr != nil {
+				util.HandleError(clientErr, "unable to create HTTP client")
+			}
+
+			log.Info().Msg("Enrolling gateway with enrollment token...")
+			enrollResp, enrollErr := api.CallEnrollGateway(httpClient, api.EnrollGatewayRequest{
+				Token:     enrollToken,
+				RelayName: relayName,
+			})
+			if enrollErr != nil {
+				util.HandleError(enrollErr, "enrollment failed")
+			}
+
+			// Install systemd service using the long-lived access token
+			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+				util.HandleError(installErr, "Unable to install systemd service")
+			}
+		} else {
+			// --- Machine identity token path ---
+			token, tokenErr := util.GetInfisicalToken(cmd)
+			if tokenErr != nil {
+				util.HandleError(tokenErr, "Unable to parse flag")
+			}
+
+			if token == nil {
+				util.HandleError(errors.New("Token not found"))
+			}
+
+			relayName, relayErr := util.GetRelayName(cmd, false, token.Token)
+			if relayErr != nil {
+				util.HandleError(relayErr, "unable to get relay name")
+			}
+
+			if installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+				util.HandleError(installErr, "Unable to install systemd service")
+			}
 		}
 
 		enableCmd := exec.Command("systemctl", "enable", "infisical-gateway")
@@ -513,7 +646,9 @@ func init() {
 	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway")
-	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
+	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token, or enrollment token when --enroll-method=static")
+	gatewayStartCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token to obtain a long-lived gateway access token")
+	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=static)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
 	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
@@ -529,7 +664,8 @@ func init() {
 	gatewayInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 
 	// Systemd install command flags (v2)
-	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
+	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token, or enrollment token when --enroll-method=static")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
 	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead

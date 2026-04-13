@@ -505,12 +505,10 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 }
 
 func (g *Gateway) registerGateway() error {
-	body := api.RegisterGatewayRequest{
+	certResp, err := api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
 		RelayName: g.config.RelayName,
 		Name:      g.config.Name,
-	}
-
-	certResp, err := api.CallRegisterGateway(g.httpClient, body)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}

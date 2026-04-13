@@ -786,8 +786,29 @@ type Relay struct {
 type GetRelaysResponse []Relay
 
 type RegisterGatewayRequest struct {
-	RelayName string `json:"relayName"`
-	Name      string `json:"name"`
+	RelayName string `json:"relayName,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
+type EnrollGatewayRequest struct {
+	Token     string `json:"token"`
+	RelayName string `json:"relayName,omitempty"`
+}
+
+type EnrollGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	GatewayID   string `json:"gatewayId"`
+	RelayHost   string `json:"relayHost"`
+	PKI         struct {
+		ServerCertificate      string `json:"serverCertificate"`
+		ServerPrivateKey       string `json:"serverPrivateKey"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
+	} `json:"pki"`
+	SSH struct {
+		ClientCertificate string `json:"clientCertificate"`
+		ClientPrivateKey  string `json:"clientPrivateKey"`
+		ServerCAPublicKey string `json:"serverCAPublicKey"`
+	} `json:"ssh"`
 }
 
 type RegisterGatewayResponse struct {

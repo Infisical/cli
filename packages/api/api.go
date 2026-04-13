@@ -48,6 +48,7 @@ const (
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallGetOrgRelays                      = "CallGetOrgRelays"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
+	operationCallEnrollGateway                     = "CallEnrollGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
@@ -910,6 +911,26 @@ func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayReques
 
 	if response.IsError() {
 		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallRegisterGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (EnrollGatewayResponse, error) {
+	var resBody EnrollGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/gateways/enroll", config.INFISICAL_URL))
+
+	if err != nil {
+		return EnrollGatewayResponse{}, NewGenericRequestError(operationCallEnrollGateway, err)
+	}
+
+	if response.IsError() {
+		return EnrollGatewayResponse{}, NewAPIErrorWithResponse(operationCallEnrollGateway, response, nil)
 	}
 
 	return resBody, nil
