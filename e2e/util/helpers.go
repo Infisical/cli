@@ -70,6 +70,7 @@ func NewInfisicalService(opts ...InfisicalServiceOption) *InfisicalService {
 		),
 	}
 	svc.WithBackendEnvironment(types.NewMappingWithEquals([]string{
+		"NODE_ENV=development",
 		"ACME_DEVELOPMENT_MODE=true",
 		"ACME_SKIP_UPSTREAM_VALIDATION=true",
 		"BDD_NOCK_API_ENABLED=true",
