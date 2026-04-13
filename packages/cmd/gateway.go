@@ -203,12 +203,12 @@ var gatewayCmd = &cobra.Command{
 }
 
 var gatewayStartCmd = &cobra.Command{
-	Use:                   "start",
+	Use:                   "start [name]",
 	Short:                 "Start the new Infisical gateway",
-	Long:                  "Start the new Infisical gateway component.",
-	Example:               "infisical gateway start --name=<name> --token=<token>",
+	Long:                  "Start the new Infisical gateway component. The gateway name can be provided as a positional argument or via the --name flag.",
+	Example:               "infisical gateway start my-gateway --token=<token>",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
@@ -286,16 +286,16 @@ var gatewayStartCmd = &cobra.Command{
 			}
 		}
 
+		// Resolve gateway name: positional arg > --name flag (deprecated) > env var
 		var gatewayName string
 		var err error
-		if !runningWithStoredToken {
-			gatewayName, err = util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
-			if err != nil {
-				util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.GATEWAY_NAME_ENV_NAME))
-			}
+		if len(args) > 0 {
+			gatewayName = args[0]
 		} else {
-			// Name was set at enrollment time and is stored in the backend; not needed for cert refresh.
 			gatewayName, _ = util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
+		}
+		if gatewayName == "" {
+			util.HandleError(errors.New("gateway name is required (provide as positional argument or --name flag)"))
 		}
 
 		pamSessionRecordingPath, err := util.GetCmdFlagOrEnv(cmd, "pam-session-recording-path", []string{gatewayv2.INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME})
@@ -485,12 +485,12 @@ var gatewaySystemdCmd = &cobra.Command{
 }
 
 var gatewaySystemdInstallCmd = &cobra.Command{
-	Use:                   "install",
+	Use:                   "install [name]",
 	Short:                 "Install and enable systemd service for the gateway (v2) (requires sudo)",
-	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux.",
-	Example:               "sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name>",
+	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux. The gateway name can be provided as a positional argument or via the --name flag.",
+	Example:               "sudo infisical gateway systemd install my-gateway --token=<token> --domain=<domain>",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
 			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
@@ -509,12 +509,15 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 		}
 
-		gatewayName, err := cmd.Flags().GetString("name")
-		if err != nil {
-			util.HandleError(err, "Unable to parse name flag")
+		// Resolve gateway name: positional arg > --name flag (deprecated) > env var
+		var gatewayName string
+		if len(args) > 0 {
+			gatewayName = args[0]
+		} else {
+			gatewayName, _ = cmd.Flags().GetString("name")
 		}
 		if gatewayName == "" {
-			util.HandleError(errors.New("Gateway name is required"))
+			util.HandleError(errors.New("gateway name is required (provide as positional argument or --name flag)"))
 		}
 
 		serviceLogFile, err := cmd.Flags().GetString("log-file")
@@ -645,7 +648,8 @@ func init() {
 	// Gateway start command flags (v2)
 	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
-	gatewayStartCmd.Flags().String("name", "", "name of the gateway")
+	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
+	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token, or enrollment token when --enroll-method=static")
 	gatewayStartCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token to obtain a long-lived gateway access token")
 	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=static)")
@@ -667,7 +671,8 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token, or enrollment token when --enroll-method=static")
 	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
-	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway")
+	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
+	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway systemd install <name>")
 	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
 	gatewaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
