@@ -78,7 +78,9 @@ func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode())
+	if resp.StatusCode() != http.StatusOK {
+		t.Fatalf("CreateSshPamResource returned %d: %s", resp.StatusCode(), string(resp.Body))
+	}
 	slog.Info("Created SSH PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
 	return resp.JSON200.Resource.Id
 }
