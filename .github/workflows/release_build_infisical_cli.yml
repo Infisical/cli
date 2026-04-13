@@ -101,7 +101,7 @@ jobs:
       - run: echo "Ref name ${{github.ref_name}}"
       - uses: actions/setup-go@v3
         with:
-          go-version: "1.25.8"
+          go-version: "1.25.9"
           cache: true
           cache-dependency-path: go.sum
       - name: Setup for libssl1.0-dev
@@ -183,7 +183,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: "1.25.8"
+          go-version: "1.25.9"
           cache: true
           cache-dependency-path: go.sum
 
