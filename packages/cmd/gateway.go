@@ -226,10 +226,10 @@ var gatewayStartCmd = &cobra.Command{
 		}
 
 		// --- Enrollment token path ---
-		if enrollMethod == gatewayv2.EnrollMethodStatic {
+		if enrollMethod == gatewayv2.EnrollMethodToken {
 			enrollToken, err := cmd.Flags().GetString("token")
 			if err != nil || enrollToken == "" {
-				util.HandleError(errors.New("--token is required when --enroll-method=static"))
+				util.HandleError(errors.New("--token is required when --enroll-method=token"))
 			}
 
 			// Check if this is the same token we already enrolled with.
@@ -290,7 +290,7 @@ var gatewayStartCmd = &cobra.Command{
 		// --domain flag takes priority; fall back to domain saved at enrollment time.
 		// For enrollment flow with alreadyEnrolled, domain was set during original enrollment
 		// and needs to be loaded from config.
-		if enrollMethod != gatewayv2.EnrollMethodStatic || alreadyEnrolled {
+		if enrollMethod != gatewayv2.EnrollMethodToken || alreadyEnrolled {
 			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
 			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
@@ -301,7 +301,7 @@ var gatewayStartCmd = &cobra.Command{
 		// Only use the stored token when no explicit identity credentials are provided.
 		// If --token or --auth-method is set, the user wants the identity-based path.
 		var runningWithStoredToken bool
-		if enrollMethod == gatewayv2.EnrollMethodStatic {
+		if enrollMethod == gatewayv2.EnrollMethodToken {
 			// Just enrolled above; use the freshly saved token.
 			runningWithStoredToken = true
 		} else {
@@ -553,11 +553,11 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
-		if enrollMethod == gatewayv2.EnrollMethodStatic {
+		if enrollMethod == gatewayv2.EnrollMethodToken {
 			// --- Enrollment token path ---
 			enrollToken, flagErr := cmd.Flags().GetString("token")
 			if flagErr != nil || enrollToken == "" {
-				util.HandleError(errors.New("--token is required when --enroll-method=static"))
+				util.HandleError(errors.New("--token is required when --enroll-method=token"))
 			}
 
 			relayName, _ := util.GetRelayName(cmd, false, "")
@@ -677,8 +677,8 @@ func init() {
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewayStartCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token to obtain a long-lived gateway access token")
-	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=static)")
+	gatewayStartCmd.Flags().String("enroll-method", "", "enrollment method [token]. when set to 'token', uses --token as a one-time enrollment token")
+	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
 	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
@@ -695,7 +695,7 @@ func init() {
 
 	// Systemd install command flags (v2)
 	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "enrollment method [token]. when set to 'token', uses --token as a one-time enrollment token")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway systemd install <name>")
