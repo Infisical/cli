@@ -305,6 +305,9 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		if credentials.AuthMethod == "gateway-kubernetes-auth" {
 			kubernetesConfig.ImpersonateNamespace = credentials.Namespace
 			kubernetesConfig.ImpersonateServiceAccount = credentials.ServiceAccountName
+			if credentials.Namespace == "" || credentials.ServiceAccountName == "" {
+				return fmt.Errorf("gateway-kubernetes-auth requires non-empty namespace and service account name")
+			}
 
 			// Auto-discover K8s API URL from env vars
 			host, port := os.Getenv(util.KUBERNETES_SERVICE_HOST_ENV_NAME), os.Getenv(util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME)
@@ -316,18 +319,14 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			// Use pod's in-cluster CA cert with strict TLS (ignore resource SSL settings)
 			caCert, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to read pod CA cert, falling back to resource TLS config")
-			} else {
-				caCertPool := x509.NewCertPool()
-				if caCertPool.AppendCertsFromPEM(caCert) {
-					kubernetesConfig.TLSConfig = &tls.Config{
-						RootCAs: caCertPool,
-					}
-				} else {
-					log.Warn().
-						Str("sessionId", pamConfig.SessionId).
-						Msg("Failed to parse pod CA cert PEM, falling back to resource TLS config")
-				}
+				return fmt.Errorf("gateway-kubernetes-auth: failed to read pod CA cert for strict TLS: %w", err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("gateway-kubernetes-auth: pod CA cert PEM is invalid or empty; cannot establish strict TLS")
+			}
+			kubernetesConfig.TLSConfig = &tls.Config{
+				RootCAs: caCertPool,
 			}
 		}
 

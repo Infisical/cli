@@ -49,6 +49,15 @@ func NewKubernetesProxy(config KubernetesProxyConfig) *KubernetesProxy {
 // For gateway-kubernetes-auth: reads the gateway pod's own token (fresh each call) and sets
 // Impersonate-User/Group headers to act as the target service account.
 func (p *KubernetesProxy) injectAuthHeaders(headers http.Header) error {
+	// Strip any client-supplied impersonation headers to prevent privilege escalation
+	headers.Del("Impersonate-User")
+	headers.Del("Impersonate-Group")
+	for key := range headers {
+		if strings.HasPrefix(strings.ToLower(key), "impersonate-extra-") {
+			headers.Del(key)
+		}
+	}
+
 	switch p.config.AuthMethod {
 	case "service-account-token", "":
 		headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
