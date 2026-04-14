@@ -62,7 +62,7 @@ func saveConfKey(key, value string) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(confPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(confPath), 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
