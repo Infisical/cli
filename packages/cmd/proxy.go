@@ -57,6 +57,14 @@ var proxyDebugCmd = &cobra.Command{
 	Hidden:                true,
 }
 
+func initializeSSEManager(ctx context.Context, clientId, clientSecret string, cache *proxy.Cache, domainURL *url.URL, streamingClient *http.Client, httpClient *http.Client, pollingFallbackInterval time.Duration) (*proxy.SSEManager, error) {
+	sseAuthState, err := proxy.NewSSEAuthState(clientId, clientSecret, domainURL, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.NewSSEManager(ctx, cache, domainURL, streamingClient, httpClient, sseAuthState, pollingFallbackInterval), nil
+}
+
 func startProxyServer(cmd *cobra.Command, args []string) {
 	domain, err := cmd.Flags().GetString("domain")
 	if err != nil {
@@ -124,6 +132,35 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid static-secrets-refresh-interval format '%s'. Use formats like 30m, 1h, 1d", staticSecretsRefreshIntervalStr))
 	}
 
+	pollingFallbackIntervalStr, err := cmd.Flags().GetString("polling-fallback-interval")
+	if err != nil {
+		util.HandleError(err, "Unable to parse polling-fallback-interval flag")
+	}
+
+	pollingFallbackInterval, err := util.ParseTimeDurationString(pollingFallbackIntervalStr, true)
+	if err != nil {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid polling-fallback-interval format '%s'. Use formats like 1m, 5m, 10m", pollingFallbackIntervalStr))
+	}
+
+	useSSE, err := cmd.Flags().GetBool("enable-event-subscriptions")
+	if err != nil {
+		util.HandleError(err, "Unable to parse enable-event-subscriptions flag")
+	}
+
+	clientId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse client-id flag")
+	}
+
+	clientSecret, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse client-secret flag")
+	}
+
+	if useSSE && (clientId == "" || clientSecret == "") {
+		util.PrintErrorMessageAndExit("--client-id and --client-secret are required when --enable-event-subscriptions is enabled. Set via flags or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET environment variables.")
+	}
+
 	domainURL, err := url.Parse(domain)
 	if err != nil {
 		util.HandleError(err, fmt.Sprintf("Invalid domain URL: %s", domain))
@@ -175,6 +212,15 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		log.Info().Msg("Dev mode enabled: debug endpoint available at /_debug/cache")
 	}
 
+	var sseManager *proxy.SSEManager
+	if useSSE {
+		sseManager, err = initializeSSEManager(context.Background(), clientId, clientSecret, cache, domainURL, streamingClient, httpClient, pollingFallbackInterval)
+		if err != nil {
+			util.HandleError(err, "Failed to initialize SSE manager")
+		}
+		log.Info().Msg("SSE manager initialized for demand-driven cache updates")
+	}
+
 	proxyHandler := func(w http.ResponseWriter, r *http.Request) {
 		// Skip debug endpoints - they're handled by mux
 		if strings.HasPrefix(r.URL.Path, "/_debug/") {
@@ -190,26 +236,9 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 		// -- Cache Check --
 
 		if isCacheable && token != "" {
-			cacheKey := proxy.GenerateCacheKey(r.Method, r.URL.Path, r.URL.RawQuery, token)
-
-			if cachedResp, found := cache.Get(cacheKey); found {
-				log.Info().
-					Str("hash", cacheKey).
-					Msg("Cache hit")
-
-				proxy.CopyHeaders(w.Header(), cachedResp.Header)
-				w.WriteHeader(cachedResp.StatusCode)
-				_, err := io.Copy(w, cachedResp.Body)
-				if err != nil {
-					log.Error().Err(err).Msg("Failed to copy cached response body")
-					return
-				}
+			if served := serveCachedResponse(w, r, cache, token); served {
 				return
 			}
-
-			log.Info().
-				Str("hash", cacheKey).
-				Msg("Cache miss")
 		}
 
 		// -- Proxy Request --
@@ -428,6 +457,11 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 
 				cache.Set(cacheKey, r, cachedResp, token, indexEntry)
 
+				if useSSE && sseManager != nil {
+					log.Info().Str("projectId", indexEntry.ProjectId).Str("envSlug", indexEntry.EnvironmentSlug).Msg("Ensuring SSE subscription for project")
+					sseManager.EnsureSubscription(indexEntry.ProjectId, indexEntry.EnvironmentSlug)
+				}
+
 				log.Debug().
 					Str("method", r.Method).
 					Str("path", r.URL.Path).
@@ -473,7 +507,7 @@ func startProxyServer(cmd *cobra.Command, args []string) {
 	resyncCtx, resyncCancel := context.WithCancel(context.Background())
 	defer resyncCancel()
 
-	go proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval)
+	proxy.StartBackgroundLoops(resyncCtx, cache, domainURL, httpClient, evictionStrategy, accessTokenCheckInterval, staticSecretsRefreshInterval, useSSE)
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -563,6 +597,29 @@ func printCacheDebug(cmd *cobra.Command, args []string) {
 	fmt.Println(string(output))
 }
 
+// serveCachedResponse looks up the cache for the request using the caller's token.
+// Returns true if a cached response was written to w.
+func serveCachedResponse(w http.ResponseWriter, r *http.Request, c *proxy.Cache, token string) bool {
+	cacheKey := proxy.GenerateCacheKey(r.Method, r.URL.Path, r.URL.RawQuery, token)
+
+	if cachedResp, found := c.Get(cacheKey); found {
+		log.Info().Str("hash", cacheKey).Msg("Cache hit")
+		writeCachedResponse(w, cachedResp)
+		return true
+	}
+
+	log.Info().Str("hash", cacheKey).Msg("Cache miss")
+	return false
+}
+
+func writeCachedResponse(w http.ResponseWriter, cachedResp *http.Response) {
+	proxy.CopyHeaders(w.Header(), cachedResp.Header)
+	w.WriteHeader(cachedResp.StatusCode)
+	if _, err := io.Copy(w, cachedResp.Body); err != nil {
+		log.Error().Err(err).Msg("Failed to copy cached response body")
+	}
+}
+
 func isStreamingEndpoint(path string) bool {
 	return strings.HasPrefix(path, "/api/v1/events/")
 }
@@ -576,6 +633,10 @@ func init() {
 	proxyStartCmd.Flags().String("tls-cert-file", "", "The path to the TLS certificate file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().String("tls-key-file", "", "The path to the TLS key file for the proxy server. Required when `tls-enabled` is set to true (default)")
 	proxyStartCmd.Flags().Bool("tls-enabled", true, "Whether to enable TLS for the proxy server. Defaults to true")
+	proxyStartCmd.Flags().Bool("enable-event-subscriptions", false, "Enable Event Subscription mode for real-time cache invalidation. When enabled, the static secrets refresh loop is disabled. If event subscriptions are unavailable, the proxy will fall back to a polling mechanism.  `--client id` and `--client-secret` are required when this is set to true ")
+	proxyStartCmd.Flags().String("client-id", "", "Machine identity universal auth client ID. This is required when using event subscriptions.")
+	proxyStartCmd.Flags().String("client-secret", "", "Machine identity universal auth client secret. This is required when using event subscriptions.")
+	proxyStartCmd.Flags().String("polling-fallback-interval", "10m", "How often to poll for secret changes when SSE is unavailable (e.g., 1m, 5m). Defaults to 5m. Only used when --enable-event-subscriptions is set.")
 
 	proxyDebugCmd.Flags().String("listen-address", "localhost:8081", "The address where the proxy server is listening. Defaults to localhost:8081")
 

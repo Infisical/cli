@@ -55,6 +55,15 @@ type PathIndexMarker struct {
 	CacheKey string `json:"cacheKey"`
 }
 
+// CollectedCacheEntry holds the metadata of a cache entry collected before purging,
+// so it can be replayed (re-fetched) using the original request and token.
+type CollectedCacheEntry struct {
+	CacheKey   string
+	Request    *CachedRequest
+	Token      string
+	IndexEntry IndexEntry
+}
+
 // Cache is an HTTP response cache fully backed by EncryptedStorage
 type Cache struct {
 	storage *cache.EncryptedStorage
@@ -130,6 +139,18 @@ func IsSecretsEndpoint(path string) bool {
 		path == "/api/v3/secrets" || path == "/api/v4/secrets"
 }
 
+func ExtractSecretNameFromPath(urlPath string) string {
+	for _, prefix := range []string{"/api/v4/secrets/", "/api/v3/secrets/"} {
+		if strings.HasPrefix(urlPath, prefix) {
+			name := strings.TrimPrefix(urlPath, prefix)
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 func IsCacheableRequest(path string, method string) bool {
 	if method != http.MethodGet {
 		return false
@@ -163,6 +184,8 @@ func (c *Cache) Get(cacheKey string) (*http.Response, bool) {
 	return resp, true
 }
 
+// when a new key is added, we need to check if the projectID and the env slug are being tracked in the cache
+// to refactor: every operation that call set, it checkes the values of indexEntry before, this could happen here.
 func (c *Cache) Set(cacheKey string, req *http.Request, resp *http.Response, token string, indexEntry IndexEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -341,6 +364,55 @@ func (c *Cache) GetExpiredRequests(cacheTTL time.Duration) map[string]*CachedReq
 			CachedAt:   entry.Request.CachedAt,
 		}
 
+		CopyHeaders(requestCopy.Headers, entry.Request.Headers)
+
+		requests[cacheKey] = requestCopy
+	}
+
+	return requests
+}
+
+// GetEntriesForProjectEnv retrieves all cache entries for a given project and environment.
+// Uses the same path index prefix as PurgeByMutation and CollectAndPurgeByMutation.
+func (c *Cache) GetEntriesForProjectEnv(projectId, envSlug string) map[string]*CachedRequest {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	requests := make(map[string]*CachedRequest)
+
+	prefix := buildPathIndexPrefixForProject(projectId, envSlug)
+	pathKeys, err := c.storage.GetKeysByPrefix(prefix)
+	if err != nil {
+		log.Error().Err(err).Str("projectId", projectId).Str("envSlug", envSlug).Msg("Failed to get path index keys for project environment")
+		return requests
+	}
+
+	for _, key := range pathKeys {
+		var marker PathIndexMarker
+		if err := c.storage.Get(key, &marker); err != nil {
+			continue
+		}
+
+		cacheKey := marker.CacheKey
+		if _, exists := requests[cacheKey]; exists {
+			continue
+		}
+
+		var entry StoredCacheEntry
+		if err := c.storage.Get(buildEntryKey(cacheKey), &entry); err != nil {
+			continue
+		}
+
+		if entry.Request == nil {
+			continue
+		}
+
+		requestCopy := &CachedRequest{
+			Method:     entry.Request.Method,
+			RequestURI: entry.Request.RequestURI,
+			Headers:    make(http.Header),
+			CachedAt:   entry.Request.CachedAt,
+		}
 		CopyHeaders(requestCopy.Headers, entry.Request.Headers)
 
 		requests[cacheKey] = requestCopy
@@ -570,6 +642,60 @@ func (c *Cache) PurgeByMutation(projectID, envSlug, mutationPath string) int {
 	return purgedCount
 }
 
+// CollectAndPurgeByMutation collects cache entries matching the mutation path, then purges them.
+// Returns the collected entries so they can be replayed with their original requests/tokens.
+func (c *Cache) CollectAndPurgeByMutation(projectID, envSlug, mutationPath string) []CollectedCacheEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var collected []CollectedCacheEntry
+
+	prefix := buildPathIndexPrefixForProject(projectID, envSlug)
+	pathKeys, err := c.storage.GetKeysByPrefix(prefix)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get path index keys for collect-and-purge")
+		return collected
+	}
+
+	for _, key := range pathKeys {
+		withoutPrefix := strings.TrimPrefix(key, prefix)
+		parts := strings.SplitN(withoutPrefix, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+
+		keySecretPath := strings.ReplaceAll(parts[1], "\\:", ":")
+		keyCacheKey := parts[2]
+
+		if !matchesPath(keySecretPath, mutationPath) {
+			continue
+		}
+
+		// Load the full entry before evicting
+		var entry StoredCacheEntry
+		if err := c.storage.Get(buildEntryKey(keyCacheKey), &entry); err == nil && entry.Request != nil {
+			requestCopy := &CachedRequest{
+				Method:     entry.Request.Method,
+				RequestURI: entry.Request.RequestURI,
+				Headers:    make(http.Header),
+				CachedAt:   entry.Request.CachedAt,
+			}
+			CopyHeaders(requestCopy.Headers, entry.Request.Headers)
+
+			collected = append(collected, CollectedCacheEntry{
+				CacheKey:   keyCacheKey,
+				Request:    requestCopy,
+				Token:      entry.Token,
+				IndexEntry: entry.Index,
+			})
+		}
+
+		c.evictEntryUnsafe(keyCacheKey)
+	}
+
+	return collected
+}
+
 // CompoundPathIndexDebugInfo represents the compound path index structure
 type CompoundPathIndexDebugInfo struct {
 	Token      string                      `json:"token"`
@@ -755,3 +881,4 @@ func (c *Cache) GetDebugInfo() CacheDebugInfo {
 		CompoundPathIndex: compoundPathIndex,
 	}
 }
+
