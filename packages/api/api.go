@@ -923,7 +923,7 @@ func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v2/gateways/enroll", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v3/gateways/token-auth/enroll", config.INFISICAL_URL))
 
 	if err != nil {
 		return EnrollGatewayResponse{}, NewGenericRequestError(operationCallEnrollGateway, err)
