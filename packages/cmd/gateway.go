@@ -280,14 +280,16 @@ var gatewayStartCmd = &cobra.Command{
 			explicitAuthMethod, _ := cmd.Flags().GetString("auth-method")
 			hasExplicitCreds := explicitToken != nil || explicitAuthMethod != ""
 
-			storedToken, loadErr := gatewayv2.LoadStoredAccessToken()
-			if loadErr != nil {
-				util.HandleError(loadErr, "failed to load stored gateway access token")
-			}
+			if !hasExplicitCreds {
+				storedToken, loadErr := gatewayv2.LoadStoredAccessToken()
+				if loadErr != nil {
+					util.HandleError(loadErr, "failed to load stored gateway access token")
+				}
 
-			if storedToken != "" && !hasExplicitCreds {
-				log.Info().Msg("Using stored gateway access token")
-				runningWithStoredToken = true
+				if storedToken != "" {
+					log.Info().Msg("Using stored gateway access token")
+					runningWithStoredToken = true
+				}
 			}
 		}
 
