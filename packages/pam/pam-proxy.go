@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
@@ -17,6 +18,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -297,10 +299,37 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:                 pamConfig.SessionId,
 			SessionLogger:             sessionLogger,
 		}
+
+		// For gateway-kubernetes-auth, override target URL and TLS with pod's in-cluster credentials
+		if credentials.AuthMethod == "gateway-kubernetes-auth" {
+			kubernetesConfig.ImpersonateNamespace = credentials.Namespace
+			kubernetesConfig.ImpersonateServiceAccount = credentials.ServiceAccountName
+
+			// Auto-discover K8s API URL from env vars
+			k8sHost := util.KUBERNETES_SERVICE_HOST_ENV_NAME
+			k8sPort := util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME
+			if host, port := os.Getenv(k8sHost), os.Getenv(k8sPort); host != "" && port != "" {
+				kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s:%s", host, port)
+			}
+
+			// Use pod's in-cluster CA cert with strict TLS (ignore resource SSL settings)
+			caCert, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to read pod CA cert, falling back to resource TLS config")
+			} else {
+				caCertPool := x509.NewCertPool()
+				caCertPool.AppendCertsFromPEM(caCert)
+				kubernetesConfig.TLSConfig = &tls.Config{
+					RootCAs: caCertPool,
+				}
+			}
+		}
+
 		proxy := kubernetes.NewKubernetesProxy(kubernetesConfig)
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", kubernetesConfig.TargetApiServer).
+			Str("authMethod", credentials.AuthMethod).
 			Msg("Starting Kubernetes PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeMongodb:
