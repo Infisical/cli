@@ -674,7 +674,7 @@ func init() {
 	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
-	gatewayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token, or enrollment token when --enroll-method=static")
+	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
 	gatewayStartCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token to obtain a long-lived gateway access token")
 	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=static)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
@@ -692,7 +692,7 @@ func init() {
 	gatewayInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 
 	// Systemd install command flags (v2)
-	gatewaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token, or enrollment token when --enroll-method=static")
+	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
 	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "enrollment method [static]. when set to 'static', uses --token as a one-time enrollment token")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
