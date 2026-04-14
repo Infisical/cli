@@ -214,7 +214,7 @@ var gatewayStartCmd = &cobra.Command{
 		var alreadyEnrolled bool
 
 		// --- Enrollment token path ---
-		if enrollMethod == "static" {
+		if enrollMethod == gatewayv2.EnrollMethodStatic {
 			enrollToken, err := cmd.Flags().GetString("token")
 			if err != nil || enrollToken == "" {
 				util.HandleError(errors.New("--token is required when --enroll-method=static"))
@@ -278,7 +278,7 @@ var gatewayStartCmd = &cobra.Command{
 		// --domain flag takes priority; fall back to domain saved at enrollment time.
 		// For enrollment flow with alreadyEnrolled, domain was set during original enrollment
 		// and needs to be loaded from config.
-		if enrollMethod != "static" || alreadyEnrolled {
+		if enrollMethod != gatewayv2.EnrollMethodStatic || alreadyEnrolled {
 			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
 			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(); storedDomain != "" {
@@ -289,7 +289,7 @@ var gatewayStartCmd = &cobra.Command{
 		// Only use the stored token when no explicit identity credentials are provided.
 		// If --token or --auth-method is set, the user wants the identity-based path.
 		var runningWithStoredToken bool
-		if enrollMethod == "static" {
+		if enrollMethod == gatewayv2.EnrollMethodStatic {
 			// Just enrolled above; use the freshly saved token.
 			runningWithStoredToken = true
 		} else {
@@ -551,7 +551,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
-		if enrollMethod == "static" {
+		if enrollMethod == gatewayv2.EnrollMethodStatic {
 			// --- Enrollment token path ---
 			enrollToken, flagErr := cmd.Flags().GetString("token")
 			if flagErr != nil || enrollToken == "" {
