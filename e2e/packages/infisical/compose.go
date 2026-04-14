@@ -303,7 +303,7 @@ func WithPebbleService() StackOption {
 func WithBackendService(options BackendOptions) StackOption {
 
 	licenseKey, found := os.LookupEnv("INFISICAL_LICENSE_KEY")
-	if !found {
+	if !found || licenseKey == "" {
 		log.Println("INFISICAL_LICENSE_KEY not set, continuing without licensing.")
 	} else {
 		log.Println("INFISICAL_LICENSE_KEY set, continuing with licensing.")

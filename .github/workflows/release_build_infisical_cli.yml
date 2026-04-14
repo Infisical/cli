@@ -17,6 +17,7 @@ jobs:
     uses: ./.github/workflows/pre-tag-validation.yml
   cli-tests:
     uses: ./.github/workflows/run-cli-e2e-tests.yml
+    secrets: inherit
 
   # cli-integration-tests:
   #   name: Run tests before deployment
