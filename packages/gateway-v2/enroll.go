@@ -15,11 +15,12 @@ const (
 	EnrollMethodStatic                     = "static"
 )
 
-// gatewayConfPath returns the path to the gateway config file.
-// Uses /etc/infisical/gateway.conf when running as root, otherwise ~/.infisical/gateway.conf.
-func gatewayConfPath() (string, error) {
+// gatewayConfPath returns the path to the gateway config file scoped by name.
+// Uses /etc/infisical/gateways/<name>.conf when running as root,
+// otherwise ~/.infisical/gateways/<name>.conf.
+func gatewayConfPath(name string) (string, error) {
 	if os.Geteuid() == 0 {
-		return "/etc/infisical/gateway.conf", nil
+		return filepath.Join("/etc/infisical/gateways", name+".conf"), nil
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -27,12 +28,12 @@ func gatewayConfPath() (string, error) {
 		return "", fmt.Errorf("unable to determine home directory: %w", err)
 	}
 
-	return filepath.Join(homeDir, ".infisical", "gateway.conf"), nil
+	return filepath.Join(homeDir, ".infisical", "gateways", name+".conf"), nil
 }
 
-// loadConfKey reads a key from the config file. Returns empty string if not found.
-func loadConfKey(key string) (string, error) {
-	confPath, err := gatewayConfPath()
+// loadConfKey reads a key from the named gateway's config file. Returns empty string if not found.
+func loadConfKey(name, key string) (string, error) {
+	confPath, err := gatewayConfPath(name)
 	if err != nil {
 		return "", err
 	}
@@ -56,10 +57,10 @@ func loadConfKey(key string) (string, error) {
 	return "", nil
 }
 
-// saveConfKey writes a key=value pair to the config file, preserving other keys.
+// saveConfKey writes a key=value pair to the named gateway's config file, preserving other keys.
 // The file is created with 0600 permissions (owner read/write only).
-func saveConfKey(key, value string) error {
-	confPath, err := gatewayConfPath()
+func saveConfKey(name, key, value string) error {
+	confPath, err := gatewayConfPath(name)
 	if err != nil {
 		return err
 	}
@@ -96,49 +97,46 @@ func saveConfKey(key, value string) error {
 
 // LoadStoredAccessToken reads the gateway access token from the environment or config file.
 // Env var takes precedence over the config file.
-// Returns an empty string if neither source has the token set.
-func LoadStoredAccessToken() (string, error) {
+func LoadStoredAccessToken(name string) (string, error) {
 	if envToken := os.Getenv(INFISICAL_GATEWAY_ACCESS_TOKEN_KEY); envToken != "" {
 		return envToken, nil
 	}
-	return loadConfKey(INFISICAL_GATEWAY_ACCESS_TOKEN_KEY)
+	return loadConfKey(name, INFISICAL_GATEWAY_ACCESS_TOKEN_KEY)
 }
 
 // SaveAccessToken writes the gateway access token to the config file.
-func SaveAccessToken(token string) error {
-	return saveConfKey(INFISICAL_GATEWAY_ACCESS_TOKEN_KEY, token)
+func SaveAccessToken(name, token string) error {
+	return saveConfKey(name, INFISICAL_GATEWAY_ACCESS_TOKEN_KEY, token)
 }
 
 // LoadStoredDomain reads the Infisical domain from the gateway config file.
-// Returns empty string if not set (caller should use the default).
-func LoadStoredDomain() (string, error) {
-	return loadConfKey(INFISICAL_GATEWAY_DOMAIN_KEY)
+func LoadStoredDomain(name string) (string, error) {
+	return loadConfKey(name, INFISICAL_GATEWAY_DOMAIN_KEY)
 }
 
 // SaveDomain writes the Infisical domain to the config file.
-func SaveDomain(domain string) error {
-	return saveConfKey(INFISICAL_GATEWAY_DOMAIN_KEY, domain)
+func SaveDomain(name, domain string) error {
+	return saveConfKey(name, INFISICAL_GATEWAY_DOMAIN_KEY, domain)
 }
 
 // LoadStoredEnrollmentToken reads the enrollment token from the config file.
-func LoadStoredEnrollmentToken() (string, error) {
-	return loadConfKey(INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY)
+func LoadStoredEnrollmentToken(name string) (string, error) {
+	return loadConfKey(name, INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY)
 }
 
 // SaveEnrollmentToken writes the enrollment token to the config file.
-func SaveEnrollmentToken(token string) error {
-	return saveConfKey(INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY, token)
+func SaveEnrollmentToken(name, token string) error {
+	return saveConfKey(name, INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY, token)
 }
 
-// GetConfPathDisplay returns the config path for display in log messages,
-// without returning an error (falls back to a sensible default).
-func GetConfPathDisplay() string {
-	path, err := gatewayConfPath()
+// GetConfPathDisplay returns the config path for display in log messages.
+func GetConfPathDisplay(name string) string {
+	path, err := gatewayConfPath(name)
 	if err != nil {
 		if runtime.GOOS == "linux" {
-			return "/etc/infisical/gateway.conf"
+			return "/etc/infisical/gateways/" + name + ".conf"
 		}
-		return "~/.infisical/gateway.conf"
+		return "~/.infisical/gateways/" + name + ".conf"
 	}
 	return path
 }

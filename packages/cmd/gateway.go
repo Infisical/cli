@@ -213,6 +213,18 @@ var gatewayStartCmd = &cobra.Command{
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 		var alreadyEnrolled bool
 
+		// Resolve gateway name early so config files can be scoped per gateway.
+		// Positional arg > --name flag (deprecated) > env var
+		var gatewayName string
+		if len(args) > 0 {
+			gatewayName = args[0]
+		} else {
+			gatewayName, _ = util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
+		}
+		if gatewayName == "" {
+			util.HandleError(errors.New("gateway name is required (provide as positional argument)"))
+		}
+
 		// --- Enrollment token path ---
 		if enrollMethod == gatewayv2.EnrollMethodStatic {
 			enrollToken, err := cmd.Flags().GetString("token")
@@ -222,7 +234,7 @@ var gatewayStartCmd = &cobra.Command{
 
 			// Check if this is the same token we already enrolled with.
 			// If so, skip enrollment and just start the gateway.
-			storedEnrollToken, _ := gatewayv2.LoadStoredEnrollmentToken()
+			storedEnrollToken, _ := gatewayv2.LoadStoredEnrollmentToken(gatewayName)
 			alreadyEnrolled = storedEnrollToken != "" && storedEnrollToken == enrollToken
 
 			if alreadyEnrolled {
@@ -249,11 +261,11 @@ var gatewayStartCmd = &cobra.Command{
 					util.HandleError(err, "enrollment failed")
 				}
 
-				if err := gatewayv2.SaveAccessToken(enrollResp.AccessToken); err != nil {
+				if err := gatewayv2.SaveAccessToken(gatewayName, enrollResp.AccessToken); err != nil {
 					util.HandleError(err, "failed to save gateway access token")
 				}
 
-				if err := gatewayv2.SaveEnrollmentToken(enrollToken); err != nil {
+				if err := gatewayv2.SaveEnrollmentToken(gatewayName, enrollToken); err != nil {
 					util.HandleError(err, "failed to save enrollment token to config")
 				}
 
@@ -263,12 +275,12 @@ var gatewayStartCmd = &cobra.Command{
 					effectiveDomain = config.INFISICAL_URL
 				}
 				if effectiveDomain != "" {
-					if err := gatewayv2.SaveDomain(effectiveDomain); err != nil {
+					if err := gatewayv2.SaveDomain(gatewayName, effectiveDomain); err != nil {
 						util.HandleError(err, "failed to save domain to config")
 					}
 				}
 
-				log.Info().Msgf("Gateway enrolled successfully. Access token saved to %s", gatewayv2.GetConfPathDisplay())
+				log.Info().Msgf("Gateway enrolled successfully. Access token saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
 			}
 
 			log.Info().Msg("Starting gateway...")
@@ -281,7 +293,7 @@ var gatewayStartCmd = &cobra.Command{
 		if enrollMethod != gatewayv2.EnrollMethodStatic || alreadyEnrolled {
 			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
-			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(); storedDomain != "" {
+			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
 				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
 			}
 		}
@@ -298,7 +310,7 @@ var gatewayStartCmd = &cobra.Command{
 			hasExplicitCreds := explicitToken != nil || explicitAuthMethod != ""
 
 			if !hasExplicitCreds {
-				storedToken, loadErr := gatewayv2.LoadStoredAccessToken()
+				storedToken, loadErr := gatewayv2.LoadStoredAccessToken(gatewayName)
 				if loadErr != nil {
 					util.HandleError(loadErr, "failed to load stored gateway access token")
 				}
@@ -310,17 +322,7 @@ var gatewayStartCmd = &cobra.Command{
 			}
 		}
 
-		// Resolve gateway name: positional arg > --name flag (deprecated) > env var
-		var gatewayName string
 		var err error
-		if len(args) > 0 {
-			gatewayName = args[0]
-		} else {
-			gatewayName, _ = util.GetCmdFlagOrEnv(cmd, "name", []string{gatewayv2.GATEWAY_NAME_ENV_NAME})
-		}
-		if gatewayName == "" {
-			util.HandleError(errors.New("gateway name is required (provide as positional argument or --name flag)"))
-		}
 
 		pamSessionRecordingPath, err := util.GetCmdFlagOrEnv(cmd, "pam-session-recording-path", []string{gatewayv2.INFISICAL_PAM_SESSION_RECORDING_PATH_ENV_NAME})
 		if err == nil && pamSessionRecordingPath != "" {
@@ -331,7 +333,7 @@ var gatewayStartCmd = &cobra.Command{
 		cancelSdk := func() {}                              // noop by default
 		var sdkTokenGetter func() string                    // nil when using stored token
 		if runningWithStoredToken {
-			loadedToken, loadErr := gatewayv2.LoadStoredAccessToken()
+			loadedToken, loadErr := gatewayv2.LoadStoredAccessToken(gatewayName)
 			if loadErr != nil || loadedToken == "" {
 				util.HandleError(errors.New("no stored access token found"))
 			}
