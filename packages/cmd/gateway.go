@@ -205,7 +205,7 @@ var gatewayCmd = &cobra.Command{
 var gatewayStartCmd = &cobra.Command{
 	Use:                   "start [name]",
 	Short:                 "Start the new Infisical gateway",
-	Long:                  "Start the new Infisical gateway component. The gateway name can be provided as a positional argument or via the --name flag.",
+	Long:                  "Start the new Infisical gateway component.",
 	Example:               "infisical gateway start my-gateway --token=<token>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
@@ -502,7 +502,7 @@ var gatewaySystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd service for Infisical gateway",
 	Long:  "Manage systemd service for Infisical gateway. Use 'systemd install' to install and enable the service.",
-	Example: `sudo infisical gateway systemd install --token=<token> --domain=<domain> --name=<name>
+	Example: `sudo infisical gateway systemd install my-gateway --token=<token> --domain=<domain>
   sudo infisical gateway systemd uninstall`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
@@ -511,7 +511,7 @@ var gatewaySystemdCmd = &cobra.Command{
 var gatewaySystemdInstallCmd = &cobra.Command{
 	Use:                   "install [name]",
 	Short:                 "Install and enable systemd service for the gateway (v2) (requires sudo)",
-	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux. The gateway name can be provided as a positional argument or via the --name flag.",
+	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux.",
 	Example:               "sudo infisical gateway systemd install my-gateway --token=<token> --domain=<domain>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
