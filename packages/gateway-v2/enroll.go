@@ -16,7 +16,7 @@ const (
 // gatewayConfPath returns the path to the gateway config file.
 // Uses /etc/infisical/gateway.conf when running as root, otherwise ~/.infisical/gateway.conf.
 func gatewayConfPath() (string, error) {
-	if os.Getuid() == 0 {
+	if os.Geteuid() == 0 {
 		return "/etc/infisical/gateway.conf", nil
 	}
 
