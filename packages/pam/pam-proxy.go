@@ -161,6 +161,11 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
+	defer func() {
+		if err := sessionLogger.Close(); err != nil {
+			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to close session logger")
+		}
+	}()
 	pamConfig.SessionUploader.RegisterSession(pamConfig.SessionId)
 
 	serverName := credentials.Host

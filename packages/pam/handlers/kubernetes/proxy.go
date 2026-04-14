@@ -52,6 +52,7 @@ func (p *KubernetesProxy) injectAuthHeaders(headers http.Header) error {
 	// Strip any client-supplied impersonation headers to prevent privilege escalation
 	headers.Del("Impersonate-User")
 	headers.Del("Impersonate-Group")
+	headers.Del("Impersonate-Uid")
 	for key := range headers {
 		if strings.HasPrefix(strings.ToLower(key), "impersonate-extra-") {
 			headers.Del(key)
