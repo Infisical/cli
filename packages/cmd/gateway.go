@@ -244,8 +244,13 @@ var gatewayStartCmd = &cobra.Command{
 				util.HandleError(err, "failed to save gateway access token")
 			}
 
-			if domain != "" {
-				if err := gatewayv2.SaveDomain(domain); err != nil {
+			// Always persist the effective domain so restarts use the same backend
+			effectiveDomain := domain
+			if effectiveDomain == "" {
+				effectiveDomain = config.INFISICAL_URL
+			}
+			if effectiveDomain != "" {
+				if err := gatewayv2.SaveDomain(effectiveDomain); err != nil {
 					util.HandleError(err, "failed to save domain to config")
 				}
 			}
