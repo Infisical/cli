@@ -68,6 +68,7 @@ func (p *KubernetesProxy) injectAuthHeaders(headers http.Header) error {
 		headers.Set("Impersonate-User", saUser)
 		headers.Set("Impersonate-Group", "system:serviceaccounts")
 		headers.Add("Impersonate-Group", fmt.Sprintf("system:serviceaccounts:%s", p.config.ImpersonateNamespace))
+		headers.Add("Impersonate-Group", "system:authenticated")
 	default:
 		return fmt.Errorf("unsupported Kubernetes auth method: %s", p.config.AuthMethod)
 	}
@@ -298,7 +299,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	headers.Set("Host", newUrl.Host)
 	if err := p.injectAuthHeaders(headers); err != nil {
 		l.Error().Err(err).Msg("Failed to inject auth headers for websocket")
-		clientConn.Write([]byte(buildHttpInternalServerError("failed to configure auth headers")))
+		_, _ = clientConn.Write([]byte(buildHttpInternalServerError("failed to configure auth headers")))
 		return err
 	}
 	for key, values := range headers {

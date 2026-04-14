@@ -307,13 +307,11 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			kubernetesConfig.ImpersonateServiceAccount = credentials.ServiceAccountName
 
 			// Auto-discover K8s API URL from env vars
-			if host, port := os.Getenv(util.KUBERNETES_SERVICE_HOST_ENV_NAME), os.Getenv(util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME); host != "" && port != "" {
-				kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s", net.JoinHostPort(host, port))
-			} else {
-				log.Warn().
-					Str("sessionId", pamConfig.SessionId).
-					Msg("KUBERNETES_SERVICE_HOST or KUBERNETES_SERVICE_PORT_HTTPS not set; gateway-kubernetes-auth requires the gateway to run inside a K8s pod")
+			host, port := os.Getenv(util.KUBERNETES_SERVICE_HOST_ENV_NAME), os.Getenv(util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME)
+			if host == "" || port == "" {
+				return fmt.Errorf("gateway-kubernetes-auth requires KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT_HTTPS to be set; gateway must run inside a Kubernetes pod")
 			}
+			kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s", net.JoinHostPort(host, port))
 
 			// Use pod's in-cluster CA cert with strict TLS (ignore resource SSL settings)
 			caCert, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
@@ -321,9 +319,14 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 				log.Warn().Err(err).Msg("Failed to read pod CA cert, falling back to resource TLS config")
 			} else {
 				caCertPool := x509.NewCertPool()
-				caCertPool.AppendCertsFromPEM(caCert)
-				kubernetesConfig.TLSConfig = &tls.Config{
-					RootCAs: caCertPool,
+				if caCertPool.AppendCertsFromPEM(caCert) {
+					kubernetesConfig.TLSConfig = &tls.Config{
+						RootCAs: caCertPool,
+					}
+				} else {
+					log.Warn().
+						Str("sessionId", pamConfig.SessionId).
+						Msg("Failed to parse pod CA cert PEM, falling back to resource TLS config")
 				}
 			}
 		}
