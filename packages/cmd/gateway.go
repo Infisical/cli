@@ -211,6 +211,7 @@ var gatewayStartCmd = &cobra.Command{
 	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+		var alreadyEnrolled bool
 
 		// --- Enrollment token path ---
 		if enrollMethod == "static" {
@@ -219,49 +220,65 @@ var gatewayStartCmd = &cobra.Command{
 				util.HandleError(errors.New("--token is required when --enroll-method=static"))
 			}
 
-			relayName, _ := util.GetRelayName(cmd, false, "")
+			// Check if this is the same token we already enrolled with.
+			// If so, skip enrollment and just start the gateway.
+			storedEnrollToken, _ := gatewayv2.LoadStoredEnrollmentToken()
+			alreadyEnrolled = storedEnrollToken != "" && storedEnrollToken == enrollToken
 
-			domain, _ := cmd.Flags().GetString("domain")
-			if domain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
-			}
+			if alreadyEnrolled {
+				log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
+			} else {
+				relayName, _ := util.GetRelayName(cmd, false, "")
 
-			httpClient, err := util.GetRestyClientWithCustomHeaders()
-			if err != nil {
-				util.HandleError(err, "unable to create HTTP client")
-			}
-
-			log.Info().Msg("Enrolling gateway with enrollment token...")
-			enrollResp, err := api.CallEnrollGateway(httpClient, api.EnrollGatewayRequest{
-				Token:     enrollToken,
-				RelayName: relayName,
-			})
-			if err != nil {
-				util.HandleError(err, "enrollment failed")
-			}
-
-			if err := gatewayv2.SaveAccessToken(enrollResp.AccessToken); err != nil {
-				util.HandleError(err, "failed to save gateway access token")
-			}
-
-			// Always persist the effective domain so restarts use the same backend
-			effectiveDomain := domain
-			if effectiveDomain == "" {
-				effectiveDomain = config.INFISICAL_URL
-			}
-			if effectiveDomain != "" {
-				if err := gatewayv2.SaveDomain(effectiveDomain); err != nil {
-					util.HandleError(err, "failed to save domain to config")
+				domain, _ := cmd.Flags().GetString("domain")
+				if domain != "" {
+					config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 				}
+
+				httpClient, err := util.GetRestyClientWithCustomHeaders()
+				if err != nil {
+					util.HandleError(err, "unable to create HTTP client")
+				}
+
+				log.Info().Msg("Enrolling gateway with enrollment token...")
+				enrollResp, err := api.CallEnrollGateway(httpClient, api.EnrollGatewayRequest{
+					Token:     enrollToken,
+					RelayName: relayName,
+				})
+				if err != nil {
+					util.HandleError(err, "enrollment failed")
+				}
+
+				if err := gatewayv2.SaveAccessToken(enrollResp.AccessToken); err != nil {
+					util.HandleError(err, "failed to save gateway access token")
+				}
+
+				if err := gatewayv2.SaveEnrollmentToken(enrollToken); err != nil {
+					util.HandleError(err, "failed to save enrollment token to config")
+				}
+
+				// Always persist the effective domain so restarts use the same backend
+				effectiveDomain := domain
+				if effectiveDomain == "" {
+					effectiveDomain = config.INFISICAL_URL
+				}
+				if effectiveDomain != "" {
+					if err := gatewayv2.SaveDomain(effectiveDomain); err != nil {
+						util.HandleError(err, "failed to save domain to config")
+					}
+				}
+
+				log.Info().Msgf("Gateway enrolled successfully. Access token saved to %s", gatewayv2.GetConfPathDisplay())
 			}
 
-			log.Info().Msgf("Gateway enrolled successfully. Access token saved to %s", gatewayv2.GetConfPathDisplay())
 			log.Info().Msg("Starting gateway...")
 		}
 
 		// --- Stored token / post-enrollment path ---
 		// --domain flag takes priority; fall back to domain saved at enrollment time.
-		if enrollMethod != "static" {
+		// For enrollment flow with alreadyEnrolled, domain was set during original enrollment
+		// and needs to be loaded from config.
+		if enrollMethod != "static" || alreadyEnrolled {
 			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
 			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(); storedDomain != "" {

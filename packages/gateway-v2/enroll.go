@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	INFISICAL_GATEWAY_ACCESS_TOKEN_KEY = "INFISICAL_GATEWAY_ACCESS_TOKEN"
-	INFISICAL_GATEWAY_DOMAIN_KEY       = "INFISICAL_GATEWAY_DOMAIN"
+	INFISICAL_GATEWAY_ACCESS_TOKEN_KEY    = "INFISICAL_GATEWAY_ACCESS_TOKEN"
+	INFISICAL_GATEWAY_DOMAIN_KEY          = "INFISICAL_GATEWAY_DOMAIN"
+	INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY = "INFISICAL_GATEWAY_ENROLLMENT_TOKEN"
 )
 
 // gatewayConfPath returns the path to the gateway config file.
@@ -116,6 +117,16 @@ func LoadStoredDomain() (string, error) {
 // SaveDomain writes the Infisical domain to the config file.
 func SaveDomain(domain string) error {
 	return saveConfKey(INFISICAL_GATEWAY_DOMAIN_KEY, domain)
+}
+
+// LoadStoredEnrollmentToken reads the enrollment token from the config file.
+func LoadStoredEnrollmentToken() (string, error) {
+	return loadConfKey(INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY)
+}
+
+// SaveEnrollmentToken writes the enrollment token to the config file.
+func SaveEnrollmentToken(token string) error {
+	return saveConfKey(INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY, token)
 }
 
 // GetConfPathDisplay returns the config path for display in log messages,
