@@ -50,9 +50,12 @@ func NewKubernetesProxy(config KubernetesProxyConfig) *KubernetesProxy {
 // Impersonate-User/Group headers to act as the target service account.
 func (p *KubernetesProxy) injectAuthHeaders(headers http.Header) error {
 	switch p.config.AuthMethod {
-	case "service-account-token":
+	case "service-account-token", "":
 		headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
 	case "gateway-kubernetes-auth":
+		if p.config.ImpersonateNamespace == "" || p.config.ImpersonateServiceAccount == "" {
+			return fmt.Errorf("gateway-kubernetes-auth requires non-empty namespace and service account name")
+		}
 		// Read fresh on each request — K8s auto-rotates projected volume tokens
 		token, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
 		if err != nil {
@@ -198,7 +201,7 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 		proxyReq.Header = req.Header.Clone()
 		if err := p.injectAuthHeaders(proxyReq.Header); err != nil {
 			l.Error().Err(err).Msg("Failed to inject auth headers")
-			_, err = clientConn.Write([]byte(buildHttpInternalServerError(err.Error())))
+			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to configure auth headers")))
 			if err != nil {
 				return err
 			}
@@ -295,6 +298,7 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	headers.Set("Host", newUrl.Host)
 	if err := p.injectAuthHeaders(headers); err != nil {
 		l.Error().Err(err).Msg("Failed to inject auth headers for websocket")
+		clientConn.Write([]byte(buildHttpInternalServerError("failed to configure auth headers")))
 		return err
 	}
 	for key, values := range headers {

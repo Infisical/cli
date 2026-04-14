@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"time"
@@ -306,10 +307,12 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			kubernetesConfig.ImpersonateServiceAccount = credentials.ServiceAccountName
 
 			// Auto-discover K8s API URL from env vars
-			k8sHost := util.KUBERNETES_SERVICE_HOST_ENV_NAME
-			k8sPort := util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME
-			if host, port := os.Getenv(k8sHost), os.Getenv(k8sPort); host != "" && port != "" {
-				kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s:%s", host, port)
+			if host, port := os.Getenv(util.KUBERNETES_SERVICE_HOST_ENV_NAME), os.Getenv(util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME); host != "" && port != "" {
+				kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s", net.JoinHostPort(host, port))
+			} else {
+				log.Warn().
+					Str("sessionId", pamConfig.SessionId).
+					Msg("KUBERNETES_SERVICE_HOST or KUBERNETES_SERVICE_PORT_HTTPS not set; gateway-kubernetes-auth requires the gateway to run inside a K8s pod")
 			}
 
 			// Use pod's in-cluster CA cert with strict TLS (ignore resource SSL settings)
