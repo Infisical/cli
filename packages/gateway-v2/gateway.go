@@ -82,6 +82,7 @@ type GatewayConfig struct {
 	IdentityToken  string
 	SSHPort        int
 	ReconnectDelay time.Duration
+	UseV3Connect   bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
 }
 
 type pamSessionEntry struct {
@@ -505,10 +506,19 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 }
 
 func (g *Gateway) registerGateway() error {
-	certResp, err := api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
-		RelayName: g.config.RelayName,
-		Name:      g.config.Name,
-	})
+	var certResp api.RegisterGatewayResponse
+	var err error
+
+	if g.config.UseV3Connect {
+		certResp, err = api.CallConnectGateway(g.httpClient, api.ConnectGatewayRequest{
+			RelayName: g.config.RelayName,
+		})
+	} else {
+		certResp, err = api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
+			RelayName: g.config.RelayName,
+			Name:      g.config.Name,
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}

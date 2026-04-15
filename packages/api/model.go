@@ -790,6 +790,10 @@ type RegisterGatewayRequest struct {
 	Name      string `json:"name,omitempty"`
 }
 
+type ConnectGatewayRequest struct {
+	RelayName string `json:"relayName,omitempty"`
+}
+
 type EnrollGatewayRequest struct {
 	Token     string `json:"token"`
 	RelayName string `json:"relayName,omitempty"`

@@ -373,6 +373,7 @@ var gatewayStartCmd = &cobra.Command{
 			Name:           gatewayName,
 			RelayName:      relayName,
 			ReconnectDelay: 10 * time.Second,
+			UseV3Connect:   runningWithStoredToken,
 		})
 
 		if err != nil {
