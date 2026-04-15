@@ -212,6 +212,7 @@ var gatewayStartCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 		var alreadyEnrolled bool
+		var enrolledAccessToken string // set during fresh enrollment, used directly to avoid env var interference
 
 		// Resolve gateway name early so config files can be scoped per gateway.
 		// Positional arg > --name flag (deprecated) > env var
@@ -261,6 +262,7 @@ var gatewayStartCmd = &cobra.Command{
 					util.HandleError(err, "enrollment failed")
 				}
 
+				enrolledAccessToken = enrollResp.AccessToken
 				if err := gatewayv2.SaveAccessToken(gatewayName, enrollResp.AccessToken); err != nil {
 					util.HandleError(err, "failed to save gateway access token")
 				}
@@ -331,11 +333,16 @@ var gatewayStartCmd = &cobra.Command{
 		cancelSdk := func() {}                              // noop by default
 		var sdkTokenGetter func() string                    // nil when using stored token
 		if runningWithStoredToken {
-			loadedToken, loadErr := gatewayv2.LoadStoredAccessToken(gatewayName)
-			if loadErr != nil || loadedToken == "" {
-				util.HandleError(errors.New("no stored access token found"))
+			if enrolledAccessToken != "" {
+				// Fresh enrollment: use the token directly to avoid env var interference
+				accessToken.Store(enrolledAccessToken)
+			} else {
+				loadedToken, loadErr := gatewayv2.LoadStoredAccessToken(gatewayName)
+				if loadErr != nil || loadedToken == "" {
+					util.HandleError(errors.New("no stored access token found"))
+				}
+				accessToken.Store(loadedToken)
 			}
-			accessToken.Store(loadedToken)
 		} else {
 			infisicalClient, sdkCancel, sdkErr := getInfisicalSdkInstance(cmd)
 			if sdkErr != nil {
