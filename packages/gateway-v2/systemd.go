@@ -148,10 +148,16 @@ func UninstallGatewaySystemdService() error {
 		return fmt.Errorf("failed to remove systemd service file: %v", err)
 	}
 
-	// Remove the configuration file
+	// Remove the legacy configuration file
 	configPath := "/etc/infisical/gateway.conf"
 	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove config file: %v", err)
+	}
+
+	// Remove per-gateway config files from enrollment flow
+	gatewaysDir := "/etc/infisical/gateways"
+	if err := os.RemoveAll(gatewaysDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove gateways config directory: %v", err)
 	}
 
 	// Reload systemd to apply changes
