@@ -48,6 +48,7 @@ const (
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallGetOrgRelays                      = "CallGetOrgRelays"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
+	operationCallConnectGateway                    = "CallConnectGateway"
 	operationCallEnrollGateway                     = "CallEnrollGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
@@ -906,11 +907,11 @@ func CallConnectGateway(httpClient *resty.Client, request ConnectGatewayRequest)
 		Post(fmt.Sprintf("%v/v3/gateways/connect", config.INFISICAL_URL))
 
 	if err != nil {
-		return RegisterGatewayResponse{}, NewGenericRequestError(operationCallRegisterGateway, err)
+		return RegisterGatewayResponse{}, NewGenericRequestError(operationCallConnectGateway, err)
 	}
 
 	if response.IsError() {
-		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallRegisterGateway, response, nil)
+		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallConnectGateway, response, nil)
 	}
 
 	return resBody, nil

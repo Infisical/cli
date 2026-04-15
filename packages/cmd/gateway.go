@@ -565,6 +565,8 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(errors.New("--token is required when --enroll-method=token"))
 			}
 
+			relayName, _ := util.GetRelayName(cmd, false, "")
+
 			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
 			if clientErr != nil {
 				util.HandleError(clientErr, "unable to create HTTP client")
@@ -579,7 +581,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			}
 
 			// Install systemd service using the long-lived access token
-			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, "", serviceLogFile); installErr != nil {
+			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
 		} else {
