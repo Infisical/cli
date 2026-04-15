@@ -305,9 +305,7 @@ var gatewayStartCmd = &cobra.Command{
 			// Just enrolled above; use the freshly saved token.
 			runningWithStoredToken = true
 		} else {
-			explicitToken, _ := util.GetInfisicalToken(cmd)
-			explicitAuthMethod, _ := cmd.Flags().GetString("auth-method")
-			hasExplicitCreds := explicitToken != nil || explicitAuthMethod != ""
+			hasExplicitCreds := cmd.Flags().Changed("token") || cmd.Flags().Changed("auth-method")
 
 			if !hasExplicitCreds {
 				storedToken, loadErr := gatewayv2.LoadStoredAccessToken(gatewayName)
