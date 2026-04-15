@@ -357,8 +357,10 @@ var gatewayStartCmd = &cobra.Command{
 
 		var relayName string
 		if runningWithStoredToken {
-			// For enrollment-flow gateways, relay is optional — the backend uses the relay stored at enrollment time.
-			relayName, _ = util.GetRelayName(cmd, false, "")
+			relayName, err = util.GetRelayName(cmd, false, accessToken.Load().(string))
+			if err != nil {
+				util.HandleError(err, "unable to get relay name")
+			}
 		} else {
 			relayName, err = util.GetRelayName(cmd, false, accessToken.Load().(string))
 			if err != nil {
