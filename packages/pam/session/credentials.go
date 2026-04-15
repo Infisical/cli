@@ -25,6 +25,7 @@ type PAMCredentials struct {
 	SSLCertificate        string
 	Url                   string
 	ServiceAccountToken   string
+	PolicyRules           *api.PAMPolicyRules
 }
 
 type cachedCredentials struct {
@@ -100,6 +101,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		SSLCertificate:        response.Credentials.SSLCertificate,
 		Url:                   response.Credentials.Url,
 		ServiceAccountToken:   response.Credentials.ServiceAccountToken,
+		PolicyRules:           response.PolicyRules,
 	}
 
 	cm.cacheMutex.Lock()
