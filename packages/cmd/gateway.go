@@ -241,8 +241,6 @@ var gatewayStartCmd = &cobra.Command{
 			if alreadyEnrolled {
 				log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
 			} else {
-				relayName, _ := util.GetRelayName(cmd, false, "")
-
 				domain, _ := cmd.Flags().GetString("domain")
 				if domain != "" {
 					config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
@@ -255,8 +253,7 @@ var gatewayStartCmd = &cobra.Command{
 
 				log.Info().Msg("Enrolling gateway with enrollment token...")
 				enrollResp, err := api.CallEnrollGateway(httpClient, api.EnrollGatewayRequest{
-					Token:     enrollToken,
-					RelayName: relayName,
+					Token: enrollToken,
 				})
 				if err != nil {
 					util.HandleError(err, "enrollment failed")
@@ -566,8 +563,6 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(errors.New("--token is required when --enroll-method=token"))
 			}
 
-			relayName, _ := util.GetRelayName(cmd, false, "")
-
 			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
 			if clientErr != nil {
 				util.HandleError(clientErr, "unable to create HTTP client")
@@ -575,15 +570,14 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 			log.Info().Msg("Enrolling gateway with enrollment token...")
 			enrollResp, enrollErr := api.CallEnrollGateway(httpClient, api.EnrollGatewayRequest{
-				Token:     enrollToken,
-				RelayName: relayName,
+				Token: enrollToken,
 			})
 			if enrollErr != nil {
 				util.HandleError(enrollErr, "enrollment failed")
 			}
 
 			// Install systemd service using the long-lived access token
-			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, "", serviceLogFile); installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
 		} else {
