@@ -48,6 +48,8 @@ const (
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallGetOrgRelays                      = "CallGetOrgRelays"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
+	operationCallConnectGateway                    = "CallConnectGateway"
+	operationCallEnrollGateway                     = "CallEnrollGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
@@ -895,6 +897,26 @@ func CallGetRelays(httpClient *resty.Client) (GetRelaysResponse, error) {
 	return resBody, nil
 }
 
+func CallConnectGateway(httpClient *resty.Client, request ConnectGatewayRequest) (RegisterGatewayResponse, error) {
+	var resBody RegisterGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/connect", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterGatewayResponse{}, NewGenericRequestError(operationCallConnectGateway, err)
+	}
+
+	if response.IsError() {
+		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallConnectGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
 func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayRequest) (RegisterGatewayResponse, error) {
 	var resBody RegisterGatewayResponse
 	response, err := httpClient.
@@ -910,6 +932,26 @@ func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayReques
 
 	if response.IsError() {
 		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallRegisterGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (EnrollGatewayResponse, error) {
+	var resBody EnrollGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/token-auth/enroll", config.INFISICAL_URL))
+
+	if err != nil {
+		return EnrollGatewayResponse{}, NewGenericRequestError(operationCallEnrollGateway, err)
+	}
+
+	if response.IsError() {
+		return EnrollGatewayResponse{}, NewAPIErrorWithResponse(operationCallEnrollGateway, response, nil)
 	}
 
 	return resBody, nil

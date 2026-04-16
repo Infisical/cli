@@ -786,8 +786,21 @@ type Relay struct {
 type GetRelaysResponse []Relay
 
 type RegisterGatewayRequest struct {
-	RelayName string `json:"relayName"`
-	Name      string `json:"name"`
+	RelayName string `json:"relayName,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
+type ConnectGatewayRequest struct {
+	RelayName string `json:"relayName,omitempty"`
+}
+
+type EnrollGatewayRequest struct {
+	Token string `json:"token"`
+}
+
+type EnrollGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	GatewayID   string `json:"gatewayId"`
 }
 
 type RegisterGatewayResponse struct {
@@ -845,8 +858,18 @@ type PAMAccessApprovalRequestResponse struct {
 	} `json:"request"`
 }
 
+type PAMPolicyRuleConfig struct {
+	Patterns []string `json:"patterns"`
+}
+
+type PAMPolicyRules struct {
+	CommandBlocking   *PAMPolicyRuleConfig `json:"command-blocking,omitempty"`
+	SessionLogMasking *PAMPolicyRuleConfig `json:"session-log-masking,omitempty"`
+}
+
 type PAMSessionCredentialsResponse struct {
 	Credentials PAMSessionCredentials `json:"credentials"`
+	PolicyRules *PAMPolicyRules       `json:"policyRules,omitempty"`
 }
 
 type PAMSessionCredentials struct {

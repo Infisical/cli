@@ -301,6 +301,14 @@ func WithPebbleService() StackOption {
 }
 
 func WithBackendService(options BackendOptions) StackOption {
+
+	licenseKey, found := os.LookupEnv("INFISICAL_LICENSE_KEY")
+	if !found || licenseKey == "" {
+		log.Println("INFISICAL_LICENSE_KEY not set, continuing without licensing.")
+	} else {
+		log.Println("INFISICAL_LICENSE_KEY set, continuing with licensing.")
+	}
+
 	return func(s *Stack) {
 		if s.Project.Services == nil {
 			s.Project.Services = types.Services{}
@@ -329,6 +337,7 @@ func WithBackendService(options BackendOptions) StackOption {
 				"SITE_URL=http://localhost:8080",
 				"OTEL_TELEMETRY_COLLECTION_ENABLED=false",
 				"ENABLE_MSSQL_SECRET_ROTATION_ENCRYPT=true",
+				"LICENSE_KEY=" + licenseKey,
 			}),
 			Volumes: []types.ServiceVolumeConfig{
 				{Source: filepath.Join(options.BackendDir, "src"), Target: "/app/src", Type: types.VolumeTypeBind},

@@ -289,28 +289,138 @@ func runStaticSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http.
 		Msg("Static secrets refresh completed")
 }
 
-// StartBackgroundLoops starts the background loops for token validation and secrets refresh
-func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, evictionStrategy string, accessTokenCheckInterval time.Duration, staticSecretsRefreshInterval time.Duration) {
-	tokenTicker := time.NewTicker(accessTokenCheckInterval)
-	secretsTicker := time.NewTicker(staticSecretsRefreshInterval)
-	defer tokenTicker.Stop()
-	defer secretsTicker.Stop()
+func runProjectSecretsRefresh(cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string) {
+	log.Info().Str("projectId", projectId).Str("envSlug", envSlug).Msg("Starting project secrets refresh")
+
+	requests := cache.GetEntriesForProjectEnv(projectId, envSlug)
+
+	type orderedEntry struct {
+		cacheKey string
+		request  *CachedRequest
+	}
+	ordered := make([]orderedEntry, 0, len(requests))
+	for key, req := range requests {
+		ordered = append(ordered, orderedEntry{key, req})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].request.CachedAt.Before(ordered[j].request.CachedAt)
+	})
+
+	refetched := 0
+	evicted := 0
+
+	for _, entry := range ordered {
+		time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+
+		proxyReq, err := reconstructProxyRequest(domainURL, entry.request)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("cacheKey", entry.cacheKey).
+				Str("requestURI", entry.request.RequestURI).
+				Msg("Failed to parse requestURI during project secrets refresh")
+			continue
+		}
+
+		resp, err := httpClient.Do(proxyReq)
+		if err != nil || (resp != nil && resp.StatusCode >= 500) {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			log.Error().
+				Err(err).
+				Str("cacheKey", entry.cacheKey).
+				Str("requestURI", entry.request.RequestURI).
+				Msg("Network error during project secrets refresh - keeping stale entry (optimistic strategy)")
+			continue
+		}
+
+		refetchedResult, evictedResult, rateLimited, retryAfterSeconds := handleResyncResponse(cache, entry.cacheKey, entry.request.RequestURI, resp)
+		if refetchedResult {
+			refetched++
+		}
+		if evictedResult {
+			evicted++
+		}
+
+		if rateLimited {
+			pauseDuration := time.Duration(retryAfterSeconds+2) * time.Second
+			log.Info().
+				Int("pauseSeconds", retryAfterSeconds+2).
+				Str("projectId", projectId).
+				Msg("Rate limited during project secrets refresh, pausing")
+			time.Sleep(pauseDuration)
+		}
+	}
 
 	log.Info().
-		Str("evictionStrategy", evictionStrategy).
-		Str("accessTokenCheckInterval", accessTokenCheckInterval.String()).
-		Str("staticSecretsRefreshInterval", staticSecretsRefreshInterval.String()).
-		Msg("Background loops started")
+		Str("projectId", projectId).
+		Int("totalEntries", len(requests)).
+		Int("refetched", refetched).
+		Int("evicted", evicted).
+		Msg("Project secrets refresh completed")
+}
+
+func startProjectPollingLoop(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, projectId, envSlug string, interval time.Duration, onPollComplete func()) {
+	log.Info().Str("projectId", projectId).Str("envSlug", envSlug).Msg("Starting project polling loop")
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	firstTick := true
+	for {
+		select {
+		case <-ticker.C:
+			runProjectSecretsRefresh(cache, domainURL, httpClient, projectId, envSlug)
+			if !firstTick && onPollComplete != nil {
+				onPollComplete()
+			}
+			firstTick = false
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func startAccessTokenValidation(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, accessTokenCheckInterval time.Duration) {
+	tokenTicker := time.NewTicker(accessTokenCheckInterval)
+	defer tokenTicker.Stop()
 
 	for {
 		select {
 		case <-tokenTicker.C:
 			runAccessTokenValidation(cache, domainURL, httpClient)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func startStaticSecretsRefresh(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, staticSecretsRefreshInterval time.Duration) {
+	secretsTicker := time.NewTicker(staticSecretsRefreshInterval)
+	defer secretsTicker.Stop()
+
+	for {
+		select {
 		case <-secretsTicker.C:
 			runStaticSecretsRefresh(cache, domainURL, httpClient, staticSecretsRefreshInterval)
 		case <-ctx.Done():
-			log.Info().Msg("Background loops stopped")
 			return
 		}
+	}
+}
+
+// StartBackgroundLoops starts the background loops for token validation and secrets refresh.
+// When sseEnabled is true, the static secrets refresh loop is disabled (SSE handles cache invalidation).
+func StartBackgroundLoops(ctx context.Context, cache *Cache, domainURL *url.URL, httpClient *http.Client, evictionStrategy string, accessTokenCheckInterval time.Duration, staticSecretsRefreshInterval time.Duration, sseEnabled bool) {
+	log.Info().
+		Str("evictionStrategy", evictionStrategy).
+		Str("accessTokenCheckInterval", accessTokenCheckInterval.String()).
+		Str("staticSecretsRefreshInterval", staticSecretsRefreshInterval.String()).
+		Bool("sseEnabled", sseEnabled).
+		Msg("Background loops started")
+
+	go startAccessTokenValidation(ctx, cache, domainURL, httpClient, accessTokenCheckInterval)
+	if !sseEnabled {
+		go startStaticSecretsRefresh(ctx, cache, domainURL, httpClient, staticSecretsRefreshInterval)
 	}
 }

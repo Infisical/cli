@@ -1,7 +1,9 @@
 package util
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -165,8 +167,10 @@ func (s *InfisicalService) ApiUrl(t *testing.T) string {
 }
 
 type MachineIdentity struct {
-	Id             string
-	TokenAuthToken *string
+	Id                        string
+	TokenAuthToken            *string
+	UniversalAuthClientId     *string
+	UniversalAuthClientSecret *string
 }
 
 type MachineIdentityOption func(*testing.T, context.Context, *InfisicalService, *MachineIdentity)
@@ -226,6 +230,64 @@ func WithTokenAuth() MachineIdentityOption {
 
 		i.TokenAuthToken = &tokenResp.JSON200.AccessToken
 	}
+}
+
+func WithUniversalAuth() MachineIdentityOption {
+	return func(t *testing.T, ctx context.Context, s *InfisicalService, i *MachineIdentity) {
+		c := s.apiClient
+
+		ttl := 2592000
+		maxTTL := 2592000
+		numUses := 0
+
+		attachResp, err := c.AttachUniversalAuthWithResponse(ctx, i.Id, client.AttachUniversalAuthJSONRequestBody{
+			AccessTokenTTL:          &ttl,
+			AccessTokenMaxTTL:       &maxTTL,
+			AccessTokenNumUsesLimit: &numUses,
+			AccessTokenTrustedIps: &[]struct {
+				IpAddress string `json:"ipAddress"`
+			}{
+				{IpAddress: "0.0.0.0/0"},
+				{IpAddress: "::/0"},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, attachResp.StatusCode(), "Failed to attach universal auth: %s", string(attachResp.Body))
+		require.NotNil(t, attachResp.JSON200)
+
+		clientId := attachResp.JSON200.IdentityUniversalAuth.ClientId
+		i.UniversalAuthClientId = &clientId
+
+		csResp, err := c.CreateUniversalAuthClientSecretWithResponse(ctx, i.Id, client.CreateUniversalAuthClientSecretJSONRequestBody{})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, csResp.StatusCode(), "Failed to create universal auth client secret: %s", string(csResp.Body))
+		require.NotNil(t, csResp.JSON200)
+
+		i.UniversalAuthClientSecret = &csResp.JSON200.ClientSecret
+	}
+}
+
+func (s *InfisicalService) UpdateMachineIdentityRole(t *testing.T, ctx context.Context, identityId string, role string) {
+	apiUrl := s.ApiUrl(t)
+	url := fmt.Sprintf("%s/api/v1/identities/%s", apiUrl, identityId)
+
+	body, err := json.Marshal(map[string]string{"role": role})
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.provisionResult.Token)
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.True(t, resp.StatusCode >= 200 && resp.StatusCode < 300,
+		"Failed to update identity role to '%s', status %d: %s", role, resp.StatusCode, string(respBody))
+
+	slog.Info("Updated machine identity role", "identityId", identityId, "role", role)
 }
 
 type RunMethod string

@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
@@ -107,6 +109,28 @@ func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *Gatew
 	return nil
 }
 
+// compilePolicyPatterns compiles regex pattern strings, logging warnings for any that fail.
+func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ruleType string) []*regexp.Regexp {
+	if config == nil || len(config.Patterns) == 0 {
+		return nil
+	}
+	var compiled []*regexp.Regexp
+	for _, pattern := range config.Patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("sessionID", sessionID).
+				Str("ruleType", ruleType).
+				Str("pattern", pattern).
+				Msg("Failed to compile policy pattern, skipping")
+			continue
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled
+}
+
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
 	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
 	if err != nil {
@@ -157,7 +181,14 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 	}
-	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType)
+
+	// Compile session log masking patterns from policy rules
+	var maskingPatterns []*regexp.Regexp
+	if credentials.PolicyRules != nil {
+		maskingPatterns = compilePolicyPatterns(credentials.PolicyRules.SessionLogMasking, pamConfig.SessionId, "session-log-masking")
+	}
+
+	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, maskingPatterns)
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
@@ -279,15 +310,22 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Msg("Starting Redis PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeSSH:
+		// Compile command blocking patterns from policy rules
+		var blockedCommandPatterns []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			blockedCommandPatterns = compilePolicyPatterns(credentials.PolicyRules.CommandBlocking, pamConfig.SessionId, "command-blocking")
+		}
+
 		sshConfig := ssh.SSHProxyConfig{
-			TargetAddr:        fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
-			AuthMethod:        credentials.AuthMethod,
-			InjectUsername:    credentials.Username,
-			InjectPassword:    credentials.Password,
-			InjectPrivateKey:  credentials.PrivateKey,
-			InjectCertificate: credentials.Certificate,
-			SessionID:         pamConfig.SessionId,
-			SessionLogger:     sessionLogger,
+			TargetAddr:             fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			AuthMethod:             credentials.AuthMethod,
+			InjectUsername:         credentials.Username,
+			InjectPassword:         credentials.Password,
+			InjectPrivateKey:       credentials.PrivateKey,
+			InjectCertificate:      credentials.Certificate,
+			SessionID:              pamConfig.SessionId,
+			SessionLogger:          sessionLogger,
+			BlockedCommandPatterns: blockedCommandPatterns,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
 		log.Info().
