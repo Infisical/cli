@@ -191,7 +191,7 @@ func (p *KubernetesProxyServer) gracefulShutdown() {
 
 			delete(config.Contexts, p.kubeConfigClusterName)
 			delete(config.AuthInfos, p.kubeConfigClusterName)
-			delete(config.Contexts, p.kubeConfigClusterName)
+			delete(config.Clusters, p.kubeConfigClusterName)
 			if p.kubeConfigOriginalContext != "" {
 				config.CurrentContext = p.kubeConfigOriginalContext
 			}
