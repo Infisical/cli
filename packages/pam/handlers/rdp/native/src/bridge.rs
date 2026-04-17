@@ -51,7 +51,21 @@ pub struct ProxyArgs {
     pub password: String,
 }
 
-type ErasedStream = Box<dyn AsyncReadWrite + Send + Sync + Unpin + 'static>;
+pub(crate) type ErasedStream = Box<dyn AsyncReadWrite + Send + Sync + Unpin + 'static>;
+
+/// Public re-entry for the RDCleanPath handler once both sides have reached
+/// active phase. Forwards decoded PDUs in both directions and taps events.
+pub async fn bridge_pdus_public<C, T>(
+    client_framed: ironrdp_tokio::TokioFramed<C>,
+    target_framed: ironrdp_tokio::TokioFramed<T>,
+    tx: EventSender,
+) -> Result<()>
+where
+    C: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+    T: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+{
+    bridge_pdus(client_framed, target_framed, tx).await
+}
 
 /// Standalone-binary entry: loops forever, handling one connection at a
 /// time, logging events to stdout via the debug logger.
@@ -188,6 +202,7 @@ async fn handle_one(
                 .unwrap_or(3389),
             &args.username,
             &args.password,
+            tx,
         )
         .await;
     }
@@ -459,5 +474,5 @@ fn build_acceptor_tls() -> Result<tokio_rustls::rustls::ServerConfig> {
     Ok(config)
 }
 
-trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}
 impl<T> AsyncReadWrite for T where T: AsyncRead + AsyncWrite {}
