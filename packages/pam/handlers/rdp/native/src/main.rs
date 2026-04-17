@@ -17,6 +17,7 @@ mod bridge;
 mod caps;
 mod client;
 mod config;
+mod events;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

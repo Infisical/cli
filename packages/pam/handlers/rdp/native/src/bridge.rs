@@ -11,22 +11,26 @@
 //!   event stream exposed across FFI.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Args;
 use ironrdp_acceptor::{Acceptor, BeginResult};
 use ironrdp_connector::{ClientConnector, DesktopSize};
+use ironrdp_core::ReadCursor;
 use ironrdp_pdu::Action;
+use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
 use ironrdp_pdu::nego::SecurityProtocol;
 use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
 use ironrdp_tokio::FramedWrite;
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, warn};
 
 use crate::caps::{acceptor_capabilities, default_desktop_size};
 use crate::config::connector_config;
+use crate::events::{self, EventSender, SessionEvent, elapsed_ns_since};
 
 #[derive(Args, Debug, Clone)]
 pub struct ProxyArgs {
@@ -185,7 +189,43 @@ async fn handle_one(
 
     // --- BRIDGE: PDU-aware forwarding with event tap ---
 
-    bridge_pdus(acceptor_framed, upgraded_framed).await?;
+    let (tx, mut rx) = events::channel();
+
+    // Background logger: drains events so we can see them during the spike.
+    // Replaced in Step 2 by the FFI event queue that Go drains instead.
+    let event_logger = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match &event {
+                SessionEvent::KeyboardInput {
+                    scancode,
+                    flags,
+                    elapsed_ns,
+                } => debug!(?flags, scancode, elapsed_ns, "KeyboardInput"),
+                SessionEvent::UnicodeInput {
+                    code_point,
+                    flags,
+                    elapsed_ns,
+                } => debug!(?flags, code_point, elapsed_ns, "UnicodeInput"),
+                SessionEvent::MouseInput {
+                    x,
+                    y,
+                    flags,
+                    wheel_delta,
+                    elapsed_ns,
+                } => debug!(?flags, x, y, wheel_delta, elapsed_ns, "MouseInput"),
+                SessionEvent::TargetFrame {
+                    action,
+                    bytes,
+                    elapsed_ns,
+                } => debug!(?action, bytes, elapsed_ns, "TargetFrame"),
+            }
+        }
+    });
+
+    bridge_pdus(acceptor_framed, upgraded_framed, tx).await?;
+
+    // Give the logger a tick to drain in-flight events, then drop the channel.
+    let _ = event_logger.await;
 
     Ok(())
 }
@@ -203,6 +243,7 @@ async fn handle_one(
 async fn bridge_pdus<C, T>(
     client_framed: ironrdp_tokio::TokioFramed<C>,
     target_framed: ironrdp_tokio::TokioFramed<T>,
+    tx: EventSender,
 ) -> Result<()>
 where
     C: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
@@ -211,7 +252,12 @@ where
     let (mut client_read, mut client_write) = ironrdp_tokio::split_tokio_framed(client_framed);
     let (mut target_read, mut target_write) = ironrdp_tokio::split_tokio_framed(target_framed);
 
-    // client -> target: input PDUs (keyboard, mouse, channel data)
+    let started_at = Instant::now();
+    let tx_c2t = tx.clone();
+    let tx_t2c = tx;
+
+    // client -> target: input PDUs. Decode FastPath input for the event
+    // tap, then forward the raw bytes unchanged.
     let c2t = async move {
         loop {
             let (action, frame) = match client_read.read_pdu().await {
@@ -219,7 +265,7 @@ where
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err::<_, anyhow::Error>(e.into()),
             };
-            tap_client_to_target(action, &frame);
+            tap_client_to_target(action, &frame, started_at, &tx_c2t);
             target_write
                 .write_all(&frame)
                 .await
@@ -228,7 +274,8 @@ where
         Ok(())
     };
 
-    // target -> client: output PDUs (bitmap updates, channel data)
+    // target -> client: output PDUs. Emit a TargetFrame event with
+    // metadata (no payload capture yet) and forward bytes.
     let t2c = async move {
         loop {
             let (action, frame) = match target_read.read_pdu().await {
@@ -236,7 +283,7 @@ where
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err::<_, anyhow::Error>(e.into()),
             };
-            tap_target_to_client(action, &frame);
+            tap_target_to_client(action, &frame, started_at, &tx_t2c);
             client_write
                 .write_all(&frame)
                 .await
@@ -249,22 +296,68 @@ where
     Ok(())
 }
 
-/// Event tap -- client-to-target direction (input events).
-///
-/// Step 1: log action + length.
-/// Step 2: decode FastPath input PDUs into KeyboardInput/MouseInput events
-/// and push them onto an event channel exposed through FFI.
-fn tap_client_to_target(action: Action, frame: &[u8]) {
-    trace!(?action, len = frame.len(), "c->t");
+fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+    // Only FastPath input carries keyboard/mouse events. X.224 input is
+    // rare today; most clients use FastPath exclusively. Emit nothing for
+    // X.224 input in this step; decode in a later pass if needed.
+    if action != Action::FastPath {
+        return;
+    }
+
+    let input: FastPathInput = match decode_fast_path_input(frame) {
+        Ok(input) => input,
+        Err(e) => {
+            warn!(?e, "failed to decode FastPathInput");
+            return;
+        }
+    };
+
+    let elapsed_ns = elapsed_ns_since(started_at);
+
+    for event in input.input_events() {
+        let session_event = match *event {
+            FastPathInputEvent::KeyboardEvent(flags, scancode) => SessionEvent::KeyboardInput {
+                scancode,
+                flags,
+                elapsed_ns,
+            },
+            FastPathInputEvent::UnicodeKeyboardEvent(flags, code_point) => {
+                SessionEvent::UnicodeInput {
+                    code_point,
+                    flags,
+                    elapsed_ns,
+                }
+            }
+            FastPathInputEvent::MouseEvent(pdu) => SessionEvent::MouseInput {
+                x: pdu.x_position,
+                y: pdu.y_position,
+                flags: pdu.flags,
+                wheel_delta: pdu.number_of_wheel_rotation_units,
+                elapsed_ns,
+            },
+            // MouseEventEx, MouseEventRel, QoeEvent, SyncEvent: not
+            // decoded yet. Uncommon for basic sessions; add variants in a
+            // later pass if we see them in practice.
+            _ => continue,
+        };
+        // Drop on send-error means the receiver went away; that's fine,
+        // means the session is shutting down.
+        let _ = tx.send(session_event);
+    }
 }
 
-/// Event tap -- target-to-client direction (output events).
-///
-/// Step 1: log action + length.
-/// Step 2: decode FastPath graphics updates into BitmapRegion events (with
-/// compressed payload forwarded as-is for lossless recording).
-fn tap_target_to_client(action: Action, frame: &[u8]) {
-    trace!(?action, len = frame.len(), "t->c");
+fn tap_target_to_client(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+    let _ = tx.send(SessionEvent::TargetFrame {
+        action,
+        bytes: frame.len(),
+        elapsed_ns: elapsed_ns_since(started_at),
+    });
+}
+
+fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
+    let mut cursor = ReadCursor::new(frame);
+    use ironrdp_core::Decode as _;
+    FastPathInput::decode(&mut cursor).map_err(|e| anyhow::anyhow!("decode FastPathInput: {e}"))
 }
 
 fn build_acceptor_tls() -> Result<tokio_rustls::rustls::ServerConfig> {
