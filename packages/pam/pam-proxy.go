@@ -6,7 +6,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
 	"regexp"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -189,6 +192,11 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
+	defer func() {
+		if err := sessionLogger.Close(); err != nil {
+			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to close session logger")
+		}
+	}()
 	pamConfig.SessionUploader.RegisterSession(pamConfig.SessionId)
 
 	serverName := credentials.Host
@@ -335,10 +343,41 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:                 pamConfig.SessionId,
 			SessionLogger:             sessionLogger,
 		}
+
+		// For gateway-kubernetes-auth, override target URL and TLS with pod's in-cluster credentials
+		if credentials.AuthMethod == "gateway-kubernetes-auth" {
+			kubernetesConfig.ImpersonateNamespace = credentials.Namespace
+			kubernetesConfig.ImpersonateServiceAccount = credentials.ServiceAccountName
+			if credentials.Namespace == "" || credentials.ServiceAccountName == "" {
+				return fmt.Errorf("gateway-kubernetes-auth requires non-empty namespace and service account name")
+			}
+
+			// Auto-discover K8s API URL from env vars
+			host, port := os.Getenv(util.KUBERNETES_SERVICE_HOST_ENV_NAME), os.Getenv(util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME)
+			if host == "" || port == "" {
+				return fmt.Errorf("gateway-kubernetes-auth requires KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT_HTTPS to be set; gateway must run inside a Kubernetes pod")
+			}
+			kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s", net.JoinHostPort(host, port))
+
+			// Use pod's in-cluster CA cert with strict TLS (ignore resource SSL settings)
+			caCert, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
+			if err != nil {
+				return fmt.Errorf("gateway-kubernetes-auth: failed to read pod CA cert for strict TLS: %w", err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("gateway-kubernetes-auth: pod CA cert PEM is invalid or empty; cannot establish strict TLS")
+			}
+			kubernetesConfig.TLSConfig = &tls.Config{
+				RootCAs: caCertPool,
+			}
+		}
+
 		proxy := kubernetes.NewKubernetesProxy(kubernetesConfig)
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", kubernetesConfig.TargetApiServer).
+			Str("authMethod", credentials.AuthMethod).
 			Msg("Starting Kubernetes PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeMongodb:

@@ -25,6 +25,8 @@ type PAMCredentials struct {
 	SSLCertificate        string
 	Url                   string
 	ServiceAccountToken   string
+	ServiceAccountName    string
+	Namespace             string
 	PolicyRules           *api.PAMPolicyRules
 }
 
@@ -101,6 +103,8 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		SSLCertificate:        response.Credentials.SSLCertificate,
 		Url:                   response.Credentials.Url,
 		ServiceAccountToken:   response.Credentials.ServiceAccountToken,
+		ServiceAccountName:    response.Credentials.ServiceAccountName,
+		Namespace:             response.Credentials.Namespace,
 		PolicyRules:           response.PolicyRules,
 	}
 
