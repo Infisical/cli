@@ -1192,6 +1192,21 @@ func (tm *AgentManager) getTokenUnsafe() string {
 	return tm.accessToken
 }
 
+func (tm *AgentManager) waitForToken(ctx context.Context) bool {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if tm.GetToken() != "" {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
 func (tm *AgentManager) FetchUniversalAuthAccessToken() (credential infisicalSdk.MachineIdentityCredential, e error) {
 
 	var universalAuthConfig UniversalAuth
@@ -2488,19 +2503,8 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 	ticker := time.NewTicker(monitoringInterval)
 	defer ticker.Stop()
 
-	for {
-		var token string
-		func() {
-			tm.mutex.Lock()
-			defer tm.mutex.Unlock()
-			token = tm.getTokenUnsafe()
-		}()
-
-		if token != "" {
-			break
-		}
-
-		time.Sleep(1 * time.Second)
+	if !tm.waitForToken(ctx) {
+		return
 	}
 
 	for _, cert := range tm.certificates {
@@ -3141,11 +3145,8 @@ var agentCmd = &cobra.Command{
 
 		if len(tm.certificates) > 0 {
 			go func() {
-				for {
-					if tm.getTokenUnsafe() != "" {
-						break
-					}
-					time.Sleep(100 * time.Millisecond)
+				if !tm.waitForToken(ctx) {
+					return
 				}
 
 				httpClient, err := tm.createAuthenticatedClient()
@@ -3359,11 +3360,8 @@ var certManagerAgentCmd = &cobra.Command{
 
 		if len(tm.certificates) > 0 {
 			go func() {
-				for {
-					if tm.getTokenUnsafe() != "" {
-						break
-					}
-					time.Sleep(100 * time.Millisecond)
+				if !tm.waitForToken(ctx) {
+					return
 				}
 
 				httpClient, err := tm.createAuthenticatedClient()
