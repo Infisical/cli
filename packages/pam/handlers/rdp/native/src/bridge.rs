@@ -167,7 +167,35 @@ async fn handle_one(
     args: ProxyArgs,
     tx: EventSender,
 ) -> Result<()> {
-    // --- CLIENT-FACING: acceptor handshake ---
+    // Auto-detect entry protocol by peeking at the first byte:
+    //   * 0x03 = TPKT, raw RDP from a CLI client (existing flow below).
+    //   * 0x30 = ASN.1 SEQUENCE, RDCleanPath from a browser client.
+    // Everything else is rejected.
+    let first = crate::rdcleanpath::peek_first_byte(&client_tcp)
+        .await
+        .context("peek first byte")?;
+    if first == 0x30 {
+        info!("handle_one: detected RDCleanPath (browser flow)");
+        return crate::rdcleanpath::handle_browser_session(
+            client_tcp,
+            args.target
+                .rsplit_once(':')
+                .map(|(h, _)| h)
+                .unwrap_or(&args.target),
+            args.target
+                .rsplit_once(':')
+                .and_then(|(_, p)| p.parse().ok())
+                .unwrap_or(3389),
+            &args.username,
+            &args.password,
+        )
+        .await;
+    }
+    if first != 0x03 {
+        anyhow::bail!("unrecognized first byte: {:02x}", first);
+    }
+
+    // --- CLIENT-FACING: acceptor handshake (CLI flow) ---
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
     let (width, height) = default_desktop_size();

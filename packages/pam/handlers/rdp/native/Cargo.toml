@@ -26,6 +26,7 @@ ironrdp-tokio = { version = "0.8", features = ["reqwest"] }
 ironrdp-pdu = "0.7"
 ironrdp-core = "0.1"
 ironrdp-tls = { version = "0.2", features = ["rustls"] }
+ironrdp-rdcleanpath = "0.1"
 
 # Runtime + TLS (for acceptor-side TLS, since ironrdp-tls::upgrade is client-only)
 tokio = { version = "1", features = ["full"] }
