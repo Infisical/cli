@@ -5,6 +5,14 @@ edition = "2021"
 description = "Phase 0 POC: IronRDP MITM bridge for Infisical PAM Windows/RDP support"
 publish = false
 
+[lib]
+name = "infisical_rdp_bridge"
+# cdylib for dynamic linking (Linux .so, macOS .dylib, Windows .dll)
+# staticlib for CGo linking into a single Go binary
+# rlib so we can keep the spike binary and tests in-tree
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
 [[bin]]
 name = "rdp-bridge-spike"
 path = "src/main.rs"
@@ -28,6 +36,7 @@ rcgen = "0.13"
 
 # Utilities
 anyhow = "1"
+once_cell = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }

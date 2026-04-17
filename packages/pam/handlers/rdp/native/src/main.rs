@@ -1,29 +1,18 @@
-//! Phase 0 spike: IronRDP credential injection + MITM bridge.
+//! Thin binary wrapper. Real implementation lives in the library.
 //!
-//! Two subcommands:
-//!   * `client` -- connect to a Windows target using provided credentials,
-//!                 drive the full RDP handshake (including CredSSP/NLA),
-//!                 hold the session open briefly, disconnect. Proves that
-//!                 credential injection via the connector works end-to-end.
-//!   * `proxy`  -- accept an inbound RDP connection, terminate it, open a
-//!                 new outbound connection to the target with credential
-//!                 injection, bridge bytes. Full MITM. Structured skeleton;
-//!                 parts marked TODO need integration testing.
-//!
-//! Deliberately minimal: no event tap, no FFI, no recording.
-//! See README.md for the POC scope.
-
-mod bridge;
-mod caps;
-mod client;
-mod config;
-mod events;
+//! Two subcommands for manual spike testing:
+//!   * `client` -- connect to a Windows target using provided credentials.
+//!                 Validates CredSSP injection end-to-end.
+//!   * `proxy`  -- full MITM. Accepts an inbound RDP connection, injects
+//!                 credentials on the outbound half, forwards PDUs.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use infisical_rdp_bridge::{bridge, client};
+
 #[derive(Parser, Debug)]
-#[command(about = "Infisical RDP bridge (Phase 0 spike)")]
+#[command(about = "Infisical RDP bridge (Phase 0/1 spike)")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -31,12 +20,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Connect directly to a Windows target as an RDP client.
-    /// Proves that credential injection via CredSSP works.
     Client(client::ClientArgs),
-    /// Full MITM proxy. Accepts an inbound RDP connection, injects
-    /// credentials on the outbound half. Scaffolding -- needs integration
-    /// testing against a real Windows target before it can be called working.
     Proxy(bridge::ProxyArgs),
 }
 
@@ -54,7 +38,6 @@ async fn main() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("failed to install rustls crypto provider"))?;
 
     let cli = Cli::parse();
-
     match cli.command {
         Command::Client(args) => client::run(args).await,
         Command::Proxy(args) => bridge::run(args).await,

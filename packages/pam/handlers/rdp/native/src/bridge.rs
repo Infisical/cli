@@ -53,6 +53,8 @@ pub struct ProxyArgs {
 
 type ErasedStream = Box<dyn AsyncReadWrite + Send + Sync + Unpin + 'static>;
 
+/// Standalone-binary entry: loops forever, handling one connection at a
+/// time, logging events to stdout via the debug logger.
 pub async fn run(args: ProxyArgs) -> Result<()> {
     info!(listen = %args.listen, target = %args.target, "proxy-mode: starting");
 
@@ -66,17 +68,78 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         let (client_tcp, peer) = listener.accept().await.context("accept")?;
         info!(%peer, "inbound connection");
 
+        // For standalone mode we spin up a local logger per session.
+        let (tx, rx) = events::channel();
+        let logger = spawn_event_logger(rx);
+
         let server_tls = Arc::clone(&server_tls);
-        if let Err(err) = handle_one(client_tcp, server_tls, args.clone()).await {
+        if let Err(err) = handle_one(client_tcp, server_tls, args.clone(), tx).await {
             error!(?err, "session failed");
         }
+
+        // Drain remaining events before the next connection.
+        let _ = logger.await;
     }
+}
+
+/// FFI entry: accepts exactly one inbound connection, bridges it, and
+/// pipes decoded events into the caller-provided channel. Returns when
+/// the session ends.
+pub async fn run_single_with_events(args: ProxyArgs, tx: EventSender) -> Result<()> {
+    info!(listen = %args.listen, target = %args.target, "ffi bridge: starting");
+
+    let listener = TcpListener::bind(args.listen)
+        .await
+        .with_context(|| format!("bind {}", args.listen))?;
+
+    let server_tls = Arc::new(build_acceptor_tls().context("build acceptor TLS config")?);
+
+    let (client_tcp, peer) = listener.accept().await.context("accept")?;
+    info!(%peer, "ffi bridge: inbound connection");
+
+    // Drop the listener so the port is freed immediately after the one
+    // connection we accept.
+    drop(listener);
+
+    handle_one(client_tcp, server_tls, args, tx).await
+}
+
+fn spawn_event_logger(mut rx: events::EventReceiver) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match &event {
+                SessionEvent::KeyboardInput {
+                    scancode,
+                    flags,
+                    elapsed_ns,
+                } => debug!(?flags, scancode, elapsed_ns, "KeyboardInput"),
+                SessionEvent::UnicodeInput {
+                    code_point,
+                    flags,
+                    elapsed_ns,
+                } => debug!(?flags, code_point, elapsed_ns, "UnicodeInput"),
+                SessionEvent::MouseInput {
+                    x,
+                    y,
+                    flags,
+                    wheel_delta,
+                    elapsed_ns,
+                } => debug!(?flags, x, y, wheel_delta, elapsed_ns, "MouseInput"),
+                SessionEvent::TargetFrame {
+                    action,
+                    bytes,
+                    elapsed_ns,
+                } => debug!(?action, bytes, elapsed_ns, "TargetFrame"),
+            }
+        }
+    })
 }
 
 async fn handle_one(
     client_tcp: TcpStream,
     server_tls: Arc<tokio_rustls::rustls::ServerConfig>,
     args: ProxyArgs,
+    tx: EventSender,
 ) -> Result<()> {
     // --- CLIENT-FACING: acceptor handshake ---
 
@@ -188,45 +251,11 @@ async fn handle_one(
     );
 
     // --- BRIDGE: PDU-aware forwarding with event tap ---
-
-    let (tx, mut rx) = events::channel();
-
-    // Background logger: drains events so we can see them during the spike.
-    // Replaced in Step 2 by the FFI event queue that Go drains instead.
-    let event_logger = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match &event {
-                SessionEvent::KeyboardInput {
-                    scancode,
-                    flags,
-                    elapsed_ns,
-                } => debug!(?flags, scancode, elapsed_ns, "KeyboardInput"),
-                SessionEvent::UnicodeInput {
-                    code_point,
-                    flags,
-                    elapsed_ns,
-                } => debug!(?flags, code_point, elapsed_ns, "UnicodeInput"),
-                SessionEvent::MouseInput {
-                    x,
-                    y,
-                    flags,
-                    wheel_delta,
-                    elapsed_ns,
-                } => debug!(?flags, x, y, wheel_delta, elapsed_ns, "MouseInput"),
-                SessionEvent::TargetFrame {
-                    action,
-                    bytes,
-                    elapsed_ns,
-                } => debug!(?action, bytes, elapsed_ns, "TargetFrame"),
-            }
-        }
-    });
-
+    //
+    // The event channel is provided by the caller. Standalone binary mode
+    // wires it to a local logger; FFI mode wires it to the poll_event
+    // queue drained by Go.
     bridge_pdus(acceptor_framed, upgraded_framed, tx).await?;
-
-    // Give the logger a tick to drain in-flight events, then drop the channel.
-    let _ = event_logger.await;
-
     Ok(())
 }
 
