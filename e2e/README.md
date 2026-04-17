@@ -187,19 +187,21 @@ cd e2e
 go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/pam
 ```
 
-To run a specific test (e.g., only SSH or only Postgres):
+To run a specific test (e.g., only SSH, Postgres, or Redis):
 
 ```bash
 cd e2e
 go test -v -timeout 30m -count=1 -run TestPAM_SSH github.com/infisical/cli/e2e-tests/pam
 go test -v -timeout 30m -count=1 -run TestPAM_Postgres github.com/infisical/cli/e2e-tests/pam
+go test -v -timeout 5m -count=1 -run TestPAM_Redis github.com/infisical/cli/e2e-tests/pam
 ```
 
-To run a specific sub-test (e.g., only certificate auth within SSH):
+To run a specific sub-test (e.g., only certificate auth within SSH, or ACL over SSL within Redis):
 
 ```bash
 cd e2e
 go test -v -timeout 30m -count=1 -run TestPAM_SSH/certificate github.com/infisical/cli/e2e-tests/pam
+go test -v -timeout 5m -count=1 -run TestPAM_Redis/acl-over-ssl github.com/infisical/cli/e2e-tests/pam
 ```
 
 **Prerequisites:**

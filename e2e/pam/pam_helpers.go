@@ -52,6 +52,7 @@ func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
 	infisical := helpers.NewInfisicalService().
 		WithBackendEnvironment(types.NewMappingWithEquals([]string{
 			"ALLOW_INTERNAL_IP_CONNECTIONS=true",
+			"NODE_ENV=test",
 		})).
 		Up(t, ctx)
 

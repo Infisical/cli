@@ -36,3 +36,4 @@ output-options:
     - createPostgresPamAccount
     - createSshPamResource
     - createSshPamAccount
+    - createRedisPamAccount
