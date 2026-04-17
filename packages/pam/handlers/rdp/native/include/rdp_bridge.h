@@ -62,6 +62,23 @@ uint64_t rdp_bridge_start(
     const char *listen_addr
 );
 
+/* Start a bridge with an already-accepted client socket.
+ *
+ * The caller transfers ownership of `client_fd` to the bridge. `client_fd`
+ * must be a duplicated TCP socket fd. The bridge closes it on session end;
+ * the caller must not touch it afterward.
+ *
+ * Returns a non-zero handle on success, 0 on failure.
+ * Unix only; not implemented on Windows.
+ */
+uint64_t rdp_bridge_start_with_fd(
+    int client_fd,
+    const char *target_host,
+    uint16_t target_port,
+    const char *username,
+    const char *password
+);
+
 /* Poll the next session event, blocking up to `timeout_ms`.
  *
  * Return codes:

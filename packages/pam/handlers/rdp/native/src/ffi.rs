@@ -33,6 +33,9 @@ use tracing::{error, info};
 use crate::bridge::{self, ProxyArgs};
 use crate::events::SessionEvent;
 
+#[cfg(unix)]
+use std::os::unix::io::{FromRawFd, RawFd};
+
 // -- Poll return codes ---------------------------------------------------
 
 /// An event was written to `*out`.
@@ -346,6 +349,99 @@ pub unsafe extern "C" fn rdp_bridge_poll_event(
     }
 
     outcome
+}
+
+/// Start a bridge from an already-accepted client socket.
+///
+/// The caller transfers ownership of `client_fd` to the bridge. `client_fd`
+/// must be a duplicated, blocking-mode TCP socket fd. Rust closes it on
+/// session end; the caller must not close or read/write to it afterward.
+///
+/// Unix only. Windows requires passing a SOCKET handle instead; not
+/// implemented for POC.
+///
+/// Returns a non-zero handle on success, 0 on failure.
+#[cfg(unix)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdp_bridge_start_with_fd(
+    client_fd: RawFd,
+    target_host: *const c_char,
+    target_port: u16,
+    username: *const c_char,
+    password: *const c_char,
+) -> u64 {
+    let _ = &*TLS_INIT;
+
+    let Some(target_host) = (unsafe { c_str_to_owned(target_host) }) else {
+        return 0;
+    };
+    let Some(username) = (unsafe { c_str_to_owned(username) }) else {
+        return 0;
+    };
+    let Some(password) = (unsafe { c_str_to_owned(password) }) else {
+        return 0;
+    };
+
+    let target = format!("{target_host}:{target_port}");
+
+    let (events_tx, events_rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
+
+    // Take ownership of the fd. Wrap it in a std TcpStream so we can
+    // hand it to tokio. If this fails the caller still owns the fd --
+    // they need to close it.
+    let std_stream = unsafe { std::net::TcpStream::from_raw_fd(client_fd) };
+
+    // Tokio needs a non-blocking socket.
+    if let Err(err) = std_stream.set_nonblocking(true) {
+        error!(?err, "set_nonblocking on client fd");
+        return 0;
+    }
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(err) => {
+                error!(?err, "failed to start bridge runtime");
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let tokio_stream = match tokio::net::TcpStream::from_std(std_stream) {
+                Ok(s) => s,
+                Err(err) => {
+                    error!(?err, "tokio::TcpStream::from_std failed");
+                    return;
+                }
+            };
+
+            tokio::select! {
+                result = bridge::run_with_stream(
+                    tokio_stream,
+                    target,
+                    username,
+                    password,
+                    events_tx,
+                ) => {
+                    if let Err(err) = result {
+                        error!(?err, "bridge task failed");
+                    }
+                }
+                _ = shutdown_rx.recv() => {
+                    info!("bridge received shutdown signal");
+                }
+            }
+        });
+    });
+
+    allocate_handle(BridgeHandle {
+        events_rx,
+        _shutdown: shutdown_tx,
+        ended: false,
+    })
 }
 
 /// Tear down the bridge and free resources.

@@ -104,6 +104,32 @@ pub async fn run_single_with_events(args: ProxyArgs, tx: EventSender) -> Result<
     handle_one(client_tcp, server_tls, args, tx).await
 }
 
+/// FFI entry used by the Go gateway: consumes an already-accepted TCP
+/// stream (handed over as a file descriptor) instead of listening. The
+/// target-side handshake still happens normally.
+pub async fn run_with_stream(
+    client_tcp: TcpStream,
+    target: String,
+    username: String,
+    password: String,
+    tx: EventSender,
+) -> Result<()> {
+    info!(%target, "ffi bridge: starting with pre-accepted stream");
+
+    let server_tls = Arc::new(build_acceptor_tls().context("build acceptor TLS config")?);
+
+    // Build a ProxyArgs-equivalent for the target side. `listen` is unused
+    // in this path but the shared `handle_one` takes it.
+    let args = ProxyArgs {
+        listen: "0.0.0.0:0".parse().expect("placeholder"),
+        target,
+        username,
+        password,
+    };
+
+    handle_one(client_tcp, server_tls, args, tx).await
+}
+
 fn spawn_event_logger(mut rx: events::EventReceiver) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {

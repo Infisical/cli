@@ -40,6 +40,7 @@ const (
 	TerminalChannelShell TerminalChannelType = "terminal" // Interactive shell session
 	TerminalChannelExec  TerminalChannelType = "exec"     // Single command execution
 	TerminalChannelSFTP  TerminalChannelType = "sftp"     // SFTP file transfer
+	TerminalChannelRDP   TerminalChannelType = "rdp"      // RDP structured events (JSON payload in Data)
 )
 
 // TerminalEvent represents a single event in a terminal session

@@ -21,6 +21,8 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"net"
+	"syscall"
 	"unsafe"
 )
 
@@ -77,6 +79,60 @@ func Start(targetHost string, targetPort uint16, username, password, listenAddr 
 	h := C.rdp_bridge_start(cTarget, C.uint16_t(targetPort), cUser, cPass, cListen)
 	if h == 0 {
 		return nil, errors.New("rdp_bridge_start failed (invalid args)")
+	}
+	return &Bridge{handle: h}, nil
+}
+
+// StartWithConn kicks off a bridge that consumes an already-accepted
+// client socket (such as one handed to a gateway handler). The file
+// descriptor of `clientConn` is duplicated and transferred to the native
+// bridge; the caller should still Close `clientConn` to release Go-side
+// resources, but the bridge will drive I/O over its own dup'd fd.
+//
+// Unix only. On Windows this returns an error.
+func StartWithConn(clientConn net.Conn, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
+	tcp, ok := clientConn.(*net.TCPConn)
+	if !ok {
+		return nil, fmt.Errorf("rdp: StartWithConn requires *net.TCPConn, got %T", clientConn)
+	}
+
+	// Extract the raw fd and dup it so the Go side can still close its
+	// conn without pulling the rug out from under the bridge.
+	rawConn, err := tcp.SyscallConn()
+	if err != nil {
+		return nil, fmt.Errorf("rdp: SyscallConn: %w", err)
+	}
+
+	var dupFd int
+	var dupErr error
+	err = rawConn.Control(func(fd uintptr) {
+		dupFd, dupErr = syscall.Dup(int(fd))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rdp: Control: %w", err)
+	}
+	if dupErr != nil {
+		return nil, fmt.Errorf("rdp: dup fd: %w", dupErr)
+	}
+
+	cTarget := C.CString(targetHost)
+	defer C.free(unsafe.Pointer(cTarget))
+	cUser := C.CString(username)
+	defer C.free(unsafe.Pointer(cUser))
+	cPass := C.CString(password)
+	defer C.free(unsafe.Pointer(cPass))
+
+	h := C.rdp_bridge_start_with_fd(
+		C.int(dupFd),
+		cTarget,
+		C.uint16_t(targetPort),
+		cUser,
+		cPass,
+	)
+	if h == 0 {
+		// Bridge rejected the fd; we still own it, so close it.
+		_ = syscall.Close(dupFd)
+		return nil, errors.New("rdp_bridge_start_with_fd failed")
 	}
 	return &Bridge{handle: h}, nil
 }
