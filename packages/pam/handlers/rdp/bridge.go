@@ -3,9 +3,12 @@
 // Phase 1 Step 2: thin CGo wrapper exposing an idiomatic Go interface over
 // the handle-based C ABI defined in native/include/rdp_bridge.h.
 //
-// Build requires the Rust static library to exist at
+// The Rust static library is expected at
 //   packages/pam/handlers/rdp/native/target/release/libinfisical_rdp_bridge.a
-// Run `cargo build --release` in native/ before `go build`.
+// Running `go generate ./packages/pam/handlers/rdp/...` invokes cargo to
+// produce it. CI / release hooks should do the same before `go build`.
+
+//go:generate bash -c "cd native && cargo build --release"
 package rdp
 
 /*
