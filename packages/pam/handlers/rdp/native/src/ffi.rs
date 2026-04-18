@@ -173,6 +173,16 @@ static TLS_INIT: Lazy<()> = Lazy::new(|| {
     let _ = rustls::crypto::ring::default_provider().install_default();
 });
 
+// Pipe tracing logs to stderr so `info!` / `error!` from the bridge and
+// rdcleanpath modules show up in gateway logs. RUST_LOG can override the
+// default filter, e.g. `RUST_LOG=ironrdp=debug,infisical_rdp_bridge=debug`.
+static LOG_INIT: Lazy<()> = Lazy::new(|| {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,ironrdp=info"));
+    let _ = fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
+});
+
 fn allocate_handle(handle: BridgeHandle) -> u64 {
     let id = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     HANDLES.lock().expect("handles lock").insert(id, handle);
@@ -212,6 +222,7 @@ pub unsafe extern "C" fn rdp_bridge_start(
     listen_addr: *const c_char,
 ) -> u64 {
     let _ = &*TLS_INIT;
+    let _ = &*LOG_INIT;
 
     let Some(target_host) = (unsafe { c_str_to_owned(target_host) }) else {
         return 0;
@@ -371,6 +382,7 @@ pub unsafe extern "C" fn rdp_bridge_start_with_fd(
     password: *const c_char,
 ) -> u64 {
     let _ = &*TLS_INIT;
+    let _ = &*LOG_INIT;
 
     let Some(target_host) = (unsafe { c_str_to_owned(target_host) }) else {
         return 0;

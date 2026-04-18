@@ -1,25 +1,37 @@
 //! RDCleanPath browser-flow handler for the gateway.
 //!
-//! After the RDCleanPath handshake, converges with the CLI flow by
-//! driving an acceptor (client-facing) and a connector (target-facing)
-//! to the active phase, then handing off to the existing bridge_pdus
-//! loop for event-tapped byte forwarding.
+//! Splits the pipeline into two halves so we can MITM-inject credentials
+//! while still using IronRDP's web client unchanged:
+//!
+//!   Browser  <--WS-->  [gateway SSL-only TLS]  <--MITM-->  [gateway HYBRID_EX + CredSSP]  <--TCP/TLS-->  Target
+//!
+//! We downgrade the *browser's* view to SSL-only by fabricating the
+//! X.224 CC we put in the RDCleanPath Response. The browser then does
+//! plain RDP-over-TLS, so we never have to run a server-side CredSSP.
+//! The target side keeps HYBRID_EX and CredSSP, which is where the real
+//! credential injection happens.
+//!
+//! The browser validates our self-signed cert against whatever chain we
+//! include in the RDCleanPath Response, so we put our own DER in there.
 
 use anyhow::{Context, Result};
 use ironrdp_acceptor::{Acceptor, AcceptorResult};
 use ironrdp_connector::{ClientConnector, DesktopSize, Sequence};
 use ironrdp_core::WriteBuf;
-use ironrdp_pdu::nego::SecurityProtocol;
+use ironrdp_pdu::nego::{
+    ConnectionConfirm, ConnectionRequest, RequestFlags, ResponseFlags, SecurityProtocol,
+};
+use ironrdp_pdu::x224::X224;
 use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
-use ironrdp_rdcleanpath::der::Encode;
 use ironrdp_rdcleanpath::{RDCleanPath, RDCleanPathPdu};
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{FramedWrite, TokioFramed};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use crate::bridge::{bridge_pdus_public, ErasedStream};
+use crate::bridge::{ErasedStream, bridge_pdus_public};
 use crate::caps::{acceptor_capabilities, default_desktop_size};
 use crate::config::connector_config;
 use crate::events::EventSender;
@@ -60,8 +72,7 @@ async fn read_rdcleanpath_pdu(tcp: &mut TcpStream) -> Result<RDCleanPathPdu> {
                         );
                         buf.truncate(total_length);
                     }
-                    return RDCleanPathPdu::from_der(&buf)
-                        .context("decode RDCleanPath PDU");
+                    return RDCleanPathPdu::from_der(&buf).context("decode RDCleanPath PDU");
                 }
             }
             ironrdp_rdcleanpath::DetectionResult::NotEnoughBytes => {}
@@ -80,12 +91,12 @@ async fn read_tpkt_pdu<S>(framed: &mut TokioFramed<S>) -> Result<Vec<u8>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
-    // Use a direct-TCP approach isn't great here since framed wraps the stream.
-    // Instead, pull raw bytes through the inner stream.
-    // For our use case we read the first TPKT frame then hand the stream back.
     let (stream, _leftover) = framed.get_inner_mut();
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header).await.context("read TPKT header")?;
+    stream
+        .read_exact(&mut header)
+        .await
+        .context("read TPKT header")?;
     if header[0] != 0x03 {
         anyhow::bail!("not a TPKT frame: {:02x}", header[0]);
     }
@@ -99,6 +110,37 @@ where
     full.extend_from_slice(&header);
     full.extend_from_slice(&body);
     Ok(full)
+}
+
+/// Encode a synthetic X.224 PDU (Connection Request or Confirm) into bytes
+/// suitable for feeding into the acceptor or sending in the RDCleanPath Response.
+fn encode_x224<T>(pdu: T) -> Result<Vec<u8>>
+where
+    T: ironrdp_core::Encode,
+{
+    let mut buf = WriteBuf::new();
+    ironrdp_core::encode_buf(&pdu, &mut buf).context("encode X.224 PDU")?;
+    Ok(buf.filled().to_vec())
+}
+
+/// Build a short-lived self-signed cert + a matching rustls ServerConfig.
+/// The cert's DER goes into the RDCleanPath Response so the browser's TLS
+/// validator accepts it; the ServerConfig terminates TLS on the WS side.
+fn build_client_side_tls() -> Result<(Vec<u8>, Arc<tokio_rustls::rustls::ServerConfig>)> {
+    let subject_alt_names = vec![
+        "localhost".to_string(),
+        "infisical-rdp-gateway".to_string(),
+    ];
+    let cert = rcgen::generate_simple_self_signed(subject_alt_names)
+        .context("generate self-signed cert")?;
+    let cert_der_vec = cert.cert.der().to_vec();
+    let cert_der_for_tls = rustls::pki_types::CertificateDer::from(cert_der_vec.clone());
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
+    let config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der_for_tls], key_der)
+        .context("build ServerConfig")?;
+    Ok((cert_der_vec, Arc::new(config)))
 }
 
 /// Entry point for a browser session.
@@ -126,10 +168,11 @@ pub async fn handle_browser_session(
     };
     info!(destination, "RDCleanPath: received Request");
 
-    // --- PHASE 2: open target TCP, do X.224 manually using browser's CR ---
-    // We use the browser's exact X.224 CR bytes to negotiate with the target,
-    // so the negotiated protocol matches what the browser advertised. The
-    // X.224 CC we receive goes back in the RDCleanPath Response.
+    // --- PHASE 2: open target TCP, do X.224 using browser's original CR ---
+    //
+    // Target sees whatever protocols the browser advertised (usually
+    // HYBRID_EX) and confirms one. We keep that exchange untouched on the
+    // target side so the connector's CredSSP path works as in CLI mode.
 
     let target_tcp = TcpStream::connect((target_host, target_port))
         .await
@@ -137,28 +180,51 @@ pub async fn handle_browser_session(
     let target_addr = target_tcp.local_addr().context("local_addr")?;
     let mut target_framed = TokioFramed::new(target_tcp);
 
-    // Write the browser's X.224 CR, read target's X.224 CC.
     target_framed
         .write_all(&x224_cr)
         .await
         .context("write X.224 CR to target")?;
-    let x224_cc = read_tpkt_pdu(&mut target_framed).await.context("read X.224 CC")?;
-    debug!(len = x224_cc.len(), "RDCleanPath: received X.224 CC");
+    let x224_cc_target = read_tpkt_pdu(&mut target_framed)
+        .await
+        .context("read X.224 CC")?;
+    debug!(
+        len = x224_cc_target.len(),
+        "RDCleanPath: received X.224 CC from target"
+    );
 
-    // --- PHASE 3: TLS with target, extract cert ---
+    // --- PHASE 3: TLS with target, keep stream and cert for connector ---
 
     let (initial_stream, leftover) = target_framed.into_inner();
     let (upgraded_stream, target_cert) = ironrdp_tls::upgrade(initial_stream, target_host)
         .await
         .context("TLS upgrade to target")?;
-    let target_cert_der = target_cert.to_der().context("encode cert to DER")?;
 
-    // --- PHASE 4: send RDCleanPath Response to browser ---
+    // --- PHASE 4: fabricate SSL-only CC for browser ---
+    //
+    // The IronRDP WASM client treats WSS as the secure transport and
+    // sends plaintext RDP immediately after the Response -- no TLS
+    // handshake on the WS. We fabricate an SSL-only CC so the browser
+    // skips CredSSP and goes straight to MCS Connect Initial, which
+    // the server-side acceptor handles post-"SecurityUpgrade" without
+    // needing an actual TLS session or a CredSSP server impl.
+    //
+    // The cert chain in the Response is ignored by the client when it
+    // doesn't do TLS, but the PDU still requires *something*; we include
+    // a throwaway self-signed DER.
+
+    let (throwaway_cert_der, _unused_tls_config) =
+        build_client_side_tls().context("build throwaway cert for RDCleanPath Response")?;
+
+    let fake_cc_bytes = encode_x224(X224(ConnectionConfirm::Response {
+        flags: ResponseFlags::empty(),
+        protocol: SecurityProtocol::SSL,
+    }))
+    .context("encode fabricated SSL-only X.224 CC")?;
 
     let response = RDCleanPathPdu::new_response(
-        format!("{}:{}", target_host, target_port),
-        x224_cc.clone(),
-        vec![target_cert_der],
+        format!("{target_host}:{target_port}"),
+        fake_cc_bytes,
+        vec![throwaway_cert_der],
     )
     .context("build RDCleanPath Response")?;
     let response_der = response.to_der().context("encode RDCleanPath Response")?;
@@ -166,19 +232,9 @@ pub async fn handle_browser_session(
         .write_all(&response_der)
         .await
         .context("write RDCleanPath Response to client")?;
-    info!("RDCleanPath: Response sent, now driving active-phase handshake");
+    info!("RDCleanPath: Response sent (SSL-only), now driving both sides");
 
     // --- PHASE 5: drive target-side connector to active state ---
-    //
-    // The connector's state machine expects to have generated its own X.224
-    // CR and received its own X.224 CC. We've already done both manually,
-    // using the browser's CR + target's CC. We synthesize those state
-    // transitions on the connector:
-    //   step_no_input -> connector emits an X.224 CR (discarded)
-    //   step(x224_cc) -> connector consumes our CC, advances to
-    //                    EnhancedSecurityUpgrade state
-    //   skip_connect_begin + mark_as_upgraded -> past TLS
-    //   connect_finalize -> runs CredSSP (with vaulted creds) + rest
 
     let config = connector_config(username.to_owned(), password.to_owned(), 1920, 1080);
     let mut connector = ClientConnector::new(config, target_addr);
@@ -189,7 +245,7 @@ pub async fn handle_browser_session(
         .context("synthesize connector X.224 CR")?;
     scratch.clear();
     connector
-        .step(&x224_cc, &mut scratch)
+        .step(&x224_cc_target, &mut scratch)
         .context("feed X.224 CC to connector")?;
     scratch.clear();
 
@@ -219,20 +275,15 @@ pub async fn handle_browser_session(
         "RDCleanPath: target-side reached active"
     );
 
-    // --- PHASE 6: drive client-facing acceptor to active state ---
+    // --- PHASE 6: drive client-facing acceptor past X.224 to BasicSettings ---
     //
-    // The browser is past RDCleanPath from its perspective -- meaning it
-    // thinks X.224 + TLS are done. Its next bytes will be whatever comes
-    // after the selected security mode. We mirror this by running an
-    // acceptor that's forced past its pre-TLS states without actually
-    // doing TLS on this socket. Trick: feed the browser's X.224 CR back
-    // into the acceptor (swallowing its CC output), then call
-    // mark_security_upgrade_as_done().
-
-    let mut client_framed: TokioFramed<ErasedStream> = {
-        let erased: ErasedStream = Box::new(client_tcp);
-        TokioFramed::new(erased)
-    };
+    // The acceptor needs to parse an X.224 CR to decide which security
+    // protocol to use. We never let the browser's real CR through (the
+    // RDCleanPath Request swallowed it), so we feed a fabricated SSL-only
+    // CR. Two step() calls transition InitiationWaitRequest ->
+    // InitiationSendConfirm -> SecurityUpgrade. Then
+    // mark_security_upgrade_as_done() moves to BasicSettingsWaitInitial
+    // (not Credssp, because we picked SSL).
 
     let (width, height) = default_desktop_size();
     let placeholder_creds = AcceptorCredentials {
@@ -247,23 +298,35 @@ pub async fn handle_browser_session(
         Some(placeholder_creds),
     );
 
-    // Prime the acceptor with the browser's X.224 CR. The acceptor will
-    // generate an X.224 CC in its output buffer -- we discard it because
-    // we already sent our own CC inside the RDCleanPath Response.
-    let mut acceptor_scratch = WriteBuf::new();
-    acceptor
-        .step(&x224_cr, &mut acceptor_scratch)
-        .context("acceptor: step with browser X.224 CR")?;
-    acceptor_scratch.clear();
+    let fake_cr_bytes = encode_x224(X224(ConnectionRequest {
+        nego_data: None,
+        flags: RequestFlags::empty(),
+        protocol: SecurityProtocol::SSL,
+    }))
+    .context("encode fabricated SSL-only X.224 CR")?;
 
-    // Acceptor should now be in SecurityUpgrade state. Mark it done.
+    let mut acc_scratch = WriteBuf::new();
+    // step 1: consume CR -> InitiationSendConfirm
+    acceptor
+        .step(&fake_cr_bytes, &mut acc_scratch)
+        .context("acceptor: step(fake CR)")?;
+    acc_scratch.clear();
+    // step 2: emit CC (discarded) -> SecurityUpgrade
+    acceptor
+        .step(&[], &mut acc_scratch)
+        .context("acceptor: step(empty to emit CC)")?;
+    acc_scratch.clear();
+
     if acceptor.reached_security_upgrade().is_none() {
-        anyhow::bail!("acceptor did not reach SecurityUpgrade after synthetic CR");
+        anyhow::bail!("acceptor did not reach SecurityUpgrade after synthetic CR/CC");
     }
     acceptor.mark_security_upgrade_as_done();
 
-    // Drive the rest of the acceptor (post-TLS): ClientInfoPdu, Licensing,
-    // Capabilities, Finalization. Reuses the existing accept_finalize.
+    // No TLS on the client side -- the WASM sends plaintext RDP over
+    // the WSS tunnel. Hand the raw TCP stream straight to the acceptor.
+    let client_erased: ErasedStream = Box::new(client_tcp);
+    let client_framed: TokioFramed<ErasedStream> = TokioFramed::new(client_erased);
+
     let (client_final_framed, acceptor_result): (TokioFramed<ErasedStream>, AcceptorResult) =
         ironrdp_acceptor::accept_finalize(client_framed, &mut acceptor)
             .await
@@ -273,9 +336,8 @@ pub async fn handle_browser_session(
         io_channel_id = acceptor_result.io_channel_id,
         "RDCleanPath: client-side reached active"
     );
-    client_framed = client_final_framed;
 
-    // --- PHASE 7: hand off to bridge_pdus ---
+    // --- PHASE 8: hand off to bridge_pdus ---
 
-    bridge_pdus_public(client_framed, target_upgraded_framed, tx).await
+    bridge_pdus_public(client_final_framed, target_upgraded_framed, tx).await
 }

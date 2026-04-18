@@ -6,7 +6,7 @@
 
 use ironrdp_connector::{BitmapConfig, Config, Credentials};
 use ironrdp_pdu::gcc::KeyboardType;
-use ironrdp_pdu::rdp::capability_sets::{BitmapCodecs, MajorPlatformType};
+use ironrdp_pdu::rdp::capability_sets::{BitmapCodecs, MajorPlatformType, client_codecs_capabilities};
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 
 pub fn connector_config(username: String, password: String, width: u16, height: u16) -> Config {
@@ -30,14 +30,15 @@ pub fn connector_config(username: String, password: String, width: u16, height: 
         keyboard_layout: 0,
         ime_file_name: String::new(),
 
-        // Constrain the connector's codec negotiation: basic bitmap only,
-        // no RemoteFX / NSCodec. The acceptor advertises the same minimal
-        // set to the inbound client, so both handshakes land on the same
-        // format and raw-byte forwarding works without transcoding.
+        // Advertise RemoteFX on the client (target-facing) side so the
+        // server emits RFX-encoded frames for motion-heavy content (e.g.
+        // scrolling in a browser). The acceptor advertises the same codec
+        // back to the browser-side client, so both handshakes land on the
+        // same format and the bridge can forward raw bytes unchanged.
         bitmap: Some(BitmapConfig {
             lossy_compression: false,
             color_depth: 32,
-            codecs: BitmapCodecs(Vec::new()),
+            codecs: client_codecs_capabilities(&[]).unwrap_or_else(|_| BitmapCodecs(Vec::new())),
         }),
         dig_product_id: String::new(),
         client_dir: "C:\\Windows\\System32\\mstscax.dll".to_owned(),

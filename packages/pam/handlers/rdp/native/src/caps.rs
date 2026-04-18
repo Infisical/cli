@@ -8,7 +8,7 @@
 
 use ironrdp_pdu::rdp::capability_sets::{
     self, BitmapCodecs, BitmapDrawingFlags, CapabilitySet, CmdFlags, GeneralExtraFlags, InputFlags,
-    OrderFlags, OrderSupportExFlags, VirtualChannelFlags,
+    OrderFlags, OrderSupportExFlags, VirtualChannelFlags, server_codecs_capabilities,
 };
 
 const DEFAULT_WIDTH: u16 = 1920;
@@ -27,10 +27,12 @@ pub fn acceptor_capabilities(width: u16, height: u16) -> Vec<CapabilitySet> {
         CapabilitySet::MultiFragmentUpdate(capability_sets::MultifragmentUpdate {
             max_request_size: MULTIFRAGMENT_MAX_REQUEST_SIZE,
         }),
-        // Empty codec set on purpose: no RemoteFX, no NSCodec. Forces basic
-        // bitmap only so the target-side connector's negotiation lands on
-        // something we can forward without transcoding.
-        CapabilitySet::BitmapCodecs(BitmapCodecs(Vec::new())),
+        // Advertise RemoteFX to the browser-side client. Matched by
+        // the connector config so both handshakes agree and the bridge
+        // forwards RFX-encoded bitmap updates byte-for-byte.
+        CapabilitySet::BitmapCodecs(
+            server_codecs_capabilities(&[]).unwrap_or_else(|_| BitmapCodecs(Vec::new())),
+        ),
     ]
 }
 

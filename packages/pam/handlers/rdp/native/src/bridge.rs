@@ -395,6 +395,7 @@ where
 }
 
 fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+    debug!(?action, len = frame.len(), "client->target PDU");
     // Only FastPath input carries keyboard/mouse events. X.224 input is
     // rare today; most clients use FastPath exclusively. Emit nothing for
     // X.224 input in this step; decode in a later pass if needed.
@@ -445,6 +446,37 @@ fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &
 }
 
 fn tap_target_to_client(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+    if action == Action::FastPath {
+        // FastPath output PDU shape:
+        //   [0] fpOutputHeader   (action=0, flags in high bits)
+        //   [1] length1          (if high bit set, 2-byte length follows)
+        //  [1|2] length2         (optional)
+        //   [N] first update PDU: byte N has updateCode in bits 0..4
+        if frame.len() >= 3 {
+            let length1 = frame[1];
+            let hdr_size = if length1 & 0x80 != 0 { 3 } else { 2 };
+            if frame.len() > hdr_size {
+                let update_byte = frame[hdr_size];
+                let update_code = update_byte & 0x0f;
+                let name = match update_code {
+                    0 => "Orders",
+                    1 => "Bitmap",
+                    2 => "Palette",
+                    3 => "Synchronize",
+                    4 => "SurfaceCommands(RFX)",
+                    5 => "HiddenPointer",
+                    6 => "DefaultPointer",
+                    8 => "PositionPointer",
+                    9 => "ColorPointer",
+                    10 => "CachedPointer",
+                    11 => "NewPointer",
+                    12 => "LargePointer",
+                    _ => "?",
+                };
+                debug!(update_code, name, bytes = frame.len(), "target->client FastPath");
+            }
+        }
+    }
     let _ = tx.send(SessionEvent::TargetFrame {
         action,
         bytes: frame.len(),
