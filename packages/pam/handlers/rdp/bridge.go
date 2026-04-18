@@ -24,6 +24,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"syscall"
 	"unsafe"
@@ -87,36 +88,79 @@ func Start(targetHost string, targetPort uint16, username, password, listenAddr 
 }
 
 // StartWithConn kicks off a bridge that consumes an already-accepted
-// client socket (such as one handed to a gateway handler). The file
-// descriptor of `clientConn` is duplicated and transferred to the native
-// bridge; the caller should still Close `clientConn` to release Go-side
-// resources, but the bridge will drive I/O over its own dup'd fd.
+// client connection such as the *tls.Conn the gateway hands to PAM
+// handlers.
 //
-// Unix only. On Windows this returns an error.
+// The native bridge needs a raw TCP file descriptor, but the gateway's
+// socket is often wrapped in TLS (or some other protocol) that lives
+// only in Go. To bridge the gap we open a local loopback TCP pair:
+//
+//   Rust bridge  <--TCP-->  Go loopback conn  <--io.Copy-->  clientConn
+//
+// Rust owns one half (the dialed end); Go copies bytes between the
+// other half and the caller's connection. The caller keeps ownership
+// of clientConn and should Close it when done with the session.
 func StartWithConn(clientConn net.Conn, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
-	tcp, ok := clientConn.(*net.TCPConn)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("rdp: loopback listen: %w", err)
+	}
+	defer listener.Close()
+
+	acceptCh := make(chan net.Conn, 1)
+	acceptErrCh := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			acceptErrCh <- acceptErr
+			return
+		}
+		acceptCh <- conn
+	}()
+
+	// Dial our own listener; the dialed end's fd goes to Rust.
+	dialed, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		return nil, fmt.Errorf("rdp: loopback dial: %w", err)
+	}
+	dialedTcp, ok := dialed.(*net.TCPConn)
 	if !ok {
-		return nil, fmt.Errorf("rdp: StartWithConn requires *net.TCPConn, got %T", clientConn)
+		dialed.Close()
+		return nil, fmt.Errorf("rdp: dialed non-TCPConn %T", dialed)
 	}
 
-	// Extract the raw fd and dup it so the Go side can still close its
-	// conn without pulling the rug out from under the bridge.
-	rawConn, err := tcp.SyscallConn()
+	var loopbackPeer net.Conn
+	select {
+	case loopbackPeer = <-acceptCh:
+	case err = <-acceptErrCh:
+		dialedTcp.Close()
+		return nil, fmt.Errorf("rdp: loopback accept: %w", err)
+	}
+
+	// Dup the dialed fd; hand the copy to Rust so we can close our end
+	// independently when the session ends.
+	rawConn, err := dialedTcp.SyscallConn()
 	if err != nil {
+		dialedTcp.Close()
+		loopbackPeer.Close()
 		return nil, fmt.Errorf("rdp: SyscallConn: %w", err)
 	}
-
 	var dupFd int
 	var dupErr error
-	err = rawConn.Control(func(fd uintptr) {
+	if ctrlErr := rawConn.Control(func(fd uintptr) {
 		dupFd, dupErr = syscall.Dup(int(fd))
-	})
-	if err != nil {
-		return nil, fmt.Errorf("rdp: Control: %w", err)
+	}); ctrlErr != nil {
+		dialedTcp.Close()
+		loopbackPeer.Close()
+		return nil, fmt.Errorf("rdp: Control: %w", ctrlErr)
 	}
 	if dupErr != nil {
+		dialedTcp.Close()
+		loopbackPeer.Close()
 		return nil, fmt.Errorf("rdp: dup fd: %w", dupErr)
 	}
+	// Go closes its copy of the fd — Rust owns the dup.
+	dialedTcp.Close()
 
 	cTarget := C.CString(targetHost)
 	defer C.free(unsafe.Pointer(cTarget))
@@ -133,10 +177,22 @@ func StartWithConn(clientConn net.Conn, targetHost string, targetPort uint16, us
 		cPass,
 	)
 	if h == 0 {
-		// Bridge rejected the fd; we still own it, so close it.
 		_ = syscall.Close(dupFd)
+		loopbackPeer.Close()
 		return nil, errors.New("rdp_bridge_start_with_fd failed")
 	}
+
+	// Shuttle bytes between the loopback and the caller's connection.
+	// When either side closes, the other's io.Copy returns and the
+	// peer conn is closed, tearing the bridge down cleanly.
+	go func() {
+		defer loopbackPeer.Close()
+		_, _ = io.Copy(loopbackPeer, clientConn)
+	}()
+	go func() {
+		_, _ = io.Copy(clientConn, loopbackPeer)
+	}()
+
 	return &Bridge{handle: h}, nil
 }
 
