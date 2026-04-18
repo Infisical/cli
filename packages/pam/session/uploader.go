@@ -31,7 +31,9 @@ const (
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
 	ResourceTypeMongodb    = "mongodb"
-	ResourceTypeRDP        = "rdp"
+	// Matches the backend's PamResource.Windows enum value so the
+	// gateway dispatcher can match the session's resource type string.
+	ResourceTypeRDP = "windows"
 )
 
 type SessionFileInfo struct {
