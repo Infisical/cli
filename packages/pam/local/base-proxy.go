@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,12 +22,14 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 )
 
 type PAMAccessParams struct {
 	ResourceName string
 	AccountName  string
+	Reason       string
 }
 
 // GetDisplayName returns a user-friendly display name for the access params
@@ -41,6 +44,7 @@ func (p PAMAccessParams) ToAPIRequest(projectID, duration string) api.PAMAccessR
 		ResourceName: p.ResourceName,
 		AccountName:  p.AccountName,
 		ProjectId:    projectID,
+		Reason:       p.Reason,
 	}
 }
 
@@ -313,14 +317,53 @@ func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 	}
 }
 
+const reasonRequiredErrorName = "PAM_REASON_REQUIRED"
+
+func PromptForReason(required bool) (string, error) {
+	label := "Reason for access"
+	prompt := promptui.Prompt{
+		Label: label,
+		Validate: func(input string) error {
+			if required && strings.TrimSpace(input) == "" {
+				return fmt.Errorf("a reason is required")
+			}
+			return nil
+		},
+	}
+	result, err := prompt.Run()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result), nil
+}
+
 // CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required
 // This is a shared function used by all PAM proxies
 func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequest) (api.PAMAccessResponse, error) {
 	// Initial request
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
 	if err != nil {
-		// Check if MFA is required
 		if apiErr, ok := err.(*api.APIError); ok {
+			// Reason required by account policy
+			if apiErr.Name == reasonRequiredErrorName {
+				if !isatty.IsTerminal(os.Stdin.Fd()) {
+					return api.PAMAccessResponse{}, fmt.Errorf(
+						"a reason is required to access this account — pass one with --reason")
+				}
+				log.Info().Msg("A reason is required to access this account.")
+				reason, promptErr := PromptForReason(true)
+				if promptErr != nil {
+					return api.PAMAccessResponse{}, fmt.Errorf("reason prompt cancelled: %w", promptErr)
+				}
+				pamRequest.Reason = reason
+				pamResponse, err = api.CallPAMAccess(httpClient, pamRequest)
+				if err != nil {
+					return api.PAMAccessResponse{}, err
+				}
+				return pamResponse, nil
+			}
+
+			// MFA required
 			if apiErr.Name == "SESSION_MFA_REQUIRED" {
 				// Extract MFA details from error
 				if details, ok := apiErr.Details.(map[string]interface{}); ok {
@@ -347,7 +390,7 @@ func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequ
 				}
 			}
 		}
-		// Return original error if not MFA-related
+		// Return original error if not MFA/reason-related
 		return api.PAMAccessResponse{}, err
 	}
 

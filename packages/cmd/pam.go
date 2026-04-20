@@ -1,13 +1,30 @@
 package cmd
 
 import (
+	"os"
 	"time"
 
 	pam "github.com/Infisical/infisical-merge/packages/pam/local"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
+
+func resolveReason(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("reason") {
+		reason, _ := cmd.Flags().GetString("reason")
+		return reason
+	}
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		return ""
+	}
+	reason, err := pam.PromptForReason(false)
+	if err != nil {
+		return ""
+	}
+	return reason
+}
 
 var pamCmd = &cobra.Command{
 	Use:                   "pam",
@@ -72,6 +89,8 @@ var pamDbAccessCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse port flag")
 		}
 
+		reason := resolveReason(cmd)
+
 		log.Debug().Msg("PAM Database Access: Trying to fetch secrets using logged in details")
 
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -92,6 +111,7 @@ var pamDbAccessCmd = &cobra.Command{
 		pam.StartDatabaseLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
 			ResourceName: resourceName,
 			AccountName:  accountName,
+			Reason:       reason,
 		}, projectID, durationStr, port)
 	},
 }
@@ -194,6 +214,8 @@ func runSSHCommand(cmd *cobra.Command, args []string, options pam.SSHAccessOptio
 		projectID = workspaceFile.WorkspaceId
 	}
 
+	reason := resolveReason(cmd)
+
 	log.Debug().Msg("PAM SSH: Trying to fetch credentials using logged in details")
 
 	loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -214,6 +236,7 @@ func runSSHCommand(cmd *cobra.Command, args []string, options pam.SSHAccessOptio
 	pam.StartSSHLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
 		ResourceName: resourceName,
 		AccountName:  accountName,
+		Reason:       reason,
 	}, projectID, durationStr, options)
 }
 
@@ -273,6 +296,8 @@ var pamKubernetesAccessCmd = &cobra.Command{
 			projectID = workspaceFile.WorkspaceId
 		}
 
+		reason := resolveReason(cmd)
+
 		log.Debug().Msg("PAM Kubernetes Access: Trying to fetch credentials using logged in details")
 
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -293,6 +318,7 @@ var pamKubernetesAccessCmd = &cobra.Command{
 		pam.StartKubernetesLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
 			ResourceName: resourceName,
 			AccountName:  accountName,
+			Reason:       reason,
 		}, projectID, durationStr, port)
 	},
 }
@@ -352,6 +378,8 @@ var pamRedisAccessCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse port flag")
 		}
 
+		reason := resolveReason(cmd)
+
 		log.Debug().Msg("PAM Redis Access: Trying to fetch secrets using logged in details")
 
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -372,6 +400,7 @@ var pamRedisAccessCmd = &cobra.Command{
 		pam.StartRedisLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
 			ResourceName: resourceName,
 			AccountName:  accountName,
+			Reason:       reason,
 		}, projectID, durationStr, port)
 	},
 }
@@ -384,6 +413,7 @@ func init() {
 	pamDbAccessCmd.Flags().String("duration", "1h", "Duration for database access session (e.g., '1h', '30m', '2h30m')")
 	pamDbAccessCmd.Flags().Int("port", 0, "Port for the local database proxy server (0 for auto-assign)")
 	pamDbAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamDbAccessCmd.Flags().String("reason", "", "Reason for accessing the account (stored on the session for audit purposes)")
 	pamDbAccessCmd.MarkFlagRequired("resource")
 	pamDbAccessCmd.MarkFlagRequired("account")
 
@@ -393,6 +423,7 @@ func init() {
 		cmd.Flags().String("account", "", "Name of the account within the resource")
 		cmd.Flags().String("duration", "1h", "Duration for SSH access session (e.g., '1h', '30m', '2h30m')")
 		cmd.Flags().String("project-id", "", "Project ID of the account to access")
+		cmd.Flags().String("reason", "", "Reason for accessing the account (stored on the session for audit purposes)")
 		cmd.MarkFlagRequired("resource")
 		cmd.MarkFlagRequired("account")
 	}
@@ -413,6 +444,7 @@ func init() {
 	pamKubernetesAccessCmd.Flags().String("duration", "1h", "Duration for kubernetes access session (e.g., '1h', '30m', '2h30m')")
 	pamKubernetesAccessCmd.Flags().Int("port", 0, "Port for the local kubernetes proxy server (0 for auto-assign)")
 	pamKubernetesAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamKubernetesAccessCmd.Flags().String("reason", "", "Reason for accessing the account (stored on the session for audit purposes)")
 	pamKubernetesAccessCmd.MarkFlagRequired("resource")
 	pamKubernetesAccessCmd.MarkFlagRequired("account")
 
@@ -423,6 +455,7 @@ func init() {
 	pamRedisAccessCmd.Flags().String("duration", "1h", "Duration for Redis access session (e.g., '1h', '30m', '2h30m')")
 	pamRedisAccessCmd.Flags().Int("port", 0, "Port for the local Redis proxy server (0 for auto-assign)")
 	pamRedisAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamRedisAccessCmd.Flags().String("reason", "", "Reason for accessing the account (stored on the session for audit purposes)")
 	pamRedisAccessCmd.MarkFlagRequired("resource")
 	pamRedisAccessCmd.MarkFlagRequired("account")
 
