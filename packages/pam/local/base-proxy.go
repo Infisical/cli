@@ -356,11 +356,7 @@ func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequ
 					return api.PAMAccessResponse{}, fmt.Errorf("reason prompt cancelled: %w", promptErr)
 				}
 				pamRequest.Reason = reason
-				pamResponse, err = api.CallPAMAccess(httpClient, pamRequest)
-				if err != nil {
-					return api.PAMAccessResponse{}, err
-				}
-				return pamResponse, nil
+				return CallPAMAccessWithMFA(httpClient, pamRequest)
 			}
 
 			// MFA required
@@ -428,8 +424,9 @@ func HandleApprovalWorkflow(httpClient *resty.Client, err error, projectID strin
 	}
 
 	approvalReq, reqErr := api.CallPAMAccessApprovalRequest(httpClient, api.PAMAccessApprovalRequest{
-		ProjectId:   projectID,
-		RequestData: accessParams.ToApprovalRequestData(durationStr),
+		ProjectId:     projectID,
+		RequestData:   accessParams.ToApprovalRequestData(durationStr),
+		Justification: accessParams.Reason,
 	})
 	if reqErr != nil {
 		util.HandleError(reqErr, "Failed to send PAM account request")
