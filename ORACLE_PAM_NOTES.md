@@ -1,11 +1,30 @@
 # Oracle PAM — Research & Implementation Notes
 
-Handoff document for anyone forking this branch and continuing Oracle PAM work. Contains:
-- What we're building and why it's different from other databases
-- What we tried, how far we got, what broke
-- Research into how the major PAM vendors solve this
-- The two viable paths forward, with concrete technical detail
-- References, file map, and how to reproduce the current test setup
+## Current state (2026-04-22)
+
+**Oracle PAM works end-to-end for JDBC thin clients.** Verified with sqlcl against AWS RDS Oracle 19c: SELECT, INSERT, DDL, PL/SQL, DBMS_OUTPUT, bind variables, session-metadata queries, clean disconnect. Credential injection works: user types `infisical-pam-proxy`, real Oracle password never leaves the gateway.
+
+**Architecture shipped (see `packages/pam/handlers/oracle/proxy_auth.go`):** the gateway opens a raw TCP connection to upstream, forwards client's `CONNECT` / ANO / TCPNego / DataTypeNego bytes verbatim in both directions, and intercepts only at the O5Logon boundary to swap placeholder-keyed material for real-password-keyed material in four specific TTC fields. After auth, byte relay is transparent. This bypasses the state-mismatch problem that blocks the simpler "impersonate Oracle entirely" approach.
+
+**File map (current, post-cleanup):**
+
+- `proxy.go` — entry, relay loop, connection glue
+- `proxy_auth.go` — the proxied-auth flow (pre-auth byte proxy + O5Logon translation)
+- `o5logon.go` — O5Logon crypto primitives + `BuildSvrResponse`
+- `o5logon_server.go` — phase-2 request parser, error packet helpers
+- `tns.go` — DATA packet codec + REFUSE helper
+- `ttc.go` — TTC codec (compressed ints, CLR strings, KVP encoding)
+- `query_logger.go` — TTC tap for session recording
+- `constants.go` — `ProxyPasswordPlaceholder`
+- `ATTRIBUTION.md` — MIT notice for code ported from sijms/go-ora
+
+**What still needs verification:**
+- Session recording file actually contains the captured queries (tap is wired but not end-to-end tested on this path)
+- Other clients: sqlplus (OCI), python-oracledb (thin), SQL Developer, DBeaver, Toad
+- Oracle NNE (Native Network Encryption) customers
+- Oracle RAC via SCAN listeners
+
+**Historical sections below** document the impersonation approach we tried first (now removed from the codebase) and the research we did along the way. Kept for context — the "what we tried" and "how vendors solve this" analysis is still accurate.
 
 ---
 

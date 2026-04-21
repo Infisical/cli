@@ -34,7 +34,6 @@ require (
 	github.com/quic-go/quic-go v0.54.1
 	github.com/rs/cors v1.11.0
 	github.com/rs/zerolog v1.26.1
-	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/smallnest/resp3 v0.0.0-20251228151914-4f2fa7427e69
 	github.com/spf13/cobra v1.6.1
 	github.com/spf13/viper v1.8.1

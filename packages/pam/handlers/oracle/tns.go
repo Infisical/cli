@@ -82,151 +82,10 @@ func PacketTypeOf(packet []byte) PacketType {
 	return PacketType(packet[4])
 }
 
-// ConnectPacket holds the parsed fields from a client CONNECT packet (or used to build a
-// response). Field layout matches go-ora's ConnectPacket / newConnectPacket.
-type ConnectPacket struct {
-	Version           uint16
-	LoVersion         uint16
-	Options           uint16
-	SessionDataUnit   uint32
-	TransportDataUnit uint32
-	OurOne            uint16
-	Flag              uint8
-	ACFL0             uint8
-	ACFL1             uint8
-	DataOffset        uint16
-	ConnectData       []byte // the connect-string payload ("(DESCRIPTION=...)")
-}
 
-func ParseConnectPacket(raw []byte) (*ConnectPacket, error) {
-	if len(raw) < 70 {
-		return nil, errors.New("CONNECT packet too short")
-	}
-	if PacketType(raw[4]) != PacketTypeConnect {
-		return nil, fmt.Errorf("not a CONNECT packet: type=%d", raw[4])
-	}
-	p := &ConnectPacket{
-		Version:     binary.BigEndian.Uint16(raw[8:]),
-		LoVersion:   binary.BigEndian.Uint16(raw[10:]),
-		Options:     binary.BigEndian.Uint16(raw[12:]),
-		OurOne:      binary.BigEndian.Uint16(raw[22:]),
-		ACFL0:       raw[32],
-		ACFL1:       raw[33],
-		DataOffset:  binary.BigEndian.Uint16(raw[26:]),
-		Flag:        raw[5],
-		// 16-bit SDU/TDU at offset 14/16; 32-bit at 58/62
-		SessionDataUnit:   binary.BigEndian.Uint32(raw[58:]),
-		TransportDataUnit: binary.BigEndian.Uint32(raw[62:]),
-	}
-	if p.SessionDataUnit == 0 {
-		p.SessionDataUnit = uint32(binary.BigEndian.Uint16(raw[14:]))
-	}
-	if p.TransportDataUnit == 0 {
-		p.TransportDataUnit = uint32(binary.BigEndian.Uint16(raw[16:]))
-	}
-	buffLen := binary.BigEndian.Uint16(raw[24:])
-	if p.DataOffset > 0 && int(p.DataOffset)+int(buffLen) <= len(raw) {
-		p.ConnectData = make([]byte, buffLen)
-		copy(p.ConnectData, raw[int(p.DataOffset):int(p.DataOffset)+int(buffLen)])
-	}
-	return p, nil
-}
 
-// AcceptPacket is the server response to CONNECT, plus the negotiated session parameters
-// the gateway will use. We always respond with >= v315 framing to match modern clients.
-type AcceptPacket struct {
-	Version           uint16
-	NegotiatedOptions uint16
-	SessionDataUnit   uint32
-	TransportDataUnit uint32
-	Histone           uint16
-	ACFL0             uint8
-	ACFL1             uint8
-	ConnectData       []byte // usually empty on ACCEPT
-}
 
-// AcceptFromConnect returns a server-role ACCEPT that mirrors what a real Oracle 19c
-// listener (RDS) sends. Captured values from a real AWS RDS Oracle listener:
-//
-//	version = 317, options = 0x0801 (2049), Histone = 256,
-//	dataOffset = 45 (equals total length), ACFL0 = 0x41, ACFL1 = 0x01,
-//	SDU = 8192, TDU = 2_097_152, 5 trailing zero bytes after the 32-bit SDU/TDU.
-//
-// These are the bytes JDBC thin actually validates against; downgrading version or
-// shortening the packet makes it silently drop the TCP connection.
-func AcceptFromConnect(c *ConnectPacket) *AcceptPacket {
-	sdu := c.SessionDataUnit
-	tdu := c.TransportDataUnit
-	if sdu == 0 {
-		sdu = 8192
-	}
-	if tdu == 0 {
-		tdu = sdu
-	}
-	if sdu < 512 {
-		sdu = 512
-	}
-	if tdu < sdu {
-		tdu = sdu
-	}
-	if sdu > 2097152 {
-		sdu = 2097152
-	}
-	if tdu > 2097152 {
-		tdu = 2097152
-	}
-	return &AcceptPacket{
-		Version:           317,
-		NegotiatedOptions: 0x0801,
-		SessionDataUnit:   sdu,
-		TransportDataUnit: tdu,
-		Histone:           256,
-		ACFL0:             0x41,
-		ACFL1:             0x01,
-	}
-}
 
-// Bytes serializes the ACCEPT to wire format, mirroring a real Oracle 19c listener.
-// For version < 315 we use the legacy 24-byte layout; for >= 315 the packet is 45
-// bytes (header 0-23, reserved/reconAddr 24-31, 32-bit SDU/TDU 32-39, 5 trailing
-// zero bytes 40-44). dataOffset equals the total length, indicating no trailing buffer.
-func (a *AcceptPacket) Bytes() []byte {
-	var dataOffset uint16
-	if a.Version < 315 {
-		dataOffset = 24
-	} else {
-		dataOffset = 45
-	}
-	length := uint32(int(dataOffset) + len(a.ConnectData))
-	out := make([]byte, length)
-	binary.BigEndian.PutUint16(out, uint16(length))
-	out[4] = byte(PacketTypeAccept)
-	out[5] = 0 // flag
-	binary.BigEndian.PutUint16(out[8:], a.Version)
-	binary.BigEndian.PutUint16(out[10:], a.NegotiatedOptions)
-	if a.Version < 315 {
-		sdu := uint16(a.SessionDataUnit)
-		if a.SessionDataUnit > 0xFFFF {
-			sdu = 0xFFFF
-		}
-		tdu := uint16(a.TransportDataUnit)
-		if a.TransportDataUnit > 0xFFFF {
-			tdu = 0xFFFF
-		}
-		binary.BigEndian.PutUint16(out[12:], sdu)
-		binary.BigEndian.PutUint16(out[14:], tdu)
-	} else {
-		binary.BigEndian.PutUint32(out[32:], a.SessionDataUnit)
-		binary.BigEndian.PutUint32(out[36:], a.TransportDataUnit)
-	}
-	binary.BigEndian.PutUint16(out[16:], a.Histone)
-	binary.BigEndian.PutUint16(out[18:], uint16(len(a.ConnectData)))
-	binary.BigEndian.PutUint16(out[20:], dataOffset)
-	out[22] = a.ACFL0
-	out[23] = a.ACFL1
-	copy(out[dataOffset:], a.ConnectData)
-	return out
-}
 
 // DataPacket wraps a single TNS DATA frame, without any ANO encryption/hash (the gateway
 // refuses ANO so we never deal with those on the client-facing leg).
@@ -261,13 +120,6 @@ func (d *DataPacket) Bytes(use32BitLen bool) []byte {
 	return out
 }
 
-// MarkerPacket fixed 11-byte frame for break / reset signals.
-func MarkerPacketBytes(markerType uint8, use32BitLen bool) []byte {
-	if use32BitLen {
-		return []byte{0, 0x0, 0, 0xB, byte(PacketTypeMarker), 0, 0, 0, 1, 0, markerType}
-	}
-	return []byte{0, 0xB, 0, 0, byte(PacketTypeMarker), 0, 0, 0, 1, 0, markerType}
-}
 
 // RefusePacket is the server's polite "no" to an incoming CONNECT (pre-ACCEPT). Used for
 // upstream-failure reporting.
