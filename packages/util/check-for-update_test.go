@@ -77,10 +77,10 @@ func TestGetUpdateInstructions(t *testing.T) {
 			expected: "winget upgrade Infisical.Infisical",
 		},
 		{
-			name:     "windows unknown defaults to scoop",
-			goos:     "windows",
-			execPath: `C:\infisical\infisical.exe`,
-			expected: "scoop update infisical",
+			name:        "windows unknown returns empty",
+			goos:        "windows",
+			execPath:    `C:\infisical\infisical.exe`,
+			expectEmpty: true,
 		},
 
 		// linux

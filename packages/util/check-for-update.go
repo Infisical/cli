@@ -342,7 +342,7 @@ func getUpdateInstructions(goos string, execPath string) string {
 		if strings.Contains(p, "winget") {
 			return "To update, run: winget upgrade Infisical.Infisical"
 		}
-		return "To update, run: scoop update infisical"
+		return ""
 	case "linux":
 		if isNpm {
 			return "To update, run: npm update -g @infisical/cli"
