@@ -199,28 +199,50 @@ func (e *QueryExtractor) recordLiteral(sql string) {
 	e.pair.mu.Unlock()
 }
 
-// tryExtractSQL does a best-effort walk of an OALL8 payload to pick out the SQL string.
-// The exact OALL8 layout is: options (ub4), cursor_id (ub4), SQL text length (ub4),
-// then compressed ub4's for various counts, followed by the CLR of the SQL text.
-// We scan forward looking for the first CLR that decodes to printable text ≥ 4 bytes —
-// the SQL statement. This is intentionally lenient: we'd rather miss a query than
-// crash, and structured parsing is brittle across Oracle versions and bind variants.
+// tryExtractSQL scans an OALL8 payload for the SQL statement. The OALL8 wire format
+// has variable-length headers that differ across client drivers and bind patterns, so
+// we use a simple heuristic rather than structured parsing: find the longest run of
+// printable ASCII bytes ≥ 4 chars long. In practice the SQL text is always the
+// longest such run in the payload. Lenient by design — we'd rather miss a query than
+// crash on a bind-param shape we didn't anticipate.
 func tryExtractSQL(r *TTCReader) string {
-	// Skip first few compressed uint4s (options, cursor_id, sql length, etc.)
-	for i := 0; i < 6; i++ {
-		if _, err := r.GetInt(4, true, true); err != nil {
-			return ""
-		}
+	// Pull the remaining bytes from the reader.
+	// r.buf is private; use a Remaining-check-plus-GetBytes dance.
+	remaining := r.Remaining()
+	if remaining <= 0 {
+		return ""
 	}
-	data, err := r.GetClr()
+	buf, err := r.GetBytes(remaining)
 	if err != nil {
 		return ""
 	}
-	s := string(data)
-	if len(s) < 1 {
+	return longestPrintableRun(buf)
+}
+
+// longestPrintableRun returns the longest contiguous run of printable ASCII (0x20..0x7E
+// plus tab/newline/CR) in data, provided it's at least 4 chars. Otherwise returns "".
+func longestPrintableRun(data []byte) string {
+	bestStart, bestLen := 0, 0
+	curStart, curLen := 0, 0
+	for i, b := range data {
+		printable := b == '\t' || b == '\n' || b == '\r' || (b >= 0x20 && b <= 0x7E)
+		if printable {
+			if curLen == 0 {
+				curStart = i
+			}
+			curLen++
+			if curLen > bestLen {
+				bestLen = curLen
+				bestStart = curStart
+			}
+		} else {
+			curLen = 0
+		}
+	}
+	if bestLen < 4 {
 		return ""
 	}
-	return s
+	return string(data[bestStart : bestStart+bestLen])
 }
 
 func (e *QueryExtractor) handleServerResponse(payload []byte) {
