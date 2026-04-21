@@ -33,12 +33,13 @@ pub enum SessionEvent {
         wheel_delta: i16,
         elapsed_ns: u64,
     },
-    /// Metadata for one PDU the target sent toward the client. Payload is
-    /// intentionally not captured yet; phase 2 adds BitmapRegion with the
-    /// compressed bytes for lossless recording.
+    /// One PDU the target sent toward the client, with the raw bytes included
+    /// for offline playback. `payload` holds the full FastPath / X.224 PDU
+    /// exactly as it came off the wire; decoding (RLE, 16bpp→RGBA, etc.)
+    /// happens at replay time in the browser.
     TargetFrame {
         action: Action,
-        bytes: usize,
+        payload: Vec<u8>,
         elapsed_ns: u64,
     },
 }

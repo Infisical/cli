@@ -31,7 +31,12 @@ extern "C" {
  *   Unicode:       value_a = code_point, flags = KeyboardFlags bits
  *   Mouse:         value_a = x, value_b = y, flags = PointerFlags bits,
  *                  wheel_delta = signed wheel units
- *   TargetFrame:   value_a = payload bytes, action = X224 or FASTPATH
+ *   TargetFrame:   value_a = payload_len (redundant),
+ *                  action = X224 or FASTPATH,
+ *                  payload_ptr = malloc'd raw PDU bytes (caller must free),
+ *                  payload_len = size of the buffer
+ *
+ * Non-TargetFrame events set payload_ptr = NULL and payload_len = 0.
  *
  * elapsed_ns is nanoseconds since the bridge started its background task.
  */
@@ -43,6 +48,8 @@ typedef struct {
     uint32_t flags;
     int32_t  wheel_delta;
     uint8_t  action;
+    uint8_t *payload_ptr;
+    uint32_t payload_len;
 } rdp_event_t;
 
 /* Start a new bridge session. The bridge listens on `listen_addr` and

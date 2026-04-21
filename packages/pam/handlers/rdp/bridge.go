@@ -50,6 +50,10 @@ const (
 
 // Event is the structured session event produced by the native bridge.
 // Field meaning depends on Type; see rdp_bridge.h for semantics.
+//
+// For TargetFrame events, Payload holds the full raw PDU bytes as a Go
+// slice owned by Go (copied out of the malloc'd C buffer which is freed
+// during PollEvent). For other event types Payload is nil.
 type Event struct {
 	Type       EventType
 	ElapsedNS  uint64
@@ -58,6 +62,7 @@ type Event struct {
 	Flags      uint32
 	WheelDelta int32
 	Action     FrameAction
+	Payload    []byte
 }
 
 // Bridge is a handle to an active MITM session running in the native
@@ -208,7 +213,7 @@ func (b *Bridge) PollEvent(timeoutMs uint32) (*Event, error) {
 	rc := C.rdp_bridge_poll_event(b.handle, &raw, C.uint32_t(timeoutMs))
 	switch int32(rc) {
 	case C.RDP_POLL_OK:
-		return &Event{
+		ev := &Event{
 			Type:       EventType(raw.event_type),
 			ElapsedNS:  uint64(raw.elapsed_ns),
 			ValueA:     uint32(raw.value_a),
@@ -216,7 +221,13 @@ func (b *Bridge) PollEvent(timeoutMs uint32) (*Event, error) {
 			Flags:      uint32(raw.flags),
 			WheelDelta: int32(raw.wheel_delta),
 			Action:     FrameAction(raw.action),
-		}, nil
+		}
+		// Copy TargetFrame payload out of the C buffer and free it.
+		if raw.payload_ptr != nil && raw.payload_len > 0 {
+			ev.Payload = C.GoBytes(unsafe.Pointer(raw.payload_ptr), C.int(raw.payload_len))
+			C.free(unsafe.Pointer(raw.payload_ptr))
+		}
+		return ev, nil
 	case C.RDP_POLL_TIMEOUT:
 		return nil, nil
 	case C.RDP_POLL_ENDED:

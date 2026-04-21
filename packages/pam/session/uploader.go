@@ -267,8 +267,16 @@ func deletePersistedOffset(filename string) {
 	_ = os.Remove(offsetFilePath(filename))
 }
 
+// maxBatchPayloadBytes caps a single event-batch upload so we stay under
+// the platform's request size limit (nginx + backend are configured for
+// ~50MB). Leave headroom for JSON overhead + TLS framing.
+const maxBatchPayloadBytes = 40 * 1024 * 1024
+
 // readFromOffset reads length-prefixed encrypted records from filename starting at offset,
 // decrypts each, and returns them as a JSON array payload plus the new file offset.
+// Stops reading once the accumulated payload approaches maxBatchPayloadBytes so a single
+// upload stays within platform size limits; the caller should loop until no more events
+// are produced.
 // Returns nil payload (and the unchanged offset) if there are no new records.
 func readFromOffset(filename, encryptionKey string, offset int64) ([]byte, int64, error) {
 	recordingDir := GetSessionRecordingDir()
@@ -286,6 +294,7 @@ func readFromOffset(filename, encryptionKey string, offset int64) ([]byte, int64
 
 	var entries []json.RawMessage
 	newOffset := offset
+	accumulatedBytes := 0
 
 	for {
 		lengthBytes := make([]byte, 4)
@@ -307,7 +316,16 @@ func readFromOffset(filename, encryptionKey string, offset int64) ([]byte, int64
 			return nil, newOffset, fmt.Errorf("failed to decrypt record at offset %d: %w", newOffset, err)
 		}
 
+		// Guard against unbounded batches: stop adding once the decrypted
+		// payload approaches the upload cap. Always keep the first entry
+		// even if it's oversized on its own — the caller will still try
+		// to upload it (may fail, but we don't deadlock).
+		if len(entries) > 0 && accumulatedBytes+len(decryptedData) > maxBatchPayloadBytes {
+			break
+		}
+
 		entries = append(entries, json.RawMessage(decryptedData))
+		accumulatedBytes += len(decryptedData)
 		newOffset += int64(4 + length)
 	}
 
@@ -480,33 +498,39 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) {
 		return // Platform does not support batch uploads; bulk upload will happen at session end
 	}
 
-	payload, newOffset, err := readFromOffset(state.filename, encryptionKey, state.fileOffset)
-	if err != nil {
-		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for batch upload")
-		return
-	}
-	if len(payload) == 0 {
-		return // No new events since last flush
-	}
-
-	if err := api.CallUploadPamSessionEventBatch(su.httpClient, sessionID, state.fileOffset, payload); err != nil {
-		var apiErr *api.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			// Platform does not support the batch upload endpoint yet; fall back to bulk upload at session end
-			log.Warn().Str("sessionId", sessionID).Msg("Batch upload endpoint not supported by platform, will use legacy bulk upload at session end")
-			state.legacyMode = true
+	// Drain as much of the backlog as fits in size-capped batches this tick.
+	// readFromOffset caps each batch at ~40MB so the upload stays under
+	// the platform's request limit; we loop until no new events remain
+	// or an upload fails (then we retry next tick).
+	for {
+		payload, newOffset, err := readFromOffset(state.filename, encryptionKey, state.fileOffset)
+		if err != nil {
+			log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for batch upload")
 			return
 		}
-		log.Error().Err(err).Str("sessionId", sessionID).Int64("startOffset", state.fileOffset).Msg("Failed to upload session event batch, will retry next tick")
-		return // Do not advance offset on failure so the batch is retried
-	}
+		if len(payload) == 0 {
+			return // No new events since last flush
+		}
 
-	state.fileOffset = newOffset
-	if err := writePersistedOffset(state.filename, newOffset); err != nil {
-		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after flush")
-	}
+		if err := api.CallUploadPamSessionEventBatch(su.httpClient, sessionID, state.fileOffset, payload); err != nil {
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+				// Platform does not support the batch upload endpoint yet; fall back to bulk upload at session end
+				log.Warn().Str("sessionId", sessionID).Msg("Batch upload endpoint not supported by platform, will use legacy bulk upload at session end")
+				state.legacyMode = true
+				return
+			}
+			log.Error().Err(err).Str("sessionId", sessionID).Int64("startOffset", state.fileOffset).Msg("Failed to upload session event batch, will retry next tick")
+			return // Do not advance offset on failure so the batch is retried
+		}
 
-	log.Debug().Str("sessionId", sessionID).Int64("newOffset", newOffset).Msg("Flushed session event batch")
+		state.fileOffset = newOffset
+		if err := writePersistedOffset(state.filename, newOffset); err != nil {
+			log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after flush")
+		}
+
+		log.Debug().Str("sessionId", sessionID).Int64("newOffset", newOffset).Msg("Flushed session event batch")
+	}
 }
 
 func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {

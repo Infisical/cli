@@ -2,6 +2,7 @@ package rdp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,8 +106,8 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 }
 
 // recordedRDPEvent is the JSON shape we serialize into the session log.
-// Phase 2 captures the structured fields that come across the FFI; Phase
-// 3 will add the target frame payload for lossless bitmap recording.
+// target_frame events carry the base64-encoded raw PDU bytes in Payload
+// so the replay viewer can reconstruct the screen by re-decoding them.
 type recordedRDPEvent struct {
 	Type       string `json:"type"` // keyboard | unicode | mouse | target_frame
 	ElapsedNS  uint64 `json:"elapsed_ns"`
@@ -118,6 +119,7 @@ type recordedRDPEvent struct {
 	WheelDelta int32  `json:"wheel_delta,omitempty"`
 	FrameBytes uint32 `json:"frame_bytes,omitempty"`
 	Action     string `json:"action,omitempty"` // x224 | fastpath
+	Payload    string `json:"payload,omitempty"` // base64 (target_frame only)
 }
 
 func (p *RDPProxy) logEvent(startedAt time.Time, ev *Event) error {
@@ -149,6 +151,9 @@ func (p *RDPProxy) logEvent(startedAt time.Time, ev *Event) error {
 			rec.Action = "fastpath"
 		} else {
 			rec.Action = "x224"
+		}
+		if len(ev.Payload) > 0 {
+			rec.Payload = base64.StdEncoding.EncodeToString(ev.Payload)
 		}
 		direction = session.TerminalEventOutput
 	default:

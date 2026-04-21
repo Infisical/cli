@@ -61,6 +61,11 @@ pub enum RdpEventType {
 
 /// C-ABI friendly event. Fields are reused across variants; see
 /// `event_type` to decide which fields are meaningful.
+///
+/// For `TargetFrame`, `payload_ptr` points at a heap buffer of size
+/// `payload_len` allocated by `malloc`. Caller is responsible for calling
+/// `free(payload_ptr)` once the bytes are consumed. Non-TargetFrame events
+/// set `payload_ptr = NULL` and `payload_len = 0`.
 #[repr(C)]
 pub struct RdpEvent {
     pub event_type: u8,
@@ -76,6 +81,10 @@ pub struct RdpEvent {
     pub wheel_delta: i32,
     /// TargetFrame: 0 = X.224, 1 = FastPath. 0 for others.
     pub action: u8,
+    /// TargetFrame: malloc'd buffer with the raw PDU bytes. NULL otherwise.
+    pub payload_ptr: *mut u8,
+    /// Size of the `payload_ptr` buffer in bytes. 0 if payload_ptr is NULL.
+    pub payload_len: u32,
 }
 
 impl RdpEvent {
@@ -88,6 +97,8 @@ impl RdpEvent {
             flags: 0,
             wheel_delta: 0,
             action: 0,
+            payload_ptr: std::ptr::null_mut(),
+            payload_len: 0,
         }
     }
 
@@ -132,18 +143,39 @@ impl RdpEvent {
             },
             SessionEvent::TargetFrame {
                 action,
-                bytes,
+                payload,
                 elapsed_ns,
-            } => Self {
-                event_type: RdpEventType::TargetFrame as u8,
-                elapsed_ns,
-                value_a: bytes as u32,
-                action: match action {
-                    ironrdp_pdu::Action::X224 => 0,
-                    ironrdp_pdu::Action::FastPath => 1,
-                },
-                ..Self::zero()
-            },
+            } => {
+                // Copy payload into a malloc'd buffer the caller will free.
+                // We use malloc (not Rust's allocator) so Go can free via
+                // libc::free across the FFI without an extra trip back here.
+                let len = payload.len();
+                let ptr = if len == 0 {
+                    std::ptr::null_mut()
+                } else {
+                    unsafe {
+                        let p = libc::malloc(len) as *mut u8;
+                        if p.is_null() {
+                            std::ptr::null_mut()
+                        } else {
+                            std::ptr::copy_nonoverlapping(payload.as_ptr(), p, len);
+                            p
+                        }
+                    }
+                };
+                Self {
+                    event_type: RdpEventType::TargetFrame as u8,
+                    elapsed_ns,
+                    value_a: len as u32,
+                    action: match action {
+                        ironrdp_pdu::Action::X224 => 0,
+                        ironrdp_pdu::Action::FastPath => 1,
+                    },
+                    payload_ptr: ptr,
+                    payload_len: len as u32,
+                    ..Self::zero()
+                }
+            }
         }
     }
 }
