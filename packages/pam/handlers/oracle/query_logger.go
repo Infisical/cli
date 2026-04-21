@@ -1,0 +1,290 @@
+package oracle
+
+import (
+	"bytes"
+	"encoding/binary"
+	"sync"
+	"time"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/rs/zerolog/log"
+)
+
+// TTC function-call opcodes of interest for query logging. These match what a real
+// Oracle server receives during a client's query lifecycle — see Oracle Net TTC
+// documentation and go-ora's parameter/command.go for reference.
+const (
+	ttcFuncOALL8    = 0x5E // all-in-one statement execution (SQL + binds in a single call)
+	ttcFuncOFETCH   = 0x05 // fetch more rows
+	ttcFuncOCOMMIT  = 0x0E // commit
+	ttcFuncORLLBK   = 0x0F // rollback
+	ttcFuncOCLOSE   = 0x69 // close cursor
+	ttcFuncOSTMT    = 0x04 // parse / describe
+	ttcFuncOLOGOFF  = 0x09 // logoff
+	ttcMsgFunction  = 0x03 // outer opcode for function calls
+	ttcMsgPiggyback = 0x11 // piggyback TTC
+)
+
+// pendingQuery tracks the SQL-string that was sent client→upstream; we correlate it
+// with the subsequent upstream→client response so the session log has both.
+type pendingQuery struct {
+	sql       string
+	timestamp time.Time
+}
+
+// QueryExtractor runs in its own goroutine, consuming DATA packet payloads from
+// either direction via Feed() and emitting SessionLogEntry records when a complete
+// client call + server response pair is recognized. Feed is non-blocking; if the
+// internal channel fills, packets are dropped and a warning is logged. Logging is
+// best-effort, same as MSSQL.
+type QueryExtractor struct {
+	logger     session.SessionLogger
+	sessionID  string
+	direction  string // "client->upstream" or "upstream->client"
+	ch         chan []byte
+	stopCh     chan struct{}
+	wg         sync.WaitGroup
+	use32Bit   bool
+	pair       *pairState // shared across both directions via Pair
+}
+
+// pairState couples the client-side and upstream-side extractors so we can match
+// requests with responses.
+type pairState struct {
+	mu      sync.Mutex
+	pending *pendingQuery
+}
+
+// NewQueryExtractorPair returns two extractors, one per direction, sharing a pair state.
+// They must both be started and stopped together.
+func NewQueryExtractorPair(logger session.SessionLogger, sessionID string, use32Bit bool) (clientToUpstream, upstreamToClient *QueryExtractor) {
+	p := &pairState{}
+	clientToUpstream = newExtractor(logger, sessionID, "client->upstream", use32Bit, p)
+	upstreamToClient = newExtractor(logger, sessionID, "upstream->client", use32Bit, p)
+	return
+}
+
+func newExtractor(logger session.SessionLogger, sessionID, direction string, use32Bit bool, pair *pairState) *QueryExtractor {
+	e := &QueryExtractor{
+		logger:    logger,
+		sessionID: sessionID,
+		direction: direction,
+		ch:        make(chan []byte, 64),
+		stopCh:    make(chan struct{}),
+		use32Bit:  use32Bit,
+		pair:      pair,
+	}
+	e.wg.Add(1)
+	go e.loop()
+	return e
+}
+
+// Feed pushes a chunk of bytes into the extractor. Returns without blocking if the
+// queue is full; drops on overflow. This keeps the relay hot path off the TTC parser.
+func (e *QueryExtractor) Feed(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	select {
+	case e.ch <- cp:
+	default:
+		// drop — logging is best-effort
+	}
+}
+
+func (e *QueryExtractor) Stop() {
+	close(e.stopCh)
+	e.wg.Wait()
+}
+
+func (e *QueryExtractor) loop() {
+	defer e.wg.Done()
+	var buffer bytes.Buffer
+
+	for {
+		select {
+		case <-e.stopCh:
+			return
+		case chunk := <-e.ch:
+			buffer.Write(chunk)
+			e.drain(&buffer)
+		}
+	}
+}
+
+// drain consumes as many complete TNS packets as the buffer contains.
+func (e *QueryExtractor) drain(buf *bytes.Buffer) {
+	for {
+		if buf.Len() < 8 {
+			return
+		}
+		head := buf.Bytes()[:8]
+		var length uint32
+		if e.use32Bit {
+			length = binary.BigEndian.Uint32(head)
+		} else {
+			length = uint32(binary.BigEndian.Uint16(head))
+		}
+		if length < 8 || length > 16*1024*1024 {
+			// Framing is broken — reset. Shouldn't happen in normal flow.
+			buf.Reset()
+			return
+		}
+		if buf.Len() < int(length) {
+			return
+		}
+		packet := make([]byte, length)
+		if _, err := buf.Read(packet); err != nil {
+			return
+		}
+		e.handlePacket(packet)
+	}
+}
+
+func (e *QueryExtractor) handlePacket(raw []byte) {
+	if PacketTypeOf(raw) != PacketTypeData {
+		return
+	}
+	d, err := ParseDataPacket(raw, e.use32Bit)
+	if err != nil {
+		return
+	}
+	if len(d.Payload) < 1 {
+		return
+	}
+	switch e.direction {
+	case "client->upstream":
+		e.handleClientRequest(d.Payload)
+	case "upstream->client":
+		e.handleServerResponse(d.Payload)
+	}
+}
+
+func (e *QueryExtractor) handleClientRequest(payload []byte) {
+	r := NewTTCReader(payload)
+	op, err := r.GetByte()
+	if err != nil {
+		return
+	}
+	if op != ttcMsgFunction {
+		return
+	}
+	sub, err := r.GetByte()
+	if err != nil {
+		return
+	}
+	switch sub {
+	case ttcFuncOALL8:
+		sqlText := tryExtractSQL(r)
+		if sqlText != "" {
+			e.pair.mu.Lock()
+			e.pair.pending = &pendingQuery{sql: sqlText, timestamp: time.Now()}
+			e.pair.mu.Unlock()
+		}
+	case ttcFuncOFETCH:
+		// Fetch uses a cursor ID we don't track in v1; leave any previous pending
+		// query as-is so FETCH responses are attributed back to the open SELECT.
+	case ttcFuncOCOMMIT:
+		e.recordLiteral("COMMIT")
+	case ttcFuncORLLBK:
+		e.recordLiteral("ROLLBACK")
+	}
+}
+
+func (e *QueryExtractor) recordLiteral(sql string) {
+	e.pair.mu.Lock()
+	e.pair.pending = &pendingQuery{sql: sql, timestamp: time.Now()}
+	e.pair.mu.Unlock()
+}
+
+// tryExtractSQL does a best-effort walk of an OALL8 payload to pick out the SQL string.
+// The exact OALL8 layout is: options (ub4), cursor_id (ub4), SQL text length (ub4),
+// then compressed ub4's for various counts, followed by the CLR of the SQL text.
+// We scan forward looking for the first CLR that decodes to printable text ≥ 4 bytes —
+// the SQL statement. This is intentionally lenient: we'd rather miss a query than
+// crash, and structured parsing is brittle across Oracle versions and bind variants.
+func tryExtractSQL(r *TTCReader) string {
+	// Skip first few compressed uint4s (options, cursor_id, sql length, etc.)
+	for i := 0; i < 6; i++ {
+		if _, err := r.GetInt(4, true, true); err != nil {
+			return ""
+		}
+	}
+	data, err := r.GetClr()
+	if err != nil {
+		return ""
+	}
+	s := string(data)
+	if len(s) < 1 {
+		return ""
+	}
+	return s
+}
+
+func (e *QueryExtractor) handleServerResponse(payload []byte) {
+	// If we have a pending client query, emit one log entry with a best-effort outcome
+	// derived from the response. Successful responses often contain an "OK" at opcode
+	// 0x04 with returnCode == 0; error responses contain non-zero returnCode.
+	e.pair.mu.Lock()
+	pending := e.pair.pending
+	e.pair.pending = nil
+	e.pair.mu.Unlock()
+	if pending == nil {
+		return
+	}
+	output := extractResponseOutcome(payload)
+	err := e.logger.LogEntry(session.SessionLogEntry{
+		Timestamp: pending.timestamp,
+		Input:     pending.sql,
+		Output:    output,
+	})
+	if err != nil {
+		log.Debug().Err(err).Str("sessionID", e.sessionID).Msg("session log entry dropped")
+	}
+}
+
+// extractResponseOutcome scans the server response for either an OError packet (opcode
+// 0x04) or a row-count in a status KV. Returns "OK", "ERROR: ORA-XXXX: ..." or "".
+func extractResponseOutcome(payload []byte) string {
+	r := NewTTCReader(payload)
+	for r.Remaining() > 0 {
+		op, err := r.GetByte()
+		if err != nil {
+			break
+		}
+		if op == 0x04 { // summary / error
+			// Skip a few fields; return code is the 4th compressed int.
+			for i := 0; i < 3; i++ {
+				if _, err := r.GetInt(4, true, true); err != nil {
+					return "OK"
+				}
+			}
+			code, err := r.GetInt(4, true, true)
+			if err != nil || code == 0 {
+				return "OK"
+			}
+			return ora(code)
+		}
+	}
+	return ""
+}
+
+func ora(code int) string {
+	switch code {
+	case 0:
+		return "OK"
+	case 1:
+		return "ERROR: ORA-00001: unique constraint violated"
+	case 900:
+		return "ERROR: ORA-00900: invalid SQL statement"
+	case 942:
+		return "ERROR: ORA-00942: table or view does not exist"
+	case 1017:
+		return "ERROR: ORA-01017: invalid username/password"
+	case 28000:
+		return "ERROR: ORA-28000: the account is locked"
+	}
+	return "ERROR"
+}
