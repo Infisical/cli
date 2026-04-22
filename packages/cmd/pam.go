@@ -376,6 +376,90 @@ var pamRedisAccessCmd = &cobra.Command{
 	},
 }
 
+// ==================== RDP Commands ====================
+
+var pamRdpCmd = &cobra.Command{
+	Use:                   "rdp",
+	Short:                 "RDP-related PAM commands",
+	Long:                  "RDP-related PAM commands for Infisical (Windows Server / Remote Desktop)",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var pamRdpAccessCmd = &cobra.Command{
+	Use:                   "access",
+	Short:                 "Access PAM Windows/RDP accounts",
+	Long:                  "Access a PAM-managed Windows target over RDP. This starts a local loopback proxy that your RDP client connects to; the session tunnels through the Infisical Gateway with credentials injected server-side.",
+	Example:               "infisical pam rdp access --resource windows-prod --account Administrator --duration 1h --project-id <project_uuid>",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		util.RequireLogin()
+
+		resourceName, _ := cmd.Flags().GetString("resource")
+		accountName, _ := cmd.Flags().GetString("account")
+
+		if resourceName == "" || accountName == "" {
+			util.PrintErrorMessageAndExit("Both --resource and --account flags are required")
+		}
+
+		projectID, err := cmd.Flags().GetString("project-id")
+		if err != nil {
+			util.HandleError(err, "Unable to parse project-id flag")
+		}
+
+		if projectID == "" {
+			workspaceFile, err := util.GetWorkSpaceFromFile()
+			if err != nil {
+				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --project-id flag")
+			}
+			projectID = workspaceFile.WorkspaceId
+		}
+
+		durationStr, err := cmd.Flags().GetString("duration")
+		if err != nil {
+			util.HandleError(err, "Unable to parse duration flag")
+		}
+
+		_, err = time.ParseDuration(durationStr)
+		if err != nil {
+			util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+		}
+
+		port, err := cmd.Flags().GetInt("port")
+		if err != nil {
+			util.HandleError(err, "Unable to parse port flag")
+		}
+
+		noLaunch, err := cmd.Flags().GetBool("no-launch")
+		if err != nil {
+			util.HandleError(err, "Unable to parse no-launch flag")
+		}
+
+		log.Debug().Msg("PAM RDP Access: Trying to start session using logged in details")
+
+		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
+		isConnected := util.ValidateInfisicalAPIConnection()
+
+		if isConnected {
+			log.Debug().Msg("PAM RDP Access: Connected to Infisical instance, checking logged in creds")
+		}
+
+		if err != nil {
+			util.HandleError(err, "Unable to get logged in user details")
+		}
+
+		if isConnected && loggedInUserDetails.LoginExpired {
+			loggedInUserDetails = util.EstablishUserLoginSession()
+		}
+
+		pam.StartRDPLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
+			ResourceName: resourceName,
+			AccountName:  accountName,
+		}, projectID, durationStr, port, noLaunch)
+	},
+}
+
 func init() {
 	// Database commands
 	pamDbCmd.AddCommand(pamDbAccessCmd)
@@ -426,9 +510,21 @@ func init() {
 	pamRedisAccessCmd.MarkFlagRequired("resource")
 	pamRedisAccessCmd.MarkFlagRequired("account")
 
+	// RDP commands
+	pamRdpCmd.AddCommand(pamRdpAccessCmd)
+	pamRdpAccessCmd.Flags().String("resource", "", "Name of the PAM resource to access")
+	pamRdpAccessCmd.Flags().String("account", "", "Name of the account within the resource")
+	pamRdpAccessCmd.Flags().String("duration", "1h", "Duration for RDP access session (e.g., '1h', '30m', '2h30m')")
+	pamRdpAccessCmd.Flags().Int("port", 0, "Port for the local RDP proxy server (0 for auto-assign)")
+	pamRdpAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
+	pamRdpAccessCmd.Flags().Bool("no-launch", false, "Do not auto-launch the system RDP client; print connection details only")
+	pamRdpAccessCmd.MarkFlagRequired("resource")
+	pamRdpAccessCmd.MarkFlagRequired("account")
+
 	pamCmd.AddCommand(pamDbCmd)
 	pamCmd.AddCommand(pamSshCmd)
 	pamCmd.AddCommand(pamKubernetesCmd)
 	pamCmd.AddCommand(pamRedisCmd)
+	pamCmd.AddCommand(pamRdpCmd)
 	RootCmd.AddCommand(pamCmd)
 }

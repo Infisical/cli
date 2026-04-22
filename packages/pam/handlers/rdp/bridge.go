@@ -19,6 +19,17 @@ var ErrInvalidHandle = errors.New("rdp bridge: invalid handle")
 // handshake or forwarding error (rather than a clean client disconnect).
 var ErrSessionFailed = errors.New("rdp bridge: session ended with error")
 
+// AcceptorUsername and AcceptorPassword are the fixed placeholder
+// credential the native RDP client must present to the acceptor side of
+// the bridge. The real access gate is upstream (Infisical auth + the
+// gateway tunnel); these values are echoed from the Rust crate's
+// ACCEPTOR_USERNAME / ACCEPTOR_PASSWORD constants and must stay in
+// sync.
+const (
+	AcceptorUsername = "infisical"
+	AcceptorPassword = "infisical"
+)
+
 // Bridge owns the handle to a running RDP MITM session. Cancel may be
 // called from any goroutine; Wait blocks until the session ends; Close
 // releases the handle and must be called after Wait returns.
