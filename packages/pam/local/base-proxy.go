@@ -339,14 +339,18 @@ func PromptForReason(required bool) (string, error) {
 
 // CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required
 // This is a shared function used by all PAM proxies
-func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequest) (api.PAMAccessResponse, error) {
+func CallPAMAccessWithMFA(
+	httpClient *resty.Client,
+	pamRequest api.PAMAccessRequest,
+	interactive bool,
+) (api.PAMAccessResponse, error) {
 	// Initial request
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
 	if err != nil {
 		if apiErr, ok := err.(*api.APIError); ok {
 			// Reason required by account policy
 			if apiErr.Name == reasonRequiredErrorName {
-				if !isatty.IsTerminal(os.Stdin.Fd()) {
+				if !interactive || !isatty.IsTerminal(os.Stdin.Fd()) {
 					return api.PAMAccessResponse{}, fmt.Errorf(
 						"a reason is required to access this account — pass one with --reason")
 				}
@@ -356,7 +360,7 @@ func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequ
 					return api.PAMAccessResponse{}, fmt.Errorf("reason prompt cancelled: %w", promptErr)
 				}
 				pamRequest.Reason = reason
-				return CallPAMAccessWithMFA(httpClient, pamRequest)
+				return CallPAMAccessWithMFA(httpClient, pamRequest, interactive)
 			}
 
 			// MFA required
@@ -424,9 +428,8 @@ func HandleApprovalWorkflow(httpClient *resty.Client, err error, projectID strin
 	}
 
 	approvalReq, reqErr := api.CallPAMAccessApprovalRequest(httpClient, api.PAMAccessApprovalRequest{
-		ProjectId:     projectID,
-		RequestData:   accessParams.ToApprovalRequestData(durationStr),
-		Justification: accessParams.Reason,
+		ProjectId:   projectID,
+		RequestData: accessParams.ToApprovalRequestData(durationStr),
 	})
 	if reqErr != nil {
 		util.HandleError(reqErr, "Failed to send PAM account request")

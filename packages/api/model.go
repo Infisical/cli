@@ -847,9 +847,8 @@ type PAMAccessApprovalRequestPayloadRequestData struct {
 }
 
 type PAMAccessApprovalRequest struct {
-	ProjectId     string                                     `json:"projectId"`
-	RequestData   PAMAccessApprovalRequestPayloadRequestData `json:"requestData"`
-	Justification string                                     `json:"justification,omitempty"`
+	ProjectId   string                                     `json:"projectId"`
+	RequestData PAMAccessApprovalRequestPayloadRequestData `json:"requestData"`
 }
 
 type PAMAccessApprovalRequestResponse struct {
