@@ -641,8 +641,6 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 		return nil, fmt.Errorf("encrypt real password: %w", err)
 	}
 
-	// Remember encKey so phase-2 response translation can reuse it for SVR_RESPONSE regen.
-	state.ServerSessKey = state.ServerSessKey // (no-op; kept for clarity)
 	// Rebuild the phase-2 payload with substituted AUTH_SESSKEY and AUTH_PASSWORD.
 	rebuilt, err := rebuildPhase2Request(payload, newEClientSessKey, newEPassword)
 	if err != nil {
@@ -847,7 +845,6 @@ func replaceKVPValue(payload []byte, key, newValue string) ([]byte, error) {
 	} else {
 		return nil, fmt.Errorf("invalid val_len size byte %d", vSizeByte)
 	}
-	valStart := pos
 	// If vLen > 0, there's a CLR length byte + vLen value bytes.
 	if vLen > 0 {
 		// CLR length byte
@@ -866,9 +863,8 @@ func replaceKVPValue(payload []byte, key, newValue string) ([]byte, error) {
 		newValSection = append(newValSection, encodeCompressedInt(uint64(newVLen))...)
 		newValSection = append(newValSection, byte(newVLen))
 		newValSection = append(newValSection, newVal...)
-		// Assemble output: prefix (unchanged up to valStart) + newValSection + rest after old val
-		prefix := payload[:valStart-int(vSizeByte)-1] // everything up to val_len size byte (inclusive of bytes before vSizeByte)
-		// Actually recompute: the old section we replace is from idx+len(keyBytes) to valBodyEnd
+		// Splice in the new value: keep bytes up to the end of the key, then the new
+		// encoded value section, then everything after the old value's body.
 		oldStart := idx + len(keyBytes)
 		oldEnd := valBodyEnd
 		out := make([]byte, 0, len(payload)+len(newValSection))
@@ -876,7 +872,6 @@ func replaceKVPValue(payload []byte, key, newValue string) ([]byte, error) {
 		out = append(out, newValSection...)
 		out = append(out, payload[oldEnd:]...)
 		return out, nil
-		_ = prefix
 	}
 	return payload, fmt.Errorf("unexpected empty value for %q", key)
 }
