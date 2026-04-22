@@ -384,16 +384,14 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeOracle:
 		oracleConfig := oracle.OracleProxyConfig{
-			TargetAddr:            fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
-			InjectUsername:        credentials.Username,
-			InjectPassword:        credentials.Password,
-			InjectDatabase:        credentials.Database,
-			EnableTLS:             credentials.SSLEnabled,
-			TLSConfig:             tlsConfig,
-			SessionID:             pamConfig.SessionId,
-			SessionLogger:         sessionLogger,
-			SSLRejectUnauthorized: credentials.SSLRejectUnauthorized,
-			SSLCertificate:        credentials.SSLCertificate,
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
 		}
 		proxy := oracle.NewOracleProxy(oracleConfig)
 		log.Info().

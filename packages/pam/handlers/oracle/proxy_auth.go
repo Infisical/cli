@@ -35,14 +35,26 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 
 	log.Info().Str("sessionID", p.config.SessionID).Str("target", p.config.TargetAddr).Msg("Oracle PAM session started (proxied auth)")
 
-	// 1. Raw TCP dial to upstream.
-	upstreamConn, err := dialUpstreamRaw(ctx, p.config)
+	// 1. Dial upstream. For TCPS targets we get back both the raw TCP conn and
+	// the first TLS session wrapping it. Oracle's TCPS flow may ask us to do
+	// a SECOND TLS handshake on the raw conn partway through (see the
+	// RESEND+flag=0x08 branch below), so we keep both references.
+	rawUpstream, tlsUpstream, err := dialUpstreamRaw(ctx, p.config)
 	if err != nil {
 		log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to dial Oracle upstream")
 		_ = WriteRefuseToClient(clientConn, "(DESCRIPTION=(ERR=12564)(VSNNUM=0)(ERROR_STACK=(ERROR=(CODE=12564)(EMFI=4))))")
 		return fmt.Errorf("upstream dial: %w", err)
 	}
-	defer upstreamConn.Close()
+	// upstreamConn starts as the first TLS session (when TLS) or the raw conn
+	// (when not). It may be reassigned to a fresh *tls.Conn on a flag-0x08
+	// RESEND. The deferred close acts on whatever it points to at exit time.
+	var upstreamConn net.Conn
+	if tlsUpstream != nil {
+		upstreamConn = tlsUpstream
+	} else {
+		upstreamConn = rawUpstream
+	}
+	defer func() { upstreamConn.Close() }()
 
 	// 2. Forward client CONNECT → upstream, then upstream ACCEPT → client.
 	connectRaw, err := ReadFullPacket(clientConn, false)
@@ -74,7 +86,37 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 			return fmt.Errorf("read upstream handshake packet (attempt %d): %w", attempt, err)
 		}
 		pktType := PacketTypeOf(pkt)
-		log.Info().Str("sessionID", p.config.SessionID).Uint8("pktType", uint8(pktType)).Int("pktLen", len(pkt)).Msg("Proxy: upstream handshake packet")
+		var origFlag byte
+		if len(pkt) > 5 {
+			origFlag = pkt[5]
+		}
+		log.Info().Str("sessionID", p.config.SessionID).Uint8("pktType", uint8(pktType)).Int("pktLen", len(pkt)).Uint8("flag", origFlag).Msg("Proxy: upstream handshake packet")
+
+		// Oracle TCPS in-band "restart TLS" signal: RESEND with byte-5 flag
+		// 0x08 tells the client to abandon the current TLS session and run a
+		// FRESH TLS handshake on the raw TCP socket (bypassing the already-
+		// established first-round TLS). The server does the same on its end.
+		// go-ora handles this in network/session.go readPacket's RESEND branch
+		// by calling session.negotiate() again — which creates a new
+		// tls.Client(session.conn, ...) wrapping the raw conn. We do the
+		// equivalent here.
+		if p.config.EnableTLS && pktType == PacketTypeResendMarker && origFlag&0x08 != 0 {
+			tc, terr := upgradeToTLS(ctx, rawUpstream, p.config)
+			if terr != nil {
+				return fmt.Errorf("upstream TLS upgrade after RESEND(flag=0x08): %w", terr)
+			}
+			upstreamConn = tc
+			log.Info().Str("sessionID", p.config.SessionID).Str("tlsVersion", tlsVersionString(tc.ConnectionState().Version)).Str("cipher", tls.CipherSuiteName(tc.ConnectionState().CipherSuite)).Msg("Proxy: upstream TLS re-handshook on RESEND(flag=0x08)")
+		}
+
+		// Byte-5 masking: thin clients (JDBC thin, python-oracledb thin) read
+		// byte 5 from the RESEND to decide whether their local socket is
+		// TCPS-shaped and try to cast their NT adapter to TcpsNTAdapter. Our
+		// client-facing socket is plain TCP, so the cast would fail. Strip
+		// the flag on the packet going to the client.
+		if p.config.EnableTLS && len(pkt) > 5 {
+			pkt[5] = 0x00
+		}
 		if _, werr := clientConn.Write(pkt); werr != nil {
 			return fmt.Errorf("forward upstream handshake packet: %w", werr)
 		}
@@ -87,7 +129,8 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 			return fmt.Errorf("upstream REDIRECT during handshake (not supported)")
 		case PacketTypeResendMarker:
 			// Read the client's follow-up packet (typically the DESCRIPTION supplement
-			// as a 16-bit-framed DATA packet) and forward to upstream.
+			// as a 16-bit-framed DATA packet) and forward to upstream. If we upgraded
+			// to TLS above, this write flows through the new TLS session.
 			supplement, err := ReadFullPacket(clientConn, false)
 			if err != nil {
 				return fmt.Errorf("read client supplement after RESEND: %w", err)
@@ -220,32 +263,107 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	return nil
 }
 
-// dialUpstreamRaw opens a plain TCP (or TLS) connection to the upstream Oracle target
-// without invoking go-ora. We'll drive the handshake ourselves by proxying client bytes.
-func dialUpstreamRaw(ctx context.Context, cfg OracleProxyConfig) (net.Conn, error) {
-	host, port, err := splitHostPort(cfg.TargetAddr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid target addr: %w", err)
+// oracleUpstreamCiphers is the set of TLS cipher suites we advertise to Oracle
+// TCPS listeners. Oracle 19c (including AWS RDS's SSL option) only offers
+// legacy RSA-CBC cipher suites — they are not in Go's crypto/tls defaults, so
+// we list them explicitly. Modern AEAD suites are kept first so newer Oracle
+// versions still use them.
+var oracleUpstreamCiphers = []uint16{
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+	tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+	tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+}
+
+// buildOracleTLSConfig clones the shared TLS config and augments it with the
+// settings Oracle TCPS needs: legacy cipher suites, TLS 1.0 floor (Oracle's
+// second-round handshake in some deployments negotiates down to 1.0 — openssl
+// s_client with defaults picks 1.2 against RDS, but the handshake-restart
+// flow doesn't always honour MinVersion=1.2 — so we accept 1.0 here for
+// compatibility; the outer relay mTLS and our own code paths remain strict).
+// TLS 1.3 is capped out because renegotiation / handshake restart is a 1.2-
+// only feature; Oracle's signal is nonsensical in a 1.3 world.
+func buildOracleTLSConfig(base *tls.Config, host string) *tls.Config {
+	cfg := base.Clone()
+	if cfg.ServerName == "" {
+		cfg.ServerName = host
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
-	d := &net.Dialer{Timeout: 15 * time.Second}
-	rawConn, err := d.DialContext(ctx, "tcp", addr)
+	cfg.MinVersion = tls.VersionTLS10
+	cfg.MaxVersion = tls.VersionTLS12
+	cfg.CipherSuites = oracleUpstreamCiphers
+	return cfg
+}
+
+// dialUpstreamRaw opens the upstream connection. Returns the raw TCP conn
+// and — when TLS is enabled — the first TLS session wrapping it.
+//
+// Oracle TCPS on port 2484 requires a TLS handshake from byte zero (we tested
+// this — plaintext CONNECT is met with an immediate connection reset). That
+// first TLS session carries the initial CONNECT and the server's RESEND. If
+// the RESEND's byte-5 flag has 0x08 set, Oracle's protocol requires a SECOND
+// TLS handshake on the SAME underlying TCP socket (bypassing the first TLS
+// session) before the next CONNECT supplement can flow. go-ora does this
+// same two-handshake dance in network/session.go readPacket's RESEND branch.
+// That second handshake is performed by upgradeToTLS below, reusing the raw
+// conn returned here.
+func dialUpstreamRaw(ctx context.Context, cfg OracleProxyConfig) (rawConn net.Conn, tlsConn *tls.Conn, err error) {
+	host, _, err := splitHostPort(cfg.TargetAddr)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("invalid target addr: %w", err)
+	}
+	d := &net.Dialer{Timeout: 15 * time.Second}
+	rawConn, err = d.DialContext(ctx, "tcp", cfg.TargetAddr)
+	if err != nil {
+		return nil, nil, err
 	}
 	if !cfg.EnableTLS {
-		return rawConn, nil
+		return rawConn, nil, nil
 	}
-	tlsCfg := &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: !cfg.SSLRejectUnauthorized,
+	if cfg.TLSConfig == nil {
+		rawConn.Close()
+		return nil, nil, fmt.Errorf("upstream TLS requested but no TLSConfig provided")
 	}
-	if cfg.TLSConfig != nil && len(cfg.TLSConfig.RootCAs.Subjects()) > 0 {
-		tlsCfg.RootCAs = cfg.TLSConfig.RootCAs
-	}
+	tlsCfg := buildOracleTLSConfig(cfg.TLSConfig, host)
 	tc := tls.Client(rawConn, tlsCfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		rawConn.Close()
+		return nil, nil, fmt.Errorf("upstream TLS handshake: %w", err)
+	}
+	return rawConn, tc, nil
+}
+
+func tlsVersionString(v uint16) string {
+	switch v {
+	case tls.VersionTLS10:
+		return "TLS1.0"
+	case tls.VersionTLS11:
+		return "TLS1.1"
+	case tls.VersionTLS12:
+		return "TLS1.2"
+	case tls.VersionTLS13:
+		return "TLS1.3"
+	default:
+		return fmt.Sprintf("0x%04x", v)
+	}
+}
+
+// upgradeToTLS performs a TLS handshake on an existing upstream TCP socket.
+// Called mid-flow when Oracle's RESEND packet signals the socket should switch
+// to TLS. The returned *tls.Conn replaces the raw conn from that point on.
+func upgradeToTLS(ctx context.Context, rawConn net.Conn, cfg OracleProxyConfig) (*tls.Conn, error) {
+	host, _, err := splitHostPort(cfg.TargetAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target addr: %w", err)
+	}
+	tlsCfg := buildOracleTLSConfig(cfg.TLSConfig, host)
+	tc := tls.Client(rawConn, tlsCfg)
+	if err := tc.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("upstream TLS handshake: %w", err)
 	}
 	return tc, nil

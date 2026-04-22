@@ -37,20 +37,18 @@ func (p *prependedConn) SetReadDeadline(t time.Time) error {
 }
 
 // OracleProxyConfig mirrors the shape used by other PAM database handlers so the
-// dispatch in pam-proxy.go stays templatized. Oracle-specific extras (the upstream
-// TLS pinning fields) sit on top of the common eight.
+// dispatch in pam-proxy.go stays templatized. When EnableTLS is true, the
+// upstream leg uses TLSConfig (built centrally in pam-proxy.go from the
+// resource's sslRejectUnauthorized + sslCertificate fields).
 type OracleProxyConfig struct {
 	TargetAddr     string // "host:port"
 	InjectUsername string
 	InjectPassword string
 	InjectDatabase string
 	EnableTLS      bool
-	TLSConfig      *tls.Config // provided by dispatcher but not used on the upstream leg
+	TLSConfig      *tls.Config
 	SessionID      string
 	SessionLogger  session.SessionLogger
-
-	SSLRejectUnauthorized bool
-	SSLCertificate        string
 }
 
 type OracleProxy struct {
