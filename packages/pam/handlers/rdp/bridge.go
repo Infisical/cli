@@ -23,5 +23,6 @@ var ErrSessionFailed = errors.New("rdp bridge: session ended with error")
 // called from any goroutine; Wait blocks until the session ends; Close
 // releases the handle and must be called after Wait returns.
 type Bridge struct {
-	handle uint64
+	handle  uint64
+	cleanup func() // runs during Close after the handle is freed; nil for direct fd sessions
 }

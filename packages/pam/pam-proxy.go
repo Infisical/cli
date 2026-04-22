@@ -18,6 +18,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/rdp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -53,6 +54,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
 		session.ResourceTypeMongodb,
+		session.ResourceTypeRDP,
 	}
 }
 
@@ -405,6 +407,24 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 
 		return proxy.HandleConnection(ctx, conn, sessionLogger)
+	case session.ResourceTypeRDP:
+		if credentials.Port < 0 || credentials.Port > 65535 {
+			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
+		}
+		rdpConfig := rdp.RDPProxyConfig{
+			TargetHost:     credentials.Host,
+			TargetPort:     uint16(credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+		proxy := rdp.NewRDPProxy(rdpConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
+			Msg("Starting RDP PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
 	}
