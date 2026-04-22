@@ -31,11 +31,12 @@ that validate echoes like `ServerCoreData.clientRequestedProtocols`
 accept the session because target's response reflects the values
 **client** sent, not what our connector would have advertised.
 
-## Phase 1 scope
+## Scope
 
-Standalone test binary only. No FFI, no event tap, no session recording.
-The crate compiles to both a `staticlib` (for later CGo linking) and an
-`rlib` (for the in-tree test binary).
+No event tap, no session recording. The crate compiles to both a
+`staticlib` (consumed via CGo from the Go wrapper at
+`packages/pam/handlers/rdp/`, see [Go wrapper](#go-wrapper) below) and
+an `rlib` (for the in-tree test binary).
 
 ## Build
 
@@ -82,23 +83,28 @@ and supply `infisical` as the password when prompted.
 ### macOS dev note
 
 On macOS, sspi's Kerberos DNS fallback via Bonjour adds ~4s of DNS
-timeouts during CredSSP. This does not affect production gateway
-deployments (Linux, where `hickory-resolver` returns NXDOMAIN in
-milliseconds). If validating locally on macOS with strict clients,
-prefer running the bridge inside a Linux container:
+timeouts during CredSSP. Sessions still succeed (strict clients like
+Windows App do not time out in that window), but CredSSP feels sluggish.
+Production gateway deployments run on Linux, where `hickory-resolver`
+returns NXDOMAIN in milliseconds, so this is a local-dev quirk only.
+
+## Go wrapper
+
+The static library in `target/release/libinfisical_rdp_bridge.a`
+exports a C ABI (see [`include/rdp_bridge.h`](include/rdp_bridge.h))
+that is consumed from the Go package at
+`packages/pam/handlers/rdp/` via CGo. Build order:
 
 ```sh
-docker run --rm -v "$PWD":/work -v "$PWD/target-docker":/work/target \
-    -w /work -p 127.0.0.1:3390:3390 rust:1-bookworm \
-    bash -c "cargo build --release && \
-        ./target/release/rdp-bridge-test \
-        --listen 0.0.0.0:3390 \
-        --target-host <windows-ip-or-hostname> \
-        --username <user> --password '<pass>'"
+# 1. Build the Rust static library first.
+cd packages/pam/handlers/rdp/native && cargo build --release
+
+# 2. Build the Go binary or package with the rdp tag.
+cd - && go build -tags rdp ./packages/pam/handlers/rdp/cmd/bridge-test
 ```
 
-The `target-docker` directory keeps the Linux build artifacts separate
-from the host's macOS `target`.
+Builds without `-tags rdp` (or on unsupported platforms) link against a
+pure-Go stub that returns `ErrRdpUnavailable` from every constructor.
 
 ## Lints
 

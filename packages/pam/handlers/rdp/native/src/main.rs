@@ -1,20 +1,16 @@
 //! Standalone test binary. Listens on a loopback port, accepts one
 //! connection, runs the MITM bridge to a Windows target, and exits.
 //!
-//! Validate against a real Windows server with:
-//!
-//! ```sh
-//! xfreerdp /v:127.0.0.1:3390 /u:infisical /p:infisical /sec:tls /cert:ignore
-//! ```
-//!
-//! (or `mstsc` with a `.rdp` file whose `authentication level:i:0` and
-//! `enablecredsspsupport:i:0` are set).
+//! Validate against a real Windows server with any native RDP client
+//! using credentials `infisical`/`infisical`; see the crate README for
+//! tested client commands.
 
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -74,7 +70,9 @@ async fn main() -> Result<()> {
         password: args.password,
     };
 
-    match run_mitm(client_tcp, endpoint).await {
+    // Test binary never cancels; pass a fresh token that stays uncancelled.
+    let cancel = CancellationToken::new();
+    match run_mitm(client_tcp, endpoint, cancel).await {
         Ok(()) => {
             info!("session ended cleanly");
             Ok(())

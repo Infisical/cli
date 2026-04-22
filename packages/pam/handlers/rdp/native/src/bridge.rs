@@ -24,6 +24,7 @@ use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{FramedWrite, NetworkClient};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
@@ -42,8 +43,23 @@ pub struct TargetEndpoint {
 }
 
 /// Run a single RDP MITM session. Injects credentials at CredSSP and then
-/// passes everything else through between the two TLS streams.
-pub async fn run_mitm(client_tcp: TcpStream, target: TargetEndpoint) -> Result<()> {
+/// passes everything else through between the two TLS streams. The caller
+/// can abort the session by cancelling the token.
+pub async fn run_mitm(
+    client_tcp: TcpStream,
+    target: TargetEndpoint,
+    cancel: CancellationToken,
+) -> Result<()> {
+    tokio::select! {
+        result = run_mitm_inner(client_tcp, target) => result,
+        _ = cancel.cancelled() => {
+            info!("session canceled by caller");
+            Ok(())
+        }
+    }
+}
+
+async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result<()> {
     // rustls 0.23 requires an explicit crypto provider when more than one is
     // compiled in. Our tree pulls both `ring` (direct) and `aws-lc-rs`
     // (transitively from reqwest). Install ring as the default on first call;
