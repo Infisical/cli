@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,7 +21,6 @@ type DatabaseProxyServer struct {
 	BaseProxyServer // Embed common functionality
 	server          net.Listener
 	port            int
-	oracleTNSAdmin  string // per-session TNS_ADMIN dir (Oracle only; cleaned up on shutdown)
 }
 
 type ALPN string
@@ -130,14 +128,6 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
 	case session.ResourceTypeOracle:
 		util.PrintfStderr("oracle://%s:%s@localhost:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
-		tnsDir := filepath.Join(os.TempDir(), "infisical-pam-"+pamResponse.SessionId)
-		if err := os.MkdirAll(tnsDir, 0700); err == nil {
-			sqlnetPath := filepath.Join(tnsDir, "sqlnet.ora")
-			if werr := os.WriteFile(sqlnetPath, []byte("DISABLE_OOB=TRUE\n"), 0600); werr == nil {
-				proxy.oracleTNSAdmin = tnsDir
-				util.PrintfStderr("\n\nBefore connecting, set:\n  export TNS_ADMIN=%s", tnsDir)
-			}
-		}
 		util.PrintfStderr("\n\nNote: the password shown is a protocol placeholder required by Oracle, not a secret.")
 		util.PrintfStderr("\nReal authentication is handled by the local proxy.")
 	default:
@@ -196,12 +186,6 @@ func (p *DatabaseProxyServer) gracefulShutdown() {
 
 		// Wait for connections to close
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
-
-		if p.oracleTNSAdmin != "" {
-			if err := os.RemoveAll(p.oracleTNSAdmin); err != nil {
-				log.Warn().Err(err).Str("path", p.oracleTNSAdmin).Msg("Failed to remove Oracle TNS_ADMIN temp dir")
-			}
-		}
 
 		log.Info().Msg("Database proxy shutdown complete")
 		os.Exit(0)

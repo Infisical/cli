@@ -6,4 +6,4 @@ package oracle
 // enforced by the mTLS tunnel between CLI, backend and gateway, and by session-scoped
 // client certs. Oracle's O5Logon cannot be bypassed the way MySQL/Postgres auth can,
 // so the gateway and the client must agree on some shared string; this is it.
-const ProxyPasswordPlaceholder = "infisical-pam-proxy"
+const ProxyPasswordPlaceholder = "password"
