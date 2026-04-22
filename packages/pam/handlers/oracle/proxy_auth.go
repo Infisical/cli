@@ -282,13 +282,11 @@ var oracleUpstreamCiphers = []uint16{
 }
 
 // buildOracleTLSConfig clones the shared TLS config and augments it with the
-// settings Oracle TCPS needs: legacy cipher suites, TLS 1.0 floor (Oracle's
-// second-round handshake in some deployments negotiates down to 1.0 — openssl
-// s_client with defaults picks 1.2 against RDS, but the handshake-restart
-// flow doesn't always honour MinVersion=1.2 — so we accept 1.0 here for
-// compatibility; the outer relay mTLS and our own code paths remain strict).
-// TLS 1.3 is capped out because renegotiation / handshake restart is a 1.2-
-// only feature; Oracle's signal is nonsensical in a 1.3 world.
+// settings Oracle TCPS needs: legacy cipher suites (Oracle 19c only offers
+// RSA-CBC), TLS 1.0 floor (the second-round handshake against RDS negotiates
+// down to 1.0 in practice), and 1.2 ceiling (TLS 1.3 has no handshake-restart
+// mechanism). Only the Oracle-upstream leg relaxes versions this way; the
+// relay mTLS and other handlers stay on defaults.
 func buildOracleTLSConfig(base *tls.Config, host string) *tls.Config {
 	cfg := base.Clone()
 	if cfg.ServerName == "" {
