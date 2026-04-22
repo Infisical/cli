@@ -163,34 +163,39 @@ func (e *QueryExtractor) handlePacket(raw []byte) {
 }
 
 func (e *QueryExtractor) handleClientRequest(payload []byte) {
-	r := NewTTCReader(payload)
-	op, err := r.GetByte()
-	if err != nil {
-		return
-	}
-	if op != ttcMsgFunction {
-		return
-	}
-	sub, err := r.GetByte()
-	if err != nil {
-		return
-	}
-	switch sub {
-	case ttcFuncOALL8:
-		sqlText := tryExtractSQL(r)
-		if sqlText != "" {
+	// Oracle clients (sqlcl, JDBC thin) frequently bundle multiple TTC messages
+	// in a single packet — typically a piggybacked OCLOSE for the previous cursor
+	// (0x11 0x69 ...) followed by the new function call (0x03 0x5E ... for OALL8).
+	// The piggyback prefix is variable-length, so rather than parse it we scan the
+	// payload for the function-call+opcode marker pair and start parsing there.
+	if idx := findBytePair(payload, ttcMsgFunction, ttcFuncOALL8); idx >= 0 {
+		r := NewTTCReader(payload[idx+2:])
+		if sqlText := tryExtractSQL(r); sqlText != "" {
 			e.pair.mu.Lock()
 			e.pair.pending = &pendingQuery{sql: sqlText, timestamp: time.Now()}
 			e.pair.mu.Unlock()
 		}
-	case ttcFuncOFETCH:
-		// Fetch uses a cursor ID we don't track in v1; leave any previous pending
-		// query as-is so FETCH responses are attributed back to the open SELECT.
-	case ttcFuncOCOMMIT:
-		e.recordLiteral("COMMIT")
-	case ttcFuncORLLBK:
-		e.recordLiteral("ROLLBACK")
+		return
 	}
+	if findBytePair(payload, ttcMsgFunction, ttcFuncOCOMMIT) >= 0 {
+		e.recordLiteral("COMMIT")
+		return
+	}
+	if findBytePair(payload, ttcMsgFunction, ttcFuncORLLBK) >= 0 {
+		e.recordLiteral("ROLLBACK")
+		return
+	}
+	// FETCH packets are intentionally not surfaced — they correlate to a still-pending
+	// SELECT and we want responses to attribute back to that, not to the FETCH itself.
+}
+
+func findBytePair(data []byte, b1, b2 byte) int {
+	for i := 0; i+1 < len(data); i++ {
+		if data[i] == b1 && data[i+1] == b2 {
+			return i
+		}
+	}
+	return -1
 }
 
 func (e *QueryExtractor) recordLiteral(sql string) {
