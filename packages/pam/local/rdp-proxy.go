@@ -123,6 +123,16 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	util.PrintfStderr("**********************************************************************\n")
 	util.PrintfStderr("\n")
 
+	// The .rdp file format has no portable way to embed a plaintext password
+	// (mstsc's `password 51:b:` is Windows-DPAPI-encrypted; Mac / freerdp
+	// clients ignore any password field). Put the fixed acceptor password
+	// on the clipboard so the user just pastes it when the client prompts.
+	if err := copyToClipboard(rdp.AcceptorPassword); err != nil {
+		log.Debug().Err(err).Msg("Could not copy password to clipboard; type it manually")
+	} else {
+		util.PrintfStderr("(Password copied to clipboard.)\n\n")
+	}
+
 	if !noLaunch && proxy.rdpFilePath != "" {
 		if err := launchRDPClient(proxy.rdpFilePath); err != nil {
 			log.Warn().Err(err).Msg("Failed to auto-launch RDP client; connect manually using the details above")
@@ -289,13 +299,24 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 	log.Info().Msgf("RDP connection closed for client: %s", clientConn.RemoteAddr().String())
 }
 
-// writeRDPFile creates a .rdp file in the OS temp directory pointing at
-// the local loopback listener. The filename includes the session ID so
-// multiple concurrent sessions don't collide. The file is not deleted on
-// exit; users sometimes want to re-open the same session a few times.
+// writeRDPFile creates a .rdp file pointing at the local loopback
+// listener. Files live under `~/.infisical/rdp/` — matching the CLI's
+// existing convention for per-user state (alongside the login config
+// and update-check cache). Filename includes the session ID so
+// concurrent sessions don't collide; the file is not deleted on exit
+// so users can re-open a session a few times from Finder if they want.
+// Falls back to the OS temp dir if the home directory can't be resolved.
 func writeRDPFile(listenPort int, sessionID string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)
-	path := filepath.Join(os.TempDir(), filename)
+
+	dir, err := rdpFileDir()
+	if err != nil {
+		log.Debug().Err(err).Msg("Falling back to OS temp dir for .rdp file")
+		dir = os.TempDir()
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create rdp dir %q: %w", dir, err)
+	}
+	path := filepath.Join(dir, filename)
 
 	content := fmt.Sprintf(
 		"full address:s:127.0.0.1:%d\r\n"+
@@ -308,6 +329,16 @@ func writeRDPFile(listenPort int, sessionID string) (string, error) {
 		return "", fmt.Errorf("write rdp file: %w", err)
 	}
 	return path, nil
+}
+
+// rdpFileDir returns ~/.infisical/rdp (the conventional per-user state
+// location for CLI data; see util.CONFIG_FOLDER_NAME).
+func rdpFileDir() (string, error) {
+	home, err := util.GetHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, util.CONFIG_FOLDER_NAME, "rdp"), nil
 }
 
 // launchRDPClient opens the given .rdp file with the user's default RDP
@@ -324,4 +355,41 @@ func launchRDPClient(rdpFilePath string) error {
 		cmd = exec.Command("xdg-open", rdpFilePath)
 	}
 	return cmd.Start()
+}
+
+// copyToClipboard pipes `text` into the OS clipboard via the platform's
+// standard CLI helper. Failure is non-fatal; the caller logs and moves on.
+func copyToClipboard(text string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		// Try xclip first, then xsel. Neither is guaranteed to exist on
+		// headless servers, which is fine: we just return the error and
+		// the caller logs at debug level.
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		} else {
+			return fmt.Errorf("no clipboard tool found (install xclip or xsel)")
+		}
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if _, err := stdin.Write([]byte(text)); err != nil {
+		return err
+	}
+	if err := stdin.Close(); err != nil {
+		return err
+	}
+	return cmd.Wait()
 }
