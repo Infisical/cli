@@ -7,8 +7,8 @@ Ported / adapted portions:
 
 - `tns.go` adapts `go-ora/v2/network/{packets,connect_packet,accept_packet,data_packet,marker_packet,refuse_packet}.go`
 - `o5logon.go` adapts crypto primitives from `go-ora/v2/auth_object.go`
-- `nego.go` adapts `go-ora/v2/{tcp_protocol_nego,data_type_nego}.go`
 - `ttc.go` adapts the TTC buffer codec from `go-ora/v2/network/session.go`
+- The upstream TCPS two-handshake flow in `proxy_auth.go` mirrors the logic in `go-ora/v2/network/session.go` `readPacket` RESEND branch
 
 ## MIT License
 

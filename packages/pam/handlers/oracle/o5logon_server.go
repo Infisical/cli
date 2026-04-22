@@ -5,13 +5,14 @@ import (
 	"net"
 )
 
-// Server-role O5Logon implementation. The gateway acts as an Oracle server and drives
-// the two-phase O5Logon challenge/response with the client, verifying that the client
-// sends the placeholder password. Real upstream auth is handled separately (see
-// upstream.go) with the injected real credentials.
+// Packet-layer helpers for the O5Logon exchange: DATA-packet I/O, phase-2
+// request parsing, and error packet construction. Used by proxy_auth.go's
+// proxied-auth flow to parse AUTH_SESSKEY / AUTH_PASSWORD at the O5Logon
+// boundary (so they can be re-encrypted before forwarding) and to synthesise
+// clean error responses back to the client when upstream rejects auth.
 //
-// NOTE: This is new code (not ported from go-ora). The formats match what go-ora's
-// client-side code expects; see auth_object.go newAuthObject / AuthObject.Write.
+// The constants and wire formats below mirror what go-ora's client-side code
+// emits; see auth_object.go newAuthObject / AuthObject.Write for reference.
 
 // TTC function-call opcodes we touch during auth.
 const (
