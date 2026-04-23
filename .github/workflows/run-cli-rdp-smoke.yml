@@ -1,0 +1,65 @@
+name: RDP Bridge Smoke Test
+
+# Fast per-PR check that the Rust static lib + CGo wrapper still build
+# and link against the Go CLI on linux/amd64. The full cross-compile
+# matrix runs on tag push via the release workflow; this job just
+# guards against regressions that would only surface at release time.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "packages/pam/**"
+      - "packages/cmd/pam.go"
+      - ".github/workflows/run-cli-rdp-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Build + smoke test on linux/amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.9"
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-bridge-cargo-${{ runner.os }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-bridge-cargo-${{ runner.os }}-
+
+      # Running any cargo command inside the crate auto-installs the
+      # toolchain pinned in rust-toolchain.toml via rustup (pre-installed
+      # on GitHub-hosted ubuntu-latest).
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        run: rustup show active-toolchain
+
+      - name: cargo fmt --check
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo fmt --check
+
+      - name: cargo clippy -D warnings
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo build --release
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo build --release
+
+      - name: go build -tags rdp
+        run: go build -tags rdp -o ./infisical-rdp .
+
+      - name: Smoke test CLI
+        run: |
+          ./infisical-rdp --version
+          ./infisical-rdp pam rdp access --help
