@@ -2,6 +2,16 @@ name: Build and release CLI
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Run goreleaser in --snapshot --skip=publish mode. No git tag needed,
+          nothing is published. The built binaries are uploaded as a
+          workflow artifact so you can download and sanity-check them. Safe
+          way to exercise the full cross-compile matrix before cutting a
+          real release.
+        type: boolean
+        default: true
 
   push:
     # run only against tags
@@ -14,6 +24,9 @@ permissions:
 
 jobs:
   validate-tag-branch:
+    # Tag validation only makes sense on actual tag push. Skipped on
+    # workflow_dispatch runs (dry-run or manual real release from any branch).
+    if: github.event_name == 'push'
     uses: ./.github/workflows/pre-tag-validation.yml
   cli-tests:
     uses: ./.github/workflows/run-cli-e2e-tests.yml
@@ -33,6 +46,9 @@ jobs:
   #     CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE: ${{ secrets.CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE }}
 
   npm-release:
+    # Never publish npm on dry-runs. Only on real tag pushes or a manual
+    # workflow_dispatch with dry_run=false.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
     runs-on: ubuntu-latest
     env:
       working-directory: ./npm
@@ -84,6 +100,13 @@ jobs:
     needs:
       - validate-tag-branch
       - cli-tests
+    # `always()` lets this run even when validate-tag-branch was skipped
+    # (dry-run / dispatched-release case). The inner conditions enforce
+    # the cli-tests success and branch-validation-if-tag rules.
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
         with:
@@ -115,7 +138,22 @@ jobs:
         run: |
           mkdir ../../osxcross
           git clone https://github.com/plentico/osxcross-target.git ../../osxcross/target
-      - uses: goreleaser/goreleaser-action@v4
+      - name: GoReleaser (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: GoReleaser (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -126,6 +164,13 @@ jobs:
           FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist-linux
+          path: dist/
+          retention-days: 7
       - uses: actions/setup-python@v4
         with:
           python-version: "3.12"
@@ -153,6 +198,7 @@ jobs:
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
       - name: Publish packages to repositories
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: bash upload_to_s3.sh
         env:
           INFISICAL_CLI_S3_BUCKET: ${{ secrets.INFISICAL_CLI_S3_BUCKET }}
@@ -161,6 +207,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
       - name: Invalidate Cloudfront cache
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/Packages/*' '/rpm/repodata/*' '/deb/dists/stable/*' '/apk/stable/main/*'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
@@ -173,6 +220,10 @@ jobs:
     needs:
       - validate-tag-branch
       - cli-tests
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
         with:
@@ -194,7 +245,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v4
+      - name: GoReleaser Windows (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: GoReleaser Windows (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -204,5 +269,12 @@ jobs:
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist-windows
+          path: dist/
+          retention-days: 7
 
 
