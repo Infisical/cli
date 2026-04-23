@@ -33,11 +33,6 @@ const (
 	PacketTypeCtrl     PacketType = 14
 )
 
-const (
-	markerTypeReset     uint8 = 2
-	markerTypeInterrupt uint8 = 3
-)
-
 // TNS header is always 8 bytes. Length field is uint16 before handshakeComplete+v315,
 // uint32 afterwards. For server-side use the simple rule is: CONNECT / ACCEPT / REFUSE /
 // early MARKER use 16-bit length; post-ACCEPT (nego onwards) use 32-bit length when the
@@ -82,11 +77,6 @@ func PacketTypeOf(packet []byte) PacketType {
 	return PacketType(packet[4])
 }
 
-
-
-
-
-
 // DataPacket wraps a single TNS DATA frame, without any ANO encryption/hash (the gateway
 // refuses ANO so we never deal with those on the client-facing leg).
 type DataPacket struct {
@@ -119,7 +109,6 @@ func (d *DataPacket) Bytes(use32BitLen bool) []byte {
 	copy(out[10:], d.Payload)
 	return out
 }
-
 
 // RefusePacket is the server's polite "no" to an incoming CONNECT (pre-ACCEPT). Used for
 // upstream-failure reporting.

@@ -161,9 +161,6 @@ func NewTTCReader(payload []byte) *TTCReader {
 	return &TTCReader{buf: payload, useBigClrChunks: true}
 }
 
-// SetUseBigClrChunks lets callers match negotiated capabilities. Default is true.
-func (r *TTCReader) SetUseBigClrChunks(v bool) { r.useBigClrChunks = v }
-
 func (r *TTCReader) Remaining() int { return len(r.buf) - r.pos }
 
 // Pos returns the current byte offset into the payload. Useful when a caller needs
@@ -327,17 +324,4 @@ func (r *TTCReader) GetKeyVal() (key, val []byte, num int, err error) {
 	}
 	num, err = r.GetInt(4, true, true)
 	return
-}
-
-func (r *TTCReader) GetNullTermString() (string, error) {
-	start := r.pos
-	for r.pos < len(r.buf) {
-		if r.buf[r.pos] == 0 {
-			s := string(r.buf[start:r.pos])
-			r.pos++
-			return s, nil
-		}
-		r.pos++
-	}
-	return "", io.ErrUnexpectedEOF
 }

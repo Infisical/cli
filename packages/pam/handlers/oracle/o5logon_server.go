@@ -1,3 +1,13 @@
+// Portions of this file are adapted from github.com/sijms/go-ora/v2,
+// licensed under MIT. Copyright (c) 2020 Samy Sultan.
+// Original sources:
+//   auth_object.go (AuthObject.Write — phase-2 request layout mirrored by
+//   ParseAuthPhaseTwo in reverse) and summary_object.go (Oracle error summary
+//   packet layout mirrored by BuildErrorPacket).
+// Modifications for server-side use by Infisical: the parser operates from the
+// server's perspective (reading what go-ora's client would write), and the
+// error packet is constructed standalone rather than via a Session.
+
 package oracle
 
 import (
@@ -10,16 +20,11 @@ import (
 // proxied-auth flow to parse AUTH_SESSKEY / AUTH_PASSWORD at the O5Logon
 // boundary (so they can be re-encrypted before forwarding) and to synthesise
 // clean error responses back to the client when upstream rejects auth.
-//
-// The constants and wire formats below mirror what go-ora's client-side code
-// emits; see auth_object.go newAuthObject / AuthObject.Write for reference.
 
 // TTC function-call opcodes we touch during auth.
 const (
-	TTCMsgAuthRequest  = 0x03 // generic "pre-auth" message
-	TTCMsgAuthResponse = 0x08 // server's response carrying KVP dict
-	TTCMsgError        = 0x04 // server's error summary packet
-	TTCMsgBreak        = 0x0B // reserved
+	TTCMsgAuthRequest = 0x03 // generic "pre-auth" message
+	TTCMsgError       = 0x04 // server's error summary packet
 )
 
 // AuthSubOp values — bundled inside a TTCMsgAuthRequest.
@@ -28,22 +33,10 @@ const (
 	AuthSubOpPhaseTwo = 0x73
 )
 
-// LogonMode flags (subset). Sent by the client inside phase-2 so we know what kind of
-// auth is requested.
-const (
-	LogonModeUserAndPass = 0x100
-	LogonModeNoNewPass   = 0x2000
-)
-
-
 // AuthPhaseTwo carries the parsed client request that completes auth.
 type AuthPhaseTwo struct {
 	EClientSessKey string
 	EPassword      string
-	ESpeedyKey     string
-	ClientInfo     map[string]string
-	AlterSession   string
-	LogonMode      uint32
 }
 
 // readDataPayload reads a single DATA packet from the client and returns its TTC payload
@@ -74,8 +67,6 @@ func writeDataPayload(conn net.Conn, payload []byte, use32BitLen bool) error {
 	return err
 }
 
-
-
 // ParseAuthPhaseTwo decodes the second auth-request TTC payload from the client.
 func ParseAuthPhaseTwo(payload []byte) (*AuthPhaseTwo, error) {
 	r := NewTTCReader(payload)
@@ -97,7 +88,7 @@ func ParseAuthPhaseTwo(payload []byte) (*AuthPhaseTwo, error) {
 		return nil, err
 	}
 
-	out := &AuthPhaseTwo{ClientInfo: map[string]string{}}
+	out := &AuthPhaseTwo{}
 
 	hasUser, err := r.GetByte()
 	if err != nil {
@@ -115,12 +106,11 @@ func ParseAuthPhaseTwo(payload []byte) (*AuthPhaseTwo, error) {
 		}
 	}
 
-	mode, err := r.GetInt(4, true, true)
-	if err != nil {
+	// Advance past mode + marker + count + 1 + 1. We don't keep any of these today,
+	// but we have to consume them to reach the KVP list.
+	if _, err := r.GetInt(4, true, true); err != nil {
 		return nil, err
 	}
-	out.LogonMode = uint32(mode)
-
 	if _, err := r.GetByte(); err != nil {
 		return nil, err
 	}
@@ -135,8 +125,8 @@ func ParseAuthPhaseTwo(payload []byte) (*AuthPhaseTwo, error) {
 		return nil, err
 	}
 	if hasUser == 1 && userLen > 0 {
-		// Same client-specific branch as ParseAuthPhaseOne: go-ora prefixes with a
-		// CLR length byte; JDBC thin sends raw. Peek to disambiguate.
+		// go-ora prefixes the username with a CLR length byte; JDBC thin sends it raw.
+		// Peek to disambiguate.
 		peek, perr := r.PeekByte()
 		if perr != nil {
 			return nil, fmt.Errorf("peek phase2 username: %w", perr)
@@ -151,6 +141,7 @@ func ParseAuthPhaseTwo(payload []byte) (*AuthPhaseTwo, error) {
 		}
 	}
 
+	// Only AUTH_SESSKEY and AUTH_PASSWORD are consumed downstream; skip the rest.
 	for i := 0; i < count; i++ {
 		k, v, _, err := r.GetKeyVal()
 		if err != nil {
@@ -161,18 +152,10 @@ func ParseAuthPhaseTwo(payload []byte) (*AuthPhaseTwo, error) {
 			out.EClientSessKey = string(v)
 		case "AUTH_PASSWORD":
 			out.EPassword = string(v)
-		case "AUTH_PBKDF2_SPEEDY_KEY":
-			out.ESpeedyKey = string(v)
-		case "AUTH_ALTER_SESSION":
-			out.AlterSession = string(v)
-		default:
-			out.ClientInfo[string(k)] = string(v)
 		}
 	}
 	return out, nil
 }
-
-
 
 // BuildErrorPacket constructs an Oracle error summary packet (opcode 0x04). The Oracle
 // client checks `Session.HasError()` after each response, which reads this summary.
@@ -204,9 +187,9 @@ func BuildErrorPacket(oraCode int, message string) []byte {
 	//   rba byte (4)
 	//   some flags, then CLR of the message
 	// Most fields can be zero; the code is what matters.
-	b.PutInt(0, 4, true, true)  // endOfCallStatus
-	b.PutInt(0, 2, true, true)  // endToEndECID
-	b.PutInt(0, 4, true, true)  // currentRow
+	b.PutInt(0, 4, true, true) // endOfCallStatus
+	b.PutInt(0, 2, true, true) // endToEndECID
+	b.PutInt(0, 4, true, true) // currentRow
 	b.PutInt(int64(oraCode), 4, true, true)
 	b.PutInt(0, 2, true, true)
 	b.PutInt(0, 2, true, true)
@@ -235,6 +218,3 @@ func BuildErrorPacket(oraCode int, message string) []byte {
 func WriteErrorToClient(conn net.Conn, oraCode int, message string, use32BitLen bool) error {
 	return writeDataPayload(conn, BuildErrorPacket(oraCode, message), use32BitLen)
 }
-
-
-
