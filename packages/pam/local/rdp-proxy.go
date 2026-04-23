@@ -45,7 +45,7 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 
 	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
 
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
 	if err != nil {
 		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
 			return

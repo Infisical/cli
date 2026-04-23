@@ -475,6 +475,8 @@ var pamRdpAccessCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse no-launch flag")
 		}
 
+		reason := resolveReason(cmd)
+
 		log.Debug().Msg("PAM RDP Access: Trying to start session using logged in details")
 
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -495,6 +497,7 @@ var pamRdpAccessCmd = &cobra.Command{
 		pam.StartRDPLocalProxy(loggedInUserDetails.UserCredentials.JTWToken, pam.PAMAccessParams{
 			ResourceName: resourceName,
 			AccountName:  accountName,
+			Reason:       reason,
 		}, projectID, durationStr, port, noLaunch)
 	},
 }
@@ -561,6 +564,7 @@ func init() {
 	pamRdpAccessCmd.Flags().Int("port", 0, "Port for the local RDP proxy server (0 for auto-assign)")
 	pamRdpAccessCmd.Flags().String("project-id", "", "Project ID of the account to access")
 	pamRdpAccessCmd.Flags().Bool("no-launch", false, "Do not auto-launch the system RDP client; print connection details only")
+	pamRdpAccessCmd.Flags().String("reason", "", "Reason for accessing the account (stored for audit purposes)")
 	pamRdpAccessCmd.MarkFlagRequired("resource")
 	pamRdpAccessCmd.MarkFlagRequired("account")
 
