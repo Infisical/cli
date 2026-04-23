@@ -32,7 +32,7 @@ func StartRedisLocalProxy(accessToken string, accessParams PAMAccessParams, proj
 
 	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
 
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
 	if err != nil {
 		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
 			return
