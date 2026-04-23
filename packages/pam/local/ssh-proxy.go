@@ -41,7 +41,8 @@ func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 
 	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
 
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
+	interactive := options.ExecCommand == ""
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, interactive)
 	if err != nil {
 		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
 			return

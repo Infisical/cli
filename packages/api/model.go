@@ -824,6 +824,7 @@ type PAMAccessRequest struct {
 	AccountName  string `json:"accountName,omitempty"`
 	ProjectId    string `json:"projectId,omitempty"`
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 type PAMAccessResponse struct {
