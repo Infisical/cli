@@ -344,17 +344,21 @@ jobs:
   # Builds the Windows Server container images (→ Docker Hub). The
   # binary baked in is RDP-enabled via MinGW CGO, matching the
   # user-facing Windows zip.
+  #
+  # The Rust bridge is built here natively rather than downloaded from
+  # build-rdp-bridge: cross-rs's MinGW produces MSVCRT-ABI archives,
+  # but windows-2022's MinGW 14 is UCRT-based, which doesn't resolve
+  # MSVCRT-only symbols like __iob_func. Building both the .a and the
+  # Go binary on the same runner guarantees the ABIs match.
   goreleaser-windows:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
       - cli-tests
-      - build-rdp-bridge
       - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
-      needs.build-rdp-bridge.result == 'success' &&
       (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
@@ -372,11 +376,27 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Download windows RDP bridge static lib
-        uses: actions/download-artifact@v4
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
         with:
-          name: rdp-bridge-x86_64-pc-windows-gnu
-          path: packages/pam/handlers/rdp/native/target/x86_64-pc-windows-gnu/release
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-bridge-windows-cargo-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-bridge-windows-cargo-
+
+      - name: Install pinned Rust toolchain + gnu target
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: |
+          rustup show active-toolchain
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Build Rust bridge for x86_64-pc-windows-gnu
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: 🐋 Login to Docker Hub
         uses: docker/login-action@v2
