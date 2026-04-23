@@ -1,8 +1,8 @@
 name: Build RDP Bridge Static Libs
 
-# windows/arm64 excluded: cross-compiling libz-sys for the gnullvm
-# target needs aarch64-w64-mingw32-clang (from llvm-mingw), not
-# available in Ubuntu repos.
+# windows/arm64, freebsd, netbsd, openbsd excluded: no cgo-capable
+# cross toolchain we can reasonably install in CI. They ship the RDP
+# stub at runtime.
 
 on:
   workflow_call:
@@ -21,8 +21,6 @@ jobs:
           - target: i686-unknown-linux-gnu
           - target: arm-unknown-linux-gnueabi
           - target: armv7-unknown-linux-gnueabihf
-          - target: x86_64-unknown-freebsd
-          - target: x86_64-unknown-netbsd
           - target: x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@v4

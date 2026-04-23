@@ -145,41 +145,7 @@ builds:
     goarm:
       - "7"
 
-  - id: freebsd-amd64-rdp
-    binary: infisical
-    ldflags:
-      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
-      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
-    flags:
-      - -trimpath
-      - -tags=rdp
-    env:
-      - CGO_ENABLED=1
-      - 'CC=zig cc -target x86_64-freebsd-none'
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-freebsd/release'
-    goos:
-      - freebsd
-    goarch:
-      - amd64
-
-  - id: netbsd-amd64-rdp
-    binary: infisical
-    ldflags:
-      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
-      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
-    flags:
-      - -trimpath
-      - -tags=rdp
-    env:
-      - CGO_ENABLED=1
-      - 'CC=zig cc -target x86_64-netbsd-none'
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-netbsd/release'
-    goos:
-      - netbsd
-    goarch:
-      - amd64
-
-  # openbsd and windows/arm64 stay on CGO=0 stub; see build-rdp-bridge.yml.
+  # BSDs and windows/arm64 stay on CGO=0 stub; see build-rdp-bridge.yml.
   - id: all-other-builds
     env:
       - CGO_ENABLED=0
@@ -190,6 +156,8 @@ builds:
     flags:
       - -trimpath
     goos:
+      - freebsd
+      - netbsd
       - openbsd
       - windows
     goarch:
@@ -201,6 +169,8 @@ builds:
       - "6"
       - "7"
     ignore:
+      - goos: freebsd
+        goarch: "386"
       - goos: windows
         goarch: amd64
       - goos: windows
