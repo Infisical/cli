@@ -1,24 +1,26 @@
 name: Build RDP Bridge Static Libs
 
-# Cross-compile the Rust MITM bridge into static archives (.a) for
-# every OS/arch the CLI targets at release time. Produces three
-# groups of artifacts that the main release workflow picks up and
-# links per-target via CGO_LDFLAGS:
+# Cross-compile the Rust MITM bridge into static archives for every
+# OS/arch the CLI targets with RDP support at release time. Scoped to
+# the "client tier" platforms where users actually run `pam rdp access`
+# (or the gateway serves RDP): linux amd64/arm64, darwin amd64/arm64,
+# and windows amd64 via MinGW (so cgo cross-compile from ubuntu can
+# link against it).
 #
-#   rdp-bridge-cross     — 8 targets built via `cross` on ubuntu-latest
-#                          (linux/386, linux/amd64, linux/arm64,
-#                          linux/armv6, linux/armv7, freebsd/amd64,
-#                          netbsd/amd64, windows/amd64)
-#   rdp-bridge-darwin    — darwin/amd64 + darwin/arm64 built natively
-#                          on macos-latest
-#   rdp-bridge-winarm    — windows/arm64 built natively on
-#                          windows-11-arm
+# Other platforms the main CLI targets (linux/386, arm 32-bit, BSDs,
+# windows-arm64) ship with the RDP stub: they keep CGO=0 and get
+# ErrRdpUnavailable at runtime. That matches option 2 of the build
+# design: RDP is only available on the tier where users realistically
+# use it.
 #
-# Each job uploads a single artifact per target, keyed by the Rust
-# triple, so goreleaser can fetch them with predictable names.
+# Artifacts:
+#   rdp-bridge-x86_64-unknown-linux-gnu      : linux/amd64
+#   rdp-bridge-aarch64-unknown-linux-gnu     : linux/arm64
+#   rdp-bridge-x86_64-pc-windows-gnu         : windows/amd64 (MinGW)
+#   rdp-bridge-x86_64-apple-darwin           : darwin/amd64
+#   rdp-bridge-aarch64-apple-darwin          : darwin/arm64
 #
 # Called from:
-#   - Per-push PR smoke (not yet — this is the heavy job)
 #   - Release workflow as a prerequisite to goreleaser
 #   - Direct workflow_dispatch for iterating on the matrix
 
@@ -34,14 +36,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: i686-unknown-linux-gnu          # linux/386
           - target: x86_64-unknown-linux-gnu        # linux/amd64
           - target: aarch64-unknown-linux-gnu       # linux/arm64
-          - target: arm-unknown-linux-gnueabi       # linux/armv6
-          - target: armv7-unknown-linux-gnueabihf   # linux/armv7
-          - target: x86_64-unknown-freebsd          # freebsd/amd64
-          - target: x86_64-unknown-netbsd           # netbsd/amd64
-          - target: x86_64-pc-windows-gnu           # windows/amd64
+          - target: x86_64-pc-windows-gnu           # windows/amd64 (MinGW)
     steps:
       - uses: actions/checkout@v4
 
@@ -109,40 +106,5 @@ jobs:
         with:
           name: rdp-bridge-${{ matrix.target }}
           path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
-          if-no-files-found: error
-          retention-days: 7
-
-  rust-winarm:
-    name: windows-11-arm (windows/arm64)
-    runs-on: windows-11-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: rdp-winarm-cargo-aarch64-pc-windows-msvc-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
-          restore-keys: rdp-winarm-cargo-aarch64-pc-windows-msvc-
-
-      - name: Install pinned Rust toolchain
-        working-directory: packages/pam/handlers/rdp/native
-        shell: pwsh
-        run: |
-          rustup show active-toolchain
-          rustup target add aarch64-pc-windows-msvc
-
-      - name: cargo build --release --target aarch64-pc-windows-msvc
-        working-directory: packages/pam/handlers/rdp/native
-        shell: pwsh
-        run: cargo build --release --target aarch64-pc-windows-msvc
-
-      - name: Upload static library
-        uses: actions/upload-artifact@v4
-        with:
-          name: rdp-bridge-aarch64-pc-windows-msvc
-          path: packages/pam/handlers/rdp/native/target/aarch64-pc-windows-msvc/release/infisical_rdp_bridge.lib
           if-no-files-found: error
           retention-days: 7

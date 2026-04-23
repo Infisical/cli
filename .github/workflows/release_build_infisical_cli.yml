@@ -32,6 +32,13 @@ jobs:
     uses: ./.github/workflows/run-cli-e2e-tests.yml
     secrets: inherit
 
+  build-rdp-bridge:
+    # Cross-compile the Rust RDP bridge static archives for the five
+    # client-tier targets (linux amd64/arm64, darwin amd64/arm64,
+    # windows amd64 via MinGW). Goreleaser picks these up and links
+    # them into the per-target `infisical` binary via CGO.
+    uses: ./.github/workflows/build-rdp-bridge.yml
+
   # cli-integration-tests:
   #   name: Run tests before deployment
   #   uses: ./.github/workflows/run-cli-tests.yml
@@ -100,12 +107,14 @@ jobs:
     needs:
       - validate-tag-branch
       - cli-tests
+      - build-rdp-bridge
     # `always()` lets this run even when validate-tag-branch was skipped
     # (dry-run / dispatched-release case). The inner conditions enforce
-    # the cli-tests success and branch-validation-if-tag rules.
+    # the cli-tests + rdp-bridge success and branch-validation-if-tag rules.
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
@@ -134,10 +143,35 @@ jobs:
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
           sudo apt update
           sudo apt-get install -y libssl1.0-dev
+      - name: Install cross-compile toolchains for RDP tier
+        # aarch64-linux-gnu-gcc: linux/arm64 CGO cross-compile.
+        # x86_64-w64-mingw32-gcc: windows/amd64 CGO cross-compile.
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86_64
       - name: OSXCross for CGO Support
         run: |
           mkdir ../../osxcross
           git clone https://github.com/plentico/osxcross-target.git ../../osxcross/target
+      - name: Download RDP bridge static libs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdp-bridge-*
+          path: /tmp/rdp-bridge-artifacts/
+      - name: Stage RDP bridge static libs into cargo target dirs
+        # Goreleaser's per-build CGO_LDFLAGS expects each target triple's
+        # libinfisical_rdp_bridge.a to live at the standard cargo output
+        # path so the linker's -L flag resolves.
+        run: |
+          set -euo pipefail
+          for triple in \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-pc-windows-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin; do
+            target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
+            mkdir -p "$target_dir"
+            cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
+          done
       - name: GoReleaser (dry-run snapshot)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         uses: goreleaser/goreleaser-action@v4

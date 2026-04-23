@@ -1,34 +1,123 @@
-# This is an example .goreleaser.yml file with some sensible defaults.
-# Make sure to check the documentation at https://goreleaser.com
-# before:
-#   hooks:
-#     # You may remove this if you don't use go modules.
-#     - cd cli && go mod tidy
-#     # you may remove this if you don't need go generate
-#     - cd cli && go generate ./...
 before:
   hooks:
     - ./scripts/completions.sh
     - ./scripts/manpages.sh
 
+# ---------------------------------------------------------------------
+# Builds.
+#
+# The CLI has two tiers:
+#
+#   rdp tier  : CGO=1 with `-tags rdp`, links the Rust RDP bridge
+#                static archive. Cross-compile toolchain per target:
+#                  linux/amd64  : system gcc
+#                  linux/arm64  : gcc-aarch64-linux-gnu
+#                  darwin/amd64 : o64-clang via osxcross
+#                  darwin/arm64 : o64-clang via osxcross
+#                  windows/amd64: x86_64-w64-mingw32-gcc (MinGW)
+#                Static lib per target is staged at
+#                  packages/pam/handlers/rdp/native/target/<triple>/release/libinfisical_rdp_bridge.a
+#                by the `build-rdp-bridge` workflow job. CGO_LDFLAGS
+#                adds the target-triple -L dir; the #cgo directive in
+#                bridge_cgo.go / bridge_cgo_windows.go supplies the -l
+#                flags.
+#
+#   stub tier : CGO=0, no rdp tag. Ships the RDP stub that returns
+#                ErrRdpUnavailable at runtime. Covers the long tail of
+#                platforms we build for but don't realistically run PAM
+#                RDP on: linux 386 / 32-bit arm, BSDs, windows arm/arm64.
+# ---------------------------------------------------------------------
 builds:
-  - id: darwin-build
+  # --- rdp tier ---
+  - id: darwin-amd64-rdp
     binary: infisical
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
     flags:
       - -trimpath
+      - -tags=rdp
     env:
       - CGO_ENABLED=1
       - CC=/home/runner/work/osxcross/target/bin/o64-clang
       - CXX=/home/runner/work/osxcross/target/bin/o64-clang++
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-apple-darwin/release'
     goos:
       - darwin
-    ignore:
-      - goos: darwin
-        goarch: "386"
+    goarch:
+      - amd64
 
+  - id: darwin-arm64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=/home/runner/work/osxcross/target/bin/o64-clang
+      - CXX=/home/runner/work/osxcross/target/bin/o64-clang++
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-apple-darwin/release'
+    goos:
+      - darwin
+    goarch:
+      - arm64
+
+  - id: linux-amd64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-linux-gnu/release'
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+  - id: linux-arm64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-unknown-linux-gnu/release'
+    goos:
+      - linux
+    goarch:
+      - arm64
+
+  - id: windows-amd64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-w64-mingw32-gcc
+      - CXX=x86_64-w64-mingw32-g++
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-pc-windows-gnu/release'
+    goos:
+      - windows
+    goarch:
+      - amd64
+
+  # --- stub tier: CGO=0, no rdp support ---
   - id: all-other-builds
     env:
       - CGO_ENABLED=0
@@ -53,6 +142,14 @@ builds:
       - "6"
       - "7"
     ignore:
+      # linux/amd64, linux/arm64, windows/amd64 are handled by the
+      # per-arch rdp builds above: don't duplicate them here.
+      - goos: linux
+        goarch: amd64
+      - goos: linux
+        goarch: arm64
+      - goos: windows
+        goarch: amd64
       - goos: windows
         goarch: "386"
       - goos: freebsd
@@ -123,6 +220,8 @@ nfpms:
   - id: infisical
     package_name: infisical
     builds:
+      - linux-amd64-rdp
+      - linux-arm64-rdp
       - all-other-builds
     vendor: Infisical, Inc
     homepage: https://infisical.com/
@@ -205,7 +304,7 @@ dockers:
     goarch: amd64
     use: buildx
     ids:
-      - all-other-builds
+      - linux-amd64-rdp
     image_templates:
       - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-amd64"
       - "infisical/cli:latest-amd64"
@@ -217,7 +316,7 @@ dockers:
     goarch: arm64
     use: buildx
     ids:
-      - all-other-builds
+      - linux-arm64-rdp
     image_templates:
       - "infisical/cli:{{ .Major }}.{{ .Minor }}.{{ .Patch }}-arm64"
       - "infisical/cli:latest-arm64"
