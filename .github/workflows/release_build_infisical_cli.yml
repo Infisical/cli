@@ -341,15 +341,20 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # Currently only supports Windows amd64
+  # Currently only supports Windows amd64.
+  # Doesn't technically need create-release-draft (output goes to
+  # Docker Hub, not the GitHub release), but kept in needs for visual
+  # grouping with the other two goreleaser jobs in the workflow DAG.
   goreleaser-windows:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
       - cli-tests
+      - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
+      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
