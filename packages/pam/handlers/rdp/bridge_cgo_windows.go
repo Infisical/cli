@@ -4,7 +4,7 @@ package rdp
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/native/include
-#cgo windows LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lws2_32 -luserenv -lbcrypt -lntdll -ladvapi32 -lcrypt32 -lsecur32
+#cgo windows LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lws2_32 -luserenv -lbcrypt -lntdll -ladvapi32 -lcrypt32 -lsecur32 -lwinpthread
 
 #include "rdp_bridge.h"
 #include <stdlib.h>
