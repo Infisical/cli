@@ -21,16 +21,11 @@ type PacketType uint8
 const (
 	PacketTypeConnect  PacketType = 1
 	PacketTypeAccept   PacketType = 2
-	PacketTypeAck      PacketType = 3
 	PacketTypeRefuse   PacketType = 4
 	PacketTypeRedirect PacketType = 5
 	PacketTypeData     PacketType = 6
-	PacketTypeNull     PacketType = 7
-	PacketTypeAbort    PacketType = 9
 	PacketTypeResend   PacketType = 11
 	PacketTypeMarker   PacketType = 12
-	PacketTypeAttn     PacketType = 13
-	PacketTypeCtrl     PacketType = 14
 )
 
 // TNS header is always 8 bytes. Length field is uint16 before handshakeComplete+v315,

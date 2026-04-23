@@ -14,15 +14,10 @@ import (
 // Oracle server receives during a client's query lifecycle — see Oracle Net TTC
 // documentation and go-ora's parameter/command.go for reference.
 const (
-	ttcFuncOALL8    = 0x5E // all-in-one statement execution (SQL + binds in a single call)
-	ttcFuncOFETCH   = 0x05 // fetch more rows
-	ttcFuncOCOMMIT  = 0x0E // commit
-	ttcFuncORLLBK   = 0x0F // rollback
-	ttcFuncOCLOSE   = 0x69 // close cursor
-	ttcFuncOSTMT    = 0x04 // parse / describe
-	ttcFuncOLOGOFF  = 0x09 // logoff
-	ttcMsgFunction  = 0x03 // outer opcode for function calls
-	ttcMsgPiggyback = 0x11 // piggyback TTC
+	ttcFuncOALL8   = 0x5E // all-in-one statement execution (SQL + binds in a single call)
+	ttcFuncOCOMMIT = 0x0E // commit
+	ttcFuncORLLBK  = 0x0F // rollback
+	ttcMsgFunction = 0x03 // outer opcode for function calls
 )
 
 // pendingQuery tracks the SQL-string that was sent client→upstream; we correlate it
@@ -38,14 +33,14 @@ type pendingQuery struct {
 // internal channel fills, packets are dropped and a warning is logged. Logging is
 // best-effort, same as MSSQL.
 type QueryExtractor struct {
-	logger     session.SessionLogger
-	sessionID  string
-	direction  string // "client->upstream" or "upstream->client"
-	ch         chan []byte
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
-	use32Bit   bool
-	pair       *pairState // shared across both directions via Pair
+	logger    session.SessionLogger
+	sessionID string
+	direction string // "client->upstream" or "upstream->client"
+	ch        chan []byte
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+	use32Bit  bool
+	pair      *pairState // shared across both directions via Pair
 }
 
 // pairState couples the client-side and upstream-side extractors so we can match
