@@ -4,8 +4,8 @@ package rdp
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/native/include
-#cgo linux LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lm -ldl -lpthread -lz
-#cgo darwin LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lz -framework Security -framework CoreFoundation -framework SystemConfiguration
+#cgo linux LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lm -ldl -lpthread
+#cgo darwin LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -framework Security -framework CoreFoundation -framework SystemConfiguration
 
 #include "rdp_bridge.h"
 #include <stdlib.h>

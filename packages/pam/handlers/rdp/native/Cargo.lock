@@ -1418,6 +1418,7 @@ dependencies = [
  "ironrdp-pdu",
  "ironrdp-tls",
  "ironrdp-tokio",
+ "libz-sys",
  "rcgen",
  "rustls",
  "tokio",
@@ -1691,6 +1692,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc3a226e576f50782b3305c5ccf458698f92798987f551c6a02efe8276721e22"
 dependencies = [
  "cc",
+ "libc",
  "pkg-config",
  "vcpkg",
 ]
