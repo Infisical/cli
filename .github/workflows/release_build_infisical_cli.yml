@@ -285,10 +285,7 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          # Skip docker on dry-run: the windows-2022 runner doesn't
-          # always have a running docker daemon for building Windows
-          # Server images. Real-release invocations still build them.
-          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish,docker
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
