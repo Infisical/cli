@@ -1,11 +1,10 @@
-//go:build rdp && (linux || darwin)
+//go:build rdp && windows
 
 package rdp
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/native/include
-#cgo linux LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lm -ldl -lpthread -lz
-#cgo darwin LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lz -framework Security -framework CoreFoundation -framework SystemConfiguration
+#cgo windows LDFLAGS: -L${SRCDIR}/native/target/release -linfisical_rdp_bridge -lws2_32 -luserenv -lbcrypt -lntdll -ladvapi32 -lcrypt32 -lsecur32
 
 #include "rdp_bridge.h"
 #include <stdlib.h>
@@ -20,35 +19,37 @@ import (
 	"net"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // StartWithConn starts a bridge session for the given TCP connection.
-// Internally, an independent dup of the underlying file descriptor is
-// handed to the bridge; the caller's conn stays fully usable and is not
-// closed by this function. The bridge closes its dup when the session
-// ends.
+// Internally, an independent duplicate of the underlying SOCKET is
+// handed to the bridge via DuplicateHandle; the caller's conn stays
+// fully usable and is not closed by this function. The bridge closes
+// its dup when the session ends.
 //
-// `conn` must be a *net.TCPConn or any net.Conn that exposes a raw file
-// descriptor via syscall.Conn. For TLS-wrapped or otherwise non-fd-backed
+// `conn` must be a *net.TCPConn or any net.Conn that exposes a raw
+// socket via syscall.Conn. For TLS-wrapped or otherwise non-socket-backed
 // conns (like the ones the gateway receives), use [StartWithReadWriter]
 // instead.
 func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
-	dupFd, err := dupConnFD(conn)
+	dupSocket, err := dupConnSocket(conn)
 	if err != nil {
-		return nil, fmt.Errorf("rdp bridge: dup client fd: %w", err)
+		return nil, fmt.Errorf("rdp bridge: dup client socket: %w", err)
 	}
-	return startWithDupedFD(dupFd, targetHost, targetPort, username, password)
+	return startWithDupedSocket(dupSocket, targetHost, targetPort, username, password)
 }
 
-// startWithDupedFD hands ownership of `dupFd` to the Rust bridge. On
-// success the bridge closes the fd when the session ends; on failure
-// this function closes the fd itself before returning. Shared by
-// StartWithConn and StartWithReadWriter.
-func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
+// startWithDupedSocket hands ownership of `dupSocket` to the Rust bridge.
+// On success the bridge closes the socket when the session ends; on
+// failure this function closes the socket itself before returning.
+// Shared by StartWithConn and StartWithReadWriter.
+func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	success := false
 	defer func() {
 		if !success {
-			_ = syscall.Close(dupFd)
+			_ = windows.Closesocket(dupSocket)
 		}
 	}()
 
@@ -60,8 +61,8 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 	defer C.free(unsafe.Pointer(cPass))
 
 	var handle C.uint64_t
-	rc := C.rdp_bridge_start_unix_fd(
-		C.int(dupFd),
+	rc := C.rdp_bridge_start_windows_socket(
+		C.uintptr_t(dupSocket),
 		cHost,
 		C.uint16_t(targetPort),
 		cUser,
@@ -76,26 +77,22 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 }
 
 // StartWithReadWriter starts a bridge session for a caller whose client
-// stream is not fd-backed (e.g. *tls.Conn wrapping an mTLS'd virtual
-// connection in the gateway). It creates a local loopback TCP pair, hands
-// the kernel-backed accepted end to the Rust bridge, and pumps bytes
-// between the other loopback end and the caller's `rw` via two io.Copy
-// goroutines. The goroutines exit when either side closes; the bridge's
-// Close method also tears them down.
+// stream is not socket-backed (e.g. *tls.Conn wrapping an mTLS'd virtual
+// connection in the gateway). It creates a local loopback TCP pair,
+// hands the kernel-backed accepted end to the Rust bridge, and pumps
+// bytes between the other loopback end and the caller's `rw` via two
+// io.Copy goroutines. The goroutines exit when either side closes; the
+// bridge's Close method also tears them down.
 //
-// The caller retains ownership of `rw` and is responsible for closing it
-// when done (the bridge does not close it).
+// The caller retains ownership of `rw` and is responsible for closing
+// it when done (the bridge does not close it).
 func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: loopback listen: %w", err)
 	}
-	// We only ever accept one connection; close the listener either way.
 	defer listener.Close()
 
-	// Kick off the dial concurrently with accept. Either ordering would
-	// work but the goroutine avoids a deadlock if some future net stack
-	// decides accept must run first.
 	type dialResult struct {
 		conn net.Conn
 		err  error
@@ -117,24 +114,19 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 	}
 	peer := dr.conn
 
-	// The accepted side gets handed to Rust. Dup its fd, then close our
-	// copy so only Rust owns the socket going forward.
-	dupFd, err := dupConnFD(accepted)
+	dupSocket, err := dupConnSocket(accepted)
 	_ = accepted.Close()
 	if err != nil {
 		_ = peer.Close()
-		return nil, fmt.Errorf("rdp bridge: dup accepted fd: %w", err)
+		return nil, fmt.Errorf("rdp bridge: dup accepted socket: %w", err)
 	}
 
-	bridge, err := startWithDupedFD(dupFd, targetHost, targetPort, username, password)
+	bridge, err := startWithDupedSocket(dupSocket, targetHost, targetPort, username, password)
 	if err != nil {
 		_ = peer.Close()
 		return nil, err
 	}
 
-	// Pump bytes between the caller's rw and the loopback peer. Each
-	// goroutine closes the peer on exit so the other side unblocks and
-	// exits too, regardless of which half EOFs first.
 	go func() {
 		_, _ = io.Copy(peer, rw)
 		_ = peer.Close()
@@ -148,28 +140,45 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 	return bridge, nil
 }
 
-// dupConnFD returns a new file descriptor independent from `conn`'s
-// internal one. The caller becomes responsible for closing the returned
-// fd. Requires `conn` to implement syscall.Conn.
-func dupConnFD(conn net.Conn) (int, error) {
+// dupConnSocket returns a new SOCKET handle independent from `conn`'s
+// internal one, using DuplicateHandle against the current process. The
+// caller becomes responsible for closing the returned handle via
+// windows.Closesocket. Requires `conn` to implement syscall.Conn.
+//
+// Note: this uses DuplicateHandle, not WSADuplicateSocketW.
+// WSADuplicateSocketW is for cross-process socket sharing and requires
+// the peer to call WSASocket with a WSAPROTOCOL_INFOW. For in-process
+// SOCKET duplication, DuplicateHandle on the SOCKET's underlying kernel
+// handle is the standard approach (SOCKETs are kernel handles on modern
+// Windows).
+func dupConnSocket(conn net.Conn) (windows.Handle, error) {
 	sc, ok := conn.(syscall.Conn)
 	if !ok {
-		return -1, fmt.Errorf("conn %T does not expose syscall.Conn", conn)
+		return 0, fmt.Errorf("conn %T does not expose syscall.Conn", conn)
 	}
 	raw, err := sc.SyscallConn()
 	if err != nil {
-		return -1, err
+		return 0, err
 	}
-	var dup int
+	var dup windows.Handle
 	var dupErr error
+	proc := windows.CurrentProcess()
 	ctrlErr := raw.Control(func(fd uintptr) {
-		dup, dupErr = syscall.Dup(int(fd))
+		dupErr = windows.DuplicateHandle(
+			proc,
+			windows.Handle(fd),
+			proc,
+			&dup,
+			0,
+			false,
+			windows.DUPLICATE_SAME_ACCESS,
+		)
 	})
 	if ctrlErr != nil {
-		return -1, ctrlErr
+		return 0, ctrlErr
 	}
 	if dupErr != nil {
-		return -1, dupErr
+		return 0, dupErr
 	}
 	return dup, nil
 }
@@ -185,8 +194,6 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 	if p.config.SessionLogger != nil {
 		defer func() {
 			if err := p.config.SessionLogger.Close(); err != nil {
-				// Don't fail the session on logger close error; it's a
-				// best-effort flush of any buffered events.
 				_ = err
 			}
 		}()
@@ -204,7 +211,6 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 	}
 	defer bridge.Close()
 
-	// Run Wait on a goroutine so we can also select on ctx.Done().
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- bridge.Wait() }()
 
@@ -216,7 +222,7 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 		return nil
 	case <-ctx.Done():
 		_ = bridge.Cancel()
-		<-waitErr // let the session unwind before we return
+		<-waitErr
 		return ctx.Err()
 	}
 }

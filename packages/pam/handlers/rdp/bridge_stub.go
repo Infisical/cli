@@ -1,4 +1,4 @@
-//go:build !rdp || (!linux && !darwin)
+//go:build !rdp || (!linux && !darwin && !windows)
 
 package rdp
 
@@ -10,8 +10,7 @@ import (
 
 // StartWithConn is a stub that reports the RDP bridge is unavailable in
 // this build. To enable the real implementation, build with `-tags rdp`
-// on a supported platform (linux, darwin; windows and others land in
-// later phases).
+// on a supported platform (linux, darwin, windows).
 func StartWithConn(_ net.Conn, _ string, _ uint16, _, _ string) (*Bridge, error) {
 	return nil, ErrRdpUnavailable
 }
