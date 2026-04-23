@@ -147,10 +147,16 @@ jobs:
         # aarch64-linux-gnu-gcc: linux/arm64 CGO cross-compile.
         # x86_64-w64-mingw32-gcc: windows/amd64 CGO cross-compile.
         run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
-      - name: OSXCross for CGO Support
-        run: |
-          mkdir ../../osxcross
-          git clone https://github.com/plentico/osxcross-target.git ../../osxcross/target
+      - name: Install zig for darwin cross-compile
+        # zig cc bundles clang + ld.lld + a macOS SDK snapshot, so it
+        # can produce valid Mach-O from linux. Used as the $CC for the
+        # darwin-amd64-rdp and darwin-arm64-rdp goreleaser builds.
+        # The previous osxcross-target clone only shipped SDK headers
+        # (no linker), which worked when no cgo code was actually being
+        # linked but breaks as soon as -tags rdp pulls in bridge_cgo.go.
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
       - name: Download RDP bridge static libs
         uses: actions/download-artifact@v4
         with:
