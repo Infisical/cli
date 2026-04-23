@@ -1,13 +1,7 @@
-//! MITM bridge with post-CredSSP passthrough.
-//!
-//! We run the acceptor and connector only far enough to do credential
-//! injection: accept client TLS + fixed-cred CredSSP on one side, connect
-//! target TLS + real-cred CredSSP on the other. Once both CredSSP sequences
-//! complete, we stop driving the IronRDP state machines and byte-forward
-//! raw bytes between the two TLS streams. Client and target then negotiate
-//! MCS, channels, capabilities, and share state directly with each other
-//! through us, avoiding the feature-flag drift that breaks strict clients
-//! (Windows App, mstsc) when acceptor and connector negotiate independently.
+//! MITM bridge. Runs acceptor + connector only through CredSSP (to inject
+//! credentials), then byte-forwards between the two TLS streams. Letting
+//! client and target negotiate MCS/capabilities/share-state directly
+//! avoids drift that breaks strict clients (Windows App, mstsc).
 
 use std::sync::Arc;
 
@@ -29,9 +23,7 @@ use tracing::info;
 
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 
-/// Fixed credential presented by the native client through the acceptor.
-/// The real access gate is upstream (Infisical auth + the gateway tunnel);
-/// this value only needs to match what the CLI bakes into the `.rdp` file.
+// Must match what the CLI bakes into the generated .rdp file.
 pub const ACCEPTOR_USERNAME: &str = "infisical";
 pub const ACCEPTOR_PASSWORD: &str = "infisical";
 
@@ -42,9 +34,6 @@ pub struct TargetEndpoint {
     pub password: String,
 }
 
-/// Run a single RDP MITM session. Injects credentials at CredSSP and then
-/// passes everything else through between the two TLS streams. The caller
-/// can abort the session by cancelling the token.
 pub async fn run_mitm(
     client_tcp: TcpStream,
     target: TargetEndpoint,
@@ -60,15 +49,10 @@ pub async fn run_mitm(
 }
 
 async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result<()> {
-    // rustls 0.23 requires an explicit crypto provider when more than one is
-    // compiled in. Our tree pulls both `ring` (direct) and `aws-lc-rs`
-    // (transitively from reqwest). Install ring as the default on first call;
-    // subsequent calls return Err("already installed") which we ignore.
+    // Our tree pulls both ring (direct) and aws-lc-rs (via reqwest); rustls
+    // 0.23 needs an explicit provider when more than one is compiled in.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Run the two halves concurrently so the client doesn't sit idle while
-    // the target side completes CredSSP. Functionally either order works;
-    // this is a latency optimization.
     let (acceptor_output, connector_output) =
         tokio::try_join!(run_acceptor_half(client_tcp), run_connector_half(target))?;
 
@@ -88,10 +72,8 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
             .context("flush target leftover to client")?;
     }
 
-    // Flush anything the CredSSP phase left buffered before handing off to
-    // copy_bidirectional. Belt-and-suspenders: tokio-rustls normally
-    // flushes on write_all, but being explicit here avoids a subtle stall
-    // if the final EarlyUserAuthResult PDU is sitting in the write buffer.
+    // Explicit flush before passthrough: avoids a stall if the final
+    // EarlyUserAuthResult PDU is sitting in the write buffer.
     client_stream
         .flush()
         .await
@@ -101,11 +83,8 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
         .await
         .context("flush target stream before passthrough")?;
 
-    // Passthrough: client and target negotiate MCS, channels, capabilities
-    // and share state directly through us. Real RDP clients hard-close the
-    // TCP connection on session end (no TLS close_notify), so rustls
-    // returns an UnexpectedEof. We treat that specific error as a clean
-    // shutdown; any other IO error propagates.
+    // Real RDP clients hard-close TCP without TLS close_notify, which
+    // rustls surfaces as UnexpectedEof. Treat that as clean shutdown.
     match tokio::io::copy_bidirectional(&mut client_stream, &mut target_stream).await {
         Ok(_) => info!("session ended cleanly"),
         Err(e) if is_unexpected_eof(&e) => info!("session ended (peer hard-closed)"),
@@ -114,17 +93,10 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
     Ok(())
 }
 
-/// rustls 0.23 raises `UnexpectedEof` when a peer closes the TCP connection
-/// without sending `close_notify`. That's normal RDP client behavior and
-/// should not surface as a session error.
 fn is_unexpected_eof(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::UnexpectedEof
 }
 
-/// Accept the inbound connection, upgrade to TLS, and run CredSSP with the
-/// fixed acceptor credential. Stops there: MCS and everything after is the
-/// passthrough phase's job. Returns the underlying TLS stream and any bytes
-/// the framed reader buffered beyond CredSSP.
 async fn run_acceptor_half(client_tcp: TcpStream) -> Result<(ErasedStream, bytes::BytesMut)> {
     let (server_tls, acceptor_public_key) =
         build_acceptor_tls().context("build acceptor TLS config")?;
@@ -136,9 +108,7 @@ async fn run_acceptor_half(client_tcp: TcpStream) -> Result<(ErasedStream, bytes
         password: ACCEPTOR_PASSWORD.to_owned(),
         domain: None,
     };
-    // Capabilities and desktop size passed here are unused because we never
-    // call `accept_finalize`. Acceptor::new requires them so we pass empty
-    // / sentinel values.
+    // Capabilities/desktop-size are shape-fillers; we never call accept_finalize.
     let mut acceptor = Acceptor::new(
         SecurityProtocol::HYBRID_EX | SecurityProtocol::HYBRID | SecurityProtocol::SSL,
         ironrdp_acceptor::DesktopSize {
@@ -187,9 +157,6 @@ async fn run_acceptor_half(client_tcp: TcpStream) -> Result<(ErasedStream, bytes
     Ok(acceptor_framed.into_inner())
 }
 
-/// Connect to the target, upgrade to TLS, and run CredSSP with the injected
-/// credentials. Stops there. Returns the underlying TLS stream and any
-/// bytes the framed reader buffered beyond CredSSP.
 async fn run_connector_half(target: TargetEndpoint) -> Result<(ErasedStream, bytes::BytesMut)> {
     let target_addr = format!("{}:{}", target.host, target.port);
     let target_tcp = TcpStream::connect(&target_addr)
@@ -235,11 +202,8 @@ async fn run_connector_half(target: TargetEndpoint) -> Result<(ErasedStream, byt
     Ok(target_framed.into_inner())
 }
 
-/// Drive the connector's CredSSP sequence to completion. Equivalent to
-/// `perform_credssp_step` in `ironrdp-async`'s private module; replicated
-/// here so we can stop before `connect_finalize` would start the MCS /
-/// capability exchange (which is what we want client and target to do
-/// directly via passthrough).
+// Replicated from ironrdp-async's private perform_credssp_step so we can
+// stop before connect_finalize (which would start MCS/capability exchange).
 async fn perform_connector_credssp<S>(
     connector: &mut ClientConnector,
     framed: &mut ironrdp_tokio::TokioFramed<S>,
@@ -323,8 +287,6 @@ where
     Ok(())
 }
 
-/// Build the acceptor's TLS config and return the server's public key for
-/// use as CredSSP TLS channel binding material.
 fn build_acceptor_tls() -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>)> {
     use x509_cert::der::Decode;
 

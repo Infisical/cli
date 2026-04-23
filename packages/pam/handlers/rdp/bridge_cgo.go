@@ -22,16 +22,8 @@ import (
 	"unsafe"
 )
 
-// StartWithConn starts a bridge session for the given TCP connection.
-// Internally, an independent dup of the underlying file descriptor is
-// handed to the bridge; the caller's conn stays fully usable and is not
-// closed by this function. The bridge closes its dup when the session
-// ends.
-//
-// `conn` must be a *net.TCPConn or any net.Conn that exposes a raw file
-// descriptor via syscall.Conn. For TLS-wrapped or otherwise non-fd-backed
-// conns (like the ones the gateway receives), use [StartWithReadWriter]
-// instead.
+// StartWithConn hands an independent dup of conn's fd to the bridge.
+// For TLS-wrapped or otherwise non-fd-backed conns, use StartWithReadWriter.
 func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	dupFd, err := dupConnFD(conn)
 	if err != nil {
@@ -40,10 +32,7 @@ func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username
 	return startWithDupedFD(dupFd, targetHost, targetPort, username, password)
 }
 
-// startWithDupedFD hands ownership of `dupFd` to the Rust bridge. On
-// success the bridge closes the fd when the session ends; on failure
-// this function closes the fd itself before returning. Shared by
-// StartWithConn and StartWithReadWriter.
+// Ownership of dupFd transfers to Rust on success; we close it on failure.
 func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	success := false
 	defer func() {
@@ -75,27 +64,16 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 	return &Bridge{handle: uint64(handle)}, nil
 }
 
-// StartWithReadWriter starts a bridge session for a caller whose client
-// stream is not fd-backed (e.g. *tls.Conn wrapping an mTLS'd virtual
-// connection in the gateway). It creates a local loopback TCP pair, hands
-// the kernel-backed accepted end to the Rust bridge, and pumps bytes
-// between the other loopback end and the caller's `rw` via two io.Copy
-// goroutines. The goroutines exit when either side closes; the bridge's
-// Close method also tears them down.
-//
-// The caller retains ownership of `rw` and is responsible for closing it
-// when done (the bridge does not close it).
+// StartWithReadWriter creates a loopback TCP pair, hands the accepted
+// kernel-backed end to the bridge, and pumps bytes between the other
+// end and rw. Used for streams without a raw fd (e.g. *tls.Conn).
 func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: loopback listen: %w", err)
 	}
-	// We only ever accept one connection; close the listener either way.
 	defer listener.Close()
 
-	// Kick off the dial concurrently with accept. Either ordering would
-	// work but the goroutine avoids a deadlock if some future net stack
-	// decides accept must run first.
 	type dialResult struct {
 		conn net.Conn
 		err  error
@@ -117,8 +95,6 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 	}
 	peer := dr.conn
 
-	// The accepted side gets handed to Rust. Dup its fd, then close our
-	// copy so only Rust owns the socket going forward.
 	dupFd, err := dupConnFD(accepted)
 	_ = accepted.Close()
 	if err != nil {
@@ -132,9 +108,6 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 		return nil, err
 	}
 
-	// Pump bytes between the caller's rw and the loopback peer. Each
-	// goroutine closes the peer on exit so the other side unblocks and
-	// exits too, regardless of which half EOFs first.
 	go func() {
 		_, _ = io.Copy(peer, rw)
 		_ = peer.Close()
@@ -148,9 +121,6 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 	return bridge, nil
 }
 
-// dupConnFD returns a new file descriptor independent from `conn`'s
-// internal one. The caller becomes responsible for closing the returned
-// fd. Requires `conn` to implement syscall.Conn.
 func dupConnFD(conn net.Conn) (int, error) {
 	sc, ok := conn.(syscall.Conn)
 	if !ok {
@@ -174,21 +144,11 @@ func dupConnFD(conn net.Conn) (int, error) {
 	return dup, nil
 }
 
-// HandleConnection is the entry point the gateway's PAM dispatcher calls
-// for a Windows/RDP session. It takes ownership of `clientConn` (closes
-// it on return), spawns a bridge via the loopback shim, and blocks until
-// the session ends or `ctx` is cancelled (admin terminate, session
-// expiry). On cancellation the bridge is signalled to abort and we wait
-// for it to actually finish before returning `ctx.Err()`.
 func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
 	defer clientConn.Close()
 	if p.config.SessionLogger != nil {
 		defer func() {
-			if err := p.config.SessionLogger.Close(); err != nil {
-				// Don't fail the session on logger close error; it's a
-				// best-effort flush of any buffered events.
-				_ = err
-			}
+			_ = p.config.SessionLogger.Close()
 		}()
 	}
 
@@ -204,7 +164,6 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 	}
 	defer bridge.Close()
 
-	// Run Wait on a goroutine so we can also select on ctx.Done().
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- bridge.Wait() }()
 
@@ -216,7 +175,7 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 		return nil
 	case <-ctx.Done():
 		_ = bridge.Cancel()
-		<-waitErr // let the session unwind before we return
+		<-waitErr
 		return ctx.Err()
 	}
 }

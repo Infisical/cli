@@ -3,32 +3,7 @@ before:
     - ./scripts/completions.sh
     - ./scripts/manpages.sh
 
-# ---------------------------------------------------------------------
-# Builds.
-#
-# The CLI has two tiers:
-#
-#   rdp tier  : CGO=1 with `-tags rdp`, links the Rust RDP bridge
-#                static archive. Cross-compile toolchain per target:
-#                  linux/amd64  : system gcc
-#                  linux/arm64  : gcc-aarch64-linux-gnu
-#                  darwin/amd64 : o64-clang via osxcross
-#                  darwin/arm64 : o64-clang via osxcross
-#                  windows/amd64: x86_64-w64-mingw32-gcc (MinGW)
-#                Static lib per target is staged at
-#                  packages/pam/handlers/rdp/native/target/<triple>/release/libinfisical_rdp_bridge.a
-#                by the `build-rdp-bridge` workflow job. CGO_LDFLAGS
-#                adds the target-triple -L dir; the #cgo directive in
-#                bridge_cgo.go / bridge_cgo_windows.go supplies the -l
-#                flags.
-#
-#   stub tier : CGO=0, no rdp tag. Ships the RDP stub that returns
-#                ErrRdpUnavailable at runtime. Covers the long tail of
-#                platforms we build for but don't realistically run PAM
-#                RDP on: linux 386 / 32-bit arm, BSDs, windows arm/arm64.
-# ---------------------------------------------------------------------
 builds:
-  # --- rdp tier ---
   - id: darwin-amd64-rdp
     binary: infisical
     ldflags:
@@ -204,13 +179,7 @@ builds:
     goarch:
       - amd64
 
-  # --- stub tier: CGO=0, no rdp support ---
-  # Two targets stay on stub:
-  #   - openbsd (no cargo / `cross` coverage, negligible PAM users)
-  #   - windows/arm64 (gnullvm cross-compile needs llvm-mingw that
-  #     Ubuntu doesn't ship; negligible PAM users)
-  # Every other target the CLI builds for has a dedicated rdp build
-  # above.
+  # openbsd and windows/arm64 stay on CGO=0 stub; see build-rdp-bridge.yml.
   - id: all-other-builds
     env:
       - CGO_ENABLED=0
@@ -232,9 +201,6 @@ builds:
       - "6"
       - "7"
     ignore:
-      # windows/amd64 is handled by windows-amd64-rdp above.
-      # windows/386 isn't supported by Go+cgo anyway.
-      # windows/arm isn't a real target.
       - goos: windows
         goarch: amd64
       - goos: windows

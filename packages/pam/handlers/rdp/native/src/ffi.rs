@@ -1,22 +1,8 @@
-//! C ABI for the bridge. Designed to be called from Go via CGo.
+//! C ABI for the bridge. Called from Go via CGo.
 //!
-//! Model:
-//!  - Each session runs on its own OS thread with a current-thread tokio
-//!    runtime. Sessions are fully isolated.
-//!  - `start_*` allocates an opaque `u64` handle, spawns the thread, and
-//!    returns immediately. The handshake and passthrough happen inside
-//!    the spawned thread.
-//!  - `wait` blocks the calling thread until the session ends, returning
-//!    0 on clean exit and 1 on session error.
-//!  - `cancel` is idempotent: it signals the bridge's CancellationToken,
-//!    which interrupts `run_mitm` at the next await point.
-//!  - `free` removes the handle from the registry. Call after `wait`.
-//!
-//! Ownership of the client file descriptor / socket: Rust takes ownership
-//! of what is passed in and closes it when the session ends. The Go
-//! caller is expected to hand in a dup'd fd (syscall.Dup on Unix, the
-//! Windows equivalent on Windows) so its own `net.Conn` lifetime stays
-//! independent.
+//! Each session runs on its own OS thread with a current-thread tokio
+//! runtime. `start_*` transfers ownership of the client fd/socket to
+//! Rust (Go hands in a dup). Contract: wait, then free.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
@@ -40,7 +26,7 @@ pub const RDP_BRIDGE_RUNTIME_ERROR: i32 = -3;
 
 struct BridgeEntry {
     cancel: CancellationToken,
-    /// Taken by `wait`; `None` afterward.
+    // Taken by wait(); None afterward.
     join: Mutex<Option<JoinHandle<anyhow::Result<()>>>>,
 }
 
@@ -54,11 +40,7 @@ fn register(entry: BridgeEntry) -> u64 {
     id
 }
 
-/// # Safety
-///
-/// `ptr` must be either null or a valid NUL-terminated C string with the
-/// `'static` borrow of the caller's buffer lasting for the duration of
-/// this call.
+/// # Safety: `ptr` must be null or a valid NUL-terminated C string.
 unsafe fn c_str_to_owned(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -104,15 +86,8 @@ fn spawn_session(
     }))
 }
 
-/// Start a new bridge session consuming a Unix client file descriptor.
-///
-/// # Safety
-///
-/// `client_fd` must be a valid open socket descriptor. Ownership transfers
-/// to the bridge on success; the caller must not close it. On failure,
-/// ownership stays with the caller. `target_host`, `username`, and
-/// `password` must be NUL-terminated valid UTF-8 C strings. `out_handle`
-/// must be a writable `uint64_t`.
+/// # Safety: `client_fd` ownership transfers to the bridge on OK, stays
+/// with the caller on error. Strings must be NUL-terminated valid UTF-8.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
@@ -140,12 +115,10 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     };
 
     use std::os::unix::io::FromRawFd;
-    // Safety: contract states the caller transfers ownership of fd.
     let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
 
     match spawn_session(client_tcp, host, target_port, username, password) {
         Ok(id) => {
-            // Safety: contract states out_handle is writable.
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
         }
@@ -156,13 +129,7 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     }
 }
 
-/// Start a new bridge session consuming a Windows SOCKET.
-///
-/// # Safety
-///
-/// `client_socket` must be a valid open `SOCKET`. Ownership transfers
-/// to the bridge on success. See `rdp_bridge_start_unix_fd` for shared
-/// string and out-param contracts.
+/// # Safety: see `rdp_bridge_start_unix_fd`.
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
@@ -190,7 +157,6 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     };
 
     use std::os::windows::io::{FromRawSocket, RawSocket};
-    // Safety: contract states caller transfers ownership.
     let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
 
     match spawn_session(client_tcp, host, target_port, username, password) {
@@ -205,15 +171,6 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     }
 }
 
-/// Block until the session on `handle` finishes.
-///
-/// Returns `RDP_BRIDGE_OK` on clean session end,
-/// `RDP_BRIDGE_SESSION_ERROR` if the session ended with an error,
-/// `RDP_BRIDGE_THREAD_PANIC` if the session thread panicked,
-/// `RDP_BRIDGE_INVALID_HANDLE` if `handle` is unknown.
-///
-/// Safe to call from any thread. Calling a second time on the same handle
-/// returns `RDP_BRIDGE_OK` (the session is already done).
 #[no_mangle]
 pub extern "C" fn rdp_bridge_wait(handle: u64) -> i32 {
     let join = {
@@ -243,9 +200,6 @@ pub extern "C" fn rdp_bridge_wait(handle: u64) -> i32 {
     }
 }
 
-/// Signal the session to cancel. Idempotent: safe to call multiple times.
-/// After `cancel`, the caller should still `wait` to observe the session
-/// actually finishing, and then `free` to release the handle.
 #[no_mangle]
 pub extern "C" fn rdp_bridge_cancel(handle: u64) -> i32 {
     let handles = HANDLES.lock().expect("HANDLES poisoned");
@@ -258,11 +212,6 @@ pub extern "C" fn rdp_bridge_cancel(handle: u64) -> i32 {
     }
 }
 
-/// Release the handle's resources. Must be called after `wait` has
-/// returned. If the session thread is still running when `free` is
-/// called, the handle is dropped and the thread becomes detached (still
-/// owned by the registry entry; would leak). Callers should always pair
-/// `wait` with `free`.
 #[no_mangle]
 pub extern "C" fn rdp_bridge_free(handle: u64) -> i32 {
     let mut handles = HANDLES.lock().expect("HANDLES poisoned");

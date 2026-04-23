@@ -33,10 +33,6 @@ jobs:
     secrets: inherit
 
   build-rdp-bridge:
-    # Cross-compile the Rust RDP bridge static archives for the five
-    # client-tier targets (linux amd64/arm64, darwin amd64/arm64,
-    # windows amd64 via MinGW). Goreleaser picks these up and links
-    # them into the per-target `infisical` binary via CGO.
     uses: ./.github/workflows/build-rdp-bridge.yml
 
   # cli-integration-tests:
@@ -53,8 +49,6 @@ jobs:
   #     CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE: ${{ secrets.CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE }}
 
   npm-release:
-    # Never publish npm on dry-runs. Only on real tag pushes or a manual
-    # workflow_dispatch with dry_run=false.
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
     runs-on: ubuntu-latest
     env:
@@ -108,9 +102,6 @@ jobs:
       - validate-tag-branch
       - cli-tests
       - build-rdp-bridge
-    # `always()` lets this run even when validate-tag-branch was skipped
-    # (dry-run / dispatched-release case). The inner conditions enforce
-    # the cli-tests + rdp-bridge success and branch-validation-if-tag rules.
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
@@ -144,10 +135,6 @@ jobs:
           sudo apt update
           sudo apt-get install -y libssl1.0-dev
       - name: Install cross-compile toolchains for RDP tier
-        # Per-target C cross-compilers for the Linux/Windows RDP builds.
-        # Darwin, FreeBSD, NetBSD, and windows/arm64 use zig cc instead
-        # (installed below) because apt doesn't ship cgo-capable cross
-        # toolchains for those targets.
         run: |
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
@@ -155,13 +142,10 @@ jobs:
             gcc-arm-linux-gnueabi \
             gcc-arm-linux-gnueabihf \
             gcc-mingw-w64-x86-64
-      - name: Install zig for darwin cross-compile
-        # zig cc bundles clang + ld.lld + a macOS SDK snapshot, so it
-        # can produce valid Mach-O from linux. Used as the $CC for the
-        # darwin-amd64-rdp and darwin-arm64-rdp goreleaser builds.
-        # The previous osxcross-target clone only shipped SDK headers
-        # (no linker), which worked when no cgo code was actually being
-        # linked but breaks as soon as -tags rdp pulls in bridge_cgo.go.
+      # zig cc is used as the $CC for darwin + FreeBSD + NetBSD
+      # goreleaser builds; apt doesn't ship cgo-capable cross compilers
+      # for those targets.
+      - name: Install zig for darwin/BSD cross-compile
         uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
@@ -171,10 +155,6 @@ jobs:
           pattern: rdp-bridge-*
           path: /tmp/rdp-bridge-artifacts/
       - name: Stage RDP bridge static libs into cargo target dirs
-        # Goreleaser's per-build CGO_LDFLAGS expects each target triple's
-        # libinfisical_rdp_bridge.a to live at the standard cargo output
-        # path so the linker's -L flag resolves. 10 triples, one per
-        # RDP-enabled target.
         run: |
           set -euo pipefail
           for triple in \

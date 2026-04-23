@@ -1,8 +1,4 @@
 [toolchain]
-# Pin the Rust version used by both local dev and CI so the three
-# cross-compile jobs (rust-cross on ubuntu, rust-darwin on macos,
-# rust-winarm on windows-11-arm) agree on compiler behaviour. Bump by
-# editing this file and letting CI fall through to the new toolchain.
 channel = "1.95.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

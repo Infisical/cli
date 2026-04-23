@@ -34,12 +34,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 
-# Force libz-sys to bundle its own zlib and link it statically into
-# our .a, so cross-compile linkers don't need a system `-lz` for the
-# target arch. Without this the linux cross builds fail at link time
-# with "cannot find -lz" because Ubuntu's cross-gcc packages don't
-# ship per-arch zlib. libz-sys is a transitive dep of flate2, which
-# ironrdp's smartcard / CredSSP paths pull in via winscard -> sspi.
+# Bundle zlib into the .a so cross-compile linkers don't need system -lz
+# per target arch. Pulled in transitively via flate2 (winscard -> sspi).
 libz-sys = { version = "1", features = ["static"] }
 
 [profile.release]

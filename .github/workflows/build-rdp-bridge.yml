@@ -1,30 +1,8 @@
 name: Build RDP Bridge Static Libs
 
-# Cross-compile the Rust MITM bridge into static archives for every
-# OS/arch the CLI ships with RDP support. Goreleaser downloads these
-# as artifacts at release time and links them into per-target
-# `infisical` binaries via CGO.
-#
-# Artifacts (10 total):
-#   rdp-bridge-x86_64-unknown-linux-gnu          : linux/amd64
-#   rdp-bridge-aarch64-unknown-linux-gnu         : linux/arm64
-#   rdp-bridge-i686-unknown-linux-gnu            : linux/386
-#   rdp-bridge-arm-unknown-linux-gnueabi         : linux/armv6
-#   rdp-bridge-armv7-unknown-linux-gnueabihf     : linux/armv7
-#   rdp-bridge-x86_64-unknown-freebsd            : freebsd/amd64
-#   rdp-bridge-x86_64-unknown-netbsd             : netbsd/amd64
-#   rdp-bridge-x86_64-pc-windows-gnu             : windows/amd64 (MinGW)
-#   rdp-bridge-x86_64-apple-darwin               : darwin/amd64
-#   rdp-bridge-aarch64-apple-darwin              : darwin/arm64
-#
-# windows/arm64 is intentionally excluded: the gnullvm toolchain
-# needs aarch64-w64-mingw32-clang (from llvm-mingw) that Ubuntu
-# doesn't ship and the target has effectively no PAM user base.
-# Users on windows/arm64 get the RDP stub at runtime.
-#
-# Called from:
-#   - Release workflow as a prerequisite to goreleaser
-#   - Direct workflow_dispatch for iterating on the matrix
+# windows/arm64 excluded: cross-compiling libz-sys for the gnullvm
+# target needs aarch64-w64-mingw32-clang (from llvm-mingw), not
+# available in Ubuntu repos.
 
 on:
   workflow_call:
@@ -32,22 +10,20 @@ on:
 
 jobs:
   rust-cross:
-    # Cross-compile via the `cross` tool (docker-based sysroots). Covers
-    # Linux (all arches), BSDs, and windows/amd64-gnu.
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest-8-cores
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu        # linux/amd64
-          - target: aarch64-unknown-linux-gnu       # linux/arm64
-          - target: i686-unknown-linux-gnu          # linux/386
-          - target: arm-unknown-linux-gnueabi       # linux/armv6
-          - target: armv7-unknown-linux-gnueabihf   # linux/armv7
-          - target: x86_64-unknown-freebsd          # freebsd/amd64
-          - target: x86_64-unknown-netbsd           # netbsd/amd64
-          - target: x86_64-pc-windows-gnu           # windows/amd64 (MinGW)
+          - target: x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+          - target: i686-unknown-linux-gnu
+          - target: arm-unknown-linux-gnueabi
+          - target: armv7-unknown-linux-gnueabihf
+          - target: x86_64-unknown-freebsd
+          - target: x86_64-unknown-netbsd
+          - target: x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -67,12 +43,9 @@ jobs:
         working-directory: packages/pam/handlers/rdp/native
         run: rustup show active-toolchain
 
+      # --lib skips the rdp-bridge-test dev binary, which pulls in
+      # runtime deps cross's BSD sysroots don't ship (e.g. libexecinfo).
       - name: cross build --release --lib --target ${{ matrix.target }}
-        # --lib: only build the staticlib crate-type, skip the
-        # rdp-bridge-test dev binary. The binary pulls in extra runtime
-        # deps (libexecinfo on BSDs, for instance) that cross's
-        # stock sysroots don't ship, and it's never needed in a
-        # release artifact.
         working-directory: packages/pam/handlers/rdp/native
         run: cross build --release --lib --target ${{ matrix.target }}
 
@@ -91,8 +64,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin     # darwin/amd64
-          - target: aarch64-apple-darwin    # darwin/arm64
+          - target: x86_64-apple-darwin
+          - target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 

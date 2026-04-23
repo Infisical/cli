@@ -1,10 +1,5 @@
 name: RDP Bridge Smoke Test
 
-# Fast per-PR check that the Rust static lib + CGo wrapper still build
-# and link against the Go CLI on linux/amd64. The full cross-compile
-# matrix runs on tag push via the release workflow; this job just
-# guards against regressions that would only surface at release time.
-
 on:
   pull_request:
     types: [opened, synchronize]
@@ -33,9 +28,6 @@ jobs:
           key: rdp-bridge-cargo-${{ runner.os }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
           restore-keys: rdp-bridge-cargo-${{ runner.os }}-
 
-      # Running any cargo command inside the crate auto-installs the
-      # toolchain pinned in rust-toolchain.toml via rustup (pre-installed
-      # on GitHub-hosted ubuntu-latest).
       - name: Install pinned Rust toolchain
         working-directory: packages/pam/handlers/rdp/native
         run: rustup show active-toolchain

@@ -1,11 +1,5 @@
-//! Connector config for the outbound half of the bridge.
-//!
-//! Post-CredSSP passthrough means we only need to drive the connector far
-//! enough to complete CredSSP. After that, client and target negotiate
-//! MCS / capabilities / share state directly through the byte-forwarding
-//! pipe. Only CredSSP-relevant fields (credentials, security flags) are
-//! load-bearing; other fields are required by `ironrdp_connector::Config`
-//! but never hit the wire because we skip `connect_finalize`.
+//! Connector config. Only CredSSP-relevant fields matter; after CredSSP
+//! we switch to byte passthrough, so other fields are just shape-fillers.
 
 use ironrdp_connector::{BitmapConfig, Config, Credentials, DesktopSize};
 use ironrdp_pdu::gcc::KeyboardType;
@@ -23,28 +17,17 @@ pub fn connector_config(username: String, password: String) -> Config {
         },
         desktop_scale_factor: 0,
 
-        // Advertise the same security-protocol set that native clients
-        // typically send (HYBRID_EX | HYBRID | SSL). Target echoes this
-        // set back in its ServerCoreData.clientRequestedProtocols; strict
-        // clients (Windows App) validate that echo against what THEY sent
-        // via the acceptor side. If the sets diverge, Windows App closes
-        // the session immediately after Connect Response.
-        //
-        // Target still picks HYBRID_EX (highest priority) so credential
-        // injection via NLA is unaffected. The MITM-downgrade concern
-        // described in ironrdp-connector's Config docs is real for a
-        // direct client-to-target connection, but here the outbound
-        // connection is to a known Windows server over a trusted path
-        // (gateway -> target), not a user-facing leg.
+        // Advertise HYBRID_EX|HYBRID|SSL to match what native clients send.
+        // Windows App validates the target's echoed clientRequestedProtocols
+        // against what it sent on the acceptor side; if the sets diverge it
+        // disconnects right after Connect Response.
         enable_tls: true,
         enable_credssp: true,
 
         credentials: Credentials::UsernamePassword { username, password },
         domain: None,
 
-        // Unused after CredSSP because we switch to passthrough and target
-        // negotiates these values directly with the native client. Kept at
-        // sentinel values to satisfy the Config struct shape.
+        // Shape-fillers: unused after CredSSP (see module doc).
         client_build: 0,
         client_name: String::new(),
         keyboard_type: KeyboardType::IbmEnhanced,
