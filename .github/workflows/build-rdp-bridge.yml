@@ -67,9 +67,14 @@ jobs:
         working-directory: packages/pam/handlers/rdp/native
         run: rustup show active-toolchain
 
-      - name: cross build --release --target ${{ matrix.target }}
+      - name: cross build --release --lib --target ${{ matrix.target }}
+        # --lib: only build the staticlib crate-type, skip the
+        # rdp-bridge-test dev binary. The binary pulls in extra runtime
+        # deps (libexecinfo on BSDs, for instance) that cross's
+        # stock sysroots don't ship, and it's never needed in a
+        # release artifact.
         working-directory: packages/pam/handlers/rdp/native
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --lib --target ${{ matrix.target }}
 
       - name: Upload static library
         uses: actions/upload-artifact@v4
@@ -106,9 +111,9 @@ jobs:
           rustup show active-toolchain
           rustup target add ${{ matrix.target }}
 
-      - name: cargo build --release --target ${{ matrix.target }}
+      - name: cargo build --release --lib --target ${{ matrix.target }}
         working-directory: packages/pam/handlers/rdp/native
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --lib --target ${{ matrix.target }}
 
       - name: Upload static library
         uses: actions/upload-artifact@v4
