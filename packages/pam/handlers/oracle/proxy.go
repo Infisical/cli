@@ -112,13 +112,6 @@ func relayWithTap(src, dst net.Conn, tap *QueryExtractor, errCh chan<- error) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func splitHostPort(addr string) (string, int, error) {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {

@@ -166,6 +166,10 @@ func (r *TTCReader) SetUseBigClrChunks(v bool) { r.useBigClrChunks = v }
 
 func (r *TTCReader) Remaining() int { return len(r.buf) - r.pos }
 
+// Pos returns the current byte offset into the payload. Useful when a caller needs
+// to slice the original payload at a field boundary discovered during parsing.
+func (r *TTCReader) Pos() int { return r.pos }
+
 func (r *TTCReader) read(n int) ([]byte, error) {
 	if r.pos+n > len(r.buf) {
 		return nil, io.ErrUnexpectedEOF

@@ -76,9 +76,6 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	// forward it back to upstream — otherwise upstream stalls waiting for it.
 	//
 	// A REFUSE / REDIRECT ends the flow with an error.
-	const (
-		PacketTypeResendMarker PacketType = 0x0B // NSPTRS
-	)
 	var acceptRaw []byte
 	for attempt := 0; acceptRaw == nil; attempt++ {
 		pkt, err := ReadFullPacket(upstreamConn, false)
@@ -100,7 +97,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 		// by calling session.negotiate() again — which creates a new
 		// tls.Client(session.conn, ...) wrapping the raw conn. We do the
 		// equivalent here.
-		if p.config.EnableTLS && pktType == PacketTypeResendMarker && origFlag&0x08 != 0 {
+		if p.config.EnableTLS && pktType == PacketTypeResend && origFlag&0x08 != 0 {
 			tc, terr := upgradeToTLS(ctx, rawUpstream, p.config)
 			if terr != nil {
 				return fmt.Errorf("upstream TLS upgrade after RESEND(flag=0x08): %w", terr)
@@ -127,7 +124,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 			return fmt.Errorf("upstream REFUSE during handshake")
 		case PacketTypeRedirect:
 			return fmt.Errorf("upstream REDIRECT during handshake (not supported)")
-		case PacketTypeResendMarker:
+		case PacketTypeResend:
 			// Read the client's follow-up packet (typically the DESCRIPTION supplement
 			// as a 16-bit-framed DATA packet) and forward to upstream. If we upgraded
 			// to TLS above, this write flows through the new TLS session.
@@ -191,8 +188,19 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	}
 	log.Info().Str("sessionID", p.config.SessionID).Int("p1Len", len(p1Payload)).Msg("Proxy: auth-request boundary reached")
 
-	// 5. Forward client's phase-1 auth request to upstream verbatim.
-	if err := writeDataPayload(upstreamConn, p1Payload, use32Bit); err != nil {
+	// 5. Rewrite the phase-1 auth-request username to match the configured account,
+	// then forward to upstream. Same net effect as how the postgres/mysql/mssql
+	// handlers overwrite the client's startup-packet user: whatever the client
+	// types is inert; upstream always looks up the configured account's verifier.
+	p1Forward := p1Payload
+	if p.config.InjectUsername != "" {
+		rewritten, rerr := rewritePhase1User(p1Payload, p.config.InjectUsername)
+		if rerr != nil {
+			return fmt.Errorf("rewrite phase 1 username: %w", rerr)
+		}
+		p1Forward = rewritten
+	}
+	if err := writeDataPayload(upstreamConn, p1Forward, use32Bit); err != nil {
 		return fmt.Errorf("forward phase 1 request: %w", err)
 	}
 
@@ -221,6 +229,15 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	if err != nil {
 		_ = WriteErrorToClient(clientConn, ORA1017InvalidCredentials, "ORA-01017: invalid username/password; logon denied", use32Bit)
 		return fmt.Errorf("translate phase 2 request: %w", err)
+	}
+	// Upstream Oracle cross-checks the phase-2 username against phase-1; we rewrote
+	// phase-1 above, so phase-2 has to agree or auth fails.
+	if p.config.InjectUsername != "" {
+		rewritten, rerr := rewritePhase2User(p2ReqTranslated, p.config.InjectUsername)
+		if rerr != nil {
+			return fmt.Errorf("rewrite phase 2 username: %w", rerr)
+		}
+		p2ReqTranslated = rewritten
 	}
 	if err := writeDataPayload(upstreamConn, p2ReqTranslated, use32Bit); err != nil {
 		return fmt.Errorf("forward phase 2 request: %w", err)
@@ -429,7 +446,7 @@ func proxyUntilAuthRequest(client, upstream net.Conn, use32Bit bool, sessionID s
 			pktType := PacketTypeOf(pkt)
 			// Check for auth-request on DATA packets.
 			if pktType == PacketTypeData {
-				payload, perr := extractDataPayload(pkt, use32Bit)
+				payload, perr := extractDataPayload(pkt)
 				if perr == nil && len(payload) >= 2 &&
 					payload[0] == TTCMsgAuthRequest && payload[1] == AuthSubOpPhaseOne {
 					// Don't forward — caller takes over.
@@ -471,21 +488,139 @@ func proxyUntilAuthRequest(client, upstream net.Conn, use32Bit bool, sessionID s
 }
 
 // extractDataPayload returns the TTC payload body of a DATA packet. Assumes caller has
-// verified the packet is indeed DATA. Framing: 4-byte length + 1-byte type + 1-byte flag
-// + 2-byte checksum + 2-byte data flags = 10-byte header; body starts at offset 10.
-// For 16-bit framing, header is 8 bytes (2-byte length + 2-byte checksum + 1-byte type
-// + 1-byte flag + 2-byte data flags).
-func extractDataPayload(pkt []byte, use32Bit bool) ([]byte, error) {
-	headerLen := 10
-	if !use32Bit {
-		headerLen = 10 // 2 len + 2 ch + 1 type + 1 flag + 2 data = 8 actually. But go-ora and we add dflags.
-		// Actually both use 10 because of the 2-byte data_flags after the 8-byte packet
-		// header. See readDataPayload in o5logon_server.go.
-	}
+// verified the packet is indeed DATA. The 2-byte data_flags follow the 8-byte TNS header
+// in both 16-bit and 32-bit framing modes, so body always starts at offset 10.
+func extractDataPayload(pkt []byte) ([]byte, error) {
+	const headerLen = 10
 	if len(pkt) < headerLen {
 		return nil, fmt.Errorf("packet too short: %d", len(pkt))
 	}
 	return pkt[headerLen:], nil
+}
+
+// rewriteAuthRequestUser replaces the username field in a client-sent auth request
+// (phase-1 or phase-2 — same layout, different sub-op) with `newUser`, leaving every
+// other field verbatim. Upstream Oracle uses the username we forward here to look up
+// the account's verifier in phase 1 and to validate the same user in phase 2 — so
+// rewriting both drives the whole crypto path to operate on `newUser`'s credentials,
+// regardless of what the client originally typed.
+//
+// Layout (identical for phase-1 sub-op 0x76 and phase-2 sub-op 0x73):
+//
+//	u8 0x03, u8 subOp, u8 0, u8 hasUser, [u32 compressed userLen OR single 0 byte],
+//	u32 compressed mode, u8 1, u32 compressed count, u8 1, u8 1,
+//	[optional u8 CLR-length prefix (go-ora) | no prefix (JDBC thin)] + user bytes,
+//	<count KVPs>
+//
+// Username encoding varies by client: go-ora emits a CLR-length byte before the raw
+// bytes; JDBC thin omits it. We detect which form the client used with the same peek
+// heuristic as ParseAuthPhaseTwo (if the next byte equals userLen and is below 0x20,
+// it's a length prefix) and mirror that form when emitting `newUser`.
+func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) ([]byte, error) {
+	r := NewTTCReader(payload)
+	op, err := r.GetByte()
+	if err != nil {
+		return nil, fmt.Errorf("opcode: %w", err)
+	}
+	if op != TTCMsgAuthRequest {
+		return nil, fmt.Errorf("unexpected opcode 0x%02X", op)
+	}
+	sub, err := r.GetByte()
+	if err != nil {
+		return nil, err
+	}
+	if sub != expectedSubOp {
+		return nil, fmt.Errorf("unexpected sub-op 0x%02X (want 0x%02X)", sub, expectedSubOp)
+	}
+	if _, err := r.GetByte(); err != nil { // the 0x00 separator
+		return nil, err
+	}
+
+	hasUser, err := r.GetByte()
+	if err != nil {
+		return nil, err
+	}
+	// Client sent no username — nothing to rewrite; forward verbatim.
+	if hasUser != 1 {
+		return payload, nil
+	}
+	origUserLen, err := r.GetInt(4, true, true)
+	if err != nil {
+		return nil, fmt.Errorf("userLen: %w", err)
+	}
+	if origUserLen <= 0 {
+		return payload, nil
+	}
+
+	// Capture the offset just after the userLen compressed-int. Everything from here
+	// up to the start of the user bytes (mode / markers / count) is copied verbatim.
+	middleStart := r.Pos()
+
+	// Walk mode + markers + count + 1 + 1 (identical to ParseAuthPhaseTwo).
+	if _, err := r.GetInt(4, true, true); err != nil {
+		return nil, fmt.Errorf("mode: %w", err)
+	}
+	if _, err := r.GetByte(); err != nil {
+		return nil, fmt.Errorf("marker after mode: %w", err)
+	}
+	if _, err := r.GetInt(4, true, true); err != nil {
+		return nil, fmt.Errorf("count: %w", err)
+	}
+	if _, err := r.GetByte(); err != nil {
+		return nil, fmt.Errorf("marker 1: %w", err)
+	}
+	if _, err := r.GetByte(); err != nil {
+		return nil, fmt.Errorf("marker 2: %w", err)
+	}
+	middleEnd := r.Pos()
+
+	// The next bytes are either <CLR-len> <user bytes> (go-ora) or just <user bytes>
+	// (JDBC thin). Peek to distinguish.
+	peek, perr := r.PeekByte()
+	if perr != nil {
+		return nil, fmt.Errorf("peek user: %w", perr)
+	}
+	usedCLRPrefix := int(peek) == origUserLen && peek < 0x20
+	if usedCLRPrefix {
+		if _, err := r.GetByte(); err != nil {
+			return nil, fmt.Errorf("consume user CLR length: %w", err)
+		}
+	}
+	if _, err := r.GetBytes(origUserLen); err != nil {
+		return nil, fmt.Errorf("user bytes: %w", err)
+	}
+	userEnd := r.Pos()
+
+	// Rebuild: header [0..3) + hasUser(1) + new userLen compressed + original middle
+	// (mode/marker/count/1/1) + [optional CLR-len byte] + new user bytes + tail.
+	newUserBytes := []byte(newUser)
+	newUserLen := len(newUserBytes)
+
+	out := make([]byte, 0, len(payload)+16)
+	out = append(out, payload[:3]...) // opcode + sub + 0x00
+	out = append(out, 0x01)           // hasUser = 1
+	// Emit newUserLen as a compressed int. Reuse TTCBuilder to avoid reimplementing
+	// the 0xFE/size-byte prefix rules.
+	lb := NewTTCBuilder()
+	lb.PutInt(int64(newUserLen), 4, true, true)
+	out = append(out, lb.Bytes()...)
+	out = append(out, payload[middleStart:middleEnd]...)
+	if usedCLRPrefix {
+		out = append(out, byte(newUserLen))
+	}
+	out = append(out, newUserBytes...)
+	out = append(out, payload[userEnd:]...)
+	return out, nil
+}
+
+// rewritePhase1User rewrites AUTH_USER on a phase-1 auth request.
+func rewritePhase1User(payload []byte, newUser string) ([]byte, error) {
+	return rewriteAuthRequestUser(payload, AuthSubOpPhaseOne, newUser)
+}
+
+// rewritePhase2User rewrites AUTH_USER on a phase-2 auth request.
+func rewritePhase2User(payload []byte, newUser string) ([]byte, error) {
+	return rewriteAuthRequestUser(payload, AuthSubOpPhaseTwo, newUser)
 }
 
 // ProxyAuthState carries session material extracted during phase-1 so phase-2 translation
@@ -632,7 +767,9 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 		return nil, fmt.Errorf("decoded password too short")
 	}
 	if string(decoded[16:]) != ProxyPasswordPlaceholder {
-		return nil, fmt.Errorf("password mismatch: got %q", string(decoded[16:]))
+		// Do not embed the decrypted plaintext — it could be a real password the
+		// client typed by mistake, and the error chain bubbles to gateway logs.
+		return nil, fmt.Errorf("password mismatch")
 	}
 	// Encrypt REAL password with the real encKey (which equals placeholderEncKey here
 	// because the computation uses session keys + CSK salt only, not the password).
@@ -856,13 +993,15 @@ func replaceKVPValue(payload []byte, key, newValue string) ([]byte, error) {
 		pos++
 		valBodyStart := pos
 		valBodyEnd := valBodyStart + vLen
-		// Build new encoded value: <vLen compressed> <vLen byte> <newValue bytes> <flag>
+		// Build the new encoded value section: <vLen compressed-int><CLR(newVal)>.
+		// TTCBuilder.PutClr emits the chunked 0xFE form when the value exceeds
+		// 0xFC bytes; a single-byte length would wrap and corrupt AUTH_PASSWORD
+		// for long (≥ 96-char) Oracle passwords.
 		newVal := []byte(newValue)
-		newVLen := len(newVal)
-		var newValSection []byte
-		newValSection = append(newValSection, encodeCompressedInt(uint64(newVLen))...)
-		newValSection = append(newValSection, byte(newVLen))
-		newValSection = append(newValSection, newVal...)
+		vb := NewTTCBuilder()
+		vb.PutUint(uint64(len(newVal)), 4, true, true)
+		vb.PutClr(newVal)
+		newValSection := vb.Bytes()
 		// Splice in the new value: keep bytes up to the end of the key, then the new
 		// encoded value section, then everything after the old value's body.
 		oldStart := idx + len(keyBytes)
@@ -874,18 +1013,4 @@ func replaceKVPValue(payload []byte, key, newValue string) ([]byte, error) {
 		return out, nil
 	}
 	return payload, fmt.Errorf("unexpected empty value for %q", key)
-}
-
-// encodeCompressedInt emits a compressed int the same way PutInt(n, 4, true, true) does.
-func encodeCompressedInt(n uint64) []byte {
-	if n == 0 {
-		return []byte{0}
-	}
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], n)
-	trimmed := bytes.TrimLeft(buf[:], "\x00")
-	out := make([]byte, 1+len(trimmed))
-	out[0] = byte(len(trimmed))
-	copy(out[1:], trimmed)
-	return out
 }
