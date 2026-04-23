@@ -5,7 +5,7 @@ name: Build RDP Bridge Static Libs
 # as artifacts at release time and links them into per-target
 # `infisical` binaries via CGO.
 #
-# Artifacts (11 total):
+# Artifacts (10 total):
 #   rdp-bridge-x86_64-unknown-linux-gnu          : linux/amd64
 #   rdp-bridge-aarch64-unknown-linux-gnu         : linux/arm64
 #   rdp-bridge-i686-unknown-linux-gnu            : linux/386
@@ -14,9 +14,13 @@ name: Build RDP Bridge Static Libs
 #   rdp-bridge-x86_64-unknown-freebsd            : freebsd/amd64
 #   rdp-bridge-x86_64-unknown-netbsd             : netbsd/amd64
 #   rdp-bridge-x86_64-pc-windows-gnu             : windows/amd64 (MinGW)
-#   rdp-bridge-aarch64-pc-windows-gnullvm        : windows/arm64 (rust-lld)
 #   rdp-bridge-x86_64-apple-darwin               : darwin/amd64
 #   rdp-bridge-aarch64-apple-darwin              : darwin/arm64
+#
+# windows/arm64 is intentionally excluded: the gnullvm toolchain
+# needs aarch64-w64-mingw32-clang (from llvm-mingw) that Ubuntu
+# doesn't ship and the target has effectively no PAM user base.
+# Users on windows/arm64 get the RDP stub at runtime.
 #
 # Called from:
 #   - Release workflow as a prerequisite to goreleaser
@@ -72,43 +76,6 @@ jobs:
         with:
           name: rdp-bridge-${{ matrix.target }}
           path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
-          if-no-files-found: error
-          retention-days: 7
-
-  rust-winarm:
-    # aarch64-pc-windows-gnullvm uses rust-lld (bundled with rustup) as
-    # its linker, so no external cross toolchain is needed. The `cross`
-    # tool doesn't cover this target, so we invoke cargo directly after
-    # adding the rustup target.
-    name: aarch64-pc-windows-gnullvm (native cargo + rust-lld)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: rdp-winarm-cargo-aarch64-pc-windows-gnullvm-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
-          restore-keys: rdp-winarm-cargo-aarch64-pc-windows-gnullvm-
-
-      - name: Install pinned Rust toolchain + target
-        working-directory: packages/pam/handlers/rdp/native
-        run: |
-          rustup show active-toolchain
-          rustup target add aarch64-pc-windows-gnullvm
-
-      - name: cargo build --release --target aarch64-pc-windows-gnullvm
-        working-directory: packages/pam/handlers/rdp/native
-        run: cargo build --release --target aarch64-pc-windows-gnullvm
-
-      - name: Upload static library
-        uses: actions/upload-artifact@v4
-        with:
-          name: rdp-bridge-aarch64-pc-windows-gnullvm
-          path: packages/pam/handlers/rdp/native/target/aarch64-pc-windows-gnullvm/release/libinfisical_rdp_bridge.a
           if-no-files-found: error
           retention-days: 7
 

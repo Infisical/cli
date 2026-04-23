@@ -204,26 +204,13 @@ builds:
     goarch:
       - amd64
 
-  - id: windows-arm64-rdp
-    binary: infisical
-    ldflags:
-      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
-      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
-    flags:
-      - -trimpath
-      - -tags=rdp
-    env:
-      - CGO_ENABLED=1
-      - 'CC=zig cc -target aarch64-windows-gnu'
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-pc-windows-gnullvm/release'
-    goos:
-      - windows
-    goarch:
-      - arm64
-
   # --- stub tier: CGO=0, no rdp support ---
-  # Only openbsd ships on the stub tier now. Every other target the
-  # CLI builds for has a dedicated rdp build above.
+  # Two targets stay on stub:
+  #   - openbsd (no cargo / `cross` coverage, negligible PAM users)
+  #   - windows/arm64 (gnullvm cross-compile needs llvm-mingw that
+  #     Ubuntu doesn't ship; negligible PAM users)
+  # Every other target the CLI builds for has a dedicated rdp build
+  # above.
   - id: all-other-builds
     env:
       - CGO_ENABLED=0
@@ -235,6 +222,7 @@ builds:
       - -trimpath
     goos:
       - openbsd
+      - windows
     goarch:
       - "386"
       - amd64
@@ -243,6 +231,16 @@ builds:
     goarm:
       - "6"
       - "7"
+    ignore:
+      # windows/amd64 is handled by windows-amd64-rdp above.
+      # windows/386 isn't supported by Go+cgo anyway.
+      # windows/arm isn't a real target.
+      - goos: windows
+        goarch: amd64
+      - goos: windows
+        goarch: "386"
+      - goos: windows
+        goarch: arm
 
 archives:
   - format_overrides:
