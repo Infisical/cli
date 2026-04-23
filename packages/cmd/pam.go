@@ -219,7 +219,12 @@ func runSSHCommand(cmd *cobra.Command, args []string, options pam.SSHAccessOptio
 		projectID = workspaceFile.WorkspaceId
 	}
 
-	reason := readReasonFlag(cmd)
+	var reason string
+	if options.ExecCommand != "" {
+		reason = readReasonFlag(cmd)
+	} else {
+		reason = resolveReason(cmd)
+	}
 
 	log.Debug().Msg("PAM SSH: Trying to fetch credentials using logged in details")
 
