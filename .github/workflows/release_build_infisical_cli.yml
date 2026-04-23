@@ -341,19 +341,20 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # Currently only supports Windows amd64.
-  # Doesn't technically need create-release-draft (output goes to
-  # Docker Hub, not the GitHub release), but kept in needs for visual
-  # grouping with the other two goreleaser jobs in the workflow DAG.
+  # Builds the Windows Server container images (→ Docker Hub). The
+  # binary baked in is RDP-enabled via MinGW CGO, matching the
+  # user-facing Windows zip.
   goreleaser-windows:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
       - cli-tests
+      - build-rdp-bridge
       - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
       (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
@@ -370,6 +371,12 @@ jobs:
           go-version: "1.25.9"
           cache: true
           cache-dependency-path: go.sum
+
+      - name: Download windows RDP bridge static lib
+        uses: actions/download-artifact@v4
+        with:
+          name: rdp-bridge-x86_64-pc-windows-gnu
+          path: packages/pam/handlers/rdp/native/target/x86_64-pc-windows-gnu/release
 
       - name: 🐋 Login to Docker Hub
         uses: docker/login-action@v2
