@@ -169,6 +169,16 @@ func (p *RDPProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
 		log.Info().Msg("Starting graceful shutdown of RDP proxy...")
 
+		// Remove the .rdp file first: p.cancel() below unblocks Run(),
+		// which returns to main, which may exit before the rest of this
+		// goroutine completes. Do the cleanup that has to happen before
+		// anything that could let main race ahead.
+		if p.rdpFilePath != "" {
+			if err := os.Remove(p.rdpFilePath); err != nil && !os.IsNotExist(err) {
+				log.Debug().Err(err).Str("path", p.rdpFilePath).Msg("Failed to remove .rdp file on exit")
+			}
+		}
+
 		p.NotifySessionTermination()
 
 		close(p.shutdownCh)

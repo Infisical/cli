@@ -148,7 +148,7 @@ jobs:
       - name: Install zig for darwin cross-compile
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.16.0
+          version: 0.14.0
       - name: Download RDP bridge static libs
         uses: actions/download-artifact@v4
         with:
