@@ -4,40 +4,6 @@ before:
     - ./scripts/manpages.sh
 
 builds:
-  - id: darwin-amd64-rdp
-    binary: infisical
-    ldflags:
-      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
-      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
-    flags:
-      - -trimpath
-      - -tags=rdp
-    env:
-      - CGO_ENABLED=1
-      - 'CC=zig cc -target x86_64-macos-none'
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-apple-darwin/release'
-    goos:
-      - darwin
-    goarch:
-      - amd64
-
-  - id: darwin-arm64-rdp
-    binary: infisical
-    ldflags:
-      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
-      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
-    flags:
-      - -trimpath
-      - -tags=rdp
-    env:
-      - CGO_ENABLED=1
-      - 'CC=zig cc -target aarch64-macos-none'
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-apple-darwin/release'
-    goos:
-      - darwin
-    goarch:
-      - arm64
-
   - id: linux-amd64-rdp
     binary: infisical
     ldflags:
@@ -205,39 +171,7 @@ snapshot:
 #     dir: "{{ dir .ArtifactPath }}"
 #     cmd: curl -F package=@{{ .ArtifactName }} https://{{ .Env.FURY_TOKEN }}@push.fury.io/infisical/
 
-brews:
-  - name: infisical
-    tap:
-      owner: Infisical
-      name: homebrew-get-cli
-    commit_author:
-      name: "Infisical"
-      email: ai@infisical.com
-    folder: Formula
-    homepage: "https://infisical.com"
-    description: "The official Infisical CLI"
-    install: |-
-      bin.install "infisical"
-      bash_completion.install "completions/infisical.bash" => "infisical"
-      zsh_completion.install "completions/infisical.zsh" => "_infisical"
-      fish_completion.install "completions/infisical.fish"
-      man1.install "manpages/infisical.1.gz"
-  - name: "infisical@{{.Version}}"
-    tap:
-      owner: Infisical
-      name: homebrew-get-cli
-    commit_author:
-      name: "Infisical"
-      email: ai@infisical.com
-    folder: Formula
-    homepage: "https://infisical.com"
-    description: "The official Infisical CLI"
-    install: |-
-      bin.install "infisical"
-      bash_completion.install "completions/infisical.bash" => "infisical"
-      zsh_completion.install "completions/infisical.zsh" => "_infisical"
-      fish_completion.install "completions/infisical.fish"
-      man1.install "manpages/infisical.1.gz"
+# brews: moved to .goreleaser-darwin.yaml (where darwin binaries are built).
 
 nfpms:
   - id: infisical

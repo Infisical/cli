@@ -142,13 +142,6 @@ jobs:
             gcc-arm-linux-gnueabi \
             gcc-arm-linux-gnueabihf \
             gcc-mingw-w64-x86-64
-      # zig cc is used as the $CC for darwin + FreeBSD + NetBSD
-      # goreleaser builds; apt doesn't ship cgo-capable cross compilers
-      # for those targets.
-      - name: Install zig for darwin cross-compile
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.14.0
       - name: Download RDP bridge static libs
         uses: actions/download-artifact@v4
         with:
@@ -163,25 +156,10 @@ jobs:
             i686-unknown-linux-gnu \
             arm-unknown-linux-gnueabi \
             armv7-unknown-linux-gnueabihf \
-            x86_64-pc-windows-gnu \
-            x86_64-apple-darwin \
-            aarch64-apple-darwin; do
+            x86_64-pc-windows-gnu; do
             target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
             mkdir -p "$target_dir"
             cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
-          done
-      # zig cc doesn't ship libresolv.tbd for macos targets, but Go's
-      # net package hardcodes -lresolv in its cgo directives. Drop a
-      # stub tbd with no exports into the darwin -L dirs: zig finds it
-      # at link time (satisfying -lresolv), and at runtime the resolv_*
-      # symbols resolve through libSystem on real macOS (libresolv.9 is
-      # itself just a re-exporter of libSystem).
-      - name: Stage libresolv stub for darwin cross-compile
-        run: |
-          set -euo pipefail
-          printf -- '--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos, arm64-macos ]\ninstall-name: /usr/lib/libresolv.9.dylib\nexports:\n  - targets: [ x86_64-macos, arm64-macos ]\n    symbols: [ ]\n' > /tmp/libresolv.tbd
-          for triple in x86_64-apple-darwin aarch64-apple-darwin; do
-            cp /tmp/libresolv.tbd "packages/pam/handlers/rdp/native/target/$triple/release/libresolv.tbd"
           done
       - name: GoReleaser (dry-run snapshot)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
@@ -258,6 +236,82 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.INFISICAL_CLI_REPO_CLOUDFRONT_DISTRIBUTION_ID }}
+
+  goreleaser-darwin:
+    runs-on: macos-latest
+    # Runs after the ubuntu goreleaser creates the release draft so this
+    # job can append darwin archives (release.mode: append).
+    needs:
+      - validate-tag-branch
+      - cli-tests
+      - build-rdp-bridge
+      - goreleaser
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
+      needs.goreleaser.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --force --tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.9"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download darwin RDP bridge static libs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdp-bridge-*-apple-darwin
+          path: /tmp/rdp-bridge-artifacts/
+
+      - name: Stage darwin RDP bridge static libs
+        run: |
+          set -euo pipefail
+          for triple in x86_64-apple-darwin aarch64-apple-darwin; do
+            target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
+            mkdir -p "$target_dir"
+            cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
+          done
+
+      - name: GoReleaser Darwin (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-darwin.yaml --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: GoReleaser Darwin (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-darwin.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist-darwin
+          path: dist/
+          retention-days: 7
 
   # Currently only supports Windows amd64
   goreleaser-windows:
