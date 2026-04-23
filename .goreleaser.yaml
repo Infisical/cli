@@ -115,7 +115,115 @@ builds:
     goarch:
       - amd64
 
+  - id: linux-386-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=i686-linux-gnu-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/i686-unknown-linux-gnu/release'
+    goos:
+      - linux
+    goarch:
+      - "386"
+
+  - id: linux-armv6-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=arm-linux-gnueabi-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/arm-unknown-linux-gnueabi/release'
+    goos:
+      - linux
+    goarch:
+      - arm
+    goarm:
+      - "6"
+
+  - id: linux-armv7-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - CC=arm-linux-gnueabihf-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/armv7-unknown-linux-gnueabihf/release'
+    goos:
+      - linux
+    goarch:
+      - arm
+    goarm:
+      - "7"
+
+  - id: freebsd-amd64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - 'CC=zig cc -target x86_64-freebsd-none'
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-freebsd/release'
+    goos:
+      - freebsd
+    goarch:
+      - amd64
+
+  - id: netbsd-amd64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - 'CC=zig cc -target x86_64-netbsd-none'
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-netbsd/release'
+    goos:
+      - netbsd
+    goarch:
+      - amd64
+
+  - id: windows-arm64-rdp
+    binary: infisical
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=rdp
+    env:
+      - CGO_ENABLED=1
+      - 'CC=zig cc -target aarch64-windows-gnu'
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-pc-windows-gnullvm/release'
+    goos:
+      - windows
+    goarch:
+      - arm64
+
   # --- stub tier: CGO=0, no rdp support ---
+  # Only openbsd ships on the stub tier now. Every other target the
+  # CLI builds for has a dedicated rdp build above.
   - id: all-other-builds
     env:
       - CGO_ENABLED=0
@@ -126,11 +234,7 @@ builds:
     flags:
       - -trimpath
     goos:
-      - freebsd
-      - linux
-      - netbsd
       - openbsd
-      - windows
     goarch:
       - "386"
       - amd64
@@ -139,19 +243,6 @@ builds:
     goarm:
       - "6"
       - "7"
-    ignore:
-      # linux/amd64, linux/arm64, windows/amd64 are handled by the
-      # per-arch rdp builds above: don't duplicate them here.
-      - goos: linux
-        goarch: amd64
-      - goos: linux
-        goarch: arm64
-      - goos: windows
-        goarch: amd64
-      - goos: windows
-        goarch: "386"
-      - goos: freebsd
-        goarch: "386"
 
 archives:
   - format_overrides:
@@ -220,7 +311,9 @@ nfpms:
     builds:
       - linux-amd64-rdp
       - linux-arm64-rdp
-      - all-other-builds
+      - linux-386-rdp
+      - linux-armv6-rdp
+      - linux-armv7-rdp
     vendor: Infisical, Inc
     homepage: https://infisical.com/
     maintainer: Infisical, Inc

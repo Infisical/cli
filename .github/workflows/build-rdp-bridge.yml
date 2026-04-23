@@ -1,24 +1,22 @@
 name: Build RDP Bridge Static Libs
 
 # Cross-compile the Rust MITM bridge into static archives for every
-# OS/arch the CLI targets with RDP support at release time. Scoped to
-# the "client tier" platforms where users actually run `pam rdp access`
-# (or the gateway serves RDP): linux amd64/arm64, darwin amd64/arm64,
-# and windows amd64 via MinGW (so cgo cross-compile from ubuntu can
-# link against it).
+# OS/arch the CLI ships with RDP support. Goreleaser downloads these
+# as artifacts at release time and links them into per-target
+# `infisical` binaries via CGO.
 #
-# Other platforms the main CLI targets (linux/386, arm 32-bit, BSDs,
-# windows-arm64) ship with the RDP stub: they keep CGO=0 and get
-# ErrRdpUnavailable at runtime. That matches option 2 of the build
-# design: RDP is only available on the tier where users realistically
-# use it.
-#
-# Artifacts:
-#   rdp-bridge-x86_64-unknown-linux-gnu      : linux/amd64
-#   rdp-bridge-aarch64-unknown-linux-gnu     : linux/arm64
-#   rdp-bridge-x86_64-pc-windows-gnu         : windows/amd64 (MinGW)
-#   rdp-bridge-x86_64-apple-darwin           : darwin/amd64
-#   rdp-bridge-aarch64-apple-darwin          : darwin/arm64
+# Artifacts (11 total):
+#   rdp-bridge-x86_64-unknown-linux-gnu          : linux/amd64
+#   rdp-bridge-aarch64-unknown-linux-gnu         : linux/arm64
+#   rdp-bridge-i686-unknown-linux-gnu            : linux/386
+#   rdp-bridge-arm-unknown-linux-gnueabi         : linux/armv6
+#   rdp-bridge-armv7-unknown-linux-gnueabihf     : linux/armv7
+#   rdp-bridge-x86_64-unknown-freebsd            : freebsd/amd64
+#   rdp-bridge-x86_64-unknown-netbsd             : netbsd/amd64
+#   rdp-bridge-x86_64-pc-windows-gnu             : windows/amd64 (MinGW)
+#   rdp-bridge-aarch64-pc-windows-gnullvm        : windows/arm64 (rust-lld)
+#   rdp-bridge-x86_64-apple-darwin               : darwin/amd64
+#   rdp-bridge-aarch64-apple-darwin              : darwin/arm64
 #
 # Called from:
 #   - Release workflow as a prerequisite to goreleaser
@@ -30,6 +28,8 @@ on:
 
 jobs:
   rust-cross:
+    # Cross-compile via the `cross` tool (docker-based sysroots). Covers
+    # Linux (all arches), BSDs, and windows/amd64-gnu.
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest-8-cores
     strategy:
@@ -38,6 +38,11 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu        # linux/amd64
           - target: aarch64-unknown-linux-gnu       # linux/arm64
+          - target: i686-unknown-linux-gnu          # linux/386
+          - target: arm-unknown-linux-gnueabi       # linux/armv6
+          - target: armv7-unknown-linux-gnueabihf   # linux/armv7
+          - target: x86_64-unknown-freebsd          # freebsd/amd64
+          - target: x86_64-unknown-netbsd           # netbsd/amd64
           - target: x86_64-pc-windows-gnu           # windows/amd64 (MinGW)
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +72,43 @@ jobs:
         with:
           name: rdp-bridge-${{ matrix.target }}
           path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
+          if-no-files-found: error
+          retention-days: 7
+
+  rust-winarm:
+    # aarch64-pc-windows-gnullvm uses rust-lld (bundled with rustup) as
+    # its linker, so no external cross toolchain is needed. The `cross`
+    # tool doesn't cover this target, so we invoke cargo directly after
+    # adding the rustup target.
+    name: aarch64-pc-windows-gnullvm (native cargo + rust-lld)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rdp-winarm-cargo-aarch64-pc-windows-gnullvm-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-winarm-cargo-aarch64-pc-windows-gnullvm-
+
+      - name: Install pinned Rust toolchain + target
+        working-directory: packages/pam/handlers/rdp/native
+        run: |
+          rustup show active-toolchain
+          rustup target add aarch64-pc-windows-gnullvm
+
+      - name: cargo build --release --target aarch64-pc-windows-gnullvm
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo build --release --target aarch64-pc-windows-gnullvm
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-bridge-aarch64-pc-windows-gnullvm
+          path: packages/pam/handlers/rdp/native/target/aarch64-pc-windows-gnullvm/release/libinfisical_rdp_bridge.a
           if-no-files-found: error
           retention-days: 7
 

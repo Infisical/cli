@@ -144,9 +144,17 @@ jobs:
           sudo apt update
           sudo apt-get install -y libssl1.0-dev
       - name: Install cross-compile toolchains for RDP tier
-        # aarch64-linux-gnu-gcc: linux/arm64 CGO cross-compile.
-        # x86_64-w64-mingw32-gcc: windows/amd64 CGO cross-compile.
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
+        # Per-target C cross-compilers for the Linux/Windows RDP builds.
+        # Darwin, FreeBSD, NetBSD, and windows/arm64 use zig cc instead
+        # (installed below) because apt doesn't ship cgo-capable cross
+        # toolchains for those targets.
+        run: |
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            gcc-i686-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            gcc-arm-linux-gnueabihf \
+            gcc-mingw-w64-x86-64
       - name: Install zig for darwin cross-compile
         # zig cc bundles clang + ld.lld + a macOS SDK snapshot, so it
         # can produce valid Mach-O from linux. Used as the $CC for the
@@ -165,13 +173,20 @@ jobs:
       - name: Stage RDP bridge static libs into cargo target dirs
         # Goreleaser's per-build CGO_LDFLAGS expects each target triple's
         # libinfisical_rdp_bridge.a to live at the standard cargo output
-        # path so the linker's -L flag resolves.
+        # path so the linker's -L flag resolves. 11 triples, one per
+        # RDP-enabled target.
         run: |
           set -euo pipefail
           for triple in \
             x86_64-unknown-linux-gnu \
             aarch64-unknown-linux-gnu \
+            i686-unknown-linux-gnu \
+            arm-unknown-linux-gnueabi \
+            armv7-unknown-linux-gnueabihf \
+            x86_64-unknown-freebsd \
+            x86_64-unknown-netbsd \
             x86_64-pc-windows-gnu \
+            aarch64-pc-windows-gnullvm \
             x86_64-apple-darwin \
             aarch64-apple-darwin; do
             target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
