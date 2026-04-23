@@ -170,6 +170,19 @@ jobs:
             mkdir -p "$target_dir"
             cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
           done
+      # zig cc doesn't ship libresolv.tbd for macos targets, but Go's
+      # net package hardcodes -lresolv in its cgo directives. Drop a
+      # stub tbd with no exports into the darwin -L dirs: zig finds it
+      # at link time (satisfying -lresolv), and at runtime the resolv_*
+      # symbols resolve through libSystem on real macOS (libresolv.9 is
+      # itself just a re-exporter of libSystem).
+      - name: Stage libresolv stub for darwin cross-compile
+        run: |
+          set -euo pipefail
+          printf -- '--- !tapi-tbd\ntbd-version: 4\ntargets: [ x86_64-macos, arm64-macos ]\ninstall-name: /usr/lib/libresolv.9.dylib\nexports:\n  - targets: [ x86_64-macos, arm64-macos ]\n    symbols: [ ]\n' > /tmp/libresolv.tbd
+          for triple in x86_64-apple-darwin aarch64-apple-darwin; do
+            cp /tmp/libresolv.tbd "packages/pam/handlers/rdp/native/target/$triple/release/libresolv.tbd"
+          done
       - name: GoReleaser (dry-run snapshot)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         uses: goreleaser/goreleaser-action@v4
