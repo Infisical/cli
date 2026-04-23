@@ -145,10 +145,10 @@ jobs:
       # zig cc is used as the $CC for darwin + FreeBSD + NetBSD
       # goreleaser builds; apt doesn't ship cgo-capable cross compilers
       # for those targets.
-      - name: Install zig for darwin/BSD cross-compile
+      - name: Install zig for darwin cross-compile
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.13.0
+          version: 0.16.0
       - name: Download RDP bridge static libs
         uses: actions/download-artifact@v4
         with:
