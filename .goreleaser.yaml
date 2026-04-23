@@ -155,8 +155,11 @@ archives:
       - completions/*
 
 release:
-  replace_existing_draft: true
-  mode: "replace"
+  # The draft is created up front by the create-release-draft workflow
+  # job, so both this config and .goreleaser-darwin.yaml use append mode
+  # to add their artifacts in parallel.
+  replace_existing_draft: false
+  mode: append
 
 checksum:
   name_template: "checksums.txt"

@@ -35,6 +35,33 @@ jobs:
   build-rdp-bridge:
     uses: ./.github/workflows/build-rdp-bridge.yml
 
+  # Create the GitHub release draft up front so both goreleaser
+  # (ubuntu) and goreleaser-darwin (macos) can append to it in
+  # parallel instead of serializing on ubuntu creating the draft.
+  # Skipped on dry-run since --snapshot doesn't touch GitHub at all.
+  create-release-draft:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    needs:
+      - validate-tag-branch
+      - cli-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create GitHub release draft (idempotent)
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release for ${{ github.ref_name }} already exists, skipping creation"
+          else
+            gh release create "${{ github.ref_name }}" \
+              --draft \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+
   # cli-integration-tests:
   #   name: Run tests before deployment
   #   uses: ./.github/workflows/run-cli-tests.yml
@@ -56,6 +83,7 @@ jobs:
     needs:
       # - cli-integration-tests
       - goreleaser
+      - goreleaser-darwin
       - validate-tag-branch
       - cli-tests
     steps:
@@ -102,10 +130,12 @@ jobs:
       - validate-tag-branch
       - cli-tests
       - build-rdp-bridge
+      - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
       needs.build-rdp-bridge.result == 'success' &&
+      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
@@ -239,18 +269,16 @@ jobs:
 
   goreleaser-darwin:
     runs-on: macos-latest
-    # Runs after the ubuntu goreleaser creates the release draft so this
-    # job can append darwin archives (release.mode: append).
     needs:
       - validate-tag-branch
       - cli-tests
       - build-rdp-bridge
-      - goreleaser
+      - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
       needs.build-rdp-bridge.result == 'success' &&
-      needs.goreleaser.result == 'success' &&
+      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v4
