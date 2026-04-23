@@ -10,10 +10,6 @@ name = "infisical_rdp_bridge"
 crate-type = ["staticlib", "rlib"]
 path = "src/lib.rs"
 
-[[bin]]
-name = "rdp-bridge-test"
-path = "src/main.rs"
-
 [dependencies]
 ironrdp-acceptor = "0.8"
 ironrdp-connector = "0.8"
@@ -31,8 +27,6 @@ rcgen = "0.13"
 
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-clap = { version = "4", features = ["derive"] }
 
 # Bundle zlib into the .a so cross-compile linkers don't need system -lz
 # per target arch. Pulled in transitively via flate2 (winscard -> sspi).

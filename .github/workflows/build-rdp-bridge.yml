@@ -41,11 +41,9 @@ jobs:
         working-directory: packages/pam/handlers/rdp/native
         run: rustup show active-toolchain
 
-      # --lib skips the rdp-bridge-test dev binary, which pulls in
-      # runtime deps cross's BSD sysroots don't ship (e.g. libexecinfo).
-      - name: cross build --release --lib --target ${{ matrix.target }}
+      - name: cross build --release --target ${{ matrix.target }}
         working-directory: packages/pam/handlers/rdp/native
-        run: cross build --release --lib --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Upload static library
         uses: actions/upload-artifact@v4
@@ -82,9 +80,9 @@ jobs:
           rustup show active-toolchain
           rustup target add ${{ matrix.target }}
 
-      - name: cargo build --release --lib --target ${{ matrix.target }}
+      - name: cargo build --release --target ${{ matrix.target }}
         working-directory: packages/pam/handlers/rdp/native
-        run: cargo build --release --lib --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload static library
         uses: actions/upload-artifact@v4
