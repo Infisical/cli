@@ -19,17 +19,9 @@ import (
 	"fmt"
 )
 
-// O5Logon verifier types. Only 18453 (12c+ PBKDF2+SHA512) is supported in v1.
-const (
-	VerifierType10g = 2361
-	VerifierType11g = 6949
-	VerifierType12c = 18453
-)
-
 // Oracle error codes we return on the client-facing leg.
 const (
 	ORA1017InvalidCredentials = 1017
-	ORA12660EncryptionRequired = 12660
 )
 
 // PKCS5Padding appends PKCS#5 padding.
@@ -116,7 +108,6 @@ func encryptPassword(password, key []byte, padding bool) (string, error) {
 	return encryptSessionKey(padding, key, buffer)
 }
 
-
 // deriveServerKey computes the 32-byte AES-256 key used to encrypt AUTH_SESSKEY for
 // verifier type 18453 (12c+ PBKDF2+SHA512), same as go-ora's client-side derivation.
 func deriveServerKey(password string, salt []byte, vGenCount int) (key []byte, speedy []byte, err error) {
@@ -132,7 +123,6 @@ func deriveServerKey(password string, salt []byte, vGenCount int) (key []byte, s
 	return
 }
 
-
 // BuildSvrResponse produces AUTH_SVR_RESPONSE: AES-CBC(rand(16) || "SERVER_TO_CLIENT", encKey).
 // The client decrypts it and verifies bytes [16:32] == "SERVER_TO_CLIENT" (verified from
 // auth_object.go:526-537 — the commented-out VerifyResponse in go-ora).
@@ -144,4 +134,3 @@ func BuildSvrResponse(encKey []byte) (string, error) {
 	body := append(head, []byte("SERVER_TO_CLIENT")...)
 	return encryptSessionKey(true, encKey, body)
 }
-
