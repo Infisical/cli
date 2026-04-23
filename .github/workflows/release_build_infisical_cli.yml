@@ -146,7 +146,7 @@ jobs:
       - name: Install cross-compile toolchains for RDP tier
         # aarch64-linux-gnu-gcc: linux/arm64 CGO cross-compile.
         # x86_64-w64-mingw32-gcc: windows/amd64 CGO cross-compile.
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86_64
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64
       - name: OSXCross for CGO Support
         run: |
           mkdir ../../osxcross
@@ -285,7 +285,10 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish
+          # Skip docker on dry-run: the windows-2022 runner doesn't
+          # always have a running docker daemon for building Windows
+          # Server images. Real-release invocations still build them.
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish,docker
         env:
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
