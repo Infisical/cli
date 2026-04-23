@@ -8,10 +8,6 @@ name: RDP Bridge Smoke Test
 on:
   pull_request:
     types: [opened, synchronize]
-    paths:
-      - "packages/pam/**"
-      - "packages/cmd/pam.go"
-      - ".github/workflows/run-cli-rdp-smoke.yml"
   workflow_dispatch:
 
 jobs:

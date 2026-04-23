@@ -1,0 +1,148 @@
+name: Build RDP Bridge Static Libs
+
+# Cross-compile the Rust MITM bridge into static archives (.a) for
+# every OS/arch the CLI targets at release time. Produces three
+# groups of artifacts that the main release workflow picks up and
+# links per-target via CGO_LDFLAGS:
+#
+#   rdp-bridge-cross     — 8 targets built via `cross` on ubuntu-latest
+#                          (linux/386, linux/amd64, linux/arm64,
+#                          linux/armv6, linux/armv7, freebsd/amd64,
+#                          netbsd/amd64, windows/amd64)
+#   rdp-bridge-darwin    — darwin/amd64 + darwin/arm64 built natively
+#                          on macos-latest
+#   rdp-bridge-winarm    — windows/arm64 built natively on
+#                          windows-11-arm
+#
+# Each job uploads a single artifact per target, keyed by the Rust
+# triple, so goreleaser can fetch them with predictable names.
+#
+# Called from:
+#   - Per-push PR smoke (not yet — this is the heavy job)
+#   - Release workflow as a prerequisite to goreleaser
+#   - Direct workflow_dispatch for iterating on the matrix
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  rust-cross:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-latest-8-cores
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: i686-unknown-linux-gnu          # linux/386
+          - target: x86_64-unknown-linux-gnu        # linux/amd64
+          - target: aarch64-unknown-linux-gnu       # linux/arm64
+          - target: arm-unknown-linux-gnueabi       # linux/armv6
+          - target: armv7-unknown-linux-gnueabihf   # linux/armv7
+          - target: x86_64-unknown-freebsd          # freebsd/amd64
+          - target: x86_64-unknown-netbsd           # netbsd/amd64
+          - target: x86_64-pc-windows-gnu           # windows/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rdp-cross-cargo-${{ matrix.target }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-cross-cargo-${{ matrix.target }}-
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        run: rustup show active-toolchain
+
+      - name: cross build --release --target ${{ matrix.target }}
+        working-directory: packages/pam/handlers/rdp/native
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-bridge-${{ matrix.target }}
+          path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
+          if-no-files-found: error
+          retention-days: 7
+
+  rust-darwin:
+    name: macos-latest (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin     # darwin/amd64
+          - target: aarch64-apple-darwin    # darwin/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rdp-darwin-cargo-${{ matrix.target }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-darwin-cargo-${{ matrix.target }}-
+
+      - name: Install pinned Rust toolchain + target
+        working-directory: packages/pam/handlers/rdp/native
+        run: |
+          rustup show active-toolchain
+          rustup target add ${{ matrix.target }}
+
+      - name: cargo build --release --target ${{ matrix.target }}
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-bridge-${{ matrix.target }}
+          path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
+          if-no-files-found: error
+          retention-days: 7
+
+  rust-winarm:
+    name: windows-11-arm (windows/arm64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rdp-winarm-cargo-aarch64-pc-windows-msvc-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-winarm-cargo-aarch64-pc-windows-msvc-
+
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: |
+          rustup show active-toolchain
+          rustup target add aarch64-pc-windows-msvc
+
+      - name: cargo build --release --target aarch64-pc-windows-msvc
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-bridge-aarch64-pc-windows-msvc
+          path: packages/pam/handlers/rdp/native/target/aarch64-pc-windows-msvc/release/infisical_rdp_bridge.lib
+          if-no-files-found: error
+          retention-days: 7
