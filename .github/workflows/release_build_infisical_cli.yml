@@ -5,11 +5,7 @@ on:
     inputs:
       dry_run:
         description: >-
-          Run goreleaser in --snapshot --skip=publish mode. No git tag needed,
-          nothing is published. The built binaries are uploaded as a
-          workflow artifact so you can download and sanity-check them. Safe
-          way to exercise the full cross-compile matrix before cutting a
-          real release.
+          Do a dry-run (no artifacts are published and no release is created)
         type: boolean
         default: true
 
