@@ -40,7 +40,9 @@ fn register(entry: BridgeEntry) -> u64 {
     id
 }
 
-/// # Safety: `ptr` must be null or a valid NUL-terminated C string.
+/// # Safety
+///
+/// `ptr` must be null or a valid NUL-terminated C string.
 unsafe fn c_str_to_owned(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -86,8 +88,10 @@ fn spawn_session(
     }))
 }
 
-/// # Safety: `client_fd` ownership transfers to the bridge on OK, stays
-/// with the caller on error. Strings must be NUL-terminated valid UTF-8.
+/// # Safety
+///
+/// `client_fd` ownership transfers to the bridge on OK, stays with the
+/// caller on error. Strings must be NUL-terminated valid UTF-8.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
@@ -129,7 +133,9 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     }
 }
 
-/// # Safety: see `rdp_bridge_start_unix_fd`.
+/// # Safety
+///
+/// See `rdp_bridge_start_unix_fd`.
 #[cfg(windows)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
