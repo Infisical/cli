@@ -31,10 +31,7 @@ const (
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
 	ResourceTypeMongodb    = "mongodb"
-	// ResourceTypeRDP maps to the backend's PamResource.Windows enum; the
-	// string is "windows" (not "rdp") so the gateway's resource-type tag
-	// lines up with session metadata the backend already writes.
-	ResourceTypeRDP = "windows"
+	ResourceTypeRDP        = "windows"
 )
 
 type SessionFileInfo struct {
@@ -75,7 +72,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes, ResourceTypeMongodb)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeRDP)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 

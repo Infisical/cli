@@ -310,11 +310,13 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 }
 
 // writeRDPFile creates a .rdp file pointing at the local loopback
-// listener. Files live under `~/.infisical/rdp/` — matching the CLI's
+// listener. Files live under `~/.infisical/rdp/` to match the CLI's
 // existing convention for per-user state (alongside the login config
 // and update-check cache). Filename includes the session ID so
-// concurrent sessions don't collide; the file is not deleted on exit
-// so users can re-open a session a few times from Finder if they want.
+// concurrent sessions don't collide. The file is removed on graceful
+// shutdown (see gracefulShutdown) since the embedded loopback port
+// becomes invalid as soon as the CLI exits; reopening the file later
+// would just dial a dead port.
 // Falls back to the OS temp dir if the home directory can't be resolved.
 func writeRDPFile(listenPort int, sessionID string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)

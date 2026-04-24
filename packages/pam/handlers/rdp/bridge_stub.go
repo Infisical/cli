@@ -28,3 +28,7 @@ func (p *RDPProxy) HandleConnection(_ context.Context, clientConn net.Conn) erro
 func (b *Bridge) Wait() error   { return ErrRdpUnavailable }
 func (b *Bridge) Cancel() error { return ErrRdpUnavailable }
 func (b *Bridge) Close() error  { return ErrRdpUnavailable }
+
+// IsSupported reports whether this build has a real RDP bridge. See the
+// rdp-enabled counterpart in bridge_cgo_shared.go for details.
+func IsSupported() bool { return false }

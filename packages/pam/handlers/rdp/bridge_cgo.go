@@ -64,9 +64,19 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 	return &Bridge{handle: uint64(handle)}, nil
 }
 
-// StartWithReadWriter creates a loopback TCP pair, hands the accepted
-// kernel-backed end to the bridge, and pumps bytes between the other
-// end and rw. Used for streams without a raw fd (e.g. *tls.Conn).
+// StartWithReadWriter adapts an fd-less Go byte stream (e.g. *tls.Conn
+// from the gateway's mTLS-wrapped virtual connection) to the bridge,
+// which needs a real file descriptor because the Rust side uses tokio's
+// TcpStream::from_raw_fd and does direct async I/O on the socket.
+//
+// Trick: open a loopback TCP pair. Hand one end's fd to the bridge (it
+// thinks it has a real client). Keep the other end in Go and shuttle
+// bytes between it and rw with two io.Copy goroutines.
+//
+//	rw (e.g. *tls.Conn)  <-io.Copy->  peer  <-kernel loopback->  accepted (fd -> Rust bridge)
+//
+// Cost: two extra in-process copies and a loopback round-trip per byte.
+// Negligible vs. the TLS + CredSSP work on either side.
 func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

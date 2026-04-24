@@ -46,7 +46,7 @@ type PAMCapabilitiesResponse struct {
 }
 
 func GetSupportedResourceTypes() []string {
-	return []string{
+	types := []string{
 		session.ResourceTypePostgres,
 		session.ResourceTypeMysql,
 		session.ResourceTypeMssql,
@@ -54,8 +54,14 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
 		session.ResourceTypeMongodb,
-		session.ResourceTypeRDP,
 	}
+	// Only advertise RDP when the real bridge is compiled in. A stub
+	// build would otherwise accept RDP session routing and fail every
+	// session at connect time with ErrRdpUnavailable.
+	if rdp.IsSupported() {
+		types = append(types, session.ResourceTypeRDP)
+	}
+	return types
 }
 
 // HandlePAMCapabilities handles the capabilities request from the client

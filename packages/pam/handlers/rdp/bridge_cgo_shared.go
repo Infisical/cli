@@ -47,3 +47,9 @@ func (b *Bridge) Close() error {
 	}
 	return nil
 }
+
+// IsSupported reports whether this build has a real RDP bridge. Used
+// by the gateway to decide whether to advertise RDP in the capabilities
+// response: a stub-build gateway that advertises support would route
+// RDP sessions only to fail them at connect time.
+func IsSupported() bool { return true }
