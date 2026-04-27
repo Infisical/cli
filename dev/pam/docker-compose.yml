@@ -82,12 +82,14 @@ services:
   redis:
     image: redis:7-alpine
     profiles: [redis]
-    command: ["redis-server", "--aclfile", "/etc/redis/users.acl"]
+    entrypoint: ["sh", "/entrypoint.sh"]
     ports:
       - "127.0.0.1:55479:6379"
     volumes:
       - pam_redisdata:/data
       - ./resources/redis/users.acl:/etc/redis/users.acl:ro
+      - ./resources/redis/entrypoint.sh:/entrypoint.sh:ro
+      - ./resources/redis/seed.redis:/docker-entrypoint-initdb.d/seed.redis:ro
     healthcheck:
       test: ["CMD", "redis-cli", "--user", "infisical", "-a", "Infisical@123", "ping"]
       interval: 5s
