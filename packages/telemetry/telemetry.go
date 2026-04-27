@@ -97,11 +97,19 @@ func (t *Telemetry) IdentifyUserIfNeeded() {
 	}
 
 	// Identify the user with their email as the distinctId
-	t.posthogClient.Enqueue(posthog.Identify{
+	if err := t.posthogClient.Enqueue(posthog.Identify{
 		DistinctId: email,
 		Properties: posthog.NewProperties().
 			Set("email", email),
-	})
+	}); err != nil {
+		// If we couldn't even enqueue the Identify (closed client, malformed
+		// message, etc.), don't persist LastIdentifiedEmail — otherwise the
+		// guard at the top of this function would lock the user out of ever
+		// being identified again. Bail out early so the next CLI invocation
+		// retries naturally.
+		log.Debug().Err(err).Msgf("IdentifyUserIfNeeded: failed to enqueue Identify [email=%s]", email)
+		return
+	}
 
 	// Alias the anonymous machine ID to the user's email so that any events
 	// captured before login (or before IdentifyUser was added) are linked to
@@ -109,13 +117,20 @@ func (t *Telemetry) IdentifyUserIfNeeded() {
 	// anonymous ID, so subsequent invocations on the same machine are no-ops
 	// on the server side — which is fine, the persisted LastIdentifiedEmail
 	// guard prevents us from re-enqueueing them anyway.
+	//
+	// We only persist LastIdentifiedEmail after both enqueues succeed; a
+	// failure on Alias means the anonymous-to-email link wasn't recorded,
+	// so we want the next invocation to retry it.
 	machineId, err := machineid.ID()
 	if err == nil && machineId != "" {
 		anonymousId := "anonymous_cli_" + machineId
-		t.posthogClient.Enqueue(posthog.Alias{
+		if err := t.posthogClient.Enqueue(posthog.Alias{
 			DistinctId: email,
 			Alias:      anonymousId,
-		})
+		}); err != nil {
+			log.Debug().Err(err).Msgf("IdentifyUserIfNeeded: failed to enqueue Alias [email=%s] [anonymousId=%s]", email, anonymousId)
+			return
+		}
 	}
 
 	// Persist that we've identified this email so we don't re-fire on the
@@ -123,7 +138,7 @@ func (t *Telemetry) IdentifyUserIfNeeded() {
 	// one extra Identify enqueue on the next run.
 	configFile.LastIdentifiedEmail = email
 	if err := util.WriteConfigFile(&configFile); err != nil {
-		log.Debug().Err(err).Msg("IdentifyUserIfNeeded: failed to persist LastIdentifiedEmail")
+		log.Debug().Err(err).Msgf("IdentifyUserIfNeeded: failed to persist LastIdentifiedEmail [email=%s]", email)
 	}
 }
 
