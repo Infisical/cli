@@ -177,18 +177,26 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	}
 
 	// Resolution priority:
-	//  1. Machine-identity access token from env (matches the credential the
-	//     API call will use, and aligns with the `identity-<id>` distinctId
-	//     the backend already uses for MachineIdentityLogin and other
-	//     identity-scoped events). This deliberately beats LoggedInUserEmail
-	//     because when both are present (e.g. a developer testing CI locally),
-	//     the CLI authenticates as the machine identity, not the user.
-	//  2. Logged-in user email from the persisted config.
+	//  1. Logged-in user email from the persisted config. A logged-in user
+	//     takes precedence over any machine-identity token that happens to
+	//     be exported in the shell, because some commands never authenticate
+	//     against the backend at all (e.g. `infisical user switch`, the
+	//     local-config branch of `infisical login`) and others authenticate
+	//     with the user's session JWT rather than the env-token. Attributing
+	//     those events to a stale `identity-<id>` would corrupt person-level
+	//     analytics, while attributing them to the logged-in email is always
+	//     correct.
+	//  2. Machine-identity access token from env. This is the dominant case
+	//     in CI / containers / Kubernetes pods, where there is no logged-in
+	//     user and the only credential is `INFISICAL_TOKEN` (or the UA-scoped
+	//     env var). Aligns with the `identity-<id>` distinctId the backend
+	//     uses for MachineIdentityLogin and other identity-scoped events,
+	//     so CLI events flow into the same person record.
 	//  3. Anonymous fallback keyed by the local machine ID.
-	if identityId := getMachineIdentityIdFromEnv(); identityId != "" {
-		distinctId = "identity-" + identityId
-	} else if infisicalConfig.LoggedInUserEmail != "" {
+	if infisicalConfig.LoggedInUserEmail != "" {
 		distinctId = infisicalConfig.LoggedInUserEmail
+	} else if identityId := getMachineIdentityIdFromEnv(); identityId != "" {
+		distinctId = "identity-" + identityId
 	} else if machineId != "" {
 		distinctId = "anonymous_cli_" + machineId
 	}
