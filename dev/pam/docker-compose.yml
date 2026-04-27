@@ -83,6 +83,10 @@ services:
     image: redis:7-alpine
     profiles: [redis]
     entrypoint: ["sh", "/entrypoint.sh"]
+    environment:
+      REDIS_AUTH_USER: infisical
+      REDIS_AUTH_PASSWORD: Infisical@123
+      REDIS_SERVER_ARGS: --aclfile /etc/redis/users.acl
     ports:
       - "127.0.0.1:55479:6379"
     volumes:
@@ -99,10 +103,13 @@ services:
   redis-noauth:
     image: redis:7-alpine
     profiles: [redis-noauth]
+    entrypoint: ["sh", "/entrypoint.sh"]
     ports:
       - "127.0.0.1:55480:6379"
     volumes:
       - pam_redisnoauthdata:/data
+      - ./resources/redis/entrypoint.sh:/entrypoint.sh:ro
+      - ./resources/redis/seed.redis:/docker-entrypoint-initdb.d/seed.redis:ro
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
