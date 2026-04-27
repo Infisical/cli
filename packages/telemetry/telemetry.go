@@ -1,7 +1,11 @@
 package telemetry
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/denisbrodbeck/machineid"
@@ -89,6 +93,76 @@ func (t *Telemetry) IdentifyUser(email string) {
 	// all enqueued events (Identify, Alias, and Capture).
 }
 
+// getMachineIdentityIdFromEnv inspects the environment variables that the
+// CLI uses to receive machine-identity access tokens (the same set checked
+// by util.GetInfisicalToken, minus the `--token` flag which is per-command
+// and not visible to the telemetry layer) and, if a machine-identity JWT
+// is present, returns the `identityId` claim from its payload.
+//
+// The function is intentionally best-effort and silent on failure:
+//   - returns "" if no token is set
+//   - returns "" for service tokens (`st.` prefix), which carry no JWT
+//     payload and represent the deprecated service-token auth mode
+//   - returns "" if the JWT is malformed or missing the `identityId` claim
+//
+// The token's signature is not verified — the value is only used to derive
+// a PostHog distinctId, never for authorization. The same token has already
+// been (or is about to be) sent to the Infisical API where its signature is
+// verified server-side.
+func getMachineIdentityIdFromEnv() string {
+	// Mirror the env-var precedence in util.GetInfisicalToken so that the
+	// telemetry distinctId aligns with the credential the API call will
+	// actually use:
+	//   1. INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN
+	//   2. INFISICAL_TOKEN
+	//   3. TOKEN (legacy gateway env var)
+	envVars := []string{
+		util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
+		util.INFISICAL_TOKEN_NAME,
+		util.INFISICAL_GATEWAY_TOKEN_NAME_LEGACY,
+	}
+
+	var token string
+	for _, name := range envVars {
+		if v := os.Getenv(name); v != "" {
+			token = v
+			break
+		}
+	}
+
+	if token == "" {
+		return ""
+	}
+
+	// Service tokens are deprecated and not JWTs — no identityId to extract.
+	if strings.HasPrefix(token, "st.") {
+		return ""
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		// Some JWT issuers pad the payload with `=`; tolerate that variant.
+		payloadBytes, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return ""
+		}
+	}
+
+	var claims struct {
+		IdentityID string `json:"identityId"`
+	}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return ""
+	}
+
+	return claims.IdentityID
+}
+
 func (t *Telemetry) GetDistinctId() (string, error) {
 	var distinctId string
 
@@ -102,7 +176,18 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 		log.Debug().Err(err).Msg("failed to get config file for telemetry")
 	}
 
-	if infisicalConfig.LoggedInUserEmail != "" {
+	// Resolution priority:
+	//  1. Machine-identity access token from env (matches the credential the
+	//     API call will use, and aligns with the `identity-<id>` distinctId
+	//     the backend already uses for MachineIdentityLogin and other
+	//     identity-scoped events). This deliberately beats LoggedInUserEmail
+	//     because when both are present (e.g. a developer testing CI locally),
+	//     the CLI authenticates as the machine identity, not the user.
+	//  2. Logged-in user email from the persisted config.
+	//  3. Anonymous fallback keyed by the local machine ID.
+	if identityId := getMachineIdentityIdFromEnv(); identityId != "" {
+		distinctId = "identity-" + identityId
+	} else if infisicalConfig.LoggedInUserEmail != "" {
 		distinctId = infisicalConfig.LoggedInUserEmail
 	} else if machineId != "" {
 		distinctId = "anonymous_cli_" + machineId
