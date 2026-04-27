@@ -21,14 +21,14 @@ redis                 127.0.0.1  55479  infisical  Infisical@123
 
 Register in Infisical now? [y/N] y
 
-Prefix: local-2026-04-25
+Prefix: local01-2026-04-25
 Registering resources in Infisical ...
-  ok: local-2026-04-25-postgres + local-2026-04-25-postgres-account
-  ok: local-2026-04-25-redis + local-2026-04-25-redis-account
+  ok: local01-2026-04-25-postgres + local01-2026-04-25-postgres-account
+  ok: local01-2026-04-25-redis + local01-2026-04-25-redis-account
 
 Access snippets:
-postgres (local-2026-04-25-postgres / local-2026-04-25-postgres-account)
-  CLI:  go run main.go pam db access --resource local-2026-04-25-postgres --account local-2026-04-25-postgres-account --project-id <id> --duration 1h --domain http://localhost:8080
+postgres (local01-2026-04-25-postgres / local01-2026-04-25-postgres-account)
+  CLI:  go run main.go pam db access --resource local01-2026-04-25-postgres --account local01-2026-04-25-postgres-account --project-id <id> --duration 1h --domain http://localhost:8080
   Web:  http://localhost:8080/organizations/<org>/projects/pam/<project>/resources/postgres/<rid>/accounts/<aid>/access
 ```
 

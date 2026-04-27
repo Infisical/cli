@@ -3,6 +3,7 @@ SHELL := /bin/bash
 .PHONY: up down clean setup info
 
 up:
+	@[ -f .env ] || { echo "Missing .env. Run: cp .env.example .env"; exit 1; }
 	@set -a; . ./.env; set +a; \
 	profiles=""; \
 	[ "$$ENABLE_POSTGRES"      = "true" ] && profiles="$$profiles,postgres"       || true; \

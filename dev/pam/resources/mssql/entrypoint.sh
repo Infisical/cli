@@ -42,15 +42,23 @@ IF NOT EXISTS (SELECT name FROM sys.database_principals WHERE name = N'$USR')
 ALTER ROLE db_owner ADD MEMBER [$USR];
 "
 
-# Run init scripts
-for f in /docker-entrypoint-initdb.d/*.sql; do
-    if [ -f "$f" ]; then
-        echo "Running $f ..."
-        /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -d "$DB" -i "$f"
-    fi
-done
-
-echo "Initialization complete."
+# Run init scripts only on first boot. The pam_mssqldata volume persists, so
+# without this guard `make down && make up` would replay seed.sql against
+# already-populated tables and spam errors. -b makes sqlcmd return non-zero on
+# SQL errors so set -e actually catches them.
+SENTINEL=/var/opt/mssql/.seeded
+if [ ! -f "$SENTINEL" ]; then
+    for f in /docker-entrypoint-initdb.d/*.sql; do
+        if [ -f "$f" ]; then
+            echo "Running $f ..."
+            /opt/mssql-tools18/bin/sqlcmd -b -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -d "$DB" -i "$f"
+        fi
+    done
+    touch "$SENTINEL"
+    echo "Initialization complete."
+else
+    echo "Init scripts already applied (sentinel $SENTINEL present); skipping."
+fi
 
 # Keep SQL Server in the foreground
 wait $MSSQL_PID
