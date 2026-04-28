@@ -116,14 +116,15 @@ PREFIX="${RESOURCE_PREFIX}-$(date +%F)"
 # -----------------------------------------------------------------------------
 if [[ -z "${INFISICAL_GATEWAY_ID:-}" ]]; then
   echo "INFISICAL_GATEWAY_ID is not set. Fetching gateways from ${INFISICAL_DOMAIN} ..."
-  gw_resp=$(curl -sS -H "$AUTH_HEADER" "${INFISICAL_DOMAIN}/api/v1/gateways/")
-  if ! echo "$gw_resp" | jq -e '.gateways' >/dev/null 2>&1; then
+  # PAM uses gatewayV2Service, so list v2 gateways — v1 IDs won't validate.
+  gw_resp=$(curl -sS -H "$AUTH_HEADER" "${INFISICAL_DOMAIN}/api/v2/gateways/")
+  if ! echo "$gw_resp" | jq -e 'type == "array"' >/dev/null 2>&1; then
     echo "Failed to list gateways. Response:" >&2
     echo "$gw_resp" >&2
     exit 1
   fi
   echo "Available gateways:"
-  echo "$gw_resp" | jq -r '.gateways[] | "  \(.id)  \(.name)"'
+  echo "$gw_resp" | jq -r '.[] | "  \(.id)  \(.name)"'
   echo ""
   echo "Paste one of those IDs into .env as INFISICAL_GATEWAY_ID and rerun." >&2
   exit 1
