@@ -38,7 +38,7 @@ postgres (local01-2026-04-25-postgres / local01-2026-04-25-postgres-account)
 INFISICAL_TOKEN=                 # browser cookie 'jid' from the Infisical UI; machine-identity tokens don't work
 INFISICAL_DOMAIN=http://localhost:8080
 INFISICAL_PROJECT_ID=
-INFISICAL_GATEWAY_ID=            # required; grab it from Infisical UI > Access Control > Gateways
+INFISICAL_GATEWAY_ID=            # required; grab it from Infisical UI > Networking > Gateways
 INFISICAL_ORG_ID=                # optional, only used to print web-access URLs
 
 RESOURCE_PREFIX=local01          # bump if names collide (e.g. local02)

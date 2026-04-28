@@ -106,7 +106,7 @@ fi
 : "${INFISICAL_TOKEN:?INFISICAL_TOKEN is required in .env}"
 : "${INFISICAL_DOMAIN:?INFISICAL_DOMAIN is required in .env}"
 : "${INFISICAL_PROJECT_ID:?INFISICAL_PROJECT_ID is required in .env}"
-: "${INFISICAL_GATEWAY_ID:?INFISICAL_GATEWAY_ID is required in .env (grab it from the Infisical UI under Access Control > Gateways)}"
+: "${INFISICAL_GATEWAY_ID:?INFISICAL_GATEWAY_ID is required in .env (grab it from the Infisical UI under Networking > Gateways)}"
 RESOURCE_PREFIX="${RESOURCE_PREFIX:-local01}"
 
 AUTH_HEADER="Authorization: Bearer ${INFISICAL_TOKEN}"
