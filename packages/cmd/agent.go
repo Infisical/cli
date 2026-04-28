@@ -1092,7 +1092,6 @@ type AgentManager struct {
 	newAccessTokenNotificationChan  chan bool
 	cachedUniversalAuthClientSecret string
 	templateFirstRenderOnce         map[int]*sync.Once // Track first render per template
-	certificateFirstIssueOnce       map[int]*sync.Once // Track first issue per certificate
 	exitAfterAuth                   bool
 	revokeCredentialsOnShutdown     bool
 
@@ -1131,13 +1130,11 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 
 	certificates := make([]CertificateWithID, len(options.Certificates))
 	certificateStates := make(map[int]*CertificateState)
-	certificateFirstIssueOnce := make(map[int]*sync.Once)
 	for i, certificate := range options.Certificates {
 		certificates[i] = CertificateWithID{ID: i + 1, Certificate: certificate}
 		certificateStates[i+1] = &CertificateState{
 			Status: "pending",
 		}
-		certificateFirstIssueOnce[i+1] = &sync.Once{}
 	}
 
 	agentManager := &AgentManager{
@@ -1145,8 +1142,6 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 		templates:                 templates,
 		certificates:              certificates,
 		certificateStates:         certificateStates,
-		certificateFirstIssueOnce: certificateFirstIssueOnce,
-
 		authConfigBytes: options.AuthConfigBytes,
 		authStrategy:    options.AuthStrategy,
 		retryConfig:     options.RetryConfig,
@@ -2508,12 +2503,32 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 	}
 
 	for _, cert := range tm.certificates {
-		tm.certificateFirstIssueOnce[cert.ID].Do(func() {
+		cert := cert
+		displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
+		maxRetries := cert.Certificate.Lifecycle.MaxFailureRetries
+		retryForever := maxRetries == 0
+
+		baseDelay := 2 * time.Second
+		if d, err := parseDurationWithDays(cert.Certificate.Lifecycle.FailureRetryInterval); err == nil && d > 0 {
+			baseDelay = d
+		}
+
+		const maxBackoff = 5 * time.Minute
+		for attempt := 1; retryForever || attempt <= maxRetries; attempt++ {
 			if err := tm.IssueCertificate(cert.ID, &cert.Certificate); err != nil {
-				displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
-				log.Error().Str("Certificate", displayName).Msgf("initial certificate issuance failed: %v", err)
+				log.Error().
+					Str("Certificate", displayName).
+					Int("attempt", attempt).
+					Msgf("initial certificate issuance failed: %v", err)
+				backoff := baseDelay * time.Duration(1<<uint(min(attempt-1, 8)))
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				time.Sleep(backoff)
+			} else {
+				break
 			}
-		})
+		}
 	}
 
 	for {
@@ -3116,38 +3131,6 @@ var agentCmd = &cobra.Command{
 
 		go tm.ManageTokenLifecycle()
 
-		if len(agentConfig.Certificates) > 0 {
-			go func() {
-				for {
-					if tm.getTokenUnsafe() != "" {
-						break
-					}
-					time.Sleep(100 * time.Millisecond)
-				}
-
-				httpClient, err := tm.createAuthenticatedClient()
-				if err != nil {
-					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
-					return
-				}
-
-				err = resolveCertificateNameReferences(&agentConfig.Certificates, httpClient)
-				if err != nil {
-					log.Error().Msgf("failed to resolve certificate name references: %v", err)
-					return
-				}
-
-				for i := range tm.certificates {
-					for j := range agentConfig.Certificates {
-						if tm.certificates[i].ID == j+1 {
-							tm.certificates[i].Certificate = agentConfig.Certificates[j]
-							break
-						}
-					}
-				}
-			}()
-		}
-
 		var monitoredTemplatesFinished atomic.Int32
 
 		// when all templates have finished rendering once, we delete the unused leases from the cache.
@@ -3178,8 +3161,38 @@ var agentCmd = &cobra.Command{
 		}
 
 		if len(tm.certificates) > 0 {
-			log.Info().Msg("certificate management engine starting...")
-			go tm.MonitorCertificates(ctx)
+			go func() {
+				for {
+					if tm.getTokenUnsafe() != "" {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				httpClient, err := tm.createAuthenticatedClient()
+				if err != nil {
+					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
+					return
+				}
+
+				err = resolveCertificateNameReferences(&agentConfig.Certificates, httpClient)
+				if err != nil {
+					log.Error().Msgf("failed to resolve certificate name references: %v", err)
+					return
+				}
+
+				for i := range tm.certificates {
+					for j := range agentConfig.Certificates {
+						if tm.certificates[i].ID == j+1 {
+							tm.certificates[i].Certificate = agentConfig.Certificates[j]
+							break
+						}
+					}
+				}
+
+				log.Info().Msg("certificate management engine starting...")
+				tm.MonitorCertificates(ctx)
+			}()
 		}
 
 		for {
@@ -3366,7 +3379,7 @@ var certManagerAgentCmd = &cobra.Command{
 
 		go tm.ManageTokenLifecycle()
 
-		if len(agentConfig.Certificates) > 0 {
+		if len(tm.certificates) > 0 {
 			go func() {
 				for {
 					if tm.getTokenUnsafe() != "" {
@@ -3395,12 +3408,10 @@ var certManagerAgentCmd = &cobra.Command{
 						}
 					}
 				}
-			}()
-		}
 
-		if len(tm.certificates) > 0 {
-			log.Info().Msg("certificate management engine starting...")
-			go tm.MonitorCertificates(ctx)
+				log.Info().Msg("certificate management engine starting...")
+				tm.MonitorCertificates(ctx)
+			}()
 		}
 
 		for {
