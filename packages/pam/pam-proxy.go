@@ -422,6 +422,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			TargetPort:     uint16(credentials.Port),
 			InjectUsername: credentials.Username,
 			InjectPassword: credentials.Password,
+			InjectDomain:   credentials.Domain,
 			SessionID:      pamConfig.SessionId,
 			SessionLogger:  sessionLogger,
 		}
