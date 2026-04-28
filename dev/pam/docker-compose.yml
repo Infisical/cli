@@ -1,0 +1,149 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    profiles: [postgres]
+    environment:
+      POSTGRES_DB: infisical
+      POSTGRES_USER: infisical
+      POSTGRES_PASSWORD: Infisical@123
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ./resources/postgres/init:/docker-entrypoint-initdb.d
+      - pam_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infisical -d infisical"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mysql:
+    # Pinned to 8.0 because 8.4 disables mysql_native_password by default and
+    # removes --default-authentication-plugin. Infisical's non-TLS validator
+    # can't handshake against caching_sha2_password.
+    image: mysql:8.0
+    profiles: [mysql]
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    environment:
+      MYSQL_DATABASE: infisical
+      MYSQL_USER: infisical
+      MYSQL_PASSWORD: Infisical@123
+      MYSQL_ROOT_PASSWORD: Infisical@123
+    ports:
+      - "127.0.0.1:55433:3306"
+    volumes:
+      - ./resources/mysql/init:/docker-entrypoint-initdb.d
+      - pam_mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "infisical", "-pInfisical@123"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mssql:
+    build:
+      context: ./resources/mssql
+      dockerfile: Dockerfile
+    profiles: [mssql]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: Infisical@123
+      MSSQL_DATABASE: infisical
+      MSSQL_USER: infisical
+      MSSQL_PASSWORD: Infisical@123
+    ports:
+      - "127.0.0.1:55434:1433"
+    volumes:
+      - pam_mssqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "Infisical@123", "-C", "-Q", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongodb:
+    image: mongo:8-noble
+    profiles: [mongodb]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: infisical
+      MONGO_INITDB_ROOT_PASSWORD: Infisical@123
+      MONGO_INITDB_DATABASE: infisical
+    ports:
+      - "127.0.0.1:55437:27017"
+    volumes:
+      - ./resources/mongodb/init:/docker-entrypoint-initdb.d
+      - pam_mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    profiles: [redis]
+    entrypoint: ["sh", "/entrypoint.sh"]
+    environment:
+      REDIS_AUTH_USER: infisical
+      REDIS_AUTH_PASSWORD: Infisical@123
+      REDIS_SERVER_ARGS: --aclfile /etc/redis/users.acl
+    ports:
+      - "127.0.0.1:55479:6379"
+    volumes:
+      - pam_redisdata:/data
+      - ./resources/redis/users.acl:/etc/redis/users.acl:ro
+      - ./resources/redis/entrypoint.sh:/entrypoint.sh:ro
+      - ./resources/redis/seed.redis:/docker-entrypoint-initdb.d/seed.redis:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "--user", "infisical", "-a", "Infisical@123", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-noauth:
+    image: redis:7-alpine
+    profiles: [redis-noauth]
+    entrypoint: ["sh", "/entrypoint.sh"]
+    ports:
+      - "127.0.0.1:55480:6379"
+    volumes:
+      - pam_redisnoauthdata:/data
+      - ./resources/redis/entrypoint.sh:/entrypoint.sh:ro
+      - ./resources/redis/seed.redis:/docker-entrypoint-initdb.d/seed.redis:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ssh-server-password:
+    build:
+      context: ./resources/ssh-server
+    profiles: [ssh-password]
+    environment:
+      SSH_USER: infisical
+      SSH_MODE: password
+      SSH_PASSWORD: Infisical@123
+    ports:
+      - "127.0.0.1:55422:22"
+
+  ssh-server-key:
+    build:
+      context: ./resources/ssh-server
+    profiles: [ssh-key]
+    environment:
+      SSH_USER: infisical
+      SSH_MODE: key
+    volumes:
+      - pam_sshkeydata:/ssh-keys
+    ports:
+      - "127.0.0.1:55423:22"
+
+volumes:
+  pam_pgdata:
+  pam_mysqldata:
+  pam_mssqldata:
+  pam_mongodata:
+  pam_redisdata:
+  pam_redisnoauthdata:
+  pam_sshkeydata:
