@@ -58,18 +58,18 @@ certificates:
         omit-root: true
 
   # Fetch an existing certificate by ID. Skips issuance entirely.
-  # If private-key.path is configured but the imported certificate has no
-  # private key (e.g. ACME-issued), a warning is logged and the file is skipped.
-  # - imported-certificate-id: "00000000-0000-0000-0000-000000000000"
+  # If private-key.path is configured but the certificate has no private key
+  # (e.g. ACME-issued), a warning is logged and the file is skipped.
+  # - certificate-id: "00000000-0000-0000-0000-000000000000"
   #   lifecycle:
   #     status-check-interval: "6h"
   #   file-output:
   #     certificate:
-  #       path: "./certs/imported/certificate.crt"
+  #       path: "./certs/existing/certificate.crt"
   #       permission: "0644"
   #     chain:
-  #       path: "./certs/imported/chain.crt"
+  #       path: "./certs/existing/chain.crt"
   #       permission: "0644"
   #     private-key:
-  #       path: "./certs/imported/private.key"
+  #       path: "./certs/existing/private.key"
   #       permission: "0600"
