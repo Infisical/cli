@@ -375,11 +375,11 @@ func (su *SessionUploader) startUploadRoutine() {
 		defer su.ticker.Stop()
 		defer flushTicker.Stop()
 
-		// On startup, re-register any non-expired sessions that were in progress when
-		// the gateway last shut down or crashed so the flush ticker resumes uploading them.
+		// On startup, drive final cleanup for any non-expired session files left on disk
+		// (sessions that were active when the gateway last shut down or crashed).
 		su.resumeInProgressSessions()
 
-		// Process any orphaned expired files from previous runs immediately
+		// Process any orphaned expired files from previous runs immediately.
 		su.uploadExpiredSessionFiles()
 
 		for {
@@ -395,11 +395,12 @@ func (su *SessionUploader) startUploadRoutine() {
 	}()
 }
 
-// resumeInProgressSessions drives final cleanup for every leftover recording file at startup.
+// resumeInProgressSessions drives final cleanup for non-expired recording files at startup.
 // A gateway restart kills all proxy connections, so any file on disk is from a session that is
 // already over from the customer's perspective. CleanupPAMSession performs the final flush /
 // legacy bulk upload, deletes the file, and notifies the platform of session termination.
-// On failure the file is retained and uploadExpiredSessionFiles will retry once ExpiresAt crosses.
+// Already-expired files are skipped here and handled exclusively by uploadExpiredSessionFiles
+// to avoid duplicate back-to-back cleanup attempts on the same file at startup.
 func (su *SessionUploader) resumeInProgressSessions() {
 	allFiles, err := ListSessionFiles()
 	if err != nil {
@@ -407,10 +408,14 @@ func (su *SessionUploader) resumeInProgressSessions() {
 		return
 	}
 
+	now := time.Now()
 	for _, fileInfo := range allFiles {
+		if now.After(fileInfo.ExpiresAt) {
+			continue
+		}
 		log.Info().Str("sessionId", fileInfo.SessionID).Str("filename", fileInfo.Filename).Msg("Driving cleanup for leftover session file at startup")
 		if err := su.CleanupPAMSession(fileInfo.SessionID, "gateway_restart"); err != nil {
-			log.Error().Err(err).Str("sessionId", fileInfo.SessionID).Str("filename", fileInfo.Filename).Msg("Startup cleanup failed, file retained for retry on next ticker")
+			log.Error().Err(err).Str("sessionId", fileInfo.SessionID).Str("filename", fileInfo.Filename).Msg("Startup cleanup did not complete successfully")
 		}
 	}
 }
