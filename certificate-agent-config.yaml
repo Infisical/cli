@@ -11,6 +11,7 @@ auth:
     remove_client_secret_on_read: false
 
 certificates:
+  # Issue a new certificate from a profile
   - profile-name: "my-profile-name"
     project-slug: "my-project-slug"
 
@@ -29,8 +30,8 @@ certificates:
         - "server_auth"
       ttl: "30d"
     lifecycle:
-      renew-before-expiry: "1d"            # When to start checking for renewal before expiration
-      status-check-interval: "6h"          # How often to check certificate status and renewal needs
+      renew-before-expiry: "1d" # When to start checking for renewal before expiration
+      status-check-interval: "6h" # How often to check certificate status and renewal needs
 
     # Post-hooks for automation
     post-hooks:
@@ -55,3 +56,20 @@ certificates:
         path: "./certs/web-server/chain.crt"
         permission: "0644"
         omit-root: true
+
+  # Fetch an existing certificate by ID. Skips issuance entirely.
+  # If private-key.path is configured but the imported certificate has no
+  # private key (e.g. ACME-issued), a warning is logged and the file is skipped.
+  # - imported-certificate-id: "00000000-0000-0000-0000-000000000000"
+  #   lifecycle:
+  #     status-check-interval: "6h"
+  #   file-output:
+  #     certificate:
+  #       path: "./certs/imported/certificate.crt"
+  #       permission: "0644"
+  #     chain:
+  #       path: "./certs/imported/chain.crt"
+  #       permission: "0644"
+  #     private-key:
+  #       path: "./certs/imported/private.key"
+  #       permission: "0600"
