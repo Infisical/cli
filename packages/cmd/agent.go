@@ -2167,6 +2167,20 @@ func (tm *AgentManager) createAuthenticatedClient() (*resty.Client, error) {
 	return httpClient, nil
 }
 
+func importedStatusCheckInterval(certificate *AgentCertificateConfig) time.Duration {
+	if interval, err := parseDurationWithDays(certificate.Lifecycle.StatusCheckInterval); err == nil && interval > 0 {
+		return interval
+	}
+	return DEFAULT_MONITORING_INTERVAL
+}
+
+func importedFailureRetryInterval(certificate *AgentCertificateConfig) time.Duration {
+	if interval, err := parseDurationWithDays(certificate.Lifecycle.FailureRetryInterval); err == nil && interval > 0 {
+		return interval
+	}
+	return importedStatusCheckInterval(certificate)
+}
+
 func (tm *AgentManager) FetchImportedCertificate(certificateId int, certificate *AgentCertificateConfig) error {
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
 	log.Info().Str("Certificate", displayName).Msg("fetching imported certificate")
@@ -2231,7 +2245,7 @@ func (tm *AgentManager) FetchImportedCertificate(certificateId int, certificate 
 	state.Status = "active"
 	state.LastError = ""
 	state.RetryCount = 0
-	state.NextRenewalCheck = state.ExpiresAt
+	state.NextRenewalCheck = time.Now().Add(importedStatusCheckInterval(certificate))
 
 	certResponse := &api.CertificateResponse{
 		Certificate: &api.CertificateData{
@@ -2677,15 +2691,39 @@ func (tm *AgentManager) CheckCertificateRenewals() {
 		state := tm.certificateStates[cert.ID]
 
 		if cert.Certificate.IsImported() {
+			importedCert := &cert.Certificate
+			displayName := tm.getCertificateDisplayName(cert.ID, importedCert)
+
+			if state.Status == "failed" {
+				if cert.Certificate.Lifecycle.MaxFailureRetries > 0 && state.RetryCount >= cert.Certificate.Lifecycle.MaxFailureRetries {
+					continue
+				}
+				if !state.LastRetry.IsZero() && now.Sub(state.LastRetry) < importedFailureRetryInterval(importedCert) {
+					continue
+				}
+				log.Info().Str("Certificate", displayName).Msg("retrying imported certificate fetch")
+				tm.mutex.Unlock()
+				if err := tm.FetchImportedCertificate(cert.ID, importedCert); err != nil {
+					log.Error().Str("Certificate", displayName).Msgf("imported certificate retry failed: %v", err)
+				}
+				tm.mutex.Lock()
+				continue
+			}
+
 			if state.Status != "active" || state.CertificateID == "" {
 				continue
 			}
-			displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
+			if !state.NextRenewalCheck.IsZero() && now.Before(state.NextRenewalCheck) {
+				continue
+			}
+
 			tm.mutex.Unlock()
 			if err := tm.CheckCertificateStatus(cert.ID, state.CertificateID); err != nil {
 				log.Error().Str("Certificate", displayName).Msgf("failed to check imported certificate status: %v", err)
 			}
 			tm.mutex.Lock()
+
+			state.NextRenewalCheck = time.Now().Add(importedStatusCheckInterval(importedCert))
 			continue
 		}
 
