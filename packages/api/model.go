@@ -803,6 +803,18 @@ type EnrollGatewayResponse struct {
 	GatewayID   string `json:"gatewayId"`
 }
 
+type AwsAuthLoginGatewayRequest struct {
+	GatewayID         string `json:"gatewayId"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod"`
+	IamRequestBody    string `json:"iamRequestBody"`
+	IamRequestHeaders string `json:"iamRequestHeaders"`
+}
+
+type AwsAuthLoginGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
 type RegisterGatewayResponse struct {
 	GatewayID string `json:"gatewayId"`
 	RelayHost string `json:"relayHost"`
