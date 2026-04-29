@@ -303,7 +303,28 @@ func GetInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err erro
 		}
 	}
 
-	if infisicalToken == "" { // If it's empty, we return nothing at all.
+	if infisicalToken == "" {
+		// Check if Universal Auth client credentials are available for automatic authentication.
+		// This allows commands like `infisical run` to work when INFISICAL_UNIVERSAL_AUTH_CLIENT_ID
+		// and INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET are set, without requiring a prior `infisical login`.
+		clientId := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME)
+		clientSecret := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME)
+
+		if clientId != "" && clientSecret != "" {
+			log.Debug().Msg("No explicit token found, attempting automatic authentication via Universal Auth client credentials")
+			loginResponse, err := UniversalAuthLogin(clientId, clientSecret)
+			if err != nil {
+				return nil, fmt.Errorf("failed to authenticate with Universal Auth using %s and %s environment variables: %w",
+					INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME, err)
+			}
+
+			return &models.TokenDetails{
+				Type:   UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
+				Token:  loginResponse.AccessToken,
+				Source: fmt.Sprintf("%s and %s environment variables", INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME),
+			}, nil
+		}
+
 		return nil, nil
 	}
 
