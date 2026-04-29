@@ -59,7 +59,7 @@ func GetSupportedResourceTypes() []string {
 	// build would otherwise accept RDP session routing and fail every
 	// session at connect time with ErrRdpUnavailable.
 	if rdp.IsSupported() {
-		types = append(types, session.ResourceTypeRDP)
+		types = append(types, session.ResourceTypeWindows)
 	}
 	return types
 }
@@ -413,8 +413,8 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 
 		return proxy.HandleConnection(ctx, conn, sessionLogger)
-	case session.ResourceTypeRDP:
-		if credentials.Port < 0 || credentials.Port > 65535 {
+	case session.ResourceTypeWindows:
+		if credentials.Port <= 0 || credentials.Port > 65535 {
 			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
 		}
 		rdpConfig := rdp.RDPProxyConfig{
