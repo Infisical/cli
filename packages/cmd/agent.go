@@ -1097,7 +1097,6 @@ type AgentManager struct {
 	newAccessTokenNotificationChan  chan bool
 	cachedUniversalAuthClientSecret string
 	templateFirstRenderOnce         map[int]*sync.Once // Track first render per template
-	certificateFirstIssueOnce       map[int]*sync.Once // Track first issue per certificate
 	exitAfterAuth                   bool
 	revokeCredentialsOnShutdown     bool
 
@@ -1136,21 +1135,18 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 
 	certificates := make([]CertificateWithID, len(options.Certificates))
 	certificateStates := make(map[int]*CertificateState)
-	certificateFirstIssueOnce := make(map[int]*sync.Once)
 	for i, certificate := range options.Certificates {
 		certificates[i] = CertificateWithID{ID: i + 1, Certificate: certificate}
 		certificateStates[i+1] = &CertificateState{
 			Status: "pending",
 		}
-		certificateFirstIssueOnce[i+1] = &sync.Once{}
 	}
 
 	agentManager := &AgentManager{
-		filePaths:                 options.FileDeposits,
-		templates:                 templates,
-		certificates:              certificates,
-		certificateStates:         certificateStates,
-		certificateFirstIssueOnce: certificateFirstIssueOnce,
+		filePaths:         options.FileDeposits,
+		templates:         templates,
+		certificates:      certificates,
+		certificateStates: certificateStates,
 
 		authConfigBytes: options.AuthConfigBytes,
 		authStrategy:    options.AuthStrategy,
@@ -1199,6 +1195,21 @@ func (tm *AgentManager) GetToken() string {
 
 func (tm *AgentManager) getTokenUnsafe() string {
 	return tm.accessToken
+}
+
+func (tm *AgentManager) waitForToken(ctx context.Context) bool {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if tm.GetToken() != "" {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 func (tm *AgentManager) FetchUniversalAuthAccessToken() (credential infisicalSdk.MachineIdentityCredential, e error) {
@@ -2639,35 +2650,22 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 	ticker := time.NewTicker(monitoringInterval)
 	defer ticker.Stop()
 
-	for {
-		var token string
-		func() {
-			tm.mutex.Lock()
-			defer tm.mutex.Unlock()
-			token = tm.getTokenUnsafe()
-		}()
-
-		if token != "" {
-			break
-		}
-
-		time.Sleep(1 * time.Second)
+	if !tm.waitForToken(ctx) {
+		return
 	}
 
 	for _, cert := range tm.certificates {
-		tm.certificateFirstIssueOnce[cert.ID].Do(func() {
-			if cert.Certificate.HasCertificateID() {
-				if err := tm.FetchCertificate(cert.ID, &cert.Certificate); err != nil {
-					displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
-					log.Error().Str("Certificate", displayName).Msgf("initial certificate fetch failed: %v", err)
-				}
-				return
-			}
-			if err := tm.IssueCertificate(cert.ID, &cert.Certificate); err != nil {
+		if cert.Certificate.HasCertificateID() {
+			if err := tm.FetchCertificate(cert.ID, &cert.Certificate); err != nil {
 				displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
-				log.Error().Str("Certificate", displayName).Msgf("initial certificate issuance failed: %v", err)
+				log.Error().Str("Certificate", displayName).Msgf("initial certificate fetch failed: %v", err)
 			}
-		})
+			continue
+		}
+		if err := tm.IssueCertificate(cert.ID, &cert.Certificate); err != nil {
+			displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
+			log.Error().Str("Certificate", displayName).Msgf("initial certificate issuance failed: %v", err)
+		}
 	}
 
 	for {
@@ -3313,38 +3311,6 @@ var agentCmd = &cobra.Command{
 
 		go tm.ManageTokenLifecycle()
 
-		if len(agentConfig.Certificates) > 0 {
-			go func() {
-				for {
-					if tm.getTokenUnsafe() != "" {
-						break
-					}
-					time.Sleep(100 * time.Millisecond)
-				}
-
-				httpClient, err := tm.createAuthenticatedClient()
-				if err != nil {
-					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
-					return
-				}
-
-				err = resolveCertificateNameReferences(&agentConfig.Certificates, httpClient)
-				if err != nil {
-					log.Error().Msgf("failed to resolve certificate name references: %v", err)
-					return
-				}
-
-				for i := range tm.certificates {
-					for j := range agentConfig.Certificates {
-						if tm.certificates[i].ID == j+1 {
-							tm.certificates[i].Certificate = agentConfig.Certificates[j]
-							break
-						}
-					}
-				}
-			}()
-		}
-
 		var monitoredTemplatesFinished atomic.Int32
 
 		// when all templates have finished rendering once, we delete the unused leases from the cache.
@@ -3375,8 +3341,34 @@ var agentCmd = &cobra.Command{
 		}
 
 		if len(tm.certificates) > 0 {
-			log.Info().Msg("certificate management engine starting...")
-			go tm.MonitorCertificates(ctx)
+			go func() {
+				if !tm.waitForToken(ctx) {
+					return
+				}
+
+				httpClient, err := tm.createAuthenticatedClient()
+				if err != nil {
+					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
+					return
+				}
+
+				if err := resolveCertificateNameReferences(&agentConfig.Certificates, httpClient); err != nil {
+					log.Error().Msgf("failed to resolve certificate name references: %v", err)
+					return
+				}
+
+				for i := range tm.certificates {
+					for j := range agentConfig.Certificates {
+						if tm.certificates[i].ID == j+1 {
+							tm.certificates[i].Certificate = agentConfig.Certificates[j]
+							break
+						}
+					}
+				}
+
+				log.Info().Msg("certificate management engine starting...")
+				tm.MonitorCertificates(ctx)
+			}()
 		}
 
 		for {
@@ -3569,13 +3561,10 @@ var certManagerAgentCmd = &cobra.Command{
 
 		go tm.ManageTokenLifecycle()
 
-		if len(agentConfig.Certificates) > 0 {
+		if len(tm.certificates) > 0 {
 			go func() {
-				for {
-					if tm.getTokenUnsafe() != "" {
-						break
-					}
-					time.Sleep(100 * time.Millisecond)
+				if !tm.waitForToken(ctx) {
+					return
 				}
 
 				httpClient, err := tm.createAuthenticatedClient()
@@ -3584,8 +3573,7 @@ var certManagerAgentCmd = &cobra.Command{
 					return
 				}
 
-				err = resolveCertificateNameReferences(&agentConfig.Certificates, httpClient)
-				if err != nil {
+				if err := resolveCertificateNameReferences(&agentConfig.Certificates, httpClient); err != nil {
 					log.Error().Msgf("failed to resolve certificate name references: %v", err)
 					return
 				}
@@ -3598,12 +3586,10 @@ var certManagerAgentCmd = &cobra.Command{
 						}
 					}
 				}
-			}()
-		}
 
-		if len(tm.certificates) > 0 {
-			log.Info().Msg("certificate management engine starting...")
-			go tm.MonitorCertificates(ctx)
+				log.Info().Msg("certificate management engine starting...")
+				tm.MonitorCertificates(ctx)
+			}()
 		}
 
 		for {
