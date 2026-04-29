@@ -40,17 +40,19 @@ type SessionFileInfo struct {
 	ResourceType string // ResourceTypeSSH, ResourceTypePostgres, ResourceTypeMysql (empty for legacy files)
 }
 
-// sessionUploadState tracks incremental upload progress for an active session.
 type sessionUploadState struct {
-	fileOffset int64
-	filename   string // base filename (not full path) of the session recording
-	legacyMode bool   // true if the batch upload endpoint returned 404 (platform too old); fall back to bulk upload at session end
-	mu         sync.Mutex
+	fileOffset       int64
+	filename         string // base filename (not full path) of the session recording
+	legacyMode       bool   // true if the batch upload endpoint returned 404 (platform too old); fall back to bulk upload at session end
+	startedAt        time.Time
+	lastEndElapsedMs int64
+	mu               sync.Mutex
 }
 
 type SessionUploader struct {
 	httpClient         *resty.Client
 	credentialsManager *CredentialsManager
+	chunkUploader      *ChunkUploader
 	ticker             *time.Ticker
 	stopChan           chan struct{}
 	startOnce          sync.Once
@@ -63,6 +65,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 	return &SessionUploader{
 		httpClient:         httpClient,
 		credentialsManager: credentialsManager,
+		chunkUploader:      NewChunkUploader(httpClient, credentialsManager),
 		stopChan:           make(chan struct{}),
 		activeSessions:     make(map[string]*sessionUploadState),
 	}
@@ -236,24 +239,29 @@ func offsetFilePath(filename string) string {
 	return filepath.Join(GetSessionRecordingDir(), strings.TrimSuffix(filename, ".enc")+".offset")
 }
 
-// readPersistedOffset reads the persisted file offset for a session recording.
-func readPersistedOffset(filename string) (int64, bool) {
+// readPersistedOffset reads the persisted file offset and last elapsed-ms marker
+// Format: line 1 = offset, line 2 = lastEndElapsedMs (optional, 0 if missing for backward compat)
+func readPersistedOffset(filename string) (offset int64, lastEndElapsedMs int64, ok bool) {
 	data, err := os.ReadFile(offsetFilePath(filename))
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	offset, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
+	offset, err = strconv.ParseInt(strings.TrimSpace(lines[0]), 10, 64)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	return offset, true
+	if len(lines) > 1 {
+		lastEndElapsedMs, _ = strconv.ParseInt(strings.TrimSpace(lines[1]), 10, 64)
+	}
+	return offset, lastEndElapsedMs, true
 }
 
-// writePersistedOffset atomically writes the current file offset to disk.
-func writePersistedOffset(filename string, offset int64) error {
+func writePersistedOffset(filename string, offset int64, lastEndElapsedMs int64) error {
 	path := offsetFilePath(filename)
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(strconv.FormatInt(offset, 10)), 0600); err != nil {
+	content := fmt.Sprintf("%d\n%d", offset, lastEndElapsedMs)
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)
@@ -330,15 +338,20 @@ func (su *SessionUploader) RegisterSession(sessionID string) {
 	}
 
 	var startOffset int64
-	if offset, ok := readPersistedOffset(fileInfo.Filename); ok {
+	var lastEndElapsedMs int64
+	if offset, elapsed, ok := readPersistedOffset(fileInfo.Filename); ok {
 		startOffset = offset
-		log.Info().Str("sessionId", sessionID).Int64("resumeOffset", startOffset).Msg("Resuming incremental upload from persisted offset")
+		lastEndElapsedMs = elapsed
+		log.Info().Str("sessionId", sessionID).Int64("resumeOffset", startOffset).Int64("lastEndElapsedMs", lastEndElapsedMs).
+			Msg("Resuming incremental upload from persisted offset")
 	}
 
 	su.activeSessionsMu.Lock()
 	su.activeSessions[sessionID] = &sessionUploadState{
-		fileOffset: startOffset,
-		filename:   fileInfo.Filename,
+		fileOffset:       startOffset,
+		filename:         fileInfo.Filename,
+		startedAt:        time.Now().Add(-time.Duration(lastEndElapsedMs) * time.Millisecond),
+		lastEndElapsedMs: lastEndElapsedMs,
 	}
 	su.activeSessionsMu.Unlock()
 
@@ -381,11 +394,13 @@ func (su *SessionUploader) startUploadRoutine() {
 
 		// Process any orphaned expired files from previous runs immediately
 		su.uploadExpiredSessionFiles()
+		su.chunkUploader.ReconcileAllSessions()
 
 		for {
 			select {
 			case <-su.ticker.C:
 				su.uploadExpiredSessionFiles()
+				su.chunkUploader.ReconcileAllSessions()
 			case <-flushTicker.C:
 				su.flushActiveSessions()
 			case <-su.stopChan:
@@ -486,11 +501,33 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) {
 		return // No new events since last flush
 	}
 
+	if secrets := su.credentialsManager.GetRecordingSecrets(sessionID); secrets != nil {
+		endElapsedMs := time.Since(state.startedAt).Milliseconds()
+		startElapsedMs := state.lastEndElapsedMs
+		pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, payload, startElapsedMs, endElapsedMs)
+		if encErr != nil {
+			log.Error().Err(encErr).Str("sessionId", sessionID).Msg("Failed to encrypt chunk; will retry on next tick")
+			return
+		}
+		if upErr := su.chunkUploader.UploadChunk(sessionID, pc); upErr != nil {
+			log.Error().Err(upErr).Str("sessionId", sessionID).Int("chunkIndex", pc.ChunkIndex).
+				Msg("Chunk upload failed; will retry via reconciliation tick")
+			// Offset still advances: the chunk is queued on disk and re-reading the same events would produce a different IV, creating a duplicate
+		}
+
+		state.lastEndElapsedMs = endElapsedMs
+		state.fileOffset = newOffset
+		if err := writePersistedOffset(state.filename, newOffset, endElapsedMs); err != nil {
+			log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after chunk flush")
+		}
+		return
+	}
+
 	if err := api.CallUploadPamSessionEventBatch(su.httpClient, sessionID, state.fileOffset, payload); err != nil {
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
 			// Platform does not support the batch upload endpoint yet; fall back to bulk upload at session end
-			log.Warn().Str("sessionId", sessionID).Msg("Batch upload endpoint not supported by platform, will use legacy bulk upload at session end")
+			log.Warn().Str("sessionId", sessionID).Msg("Batch upload endpoint not supported by platform, falling back to legacy bulk upload")
 			state.legacyMode = true
 			return
 		}
@@ -499,7 +536,7 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) {
 	}
 
 	state.fileOffset = newOffset
-	if err := writePersistedOffset(state.filename, newOffset); err != nil {
+	if err := writePersistedOffset(state.filename, newOffset, state.lastEndElapsedMs); err != nil {
 		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after flush")
 	}
 
@@ -650,24 +687,29 @@ func (su *SessionUploader) CleanupPAMSession(sessionID string, reason string) er
 		}
 	}
 
-	// Unregister: removes from activeSessions and deletes persisted offset.
 	su.UnregisterSession(sessionID)
 
-	// Delete local recording file.
-	fileInfo, findErr := FindSessionFileBySessionID(sessionID)
-	if findErr == nil {
-		recordingDir := GetSessionRecordingDir()
-		fullPath := filepath.Join(recordingDir, fileInfo.Filename)
-		if removeErr := os.Remove(fullPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			log.Warn().Err(removeErr).Str("filename", fileInfo.Filename).Msg("Failed to delete session recording file")
-		} else {
-			log.Info().Str("sessionId", sessionID).Str("filename", fileInfo.Filename).Msg("Deleted local session recording file")
+	su.chunkUploader.ReconcileSession(sessionID)
+	chunksCleared := su.chunkUploader.CleanupSession(sessionID)
+
+	if chunksCleared {
+		fileInfo, findErr := FindSessionFileBySessionID(sessionID)
+		if findErr == nil {
+			recordingDir := GetSessionRecordingDir()
+			fullPath := filepath.Join(recordingDir, fileInfo.Filename)
+			if removeErr := os.Remove(fullPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				log.Warn().Err(removeErr).Str("filename", fileInfo.Filename).Msg("Failed to delete session recording file")
+			} else {
+				log.Info().Str("sessionId", sessionID).Str("filename", fileInfo.Filename).Msg("Deleted local session recording file")
+			}
 		}
+		su.credentialsManager.CleanupSessionCredentials(sessionID)
+	} else {
+		log.Warn().Str("sessionId", sessionID).
+			Msg("Pending chunks remain after reconciliation; recording file and secrets preserved for retry")
 	}
 
-	// Cleanup in-memory session state.
 	CleanupSessionMutex(sessionID)
-	su.credentialsManager.CleanupSessionCredentials(sessionID)
 
 	if err := api.CallPAMSessionTermination(su.httpClient, sessionID); err != nil {
 		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to notify session termination via API")
