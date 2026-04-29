@@ -12,7 +12,6 @@ const (
 	INFISICAL_GATEWAY_ACCESS_TOKEN_KEY    = "INFISICAL_GATEWAY_ACCESS_TOKEN"
 	INFISICAL_GATEWAY_DOMAIN_KEY          = "INFISICAL_GATEWAY_DOMAIN"
 	INFISICAL_GATEWAY_ENROLLMENT_TOKEN_KEY = "INFISICAL_GATEWAY_ENROLLMENT_TOKEN"
-	EnrollMethodToken                      = "token"
 )
 
 // gatewayConfPath returns the path to the gateway config file scoped by name.

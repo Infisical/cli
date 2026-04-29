@@ -804,6 +804,7 @@ type EnrollGatewayResponse struct {
 }
 
 type AwsAuthLoginGatewayRequest struct {
+	Method            string `json:"method"`
 	GatewayID         string `json:"gatewayId"`
 	HTTPRequestMethod string `json:"iamHttpRequestMethod"`
 	IamRequestBody    string `json:"iamRequestBody"`

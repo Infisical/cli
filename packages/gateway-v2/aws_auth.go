@@ -19,7 +19,6 @@ import (
 
 const (
 	INFISICAL_GATEWAY_ID_KEY = "INFISICAL_GATEWAY_ID"
-	EnrollMethodAws          = "aws"
 )
 
 // LoginGatewayWithAws builds a SigV4-signed sts:GetCallerIdentity request using the local AWS
@@ -72,6 +71,7 @@ func LoginGatewayWithAws(httpClient *resty.Client, gatewayID string) (string, er
 	}
 
 	resp, err := api.CallAwsAuthLoginGateway(httpClient, api.AwsAuthLoginGatewayRequest{
+		Method:            EnrollMethodAws,
 		GatewayID:         gatewayID,
 		HTTPRequestMethod: req.Method,
 		IamRequestBody:    base64.StdEncoding.EncodeToString([]byte(iamRequestBody)),

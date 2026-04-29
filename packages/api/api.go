@@ -965,7 +965,7 @@ func CallAwsAuthLoginGateway(httpClient *resty.Client, request AwsAuthLoginGatew
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/resource-aws-auth/gateways/login", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
 
 	if err != nil {
 		return AwsAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallAwsAuthLoginGateway, err)
