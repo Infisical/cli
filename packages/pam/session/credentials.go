@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -10,6 +12,10 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
+
+func uploadTokenFilePath(sessionID string) string {
+	return filepath.Join(GetSessionRecordingDir(), "chunks", sessionID+".uploadtoken.enc")
+}
 
 type PAMCredentials struct {
 	AuthMethod            string
@@ -71,6 +77,62 @@ func (cm *CredentialsManager) GetRecordingSecrets(sessionId string) *PAMRecordin
 	cm.recordingSecretsMu.RLock()
 	defer cm.recordingSecretsMu.RUnlock()
 	return cm.recordingSecrets[sessionId]
+}
+
+func (cm *CredentialsManager) persistUploadToken(sessionID, uploadToken string) {
+	encryptionKey, err := cm.GetPAMSessionEncryptionKey()
+	if err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to get encryption key for upload token persistence")
+		return
+	}
+	encrypted, err := EncryptData([]byte(uploadToken), encryptionKey)
+	if err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to encrypt upload token")
+		return
+	}
+	path := uploadTokenFilePath(sessionID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to create dir for upload token")
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, encrypted, 0o600); err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to write upload token file")
+		return
+	}
+	_ = os.Rename(tmp, path)
+}
+
+func (cm *CredentialsManager) LoadRecordingSecretsFromDisk(sessionID string) {
+	path := uploadTokenFilePath(sessionID)
+	encrypted, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to read persisted upload token")
+		}
+		return
+	}
+	encryptionKey, err := cm.GetPAMSessionEncryptionKey()
+	if err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to get encryption key for upload token decryption")
+		return
+	}
+	decrypted, err := DecryptData(encrypted, encryptionKey)
+	if err != nil {
+		log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to decrypt persisted upload token")
+		return
+	}
+	cm.recordingSecretsMu.Lock()
+	cm.recordingSecrets[sessionID] = &PAMRecordingSecrets{
+		UploadToken: string(decrypted),
+		SessionId:   sessionID,
+	}
+	cm.recordingSecretsMu.Unlock()
+	log.Info().Str("sessionId", sessionID).Msg("Restored recording upload token from disk")
+}
+
+func deletePersistedUploadToken(sessionID string) {
+	_ = os.Remove(uploadTokenFilePath(sessionID))
 }
 
 // startCleanupRoutine starts the background cleanup routine for expired credentials
@@ -139,15 +201,26 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		if decodeErr != nil {
 			log.Error().Err(decodeErr).Str("sessionId", sessionId).Msg("Failed to decode session recording key")
 		} else {
+			uploadToken := response.Recording.UploadToken
+
 			cm.recordingSecretsMu.Lock()
+			if uploadToken == "" {
+				if existing := cm.recordingSecrets[sessionId]; existing != nil {
+					uploadToken = existing.UploadToken
+				}
+			}
 			cm.recordingSecrets[sessionId] = &PAMRecordingSecrets{
 				SessionKey:     decoded,
-				UploadToken:    response.Recording.UploadToken,
+				UploadToken:    uploadToken,
 				StorageBackend: response.Recording.StorageBackend,
 				ProjectId:      response.Recording.ProjectId,
 				SessionId:      response.Recording.SessionId,
 			}
 			cm.recordingSecretsMu.Unlock()
+
+			if response.Recording.UploadToken != "" {
+				cm.persistUploadToken(sessionId, response.Recording.UploadToken)
+			}
 			log.Debug().
 				Str("sessionId", sessionId).
 				Str("storageBackend", response.Recording.StorageBackend).
@@ -187,6 +260,8 @@ func (cm *CredentialsManager) CleanupSessionCredentials(sessionID string) {
 		log.Debug().Str("sessionId", sessionID).Msg("Cleared PAM session recording secrets from memory")
 	}
 	cm.recordingSecretsMu.Unlock()
+
+	deletePersistedUploadToken(sessionID)
 }
 
 func (cm *CredentialsManager) GetPAMSessionEncryptionKey() (string, error) {

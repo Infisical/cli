@@ -434,6 +434,15 @@ func (su *SessionUploader) resumeInProgressSessions() {
 	for _, fileInfo := range allFiles {
 		log.Info().Str("sessionId", fileInfo.SessionID).Str("filename", fileInfo.Filename).Msg("Resuming session upload after restart")
 		su.RegisterSession(fileInfo.SessionID)
+
+		if su.chunkUploader.HasPendingChunks(fileInfo.SessionID) {
+			su.credentialsManager.LoadRecordingSecretsFromDisk(fileInfo.SessionID)
+		}
+
+		if _, err := su.credentialsManager.GetPAMSessionCredentials(fileInfo.SessionID, fileInfo.ExpiresAt); err != nil {
+			log.Warn().Err(err).Str("sessionId", fileInfo.SessionID).
+				Msg("Failed to re-fetch credentials on resume; logging and chunk creation will resume when client reconnects")
+		}
 	}
 }
 

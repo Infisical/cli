@@ -364,6 +364,7 @@ func (cu *ChunkUploader) ReconcileSession(sessionID string) {
 		}
 		_ = os.RemoveAll(dir)
 		_ = os.Remove(chunkIndexFile(sessionID))
+		deletePersistedUploadToken(sessionID)
 		cu.nextChunkIndexMu.Lock()
 		delete(cu.nextChunkIndex, sessionID)
 		cu.nextChunkIndexMu.Unlock()
@@ -381,7 +382,7 @@ func (cu *ChunkUploader) ReconcileSession(sessionID string) {
 			continue
 		}
 		if err := cu.UploadChunk(sessionID, pc); err != nil {
-			log.Debug().
+			log.Warn().
 				Err(err).
 				Str("sessionId", sessionID).
 				Int("chunkIndex", pc.ChunkIndex).
@@ -407,6 +408,20 @@ func (cu *ChunkUploader) ReconcileAllSessions() {
 	}
 }
 
+func (cu *ChunkUploader) HasPendingChunks(sessionID string) bool {
+	dir := chunkQueueDir(sessionID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".chunk") {
+			return true
+		}
+	}
+	return false
+}
+
 // CleanupSession removes the chunk queue dir and index file if no pending chunks remain
 // Returns true if the session is fully cleaned up (no pending chunks)
 func (cu *ChunkUploader) CleanupSession(sessionID string) bool {
@@ -422,6 +437,7 @@ func (cu *ChunkUploader) CleanupSession(sessionID string) bool {
 	}
 	_ = os.RemoveAll(dir)
 	_ = os.Remove(chunkIndexFile(sessionID))
+	deletePersistedUploadToken(sessionID)
 	cu.nextChunkIndexMu.Lock()
 	delete(cu.nextChunkIndex, sessionID)
 	cu.nextChunkIndexMu.Unlock()
