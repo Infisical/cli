@@ -279,70 +279,118 @@ func IsSecretTypeValid(s string) bool {
 	return false
 }
 
+// DetectInfisicalToken checks for locally-available tokens and credentials
+// without performing any network calls. Use this when you only need to know
+// whether a token source is present (e.g. for the "session overwritten" warning
+// in PersistentPreRun).
+func DetectInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err error) {
+	infisicalToken, source := lookupLocalToken(cmd)
+	if infisicalToken != "" {
+		return classifyToken(infisicalToken, source), nil
+	}
+
+	clientId := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME)
+	clientSecret := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME)
+	if clientId != "" && clientSecret != "" {
+		return &models.TokenDetails{
+			Type:   UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
+			Source: fmt.Sprintf("%s and %s environment variables", INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME),
+		}, nil
+	}
+
+	return nil, nil
+}
+
 func GetInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err error) {
-	infisicalToken, err := cmd.Flags().GetString("token")
-
-	if err != nil {
-		return nil, err
+	infisicalToken, source := lookupLocalToken(cmd)
+	if infisicalToken != "" {
+		return classifyToken(infisicalToken, source), nil
 	}
 
-	var source = "--token flag"
-
-	if infisicalToken == "" { // If no flag is passed, we first check for the universal auth access token env variable.
-		infisicalToken = os.Getenv(INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME)
-		source = fmt.Sprintf("%s environment variable", INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME)
-
-		if infisicalToken == "" { // If it's still empty after the first env check, we check for the service token env variable.
-			infisicalToken = os.Getenv(INFISICAL_TOKEN_NAME)
-			source = fmt.Sprintf("%s environment variable", INFISICAL_TOKEN_NAME)
-		}
-
-		if infisicalToken == "" { // if its still empty, check for the `TOKEN` environment variable (for gateway helm)
-			infisicalToken = os.Getenv(INFISICAL_GATEWAY_TOKEN_NAME_LEGACY)
-			source = fmt.Sprintf("%s environment variable", INFISICAL_GATEWAY_TOKEN_NAME_LEGACY)
-		}
-	}
-
-	if infisicalToken == "" {
-		// Check if Universal Auth client credentials are available for automatic authentication.
-		// This allows commands like `infisical run` to work when INFISICAL_UNIVERSAL_AUTH_CLIENT_ID
-		// and INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET are set, without requiring a prior `infisical login`.
-		clientId := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME)
-		clientSecret := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME)
-
-		if clientId != "" && clientSecret != "" {
-			log.Debug().Msg("No explicit token found, attempting automatic authentication via Universal Auth client credentials")
-			loginResponse, err := UniversalAuthLogin(clientId, clientSecret)
-			if err != nil {
-				return nil, fmt.Errorf("failed to authenticate with Universal Auth using %s and %s environment variables: %w",
-					INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME, err)
-			}
-
-			return &models.TokenDetails{
-				Type:   UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
-				Token:  loginResponse.AccessToken,
-				Source: fmt.Sprintf("%s and %s environment variables", INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME),
-			}, nil
-		}
-
+	// Skip auto-login when an explicit auth method is requested via
+	// --auth-method flag or INFISICAL_AUTH_METHOD env var, so that
+	// other auth flows (AWS, GCP, K8s, etc.) are not short-circuited.
+	if isAuthMethodSpecified(cmd) {
 		return nil, nil
 	}
 
+	clientId := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME)
+	clientSecret := os.Getenv(INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME)
+
+	if clientId != "" && clientSecret != "" {
+		log.Debug().Msg("No explicit token found, attempting automatic authentication via Universal Auth client credentials")
+		loginResponse, err := UniversalAuthLogin(clientId, clientSecret)
+		if err != nil {
+			return nil, fmt.Errorf("failed to authenticate with Universal Auth using %s and %s environment variables: %w",
+				INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME, err)
+		}
+
+		return &models.TokenDetails{
+			Type:   UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
+			Token:  loginResponse.AccessToken,
+			Source: fmt.Sprintf("%s and %s environment variables", INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME),
+		}, nil
+	}
+
+	return nil, nil
+}
+
+// lookupLocalToken checks for an explicit token from flags and env vars.
+// No network calls are made.
+func lookupLocalToken(cmd *cobra.Command) (token string, source string) {
+	infisicalToken, err := cmd.Flags().GetString("token")
+	if err != nil {
+		return "", ""
+	}
+
+	if infisicalToken != "" {
+		return infisicalToken, "--token flag"
+	}
+
+	if v := os.Getenv(INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME); v != "" {
+		return v, fmt.Sprintf("%s environment variable", INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME)
+	}
+
+	if v := os.Getenv(INFISICAL_TOKEN_NAME); v != "" {
+		return v, fmt.Sprintf("%s environment variable", INFISICAL_TOKEN_NAME)
+	}
+
+	if v := os.Getenv(INFISICAL_GATEWAY_TOKEN_NAME_LEGACY); v != "" {
+		return v, fmt.Sprintf("%s environment variable", INFISICAL_GATEWAY_TOKEN_NAME_LEGACY)
+	}
+
+	return "", ""
+}
+
+func classifyToken(infisicalToken, source string) *models.TokenDetails {
 	if strings.HasPrefix(infisicalToken, "st.") {
 		return &models.TokenDetails{
 			Type:   SERVICE_TOKEN_IDENTIFIER,
 			Token:  infisicalToken,
 			Source: source,
-		}, nil
+		}
 	}
-
 	return &models.TokenDetails{
 		Type:   UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
 		Token:  infisicalToken,
 		Source: source,
-	}, nil
-
+	}
 }
+
+// isAuthMethodSpecified returns true when the caller has explicitly requested
+// a machine-identity auth strategy, either via the --auth-method CLI flag or
+// the INFISICAL_AUTH_METHOD environment variable.
+func isAuthMethodSpecified(cmd *cobra.Command) bool {
+	if f := cmd.Flags().Lookup("auth-method"); f != nil && f.Changed {
+		return true
+	}
+	if os.Getenv(INFISICAL_AUTH_METHOD_NAME) != "" {
+		return true
+	}
+	return false
+}
+
+const universalAuthAutoLoginRetries = 3
 
 func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuthLoginResponse, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
@@ -350,9 +398,9 @@ func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuth
 		return api.UniversalAuthLoginResponse{}, err
 	}
 
-	httpClient.SetRetryCount(10000).
-		SetRetryMaxWaitTime(20 * time.Second).
-		SetRetryWaitTime(5 * time.Second)
+	httpClient.SetRetryCount(universalAuthAutoLoginRetries).
+		SetRetryMaxWaitTime(5 * time.Second).
+		SetRetryWaitTime(2 * time.Second)
 
 	tokenResponse, err := api.CallUniversalAuthLogin(httpClient, api.UniversalAuthLoginRequest{ClientId: clientId, ClientSecret: clientSecret})
 	if err != nil {
