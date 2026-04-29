@@ -258,15 +258,16 @@ var loginCmd = &cobra.Command{
 				return
 			}
 
+			stderrWriter := util.GetStderrWriter()
 			whilte := color.New(color.FgGreen)
 			boldWhite := whilte.Add(color.Bold)
 			time.Sleep(time.Second * 1)
-			boldWhite.Printf(">>>> Welcome to Infisical!")
-			boldWhite.Printf(" You are now logged in as %v <<<< \n", userCredentialsToBeStored.Email)
+			boldWhite.Fprintf(stderrWriter, ">>>> Welcome to Infisical!")
+			boldWhite.Fprintf(stderrWriter, " You are now logged in as %v <<<< \n", userCredentialsToBeStored.Email)
 
 			plainBold := color.New(color.Bold)
 
-			plainBold.Println("\nQuick links")
+			plainBold.Fprintln(stderrWriter, "\nQuick links")
 			util.PrintlnStderr("- Learn to inject secrets into your application at https://infisical.com/docs/cli/usage")
 			util.PrintlnStderr("- Stuck? Join our slack for quick support https://infisical.com/slack")
 		} else {
@@ -302,14 +303,15 @@ var loginCmd = &cobra.Command{
 				return
 			}
 
+			stderrWriter := util.GetStderrWriter()
 			boldGreen := color.New(color.FgGreen).Add(color.Bold)
 			boldPlain := color.New(color.Bold)
 			time.Sleep(time.Second * 1)
-			boldGreen.Printf(">>>> Successfully authenticated with %s!\n\n", formatAuthMethod(loginMethod))
+			boldGreen.Fprintf(stderrWriter, ">>>> Successfully authenticated with %s!\n\n", formatAuthMethod(loginMethod))
 			boldPlain.Printf("Access Token:\n%v", credential.AccessToken)
 
 			plainBold := color.New(color.Bold)
-			plainBold.Println("\n\nYou can use this access token to authenticate through other commands in the CLI.")
+			plainBold.Fprintln(stderrWriter, "\n\nYou can use this access token to authenticate through other commands in the CLI.")
 
 		}
 	},
@@ -488,7 +490,7 @@ func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, shouldPr
 		boldWhite := whilte.Add(color.Bold)
 		time.Sleep(time.Second * 1)
 		if shouldPrintInfo {
-			boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
+			boldWhite.Fprintf(util.GetStderrWriter(), "[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
 		}
 
 		return true, nil
