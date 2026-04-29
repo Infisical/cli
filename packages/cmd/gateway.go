@@ -260,7 +260,7 @@ var gatewayStartCmd = &cobra.Command{
 			}
 
 			log.Info().Msg("Authenticating gateway via AWS Auth (STS GetCallerIdentity)...")
-			accessTokenStr, err := gatewayv2.LoginGatewayWithAws(httpClient, gatewayID)
+			accessTokenStr, err := gatewayv2.LoginGatewayWithAws(cmd.Context(), httpClient, gatewayID)
 			if err != nil {
 				util.HandleError(err, "AWS Auth login failed")
 			}

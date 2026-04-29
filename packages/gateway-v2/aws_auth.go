@@ -25,7 +25,10 @@ const (
 // credentials chain (instance metadata, env vars, profile, etc.) and exchanges it for a
 // GATEWAY_ACCESS_TOKEN. The credentials themselves never leave the host — only the signature
 // over a single STS API call.
-func LoginGatewayWithAws(httpClient *resty.Client, gatewayID string) (string, error) {
+//
+// ctx is threaded through SigV4 signing so a shutdown signal during startup cancels the
+// outbound STS verification cleanly instead of hanging the process.
+func LoginGatewayWithAws(ctx context.Context, httpClient *resty.Client, gatewayID string) (string, error) {
 	if gatewayID == "" {
 		return "", errors.New("--gateway-id is required when --enroll-method=aws")
 	}
@@ -54,7 +57,7 @@ func LoginGatewayWithAws(httpClient *resty.Client, gatewayID string) (string, er
 
 	signingTime := time.Now()
 	signer := v4.NewSigner()
-	if err := signer.SignHTTP(context.TODO(), awsCredentials, req, payloadHash, "sts", awsRegion, signingTime); err != nil {
+	if err := signer.SignHTTP(ctx, awsCredentials, req, payloadHash, "sts", awsRegion, signingTime); err != nil {
 		return "", fmt.Errorf("error signing STS request: %w", err)
 	}
 
