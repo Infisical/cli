@@ -82,6 +82,12 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
+		}
+
 		command, err := cmd.Flags().GetString("command")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -211,6 +217,7 @@ func init() {
 	RootCmd.AddCommand(runCmd)
 	runCmd.Flags().String("token", "", "fetch secrets using service token or machine identity access token")
 	runCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	runCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	runCmd.Flags().StringP("env", "e", "dev", "set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	runCmd.Flags().Bool("expand", true, "parse shell parameter expansions in your secrets")
 	runCmd.Flags().Bool("include-imports", true, "import linked secrets ")

@@ -57,6 +57,12 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			projectId = resolved
+		}
+
 		token, err := util.GetInfisicalToken(cmd)
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -272,6 +278,7 @@ func init() {
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
 	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
+	exportCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
