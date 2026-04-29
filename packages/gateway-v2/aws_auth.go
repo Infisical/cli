@@ -43,17 +43,25 @@ func LoginGatewayWithAws(httpClient *resty.Client, gatewayID string) (string, er
 		return "", fmt.Errorf("error building STS request: %w", err)
 	}
 
-	req.Header.Add("X-Amz-Date", time.Now().UTC().Format("20060102T150405Z"))
+	// Set every header that needs to be on the wire BEFORE signing — the SDK's signer
+	// reads req.Header to compute SignedHeaders, and any modification afterwards would
+	// invalidate the signature when the backend forwards the request to STS.
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 
 	hash := sha256.New()
 	hash.Write([]byte(iamRequestBody))
 	payloadHash := fmt.Sprintf("%x", hash.Sum(nil))
 
+	signingTime := time.Now()
 	signer := v4.NewSigner()
-	if err := signer.SignHTTP(context.TODO(), awsCredentials, req, payloadHash, "sts", awsRegion, time.Now()); err != nil {
+	if err := signer.SignHTTP(context.TODO(), awsCredentials, req, payloadHash, "sts", awsRegion, signingTime); err != nil {
 		return "", fmt.Errorf("error signing STS request: %w", err)
 	}
 
+	// Forward every signed header verbatim. Content-Length is computed by the receiving
+	// HTTP stack from the body, so we don't include it (and the signer doesn't sign it).
+	// Host isn't in req.Header in Go's http package — it's on req.URL.Host — so we add it
+	// explicitly with the same value the signer used internally.
 	headers := make(map[string]string)
 	for name, values := range req.Header {
 		if strings.ToLower(name) == "content-length" {
@@ -62,8 +70,6 @@ func LoginGatewayWithAws(httpClient *resty.Client, gatewayID string) (string, er
 		headers[name] = values[0]
 	}
 	headers["Host"] = fmt.Sprintf("sts.%s.amazonaws.com", awsRegion)
-	headers["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8"
-	headers["Content-Length"] = fmt.Sprintf("%d", len(iamRequestBody))
 
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
