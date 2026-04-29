@@ -231,9 +231,6 @@ var gatewayStartCmd = &cobra.Command{
 		}
 
 		// --- AWS Auth path ---
-		// Sign an STS GetCallerIdentity request locally and exchange it for a GATEWAY_ACCESS_TOKEN.
-		// Re-logs in on every start (AWS creds are always available; STS is cheap; tokenVersion
-		// may have rotated server-side).
 		if enrollMethod == gatewayv2.EnrollMethodAws {
 			gatewayID, _ := cmd.Flags().GetString("gateway-id")
 			if gatewayID == "" {
@@ -650,7 +647,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			}
 		} else if enrollMethod == gatewayv2.EnrollMethodAws {
 			// --- AWS Auth path ---
-			// Don't perform the AWS login at install time — the daemon does it on each service
+			// Don't perform the AWS login at install time — the gateway does it on each service
 			// start (so a fresh JWT is minted every restart, matching server-side tokenVersion).
 			gatewayID, _ := cmd.Flags().GetString("gateway-id")
 			if gatewayID == "" {
@@ -778,7 +775,7 @@ func init() {
 
 	// Systemd install command flags (v2)
 	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the daemon authenticates via AWS STS on each service start (requires --gateway-id)")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id)")
 	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")

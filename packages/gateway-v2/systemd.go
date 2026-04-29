@@ -120,9 +120,10 @@ func InstallEnrolledGatewaySystemdService(accessToken string, domain string, nam
 }
 
 // InstallAwsAuthGatewaySystemdService installs the systemd service for a gateway using AWS Auth.
-// Unlike the token-auth flow, no JWT is written into the env file — the daemon will perform
-// a fresh STS-signed login on each service start using the EC2 instance's IAM role. We just
-// persist the gateway id, domain, and name so `gateway start` can re-authenticate.
+// Unlike the token-auth flow, no JWT is written into the env file — the gateway performs a
+// fresh STS-signed login on each service start using whatever AWS credentials it can resolve
+// (instance role, env vars, shared profile). We just persist the gateway id, domain, and name
+// so `gateway start` can re-authenticate.
 func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name string, relayName string, serviceLogFile string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
