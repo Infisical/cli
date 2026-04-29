@@ -121,7 +121,7 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		secretsPath, err := cmd.Flags().GetString("path")
+		secretsPaths, err := cmd.Flags().GetStringArray("path")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -136,25 +136,50 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		request := models.GetAllSecretsParameters{
-			Environment:            environmentName,
-			WorkspaceId:            projectId,
-			TagSlugs:               tagSlugs,
-			SecretsPath:            secretsPath,
-			IncludeImport:          includeImports,
-			Recursive:              recursive,
-			ExpandSecretReferences: shouldExpandSecrets,
-		}
+		var injectableEnvironment models.InjectableEnvironmentResult
+		for i, secretsPath := range secretsPaths {
+			request := models.GetAllSecretsParameters{
+				Environment:            environmentName,
+				WorkspaceId:            projectId,
+				TagSlugs:               tagSlugs,
+				SecretsPath:            secretsPath,
+				IncludeImport:          includeImports,
+				Recursive:              recursive,
+				ExpandSecretReferences: shouldExpandSecrets,
+			}
 
-		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
-		if err != nil {
-			util.HandleError(err, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
+			pathEnvironment, fetchErr := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+			if fetchErr != nil {
+				util.HandleError(fetchErr, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
+			}
+
+			if i == 0 {
+				injectableEnvironment = pathEnvironment
+			} else {
+				// Merge: later paths override earlier paths for duplicate keys
+				prevLen := len(injectableEnvironment.Variables)
+				injectableEnvironment.Variables = mergeEnvVars(injectableEnvironment.Variables, pathEnvironment.Variables)
+				newKeys := len(injectableEnvironment.Variables) - prevLen
+				injectableEnvironment.SecretsCount += newKeys
+			}
 		}
 
 		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
 
 		if watchMode {
-			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
+			if len(secretsPaths) > 1 {
+				util.PrintWarning("Watch mode currently only monitors the first path for changes. Secrets from all paths are loaded on initial run, but hot reloads will only detect changes in: " + secretsPaths[0])
+			}
+			watchRequest := models.GetAllSecretsParameters{
+				Environment:            environmentName,
+				WorkspaceId:            projectId,
+				TagSlugs:               tagSlugs,
+				SecretsPath:            secretsPaths[0],
+				IncludeImport:          includeImports,
+				Recursive:              recursive,
+				ExpandSecretReferences: shouldExpandSecrets,
+			}
+			executeCommandWithWatchMode(command, args, watchModeInterval, watchRequest, projectConfigDir, secretOverriding, token)
 		} else {
 			if cmd.Flags().Changed("command") {
 				command := cmd.Flag("command").Value.String()
@@ -220,8 +245,40 @@ func init() {
 	runCmd.Flags().Int("watch-interval", 10, "interval in seconds to check for secret changes")
 	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
-	runCmd.Flags().String("path", "/", "get secrets within a folder path")
+	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times to merge secrets from multiple paths)")
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
+}
+
+// mergeEnvVars merges two slices of environment variables in KEY=VALUE format.
+// Variables from the override slice take precedence over base for duplicate keys.
+func mergeEnvVars(base, override []string) []string {
+	envMap := make(map[string]string)
+	var orderedKeys []string
+
+	for _, entry := range base {
+		if parts := strings.SplitN(entry, "=", 2); len(parts) == 2 {
+			if _, exists := envMap[parts[0]]; !exists {
+				orderedKeys = append(orderedKeys, parts[0])
+			}
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	for _, entry := range override {
+		if parts := strings.SplitN(entry, "=", 2); len(parts) == 2 {
+			if _, exists := envMap[parts[0]]; !exists {
+				orderedKeys = append(orderedKeys, parts[0])
+			}
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	merged := make([]string, 0, len(orderedKeys))
+	for _, key := range orderedKeys {
+		merged = append(merged, key+"="+envMap[key])
+	}
+
+	return merged
 }
 
 // Will execute a single command and pass in the given secrets into the process
