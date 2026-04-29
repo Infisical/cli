@@ -61,6 +61,7 @@ var CACHE_LEASE_EXPIRE_BUFFER = 30 * time.Second
 const EXTERNAL_CA_INITIAL_POLLING_INTERVAL = 10 * time.Second
 const EXTERNAL_CA_MAX_POLLING_INTERVAL = 1 * time.Hour
 const DEFAULT_MONITORING_INTERVAL = 10 * time.Second
+const DEFAULT_MAX_FAILURE_RETRIES = 10
 
 type PersistentCacheConfig struct {
 	Type                    string `yaml:"type"`                       // file or kubernetes
@@ -2192,6 +2193,13 @@ func failureRetryIntervalFor(certificate *AgentCertificateConfig) time.Duration 
 	return statusCheckIntervalFor(certificate)
 }
 
+func effectiveMaxFailureRetries(certificate *AgentCertificateConfig) int {
+	if certificate.Lifecycle.MaxFailureRetries > 0 {
+		return certificate.Lifecycle.MaxFailureRetries
+	}
+	return DEFAULT_MAX_FAILURE_RETRIES
+}
+
 func (tm *AgentManager) FetchCertificate(certificateId int, certificate *AgentCertificateConfig) error {
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
 	log.Info().Str("Certificate", displayName).Msg("fetching certificate")
@@ -2219,10 +2227,16 @@ func (tm *AgentManager) FetchCertificate(certificateId int, certificate *AgentCe
 	}
 
 	if metadata.Certificate.Status != "active" {
-		reason := fmt.Sprintf("certificate is in '%s' state", metadata.Certificate.Status)
-		recordFailure(reason)
+		func() {
+			tm.mutex.Lock()
+			defer tm.mutex.Unlock()
+			state := tm.certificateStates[certificateId]
+			state.Status = metadata.Certificate.Status
+			state.LastError = fmt.Sprintf("certificate is in '%s' state", metadata.Certificate.Status)
+			state.LastRetry = time.Now()
+		}()
 		log.Error().Str("Certificate", displayName).Str("status", metadata.Certificate.Status).Msg("certificate is not active; skipping fetch")
-		return fmt.Errorf("certificate %s %s", certificate.CertificateID, reason)
+		return fmt.Errorf("certificate %s is in '%s' state", certificate.CertificateID, metadata.Certificate.Status)
 	}
 
 	bundle, err := api.CallGetCertificateBundle(httpClient, certificate.CertificateID)
@@ -2248,15 +2262,6 @@ func (tm *AgentManager) FetchCertificate(certificateId int, certificate *AgentCe
 	defer tm.mutex.Unlock()
 
 	state := tm.certificateStates[certificateId]
-	state.CertificateID = metadata.Certificate.ID
-	state.SerialNumber = serialNumber
-	state.CommonName = metadata.Certificate.CommonName
-	state.IssuedAt = time.Now()
-	state.ExpiresAt = metadata.Certificate.NotAfter
-	state.Status = "active"
-	state.LastError = ""
-	state.RetryCount = 0
-	state.NextRenewalCheck = time.Now().Add(statusCheckIntervalFor(certificate))
 
 	certResponse := &api.CertificateResponse{
 		Certificate: &api.CertificateData{
@@ -2272,8 +2277,20 @@ func (tm *AgentManager) FetchCertificate(certificateId int, certificate *AgentCe
 		log.Error().Str("Certificate", displayName).Msgf("failed to write certificate files: %v", err)
 		state.Status = "failed"
 		state.LastError = fmt.Sprintf("failed to write files: %v", err)
+		state.RetryCount++
+		state.LastRetry = time.Now()
 		return err
 	}
+
+	state.CertificateID = metadata.Certificate.ID
+	state.SerialNumber = serialNumber
+	state.CommonName = metadata.Certificate.CommonName
+	state.IssuedAt = time.Now()
+	state.ExpiresAt = metadata.Certificate.NotAfter
+	state.Status = "active"
+	state.LastError = ""
+	state.RetryCount = 0
+	state.NextRenewalCheck = time.Now().Add(statusCheckIntervalFor(certificate))
 
 	log.Info().Str("Certificate", displayName).Str("serial", serialNumber).Msg("certificate fetched successfully")
 
@@ -2693,7 +2710,7 @@ func (tm *AgentManager) CheckCertificateRenewals() {
 			displayName := tm.getCertificateDisplayName(cert.ID, referencedCert)
 
 			if state.Status == "failed" {
-				if referencedCert.Lifecycle.MaxFailureRetries > 0 && state.RetryCount >= referencedCert.Lifecycle.MaxFailureRetries {
+				if state.RetryCount >= effectiveMaxFailureRetries(referencedCert) {
 					continue
 				}
 				if !state.LastRetry.IsZero() && now.Sub(state.LastRetry) < failureRetryIntervalFor(referencedCert) {
