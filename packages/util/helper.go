@@ -323,6 +323,21 @@ func GetInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err erro
 
 }
 
+// GetProjectIdFromFlag reads the --projectId flag value and falls back to the
+// INFISICAL_PROJECT_ID environment variable when the flag is empty.
+func GetProjectIdFromFlag(cmd *cobra.Command) (string, error) {
+	projectId, err := cmd.Flags().GetString("projectId")
+	if err != nil {
+		return "", err
+	}
+
+	if projectId == "" {
+		projectId = os.Getenv(INFISICAL_PROJECT_ID_NAME)
+	}
+
+	return projectId, nil
+}
+
 func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuthLoginResponse, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
