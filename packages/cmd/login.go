@@ -242,8 +242,11 @@ var loginCmd = &cobra.Command{
 			}
 
 			// Identify the user in PostHog and alias the anonymous machine ID
-			// so that pre-login CLI events are merged into the same person record
-			Telemetry.IdentifyUser(userCredentialsToBeStored.Email)
+			// so that pre-login CLI events are merged into the same person record.
+			// This call is idempotent (gated on LastIdentifiedEmail in the config),
+			// and CaptureEvent below will also invoke it as a safety net for users
+			// who are already logged in on older CLIs that predate IdentifyUser.
+			Telemetry.IdentifyUserIfNeeded()
 
 			// clear backed up secrets from prev account
 			util.DeleteBackupSecrets()
