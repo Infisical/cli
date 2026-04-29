@@ -274,8 +274,9 @@ func deletePersistedOffset(filename string) {
 
 // readFromOffset reads length-prefixed encrypted records from filename starting at offset,
 // decrypts each, and returns them as a JSON array payload plus the new file offset.
+// When maxPayloadBytes > 0, stops accumulating once the next entry would push the serialized JSON array past that limit
 // Returns nil payload (and the unchanged offset) if there are no new records.
-func readFromOffset(filename, encryptionKey string, offset int64) ([]byte, int64, error) {
+func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadBytes int) ([]byte, int64, error) {
 	recordingDir := GetSessionRecordingDir()
 	fullPath := filepath.Join(recordingDir, filename)
 
@@ -291,6 +292,7 @@ func readFromOffset(filename, encryptionKey string, offset int64) ([]byte, int64
 
 	var entries []json.RawMessage
 	newOffset := offset
+	runningSize := 2 // account for JSON array brackets []
 
 	for {
 		lengthBytes := make([]byte, 4)
@@ -312,8 +314,17 @@ func readFromOffset(filename, encryptionKey string, offset int64) ([]byte, int64
 			return nil, newOffset, fmt.Errorf("failed to decrypt record at offset %d: %w", newOffset, err)
 		}
 
+		entrySize := len(decryptedData)
+		if len(entries) > 0 {
+			entrySize++ // comma separator
+		}
+		if maxPayloadBytes > 0 && len(entries) > 0 && runningSize+entrySize > maxPayloadBytes {
+			break // would exceed budget; caller will loop for the rest
+		}
+
 		entries = append(entries, json.RawMessage(decryptedData))
 		newOffset += int64(4 + length)
+		runningSize += entrySize
 	}
 
 	if len(entries) == 0 {
@@ -492,35 +503,53 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) {
 		return // Platform does not support batch uploads; bulk upload will happen at session end
 	}
 
-	payload, newOffset, err := readFromOffset(state.filename, encryptionKey, state.fileOffset)
+	if secrets := su.credentialsManager.GetRecordingSecrets(sessionID); secrets != nil {
+		endElapsedMs := time.Since(state.startedAt).Milliseconds()
+		startElapsedMs := state.lastEndElapsedMs
+		currentOffset := state.fileOffset
+
+		for {
+			payload, newOffset, err := readFromOffset(state.filename, encryptionKey, currentOffset, pamRecordingMaxPlaintextBytes)
+			if err != nil {
+				log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for chunk upload")
+				break
+			}
+			if len(payload) == 0 {
+				break
+			}
+
+			pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, payload, startElapsedMs, endElapsedMs)
+			if encErr != nil {
+				log.Error().Err(encErr).Str("sessionId", sessionID).Msg("Failed to encrypt chunk; will retry on next tick")
+				break
+			}
+			if upErr := su.chunkUploader.UploadChunk(sessionID, pc); upErr != nil {
+				log.Error().Err(upErr).Str("sessionId", sessionID).Int("chunkIndex", pc.ChunkIndex).
+					Msg("Chunk upload failed; will retry via reconciliation tick")
+				// Offset still advances: the chunk is queued on disk and re-reading the same events would produce a different IV, creating a duplicate
+			}
+
+			currentOffset = newOffset
+			startElapsedMs = endElapsedMs
+		}
+
+		if currentOffset != state.fileOffset {
+			state.lastEndElapsedMs = endElapsedMs
+			state.fileOffset = currentOffset
+			if err := writePersistedOffset(state.filename, currentOffset, endElapsedMs); err != nil {
+				log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after chunk flush")
+			}
+		}
+		return
+	}
+
+	payload, newOffset, err := readFromOffset(state.filename, encryptionKey, state.fileOffset, 0)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for batch upload")
 		return
 	}
 	if len(payload) == 0 {
 		return // No new events since last flush
-	}
-
-	if secrets := su.credentialsManager.GetRecordingSecrets(sessionID); secrets != nil {
-		endElapsedMs := time.Since(state.startedAt).Milliseconds()
-		startElapsedMs := state.lastEndElapsedMs
-		pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, payload, startElapsedMs, endElapsedMs)
-		if encErr != nil {
-			log.Error().Err(encErr).Str("sessionId", sessionID).Msg("Failed to encrypt chunk; will retry on next tick")
-			return
-		}
-		if upErr := su.chunkUploader.UploadChunk(sessionID, pc); upErr != nil {
-			log.Error().Err(upErr).Str("sessionId", sessionID).Int("chunkIndex", pc.ChunkIndex).
-				Msg("Chunk upload failed; will retry via reconciliation tick")
-			// Offset still advances: the chunk is queued on disk and re-reading the same events would produce a different IV, creating a duplicate
-		}
-
-		state.lastEndElapsedMs = endElapsedMs
-		state.fileOffset = newOffset
-		if err := writePersistedOffset(state.filename, newOffset, endElapsedMs); err != nil {
-			log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after chunk flush")
-		}
-		return
 	}
 
 	if err := api.CallUploadPamSessionEventBatch(su.httpClient, sessionID, state.fileOffset, payload); err != nil {

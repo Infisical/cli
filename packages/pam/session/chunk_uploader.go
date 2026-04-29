@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -38,6 +39,8 @@ const (
 	// How long past .enc file expiry to wait before force-deleting orphaned chunks
 	// Allows time for a reconnecting user to re-populate recording secrets
 	orphanChunkGracePeriod = 5 * time.Minute
+
+	s3PutTimeout = 2 * time.Minute
 )
 
 type ChunkUploader struct {
@@ -426,7 +429,10 @@ func (cu *ChunkUploader) CleanupSession(sessionID string) bool {
 }
 
 func s3PutCiphertext(presignedURL string, ciphertext []byte) error {
-	req, err := http.NewRequest(http.MethodPut, presignedURL, bytes.NewReader(ciphertext))
+	ctx, cancel := context.WithTimeout(context.Background(), s3PutTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presignedURL, bytes.NewReader(ciphertext))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
