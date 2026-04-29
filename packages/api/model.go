@@ -996,6 +996,13 @@ type RetrieveCertificateResponse struct {
 	} `json:"certificate"`
 }
 
+type CertificateBundleResponse struct {
+	Certificate      string `json:"certificate"`
+	CertificateChain string `json:"certificateChain"`
+	PrivateKey       string `json:"privateKey,omitempty"`
+	SerialNumber     string `json:"serialNumber"`
+}
+
 type RenewCertificateRequest struct {
 	RemoveRootsFromChain bool `json:"removeRootsFromChain,omitempty"`
 }
