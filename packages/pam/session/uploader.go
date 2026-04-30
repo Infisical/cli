@@ -549,9 +549,7 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 
 			currentOffset = newOffset
 			startElapsedMs = endElapsedMs
-		}
 
-		if currentOffset != state.fileOffset {
 			state.lastEndElapsedMs = endElapsedMs
 			state.fileOffset = currentOffset
 			if err := writePersistedOffset(state.filename, currentOffset, endElapsedMs); err != nil {
