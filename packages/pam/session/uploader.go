@@ -369,18 +369,11 @@ func (su *SessionUploader) RegisterSession(sessionID string) {
 	log.Debug().Str("sessionId", sessionID).Msg("Registered session for incremental batch upload")
 }
 
-// UnregisterSession removes a session from incremental tracking and deletes its persisted offset.
+// UnregisterSession removes a session from incremental tracking
 func (su *SessionUploader) UnregisterSession(sessionID string) {
 	su.activeSessionsMu.Lock()
-	state, ok := su.activeSessions[sessionID]
-	if ok {
-		delete(su.activeSessions, sessionID)
-	}
+	delete(su.activeSessions, sessionID)
 	su.activeSessionsMu.Unlock()
-
-	if ok && state.filename != "" {
-		deletePersistedOffset(state.filename)
-	}
 
 	log.Debug().Str("sessionId", sessionID).Msg("Unregistered session from incremental batch upload")
 }
@@ -750,6 +743,7 @@ func (su *SessionUploader) CleanupPAMSession(sessionID string, reason string) er
 	if chunksCleared {
 		fileInfo, findErr := FindSessionFileBySessionID(sessionID)
 		if findErr == nil {
+			deletePersistedOffset(fileInfo.Filename)
 			recordingDir := GetSessionRecordingDir()
 			fullPath := filepath.Join(recordingDir, fileInfo.Filename)
 			if removeErr := os.Remove(fullPath); removeErr != nil && !os.IsNotExist(removeErr) {
