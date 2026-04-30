@@ -530,8 +530,7 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 		return nil // Platform does not support batch uploads; bulk upload will happen at session end
 	}
 
-	if secrets := su.credentialsManager.GetRecordingSecrets(sessionID); secrets != nil {
-		endElapsedMs := time.Since(state.startedAt).Milliseconds()
+	if secrets := su.credentialsManager.GetRecordingSecrets(sessionID); secrets != nil && len(secrets.SessionKey) == 32 {
 		startElapsedMs := state.lastEndElapsedMs
 		currentOffset := state.fileOffset
 
@@ -544,6 +543,8 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 			if len(payload) == 0 {
 				break
 			}
+
+			endElapsedMs := time.Since(state.startedAt).Milliseconds()
 
 			parts := splitPayload(payload, pamRecordingMaxPlaintextBytes)
 			encFailed := false
