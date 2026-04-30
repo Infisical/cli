@@ -112,7 +112,7 @@ func init() {
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
 
 		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
-			token, err := util.GetInfisicalToken(cmd)
+			token, err := util.DetectInfisicalToken(cmd)
 
 			if err == nil && token != nil {
 				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
