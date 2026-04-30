@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	sts "github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/go-resty/resty/v2"
 	infisicalSdkUtil "github.com/infisical/go-sdk/packages/util"
 )
@@ -38,7 +40,19 @@ func LoginGatewayWithAws(ctx context.Context, httpClient *resty.Client, gatewayI
 		return "", fmt.Errorf("unable to retrieve AWS credentials (no instance role / no AWS env vars / no profile): %w", err)
 	}
 
-	iamRequestURL := fmt.Sprintf("https://sts.%s.amazonaws.com/", awsRegion)
+	// SDK resolver picks the right host suffix per partition: `.amazonaws.com`
+	// for commercial/GovCloud, `.amazonaws.com.cn` for China.
+	stsEndpoint, err := sts.NewDefaultEndpointResolverV2().ResolveEndpoint(ctx, sts.EndpointParameters{
+		Region: aws.String(awsRegion),
+	})
+	if err != nil {
+		return "", fmt.Errorf("error resolving STS endpoint for region %q: %w", awsRegion, err)
+	}
+
+	iamRequestURL := stsEndpoint.URI.String()
+	if !strings.HasSuffix(iamRequestURL, "/") {
+		iamRequestURL += "/"
+	}
 	iamRequestBody := "Action=GetCallerIdentity&Version=2011-06-15"
 
 	req, err := http.NewRequest(http.MethodPost, iamRequestURL, strings.NewReader(iamRequestBody))
@@ -72,7 +86,7 @@ func LoginGatewayWithAws(ctx context.Context, httpClient *resty.Client, gatewayI
 		}
 		headers[name] = values[0]
 	}
-	headers["Host"] = fmt.Sprintf("sts.%s.amazonaws.com", awsRegion)
+	headers["Host"] = stsEndpoint.URI.Host
 
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
