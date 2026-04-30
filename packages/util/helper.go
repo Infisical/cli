@@ -379,9 +379,16 @@ func classifyToken(infisicalToken, source string) *models.TokenDetails {
 
 // isAuthMethodSpecified returns true when the caller has explicitly requested
 // a machine-identity auth strategy, either via the --auth-method CLI flag or
-// the INFISICAL_AUTH_METHOD environment variable.
+// the INFISICAL_AUTH_METHOD environment variable. The env var is only checked
+// when the command actually defines the --auth-method flag (e.g. gateway, relay),
+// so that commands like run/export/secrets are not affected by a globally-set
+// INFISICAL_AUTH_METHOD.
 func isAuthMethodSpecified(cmd *cobra.Command) bool {
-	if f := cmd.Flags().Lookup("auth-method"); f != nil && f.Changed {
+	f := cmd.Flags().Lookup("auth-method")
+	if f == nil {
+		return false
+	}
+	if f.Changed {
 		return true
 	}
 	if os.Getenv(INFISICAL_AUTH_METHOD_NAME) != "" {
