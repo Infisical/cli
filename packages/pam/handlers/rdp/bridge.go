@@ -15,7 +15,7 @@ var (
 // the Rust crate. Real authn happens upstream (Infisical + gateway).
 const (
 	AcceptorUsername = "infisical"
-	AcceptorPassword = "infisical"
+	AcceptorPassword = ""
 )
 
 type Bridge struct {

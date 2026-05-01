@@ -25,7 +25,7 @@ use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 
 // Must match what the CLI bakes into the generated .rdp file.
 pub const ACCEPTOR_USERNAME: &str = "infisical";
-pub const ACCEPTOR_PASSWORD: &str = "infisical";
+pub const ACCEPTOR_PASSWORD: &str = "";
 
 pub struct TargetEndpoint {
     pub host: String,

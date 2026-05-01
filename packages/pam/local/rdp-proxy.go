@@ -112,7 +112,7 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	util.PrintfStderr("  127.0.0.1:%d\n", proxy.port)
 	util.PrintfStderr("With credentials:\n")
 	util.PrintfStderr("  username: %s\n", rdp.AcceptorUsername)
-	util.PrintfStderr("  password: %s\n", rdp.AcceptorPassword)
+	util.PrintfStderr("  password: (leave blank)\n")
 	if proxy.rdpFilePath != "" {
 		util.PrintfStderr("\n")
 		util.PrintfStderr("Generated .rdp file:\n")
@@ -122,16 +122,6 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	util.PrintfStderr("Press Ctrl+C to terminate the session.\n")
 	util.PrintfStderr("**********************************************************************\n")
 	util.PrintfStderr("\n")
-
-	// The .rdp file format has no portable way to embed a plaintext password
-	// (mstsc's `password 51:b:` is Windows-DPAPI-encrypted; Mac / freerdp
-	// clients ignore any password field). Put the fixed acceptor password
-	// on the clipboard so the user just pastes it when the client prompts.
-	if err := copyToClipboard(rdp.AcceptorPassword); err != nil {
-		log.Debug().Err(err).Msg("Could not copy password to clipboard; type it manually")
-	} else {
-		util.PrintfStderr("(Password copied to clipboard.)\n\n")
-	}
 
 	if !noLaunch && proxy.rdpFilePath != "" {
 		if err := launchRDPClient(proxy.rdpFilePath); err != nil {
@@ -367,41 +357,4 @@ func launchRDPClient(rdpFilePath string) error {
 		cmd = exec.Command("xdg-open", rdpFilePath)
 	}
 	return cmd.Start()
-}
-
-// copyToClipboard pipes `text` into the OS clipboard via the platform's
-// standard CLI helper. Failure is non-fatal; the caller logs and moves on.
-func copyToClipboard(text string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("pbcopy")
-	case "windows":
-		cmd = exec.Command("clip")
-	default:
-		// Try xclip first, then xsel. Neither is guaranteed to exist on
-		// headless servers, which is fine: we just return the error and
-		// the caller logs at debug level.
-		if _, err := exec.LookPath("xclip"); err == nil {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
-		} else if _, err := exec.LookPath("xsel"); err == nil {
-			cmd = exec.Command("xsel", "--clipboard", "--input")
-		} else {
-			return fmt.Errorf("no clipboard tool found (install xclip or xsel)")
-		}
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	if _, err := stdin.Write([]byte(text)); err != nil {
-		return err
-	}
-	if err := stdin.Close(); err != nil {
-		return err
-	}
-	return cmd.Wait()
 }
