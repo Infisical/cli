@@ -86,7 +86,7 @@ func (r *Rule) Validate() error {
 		} else if r.Description != "" {
 			context = ", description: " + r.Description
 		}
-		return fmt.Errorf("rule |id| is missing or empty" + context)
+		return fmt.Errorf("rule |id| is missing or empty%s", context)
 	}
 
 	// Ensure the rule actually matches something.

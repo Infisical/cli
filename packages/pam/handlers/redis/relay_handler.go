@@ -136,7 +136,7 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 		case resp3.TypeArray:
 			cmd := value.Elems[0]
 			if cmd.Type != resp3.TypeBlobString {
-				return fmt.Errorf("expected SimpleString, got %s", cmd.Type)
+				return fmt.Errorf("expected BlobString, got %d", cmd.Type)
 			}
 			cmdStr := strings.ToLower(value.Elems[0].Str)
 			switch cmdStr {
