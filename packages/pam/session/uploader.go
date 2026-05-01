@@ -272,22 +272,6 @@ func deletePersistedOffset(filename string) {
 	_ = os.Remove(offsetFilePath(filename))
 }
 
-func splitPayload(data []byte, maxSize int) [][]byte {
-	if len(data) <= maxSize {
-		return [][]byte{data}
-	}
-	var parts [][]byte
-	for len(data) > 0 {
-		end := maxSize
-		if end > len(data) {
-			end = len(data)
-		}
-		parts = append(parts, data[:end])
-		data = data[end:]
-	}
-	return parts
-}
-
 // readFromOffset reads length-prefixed encrypted records from filename starting at offset,
 // decrypts each, and returns them as a JSON array payload plus the new file offset.
 // When maxPayloadBytes > 0, stops accumulating once the next entry would push the serialized JSON array past that limit
@@ -546,22 +530,14 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 
 			endElapsedMs := time.Since(state.startedAt).Milliseconds()
 
-			parts := splitPayload(payload, pamRecordingMaxPlaintextBytes)
-			encFailed := false
-			for _, part := range parts {
-				pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, part, startElapsedMs, endElapsedMs)
-				if encErr != nil {
-					log.Error().Err(encErr).Str("sessionId", sessionID).Msg("Failed to encrypt chunk; will retry on next tick")
-					encFailed = true
-					break
-				}
-				if upErr := su.chunkUploader.UploadChunk(sessionID, pc); upErr != nil {
-					log.Error().Err(upErr).Str("sessionId", sessionID).Int("chunkIndex", pc.ChunkIndex).
-						Msg("Chunk upload failed; will retry via reconciliation tick")
-				}
-			}
-			if encFailed {
+			pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, payload, startElapsedMs, endElapsedMs)
+			if encErr != nil {
+				log.Error().Err(encErr).Str("sessionId", sessionID).Msg("Failed to encrypt chunk; will retry on next tick")
 				break
+			}
+			if upErr := su.chunkUploader.UploadChunk(sessionID, pc); upErr != nil {
+				log.Error().Err(upErr).Str("sessionId", sessionID).Int("chunkIndex", pc.ChunkIndex).
+					Msg("Chunk upload failed; will retry via reconciliation tick")
 			}
 
 			currentOffset = newOffset

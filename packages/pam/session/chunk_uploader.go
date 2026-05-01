@@ -217,11 +217,8 @@ func (cu *ChunkUploader) EncryptAndQueueChunk(
 		return nil, fmt.Errorf("empty plaintext")
 	}
 	if len(plaintext) > pamRecordingMaxPlaintextBytes {
-		return nil, fmt.Errorf(
-			"plaintext too large for one chunk [bytes=%d, max=%d]",
-			len(plaintext),
-			pamRecordingMaxPlaintextBytes,
-		)
+		log.Warn().Int("bytes", len(plaintext)).Int("max", pamRecordingMaxPlaintextBytes).
+			Msg("Chunk exceeds target size limit; uploading oversized chunk")
 	}
 
 	secrets := cu.credentialsManager.GetRecordingSecrets(sessionID)
