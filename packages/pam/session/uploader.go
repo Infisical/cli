@@ -435,9 +435,7 @@ func (su *SessionUploader) resumeInProgressSessions() {
 		log.Info().Str("sessionId", fileInfo.SessionID).Str("filename", fileInfo.Filename).Msg("Resuming session upload after restart")
 		su.RegisterSession(fileInfo.SessionID)
 
-		if su.chunkUploader.HasPendingChunks(fileInfo.SessionID) {
-			su.credentialsManager.LoadRecordingSecretsFromDisk(fileInfo.SessionID)
-		}
+		su.credentialsManager.LoadRecordingSecretsFromDisk(fileInfo.SessionID)
 
 		if _, err := su.credentialsManager.GetPAMSessionCredentials(fileInfo.SessionID, fileInfo.ExpiresAt); err != nil {
 			log.Warn().Err(err).Str("sessionId", fileInfo.SessionID).
