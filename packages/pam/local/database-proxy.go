@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
@@ -125,6 +126,13 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	case session.ResourceTypeMongodb:
 		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
+	case session.ResourceTypeOracle:
+		// The gateway rewrites the username in the O5Logon exchange to the real DB
+		// user, so the client can (and should) connect using the Infisical account
+		// name. Keeps the UX consistent with the "Account:" label above.
+		util.PrintfStderr("oracle://%s:%s@localhost:%d/%s", accessParams.AccountName, oracle.ProxyPasswordPlaceholder, proxy.port, database)
+		util.PrintfStderr("\n\nNote: the password shown is a protocol placeholder required by Oracle, not a secret.")
+		util.PrintfStderr("\nReal authentication is handled by the local proxy.")
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}

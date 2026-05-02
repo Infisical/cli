@@ -18,6 +18,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -53,6 +54,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
 		session.ResourceTypeMongodb,
+		session.ResourceTypeOracle,
 	}
 }
 
@@ -379,6 +381,24 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", kubernetesConfig.TargetApiServer).
 			Str("authMethod", credentials.AuthMethod).
 			Msg("Starting Kubernetes PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
+	case session.ResourceTypeOracle:
+		oracleConfig := oracle.OracleProxyConfig{
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+		proxy := oracle.NewOracleProxy(oracleConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", oracleConfig.TargetAddr).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting Oracle PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	case session.ResourceTypeMongodb:
 		mongoConfig := mongodb.MongoDBProxyConfig{

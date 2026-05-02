@@ -13,3 +13,7 @@ infisical
 
 
 /agent-testing
+
+# Editor specific
+.vscode/*
+.idea/*
