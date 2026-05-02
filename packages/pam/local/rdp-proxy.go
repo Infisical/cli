@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/rdp"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -93,7 +92,7 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 		return
 	}
 
-	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId)
+	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId, accessParams.AccountName)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to write .rdp file; proxy still running")
 	} else {
@@ -111,7 +110,7 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	util.PrintfStderr("Connect your RDP client to:\n")
 	util.PrintfStderr("  127.0.0.1:%d\n", proxy.port)
 	util.PrintfStderr("With credentials:\n")
-	util.PrintfStderr("  username: %s\n", rdp.AcceptorUsername)
+	util.PrintfStderr("  username: %s\n", accessParams.AccountName)
 	util.PrintfStderr("  password: (leave blank)\n")
 	if proxy.rdpFilePath != "" {
 		util.PrintfStderr("\n")
@@ -308,7 +307,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 // becomes invalid as soon as the CLI exits; reopening the file later
 // would just dial a dead port.
 // Falls back to the OS temp dir if the home directory can't be resolved.
-func writeRDPFile(listenPort int, sessionID string) (string, error) {
+func writeRDPFile(listenPort int, sessionID string, username string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)
 
 	dir, err := rdpFileDir()
@@ -324,7 +323,7 @@ func writeRDPFile(listenPort int, sessionID string) (string, error) {
 		"full address:s:127.0.0.1:%d\r\n"+
 			"username:s:%s\r\n",
 		listenPort,
-		rdp.AcceptorUsername,
+		username,
 	)
 
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

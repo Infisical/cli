@@ -10,13 +10,6 @@ var (
 	ErrSessionFailed  = errors.New("rdp bridge: session ended with error")
 )
 
-// Fixed placeholder credentials the RDP client presents to the acceptor
-// side of the bridge. Must match ACCEPTOR_USERNAME / ACCEPTOR_PASSWORD in
-// the Rust crate. Real authn happens upstream (Infisical + gateway).
-const (
-	AcceptorUsername = "infisical"
-	AcceptorPassword = ""
-)
 
 type Bridge struct {
 	handle  uint64

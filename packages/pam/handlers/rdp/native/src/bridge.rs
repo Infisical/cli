@@ -23,8 +23,7 @@ use tracing::info;
 
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 
-// Must match what the CLI bakes into the generated .rdp file.
-pub const ACCEPTOR_USERNAME: &str = "infisical";
+// Empty password for acceptor - the username comes from target credentials.
 pub const ACCEPTOR_PASSWORD: &str = "";
 
 pub struct TargetEndpoint {
@@ -32,6 +31,10 @@ pub struct TargetEndpoint {
     pub port: u16,
     pub username: String,
     pub password: String,
+    // Username the user types into their RDP client. Distinct from
+    // `username` (the real Windows account injected to the target).
+    // Falls back to `username` if empty.
+    pub acceptor_username: String,
 }
 
 pub async fn run_mitm(
@@ -53,8 +56,13 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
     // 0.23 needs an explicit provider when more than one is compiled in.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    let acceptor_username = if target.acceptor_username.is_empty() {
+        target.username.clone()
+    } else {
+        target.acceptor_username.clone()
+    };
     let (acceptor_output, connector_output) =
-        tokio::try_join!(run_acceptor_half(client_tcp), run_connector_half(target))?;
+        tokio::try_join!(run_acceptor_half(client_tcp, acceptor_username), run_connector_half(target))?;
 
     let (mut client_stream, client_leftover) = acceptor_output;
     let (mut target_stream, target_leftover) = connector_output;
@@ -97,14 +105,14 @@ fn is_unexpected_eof(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::UnexpectedEof
 }
 
-async fn run_acceptor_half(client_tcp: TcpStream) -> Result<(ErasedStream, bytes::BytesMut)> {
+async fn run_acceptor_half(client_tcp: TcpStream, username: String) -> Result<(ErasedStream, bytes::BytesMut)> {
     let (server_tls, acceptor_public_key) =
         build_acceptor_tls().context("build acceptor TLS config")?;
     let server_tls = Arc::new(server_tls);
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
     let expected_creds = AcceptorCredentials {
-        username: ACCEPTOR_USERNAME.to_owned(),
+        username,
         password: ACCEPTOR_PASSWORD.to_owned(),
         domain: None,
     };
