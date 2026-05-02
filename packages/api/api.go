@@ -50,6 +50,7 @@ const (
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 	operationCallConnectGateway                    = "CallConnectGateway"
 	operationCallEnrollGateway                     = "CallEnrollGateway"
+	operationCallAwsAuthLoginGateway               = "CallAwsAuthLoginGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
@@ -955,6 +956,26 @@ func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (
 
 	if response.IsError() {
 		return EnrollGatewayResponse{}, NewAPIErrorWithResponse(operationCallEnrollGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallAwsAuthLoginGateway(httpClient *resty.Client, request AwsAuthLoginGatewayRequest) (AwsAuthLoginGatewayResponse, error) {
+	var resBody AwsAuthLoginGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return AwsAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallAwsAuthLoginGateway, err)
+	}
+
+	if response.IsError() {
+		return AwsAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallAwsAuthLoginGateway, response, nil)
 	}
 
 	return resBody, nil

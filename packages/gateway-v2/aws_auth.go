@@ -1,0 +1,119 @@
+package gatewayv2
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	sts "github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/go-resty/resty/v2"
+	infisicalSdkUtil "github.com/infisical/go-sdk/packages/util"
+)
+
+const (
+	INFISICAL_GATEWAY_ID_KEY = "INFISICAL_GATEWAY_ID"
+)
+
+// LoginGatewayWithAws builds a SigV4-signed sts:GetCallerIdentity request using the local AWS
+// credentials chain (instance metadata, env vars, profile, etc.) and exchanges it for a
+// GATEWAY_ACCESS_TOKEN. The credentials themselves never leave the host — only the signature
+// over a single STS API call.
+//
+// ctx is threaded through SigV4 signing so a shutdown signal during startup cancels the
+// outbound STS verification cleanly instead of hanging the process.
+func LoginGatewayWithAws(ctx context.Context, httpClient *resty.Client, gatewayID string) (string, error) {
+	if gatewayID == "" {
+		return "", errors.New("--gateway-id is required when --enroll-method=aws")
+	}
+
+	awsCredentials, awsRegion, err := infisicalSdkUtil.RetrieveAwsCredentials()
+	if err != nil {
+		return "", fmt.Errorf("unable to retrieve AWS credentials (no instance role / no AWS env vars / no profile): %w", err)
+	}
+
+	// SDK resolver picks the right host suffix per partition: `.amazonaws.com`
+	// for commercial/GovCloud, `.amazonaws.com.cn` for China.
+	stsEndpoint, err := sts.NewDefaultEndpointResolverV2().ResolveEndpoint(ctx, sts.EndpointParameters{
+		Region: aws.String(awsRegion),
+	})
+	if err != nil {
+		return "", fmt.Errorf("error resolving STS endpoint for region %q: %w", awsRegion, err)
+	}
+
+	iamRequestURL := stsEndpoint.URI.String()
+	if !strings.HasSuffix(iamRequestURL, "/") {
+		iamRequestURL += "/"
+	}
+	iamRequestBody := "Action=GetCallerIdentity&Version=2011-06-15"
+
+	req, err := http.NewRequest(http.MethodPost, iamRequestURL, strings.NewReader(iamRequestBody))
+	if err != nil {
+		return "", fmt.Errorf("error building STS request: %w", err)
+	}
+
+	// Set every header that needs to be on the wire BEFORE signing — the SDK's signer
+	// reads req.Header to compute SignedHeaders, and any modification afterwards would
+	// invalidate the signature when the backend forwards the request to STS.
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+
+	hash := sha256.New()
+	hash.Write([]byte(iamRequestBody))
+	payloadHash := fmt.Sprintf("%x", hash.Sum(nil))
+
+	signingTime := time.Now()
+	signer := v4.NewSigner()
+	if err := signer.SignHTTP(ctx, awsCredentials, req, payloadHash, "sts", awsRegion, signingTime); err != nil {
+		return "", fmt.Errorf("error signing STS request: %w", err)
+	}
+
+	// Forward every signed header verbatim. Content-Length is computed by the receiving
+	// HTTP stack from the body, so we don't include it (and the signer doesn't sign it).
+	// Host isn't in req.Header in Go's http package — it's on req.URL.Host — so we add it
+	// explicitly with the same value the signer used internally.
+	headers := make(map[string]string)
+	for name, values := range req.Header {
+		if strings.ToLower(name) == "content-length" {
+			continue
+		}
+		headers[name] = values[0]
+	}
+	headers["Host"] = stsEndpoint.URI.Host
+
+	headersJSON, err := json.Marshal(headers)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling headers: %w", err)
+	}
+
+	resp, err := api.CallAwsAuthLoginGateway(httpClient, api.AwsAuthLoginGatewayRequest{
+		Method:            EnrollMethodAws,
+		GatewayID:         gatewayID,
+		HTTPRequestMethod: req.Method,
+		IamRequestBody:    base64.StdEncoding.EncodeToString([]byte(iamRequestBody)),
+		IamRequestHeaders: base64.StdEncoding.EncodeToString(headersJSON),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return resp.AccessToken, nil
+}
+
+// LoadStoredGatewayID returns the persisted gateway id for a named gateway (set after first
+// AWS-auth login so subsequent restarts don't need --gateway-id).
+func LoadStoredGatewayID(name string) (string, error) {
+	return loadConfKey(name, INFISICAL_GATEWAY_ID_KEY)
+}
+
+// SaveGatewayID persists the gateway id used during AWS-auth login.
+func SaveGatewayID(name, gatewayID string) error {
+	return saveConfKey(name, INFISICAL_GATEWAY_ID_KEY, gatewayID)
+}
