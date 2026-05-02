@@ -57,6 +57,8 @@ const (
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
 	operationCallUploadPamSessionEventBatch        = "CallUploadPamSessionEventBatch"
+	operationCallPAMSessionChunkPresignedPut       = "CallPAMSessionChunkPresignedPut"
+	operationCallPAMSessionChunkMetadata           = "CallPAMSessionChunkMetadata"
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
@@ -1049,6 +1051,48 @@ func CallUploadPamSessionLogs(httpClient *resty.Client, sessionId string, reques
 		return NewAPIErrorWithResponse(operationCallUploadPamSessionLog, response, nil)
 	}
 
+	return nil
+}
+
+func CallPAMSessionChunkPresignedPut(
+	httpClient *resty.Client,
+	sessionId, uploadToken string,
+	req ChunkPresignedPutRequest,
+) (ChunkPresignedPutResponse, error) {
+	var resp ChunkPresignedPutResponse
+	httpResp, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("X-Gateway-Upload-Token", uploadToken).
+		SetBody(req).
+		SetResult(&resp).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/chunks/presigned-put", config.INFISICAL_URL, sessionId))
+	if err != nil {
+		return ChunkPresignedPutResponse{}, NewGenericRequestError(operationCallPAMSessionChunkPresignedPut, err)
+	}
+	if httpResp.IsError() {
+		return ChunkPresignedPutResponse{}, NewAPIErrorWithResponse(operationCallPAMSessionChunkPresignedPut, httpResp, nil)
+	}
+	return resp, nil
+}
+
+func CallPAMSessionChunkMetadata(
+	httpClient *resty.Client,
+	sessionId, uploadToken string,
+	req ChunkMetadataRequest,
+) error {
+	httpResp, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("X-Gateway-Upload-Token", uploadToken).
+		SetBody(req).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/chunks", config.INFISICAL_URL, sessionId))
+	if err != nil {
+		return NewGenericRequestError(operationCallPAMSessionChunkMetadata, err)
+	}
+	if httpResp.IsError() {
+		return NewAPIErrorWithResponse(operationCallPAMSessionChunkMetadata, httpResp, nil)
+	}
 	return nil
 }
 
