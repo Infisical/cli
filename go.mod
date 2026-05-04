@@ -19,7 +19,7 @@ require (
 	github.com/h2non/filetype v1.1.3
 	github.com/infisical/go-sdk v0.7.0
 	github.com/infisical/infisical-kmip v0.3.17
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.9.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/muesli/ansi v0.0.0-20221106050444-61f0cd9a192a
 	github.com/muesli/mango-cobra v1.2.0

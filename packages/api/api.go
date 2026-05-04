@@ -57,11 +57,14 @@ const (
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
 	operationCallUploadPamSessionEventBatch        = "CallUploadPamSessionEventBatch"
+	operationCallPAMSessionChunkPresignedPut       = "CallPAMSessionChunkPresignedPut"
+	operationCallPAMSessionChunkMetadata           = "CallPAMSessionChunkMetadata"
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
+	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
 )
@@ -1051,6 +1054,48 @@ func CallUploadPamSessionLogs(httpClient *resty.Client, sessionId string, reques
 	return nil
 }
 
+func CallPAMSessionChunkPresignedPut(
+	httpClient *resty.Client,
+	sessionId, uploadToken string,
+	req ChunkPresignedPutRequest,
+) (ChunkPresignedPutResponse, error) {
+	var resp ChunkPresignedPutResponse
+	httpResp, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("X-Gateway-Upload-Token", uploadToken).
+		SetBody(req).
+		SetResult(&resp).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/chunks/presigned-put", config.INFISICAL_URL, sessionId))
+	if err != nil {
+		return ChunkPresignedPutResponse{}, NewGenericRequestError(operationCallPAMSessionChunkPresignedPut, err)
+	}
+	if httpResp.IsError() {
+		return ChunkPresignedPutResponse{}, NewAPIErrorWithResponse(operationCallPAMSessionChunkPresignedPut, httpResp, nil)
+	}
+	return resp, nil
+}
+
+func CallPAMSessionChunkMetadata(
+	httpClient *resty.Client,
+	sessionId, uploadToken string,
+	req ChunkMetadataRequest,
+) error {
+	httpResp, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("X-Gateway-Upload-Token", uploadToken).
+		SetBody(req).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/chunks", config.INFISICAL_URL, sessionId))
+	if err != nil {
+		return NewGenericRequestError(operationCallPAMSessionChunkMetadata, err)
+	}
+	if httpResp.IsError() {
+		return NewAPIErrorWithResponse(operationCallPAMSessionChunkMetadata, httpResp, nil)
+	}
+	return nil
+}
+
 func CallUploadPamSessionEventBatch(httpClient *resty.Client, sessionId string, startOffset int64, data []byte) error {
 	response, err := httpClient.
 		R().
@@ -1138,6 +1183,25 @@ func CallRetrieveCertificate(httpClient *resty.Client, certificateId string) (*R
 
 	if response.IsError() {
 		return nil, NewAPIErrorWithResponse(operationCallRetrieveCertificate, response, nil)
+	}
+
+	return &resBody, nil
+}
+
+func CallGetCertificateBundle(httpClient *resty.Client, certificateId string) (*CertificateBundleResponse, error) {
+	var resBody CertificateBundleResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/%s/bundle", config.INFISICAL_URL, certificateId))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallGetCertificateBundle, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallGetCertificateBundle, response, nil)
 	}
 
 	return &resBody, nil

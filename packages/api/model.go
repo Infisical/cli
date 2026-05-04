@@ -871,6 +871,40 @@ type PAMPolicyRules struct {
 type PAMSessionCredentialsResponse struct {
 	Credentials PAMSessionCredentials `json:"credentials"`
 	PolicyRules *PAMPolicyRules       `json:"policyRules,omitempty"`
+	Recording   *PAMRecordingResponse `json:"recording,omitempty"`
+}
+
+type PAMRecordingResponse struct {
+	SessionKey     string `json:"sessionKey"`
+	UploadToken    string `json:"uploadToken"`
+	StorageBackend string `json:"storageBackend"`
+	ProjectId      string `json:"projectId"`
+	SessionId      string `json:"sessionId"`
+}
+
+type ChunkPresignedPutRequest struct {
+	ChunkIndex      int   `json:"chunkIndex"`
+	CiphertextBytes int64 `json:"ciphertextBytes"`
+	IsKeyframe      bool  `json:"isKeyframe,omitempty"`
+}
+
+type ChunkPresignedPutResponse struct {
+	URL              string `json:"url"`
+	ObjectKey        string `json:"objectKey"`
+	Method           string `json:"method"`
+	ExpiresInSeconds int    `json:"expiresInSeconds"`
+}
+
+type ChunkMetadataRequest struct {
+	ChunkIndex        int    `json:"chunkIndex"`
+	StartElapsedMs    int64  `json:"startElapsedMs"`
+	EndElapsedMs      int64  `json:"endElapsedMs"`
+	CiphertextSha256  string `json:"ciphertextSha256"`
+	CiphertextBytes   int64  `json:"ciphertextBytes"`
+	IV                string `json:"iv"`
+	KeyframeObjectKey string `json:"keyframeObjectKey,omitempty"`
+	KeyframeSizeBytes int64  `json:"keyframeSizeBytes,omitempty"`
+	Ciphertext        string `json:"ciphertext,omitempty"`
 }
 
 type PAMSessionCredentials struct {
@@ -994,6 +1028,13 @@ type RetrieveCertificateResponse struct {
 		CertificateChain  string    `json:"certificateChain,omitempty"`
 		PrivateKey        string    `json:"privateKey,omitempty"`
 	} `json:"certificate"`
+}
+
+type CertificateBundleResponse struct {
+	Certificate      string `json:"certificate"`
+	CertificateChain string `json:"certificateChain"`
+	PrivateKey       string `json:"privateKey,omitempty"`
+	SerialNumber     string `json:"serialNumber"`
 }
 
 type RenewCertificateRequest struct {

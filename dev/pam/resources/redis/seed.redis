@@ -1,0 +1,29 @@
+# Strings
+SET app:greeting "Welcome to the PAM dev stack"
+SET app:version 1.0.0
+INCRBY app:counter 100
+
+# Hashes — users
+HSET user:1 username alice email alice@example.com age 30 active 1
+HSET user:2 username bob   email bob@example.com   age 25 active 1
+HSET user:3 username carol email carol@example.com age 28 active 0
+
+# Hashes — products
+HSET product:101 name "Notebook" price 9.99 stock 42
+HSET product:102 name "Pen"      price 1.50 stock 200
+HSET product:103 name "Stapler"  price 12.00 stock 15
+
+# Lists
+LPUSH events:login alice bob carol bob alice
+LPUSH events:signup carol alice bob
+
+# Sets
+SADD tags:active alice bob
+SADD tags:inactive carol
+SADD tags:engineering alice grace
+
+# Sorted set — leaderboard
+ZADD leaderboard 100 alice 250 bob 175 carol
+
+# TTL demo — user:3 expires in 24h
+EXPIRE user:3 86400
