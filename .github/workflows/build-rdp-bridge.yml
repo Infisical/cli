@@ -1,0 +1,93 @@
+name: Build RDP Bridge Static Libs
+
+# windows/arm64, freebsd, netbsd, openbsd excluded: no cgo-capable
+# cross toolchain we can reasonably install in CI. They ship the RDP
+# stub at runtime.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  rust-cross:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-latest-8-cores
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+          - target: i686-unknown-linux-gnu
+          - target: arm-unknown-linux-gnueabi
+          - target: armv7-unknown-linux-gnueabihf
+          - target: x86_64-pc-windows-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rdp-cross-cargo-${{ matrix.target }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-cross-cargo-${{ matrix.target }}-
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        run: rustup show active-toolchain
+
+      - name: cross build --release --target ${{ matrix.target }}
+        working-directory: packages/pam/handlers/rdp/native
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-bridge-${{ matrix.target }}
+          path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
+          if-no-files-found: error
+          retention-days: 7
+
+  rust-darwin:
+    name: macos-latest (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rdp-darwin-cargo-${{ matrix.target }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-darwin-cargo-${{ matrix.target }}-
+
+      - name: Install pinned Rust toolchain + target
+        working-directory: packages/pam/handlers/rdp/native
+        run: |
+          rustup show active-toolchain
+          rustup target add ${{ matrix.target }}
+
+      - name: cargo build --release --target ${{ matrix.target }}
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-bridge-${{ matrix.target }}
+          path: packages/pam/handlers/rdp/native/target/${{ matrix.target }}/release/libinfisical_rdp_bridge.a
+          if-no-files-found: error
+          retention-days: 7

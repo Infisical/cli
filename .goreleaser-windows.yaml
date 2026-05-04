@@ -1,13 +1,16 @@
 builds:
   - id: windows-build
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      - CC=gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-pc-windows-gnu/release'
     binary: infisical
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
     flags:
       - -trimpath
+      - -tags=rdp
     goos:
       - windows
     goarch:
