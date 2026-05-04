@@ -31,6 +31,7 @@ type TerminalEventType string
 const (
 	TerminalEventInput  TerminalEventType = "input"  // Data from user to server
 	TerminalEventOutput TerminalEventType = "output" // Data from server to user
+	TerminalEventRDP    TerminalEventType = "rdp"    // RDP tap event (see TerminalChannelRDP)
 )
 
 // TerminalChannelType represents the type of SSH channel
@@ -40,6 +41,7 @@ const (
 	TerminalChannelShell TerminalChannelType = "terminal" // Interactive shell session
 	TerminalChannelExec  TerminalChannelType = "exec"     // Single command execution
 	TerminalChannelSFTP  TerminalChannelType = "sftp"     // SFTP file transfer
+	TerminalChannelRDP   TerminalChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
 )
 
 // TerminalEvent represents a single event in a terminal session
@@ -305,7 +307,14 @@ func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
 		if event.ElapsedTime == 0 {
 			event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
 		}
-		event.Data = sl.applyMasking(event.Data)
+		// RDP carries a structured JSON envelope (with base64-encoded PDU
+		// bytes, scancodes, etc.) in Data, not free-form terminal text.
+		// Masking patterns are SSH-shaped regexes; running them over the
+		// envelope would corrupt valid recordings whenever a pattern
+		// happened to match a substring of the JSON or base64.
+		if event.ChannelType != TerminalChannelRDP {
+			event.Data = sl.applyMasking(event.Data)
+		}
 		return json.Marshal(event)
 	})
 }

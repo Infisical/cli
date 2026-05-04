@@ -4,6 +4,7 @@
 //! avoids drift that breaks strict clients (Windows App, mstsc).
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use ironrdp_acceptor::{Acceptor, BeginResult};
@@ -11,20 +12,24 @@ use ironrdp_connector::credssp::{CredsspSequence, KerberosConfig};
 use ironrdp_connector::sspi::credssp::ClientState;
 use ironrdp_connector::sspi::generator::GeneratorState;
 use ironrdp_connector::{encode_x224_packet, ClientConnector, ClientConnectorState};
+use ironrdp_core::ReadCursor;
 use ironrdp_pdu::gcc::ConferenceCreateRequest;
+use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
 use ironrdp_pdu::ironrdp_core::{decode, WriteBuf};
 use ironrdp_pdu::mcs::ConnectInitial;
 use ironrdp_pdu::nego::SecurityProtocol;
 use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
 use ironrdp_pdu::x224::{X224Data, X224};
+use ironrdp_pdu::Action;
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{FramedWrite, NetworkClient};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use crate::events::{elapsed_ns_since, EventSender, SessionEvent};
 
 // The acceptor side of the bridge expects the user to type the target
 // username with an empty password. The real password is injected by the
@@ -42,9 +47,10 @@ pub async fn run_mitm(
     client_tcp: TcpStream,
     target: TargetEndpoint,
     cancel: CancellationToken,
+    tx: EventSender,
 ) -> Result<()> {
     tokio::select! {
-        result = run_mitm_inner(client_tcp, target) => result,
+        result = run_mitm_inner(client_tcp, target, tx) => result,
         _ = cancel.cancelled() => {
             info!("session canceled by caller");
             Ok(())
@@ -52,7 +58,11 @@ pub async fn run_mitm(
     }
 }
 
-async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result<()> {
+async fn run_mitm_inner(
+    client_tcp: TcpStream,
+    target: TargetEndpoint,
+    tx: EventSender,
+) -> Result<()> {
     // Our tree pulls both ring (direct) and aws-lc-rs (via reqwest); rustls
     // 0.23 needs an explicit provider when more than one is compiled in.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -92,18 +102,128 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
         .await
         .context("flush target stream before passthrough")?;
 
-    // Real RDP clients hard-close TCP without TLS close_notify, which
-    // rustls surfaces as UnexpectedEof. Treat that as clean shutdown.
-    match tokio::io::copy_bidirectional(&mut client_stream, &mut target_stream).await {
-        Ok(_) => info!("session ended cleanly"),
-        Err(e) if is_unexpected_eof(&e) => info!("session ended (peer hard-closed)"),
-        Err(e) => return Err(e).context("passthrough copy_bidirectional"),
-    }
-    Ok(())
+    // Bridge PDUs end-to-end with an event tap. read_pdu is pure TPKT/FastPath
+    // framing -- it does not run any RDP state machine -- so this preserves
+    // the "no MCS/capability/share-state drift" property of the byte-level
+    // copy_bidirectional path it replaces. Each PDU is forwarded byte-for-byte
+    // before/after the tap.
+    let client_framed = ironrdp_tokio::TokioFramed::new(client_stream);
+    let target_framed = ironrdp_tokio::TokioFramed::new(target_stream);
+    bridge_pdus(client_framed, target_framed, tx).await
 }
 
-fn is_unexpected_eof(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::UnexpectedEof
+async fn bridge_pdus<C, T>(
+    client_framed: ironrdp_tokio::TokioFramed<C>,
+    target_framed: ironrdp_tokio::TokioFramed<T>,
+    tx: EventSender,
+) -> Result<()>
+where
+    C: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+    T: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+{
+    let (mut client_read, mut client_write) = ironrdp_tokio::split_tokio_framed(client_framed);
+    let (mut target_read, mut target_write) = ironrdp_tokio::split_tokio_framed(target_framed);
+
+    let started_at = Instant::now();
+    let tx_c2t = tx.clone();
+    let tx_t2c = tx;
+
+    let c2t = async move {
+        loop {
+            let (action, frame) = match client_read.read_pdu().await {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err::<_, anyhow::Error>(e.into()),
+            };
+            tap_client_to_target(action, &frame, started_at, &tx_c2t);
+            target_write
+                .write_all(&frame)
+                .await
+                .context("write client PDU to target")?;
+        }
+        Ok(())
+    };
+
+    let t2c = async move {
+        loop {
+            let (action, frame) = match target_read.read_pdu().await {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err::<_, anyhow::Error>(e.into()),
+            };
+            tap_target_to_client(action, &frame, started_at, &tx_t2c);
+            client_write
+                .write_all(&frame)
+                .await
+                .context("write target PDU to client")?;
+        }
+        Ok(())
+    };
+
+    match tokio::try_join!(c2t, t2c) {
+        Ok(_) => {
+            info!("session ended cleanly");
+            Ok(())
+        }
+        Err(e) => Err(e).context("bridge_pdus"),
+    }
+}
+
+fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+    if action != Action::FastPath {
+        return;
+    }
+    let input: FastPathInput = match decode_fast_path_input(frame) {
+        Ok(input) => input,
+        Err(e) => {
+            warn!(?e, "failed to decode FastPathInput");
+            return;
+        }
+    };
+    let elapsed_ns = elapsed_ns_since(started_at);
+    for event in input.input_events() {
+        let session_event = match *event {
+            FastPathInputEvent::KeyboardEvent(flags, scancode) => SessionEvent::KeyboardInput {
+                scancode,
+                flags,
+                elapsed_ns,
+            },
+            FastPathInputEvent::UnicodeKeyboardEvent(flags, code_point) => {
+                SessionEvent::UnicodeInput {
+                    code_point,
+                    flags,
+                    elapsed_ns,
+                }
+            }
+            FastPathInputEvent::MouseEvent(pdu) => SessionEvent::MouseInput {
+                x: pdu.x_position,
+                y: pdu.y_position,
+                flags: pdu.flags,
+                wheel_delta: pdu.number_of_wheel_rotation_units,
+                elapsed_ns,
+            },
+            // MouseEventEx, MouseEventRel, QoeEvent, SyncEvent: skip for now;
+            // uncommon in normal sessions and not needed for replay V1.
+            _ => continue,
+        };
+        // send error means the receiver was dropped (poll loop exited).
+        // The bridge keeps forwarding bytes regardless.
+        let _ = tx.send(session_event);
+    }
+}
+
+fn tap_target_to_client(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+    let _ = tx.send(SessionEvent::TargetFrame {
+        action,
+        payload: frame.to_vec(),
+        elapsed_ns: elapsed_ns_since(started_at),
+    });
+}
+
+fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
+    use ironrdp_core::Decode as _;
+    let mut cursor = ReadCursor::new(frame);
+    FastPathInput::decode(&mut cursor).map_err(|e| anyhow::anyhow!("decode FastPathInput: {e}"))
 }
 
 // Reads the client's MCS Connect Initial PDU, removes any virtual channels

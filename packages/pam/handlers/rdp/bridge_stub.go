@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 )
 
 // Stub implementations for builds without `-tags rdp` or on platforms
@@ -28,6 +29,10 @@ func (p *RDPProxy) HandleConnection(_ context.Context, clientConn net.Conn) erro
 func (b *Bridge) Wait() error   { return ErrRdpUnavailable }
 func (b *Bridge) Cancel() error { return ErrRdpUnavailable }
 func (b *Bridge) Close() error  { return ErrRdpUnavailable }
+
+func (b *Bridge) PollEvent(_ time.Duration) (PollResult, Event, error) {
+	return PollEnded, Event{}, ErrRdpUnavailable
+}
 
 // IsSupported reports whether this build has a real RDP bridge. See the
 // rdp-enabled counterpart in bridge_cgo_shared.go for details.
