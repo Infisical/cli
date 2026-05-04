@@ -10,13 +10,16 @@ use ironrdp_acceptor::{Acceptor, BeginResult};
 use ironrdp_connector::credssp::{CredsspSequence, KerberosConfig};
 use ironrdp_connector::sspi::credssp::ClientState;
 use ironrdp_connector::sspi::generator::GeneratorState;
-use ironrdp_connector::{ClientConnector, ClientConnectorState};
-use ironrdp_pdu::ironrdp_core::WriteBuf;
+use ironrdp_connector::{encode_x224_packet, ClientConnector, ClientConnectorState};
+use ironrdp_pdu::gcc::ConferenceCreateRequest;
+use ironrdp_pdu::ironrdp_core::{decode, WriteBuf};
+use ironrdp_pdu::mcs::ConnectInitial;
 use ironrdp_pdu::nego::SecurityProtocol;
 use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
+use ironrdp_pdu::x224::{X224Data, X224};
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{FramedWrite, NetworkClient};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -67,12 +70,14 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
     let (mut client_stream, client_leftover) = acceptor_output;
     let (mut target_stream, target_leftover) = connector_output;
 
-    if !client_leftover.is_empty() {
-        target_stream
-            .write_all(&client_leftover)
-            .await
-            .context("flush client leftover to target")?;
-    }
+    // Strip virtual channels (clipboard, drives, audio, USB, etc.) from the
+    // client's MCS Connect Initial before forwarding. Mouse/keyboard/screen
+    // ride the implicit MCS I/O channel, not virtual channels, so they're
+    // unaffected.
+    filter_client_mcs_connect_initial(&mut client_stream, &mut target_stream, client_leftover)
+        .await
+        .context("filter client MCS Connect Initial")?;
+
     if !target_leftover.is_empty() {
         client_stream
             .write_all(&target_leftover)
@@ -103,6 +108,86 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
 
 fn is_unexpected_eof(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::UnexpectedEof
+}
+
+// Reads the client's MCS Connect Initial PDU, removes any virtual channels
+// declared in its Client Network Data block, and forwards the rewritten PDU
+// to the target. Any bytes after the PDU (rare; PDUs typically arrive one at
+// a time at this stage) are forwarded unchanged.
+async fn filter_client_mcs_connect_initial(
+    client_stream: &mut ErasedStream,
+    target_stream: &mut ErasedStream,
+    leftover: bytes::BytesMut,
+) -> Result<()> {
+    let mut buf: Vec<u8> = leftover.to_vec();
+
+    // TPKT header: 0x03 0x00 [len_hi] [len_lo], len includes the header.
+    while buf.len() < 4 {
+        let mut chunk = [0u8; 1024];
+        let n = client_stream
+            .read(&mut chunk)
+            .await
+            .context("read TPKT header")?;
+        if n == 0 {
+            anyhow::bail!("EOF before TPKT header for MCS Connect Initial");
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    if buf[0] != 0x03 {
+        anyhow::bail!("expected TPKT version 3, got 0x{:02x}", buf[0]);
+    }
+    let total_len = usize::from(u16::from_be_bytes([buf[2], buf[3]]));
+
+    while buf.len() < total_len {
+        let mut chunk = vec![0u8; (total_len - buf.len()).max(1024)];
+        let n = client_stream
+            .read(&mut chunk)
+            .await
+            .context("read MCS Connect Initial body")?;
+        if n == 0 {
+            anyhow::bail!("EOF mid MCS Connect Initial");
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+
+    let pdu_bytes = &buf[..total_len];
+    let extra_bytes: Vec<u8> = buf[total_len..].to_vec();
+
+    let x224 = decode::<X224<X224Data<'_>>>(pdu_bytes)
+        .map_err(|e| anyhow::anyhow!("decode X.224 wrapper: {e:?}"))?;
+    let mut connect_initial = decode::<ConnectInitial>(x224.0.data.as_ref())
+        .map_err(|e| anyhow::anyhow!("decode MCS Connect Initial: {e:?}"))?;
+
+    let mut gcc_blocks = connect_initial.conference_create_request.into_gcc_blocks();
+    if let Some(network) = gcc_blocks.network.as_mut() {
+        let stripped: Vec<String> = network
+            .channels
+            .iter()
+            .map(|c| c.name.as_str().unwrap_or("?").to_owned())
+            .collect();
+        if !stripped.is_empty() {
+            info!(?stripped, "stripped virtual channels from MCS Connect Initial");
+            network.channels.clear();
+        }
+    }
+    connect_initial.conference_create_request = ConferenceCreateRequest::new(gcc_blocks)
+        .map_err(|e| anyhow::anyhow!("rebuild ConferenceCreateRequest: {e:?}"))?;
+
+    let mut out = WriteBuf::new();
+    encode_x224_packet(&connect_initial, &mut out)
+        .map_err(|e| anyhow::anyhow!("re-encode MCS Connect Initial: {e:?}"))?;
+
+    target_stream
+        .write_all(out.filled())
+        .await
+        .context("write filtered MCS Connect Initial to target")?;
+    if !extra_bytes.is_empty() {
+        target_stream
+            .write_all(&extra_bytes)
+            .await
+            .context("forward bytes trailing MCS Connect Initial")?;
+    }
+    Ok(())
 }
 
 async fn run_acceptor_half(client_tcp: TcpStream, username: String) -> Result<(ErasedStream, bytes::BytesMut)> {
