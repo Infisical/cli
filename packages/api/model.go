@@ -890,7 +890,6 @@ type PAMSessionCredentials struct {
 	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
 	ServiceAccountName    string `json:"serviceAccountName,omitempty"`
 	Namespace             string `json:"namespace,omitempty"`
-	AccountName           string `json:"accountName,omitempty"`
 }
 
 type MFASessionStatus string

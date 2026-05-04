@@ -92,7 +92,13 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 		return
 	}
 
-	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId, accessParams.AccountName)
+	username, ok := pamResponse.Metadata["username"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
+		return
+	}
+
+	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId, username)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to write .rdp file; proxy still running")
 	} else {
@@ -110,7 +116,7 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	util.PrintfStderr("Connect your RDP client to:\n")
 	util.PrintfStderr("  127.0.0.1:%d\n", proxy.port)
 	util.PrintfStderr("With credentials:\n")
-	util.PrintfStderr("  username: %s\n", accessParams.AccountName)
+	util.PrintfStderr("  username: %s\n", username)
 	util.PrintfStderr("  password: (leave blank)\n")
 	if proxy.rdpFilePath != "" {
 		util.PrintfStderr("\n")
@@ -307,7 +313,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 // becomes invalid as soon as the CLI exits; reopening the file later
 // would just dial a dead port.
 // Falls back to the OS temp dir if the home directory can't be resolved.
-func writeRDPFile(listenPort int, sessionID string, username string) (string, error) {
+func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)
 
 	dir, err := rdpFileDir()

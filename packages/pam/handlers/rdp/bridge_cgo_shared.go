@@ -30,7 +30,6 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 		p.config.TargetPort,
 		p.config.InjectUsername,
 		p.config.InjectPassword,
-		p.config.AcceptorUsername,
 	)
 	if err != nil {
 		return fmt.Errorf("rdp proxy: start bridge: %w", err)

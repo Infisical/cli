@@ -21,15 +21,15 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password, acceptorUsername string) (*Bridge, error) {
+func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	dupSocket, err := dupConnSocket(conn)
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: dup client socket: %w", err)
 	}
-	return startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, acceptorUsername)
+	return startWithDupedSocket(dupSocket, targetHost, targetPort, username, password)
 }
 
-func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPort uint16, username, password, acceptorUsername string) (*Bridge, error) {
+func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	success := false
 	defer func() {
 		if !success {
@@ -43,8 +43,6 @@ func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPor
 	defer C.free(unsafe.Pointer(cUser))
 	cPass := C.CString(password)
 	defer C.free(unsafe.Pointer(cPass))
-	cAcceptorUser := C.CString(acceptorUsername)
-	defer C.free(unsafe.Pointer(cAcceptorUser))
 
 	var handle C.uint64_t
 	rc := C.rdp_bridge_start_windows_socket(
@@ -53,7 +51,6 @@ func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPor
 		C.uint16_t(targetPort),
 		cUser,
 		cPass,
-		cAcceptorUser,
 		&handle,
 	)
 	if rc != C.RDP_BRIDGE_OK {
@@ -63,7 +60,7 @@ func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPor
 	return &Bridge{handle: uint64(handle)}, nil
 }
 
-func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, acceptorUsername string) (*Bridge, error) {
+func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: loopback listen: %w", err)
@@ -98,7 +95,7 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 		return nil, fmt.Errorf("rdp bridge: dup accepted socket: %w", err)
 	}
 
-	bridge, err := startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, acceptorUsername)
+	bridge, err := startWithDupedSocket(dupSocket, targetHost, targetPort, username, password)
 	if err != nil {
 		_ = peer.Close()
 		return nil, err

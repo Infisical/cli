@@ -27,7 +27,6 @@ int32_t rdp_bridge_start_unix_fd(
     uint16_t     target_port,
     const char  *username,
     const char  *password,
-    const char  *acceptor_username,
     uint64_t    *out_handle
 );
 #endif
@@ -39,7 +38,6 @@ int32_t rdp_bridge_start_windows_socket(
     uint16_t     target_port,
     const char  *username,
     const char  *password,
-    const char  *acceptor_username,
     uint64_t    *out_handle
 );
 #endif

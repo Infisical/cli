@@ -26,7 +26,9 @@ use tracing::info;
 
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 
-// Empty password for acceptor - the username comes from target credentials.
+// The acceptor side of the bridge expects the user to type the target
+// username with an empty password. The real password is injected by the
+// connector side from the PAM vault.
 pub const ACCEPTOR_PASSWORD: &str = "";
 
 pub struct TargetEndpoint {
@@ -34,10 +36,6 @@ pub struct TargetEndpoint {
     pub port: u16,
     pub username: String,
     pub password: String,
-    // Username the user types into their RDP client. Distinct from
-    // `username` (the real Windows account injected to the target).
-    // Falls back to `username` if empty.
-    pub acceptor_username: String,
 }
 
 pub async fn run_mitm(
@@ -59,11 +57,7 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
     // 0.23 needs an explicit provider when more than one is compiled in.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let acceptor_username = if target.acceptor_username.is_empty() {
-        target.username.clone()
-    } else {
-        target.acceptor_username.clone()
-    };
+    let acceptor_username = target.username.clone();
     let (acceptor_output, connector_output) = tokio::try_join!(
         run_acceptor_half(client_tcp, acceptor_username),
         run_connector_half(target)

@@ -418,13 +418,12 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
 		}
 		rdpConfig := rdp.RDPProxyConfig{
-			TargetHost:       credentials.Host,
-			TargetPort:       uint16(credentials.Port),
-			InjectUsername:   credentials.Username,
-			InjectPassword:   credentials.Password,
-			AcceptorUsername: credentials.AccountName,
-			SessionID:        pamConfig.SessionId,
-			SessionLogger:    sessionLogger,
+			TargetHost:     credentials.Host,
+			TargetPort:     uint16(credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
 		}
 		proxy := rdp.NewRDPProxy(rdpConfig)
 		log.Info().

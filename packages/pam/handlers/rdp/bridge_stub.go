@@ -12,11 +12,11 @@ import (
 // where the Rust bridge isn't compiled. All entry points return
 // ErrRdpUnavailable.
 
-func StartWithConn(_ net.Conn, _ string, _ uint16, _, _, _ string) (*Bridge, error) {
+func StartWithConn(_ net.Conn, _ string, _ uint16, _, _ string) (*Bridge, error) {
 	return nil, ErrRdpUnavailable
 }
 
-func StartWithReadWriter(_ io.ReadWriter, _ string, _ uint16, _, _, _ string) (*Bridge, error) {
+func StartWithReadWriter(_ io.ReadWriter, _ string, _ uint16, _, _ string) (*Bridge, error) {
 	return nil, ErrRdpUnavailable
 }
 

@@ -59,7 +59,6 @@ fn spawn_session(
     port: u16,
     username: String,
     password: String,
-    acceptor_username: String,
 ) -> anyhow::Result<u64> {
     client_tcp.set_nonblocking(true)?;
     let cancel = CancellationToken::new();
@@ -78,7 +77,6 @@ fn spawn_session(
                     port,
                     username,
                     password,
-                    acceptor_username,
                 };
                 run_mitm(client, endpoint, cancel_for_thread).await
             })
@@ -102,7 +100,6 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     target_port: u16,
     username: *const c_char,
     password: *const c_char,
-    acceptor_username: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -120,22 +117,11 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
         Some(v) => v,
         None => return RDP_BRIDGE_BAD_ARG,
     };
-    let acceptor_username = match unsafe { c_str_to_owned(acceptor_username) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
 
     use std::os::unix::io::FromRawFd;
     let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
 
-    match spawn_session(
-        client_tcp,
-        host,
-        target_port,
-        username,
-        password,
-        acceptor_username,
-    ) {
+    match spawn_session(client_tcp, host, target_port, username, password) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
@@ -158,7 +144,6 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     target_port: u16,
     username: *const c_char,
     password: *const c_char,
-    acceptor_username: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -176,22 +161,11 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
         Some(v) => v,
         None => return RDP_BRIDGE_BAD_ARG,
     };
-    let acceptor_username = match unsafe { c_str_to_owned(acceptor_username) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
 
     use std::os::windows::io::{FromRawSocket, RawSocket};
     let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
 
-    match spawn_session(
-        client_tcp,
-        host,
-        target_port,
-        username,
-        password,
-        acceptor_username,
-    ) {
+    match spawn_session(client_tcp, host, target_port, username, password) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
