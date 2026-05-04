@@ -13,8 +13,6 @@ package rdp
 import "C"
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -155,41 +153,4 @@ func dupConnFD(conn net.Conn) (int, error) {
 		return -1, dupErr
 	}
 	return dup, nil
-}
-
-func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
-	defer clientConn.Close()
-	if p.config.SessionLogger != nil {
-		defer func() {
-			_ = p.config.SessionLogger.Close()
-		}()
-	}
-
-	bridge, err := StartWithReadWriter(
-		clientConn,
-		p.config.TargetHost,
-		p.config.TargetPort,
-		p.config.InjectUsername,
-		p.config.InjectPassword,
-		p.config.AcceptorUsername,
-	)
-	if err != nil {
-		return fmt.Errorf("rdp proxy: start bridge: %w", err)
-	}
-	defer bridge.Close()
-
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- bridge.Wait() }()
-
-	select {
-	case err := <-waitErr:
-		if err != nil && !errors.Is(err, ErrInvalidHandle) {
-			return fmt.Errorf("rdp proxy: session: %w", err)
-		}
-		return nil
-	case <-ctx.Done():
-		_ = bridge.Cancel()
-		<-waitErr
-		return ctx.Err()
-	}
 }

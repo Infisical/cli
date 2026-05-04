@@ -64,8 +64,10 @@ async fn run_mitm_inner(client_tcp: TcpStream, target: TargetEndpoint) -> Result
     } else {
         target.acceptor_username.clone()
     };
-    let (acceptor_output, connector_output) =
-        tokio::try_join!(run_acceptor_half(client_tcp, acceptor_username), run_connector_half(target))?;
+    let (acceptor_output, connector_output) = tokio::try_join!(
+        run_acceptor_half(client_tcp, acceptor_username),
+        run_connector_half(target)
+    )?;
 
     let (mut client_stream, client_leftover) = acceptor_output;
     let (mut target_stream, target_leftover) = connector_output;
@@ -166,7 +168,10 @@ async fn filter_client_mcs_connect_initial(
             .map(|c| c.name.as_str().unwrap_or("?").to_owned())
             .collect();
         if !stripped.is_empty() {
-            info!(?stripped, "stripped virtual channels from MCS Connect Initial");
+            info!(
+                ?stripped,
+                "stripped virtual channels from MCS Connect Initial"
+            );
             network.channels.clear();
         }
     }
@@ -190,7 +195,10 @@ async fn filter_client_mcs_connect_initial(
     Ok(())
 }
 
-async fn run_acceptor_half(client_tcp: TcpStream, username: String) -> Result<(ErasedStream, bytes::BytesMut)> {
+async fn run_acceptor_half(
+    client_tcp: TcpStream,
+    username: String,
+) -> Result<(ErasedStream, bytes::BytesMut)> {
     let (server_tls, acceptor_public_key) =
         build_acceptor_tls().context("build acceptor TLS config")?;
     let server_tls = Arc::new(server_tls);

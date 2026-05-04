@@ -128,7 +128,14 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     use std::os::unix::io::FromRawFd;
     let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
 
-    match spawn_session(client_tcp, host, target_port, username, password, acceptor_username) {
+    match spawn_session(
+        client_tcp,
+        host,
+        target_port,
+        username,
+        password,
+        acceptor_username,
+    ) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
@@ -177,7 +184,14 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     use std::os::windows::io::{FromRawSocket, RawSocket};
     let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
 
-    match spawn_session(client_tcp, host, target_port, username, password, acceptor_username) {
+    match spawn_session(
+        client_tcp,
+        host,
+        target_port,
+        username,
+        password,
+        acceptor_username,
+    ) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
