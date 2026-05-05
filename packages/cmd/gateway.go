@@ -211,6 +211,10 @@ var gatewayStartCmd = &cobra.Command{
 	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+		// Fall back to env var for systemd-managed runs where flags aren't set.
+		if enrollMethod == "" {
+			enrollMethod = os.Getenv("INFISICAL_GATEWAY_ENROLL_METHOD")
+		}
 		var alreadyEnrolled bool
 		var enrolledAccessToken string // set during fresh enrollment, used directly to avoid env var interference
 
@@ -224,6 +228,62 @@ var gatewayStartCmd = &cobra.Command{
 		}
 		if gatewayName == "" {
 			util.HandleError(errors.New("gateway name is required (provide as positional argument)"))
+		}
+
+		// --- AWS Auth path ---
+		if enrollMethod == gatewayv2.EnrollMethodAws {
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				gatewayID = os.Getenv(gatewayv2.INFISICAL_GATEWAY_ID_KEY)
+			}
+			if gatewayID == "" {
+				stored, _ := gatewayv2.LoadStoredGatewayID(gatewayName)
+				gatewayID = stored
+			}
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=aws"))
+			}
+
+			domain, _ := cmd.Flags().GetString("domain")
+			if domain != "" {
+				config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
+			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
+				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
+			}
+
+			httpClient, err := util.GetRestyClientWithCustomHeaders()
+			if err != nil {
+				util.HandleError(err, "unable to create HTTP client")
+			}
+
+			log.Info().Msg("Authenticating gateway via AWS Auth (STS GetCallerIdentity)...")
+			accessTokenStr, err := gatewayv2.LoginGatewayWithAws(cmd.Context(), httpClient, gatewayID)
+			if err != nil {
+				util.HandleError(err, "AWS Auth login failed")
+			}
+
+			enrolledAccessToken = accessTokenStr
+			alreadyEnrolled = true // skip the stored-token branch below; we have a fresh one in hand
+
+			// Don't persist the JWT — AWS-auth re-mints a fresh one on every start, so any
+			// on-disk copy would be stale and is never read back. enrolledAccessToken (in
+			// memory) is what downstream code uses.
+			if err := gatewayv2.SaveGatewayID(gatewayName, gatewayID); err != nil {
+				util.HandleError(err, "failed to save gateway id to config")
+			}
+
+			effectiveDomain := domain
+			if effectiveDomain == "" {
+				effectiveDomain = config.INFISICAL_URL
+			}
+			if effectiveDomain != "" {
+				if err := gatewayv2.SaveDomain(gatewayName, effectiveDomain); err != nil {
+					util.HandleError(err, "failed to save domain to config")
+				}
+			}
+
+			log.Info().Msgf("Gateway authenticated via AWS Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
+			log.Info().Msg("Starting gateway...")
 		}
 
 		// --- Enrollment token path ---
@@ -289,7 +349,8 @@ var gatewayStartCmd = &cobra.Command{
 		// --domain flag takes priority; fall back to domain saved at enrollment time.
 		// For enrollment flow with alreadyEnrolled, domain was set during original enrollment
 		// and needs to be loaded from config.
-		if enrollMethod != gatewayv2.EnrollMethodToken || alreadyEnrolled {
+		isResourceAuth := enrollMethod == gatewayv2.EnrollMethodToken || enrollMethod == gatewayv2.EnrollMethodAws
+		if !isResourceAuth || alreadyEnrolled {
 			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
 			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
@@ -300,8 +361,8 @@ var gatewayStartCmd = &cobra.Command{
 		// Only use the stored token when no explicit identity credentials are provided.
 		// If --token or --auth-method is set, the user wants the identity-based path.
 		var runningWithStoredToken bool
-		if enrollMethod == gatewayv2.EnrollMethodToken {
-			// Just enrolled above; use the freshly saved token.
+		if isResourceAuth {
+			// Just enrolled / logged-in above; use the freshly saved token.
 			runningWithStoredToken = true
 		} else {
 			hasExplicitCreds := cmd.Flags().Changed("token") || cmd.Flags().Changed("auth-method")
@@ -584,6 +645,20 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
+		} else if enrollMethod == gatewayv2.EnrollMethodAws {
+			// --- AWS Auth path ---
+			// Don't perform the AWS login at install time — the gateway does it on each service
+			// start (so a fresh JWT is minted every restart, matching server-side tokenVersion).
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=aws"))
+			}
+
+			relayName, _ := util.GetRelayName(cmd, false, "")
+
+			if installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+				util.HandleError(installErr, "Unable to install systemd service")
+			}
 		} else {
 			// --- Machine identity token path ---
 			token, tokenErr := util.GetInfisicalToken(cmd)
@@ -681,8 +756,9 @@ func init() {
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewayStartCmd.Flags().String("enroll-method", "", "enrollment method [token]. when set to 'token', uses --token as a one-time enrollment token")
-	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token)")
+	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id")
+	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
+	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token or --enroll-method=aws)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
 	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
@@ -699,7 +775,8 @@ func init() {
 
 	// Systemd install command flags (v2)
 	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "enrollment method [token]. when set to 'token', uses --token as a one-time enrollment token")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id)")
+	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway systemd install <name>")

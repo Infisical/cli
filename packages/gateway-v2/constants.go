@@ -16,6 +16,11 @@ const (
 	INFISICAL_TOKEN_ENV_NAME   = "INFISICAL_TOKEN"
 
 	INFISICAL_HTTP_PROXY_ACTION_HEADER = "x-infisical-action"
+
+	// Gateway auth-method discriminators. Used both for matching the user's --enroll-method
+	// flag value and as the `method` field on the /v3/gateways/login request body.
+	EnrollMethodAws   = "aws"
+	EnrollMethodToken = "token"
 )
 
 type HttpProxyAction string
