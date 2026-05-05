@@ -13,3 +13,6 @@ infisical
 
 
 /agent-testing
+.vscode/
+# PAM CLI session artifacts (local testing only)
+/session/
