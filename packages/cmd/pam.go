@@ -429,7 +429,7 @@ var pamRdpAccessCmd = &cobra.Command{
 	Use:                   "access",
 	Short:                 "Access PAM Windows/RDP accounts",
 	Long:                  "Access a PAM-managed Windows target over RDP. This starts a local loopback proxy that your RDP client connects to; the session tunnels through the Infisical Gateway with credentials injected server-side.",
-	Example:               "infisical pam rdp access --resource windows-prod --account Administrator --duration 1h --project-id <project_uuid>",
+	Example:               "infisical pam rdp access --resource windows-prod --account administrator --duration 1h --project-id <project_uuid>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {

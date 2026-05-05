@@ -72,7 +72,13 @@ jobs:
   #     CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE: ${{ secrets.CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE }}
 
   npm-release:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
+      needs.goreleaser.result == 'success' &&
+      needs.goreleaser-darwin.result == 'success' &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     runs-on: ubuntu-latest
     env:
       working-directory: ./npm

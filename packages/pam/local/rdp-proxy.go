@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/rdp"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -93,7 +92,13 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 		return
 	}
 
-	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId)
+	username, ok := pamResponse.Metadata["username"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
+		return
+	}
+
+	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId, username)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to write .rdp file; proxy still running")
 	} else {
@@ -101,37 +106,27 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 	}
 
 	log.Info().Msgf("RDP proxy server listening on port %d", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                      RDP Proxy Session Started!                      \n")
-	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Resource: %s\n", accessParams.ResourceName)
-	fmt.Printf("Account:  %s\n", accessParams.AccountName)
-	fmt.Printf("\n")
-	fmt.Printf("Connect your RDP client to:\n")
+	util.PrintfStderr("\n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("                      RDP Proxy Session Started!                      \n")
+	util.PrintfStderr("----------------------------------------------------------------------\n")
+	util.PrintfStderr("Resource: %s\n", accessParams.ResourceName)
+	util.PrintfStderr("Account:  %s\n", accessParams.AccountName)
+	util.PrintfStderr("\n")
+	util.PrintfStderr("Connect your RDP client to:\n")
 	util.PrintfStderr("  127.0.0.1:%d\n", proxy.port)
-	fmt.Printf("With credentials:\n")
-	util.PrintfStderr("  username: %s\n", rdp.AcceptorUsername)
-	util.PrintfStderr("  password: %s\n", rdp.AcceptorPassword)
+	util.PrintfStderr("With credentials:\n")
+	util.PrintfStderr("  username: %s\n", username)
+	util.PrintfStderr("  password: (leave blank)\n")
 	if proxy.rdpFilePath != "" {
-		fmt.Printf("\n")
-		fmt.Printf("Generated .rdp file:\n")
+		util.PrintfStderr("\n")
+		util.PrintfStderr("Generated .rdp file:\n")
 		util.PrintfStderr("  %s\n", proxy.rdpFilePath)
 	}
 	util.PrintfStderr("\n")
 	util.PrintfStderr("Press Ctrl+C to terminate the session.\n")
 	util.PrintfStderr("**********************************************************************\n")
 	util.PrintfStderr("\n")
-
-	// The .rdp file format has no portable way to embed a plaintext password
-	// (mstsc's `password 51:b:` is Windows-DPAPI-encrypted; Mac / freerdp
-	// clients ignore any password field). Put the fixed acceptor password
-	// on the clipboard so the user just pastes it when the client prompts.
-	if err := copyToClipboard(rdp.AcceptorPassword); err != nil {
-		log.Debug().Err(err).Msg("Could not copy password to clipboard; type it manually")
-	} else {
-		util.PrintfStderr("(Password copied to clipboard.)\n\n")
-	}
 
 	if !noLaunch && proxy.rdpFilePath != "" {
 		if err := launchRDPClient(proxy.rdpFilePath); err != nil {
@@ -276,7 +271,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
+	done := make(chan struct{}, 2)
 
 	go func() {
 		defer connCancel()
@@ -288,7 +283,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		gatewayErrCh <- err
+		done <- struct{}{}
 	}()
 
 	go func() {
@@ -301,10 +296,14 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		clientErrCh <- err
+		done <- struct{}{}
 	}()
 
-	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
+	select {
+	case <-done:
+	case <-connCtx.Done():
+		log.Info().Msg("Connection cancelled by context")
+	}
 
 	log.Info().Msgf("RDP connection closed for client: %s", clientConn.RemoteAddr().String())
 }
@@ -318,7 +317,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 // becomes invalid as soon as the CLI exits; reopening the file later
 // would just dial a dead port.
 // Falls back to the OS temp dir if the home directory can't be resolved.
-func writeRDPFile(listenPort int, sessionID string) (string, error) {
+func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)
 
 	dir, err := rdpFileDir()
@@ -334,7 +333,7 @@ func writeRDPFile(listenPort int, sessionID string) (string, error) {
 		"full address:s:127.0.0.1:%d\r\n"+
 			"username:s:%s\r\n",
 		listenPort,
-		rdp.AcceptorUsername,
+		username,
 	)
 
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -367,41 +366,4 @@ func launchRDPClient(rdpFilePath string) error {
 		cmd = exec.Command("xdg-open", rdpFilePath)
 	}
 	return cmd.Start()
-}
-
-// copyToClipboard pipes `text` into the OS clipboard via the platform's
-// standard CLI helper. Failure is non-fatal; the caller logs and moves on.
-func copyToClipboard(text string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("pbcopy")
-	case "windows":
-		cmd = exec.Command("clip")
-	default:
-		// Try xclip first, then xsel. Neither is guaranteed to exist on
-		// headless servers, which is fine: we just return the error and
-		// the caller logs at debug level.
-		if _, err := exec.LookPath("xclip"); err == nil {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
-		} else if _, err := exec.LookPath("xsel"); err == nil {
-			cmd = exec.Command("xsel", "--clipboard", "--input")
-		} else {
-			return fmt.Errorf("no clipboard tool found (install xclip or xsel)")
-		}
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	if _, err := stdin.Write([]byte(text)); err != nil {
-		return err
-	}
-	if err := stdin.Close(); err != nil {
-		return err
-	}
-	return cmd.Wait()
 }
