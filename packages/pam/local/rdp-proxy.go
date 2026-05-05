@@ -271,7 +271,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
+	done := make(chan struct{}, 2)
 
 	go func() {
 		defer connCancel()
@@ -283,7 +283,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		gatewayErrCh <- err
+		done <- struct{}{}
 	}()
 
 	go func() {
@@ -296,10 +296,14 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		clientErrCh <- err
+		done <- struct{}{}
 	}()
 
-	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
+	select {
+	case <-done:
+	case <-connCtx.Done():
+		log.Info().Msg("Connection cancelled by context")
+	}
 
 	log.Info().Msgf("RDP connection closed for client: %s", clientConn.RemoteAddr().String())
 }
