@@ -18,6 +18,10 @@ type RDPProxyConfig struct {
 	InjectPassword string
 	SessionID      string
 	SessionLogger  session.SessionLogger
+	// Session-anchored origin for elapsedNs. The Rust bridge restarts its
+	// own clock per RDP client connection; we rewrite each event's elapsedNs
+	// against this anchor so timestamps stay monotonic across reconnects.
+	SessionStartedAt time.Time
 }
 
 type RDPProxy struct {
@@ -28,10 +32,7 @@ func NewRDPProxy(config RDPProxyConfig) *RDPProxy {
 	return &RDPProxy{config: config}
 }
 
-// Wire-format JSON envelopes carried inside session.TerminalEvent.Data when
-// ChannelType == TerminalChannelRDP. The frontend RDP player decodes these
-// after AAD-bound chunk decryption and feeds target_frame payloads into the
-// IronRDP WASM decoder.
+// Wire envelopes carried inside TerminalEvent.Data for ChannelType=RDP.
 type rdpTargetFrameEnvelope struct {
 	Type      string `json:"type"`    // "target_frame"
 	Action    string `json:"action"`  // "x224" | "fastpath"
@@ -62,21 +63,14 @@ type rdpMouseEnvelope struct {
 	ElapsedNs  uint64 `json:"elapsedNs"`
 }
 
-// pollTimeout bounds how long a single rdp_bridge_poll_event call blocks.
-// Short enough that a Cancel on the bridge ends the drain loop quickly via
-// PollEnded; long enough not to busy-wait when no events are produced.
+// Bounds bridge poll latency so Cancel ends the drain loop promptly.
 const pollTimeout = 250 * time.Millisecond
 
 var errUnknownRdpEventType = errors.New("rdp: unknown event type")
 
-// drainBridgeEvents polls bridge events and forwards each as a
-// session.TerminalEvent. Returns when ctx is cancelled, the bridge ends, or
-// PollEvent returns a hard error. Designed to run in its own goroutine.
-//
-// Errors from individual logger calls are logged but do not stop the drain:
-// dropping a single recording event is preferable to letting the bridge byte
-// stream be back-pressured by a transient logger failure.
-func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string) {
+// Logger errors are warned but don't stop the drain; dropping one event is
+// better than back-pressuring the bridge byte stream.
+func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, sessionStartedAt time.Time) {
 	if logger == nil {
 		return
 	}
@@ -95,6 +89,9 @@ func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLog
 		case PollTimeout:
 			continue
 		case PollOK:
+			if !sessionStartedAt.IsZero() {
+				ev.ElapsedNs = uint64(time.Since(sessionStartedAt).Nanoseconds())
+			}
 			data, encErr := encodeRdpEvent(ev)
 			if encErr != nil {
 				log.Warn().Err(encErr).Str("sessionID", sessionID).Uint8("type", uint8(ev.Type)).Msg("encode RDP event")

@@ -1,12 +1,5 @@
-//! C ABI for the bridge. Called from Go via CGo.
-//!
-//! Each session runs on its own OS thread with a current-thread tokio
-//! runtime. `start_*` transfers ownership of the client fd/socket to
-//! Rust (Go hands in a dup). Contract: wait, then free.
-//!
-//! Events: the bridge taps each forwarded PDU and emits structured events
-//! (keyboard / unicode / mouse / target frame) that Go drains via
-//! `rdp_bridge_poll_event`.
+//! C ABI for the bridge. Each session runs on its own thread with a
+//! current-thread tokio runtime. Caller contract: wait, then free.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
@@ -31,9 +24,8 @@ pub const RDP_BRIDGE_INVALID_HANDLE: i32 = -1;
 pub const RDP_BRIDGE_BAD_ARG: i32 = -2;
 pub const RDP_BRIDGE_RUNTIME_ERROR: i32 = -3;
 
-// Poll return codes -- distinct number space from the bridge status codes
-// above, even though their numeric values overlap, because they're consumed
-// by a different Go function.
+// Distinct number space from the bridge status codes above; consumed by
+// a different Go function.
 pub const RDP_POLL_OK: i32 = 0;
 pub const RDP_POLL_TIMEOUT: i32 = 1;
 pub const RDP_POLL_ENDED: i32 = 2;
@@ -47,13 +39,8 @@ pub enum RdpEventType {
     TargetFrame = 4,
 }
 
-/// C-ABI friendly event. Fields are reused across variants; check
-/// `event_type` to decide which fields are meaningful.
-///
-/// For TargetFrame, `payload_ptr` points at a `libc::malloc`-allocated buffer
-/// of size `payload_len`. The Go caller takes ownership and must
-/// `libc::free(payload_ptr)` after copying the bytes out. Other variants set
-/// `payload_ptr = NULL` and `payload_len = 0`.
+/// Fields are reused across variants; check `event_type` first.
+/// For TargetFrame, `payload_ptr` is libc::malloc'd; Go must libc::free it.
 #[repr(C)]
 pub struct RdpEvent {
     pub event_type: u8,
@@ -381,18 +368,8 @@ pub extern "C" fn rdp_bridge_free(handle: u64) -> i32 {
     }
 }
 
-/// Poll the next event, blocking up to `timeout_ms` milliseconds.
-///
-/// Returns:
-///   * `RDP_POLL_OK` -- event written to *out (caller owns *payload_ptr* if
-///     non-null and must `libc::free` it).
-///   * `RDP_POLL_TIMEOUT` -- no event in time; *out not modified.
-///   * `RDP_POLL_ENDED` -- bridge finished; no more events.
-///   * `RDP_POLL_INVALID_HANDLE` -- unknown or already-closed handle.
-///
-/// # Safety
-///
-/// `out` must be a non-null, writable `*mut RdpEvent`.
+/// Poll the next event, blocking up to `timeout_ms` ms. On RDP_POLL_OK,
+/// caller owns *payload_ptr (must libc::free).
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_poll_event(
     handle: u64,
@@ -403,9 +380,7 @@ pub unsafe extern "C" fn rdp_bridge_poll_event(
         return RDP_POLL_INVALID_HANDLE;
     }
 
-    // Take the receiver out of the entry so we don't hold the HANDLES lock
-    // across the await. Put it back at the end (or leave None and mark
-    // ended).
+    // Avoid holding the HANDLES lock across the await.
     let take_result: Result<Option<mpsc::UnboundedReceiver<SessionEvent>>, i32> = {
         let handles = HANDLES.lock().expect("HANDLES poisoned");
         match handles.get(&handle) {
@@ -421,8 +396,7 @@ pub unsafe extern "C" fn rdp_bridge_poll_event(
     };
     let mut rx = match take_result {
         Ok(Some(rx)) => rx,
-        // Another poll is already in flight on this handle. Treat as
-        // invalid: callers should serialize their poll calls.
+        // Concurrent poll on the same handle; callers must serialize.
         Ok(None) => return RDP_POLL_INVALID_HANDLE,
         Err(code) => return code,
     };

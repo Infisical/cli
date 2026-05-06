@@ -17,10 +17,8 @@ pub fn connector_config(username: String, password: String) -> Config {
         },
         desktop_scale_factor: 0,
 
-        // Advertise HYBRID_EX|HYBRID|SSL to match what native clients send.
-        // Windows App validates the target's echoed clientRequestedProtocols
-        // against what it sent on the acceptor side; if the sets diverge it
-        // disconnects right after Connect Response.
+        // Match native client's HYBRID_EX|HYBRID|SSL set; Windows App validates the
+        // target echo against what it sent and disconnects on divergence.
         enable_tls: true,
         enable_credssp: true,
 

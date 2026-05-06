@@ -1,10 +1,10 @@
-//! MITM bridge. Runs acceptor + connector only through CredSSP (to inject
-//! credentials), then byte-forwards between the two TLS streams. Letting
-//! client and target negotiate MCS/capabilities/share-state directly
-//! avoids drift that breaks strict clients (Windows App, mstsc).
+//! MITM bridge. Runs acceptor + connector through CredSSP only, then byte-
+//! forwards. Letting client/target negotiate MCS directly avoids drift
+//! that breaks strict clients (Windows App, mstsc).
 
+use std::borrow::Cow;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ironrdp_acceptor::{Acceptor, BeginResult};
@@ -16,9 +16,10 @@ use ironrdp_core::ReadCursor;
 use ironrdp_pdu::gcc::ConferenceCreateRequest;
 use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
 use ironrdp_pdu::ironrdp_core::{decode, WriteBuf};
-use ironrdp_pdu::mcs::ConnectInitial;
+use ironrdp_pdu::mcs::{ConnectInitial, SendDataRequest};
 use ironrdp_pdu::nego::SecurityProtocol;
 use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
+use ironrdp_pdu::rdp::headers::{ShareControlHeader, ShareControlPdu};
 use ironrdp_pdu::x224::{X224Data, X224};
 use ironrdp_pdu::Action;
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
@@ -26,10 +27,16 @@ use ironrdp_tokio::{FramedWrite, NetworkClient};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
+use crate::cap_filter;
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 use crate::events::{elapsed_ns_since, EventSender, SessionEvent};
+
+/// Cap on c2t PDUs to inspect before giving up on the cap filter.
+const CONFIRM_ACTIVE_SCAN_MAX_PDUS: usize = 32;
+/// Wall-clock cap on the cap-filter scan window.
+const CONFIRM_ACTIVE_SCAN_MAX_DURATION: Duration = Duration::from_secs(5);
 
 // The acceptor side of the bridge expects the user to type the target
 // username with an empty password. The real password is injected by the
@@ -76,10 +83,8 @@ async fn run_mitm_inner(
     let (mut client_stream, client_leftover) = acceptor_output;
     let (mut target_stream, target_leftover) = connector_output;
 
-    // Strip virtual channels (clipboard, drives, audio, USB, etc.) from the
-    // client's MCS Connect Initial before forwarding. Mouse/keyboard/screen
-    // ride the implicit MCS I/O channel, not virtual channels, so they're
-    // unaffected.
+    // Strip virtual channels (clipboard, drives, audio, USB) from MCS Connect Initial.
+    // Mouse/keyboard/screen ride the implicit I/O channel and are unaffected.
     filter_client_mcs_connect_initial(&mut client_stream, &mut target_stream, client_leftover)
         .await
         .context("filter client MCS Connect Initial")?;
@@ -102,11 +107,9 @@ async fn run_mitm_inner(
         .await
         .context("flush target stream before passthrough")?;
 
-    // Bridge PDUs end-to-end with an event tap. read_pdu is pure TPKT/FastPath
-    // framing -- it does not run any RDP state machine -- so this preserves
-    // the "no MCS/capability/share-state drift" property of the byte-level
-    // copy_bidirectional path it replaces. Each PDU is forwarded byte-for-byte
-    // before/after the tap.
+    // PDU-framed bridge with an event tap. read_pdu is pure TPKT/FastPath
+    // framing (no state machine) so this preserves the "no MCS drift"
+    // property of the byte-level copy_bidirectional it replaces.
     let client_framed = ironrdp_tokio::TokioFramed::new(client_stream);
     let target_framed = ironrdp_tokio::TokioFramed::new(target_stream);
     bridge_pdus(client_framed, target_framed, tx).await
@@ -129,6 +132,12 @@ where
     let tx_t2c = tx;
 
     let c2t = async move {
+        let mut cap_filter = CapFilterState::Scanning {
+            started_at: Instant::now(),
+            pdus_seen: 0,
+            info_done: false,
+            confirm_done: false,
+        };
         loop {
             let (action, frame) = match client_read.read_pdu().await {
                 Ok(v) => v,
@@ -136,8 +145,13 @@ where
                 Err(e) => return Err::<_, anyhow::Error>(e.into()),
             };
             tap_client_to_target(action, &frame, started_at, &tx_c2t);
+
+            let bytes_to_forward: Vec<u8> = match cap_filter.consider(action, &frame) {
+                CapFilterDecision::Forward => frame.to_vec(),
+                CapFilterDecision::Replace(modified) => modified,
+            };
             target_write
-                .write_all(&frame)
+                .write_all(&bytes_to_forward)
                 .await
                 .context("write client PDU to target")?;
         }
@@ -167,6 +181,202 @@ where
         }
         Err(e) => Err(e).context("bridge_pdus"),
     }
+}
+
+/// One-shot c2t scan that patches Client Info + Client Confirm Active.
+enum CapFilterState {
+    Scanning {
+        started_at: Instant,
+        pdus_seen: usize,
+        info_done: bool,
+        confirm_done: bool,
+    },
+    Done,
+}
+
+enum CapFilterDecision {
+    Forward,
+    Replace(Vec<u8>),
+}
+
+impl CapFilterState {
+    fn consider(&mut self, action: Action, frame: &[u8]) -> CapFilterDecision {
+        let CapFilterState::Scanning {
+            started_at,
+            pdus_seen,
+            info_done,
+            confirm_done,
+        } = self
+        else {
+            return CapFilterDecision::Forward;
+        };
+
+        if action != Action::X224 {
+            return CapFilterDecision::Forward;
+        }
+
+        *pdus_seen += 1;
+        if *pdus_seen > CONFIRM_ACTIVE_SCAN_MAX_PDUS
+            || started_at.elapsed() > CONFIRM_ACTIVE_SCAN_MAX_DURATION
+        {
+            warn!(
+                pdus_seen,
+                info_done = *info_done,
+                confirm_done = *confirm_done,
+                "scan window exhausted before both filters fired"
+            );
+            *self = CapFilterState::Done;
+            return CapFilterDecision::Forward;
+        }
+
+        // The two filters are disjoint, so a match short-circuits.
+        if !*info_done {
+            if let Some(modified) = try_filter_client_info(frame) {
+                *info_done = true;
+                let both_done = *info_done && *confirm_done;
+                if both_done {
+                    *self = CapFilterState::Done;
+                }
+                return CapFilterDecision::Replace(modified);
+            }
+        }
+        if !*confirm_done {
+            if let Some(modified) = try_filter_confirm_active(frame) {
+                *confirm_done = true;
+                let both_done = *info_done && *confirm_done;
+                if both_done {
+                    *self = CapFilterState::Done;
+                }
+                return CapFilterDecision::Replace(modified);
+            }
+        }
+        CapFilterDecision::Forward
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ByteRange {
+    offset: usize,
+    len: usize,
+}
+
+impl ByteRange {
+    fn slice<'a>(&self, frame: &'a [u8]) -> &'a [u8] {
+        &frame[self.offset..self.offset + self.len]
+    }
+
+    fn slice_mut<'a>(&self, frame: &'a mut [u8]) -> &'a mut [u8] {
+        &mut frame[self.offset..self.offset + self.len]
+    }
+}
+
+/// Locate `send_data.user_data` inside `frame`. Bails on Cow::Owned.
+fn user_data_range_within(frame: &[u8], send_data: &SendDataRequest<'_>) -> Option<ByteRange> {
+    let slice: &[u8] = match &send_data.user_data {
+        Cow::Borrowed(s) => *s,
+        Cow::Owned(_) => return None,
+    };
+    let frame_start = frame.as_ptr() as usize;
+    let slice_start = slice.as_ptr() as usize;
+    if slice_start < frame_start || slice_start + slice.len() > frame_start + frame.len() {
+        return None;
+    }
+    Some(ByteRange {
+        offset: slice_start - frame_start,
+        len: slice.len(),
+    })
+}
+
+fn locate_client_info(frame: &[u8]) -> Option<ByteRange> {
+    const SEC_INFO_PKT: u16 = 0x0040;
+    let send_data = decode::<X224<SendDataRequest<'_>>>(frame).ok()?.0;
+    let user_data = user_data_range_within(frame, &send_data)?;
+    if user_data.len < 4 {
+        return None;
+    }
+    let bytes = user_data.slice(frame);
+    let sec_flags = u16::from_le_bytes([bytes[0], bytes[1]]);
+    (sec_flags & SEC_INFO_PKT != 0).then_some(user_data)
+}
+
+struct ConfirmActiveLayout {
+    user_data: ByteRange,
+    caps_start_in_user_data: usize,
+}
+
+fn locate_confirm_active(frame: &[u8]) -> Option<ConfirmActiveLayout> {
+    let send_data = decode::<X224<SendDataRequest<'_>>>(frame).ok()?.0;
+    let share_control = decode::<ShareControlHeader>(send_data.user_data.as_ref()).ok()?;
+    if !matches!(
+        share_control.share_control_pdu,
+        ShareControlPdu::ClientConfirmActive(_),
+    ) {
+        return None;
+    }
+    let user_data = user_data_range_within(frame, &send_data)?;
+    let caps_start_in_user_data = parse_confirm_active_caps_start(user_data.slice(frame))?;
+    Some(ConfirmActiveLayout {
+        user_data,
+        caps_start_in_user_data,
+    })
+}
+
+/// MS-RDPBCGR 2.2.1.13.2.1: ShareControlHeader(10) + originatorId(2) +
+/// sourceDescLen(2) + combinedLen(2) + sourceDescriptor(var) + numCaps(2) + pad(2)
+fn parse_confirm_active_caps_start(user_data: &[u8]) -> Option<usize> {
+    let mut p = 10 + 2;
+    if user_data.len() < p + 4 {
+        return None;
+    }
+    let source_desc_len = u16::from_le_bytes([user_data[p], user_data[p + 1]]) as usize;
+    p += 4 + source_desc_len + 4;
+    (p <= user_data.len()).then_some(p)
+}
+
+fn try_filter_client_info(frame: &[u8]) -> Option<Vec<u8>> {
+    let user_data = locate_client_info(frame)?;
+    let mut out = frame.to_vec();
+    if !cap_filter::client_info::clear_compression(user_data.slice_mut(&mut out)) {
+        return None;
+    }
+    debug!("Client Info PDU: cleared INFO_COMPRESSION + CompressionTypeMask");
+    Some(out)
+}
+
+fn try_filter_confirm_active(frame: &[u8]) -> Option<Vec<u8>> {
+    let layout = locate_confirm_active(frame)?;
+    let user_data_bytes = layout.user_data.slice(frame);
+
+    let mut order_body_offset_in_frame: Option<usize> = None;
+    let mut codecs_body_offset_in_frame: Option<usize> = None;
+    for cap in cap_filter::walk_caps(user_data_bytes, layout.caps_start_in_user_data) {
+        let body_offset_in_frame = layout.user_data.offset + cap.body_offset_in_user_data;
+        match cap.cap_type {
+            cap_filter::cap_types::ORDER
+                if cap.cap_len >= cap_filter::order_cap::BODY_LEN + 4 =>
+            {
+                order_body_offset_in_frame = Some(body_offset_in_frame);
+            }
+            cap_filter::cap_types::BITMAP_CODECS
+                if cap.cap_len >= cap_filter::bitmap_codecs_cap::MIN_BODY_LEN + 4 =>
+            {
+                codecs_body_offset_in_frame = Some(body_offset_in_frame);
+            }
+            _ => {}
+        }
+    }
+
+    // Without Order patched, server emits unrenderable Orders.
+    let order_offset = order_body_offset_in_frame?;
+    let mut out = frame.to_vec();
+    cap_filter::order_cap::clear_order_support(
+        &mut out[order_offset..order_offset + cap_filter::order_cap::BODY_LEN],
+    );
+    if let Some(codecs_offset) = codecs_body_offset_in_frame {
+        cap_filter::bitmap_codecs_cap::clear_codec_count(&mut out[codecs_offset..]);
+    }
+    debug!("Confirm Active: cleared Order support + BitmapCodecs count");
+    Some(out)
 }
 
 fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
@@ -226,10 +436,7 @@ fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
     FastPathInput::decode(&mut cursor).map_err(|e| anyhow::anyhow!("decode FastPathInput: {e}"))
 }
 
-// Reads the client's MCS Connect Initial PDU, removes any virtual channels
-// declared in its Client Network Data block, and forwards the rewritten PDU
-// to the target. Any bytes after the PDU (rare; PDUs typically arrive one at
-// a time at this stage) are forwarded unchanged.
+// Strips virtual channels from the Client Network Data block of MCS Connect Initial.
 async fn filter_client_mcs_connect_initial(
     client_stream: &mut ErasedStream,
     target_stream: &mut ErasedStream,
@@ -529,3 +736,50 @@ pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}
 impl<T> AsyncReadWrite for T where T: AsyncRead + AsyncWrite {}
 
 pub type ErasedStream = Box<dyn AsyncReadWrite + Send + Sync + Unpin + 'static>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a synthetic ConfirmActive user_data prefix:
+    ///   ShareControlHeader(10) + originatorId(2) + sourceDescLen(2) +
+    ///   combinedLen(2) + sourceDescriptor(source_desc_len) + numCaps(2) + pad(2)
+    fn confirm_active_prefix(source_desc_len: usize) -> Vec<u8> {
+        let mut buf = vec![0xAA_u8; 10 + 2];
+        buf.extend_from_slice(&(source_desc_len as u16).to_le_bytes());
+        buf.extend_from_slice(&0xBBBB_u16.to_le_bytes());
+        buf.extend_from_slice(&vec![0xCC; source_desc_len]);
+        buf.extend_from_slice(&0xDDDD_u16.to_le_bytes());
+        buf.extend_from_slice(&0xEEEE_u16.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn caps_start_after_variable_source_descriptor() {
+        let user_data = confirm_active_prefix(6);
+        let p = parse_confirm_active_caps_start(&user_data).expect("caps start");
+        assert_eq!(p, 12 + 4 + 6 + 4);
+        assert_eq!(p, user_data.len());
+    }
+
+    #[test]
+    fn caps_start_works_when_source_descriptor_is_empty() {
+        let user_data = confirm_active_prefix(0);
+        let p = parse_confirm_active_caps_start(&user_data).expect("caps start");
+        assert_eq!(p, 12 + 4 + 0 + 4);
+    }
+
+    #[test]
+    fn caps_start_returns_none_when_header_truncated() {
+        let user_data = vec![0u8; 15];
+        assert!(parse_confirm_active_caps_start(&user_data).is_none());
+    }
+
+    #[test]
+    fn caps_start_returns_none_when_source_desc_len_overflows() {
+        let mut user_data = vec![0u8; 12];
+        user_data.extend_from_slice(&9999_u16.to_le_bytes());
+        user_data.extend_from_slice(&[0u8; 2]);
+        assert!(parse_confirm_active_caps_start(&user_data).is_none());
+    }
+}

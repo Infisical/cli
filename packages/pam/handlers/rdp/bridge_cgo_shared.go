@@ -46,7 +46,7 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID)
+		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.SessionStartedAt)
 	}()
 	defer func() {
 		cancelDrain()
@@ -112,10 +112,7 @@ func (b *Bridge) Close() error {
 	return nil
 }
 
-// IsSupported reports whether this build has a real RDP bridge. Used
-// by the gateway to decide whether to advertise RDP in the capabilities
-// response: a stub-build gateway that advertises support would route
-// RDP sessions only to fail them at connect time.
+// True when the real bridge is compiled in (vs the stub).
 func IsSupported() bool { return true }
 
 // PollEvent drains one tap event with the given timeout. The returned Event

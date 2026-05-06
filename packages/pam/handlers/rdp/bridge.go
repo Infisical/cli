@@ -34,13 +34,7 @@ const (
 	ActionFastPath Action = 1
 )
 
-// Event is a structured tap event drained from the bridge.
-//
-// Fields are reused across variants. Switch on Type:
-//   - Keyboard:    Scancode + Flags.
-//   - Unicode:     CodePoint + Flags.
-//   - Mouse:       X, Y, Flags, WheelDelta.
-//   - TargetFrame: Action + Payload (raw PDU bytes; owned Go slice).
+// Fields are reused across variants; switch on Type.
 type Event struct {
 	Type       EventType
 	ElapsedNs  uint64

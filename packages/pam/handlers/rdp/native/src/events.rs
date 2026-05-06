@@ -1,9 +1,5 @@
-//! Structured session events emitted by the bridge's PDU tap.
-//!
-//! Keyboard / unicode / mouse events are decoded from FastPath input PDUs on
-//! the client->target path. TargetFrame events carry the full raw PDU bytes
-//! exactly as they came off the wire on the target->client path; decoding
-//! (RLE, 16bpp->RGBA, etc.) happens at replay time in the browser.
+//! Bridge tap events. Input is FastPath-decoded c2t; TargetFrame is raw t2c
+//! PDU bytes (decoded at replay time in the browser).
 
 use std::time::Instant;
 

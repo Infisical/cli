@@ -1,8 +1,5 @@
-/*
- * infisical-rdp-bridge C ABI. See ffi.rs for details. Lifecycle:
- *   start_* -> wait -> free; cancel may be called from any thread.
- * start_* transfers ownership of the client fd/socket to the bridge.
- */
+/* C ABI; see ffi.rs. Lifecycle: start_* -> wait -> free. start_* takes
+ * ownership of the client fd/socket. cancel is thread-safe. */
 
 #ifndef INFISICAL_RDP_BRIDGE_H
 #define INFISICAL_RDP_BRIDGE_H
@@ -59,21 +56,8 @@ int32_t rdp_bridge_free(uint64_t handle);
 #define RDP_EVENT_MOUSE               3
 #define RDP_EVENT_TARGET_FRAME        4
 
-/*
- * Bridge tap event surfaced to Go.
- *
- * Fields are reused across variants -- check `event_type` to decide which
- * fields are meaningful:
- *   - Keyboard:    value_a = scancode, flags = KeyboardFlags bits.
- *   - Unicode:     value_a = code point, flags = KeyboardFlags bits.
- *   - Mouse:       value_a = x, value_b = y, flags = PointerFlags bits,
- *                  wheel_delta is signed.
- *   - TargetFrame: action = 0 (X.224) or 1 (FastPath); payload_ptr points
- *                  at a heap buffer of size payload_len with the raw PDU
- *                  bytes. The buffer was allocated with libc malloc; the Go
- *                  caller MUST free it via C.free after copying the bytes.
- *                  Other variants leave payload_ptr = NULL, payload_len = 0.
- */
+/* Fields reused across variants; check event_type. For TargetFrame,
+ * payload_ptr is libc-malloc'd and the Go caller must C.free it. */
 struct RdpEvent {
     uint8_t   event_type;
     uint64_t  elapsed_ns;
