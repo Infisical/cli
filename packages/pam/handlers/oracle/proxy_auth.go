@@ -64,6 +64,9 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	if PacketTypeOf(connectRaw) != PacketTypeConnect {
 		return fmt.Errorf("expected CONNECT, got type=%d", connectRaw[4])
 	}
+	if p.config.InjectDatabase != "" {
+		connectRaw = rewriteConnectServiceName(connectRaw, p.config.InjectDatabase)
+	}
 	if _, err := upstreamConn.Write(connectRaw); err != nil {
 		return fmt.Errorf("forward CONNECT: %w", err)
 	}
@@ -611,6 +614,40 @@ func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) 
 	out = append(out, newUserBytes...)
 	out = append(out, payload[userEnd:]...)
 	return out, nil
+}
+
+// rewriteConnectServiceName replaces the SERVICE_NAME value in a CONNECT packet's
+// description string with newName, updating the packet and connect-data length fields.
+func rewriteConnectServiceName(pkt []byte, newName string) []byte {
+	marker := []byte("SERVICE_NAME=")
+	idx := bytes.Index(pkt, marker)
+	if idx < 0 {
+		return pkt
+	}
+	valStart := idx + len(marker)
+	valEnd := bytes.IndexByte(pkt[valStart:], ')')
+	if valEnd < 0 {
+		return pkt
+	}
+	valEnd += valStart
+
+	oldVal := pkt[valStart:valEnd]
+	newVal := []byte(newName)
+	if bytes.Equal(oldVal, newVal) {
+		return pkt
+	}
+
+	out := make([]byte, 0, len(pkt)+len(newVal)-len(oldVal))
+	out = append(out, pkt[:valStart]...)
+	out = append(out, newVal...)
+	out = append(out, pkt[valEnd:]...)
+
+	binary.BigEndian.PutUint16(out[0:2], uint16(len(out)))
+	if len(out) >= 26 {
+		oldCDLen := binary.BigEndian.Uint16(pkt[24:26])
+		binary.BigEndian.PutUint16(out[24:26], uint16(int(oldCDLen)+len(newVal)-len(oldVal)))
+	}
+	return out
 }
 
 // rewritePhase1User rewrites AUTH_USER on a phase-1 auth request.
