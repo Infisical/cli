@@ -220,7 +220,7 @@ func init() {
 	runCmd.Flags().Int("watch-interval", 10, "interval in seconds to check for secret changes")
 	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
-	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times, last path wins on conflicts)")
+	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
 }
 
