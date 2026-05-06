@@ -25,7 +25,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 
 	log.Info().Str("sessionID", p.config.SessionID).Str("target", p.config.TargetAddr).Msg("Oracle PAM session started (proxied auth)")
 
-	// Keep raw TCP ref — Oracle TCPS may require a second TLS handshake mid-flow.
+	// 1. Dial upstream (keep raw TCP ref — TCPS may need a second TLS handshake mid-flow).
 	rawUpstream, tlsUpstream, err := dialUpstreamRaw(ctx, p.config)
 	if err != nil {
 		log.Error().Err(err).Str("sessionID", p.config.SessionID).Msg("Failed to dial Oracle upstream")
@@ -40,6 +40,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	}
 	defer func() { upstreamConn.Close() }()
 
+	// 2. Read client's CONNECT, rewrite SERVICE_NAME, forward to upstream.
 	connectRaw, err := ReadFullPacket(clientConn, false)
 	if err != nil {
 		return fmt.Errorf("read client CONNECT: %w", err)
@@ -55,18 +56,26 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 		return fmt.Errorf("forward CONNECT: %w", err)
 	}
 
-	// go-ora sends connect-data as a separate 16-bit-framed packet when > 230 bytes.
-	connectDataInline := true
+	// If connect-data wasn't inline (JDBC thin / go-ora with long descriptions),
+	// the client already sent it as a follow-up packet. Forward it now — some
+	// Oracle listeners (e.g., OCI Autonomous DB) won't RESEND, they just wait.
 	if len(connectRaw) >= 28 {
 		cdLen := int(binary.BigEndian.Uint16(connectRaw[24:26]))
 		cdOff := int(binary.BigEndian.Uint16(connectRaw[26:28]))
 		if cdLen > 0 && cdOff+cdLen > len(connectRaw) {
-			connectDataInline = false
+			supplement, serr := ReadFullPacket(clientConn, false)
+			if serr != nil {
+				return fmt.Errorf("read connect-data supplement: %w", serr)
+			}
+			log.Info().Str("sessionID", p.config.SessionID).Int("supplementLen", len(supplement)).Msg("Proxy: forwarding connect-data supplement before handshake")
+			if _, werr := upstreamConn.Write(supplement); werr != nil {
+				return fmt.Errorf("forward connect-data supplement: %w", werr)
+			}
 		}
 	}
 
+	// 3. Read upstream responses until ACCEPT. Handle RESEND (TLS restart).
 	var acceptRaw []byte
-	resendConsumedSupplement := false
 	for attempt := 0; acceptRaw == nil; attempt++ {
 		pkt, err := ReadFullPacket(upstreamConn, false)
 		if err != nil {
@@ -104,14 +113,29 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 		case PacketTypeRedirect:
 			return fmt.Errorf("upstream REDIRECT during handshake (not supported)")
 		case PacketTypeResend:
-			resendConsumedSupplement = true
-			supplement, err := ReadFullPacket(clientConn, false)
+			clientPkt, err := ReadFullPacket(clientConn, false)
 			if err != nil {
-				return fmt.Errorf("read client supplement after RESEND: %w", err)
+				return fmt.Errorf("read client response after RESEND: %w", err)
 			}
-			log.Info().Str("sessionID", p.config.SessionID).Int("supplementLen", len(supplement)).Uint8("supplType", uint8(PacketTypeOf(supplement))).Msg("Proxy: forwarding client supplement after RESEND")
-			if _, werr := upstreamConn.Write(supplement); werr != nil {
-				return fmt.Errorf("forward client supplement: %w", werr)
+			log.Info().Str("sessionID", p.config.SessionID).Int("len", len(clientPkt)).Uint8("type", uint8(PacketTypeOf(clientPkt))).Msg("Proxy: forwarding client response after RESEND")
+			if _, werr := upstreamConn.Write(clientPkt); werr != nil {
+				return fmt.Errorf("forward client response after RESEND: %w", werr)
+			}
+			// Client may re-send CONNECT with non-inline connect-data — forward
+			// the supplement too, same as we did before the handshake loop.
+			if PacketTypeOf(clientPkt) == PacketTypeConnect && len(clientPkt) >= 28 {
+				cdLen := int(binary.BigEndian.Uint16(clientPkt[24:26]))
+				cdOff := int(binary.BigEndian.Uint16(clientPkt[26:28]))
+				if cdLen > 0 && cdOff+cdLen > len(clientPkt) {
+					supp, serr := ReadFullPacket(clientConn, false)
+					if serr != nil {
+						return fmt.Errorf("read connect-data supplement after RESEND: %w", serr)
+					}
+					log.Info().Str("sessionID", p.config.SessionID).Int("supplementLen", len(supp)).Msg("Proxy: forwarding connect-data supplement after RESEND")
+					if _, werr := upstreamConn.Write(supp); werr != nil {
+						return fmt.Errorf("forward connect-data supplement after RESEND: %w", werr)
+					}
+				}
 			}
 		}
 	}
@@ -123,16 +147,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	use32Bit := acceptVersion >= 315
 	log.Info().Str("sessionID", p.config.SessionID).Uint16("acceptVersion", acceptVersion).Bool("use32Bit", use32Bit).Msg("Proxy: ACCEPT forwarded")
 
-	if !connectDataInline && !resendConsumedSupplement {
-		supplement, err := ReadFullPacket(clientConn, false)
-		if err != nil {
-			return fmt.Errorf("read connect-data supplement: %w", err)
-		}
-		log.Info().Str("sessionID", p.config.SessionID).Int("supplementLen", len(supplement)).Msg("Proxy: forwarding connect-data supplement")
-		if _, err := upstreamConn.Write(supplement); err != nil {
-			return fmt.Errorf("forward connect-data supplement: %w", err)
-		}
-	}
+
 
 	p1Payload, err := proxyUntilAuthRequest(clientConn, upstreamConn, use32Bit, p.config.SessionID)
 	if err != nil {
@@ -613,6 +628,10 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 	if err != nil {
 		return nil, fmt.Errorf("parse client phase 2: %w", err)
 	}
+
+	// server session key
+	// client session key
+	// session1
 
 	if p2.EClientSessKey == "" || p2.EPassword == "" {
 		return nil, fmt.Errorf("client phase 2 missing AUTH_SESSKEY or AUTH_PASSWORD")
