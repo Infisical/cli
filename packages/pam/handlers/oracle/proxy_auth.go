@@ -654,6 +654,15 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 	if err != nil {
 		return nil, fmt.Errorf("derive enc key: %w", err)
 	}
+	// Verify the client used the placeholder password. Wrong password would also
+	// fail cryptographically in phase 1 (ORA-17452), but this gives a clearer error.
+	decoded, err := decryptSessionKey(true, encKey, p2.EPassword)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt client password: %w", err)
+	}
+	if len(decoded) <= 16 || string(decoded[16:]) != ProxyPasswordPlaceholder {
+		return nil, fmt.Errorf("password mismatch")
+	}
 	newEPassword, err := encryptPassword([]byte(realPassword), encKey, true)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt real password: %w", err)
