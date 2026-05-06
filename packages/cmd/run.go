@@ -440,7 +440,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 }
 
 func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) ([]models.SingleEnvironmentVariable, error) {
-	var allSecrets []models.SingleEnvironmentVariable
+	secretsByKey := make(map[string]models.SingleEnvironmentVariable)
 
 	for _, path := range request.SecretsPaths {
 		params := models.GetAllSecretsParameters{
@@ -470,10 +470,17 @@ func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir
 			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 		}
 
-		allSecrets = append(allSecrets, secrets...)
+		for _, s := range secrets {
+			secretsByKey[s.Key] = s
+		}
 	}
 
-	return allSecrets, nil
+	result := make([]models.SingleEnvironmentVariable, 0, len(secretsByKey))
+	for _, s := range secretsByKey {
+		result = append(result, s)
+	}
+
+	return result, nil
 }
 
 func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.InjectableEnvironmentResult {
