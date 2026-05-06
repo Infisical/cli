@@ -1,17 +1,6 @@
-# Third-party code attribution
+This package contains code adapted from [sijms/go-ora](https://github.com/sijms/go-ora).
 
-This package contains code adapted from [sijms/go-ora](https://github.com/sijms/go-ora),
-licensed under the MIT License. Copyright (c) 2020 Samy Sultan.
-
-Ported / adapted portions:
-
-- `tns.go` adapts `go-ora/v2/network/{packets,connect_packet,accept_packet,data_packet,marker_packet,refuse_packet}.go`
-- `ttc.go` adapts the TTC buffer codec from `go-ora/v2/network/session.go`
-- `o5logon.go` adapts the O5Logon crypto primitives (`generateSpeedyKey`, `getKeyFromUserNameAndPassword`, `decryptSessionKey`, `encryptSessionKey`, `encryptPassword`, `generatePasswordEncKey`) from `go-ora/v2/auth_object.go` and `PKCS5Padding` from `go-ora/v2/network/security/general.go`
-- `o5logon_server.go` mirrors the phase-2 auth-request layout emitted by `go-ora/v2/auth_object.go`'s `AuthObject.Write` (used in reverse for parsing) and the Oracle error-summary packet layout from `go-ora/v2/network/summary_object.go`
-- The upstream TCPS two-handshake flow in `proxy_auth.go` mirrors the logic in `go-ora/v2/network/session.go` `readPacket` RESEND branch
-
-## MIT License
+MIT License
 
 Copyright (c) 2020 Samy Sultan
 

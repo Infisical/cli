@@ -1,12 +1,3 @@
-// Portions of this file are adapted from github.com/sijms/go-ora/v2,
-// licensed under MIT. Copyright (c) 2020 Samy Sultan.
-// Original sources:
-//   network/packets.go, network/connect_packet.go, network/accept_packet.go,
-//   network/data_packet.go, network/marker_packet.go, network/refuse_packet.go
-// Modifications for server-side use by Infisical: field accessors exported,
-// added reader/writer helpers operating directly on io.Reader / io.Writer,
-// removed Session/trace/encryption coupling (handled separately by the gateway).
-
 package oracle
 
 import (
@@ -28,16 +19,7 @@ const (
 	PacketTypeMarker   PacketType = 12
 )
 
-// TNS header is always 8 bytes. Length field is uint16 before handshakeComplete+v315,
-// uint32 afterwards. For server-side use the simple rule is: CONNECT / ACCEPT / REFUSE /
-// early MARKER use 16-bit length; post-ACCEPT (nego onwards) use 32-bit length when the
-// negotiated version is >= 315. Callers pass use32BitLen explicitly so we don't carry
-// hidden state.
-
-// ReadPacketHeader reads the 8-byte TNS header and returns the parsed fields plus the
-// full raw header bytes (so the caller can dispatch on PacketType and pass the full packet
-// bytes to the type-specific parser). It reads the remaining payload into the returned
-// buffer whose first 8 bytes are the header.
+// use32BitLen: 32-bit length framing after ACCEPT (version >= 315), 16-bit before.
 func ReadFullPacket(r io.Reader, use32BitLen bool) ([]byte, error) {
 	head := make([]byte, 8)
 	if _, err := io.ReadFull(r, head); err != nil {
@@ -52,7 +34,7 @@ func ReadFullPacket(r io.Reader, use32BitLen bool) ([]byte, error) {
 	if length < 8 {
 		return nil, fmt.Errorf("invalid TNS packet length: %d", length)
 	}
-	if length > 1<<22 { // 4MB ceiling — Oracle SDU is 16-bit, but 32-bit length can go larger post-handshake
+	if length > 1<<22 {
 		return nil, fmt.Errorf("TNS packet too large: %d", length)
 	}
 	buf := make([]byte, length)
@@ -72,8 +54,6 @@ func PacketTypeOf(packet []byte) PacketType {
 	return PacketType(packet[4])
 }
 
-// DataPacket wraps a single TNS DATA frame, without any ANO encryption/hash (the gateway
-// refuses ANO so we never deal with those on the client-facing leg).
 type DataPacket struct {
 	DataFlag uint16
 	Payload  []byte
@@ -89,7 +69,6 @@ func ParseDataPacket(raw []byte, use32BitLen bool) (*DataPacket, error) {
 	}, nil
 }
 
-// Bytes serializes a DATA packet. use32BitLen must match the negotiated version (>= 315).
 func (d *DataPacket) Bytes(use32BitLen bool) []byte {
 	length := uint32(10 + len(d.Payload))
 	out := make([]byte, length)
@@ -99,14 +78,12 @@ func (d *DataPacket) Bytes(use32BitLen bool) []byte {
 		binary.BigEndian.PutUint16(out, uint16(length))
 	}
 	out[4] = byte(PacketTypeData)
-	out[5] = 0 // flag
+	out[5] = 0
 	binary.BigEndian.PutUint16(out[8:], d.DataFlag)
 	copy(out[10:], d.Payload)
 	return out
 }
 
-// RefusePacket is the server's polite "no" to an incoming CONNECT (pre-ACCEPT). Used for
-// upstream-failure reporting.
 type RefusePacket struct {
 	UserReason   uint8
 	SystemReason uint8
@@ -127,8 +104,6 @@ func (r *RefusePacket) Bytes() []byte {
 	return out
 }
 
-// WriteRefuseToClient is a convenience: build and write a REFUSE packet. The message
-// should look like "(ERR=...)(ERROR_STACK=...)" so clients surface it as an Oracle error.
 func WriteRefuseToClient(w io.Writer, message string) error {
 	pkt := &RefusePacket{
 		UserReason:   0,

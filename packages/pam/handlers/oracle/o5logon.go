@@ -1,11 +1,3 @@
-// Portions of this file are adapted from github.com/sijms/go-ora/v2,
-// licensed under MIT. Copyright (c) 2020 Samy Sultan.
-// Original: auth_object.go (generateSpeedyKey, getKeyFromUserNameAndPassword,
-// decryptSessionKey, encryptSessionKey, encryptPassword, generatePasswordEncKey) and
-// network/security/general.go (PKCS5Padding).
-// Modifications for server-side use by Infisical: the roles are inverted — the gateway
-// acts as the Oracle server verifying the client's O5Logon using the placeholder password.
-
 package oracle
 
 import (
@@ -19,19 +11,16 @@ import (
 	"fmt"
 )
 
-// Oracle error codes we return on the client-facing leg.
 const (
 	ORA1017InvalidCredentials = 1017
 )
 
-// PKCS5Padding appends PKCS#5 padding.
 func PKCS5Padding(cipherText []byte, blockSize int) []byte {
 	padding := blockSize - len(cipherText)%blockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 	return append(cipherText, padtext...)
 }
 
-// generateSpeedyKey is HMAC-SHA512 iterative XOR, used for PBKDF2-like derivation.
 func generateSpeedyKey(buffer, key []byte, turns int) []byte {
 	mac := hmac.New(sha512.New, key)
 	mac.Write(append(buffer, 0, 0, 0, 1))
@@ -49,7 +38,6 @@ func generateSpeedyKey(buffer, key []byte, turns int) []byte {
 	return firstHash
 }
 
-// decryptSessionKey AES-CBC-decrypts a hex-encoded session key using a null IV.
 func decryptSessionKey(padding bool, encKey []byte, sessionKeyHex string) ([]byte, error) {
 	result, err := hex.DecodeString(sessionKeyHex)
 	if err != nil {
@@ -81,7 +69,6 @@ func decryptSessionKey(padding bool, encKey []byte, sessionKeyHex string) ([]byt
 	return output[:len(output)-cutLen], nil
 }
 
-// encryptSessionKey AES-CBC-encrypts a byte slice and returns hex. Mirrors go-ora.
 func encryptSessionKey(padding bool, encKey []byte, sessionKey []byte) (string, error) {
 	blk, err := aes.NewCipher(encKey)
 	if err != nil {
@@ -98,7 +85,6 @@ func encryptSessionKey(padding bool, encKey []byte, sessionKey []byte) (string, 
 	return fmt.Sprintf("%X", output), nil
 }
 
-// encryptPassword prepends 16 random bytes to `password`, then encrypts.
 func encryptPassword(password, key []byte, padding bool) (string, error) {
 	buff1 := make([]byte, 0x10)
 	if _, err := rand.Read(buff1); err != nil {
@@ -108,8 +94,6 @@ func encryptPassword(password, key []byte, padding bool) (string, error) {
 	return encryptSessionKey(padding, key, buffer)
 }
 
-// deriveServerKey computes the 32-byte AES-256 key used to encrypt AUTH_SESSKEY for
-// verifier type 18453 (12c+ PBKDF2+SHA512), same as go-ora's client-side derivation.
 func deriveServerKey(password string, salt []byte, vGenCount int) (key []byte, speedy []byte, err error) {
 	message := append([]byte(nil), salt...)
 	message = append(message, []byte("AUTH_PBKDF2_SPEEDY_KEY")...)
@@ -122,4 +106,3 @@ func deriveServerKey(password string, salt []byte, vGenCount int) (key []byte, s
 	key = h.Sum(nil)[:32]
 	return
 }
-

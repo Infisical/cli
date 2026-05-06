@@ -1,9 +1,3 @@
-// Portions of this file are adapted from github.com/sijms/go-ora/v2,
-// licensed under MIT. Copyright (c) 2020 Samy Sultan.
-// Original: network/session.go codec helpers (PutUint/PutInt/PutClr/PutKeyVal/Get*).
-// Modifications: lifted out as stateless helpers over bytes.Buffer / []byte cursor so
-// the gateway can build and parse TTC payloads without owning a full go-ora Session.
-
 package oracle
 
 import (
@@ -13,13 +7,8 @@ import (
 	"io"
 )
 
-// TTCBuilder accumulates a TTC payload to be placed inside a DATA packet body.
-// The resulting bytes go through Bytes() and are then embedded in a DataPacket.
 type TTCBuilder struct {
-	buf bytes.Buffer
-	// useBigClrChunks mirrors go-ora's Session.UseBigClrChunks flag. Enabled when
-	// ServerCompileTimeCaps[37]&32 != 0 (true for 12c+). Since we always negotiate a 19c
-	// profile as the server, we can leave this true.
+	buf             bytes.Buffer
 	useBigClrChunks bool
 	clrChunkSize    int
 }
@@ -94,8 +83,6 @@ func (b *TTCBuilder) PutInt(num int64, size uint8, bigEndian, compress bool) {
 	b.PutUint(uint64(num), size, bigEndian, false)
 }
 
-// PutClr writes a chunked variable-length byte array. 1-byte length for short, 0xFE
-// prefix + multi-chunk for long, matching go-ora's Session.PutClr.
 func (b *TTCBuilder) PutClr(data []byte) {
 	dataLen := len(data)
 	if dataLen == 0 {
@@ -128,7 +115,6 @@ func (b *TTCBuilder) PutClr(data []byte) {
 
 func (b *TTCBuilder) PutString(s string) { b.PutClr([]byte(s)) }
 
-// PutKeyVal writes key + val + flag. This is the core TTC KVP format used for auth info.
 func (b *TTCBuilder) PutKeyVal(key, val []byte, num uint32) {
 	if len(key) == 0 {
 		b.buf.WriteByte(0)
@@ -149,8 +135,6 @@ func (b *TTCBuilder) PutKeyValString(key, val string, num uint32) {
 	b.PutKeyVal([]byte(key), []byte(val), num)
 }
 
-// TTCReader walks a TTC payload (the body of a DATA packet) and exposes the same codec
-// as go-ora's Session, sans the network plumbing.
 type TTCReader struct {
 	buf             []byte
 	pos             int
@@ -163,8 +147,6 @@ func NewTTCReader(payload []byte) *TTCReader {
 
 func (r *TTCReader) Remaining() int { return len(r.buf) - r.pos }
 
-// Pos returns the current byte offset into the payload. Useful when a caller needs
-// to slice the original payload at a field boundary discovered during parsing.
 func (r *TTCReader) Pos() int { return r.pos }
 
 func (r *TTCReader) read(n int) ([]byte, error) {
@@ -184,10 +166,6 @@ func (r *TTCReader) GetByte() (uint8, error) {
 	return b[0], nil
 }
 
-// PeekByte returns the next byte without advancing the position. Returns 0 and
-// io.ErrUnexpectedEOF if the reader is exhausted. Callers should only rely on
-// this for format-sniffing decisions (e.g., distinguishing a length-prefixed
-// string from a raw string when clients differ in encoding).
 func (r *TTCReader) PeekByte() (uint8, error) {
 	if r.pos >= len(r.buf) {
 		return 0, io.ErrUnexpectedEOF
@@ -249,7 +227,6 @@ func (r *TTCReader) GetInt(size int, compress, bigEndian bool) (int, error) {
 	return int(v), err
 }
 
-// GetClr reads variable-length byte data.
 func (r *TTCReader) GetClr() ([]byte, error) {
 	nb, err := r.GetByte()
 	if err != nil {
@@ -292,14 +269,12 @@ func (r *TTCReader) GetClr() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// GetDlc reads a length-prefixed variable-length byte array.
 func (r *TTCReader) GetDlc() ([]byte, error) {
 	length, err := r.GetInt(4, true, true)
 	if err != nil {
 		return nil, err
 	}
 	if length <= 0 {
-		// length prefix = 0, but we still need to consume the CLR body (single zero byte).
 		_, _ = r.GetClr()
 		return nil, nil
 	}
