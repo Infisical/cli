@@ -440,7 +440,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 }
 
 func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) ([]models.SingleEnvironmentVariable, error) {
-	secretsByKey := make(map[string]models.SingleEnvironmentVariable)
+	var allSecrets []models.SingleEnvironmentVariable
 
 	for _, path := range request.SecretsPaths {
 		params := models.GetAllSecretsParameters{
@@ -464,23 +464,16 @@ func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir
 			return nil, fmt.Errorf("failed to fetch secrets for path %q: %w", path, err)
 		}
 
-		if secretOverriding {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-		} else {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
-		}
-
-		for _, s := range secrets {
-			secretsByKey[s.Key] = s
-		}
+		allSecrets = append(allSecrets, secrets...)
 	}
 
-	result := make([]models.SingleEnvironmentVariable, 0, len(secretsByKey))
-	for _, s := range secretsByKey {
-		result = append(result, s)
+	if secretOverriding {
+		allSecrets = util.OverrideSecrets(allSecrets, util.SECRET_TYPE_PERSONAL)
+	} else {
+		allSecrets = util.OverrideSecrets(allSecrets, util.SECRET_TYPE_SHARED)
 	}
 
-	return result, nil
+	return allSecrets, nil
 }
 
 func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.InjectableEnvironmentResult {
