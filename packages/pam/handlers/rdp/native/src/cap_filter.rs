@@ -88,10 +88,8 @@ impl<'a> Iterator for CapIter<'a> {
         if self.cursor + 4 > self.user_data.len() {
             return None;
         }
-        let cap_type = u16::from_le_bytes([
-            self.user_data[self.cursor],
-            self.user_data[self.cursor + 1],
-        ]);
+        let cap_type =
+            u16::from_le_bytes([self.user_data[self.cursor], self.user_data[self.cursor + 1]]);
         let cap_len = u16::from_le_bytes([
             self.user_data[self.cursor + 2],
             self.user_data[self.cursor + 3],

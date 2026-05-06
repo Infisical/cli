@@ -352,9 +352,7 @@ fn try_filter_confirm_active(frame: &[u8]) -> Option<Vec<u8>> {
     for cap in cap_filter::walk_caps(user_data_bytes, layout.caps_start_in_user_data) {
         let body_offset_in_frame = layout.user_data.offset + cap.body_offset_in_user_data;
         match cap.cap_type {
-            cap_filter::cap_types::ORDER
-                if cap.cap_len >= cap_filter::order_cap::BODY_LEN + 4 =>
-            {
+            cap_filter::cap_types::ORDER if cap.cap_len >= cap_filter::order_cap::BODY_LEN + 4 => {
                 order_body_offset_in_frame = Some(body_offset_in_frame);
             }
             cap_filter::cap_types::BITMAP_CODECS
