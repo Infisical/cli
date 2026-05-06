@@ -39,7 +39,7 @@ func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams,
 
 	pamRequest := accessParams.ToAPIRequest(projectId, durationStr)
 
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
 	if err != nil {
 		if HandleApprovalWorkflow(httpClient, err, projectId, accessParams, durationStr) {
 			return
