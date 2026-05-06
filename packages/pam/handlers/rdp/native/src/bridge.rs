@@ -11,13 +11,15 @@ use ironrdp_acceptor::{Acceptor, BeginResult};
 use ironrdp_connector::credssp::{CredsspSequence, KerberosConfig};
 use ironrdp_connector::sspi::credssp::ClientState;
 use ironrdp_connector::sspi::generator::GeneratorState;
-use ironrdp_connector::{encode_x224_packet, ClientConnector, ClientConnectorState};
+use ironrdp_connector::{encode_x224_packet, ClientConnector, ClientConnectorState, Credentials};
 use ironrdp_core::ReadCursor;
 use ironrdp_pdu::gcc::ConferenceCreateRequest;
 use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
-use ironrdp_pdu::ironrdp_core::{decode, WriteBuf};
+use ironrdp_pdu::ironrdp_core::{decode, encode_buf, DecodeOwned as _, WriteBuf};
 use ironrdp_pdu::mcs::{ConnectInitial, SendDataRequest};
-use ironrdp_pdu::nego::SecurityProtocol;
+use ironrdp_pdu::nego::{
+    ConnectionConfirm, ConnectionRequest, NegoRequestData, RequestFlags, SecurityProtocol,
+};
 use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
 use ironrdp_pdu::rdp::headers::{ShareControlHeader, ShareControlPdu};
 use ironrdp_pdu::x224::{X224Data, X224};
@@ -77,14 +79,12 @@ async fn run_mitm_inner(
     let acceptor_username = target.username.clone();
     let (acceptor_output, connector_output) = tokio::try_join!(
         run_acceptor_half(client_tcp, acceptor_username),
-        run_connector_half(target)
+        run_connector_half(target),
     )?;
 
     let (mut client_stream, client_leftover) = acceptor_output;
     let (mut target_stream, target_leftover) = connector_output;
 
-    // Strip virtual channels (clipboard, drives, audio, USB) from MCS Connect Initial.
-    // Mouse/keyboard/screen ride the implicit I/O channel and are unaffected.
     filter_client_mcs_connect_initial(&mut client_stream, &mut target_stream, client_leftover)
         .await
         .context("filter client MCS Connect Initial")?;
@@ -434,7 +434,11 @@ fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
     FastPathInput::decode(&mut cursor).map_err(|e| anyhow::anyhow!("decode FastPathInput: {e}"))
 }
 
-// Strips virtual channels from the Client Network Data block of MCS Connect Initial.
+// Decode + mutate + re-encode the client's MCS Connect Initial:
+//   - set CS_CORE.serverSelectedProtocol to HYBRID_EX (FreeRDP echoes the
+//     wrong value, and target servers reject mismatched echoes)
+//   - clear CS_NET.channels so the target doesn't try to open virtual
+//     channels (clipboard, drives, audio, USB) the bridge can't service
 async fn filter_client_mcs_connect_initial(
     client_stream: &mut ErasedStream,
     target_stream: &mut ErasedStream,
@@ -480,19 +484,9 @@ async fn filter_client_mcs_connect_initial(
         .map_err(|e| anyhow::anyhow!("decode MCS Connect Initial: {e:?}"))?;
 
     let mut gcc_blocks = connect_initial.conference_create_request.into_gcc_blocks();
+    gcc_blocks.core.optional_data.server_selected_protocol = Some(SecurityProtocol::HYBRID_EX);
     if let Some(network) = gcc_blocks.network.as_mut() {
-        let stripped: Vec<String> = network
-            .channels
-            .iter()
-            .map(|c| c.name.as_str().unwrap_or("?").to_owned())
-            .collect();
-        if !stripped.is_empty() {
-            info!(
-                ?stripped,
-                "stripped virtual channels from MCS Connect Initial"
-            );
-            network.channels.clear();
-        }
+        network.channels.clear();
     }
     connect_initial.conference_create_request = ConferenceCreateRequest::new(gcc_blocks)
         .map_err(|e| anyhow::anyhow!("rebuild ConferenceCreateRequest: {e:?}"))?;
@@ -528,7 +522,6 @@ async fn run_acceptor_half(
         password: ACCEPTOR_PASSWORD.to_owned(),
         domain: None,
     };
-    // Capabilities/desktop-size are shape-fillers; we never call accept_finalize.
     let mut acceptor = Acceptor::new(
         SecurityProtocol::HYBRID_EX | SecurityProtocol::HYBRID | SecurityProtocol::SSL,
         ironrdp_acceptor::DesktopSize {
@@ -588,16 +581,20 @@ async fn run_connector_half(target: TargetEndpoint) -> Result<(ErasedStream, byt
     let config = connector_config(target.username.clone(), target.password.clone());
     let mut connector = ClientConnector::new(config, client_addr);
 
-    let should_upgrade = ironrdp_tokio::connect_begin(&mut target_framed, &mut connector)
+    // Request the same protocol set native clients send so the target's
+    // ServerCoreData.clientRequestedProtocols echo matches what they expect.
+    let request_set =
+        SecurityProtocol::HYBRID_EX | SecurityProtocol::HYBRID | SecurityProtocol::SSL;
+    connector_x224_with_protocol(&mut target_framed, &mut connector, request_set)
         .await
-        .context("connector: connect_begin")?;
+        .context("connector: X.224 init")?;
 
     let (initial_stream, leftover) = target_framed.into_inner();
     let (upgraded_stream, tls_cert) = ironrdp_tls::upgrade(initial_stream, &target.host)
         .await
         .context("connector: TLS upgrade")?;
 
-    let _upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
+    connector.mark_security_upgrade_as_done();
     let erased: ErasedStream = Box::new(upgraded_stream);
     let mut target_framed = ironrdp_tokio::TokioFramed::new_with_leftover(erased, leftover);
 
@@ -620,6 +617,71 @@ async fn run_connector_half(target: TargetEndpoint) -> Result<(ErasedStream, byt
     info!("connector: CredSSP complete, credential injection succeeded");
 
     Ok(target_framed.into_inner())
+}
+
+// Drive the X.224 negotiation with the caller-chosen protocol set, then
+// transition the connector into EnhancedSecurityUpgrade so the rest of
+// the pipeline (TLS upgrade + CredSSP) proceeds normally. ironrdp's
+// connect_begin hardcodes HYBRID|HYBRID_EX, which doesn't match the set
+// native clients (Windows App, mstsc) advertise.
+async fn connector_x224_with_protocol<S>(
+    framed: &mut ironrdp_tokio::TokioFramed<S>,
+    connector: &mut ClientConnector,
+    requested: SecurityProtocol,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+{
+    // Mirror what ironrdp's connect_begin includes: routing cookie with the
+    // username, which some Windows targets / load balancers expect.
+    let nego_data =
+        connector
+            .config
+            .request_data
+            .clone()
+            .or_else(|| match &connector.config.credentials {
+                Credentials::UsernamePassword { username, .. } if !username.is_empty() => {
+                    Some(NegoRequestData::cookie(username.clone()))
+                }
+                _ => None,
+            });
+    let request = ConnectionRequest {
+        nego_data,
+        flags: RequestFlags::empty(),
+        protocol: requested,
+    };
+
+    let mut buf = WriteBuf::new();
+    encode_buf(&X224(request), &mut buf)
+        .map_err(|e| anyhow::anyhow!("encode X.224 connection request: {e:?}"))?;
+    framed
+        .write_all(buf.filled())
+        .await
+        .context("write X.224 connection request")?;
+
+    let pdu = framed
+        .read_pdu()
+        .await
+        .context("read X.224 connection confirm")?;
+    let confirm = ConnectionConfirm::decode_owned(&mut ReadCursor::new(&pdu.1))
+        .map_err(|e| anyhow::anyhow!("decode X.224 connection confirm: {e:?}"))?;
+
+    let selected_protocol = match confirm {
+        ConnectionConfirm::Response { protocol, .. } => protocol,
+        ConnectionConfirm::Failure { code } => {
+            anyhow::bail!("X.224 negotiation failure: {:?}", code);
+        }
+    };
+    if !requested.contains(selected_protocol) {
+        anyhow::bail!(
+            "target selected protocol {:?} not in requested set {:?}",
+            selected_protocol,
+            requested
+        );
+    }
+
+    connector.state = ClientConnectorState::EnhancedSecurityUpgrade { selected_protocol };
+    Ok(())
 }
 
 // Replicated from ironrdp-async's private perform_credssp_step so we can
