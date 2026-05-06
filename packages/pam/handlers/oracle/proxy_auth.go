@@ -789,28 +789,14 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 		return nil, fmt.Errorf("re-encrypt client session key: %w", err)
 	}
 
-	// Compute password-encryption keys: one using placeholder password, one using real.
-	placeholderEncKey, err := deriveProxyPasswordEncKey(clientSessKey, state.ServerSessKey, state.Pbkdf2CSKSalt, state.Pbkdf2SDerCount)
+	// Compute the password-encryption key. This key is derived from session keys +
+	// CSK salt, NOT from the password — so it's the same regardless of what the
+	// client typed. We encrypt the real password unconditionally.
+	encKey, err := deriveProxyPasswordEncKey(clientSessKey, state.ServerSessKey, state.Pbkdf2CSKSalt, state.Pbkdf2SDerCount)
 	if err != nil {
-		return nil, fmt.Errorf("derive placeholder enc key: %w", err)
+		return nil, fmt.Errorf("derive enc key: %w", err)
 	}
-	realEncKey := placeholderEncKey // same computation: encKey is derived from session keys + pbkdf2 salt, NOT password
-	// Verify client's password equals placeholder.
-	decoded, err := decryptSessionKey(true, placeholderEncKey, p2.EPassword)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt client password: %w", err)
-	}
-	if len(decoded) <= 16 {
-		return nil, fmt.Errorf("decoded password too short")
-	}
-	if string(decoded[16:]) != ProxyPasswordPlaceholder {
-		// Do not embed the decrypted plaintext — it could be a real password the
-		// client typed by mistake, and the error chain bubbles to gateway logs.
-		return nil, fmt.Errorf("password mismatch")
-	}
-	// Encrypt REAL password with the real encKey (which equals placeholderEncKey here
-	// because the computation uses session keys + CSK salt only, not the password).
-	newEPassword, err := encryptPassword([]byte(realPassword), realEncKey, true)
+	newEPassword, err := encryptPassword([]byte(realPassword), encKey, true)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt real password: %w", err)
 	}
@@ -820,8 +806,7 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 	if err != nil {
 		return nil, fmt.Errorf("rebuild phase 2: %w", err)
 	}
-	// Also stash encKey for SVR_RESPONSE regen.
-	state.placeholderEncKey = placeholderEncKey
+	state.placeholderEncKey = encKey
 	return rebuilt, nil
 }
 
