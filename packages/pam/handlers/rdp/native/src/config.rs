@@ -9,7 +9,7 @@ use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 pub const DEFAULT_WIDTH: u16 = 1920;
 pub const DEFAULT_HEIGHT: u16 = 1080;
 
-pub fn connector_config(username: String, password: String) -> Config {
+pub fn connector_config(username: String, password: String, domain: Option<String>) -> Config {
     Config {
         desktop_size: DesktopSize {
             width: DEFAULT_WIDTH,
@@ -25,7 +25,9 @@ pub fn connector_config(username: String, password: String) -> Config {
         enable_credssp: true,
 
         credentials: Credentials::UsernamePassword { username, password },
-        domain: None,
+        // Set for AD domain accounts; IronRDP forwards this in NTLM CredSSP so
+        // the target's LSA authenticates against AD rather than the local SAM.
+        domain,
 
         // Shape-fillers: unused after CredSSP (see module doc).
         client_build: 0,
