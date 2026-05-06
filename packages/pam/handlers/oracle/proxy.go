@@ -5,36 +5,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 )
-
-// prependedConn lets us push bytes we've already read back "in front" of a net.Conn's
-// read stream, so downstream code can read them normally.
-type prependedConn struct {
-	net.Conn
-	buf []byte
-}
-
-func (p *prependedConn) Read(b []byte) (int, error) {
-	if len(p.buf) > 0 {
-		n := copy(b, p.buf)
-		p.buf = p.buf[n:]
-		return n, nil
-	}
-	return p.Conn.Read(b)
-}
-
-// SetReadDeadline forwards to the wrapped conn; our prepended buf reads are synchronous
-// so no deadline is needed for them.
-func (p *prependedConn) SetReadDeadline(t time.Time) error {
-	type withDeadline interface{ SetReadDeadline(time.Time) error }
-	if d, ok := p.Conn.(withDeadline); ok {
-		return d.SetReadDeadline(t)
-	}
-	return nil
-}
 
 // OracleProxyConfig mirrors the shape used by other PAM database handlers so the
 // dispatch in pam-proxy.go stays templatized. When EnableTLS is true, the
@@ -68,29 +41,6 @@ func (p *OracleProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 	return p.handleConnectionProxied(ctx, clientConn)
 }
 
-
-// detectConnectDataSupplement returns the length of a 16-bit-framed DATA packet at the
-// start of buf, or 0 if buf doesn't look like one. Pattern: bytes[0:2] = length (16-bit
-// BE, plausible 8..64K), bytes[2:4] = 0 (packet checksum), bytes[4] = 0x06 (DATA type).
-func detectConnectDataSupplement(buf []byte) int {
-	if len(buf) < 8 {
-		return 0
-	}
-	length := int(buf[0])<<8 | int(buf[1])
-	if length < 8 || length > 64*1024 {
-		return 0
-	}
-	// Reject if the length field LOOKS like the high bytes of a 32-bit length
-	// (i.e. bytes[2:4] are non-zero would imply a 32-bit length). A 16-bit framed
-	// packet MUST have bytes[2:4] zero because that's the checksum field.
-	if buf[2] != 0 || buf[3] != 0 {
-		return 0
-	}
-	if buf[4] != 0x06 {
-		return 0
-	}
-	return length
-}
 
 // relayWithTap copies src → dst byte-for-byte, Feed()'ing a copy of each read into the
 // tap extractor. This is the hot path — it must not parse or log per-packet.

@@ -79,7 +79,20 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	// forward it back to upstream — otherwise upstream stalls waiting for it.
 	//
 	// A REFUSE / REDIRECT ends the flow with an error.
+	// Check if the client included connect-data inline. If not (go-ora with
+	// descriptions > 230 bytes), the client sends it as a separate packet and
+	// we may need to drain it after ACCEPT.
+	connectDataInline := true
+	if len(connectRaw) >= 28 {
+		cdLen := int(binary.BigEndian.Uint16(connectRaw[24:26]))
+		cdOff := int(binary.BigEndian.Uint16(connectRaw[26:28]))
+		if cdLen > 0 && cdOff+cdLen > len(connectRaw) {
+			connectDataInline = false
+		}
+	}
+
 	var acceptRaw []byte
+	resendConsumedSupplement := false
 	for attempt := 0; acceptRaw == nil; attempt++ {
 		pkt, err := ReadFullPacket(upstreamConn, false)
 		if err != nil {
@@ -128,9 +141,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 		case PacketTypeRedirect:
 			return fmt.Errorf("upstream REDIRECT during handshake (not supported)")
 		case PacketTypeResend:
-			// Read the client's follow-up packet (typically the DESCRIPTION supplement
-			// as a 16-bit-framed DATA packet) and forward to upstream. If we upgraded
-			// to TLS above, this write flows through the new TLS session.
+			resendConsumedSupplement = true
 			supplement, err := ReadFullPacket(clientConn, false)
 			if err != nil {
 				return fmt.Errorf("read client supplement after RESEND: %w", err)
@@ -151,36 +162,18 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	use32Bit := acceptVersion >= 315
 	log.Info().Str("sessionID", p.config.SessionID).Uint16("acceptVersion", acceptVersion).Bool("use32Bit", use32Bit).Msg("Proxy: ACCEPT forwarded")
 
-	// 3. Post-ACCEPT: peek for go-ora's 16-bit-framed connect-data supplement.
-	peekBuf := make([]byte, 256)
-	_ = clientConn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, _ := clientConn.Read(peekBuf)
-	_ = clientConn.SetReadDeadline(time.Time{})
-	peeked := append([]byte(nil), peekBuf[:n]...)
-	if slen := detectConnectDataSupplement(peeked); slen > 0 {
-		log.Info().Int("supplementLen", slen).Msg("Proxy: draining connect-data supplement, forwarding to upstream")
-		if slen > len(peeked) {
-			rest := make([]byte, slen-len(peeked))
-			if _, err := io.ReadFull(clientConn, rest); err != nil {
-				return fmt.Errorf("read supplement tail: %w", err)
-			}
-			// Forward full supplement to upstream.
-			if _, err := upstreamConn.Write(peeked); err != nil {
-				return fmt.Errorf("forward supplement head: %w", err)
-			}
-			if _, err := upstreamConn.Write(rest); err != nil {
-				return fmt.Errorf("forward supplement tail: %w", err)
-			}
-			peeked = nil
-		} else {
-			if _, err := upstreamConn.Write(peeked[:slen]); err != nil {
-				return fmt.Errorf("forward supplement: %w", err)
-			}
-			peeked = peeked[slen:]
+	// 3. If connect-data was not inline (go-ora, long descriptions) and the RESEND
+	// handler didn't already consume it, the client's supplement is sitting in
+	// the TCP buffer. Drain and forward it before switching to 32-bit framing.
+	if !connectDataInline && !resendConsumedSupplement {
+		supplement, err := ReadFullPacket(clientConn, false)
+		if err != nil {
+			return fmt.Errorf("read connect-data supplement: %w", err)
 		}
-	}
-	if len(peeked) > 0 {
-		clientConn = &prependedConn{Conn: clientConn, buf: peeked}
+		log.Info().Str("sessionID", p.config.SessionID).Int("supplementLen", len(supplement)).Msg("Proxy: forwarding connect-data supplement")
+		if _, err := upstreamConn.Write(supplement); err != nil {
+			return fmt.Errorf("forward connect-data supplement: %w", err)
+		}
 	}
 
 	// 4. Pre-auth turn-taking loop: each client packet → forward to upstream → read
