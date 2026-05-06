@@ -273,7 +273,7 @@ impl ByteRange {
 /// Locate `send_data.user_data` inside `frame`. Bails on Cow::Owned.
 fn user_data_range_within(frame: &[u8], send_data: &SendDataRequest<'_>) -> Option<ByteRange> {
     let slice: &[u8] = match &send_data.user_data {
-        Cow::Borrowed(s) => *s,
+        Cow::Borrowed(s) => s,
         Cow::Owned(_) => return None,
     };
     let frame_start = frame.as_ptr() as usize;
@@ -764,7 +764,7 @@ mod tests {
     fn caps_start_works_when_source_descriptor_is_empty() {
         let user_data = confirm_active_prefix(0);
         let p = parse_confirm_active_caps_start(&user_data).expect("caps start");
-        assert_eq!(p, 12 + 4 + 0 + 4);
+        assert_eq!(p, 12 + 4 + 4);
     }
 
     #[test]

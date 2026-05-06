@@ -370,6 +370,10 @@ pub extern "C" fn rdp_bridge_free(handle: u64) -> i32 {
 
 /// Poll the next event, blocking up to `timeout_ms` ms. On RDP_POLL_OK,
 /// caller owns *payload_ptr (must libc::free).
+///
+/// # Safety
+///
+/// `out` must be a non-null, writable `*mut RdpEvent`.
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_poll_event(
     handle: u64,

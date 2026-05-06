@@ -212,7 +212,7 @@ mod tests {
         buf.extend_from_slice(&[0x03, 0x00]);
         buf.extend_from_slice(&order_total_len.to_le_bytes());
         let order_body_offset = buf.len();
-        buf.extend_from_slice(&vec![0xFF; order_cap::BODY_LEN]);
+        buf.extend_from_slice(&[0xFF; order_cap::BODY_LEN]);
 
         // Cap 3: BitmapCodecs (0x001d), 4-byte header + body of 0xEE
         let codecs_header_offset = buf.len();
