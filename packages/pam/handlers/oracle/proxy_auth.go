@@ -247,20 +247,17 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	}
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 request translated and forwarded")
 
-	// 8. Read upstream's phase-2 response. Substitute AUTH_SVR_RESPONSE with a
-	//    placeholder-derived one so the client verifies successfully.
-	p2RespUpstream, err := readDataPayload(upstreamConn, use32Bit)
+	// 8. Forward upstream's phase-2 response to the client unchanged.
+	// AUTH_SVR_RESPONSE is encrypted with encKey, which is derived from session
+	// keys + CSK salt (not the password), so the client can verify it as-is.
+	p2RespRaw, err := ReadFullPacket(upstreamConn, use32Bit)
 	if err != nil {
 		return fmt.Errorf("read upstream phase 2 response: %w", err)
 	}
-	p2RespTranslated, err := translatePhase2Response(p2RespUpstream, state)
-	if err != nil {
-		return fmt.Errorf("translate phase 2 response: %w", err)
+	if _, err := clientConn.Write(p2RespRaw); err != nil {
+		return fmt.Errorf("forward phase 2 response: %w", err)
 	}
-	if err := writeDataPayload(clientConn, p2RespTranslated, use32Bit); err != nil {
-		return fmt.Errorf("write translated phase 2 response: %w", err)
-	}
-	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response translated; client authenticated")
+	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response forwarded; client authenticated")
 
 	// 9. Byte relay.
 	c2u, u2c := NewQueryExtractorPair(p.config.SessionLogger, p.config.SessionID, use32Bit)
@@ -667,10 +664,9 @@ type ProxyAuthState struct {
 	Pbkdf2CSKSalt     string // hex string
 	Pbkdf2VGenCount   int
 	Pbkdf2SDerCount   int
-	RealKey           []byte // AUTH_SESSKEY key derived from real password + salt
-	PlaceholderKey    []byte // AUTH_SESSKEY key derived from placeholder password + salt
-	ServerSessKey     []byte // raw server session key (decrypted from upstream)
-	placeholderEncKey []byte // password-encryption key (session-keyed; independent of password itself)
+	RealKey        []byte // AUTH_SESSKEY key derived from real password + salt
+	PlaceholderKey []byte // AUTH_SESSKEY key derived from placeholder password + salt
+	ServerSessKey  []byte // raw server session key (decrypted from upstream)
 }
 
 // translatePhase1Response decodes upstream's phase-1 response, substitutes AUTH_SESSKEY
@@ -806,35 +802,7 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 	if err != nil {
 		return nil, fmt.Errorf("rebuild phase 2: %w", err)
 	}
-	state.placeholderEncKey = encKey
 	return rebuilt, nil
-}
-
-// translatePhase2Response substitutes AUTH_SVR_RESPONSE in upstream's phase-2 response
-// with one the client can verify (derived from the placeholder-keyed encKey instead of
-// the real-password-keyed one). All other fields are forwarded verbatim.
-func translatePhase2Response(payload []byte, state *ProxyAuthState) ([]byte, error) {
-	kvs, trailer, err := parseAuthRespKVPList(payload)
-	if err != nil {
-		return nil, fmt.Errorf("parse upstream phase 2: %w", err)
-	}
-	// Regenerate SVR_RESPONSE so the client's placeholder-derived verification passes.
-	newSvr, err := BuildSvrResponse(state.placeholderEncKey)
-	if err != nil {
-		return nil, fmt.Errorf("build placeholder SVR_RESPONSE: %w", err)
-	}
-	foundSvr := false
-	for i := range kvs {
-		if kvs[i].Key == "AUTH_SVR_RESPONSE" {
-			kvs[i].Value = newSvr
-			foundSvr = true
-			break
-		}
-	}
-	if !foundSvr {
-		return nil, fmt.Errorf("upstream phase 2 missing AUTH_SVR_RESPONSE")
-	}
-	return rebuildAuthRespPayload(kvs, trailer), nil
 }
 
 // deriveProxyPasswordEncKey computes the key used for AUTH_PASSWORD encryption in

@@ -123,14 +123,3 @@ func deriveServerKey(password string, salt []byte, vGenCount int) (key []byte, s
 	return
 }
 
-// BuildSvrResponse produces AUTH_SVR_RESPONSE: AES-CBC(rand(16) || "SERVER_TO_CLIENT", encKey).
-// The client decrypts it and verifies bytes [16:32] == "SERVER_TO_CLIENT" (verified from
-// auth_object.go:526-537 — the commented-out VerifyResponse in go-ora).
-func BuildSvrResponse(encKey []byte) (string, error) {
-	head := make([]byte, 16)
-	if _, err := rand.Read(head); err != nil {
-		return "", err
-	}
-	body := append(head, []byte("SERVER_TO_CLIENT")...)
-	return encryptSessionKey(true, encKey, body)
-}
