@@ -13,6 +13,7 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
       - -tags=rdp
