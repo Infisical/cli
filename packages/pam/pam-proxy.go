@@ -55,7 +55,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
 		session.ResourceTypeMongodb,
-		session.ResourceTypeOracle,
+		session.ResourceTypeOracledb,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -390,7 +390,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("authMethod", credentials.AuthMethod).
 			Msg("Starting Kubernetes PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
-	case session.ResourceTypeOracle:
+	case session.ResourceTypeOracledb:
 		oracleConfig := oracle.OracleProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
