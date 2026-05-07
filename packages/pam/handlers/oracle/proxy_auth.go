@@ -217,16 +217,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	}
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response forwarded; client authenticated")
 
-	// Zero key material now that auth is complete — no reason to keep it in memory during relay.
-	for i := range state.RealKey {
-		state.RealKey[i] = 0
-	}
-	for i := range state.PlaceholderKey {
-		state.PlaceholderKey[i] = 0
-	}
-	for i := range state.ServerSessKey {
-		state.ServerSessKey[i] = 0
-	}
+	state = nil
 
 	c2u, u2c := NewQueryExtractorPair(p.config.SessionLogger, p.config.SessionID, use32Bit)
 	defer c2u.Stop()
