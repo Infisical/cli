@@ -75,8 +75,12 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	}
 
 	// 3. Read upstream responses until ACCEPT. Handle RESEND (TLS restart).
+	const maxHandshakeAttempts = 10
 	var acceptRaw []byte
 	for attempt := 0; acceptRaw == nil; attempt++ {
+		if attempt >= maxHandshakeAttempts {
+			return fmt.Errorf("too many handshake packets (%d) without ACCEPT", attempt)
+		}
 		pkt, err := ReadFullPacket(upstreamConn, false)
 		if err != nil {
 			return fmt.Errorf("read upstream handshake packet (attempt %d): %w", attempt, err)
@@ -212,6 +216,17 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 		return fmt.Errorf("forward phase 2 response: %w", err)
 	}
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response forwarded; client authenticated")
+
+	// Zero key material now that auth is complete — no reason to keep it in memory during relay.
+	for i := range state.RealKey {
+		state.RealKey[i] = 0
+	}
+	for i := range state.PlaceholderKey {
+		state.PlaceholderKey[i] = 0
+	}
+	for i := range state.ServerSessKey {
+		state.ServerSessKey[i] = 0
+	}
 
 	c2u, u2c := NewQueryExtractorPair(p.config.SessionLogger, p.config.SessionID, use32Bit)
 	defer c2u.Stop()
@@ -628,10 +643,6 @@ func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword 
 	if err != nil {
 		return nil, fmt.Errorf("parse client phase 2: %w", err)
 	}
-
-	// server session key
-	// client session key
-	// session1
 
 	if p2.EClientSessKey == "" || p2.EPassword == "" {
 		return nil, fmt.Errorf("client phase 2 missing AUTH_SESSKEY or AUTH_PASSWORD")
