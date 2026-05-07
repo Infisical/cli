@@ -121,7 +121,7 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		secretsPath, err := cmd.Flags().GetString("path")
+		secretsPaths, err := cmd.Flags().GetStringArray("path")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -136,11 +136,11 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		request := models.GetAllSecretsParameters{
+		request := models.GetMultiPathSecretsParameters{
 			Environment:            environmentName,
 			WorkspaceId:            projectId,
 			TagSlugs:               tagSlugs,
-			SecretsPath:            secretsPath,
+			SecretsPaths:           secretsPaths,
 			IncludeImport:          includeImports,
 			Recursive:              recursive,
 			ExpandSecretReferences: shouldExpandSecrets,
@@ -220,7 +220,7 @@ func init() {
 	runCmd.Flags().Int("watch-interval", 10, "interval in seconds to check for secret changes")
 	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
-	runCmd.Flags().String("path", "/", "get secrets within a folder path")
+	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
 }
 
@@ -307,7 +307,7 @@ func waitForExitCommand(cmd *exec.Cmd) (int, error) {
 	return waitStatus.ExitStatus(), nil
 }
 
-func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInterval int, request models.GetAllSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) {
+func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInterval int, request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) {
 
 	var cmd *exec.Cmd
 	var err error
@@ -439,26 +439,44 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 	}
 }
 
-func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) (models.InjectableEnvironmentResult, error) {
+func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) ([]models.SingleEnvironmentVariable, error) {
+	var allSecrets []models.SingleEnvironmentVariable
 
-	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-		request.InfisicalToken = token.Token
-	} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
-		request.UniversalAuthAccessToken = token.Token
-	}
+	for _, path := range request.SecretsPaths {
+		params := models.GetAllSecretsParameters{
+			Environment:            request.Environment,
+			WorkspaceId:            request.WorkspaceId,
+			TagSlugs:               request.TagSlugs,
+			SecretsPath:            path,
+			IncludeImport:          request.IncludeImport,
+			Recursive:              request.Recursive,
+			ExpandSecretReferences: request.ExpandSecretReferences,
+		}
 
-	secrets, err := util.GetAllEnvironmentVariables(request, projectConfigDir)
+		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+			params.InfisicalToken = token.Token
+		} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
+			params.UniversalAuthAccessToken = token.Token
+		}
 
-	if err != nil {
-		return models.InjectableEnvironmentResult{}, err
+		secrets, err := util.GetAllEnvironmentVariables(params, projectConfigDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch secrets for path %q: %w", path, err)
+		}
+
+		allSecrets = append(allSecrets, secrets...)
 	}
 
 	if secretOverriding {
-		secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
+		allSecrets = util.OverrideSecrets(allSecrets, util.SECRET_TYPE_PERSONAL)
 	} else {
-		secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
+		allSecrets = util.OverrideSecrets(allSecrets, util.SECRET_TYPE_SHARED)
 	}
 
+	return allSecrets, nil
+}
+
+func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.InjectableEnvironmentResult {
 	secretsByKey := getSecretsByKeys(secrets)
 	environmentVariables := make(map[string]string)
 
@@ -487,5 +505,14 @@ func fetchAndFormatSecretsForShell(request models.GetAllSecretsParameters, proje
 		Variables:    env,
 		ETag:         util.GenerateETagFromSecrets(secrets),
 		SecretsCount: len(secretsByKey),
-	}, nil
+	}
+}
+
+func fetchAndFormatSecretsForShell(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) (models.InjectableEnvironmentResult, error) {
+	secrets, err := fetchSecrets(request, projectConfigDir, secretOverriding, token)
+	if err != nil {
+		return models.InjectableEnvironmentResult{}, err
+	}
+
+	return formatSecretsForShell(secrets), nil
 }
