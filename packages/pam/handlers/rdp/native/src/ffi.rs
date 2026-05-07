@@ -59,7 +59,6 @@ fn spawn_session(
     port: u16,
     username: String,
     password: String,
-    domain: Option<String>,
 ) -> anyhow::Result<u64> {
     client_tcp.set_nonblocking(true)?;
     let cancel = CancellationToken::new();
@@ -78,7 +77,6 @@ fn spawn_session(
                     port,
                     username,
                     password,
-                    domain,
                 };
                 run_mitm(client, endpoint, cancel_for_thread).await
             })
@@ -93,8 +91,7 @@ fn spawn_session(
 /// # Safety
 ///
 /// `client_fd` ownership transfers to the bridge on OK, stays with the
-/// caller on error. Strings must be NUL-terminated valid UTF-8. `domain`
-/// may be NULL or empty for non-domain sessions.
+/// caller on error. Strings must be NUL-terminated valid UTF-8.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
@@ -103,7 +100,6 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     target_port: u16,
     username: *const c_char,
     password: *const c_char,
-    domain: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -121,13 +117,11 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
         Some(v) => v,
         None => return RDP_BRIDGE_BAD_ARG,
     };
-    // Empty domain string is treated the same as NULL: no domain.
-    let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
 
     use std::os::unix::io::FromRawFd;
     let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
 
-    match spawn_session(client_tcp, host, target_port, username, password, domain) {
+    match spawn_session(client_tcp, host, target_port, username, password) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
@@ -150,7 +144,6 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     target_port: u16,
     username: *const c_char,
     password: *const c_char,
-    domain: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -168,12 +161,11 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
         Some(v) => v,
         None => return RDP_BRIDGE_BAD_ARG,
     };
-    let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
 
     use std::os::windows::io::{FromRawSocket, RawSocket};
     let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
 
-    match spawn_session(client_tcp, host, target_port, username, password, domain) {
+    match spawn_session(client_tcp, host, target_port, username, password) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK

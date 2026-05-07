@@ -22,18 +22,16 @@ import (
 
 // StartWithConn hands an independent dup of conn's fd to the bridge.
 // For TLS-wrapped or otherwise non-fd-backed conns, use StartWithReadWriter.
-// `domain` is empty for local accounts; set to the AD domain name for
-// domain-joined NTLM CredSSP.
-func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	dupFd, err := dupConnFD(conn)
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: dup client fd: %w", err)
 	}
-	return startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain)
+	return startWithDupedFD(dupFd, targetHost, targetPort, username, password)
 }
 
 // Ownership of dupFd transfers to Rust on success; we close it on failure.
-func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	success := false
 	defer func() {
 		if !success {
@@ -48,13 +46,6 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 	cPass := C.CString(password)
 	defer C.free(unsafe.Pointer(cPass))
 
-	// Empty domain -> NULL pointer; bridge treats both the same way.
-	var cDomain *C.char
-	if domain != "" {
-		cDomain = C.CString(domain)
-		defer C.free(unsafe.Pointer(cDomain))
-	}
-
 	var handle C.uint64_t
 	rc := C.rdp_bridge_start_unix_fd(
 		C.int(dupFd),
@@ -62,7 +53,6 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 		C.uint16_t(targetPort),
 		cUser,
 		cPass,
-		cDomain,
 		&handle,
 	)
 	if rc != C.RDP_BRIDGE_OK {
@@ -85,7 +75,7 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 //
 // Cost: two extra in-process copies and a loopback round-trip per byte.
 // Negligible vs. the TLS + CredSSP work on either side.
-func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: loopback listen: %w", err)
@@ -120,7 +110,7 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 		return nil, fmt.Errorf("rdp bridge: dup accepted fd: %w", err)
 	}
 
-	bridge, err := startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain)
+	bridge, err := startWithDupedFD(dupFd, targetHost, targetPort, username, password)
 	if err != nil {
 		_ = peer.Close()
 		return nil, err
