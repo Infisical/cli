@@ -1,0 +1,37 @@
+[package]
+name = "infisical-rdp-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "IronRDP MITM bridge for Infisical PAM Windows/RDP support"
+publish = false
+
+[lib]
+name = "infisical_rdp_bridge"
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+ironrdp-acceptor = "0.8"
+ironrdp-connector = "0.8"
+ironrdp-tokio = { version = "0.8", features = ["reqwest"] }
+ironrdp-pdu = "0.7"
+ironrdp-tls = { version = "0.2", features = ["rustls"] }
+x509-cert = { version = "0.2", features = ["std"] }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+bytes = "1"
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["ring"] }
+rcgen = "0.13"
+
+anyhow = "1"
+tracing = "0.1"
+
+# Bundle zlib into the .a so cross-compile linkers don't need system -lz
+# per target arch. Pulled in transitively via flate2 (winscard -> sspi).
+libz-sys = { version = "1", features = ["static"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
