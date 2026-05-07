@@ -313,9 +313,14 @@ func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	}
 	path := filepath.Join(dir, filename)
 
+	// authentication level:i:0 -> mstsc connects even if it can't verify the
+	// server's TLS cert. The bridge presents a self-signed cert, so without
+	// this mstsc terminates with "unexpected server authentication certificate".
+	// FreeRDP/Windows App ignore the cert by default; mstsc is the strict one.
 	content := fmt.Sprintf(
 		"full address:s:127.0.0.1:%d\r\n"+
-			"username:s:%s\r\n",
+			"username:s:%s\r\n"+
+			"authentication level:i:0\r\n",
 		listenPort,
 		username,
 	)
