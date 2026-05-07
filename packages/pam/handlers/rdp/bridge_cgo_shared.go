@@ -49,15 +49,17 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 		defer close(drainDone)
 		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.SessionStartedAt)
 	}()
+	// Wait for the drain to finish naturally on the normal-end path so the
+	// tail of the recording isn't dropped: PollEnded fires after the Rust
+	// side closes the events channel (post bridge.Wait return). Cancellation
+	// paths trigger cancelDrain() explicitly below to bail early.
 	defer func() {
-		cancelDrain()
-		// Wait briefly for the drain loop to exit so a cancelled session
-		// can't race the Bridge.Close below. PollEvent's timeout caps how
-		// long this can take.
 		select {
 		case <-drainDone:
 		case <-time.After(2 * pollTimeout):
 		}
+		// Always release the drain context (no-op if already cancelled).
+		cancelDrain()
 	}()
 
 	waitErr := make(chan error, 1)
@@ -66,10 +68,12 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 	select {
 	case err := <-waitErr:
 		if err != nil && !errors.Is(err, ErrInvalidHandle) {
+			cancelDrain()
 			return fmt.Errorf("rdp proxy: session: %w", err)
 		}
 		return nil
 	case <-ctx.Done():
+		cancelDrain()
 		_ = bridge.Cancel()
 		<-waitErr
 		return ctx.Err()

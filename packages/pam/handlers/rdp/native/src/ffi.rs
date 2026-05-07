@@ -160,7 +160,7 @@ struct BridgeEntry {
     // Receiver side of the bridge's event channel. Polled by Go via
     // rdp_bridge_poll_event. Wrapped in Option so the poll loop can take it
     // out for the duration of the await without holding the HANDLES lock.
-    events_rx: Mutex<Option<mpsc::UnboundedReceiver<SessionEvent>>>,
+    events_rx: Mutex<Option<mpsc::Receiver<SessionEvent>>>,
     // Set once the events channel has reported closed; subsequent polls
     // short-circuit to RDP_POLL_ENDED.
     events_ended: Mutex<bool>,
@@ -395,7 +395,7 @@ pub unsafe extern "C" fn rdp_bridge_poll_event(
     }
 
     // Avoid holding the HANDLES lock across the await.
-    let take_result: Result<Option<mpsc::UnboundedReceiver<SessionEvent>>, i32> = {
+    let take_result: Result<Option<mpsc::Receiver<SessionEvent>>, i32> = {
         let handles = HANDLES.lock().expect("HANDLES poisoned");
         match handles.get(&handle) {
             None => Err(RDP_POLL_INVALID_HANDLE),

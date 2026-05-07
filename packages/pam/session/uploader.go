@@ -378,11 +378,18 @@ func (su *SessionUploader) RegisterSession(sessionID string) {
 	}
 
 	su.activeSessionsMu.Lock()
-	su.activeSessions[sessionID] = &sessionUploadState{
-		fileOffset:       startOffset,
-		filename:         fileInfo.Filename,
-		startedAt:        time.Now().Add(-time.Duration(lastEndElapsedMs) * time.Millisecond),
-		lastEndElapsedMs: lastEndElapsedMs,
+	// Preserve the original anchor across RDP reconnects within the same PAM
+	// session: HandlePAMProxy calls RegisterSession on every gateway connection,
+	// and overwriting the entry would reset startedAt to ~now, making elapsedNs
+	// rewind on reconnect. The persisted .offset only catches up after a flush,
+	// so it can't be the source of truth here.
+	if _, exists := su.activeSessions[sessionID]; !exists {
+		su.activeSessions[sessionID] = &sessionUploadState{
+			fileOffset:       startOffset,
+			filename:         fileInfo.Filename,
+			startedAt:        time.Now().Add(-time.Duration(lastEndElapsedMs) * time.Millisecond),
+			lastEndElapsedMs: lastEndElapsedMs,
+		}
 	}
 	su.activeSessionsMu.Unlock()
 
@@ -604,10 +611,14 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
-	if fileInfo.ResourceType == ResourceTypeSSH {
+	// SSH and Windows both write TerminalEvent records (SSH uses input/output/
+	// resize/error; Windows uses ChannelType=rdp). Bulk-uploading either via
+	// the Database fallback would silently zero-fill input/output, dropping
+	// the entire recording.
+	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows {
 		terminalEvents, err := ReadEncryptedTerminalEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
-			return fmt.Errorf("failed to read SSH session file: %w", err)
+			return fmt.Errorf("failed to read terminal session file: %w", err)
 		}
 
 		log.Debug().

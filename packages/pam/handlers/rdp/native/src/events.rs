@@ -38,9 +38,15 @@ pub fn elapsed_ns_since(started_at: Instant) -> u64 {
     started_at.elapsed().as_nanos() as u64
 }
 
-pub type EventSender = mpsc::UnboundedSender<SessionEvent>;
-pub type EventReceiver = mpsc::UnboundedReceiver<SessionEvent>;
+pub type EventSender = mpsc::Sender<SessionEvent>;
+pub type EventReceiver = mpsc::Receiver<SessionEvent>;
+
+// Bounded so a busy-disk gateway can't OOM under heavy graphics: producer
+// (tap_*) uses try_send and drops on full rather than back-pressuring the
+// bridge byte stream. Sized to ~few seconds of 60 fps RDP frames at typical
+// PDU rates; lossy recording > unbounded memory.
+pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 pub fn channel() -> (EventSender, EventReceiver) {
-    mpsc::unbounded_channel()
+    mpsc::channel(EVENT_CHANNEL_CAPACITY)
 }

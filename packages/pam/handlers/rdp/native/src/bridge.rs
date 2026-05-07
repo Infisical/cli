@@ -28,6 +28,7 @@ use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{FramedWrite, NetworkClient};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -176,7 +177,17 @@ where
         Ok(())
     };
 
-    match tokio::try_join!(c2t, t2c) {
+    // select! (not try_join!) so the first branch to EOF cancels the other:
+    // try_join! waits for both to complete on Ok, but on a normal client
+    // disconnect the t2c read_pdu blocks indefinitely on a quiet target.
+    // Dropping the cancelled future releases its read+write halves; with
+    // the opposite branch already done, the underlying stream's Drop closes
+    // the socket and the peer observes the half-close.
+    let result = tokio::select! {
+        r = c2t => r,
+        r = t2c => r,
+    };
+    match result {
         Ok(_) => {
             info!("session ended cleanly");
             Ok(())
@@ -416,18 +427,31 @@ fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &
             // uncommon in normal sessions and not needed for replay V1.
             _ => continue,
         };
-        // send error means the receiver was dropped (poll loop exited).
-        // The bridge keeps forwarding bytes regardless.
-        let _ = tx.send(session_event);
+        // try_send: never block the bridge byte stream on a slow consumer.
+        // Errors mean either Full (drop the input event; rare under typical
+        // sub-1k events/sec input rates) or Closed (poll loop exited; bridge
+        // keeps forwarding bytes regardless).
+        if let Err(e) = tx.try_send(session_event) {
+            if matches!(e, mpsc::error::TrySendError::Full(_)) {
+                warn!("session event channel full, dropping input event");
+            }
+        }
     }
 }
 
 fn tap_target_to_client(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
-    let _ = tx.send(SessionEvent::TargetFrame {
+    // try_send: see tap_client_to_target. Heavy-graphics RDP can produce
+    // hundreds of TargetFrames/sec; if the consumer (Go fsync-bound logger)
+    // can't keep up, drop frames rather than queueing unbounded.
+    if let Err(e) = tx.try_send(SessionEvent::TargetFrame {
         action,
         payload: frame.to_vec(),
         elapsed_ns: elapsed_ns_since(started_at),
-    });
+    }) {
+        if matches!(e, mpsc::error::TrySendError::Full(_)) {
+            warn!("session event channel full, dropping target frame");
+        }
+    }
 }
 
 fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
