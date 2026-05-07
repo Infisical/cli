@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -43,6 +44,12 @@ func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projec
 			return
 		}
 		util.HandleError(err, "Failed to access PAM account")
+		return
+	}
+
+	// Verify this is a Windows resource
+	if pamResponse.ResourceType != session.ResourceTypeWindows {
+		util.HandleError(fmt.Errorf("account is not a Windows resource, got: %s", pamResponse.ResourceType), "Invalid resource type")
 		return
 	}
 

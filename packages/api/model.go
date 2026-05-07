@@ -803,6 +803,19 @@ type EnrollGatewayResponse struct {
 	GatewayID   string `json:"gatewayId"`
 }
 
+type AwsAuthLoginGatewayRequest struct {
+	Method            string `json:"method"`
+	GatewayID         string `json:"gatewayId"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod"`
+	IamRequestBody    string `json:"iamRequestBody"`
+	IamRequestHeaders string `json:"iamRequestHeaders"`
+}
+
+type AwsAuthLoginGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
 type RegisterGatewayResponse struct {
 	GatewayID string `json:"gatewayId"`
 	RelayHost string `json:"relayHost"`
@@ -924,6 +937,7 @@ type PAMSessionCredentials struct {
 	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
 	ServiceAccountName    string `json:"serviceAccountName,omitempty"`
 	Namespace             string `json:"namespace,omitempty"`
+	Domain                string `json:"domain,omitempty"`
 }
 
 type MFASessionStatus string

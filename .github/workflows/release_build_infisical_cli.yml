@@ -36,7 +36,11 @@ jobs:
   # parallel instead of serializing on ubuntu creating the draft.
   # Skipped on dry-run since --snapshot doesn't touch GitHub at all.
   create-release-draft:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    if: |
+      always() &&
+      (needs.validate-tag-branch.result == 'success' || needs.validate-tag-branch.result == 'skipped') &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
     needs:
       - validate-tag-branch
       - cli-tests
@@ -168,12 +172,22 @@ jobs:
           sudo apt-get install -y libssl1.0-dev
       - name: Install cross-compile toolchains for RDP tier
         run: |
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            gcc-i686-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            gcc-arm-linux-gnueabihf \
-            gcc-mingw-w64-x86-64
+          set -euo pipefail
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          MUSL_CROSS_TAG=20260430
+          sudo mkdir -p /opt/musl-cross
+          for triple in \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            i686-unknown-linux-musl \
+            arm-unknown-linux-musleabi \
+            armv7-unknown-linux-musleabihf; do
+            curl --retry 5 --retry-delay 10 --retry-all-errors \
+                 --connect-timeout 30 --max-time 240 \
+                 -fsSL "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_CROSS_TAG}/${triple}.tar.xz" \
+              | sudo tar -xJ -C /opt/musl-cross
+            echo "/opt/musl-cross/${triple}/bin" >> "$GITHUB_PATH"
+          done
       - name: Download RDP bridge static libs
         uses: actions/download-artifact@v4
         with:
@@ -183,36 +197,24 @@ jobs:
         run: |
           set -euo pipefail
           for triple in \
-            x86_64-unknown-linux-gnu \
-            aarch64-unknown-linux-gnu \
-            i686-unknown-linux-gnu \
-            arm-unknown-linux-gnueabi \
-            armv7-unknown-linux-gnueabihf \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            i686-unknown-linux-musl \
+            arm-unknown-linux-musleabi \
+            armv7-unknown-linux-musleabihf \
             x86_64-pc-windows-gnu; do
             target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
             mkdir -p "$target_dir"
             cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
           done
-      - name: GoReleaser (dry-run snapshot)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+      - name: GoReleaser (build, no publish)
         uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          args: release --clean --snapshot --skip=publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
-          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
-          FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
-          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-      - name: GoReleaser (release)
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        uses: goreleaser/goreleaser-action@v4
-        with:
-          distribution: goreleaser-pro
-          version: v1.26.2-pro
-          args: release --clean
+          args: >-
+            release --clean --skip=publish,announce
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
@@ -226,6 +228,62 @@ jobs:
           name: goreleaser-dist-linux
           path: dist/
           retention-days: 7
+      - name: Smoke test linux binary across supported distros
+        run: |
+          set -uo pipefail
+          fail=0
+          echo "::group::Static-link assertion (file)"
+          for d in dist/linux-*-rdp_linux_*; do
+            bin="$d/infisical"
+            [ -f "$bin" ] || continue
+            info=$(file "$bin")
+            echo "$info"
+            if ! echo "$info" | grep -q "statically linked"; then
+              echo "::error file=$bin::not statically linked"
+              fail=1
+            fi
+          done
+          echo "::endgroup::"
+
+          BIN=dist/linux-amd64-rdp_linux_amd64_v1/infisical
+          if [ ! -f "$BIN" ]; then
+            echo "::error::expected $BIN missing from dist/"
+            exit 1
+          fi
+          echo "::group::Smoke test linux-amd64 binary across distro floor"
+          for img in \
+              ubuntu:22.04 \
+              ubuntu:20.04 \
+              rockylinux:9 \
+              rockylinux:8 \
+              amazonlinux:2023 \
+              amazonlinux:2 \
+              alpine:3.19 \
+              gcr.io/distroless/static-debian12; do
+            echo "--- $img ---"
+            if ! docker run --rm --platform linux/amd64 \
+                    -v "$PWD/$BIN":/infisical:ro \
+                    "$img" /infisical --version; then
+              echo "::error::binary failed to run on $img"
+              fail=1
+            fi
+          done
+          echo "::endgroup::"
+
+          [ "$fail" -eq 0 ] || exit 1
+      - name: GoReleaser (publish)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --skip=build,validate,before
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - uses: actions/setup-python@v4
         with:
           python-version: "3.12"

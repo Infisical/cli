@@ -16,8 +16,11 @@ type RDPProxyConfig struct {
 	TargetPort     uint16
 	InjectUsername string
 	InjectPassword string
-	SessionID      string
-	SessionLogger  session.SessionLogger
+	// Empty for local accounts; AD domain name (e.g. "CORP.EXAMPLE.COM") for
+	// domain-joined NTLM CredSSP. Backend session credentials populate this.
+	InjectDomain  string
+	SessionID     string
+	SessionLogger session.SessionLogger
 	// Session-anchored origin for elapsedNs. The Rust bridge restarts its
 	// own clock per RDP client connection; we rewrite each event's elapsedNs
 	// against this anchor so timestamps stay monotonic across reconnects.

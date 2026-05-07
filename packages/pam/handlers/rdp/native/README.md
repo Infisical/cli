@@ -33,12 +33,12 @@ For Linux targets from any host:
 
 ```bash
 cargo install cross --locked --version 0.2.5
-cross build --release --target x86_64-unknown-linux-gnu
+cross build --release --target x86_64-unknown-linux-musl
 ```
 
 Supported targets:
-- `x86_64-unknown-linux-gnu`
-- `aarch64-unknown-linux-gnu`
+- `x86_64-unknown-linux-musl`
+- `aarch64-unknown-linux-musl`
 - `x86_64-apple-darwin`
 - `aarch64-apple-darwin`
 - `x86_64-pc-windows-gnu`

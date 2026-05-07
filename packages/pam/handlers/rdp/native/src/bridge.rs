@@ -50,6 +50,8 @@ pub struct TargetEndpoint {
     pub port: u16,
     pub username: String,
     pub password: String,
+    /// Set for AD domain accounts; flows into NTLM CredSSP via connector config.
+    pub domain: Option<String>,
 }
 
 pub async fn run_mitm(
@@ -578,7 +580,11 @@ async fn run_connector_half(target: TargetEndpoint) -> Result<(ErasedStream, byt
     let client_addr = target_tcp.local_addr().context("connector: local_addr")?;
 
     let mut target_framed = ironrdp_tokio::TokioFramed::new(target_tcp);
-    let config = connector_config(target.username.clone(), target.password.clone());
+    let config = connector_config(
+        target.username.clone(),
+        target.password.clone(),
+        target.domain.clone(),
+    );
     let mut connector = ClientConnector::new(config, client_addr);
 
     // Request the same protocol set native clients send so the target's
