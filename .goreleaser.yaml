@@ -9,13 +9,14 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
-      - -tags=rdp
+      - -tags=rdp,osusergo,netgo
     env:
       - CGO_ENABLED=1
-      - CC=gcc
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-linux-gnu/release'
+      - CC=x86_64-unknown-linux-musl-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-unknown-linux-musl/release'
     goos:
       - linux
     goarch:
@@ -26,13 +27,14 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
-      - -tags=rdp
+      - -tags=rdp,osusergo,netgo
     env:
       - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-unknown-linux-gnu/release'
+      - CC=aarch64-unknown-linux-musl-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-unknown-linux-musl/release'
     goos:
       - linux
     goarch:
@@ -43,6 +45,7 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
       - -tags=rdp
@@ -61,13 +64,14 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
-      - -tags=rdp
+      - -tags=rdp,osusergo,netgo
     env:
       - CGO_ENABLED=1
-      - CC=i686-linux-gnu-gcc
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/i686-unknown-linux-gnu/release'
+      - CC=i686-unknown-linux-musl-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/i686-unknown-linux-musl/release'
     goos:
       - linux
     goarch:
@@ -78,13 +82,14 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
-      - -tags=rdp
+      - -tags=rdp,osusergo,netgo
     env:
       - CGO_ENABLED=1
-      - CC=arm-linux-gnueabi-gcc
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/arm-unknown-linux-gnueabi/release'
+      - CC=arm-unknown-linux-musleabi-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/arm-unknown-linux-musleabi/release'
     goos:
       - linux
     goarch:
@@ -97,13 +102,14 @@ builds:
     ldflags:
       - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
       - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+      - -extldflags "-static"
     flags:
       - -trimpath
-      - -tags=rdp
+      - -tags=rdp,osusergo,netgo
     env:
       - CGO_ENABLED=1
-      - CC=arm-linux-gnueabihf-gcc
-      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/armv7-unknown-linux-gnueabihf/release'
+      - CC=armv7-unknown-linux-musleabihf-gcc
+      - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/armv7-unknown-linux-musleabihf/release'
     goos:
       - linux
     goarch:

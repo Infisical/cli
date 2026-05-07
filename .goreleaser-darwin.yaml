@@ -14,6 +14,7 @@ builds:
       - -tags=rdp
     env:
       - CGO_ENABLED=1
+      - MACOSX_DEPLOYMENT_TARGET=11.0
       - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/x86_64-apple-darwin/release'
     goos:
       - darwin
@@ -30,6 +31,7 @@ builds:
       - -tags=rdp
     env:
       - CGO_ENABLED=1
+      - MACOSX_DEPLOYMENT_TARGET=11.0
       - 'CGO_LDFLAGS=-L packages/pam/handlers/rdp/native/target/aarch64-apple-darwin/release'
     goos:
       - darwin
