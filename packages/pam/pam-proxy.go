@@ -38,6 +38,7 @@ type GatewayPAMConfig struct {
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
 	GetMongoProxy      MongoProxyGetter // Session-level MongoDB proxy sharing
+	OnActivity         func()           // Called on data flow
 }
 
 type PAMCapabilitiesResponse struct {
@@ -104,17 +105,38 @@ func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *Gatew
 	// Kill the active proxy connection if it exists in the registry
 	if cancelled := cancelSession(pamConfig.SessionId); cancelled {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("Active proxy session cancelled via registry")
+		if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
+			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
+		}
 	} else {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("No active proxy session found in registry (may have already ended)")
-	}
-
-	if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
-		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
 	}
 
 	conn.Close()
 
 	return nil
+}
+
+// activityConn wraps a net.Conn and calls onActivity on every successful read or write
+type activityConn struct {
+	net.Conn
+	onActivity func()
+}
+
+func (c *activityConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.onActivity()
+	}
+	return n, err
+}
+
+func (c *activityConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.onActivity()
+	}
+	return n, err
 }
 
 // compilePolicyPatterns compiles regex pattern strings, logging warnings for any that fail.
@@ -161,10 +183,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 					Time("expiryTime", pamConfig.ExpiryTime).
 					Msg("PAM session expired, closing connection")
 
-				if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "expiry"); err != nil {
-					log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session on expiry")
-				}
-
 				conn.Close()
 			case <-ctx.Done():
 				// Context cancelled, exit gracefully
@@ -176,10 +194,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 				Str("resourceType", pamConfig.ResourceType).
 				Time("expiryTime", pamConfig.ExpiryTime).
 				Msg("PAM session already expired, closing connection immediately")
-
-			if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "already_expired"); err != nil {
-				log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup already expired PAM session")
-			}
 
 			conn.Close()
 		}
@@ -242,6 +256,12 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 	}
 
+	// Wrap the connection so every read/write resets the idle reaper timer
+	var handlerConn net.Conn = conn
+	if pamConfig.OnActivity != nil {
+		handlerConn = &activityConn{Conn: conn, onActivity: pamConfig.OnActivity}
+	}
+
 	switch pamConfig.ResourceType {
 	case session.ResourceTypePostgres:
 		proxyConfig := handlers.PostgresProxyConfig{
@@ -260,7 +280,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", proxyConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting PostgreSQL PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeMysql:
 		mysqlConfig := mysql.MysqlProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
@@ -279,7 +299,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mysqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MySQL PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeMssql:
 		mssqlConfig := mssql.MssqlProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
@@ -298,7 +318,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mssqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MSSQL PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeRedis:
 		redisConfig := redis.RedisProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
@@ -316,7 +336,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", redisConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting Redis PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeSSH:
 		// Compile command blocking patterns from policy rules
 		var blockedCommandPatterns []*regexp.Regexp
@@ -334,6 +354,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:              pamConfig.SessionId,
 			SessionLogger:          sessionLogger,
 			BlockedCommandPatterns: blockedCommandPatterns,
+			OnActivity:             pamConfig.OnActivity,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
 		log.Info().
@@ -387,7 +408,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", kubernetesConfig.TargetApiServer).
 			Str("authMethod", credentials.AuthMethod).
 			Msg("Starting Kubernetes PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeMongodb:
 		mongoConfig := mongodb.MongoDBProxyConfig{
 			Host:           credentials.ConnectionString,
@@ -412,7 +433,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			return fmt.Errorf("MongoDB proxy init: %w", err)
 		}
 
-		return proxy.HandleConnection(ctx, conn, sessionLogger)
+		return proxy.HandleConnection(ctx, handlerConn, sessionLogger)
 	case session.ResourceTypeWindows:
 		if credentials.Port <= 0 || credentials.Port > 65535 {
 			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
@@ -431,7 +452,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
 			Msg("Starting RDP PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
 	}
