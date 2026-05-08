@@ -183,13 +183,18 @@ func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc
 }
 
 // DeregisterPAMSession removes a specific connection from the session registry.
+// Returns true if this was the last connection for the session.
 // The MongoDB proxy (if any) is NOT closed here — it persists across connections
 // so that subsequent client connections (e.g. mongosh retries) find a warm topology.
 // The proxy is cleaned up on session cancellation or gateway shutdown.
-func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) {
+func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) bool {
 	g.pamSessionsMu.Lock()
 	defer g.pamSessionsMu.Unlock()
-	entries := g.pamSessions[sessionID]
+
+	entries, exists := g.pamSessions[sessionID]
+	if !exists {
+		return false
+	}
 	for i, e := range entries {
 		if e.conn == conn {
 			g.pamSessions[sessionID] = append(entries[:i], entries[i+1:]...)
@@ -198,7 +203,9 @@ func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) {
 	}
 	if len(g.pamSessions[sessionID]) == 0 {
 		delete(g.pamSessions, sessionID)
+		return true
 	}
+	return false
 }
 
 // CancelPAMSession kills all active connections for a PAM session
@@ -313,6 +320,9 @@ func (g *Gateway) reapIdleSessions() {
 	for _, sessionID := range stale {
 		log.Info().Str("sessionId", sessionID).Dur("idleTimeout", pamIdleTimeout).Msg("Reaping idle PAM session")
 		g.CancelPAMSession(sessionID)
+		if err := g.pamSessionUploader.CleanupPAMSession(sessionID, "idle_timeout"); err != nil {
+			log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to cleanup reaped PAM session")
+		}
 	}
 }
 
@@ -825,13 +835,19 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	} else if forwardConfig.Mode == ForwardModePAM {
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
 		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
-		defer g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
 		forwardConfig.PAMConfig.OnActivity = touchSession
 		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
+			}
+		}
+		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn {
+			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
+				forwardConfig.PAMConfig.SessionId, "connection_closed",
+			); err != nil {
+				log.Error().Err(err).Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Failed to cleanup PAM session")
 			}
 		}
 		return

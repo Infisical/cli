@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -162,17 +161,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
 	}
 
-	// Cleanup must run exactly once regardless of how the session ends
-	var cleanupOnce sync.Once
-	cleanupSession := func(reason string) {
-		cleanupOnce.Do(func() {
-			if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, reason); err != nil {
-				log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Str("reason", reason).Msg("Failed to cleanup PAM session")
-			}
-		})
-	}
-	defer cleanupSession("connection_closed")
-
 	// Start a goroutine to monitor session expiry and close connection when exceeded
 	go func() {
 		timeUntilExpiry := time.Until(pamConfig.ExpiryTime)
@@ -188,7 +176,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 					Time("expiryTime", pamConfig.ExpiryTime).
 					Msg("PAM session expired, closing connection")
 
-				cleanupSession("expiry")
 				conn.Close()
 			case <-ctx.Done():
 				// Context cancelled, exit gracefully
@@ -201,7 +188,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 				Time("expiryTime", pamConfig.ExpiryTime).
 				Msg("PAM session already expired, closing connection immediately")
 
-			cleanupSession("already_expired")
 			conn.Close()
 		}
 	}()
