@@ -843,6 +843,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
 			}
 		}
+		sessionCancel()
 		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn {
 			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
 				forwardConfig.PAMConfig.SessionId, "connection_closed",
