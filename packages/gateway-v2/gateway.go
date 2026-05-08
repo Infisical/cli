@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -86,8 +87,9 @@ type GatewayConfig struct {
 }
 
 type pamSessionEntry struct {
-	cancel context.CancelFunc
-	conn   *tls.Conn
+	cancel       context.CancelFunc
+	conn         *tls.Conn
+	lastActivity atomic.Int64
 }
 
 type Gateway struct {
@@ -166,20 +168,33 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 }
 
 // RegisterPAMSession registers an active PAM proxy connection for cancellation support
-func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) {
+// Returns a function that handlers should call when data flows through the connection
+func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) func() {
+	entry := &pamSessionEntry{cancel: cancel, conn: conn}
+	entry.lastActivity.Store(time.Now().Unix())
+
 	g.pamSessionsMu.Lock()
 	defer g.pamSessionsMu.Unlock()
-	g.pamSessions[sessionID] = append(g.pamSessions[sessionID], &pamSessionEntry{cancel: cancel, conn: conn})
+	g.pamSessions[sessionID] = append(g.pamSessions[sessionID], entry)
+
+	return func() {
+		entry.lastActivity.Store(time.Now().Unix())
+	}
 }
 
 // DeregisterPAMSession removes a specific connection from the session registry.
+// Returns true if this was the last connection for the session.
 // The MongoDB proxy (if any) is NOT closed here — it persists across connections
 // so that subsequent client connections (e.g. mongosh retries) find a warm topology.
 // The proxy is cleaned up on session cancellation or gateway shutdown.
-func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) {
+func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) bool {
 	g.pamSessionsMu.Lock()
 	defer g.pamSessionsMu.Unlock()
-	entries := g.pamSessions[sessionID]
+
+	entries, exists := g.pamSessions[sessionID]
+	if !exists {
+		return false
+	}
 	for i, e := range entries {
 		if e.conn == conn {
 			g.pamSessions[sessionID] = append(entries[:i], entries[i+1:]...)
@@ -188,7 +203,9 @@ func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) {
 	}
 	if len(g.pamSessions[sessionID]) == 0 {
 		delete(g.pamSessions, sessionID)
+		return true
 	}
+	return false
 }
 
 // CancelPAMSession kills all active connections for a PAM session
@@ -264,6 +281,51 @@ func (g *Gateway) closeMongoProxy(sessionID string) {
 	}
 }
 
+const pamIdleTimeout = 30 * time.Minute
+
+// startIdleReaper periodically scans the PAM session registry and cancels
+// sessions whose connections have had no data flow for pamIdleTimeout
+func (g *Gateway) startIdleReaper(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g.reapIdleSessions()
+		}
+	}
+}
+
+func (g *Gateway) reapIdleSessions() {
+	cutoff := time.Now().Add(-pamIdleTimeout).Unix()
+
+	g.pamSessionsMu.Lock()
+	var stale []string
+	for sessionID, entries := range g.pamSessions {
+		allIdle := true
+		for _, e := range entries {
+			if e.lastActivity.Load() > cutoff {
+				allIdle = false
+				break
+			}
+		}
+		if allIdle {
+			stale = append(stale, sessionID)
+		}
+	}
+	g.pamSessionsMu.Unlock()
+
+	for _, sessionID := range stale {
+		log.Info().Str("sessionId", sessionID).Dur("idleTimeout", pamIdleTimeout).Msg("Reaping idle PAM session")
+		g.CancelPAMSession(sessionID)
+		if err := g.pamSessionUploader.CleanupPAMSession(sessionID, "idle_timeout"); err != nil {
+			log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to cleanup reaped PAM session")
+		}
+	}
+}
+
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
 		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
@@ -328,6 +390,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Start session uploader goroutine for PAM
 	g.pamSessionUploader.Start()
+
+	go g.startIdleReaper(ctx)
 
 	go func() {
 		for {
@@ -487,6 +551,25 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 		<-g.ctx.Done()
 		log.Info().Msg("Context cancelled, closing relay connection...")
 		client.Close()
+	}()
+
+	// Keepalive on the relay SSH connection. If the relay drops silently,
+	// this closes the client so the reconnect loop in connectWithRetry kicks in
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := util.SSHKeepalive(client, 15*time.Second); err != nil {
+					log.Warn().Err(err).Msg("Relay SSH keepalive failed, closing connection")
+					client.Close()
+					return
+				}
+			case <-g.ctx.Done():
+				return
+			}
+		}
 	}()
 
 	// Process incoming channels with context cancellation support
@@ -751,13 +834,21 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	} else if forwardConfig.Mode == ForwardModePAM {
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
-		g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
-		defer g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
+		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		forwardConfig.PAMConfig.OnActivity = touchSession
 		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
+			}
+		}
+		sessionCancel()
+		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn {
+			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
+				forwardConfig.PAMConfig.SessionId, "connection_closed",
+			); err != nil {
+				log.Error().Err(err).Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Failed to cleanup PAM session")
 			}
 		}
 		return
