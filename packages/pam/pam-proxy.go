@@ -105,12 +105,11 @@ func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *Gatew
 	// Kill the active proxy connection if it exists in the registry
 	if cancelled := cancelSession(pamConfig.SessionId); cancelled {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("Active proxy session cancelled via registry")
+		if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
+			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
+		}
 	} else {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("No active proxy session found in registry (may have already ended)")
-	}
-
-	if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
-		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
 	}
 
 	conn.Close()
