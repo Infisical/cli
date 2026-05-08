@@ -1,6 +1,4 @@
-# Append to the release draft created by the ubuntu goreleaser job.
 release:
-  replace_existing_draft: false
   mode: append
 
 builds:

@@ -31,37 +31,6 @@ jobs:
   build-rdp-bridge:
     uses: ./.github/workflows/build-rdp-bridge.yml
 
-  # Create the GitHub release draft up front so both goreleaser
-  # (ubuntu) and goreleaser-darwin (macos) can append to it in
-  # parallel instead of serializing on ubuntu creating the draft.
-  # Skipped on dry-run since --snapshot doesn't touch GitHub at all.
-  create-release-draft:
-    if: |
-      always() &&
-      (needs.validate-tag-branch.result == 'success' || needs.validate-tag-branch.result == 'skipped') &&
-      needs.cli-tests.result == 'success' &&
-      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
-    needs:
-      - validate-tag-branch
-      - cli-tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Create GitHub release draft (idempotent)
-        run: |
-          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            echo "Release for ${{ github.ref_name }} already exists, skipping creation"
-          else
-            gh release create "${{ github.ref_name }}" \
-              --draft \
-              --title "${{ github.ref_name }}" \
-              --generate-notes
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
-
   # cli-integration-tests:
   #   name: Run tests before deployment
   #   uses: ./.github/workflows/run-cli-tests.yml
@@ -136,12 +105,10 @@ jobs:
       - validate-tag-branch
       - cli-tests
       - build-rdp-bridge
-      - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
       needs.build-rdp-bridge.result == 'success' &&
-      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
@@ -218,14 +185,13 @@ jobs:
             mkdir -p "$target_dir"
             cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
           done
-      - name: GoReleaser (build, no publish)
+      - name: GoReleaser (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          args: >-
-            release --clean --skip=publish,announce
-            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--snapshot' || '' }}
+          args: release --clean --snapshot --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
@@ -240,6 +206,7 @@ jobs:
           path: dist/
           retention-days: 7
       - name: Smoke test linux binary across supported distros
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: |
           set -uo pipefail
           fail=0
@@ -282,13 +249,13 @@ jobs:
           echo "::endgroup::"
 
           [ "$fail" -eq 0 ] || exit 1
-      - name: GoReleaser (publish)
+      - name: GoReleaser (release)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          args: release --skip=build,validate,before
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
@@ -344,12 +311,10 @@ jobs:
       - validate-tag-branch
       - cli-tests
       - build-rdp-bridge
-      - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
       needs.build-rdp-bridge.result == 'success' &&
-      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v4
@@ -426,11 +391,9 @@ jobs:
     needs:
       - validate-tag-branch
       - cli-tests
-      - create-release-draft
     if: |
       always() &&
       needs.cli-tests.result == 'success' &&
-      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
