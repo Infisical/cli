@@ -773,6 +773,10 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
+			if p.config.OnActivity != nil {
+				p.config.OnActivity()
+			}
+
 			chState.mutex.Lock()
 			isBinary := chState.isBinarySession
 			sftpParser := chState.sftpParser
