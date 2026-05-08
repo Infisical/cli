@@ -2,6 +2,12 @@ name: Build and release CLI
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Do a dry-run (no artifacts are published and no release is created)
+        type: boolean
+        default: true
 
   push:
     # run only against tags
@@ -14,10 +20,47 @@ permissions:
 
 jobs:
   validate-tag-branch:
+    # Tag validation only makes sense on actual tag push. Skipped on
+    # workflow_dispatch runs (dry-run or manual real release from any branch).
+    if: github.event_name == 'push'
     uses: ./.github/workflows/pre-tag-validation.yml
   cli-tests:
     uses: ./.github/workflows/run-cli-e2e-tests.yml
     secrets: inherit
+
+  build-rdp-bridge:
+    uses: ./.github/workflows/build-rdp-bridge.yml
+
+  # Create the GitHub release draft up front so both goreleaser
+  # (ubuntu) and goreleaser-darwin (macos) can append to it in
+  # parallel instead of serializing on ubuntu creating the draft.
+  # Skipped on dry-run since --snapshot doesn't touch GitHub at all.
+  create-release-draft:
+    if: |
+      always() &&
+      (needs.validate-tag-branch.result == 'success' || needs.validate-tag-branch.result == 'skipped') &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
+    needs:
+      - validate-tag-branch
+      - cli-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create GitHub release draft (idempotent)
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release for ${{ github.ref_name }} already exists, skipping creation"
+          else
+            gh release create "${{ github.ref_name }}" \
+              --draft \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
 
   # cli-integration-tests:
   #   name: Run tests before deployment
@@ -33,12 +76,20 @@ jobs:
   #     CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE: ${{ secrets.CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE }}
 
   npm-release:
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
+      needs.goreleaser.result == 'success' &&
+      needs.goreleaser-darwin.result == 'success' &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     runs-on: ubuntu-latest
     env:
       working-directory: ./npm
     needs:
       # - cli-integration-tests
       - goreleaser
+      - goreleaser-darwin
       - validate-tag-branch
       - cli-tests
     steps:
@@ -84,6 +135,14 @@ jobs:
     needs:
       - validate-tag-branch
       - cli-tests
+      - build-rdp-bridge
+      - create-release-draft
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
+      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
         with:
@@ -111,15 +170,125 @@ jobs:
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
           sudo apt update
           sudo apt-get install -y libssl1.0-dev
-      - name: OSXCross for CGO Support
+      - name: Install cross-compile toolchains for RDP tier
         run: |
-          mkdir ../../osxcross
-          git clone https://github.com/plentico/osxcross-target.git ../../osxcross/target
-      - uses: goreleaser/goreleaser-action@v4
+          set -euo pipefail
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          MUSL_CROSS_TAG=20260430
+          sudo mkdir -p /opt/musl-cross
+          for triple in \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            i686-unknown-linux-musl \
+            arm-unknown-linux-musleabi \
+            armv7-unknown-linux-musleabihf; do
+            case "$triple" in
+              x86_64-unknown-linux-musl)       sha=2495cfe18fc1f406d5cab93d902176af75a78f0ae93137f3e8b2df7708ec32fa ;;
+              aarch64-unknown-linux-musl)      sha=9303385fc29f8197004f641f96382196d56e4ec6dd975bff8ddd66641378628d ;;
+              i686-unknown-linux-musl)         sha=94dad4ea891b8ac701f9b590dc6db37461c3606ccc20f1c3dfe3901b1e248729 ;;
+              arm-unknown-linux-musleabi)      sha=8799be632cd66469a269f5aefbdb0266bf240b37194fc9cc3a34351c932bae2b ;;
+              armv7-unknown-linux-musleabihf)  sha=1b7d3fb5fbbe94357c094116e6fbf441e5074fc9c512415d8d9c758309705f1d ;;
+            esac
+            tarball="/tmp/${triple}.tar.xz"
+            curl --retry 5 --retry-delay 10 --retry-all-errors \
+                 --connect-timeout 30 --max-time 240 \
+                 -fsSL "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_CROSS_TAG}/${triple}.tar.xz" \
+                 -o "$tarball"
+            echo "${sha}  ${tarball}" | sha256sum -c -
+            sudo tar -xJ -f "$tarball" -C /opt/musl-cross
+            rm -f "$tarball"
+            echo "/opt/musl-cross/${triple}/bin" >> "$GITHUB_PATH"
+          done
+      - name: Download RDP bridge static libs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdp-bridge-*
+          path: /tmp/rdp-bridge-artifacts/
+      - name: Stage RDP bridge static libs into cargo target dirs
+        run: |
+          set -euo pipefail
+          for triple in \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            i686-unknown-linux-musl \
+            arm-unknown-linux-musleabi \
+            armv7-unknown-linux-musleabihf \
+            x86_64-pc-windows-gnu; do
+            target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
+            mkdir -p "$target_dir"
+            cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
+          done
+      - name: GoReleaser (build, no publish)
+        uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
-          args: release --clean
+          args: >-
+            release --clean --skip=publish,announce
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--snapshot' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist-linux
+          path: dist/
+          retention-days: 7
+      - name: Smoke test linux binary across supported distros
+        run: |
+          set -uo pipefail
+          fail=0
+          echo "::group::Static-link assertion (file)"
+          for d in dist/linux-*-rdp_linux_*; do
+            bin="$d/infisical"
+            [ -f "$bin" ] || continue
+            info=$(file "$bin")
+            echo "$info"
+            if ! echo "$info" | grep -q "statically linked"; then
+              echo "::error file=$bin::not statically linked"
+              fail=1
+            fi
+          done
+          echo "::endgroup::"
+
+          BIN=dist/linux-amd64-rdp_linux_amd64_v1/infisical
+          if [ ! -f "$BIN" ]; then
+            echo "::error::expected $BIN missing from dist/"
+            exit 1
+          fi
+          echo "::group::Smoke test linux-amd64 binary across distro floor"
+          for img in \
+              ubuntu:22.04 \
+              ubuntu:20.04 \
+              rockylinux:9 \
+              rockylinux:8 \
+              amazonlinux:2023 \
+              amazonlinux:2 \
+              alpine:3.19 \
+              gcr.io/distroless/static-debian12; do
+            echo "--- $img ---"
+            if ! docker run --rm --platform linux/amd64 \
+                    -v "$PWD/$BIN":/infisical:ro \
+                    "$img" /infisical --version; then
+              echo "::error::binary failed to run on $img"
+              fail=1
+            fi
+          done
+          echo "::endgroup::"
+
+          [ "$fail" -eq 0 ] || exit 1
+      - name: GoReleaser (publish)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --skip=build,validate,before
         env:
           GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
@@ -153,6 +322,7 @@ jobs:
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
       - name: Publish packages to repositories
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: bash upload_to_s3.sh
         env:
           INFISICAL_CLI_S3_BUCKET: ${{ secrets.INFISICAL_CLI_S3_BUCKET }}
@@ -161,18 +331,107 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
       - name: Invalidate Cloudfront cache
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/Packages/*' '/rpm/repodata/*' '/deb/dists/stable/*' '/apk/stable/main/*'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.INFISICAL_CLI_REPO_CLOUDFRONT_DISTRIBUTION_ID }}
 
-  # Currently only supports Windows amd64
+  goreleaser-darwin:
+    runs-on: macos-latest
+    needs:
+      - validate-tag-branch
+      - cli-tests
+      - build-rdp-bridge
+      - create-release-draft
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
+      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --force --tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.9"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download darwin RDP bridge static libs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdp-bridge-*-apple-darwin
+          path: /tmp/rdp-bridge-artifacts/
+
+      - name: Stage darwin RDP bridge static libs
+        run: |
+          set -euo pipefail
+          for triple in x86_64-apple-darwin aarch64-apple-darwin; do
+            target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
+            mkdir -p "$target_dir"
+            cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
+          done
+
+      - name: GoReleaser Darwin (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-darwin.yaml --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: GoReleaser Darwin (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-darwin.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist-darwin
+          path: dist/
+          retention-days: 7
+
+  # Builds the Windows Server container images (→ Docker Hub). The
+  # binary baked in is RDP-enabled via MinGW CGO, matching the
+  # user-facing Windows zip.
+  #
+  # The Rust bridge is built here natively rather than downloaded from
+  # build-rdp-bridge: cross-rs's MinGW produces MSVCRT-ABI archives,
+  # but windows-2022's MinGW 14 is UCRT-based, which doesn't resolve
+  # MSVCRT-only symbols like __iob_func. Building both the .a and the
+  # Go binary on the same runner guarantees the ABIs match.
   goreleaser-windows:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
       - cli-tests
+      - create-release-draft
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      (needs.create-release-draft.result == 'success' || needs.create-release-draft.result == 'skipped') &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
       - uses: actions/checkout@v3
         with:
@@ -188,13 +447,49 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-bridge-windows-cargo-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-bridge-windows-cargo-
+
+      - name: Install pinned Rust toolchain + gnu target
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: |
+          rustup show active-toolchain
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Build Rust bridge for x86_64-pc-windows-gnu
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
       - name: 🐋 Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v4
+      - name: GoReleaser Windows (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@v4
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: GoReleaser Windows (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -204,5 +499,12 @@ jobs:
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist-windows
+          path: dist/
+          retention-days: 7
 
 
