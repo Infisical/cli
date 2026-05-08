@@ -127,7 +127,8 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 	case session.ResourceTypeMongodb:
 		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
 	case session.ResourceTypeOracledb:
-		util.PrintfStderr("oracle://%s:%s@localhost:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
+		util.PrintfStderr("%s/%s@localhost:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
+		util.PrintfStderr("\njdbc:oracle:thin:@localhost:%d/%s  (user: %s, password: %s)", proxy.port, database, username, oracle.ProxyPasswordPlaceholder)
 		util.PrintfStderr("\n\nNote: the password shown is a protocol placeholder required by Oracle, not a secret.")
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
