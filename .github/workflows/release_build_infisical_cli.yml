@@ -182,10 +182,21 @@ jobs:
             i686-unknown-linux-musl \
             arm-unknown-linux-musleabi \
             armv7-unknown-linux-musleabihf; do
+            case "$triple" in
+              x86_64-unknown-linux-musl)       sha=2495cfe18fc1f406d5cab93d902176af75a78f0ae93137f3e8b2df7708ec32fa ;;
+              aarch64-unknown-linux-musl)      sha=9303385fc29f8197004f641f96382196d56e4ec6dd975bff8ddd66641378628d ;;
+              i686-unknown-linux-musl)         sha=94dad4ea891b8ac701f9b590dc6db37461c3606ccc20f1c3dfe3901b1e248729 ;;
+              arm-unknown-linux-musleabi)      sha=8799be632cd66469a269f5aefbdb0266bf240b37194fc9cc3a34351c932bae2b ;;
+              armv7-unknown-linux-musleabihf)  sha=1b7d3fb5fbbe94357c094116e6fbf441e5074fc9c512415d8d9c758309705f1d ;;
+            esac
+            tarball="/tmp/${triple}.tar.xz"
             curl --retry 5 --retry-delay 10 --retry-all-errors \
                  --connect-timeout 30 --max-time 240 \
                  -fsSL "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_CROSS_TAG}/${triple}.tar.xz" \
-              | sudo tar -xJ -C /opt/musl-cross
+                 -o "$tarball"
+            echo "${sha}  ${tarball}" | sha256sum -c -
+            sudo tar -xJ -f "$tarball" -C /opt/musl-cross
+            rm -f "$tarball"
             echo "/opt/musl-cross/${triple}/bin" >> "$GITHUB_PATH"
           done
       - name: Download RDP bridge static libs

@@ -113,6 +113,16 @@ type SymmetricEncryptionResult struct {
 	AuthTag    []byte `json:"AuthTag"`
 }
 
+type GetMultiPathSecretsParameters struct {
+	Environment            string
+	WorkspaceId            string
+	TagSlugs               string
+	SecretsPaths           []string
+	IncludeImport          bool
+	Recursive              bool
+	ExpandSecretReferences bool
+}
+
 type GetAllSecretsParameters struct {
 	Environment              string
 	EnvironmentPassedViaFlag bool
