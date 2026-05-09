@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
@@ -125,6 +126,10 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	case session.ResourceTypeMongodb:
 		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
+	case session.ResourceTypeOracledb:
+		util.PrintfStderr("%s/%s@localhost:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
+		util.PrintfStderr("\njdbc:oracle:thin:@localhost:%d/%s  (user: %s, password: %s)", proxy.port, database, username, oracle.ProxyPasswordPlaceholder)
+		util.PrintfStderr("\n\nNote: the password shown is a protocol placeholder required by Oracle, not a secret.")
 	default:
 		util.PrintfStderr("localhost:%d", proxy.port)
 	}
