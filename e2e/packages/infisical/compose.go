@@ -6,7 +6,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -225,27 +224,6 @@ func (s *Stack) ApiUrl(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("http://%s:%s", host, port.Port()), nil
-}
-
-func (s *Stack) BackendLogs(ctx context.Context, tail int) (string, error) {
-	backend, err := s.dockerCompose.ServiceContainer(ctx, "backend")
-	if err != nil {
-		return "", fmt.Errorf("failed to get backend container: %w", err)
-	}
-	reader, err := backend.Logs(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get backend logs: %w", err)
-	}
-	defer reader.Close()
-	logs, err := io.ReadAll(reader)
-	if err != nil {
-		return "", fmt.Errorf("failed to read backend logs: %w", err)
-	}
-	out := string(logs)
-	if tail > 0 && len(out) > tail {
-		return "..." + out[len(out)-tail:], nil
-	}
-	return out, nil
 }
 
 func BackendOptionsFromEnv() BackendOptions {
