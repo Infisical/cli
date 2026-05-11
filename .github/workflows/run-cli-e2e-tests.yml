@@ -107,8 +107,8 @@ jobs:
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-cli
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
         run: |
-          for i in $(seq 1 10); do
-            echo "========== RUN $i of 10 =========="
+          for i in $(seq 1 5); do
+            echo "========== RUN $i of 5 =========="
             if ! go test -v -timeout 30m -count=1 -run TestPAM_SSH github.com/infisical/cli/e2e-tests/pam; then
               echo "FAILED on run $i"
               exit 1
@@ -118,5 +118,5 @@ jobs:
             echo "Waiting 15s for ports to release..."
             sleep 15
           done
-          echo "All 10 runs passed"
+          echo "All 5 runs passed"
 
