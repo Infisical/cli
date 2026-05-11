@@ -114,6 +114,9 @@ jobs:
               exit 1
             fi
             echo "PASSED run $i"
+            # Wait for relay ports (8443, 2222) to clear from TIME_WAIT before next run
+            echo "Waiting 15s for ports to release..."
+            sleep 15
           done
           echo "All 10 runs passed"
 
