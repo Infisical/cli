@@ -331,6 +331,7 @@ func TestPAM_SSH(t *testing.T) {
 	// which can have a brief propagation delay after container start, causing
 	// intermittent "connection refused" during the backend's validateConnection.
 	resourceHost := "localhost"
+	slog.Info("Using resource host for SSH tests", "resourceHost", resourceHost)
 
 	methods := []string{"password", "public-key", "certificate"}
 	for _, method := range methods {
