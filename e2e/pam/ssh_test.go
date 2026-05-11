@@ -45,7 +45,10 @@ func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string)
 			HostConfigModifier: func(hc *container.HostConfig) {
 				hc.ExtraHosts = append(hc.ExtraHosts, "host.docker.internal:host-gateway")
 			},
-			WaitingFor: wait.ForListeningPort("22/tcp").WithStartupTimeout(30 * time.Second),
+			WaitingFor: wait.ForAll(
+				wait.ForListeningPort("22/tcp"),
+				wait.ForLog("Server listening"),
+			).WithStartupTimeout(30 * time.Second),
 		},
 		Started: true,
 	})
