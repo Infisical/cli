@@ -139,7 +139,10 @@ func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ru
 	return compiled
 }
 
-func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
+// HandlePAMProxy handles a PAM session connection. `browserRDP` selects
+// the browser RDP flow (RDCleanPath over the inbound stream) when the
+// resource is Windows; ignored for other resource types.
+func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
 	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to retrieve PAM session credentials")
@@ -434,7 +437,11 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
+			Bool("browser", browserRDP).
 			Msg("Starting RDP PAM proxy")
+		if browserRDP {
+			return proxy.HandleConnectionRDCleanPath(ctx, conn)
+		}
 		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)

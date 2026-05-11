@@ -26,6 +26,7 @@ type ALPN string
 
 const (
 	ALPNInfisicalPAMProxy        ALPN = "infisical-pam-proxy"
+	ALPNInfisicalPAMRDPBrowser   ALPN = "infisical-pam-rdp-browser"
 	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
 	ALPNInfisicalPAMCapabilities ALPN = "infisical-pam-capabilities"
 )

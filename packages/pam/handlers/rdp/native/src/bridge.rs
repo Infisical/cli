@@ -118,7 +118,7 @@ async fn run_mitm_inner(
     bridge_pdus(client_framed, target_framed, tx).await
 }
 
-async fn bridge_pdus<C, T>(
+pub async fn bridge_pdus<C, T>(
     client_framed: ironrdp_tokio::TokioFramed<C>,
     target_framed: ironrdp_tokio::TokioFramed<T>,
     tx: EventSender,
@@ -465,7 +465,7 @@ fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
 //     wrong value, and target servers reject mismatched echoes)
 //   - clear CS_NET.channels so the target doesn't try to open virtual
 //     channels (clipboard, drives, audio, USB) the bridge can't service
-async fn filter_client_mcs_connect_initial(
+pub(crate) async fn filter_client_mcs_connect_initial(
     client_stream: &mut ErasedStream,
     target_stream: &mut ErasedStream,
     leftover: bytes::BytesMut,
@@ -538,8 +538,8 @@ async fn run_acceptor_half(
     client_tcp: TcpStream,
     username: String,
 ) -> Result<(ErasedStream, bytes::BytesMut)> {
-    let (server_tls, acceptor_public_key) =
-        build_acceptor_tls().context("build acceptor TLS config")?;
+    let (server_tls, acceptor_public_key, _cert_der) =
+        build_acceptor_tls_with_cert().context("build acceptor TLS config")?;
     let server_tls = Arc::new(server_tls);
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
@@ -716,7 +716,7 @@ where
 
 // Replicated from ironrdp-async's private perform_credssp_step so we can
 // stop before connect_finalize (which would start MCS/capability exchange).
-async fn perform_connector_credssp<S>(
+pub(crate) async fn perform_connector_credssp<S>(
     connector: &mut ClientConnector,
     framed: &mut ironrdp_tokio::TokioFramed<S>,
     network_client: &mut ReqwestNetworkClient,
@@ -799,7 +799,8 @@ where
     Ok(())
 }
 
-fn build_acceptor_tls() -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>)> {
+pub(crate) fn build_acceptor_tls_with_cert(
+) -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>, Vec<u8>)> {
     use x509_cert::der::Decode;
 
     let subject_alt_names = vec!["localhost".to_string(), "infisical-rdp-bridge".to_string()];
@@ -813,13 +814,14 @@ fn build_acceptor_tls() -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>)>
         .ok_or_else(|| anyhow::anyhow!("extract public key from self-signed cert"))?
         .to_vec();
 
+    let cert_der_bytes = cert_der.as_ref().to_vec();
     let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
     let config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], key_der)
         .context("rustls ServerConfig")?;
 
-    Ok((config, public_key))
+    Ok((config, public_key, cert_der_bytes))
 }
 
 pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}

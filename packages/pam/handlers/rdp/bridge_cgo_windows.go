@@ -26,10 +26,20 @@ func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: dup client socket: %w", err)
 	}
-	return startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, domain)
+	return startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, domain, "")
 }
 
-func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+// Browser-flow analog of StartWithConn.
+func StartRDCleanPathWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
+	dupSocket, err := dupConnSocket(conn)
+	if err != nil {
+		return nil, fmt.Errorf("rdp bridge: dup client socket: %w", err)
+	}
+	return startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, domain, acceptorUsername)
+}
+
+// Empty acceptorUsername selects native flow; non-empty selects RDCleanPath.
+func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
 	success := false
 	defer func() {
 		if !success {
@@ -51,15 +61,31 @@ func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPor
 	}
 
 	var handle C.uint64_t
-	rc := C.rdp_bridge_start_windows_socket(
-		C.uintptr_t(dupSocket),
-		cHost,
-		C.uint16_t(targetPort),
-		cUser,
-		cPass,
-		cDomain,
-		&handle,
-	)
+	var rc C.int32_t
+	if acceptorUsername == "" {
+		rc = C.rdp_bridge_start_windows_socket(
+			C.uintptr_t(dupSocket),
+			cHost,
+			C.uint16_t(targetPort),
+			cUser,
+			cPass,
+			cDomain,
+			&handle,
+		)
+	} else {
+		cAcceptor := C.CString(acceptorUsername)
+		defer C.free(unsafe.Pointer(cAcceptor))
+		rc = C.rdp_bridge_start_rdcleanpath_windows_socket(
+			C.uintptr_t(dupSocket),
+			cHost,
+			C.uint16_t(targetPort),
+			cUser,
+			cPass,
+			cDomain,
+			cAcceptor,
+			&handle,
+		)
+	}
 	if rc != C.RDP_BRIDGE_OK {
 		return nil, fmt.Errorf("rdp bridge: start failed (status %d)", int32(rc))
 	}
@@ -68,6 +94,15 @@ func startWithDupedSocket(dupSocket windows.Handle, targetHost string, targetPor
 }
 
 func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+	return startWithReadWriterCommon(rw, targetHost, targetPort, username, password, domain, "")
+}
+
+// Browser-flow analog of StartWithReadWriter.
+func StartRDCleanPathWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
+	return startWithReadWriterCommon(rw, targetHost, targetPort, username, password, domain, acceptorUsername)
+}
+
+func startWithReadWriterCommon(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: loopback listen: %w", err)
@@ -102,7 +137,7 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 		return nil, fmt.Errorf("rdp bridge: dup accepted socket: %w", err)
 	}
 
-	bridge, err := startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, domain)
+	bridge, err := startWithDupedSocket(dupSocket, targetHost, targetPort, username, password, domain, acceptorUsername)
 	if err != nil {
 		_ = peer.Close()
 		return nil, err

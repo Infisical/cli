@@ -17,11 +17,24 @@ func StartWithConn(_ net.Conn, _ string, _ uint16, _, _, _ string) (*Bridge, err
 	return nil, ErrRdpUnavailable
 }
 
+func StartRDCleanPathWithConn(_ net.Conn, _ string, _ uint16, _, _, _, _ string) (*Bridge, error) {
+	return nil, ErrRdpUnavailable
+}
+
 func StartWithReadWriter(_ io.ReadWriter, _ string, _ uint16, _, _, _ string) (*Bridge, error) {
 	return nil, ErrRdpUnavailable
 }
 
+func StartRDCleanPathWithReadWriter(_ io.ReadWriter, _ string, _ uint16, _, _, _, _ string) (*Bridge, error) {
+	return nil, ErrRdpUnavailable
+}
+
 func (p *RDPProxy) HandleConnection(_ context.Context, clientConn net.Conn) error {
+	_ = clientConn.Close()
+	return ErrRdpUnavailable
+}
+
+func (p *RDPProxy) HandleConnectionRDCleanPath(_ context.Context, clientConn net.Conn) error {
 	_ = clientConn.Close()
 	return ErrRdpUnavailable
 }

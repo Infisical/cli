@@ -44,6 +44,37 @@ int32_t rdp_bridge_start_windows_socket(
 );
 #endif
 
+/* Browser-flow start. Same as the native start, plus `acceptor_username`:
+ * the username the browser is configured to present during the acceptor's
+ * CredSSP exchange (decoupled from the real target username injected into
+ * the connector). The browser speaks RDCleanPath over the inbound stream;
+ * the gateway's WS upstream has already stripped framing. */
+#if defined(__unix__) || defined(__APPLE__)
+int32_t rdp_bridge_start_rdcleanpath_unix_fd(
+    int          client_fd,
+    const char  *target_host,
+    uint16_t     target_port,
+    const char  *username,
+    const char  *password,
+    const char  *domain,
+    const char  *acceptor_username,
+    uint64_t    *out_handle
+);
+#endif
+
+#if defined(_WIN32) || defined(_WIN64)
+int32_t rdp_bridge_start_rdcleanpath_windows_socket(
+    uintptr_t    client_socket,
+    const char  *target_host,
+    uint16_t     target_port,
+    const char  *username,
+    const char  *password,
+    const char  *domain,
+    const char  *acceptor_username,
+    uint64_t    *out_handle
+);
+#endif
+
 int32_t rdp_bridge_wait(uint64_t handle);
 int32_t rdp_bridge_cancel(uint64_t handle);
 int32_t rdp_bridge_free(uint64_t handle);

@@ -16,14 +16,10 @@ type RDPProxyConfig struct {
 	TargetPort     uint16
 	InjectUsername string
 	InjectPassword string
-	// Empty for local accounts; AD domain name (e.g. "CORP.EXAMPLE.COM") for
-	// domain-joined NTLM CredSSP. Backend session credentials populate this.
 	InjectDomain  string
 	SessionID     string
 	SessionLogger session.SessionLogger
-	// Session-anchored origin for elapsedNs. The Rust bridge restarts its
-	// own clock per RDP client connection; we rewrite each event's elapsedNs
-	// against this anchor so timestamps stay monotonic across reconnects.
+	// Rewrite bridge elapsedNs against this anchor so timestamps stay monotonic across reconnects
 	SessionStartedAt time.Time
 }
 
@@ -34,6 +30,9 @@ type RDPProxy struct {
 func NewRDPProxy(config RDPProxyConfig) *RDPProxy {
 	return &RDPProxy{config: config}
 }
+
+// Fixed NLA username the browser presents; carries no security weight
+const BrowserAcceptorUsername = "infisical"
 
 // Wire envelopes carried inside TerminalEvent.Data for ChannelType=RDP.
 type rdpTargetFrameEnvelope struct {
@@ -71,8 +70,6 @@ const pollTimeout = 250 * time.Millisecond
 
 var errUnknownRdpEventType = errors.New("rdp: unknown event type")
 
-// Logger errors are warned but don't stop the drain; dropping one event is
-// better than back-pressuring the bridge byte stream.
 func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, sessionStartedAt time.Time) {
 	if logger == nil {
 		return
