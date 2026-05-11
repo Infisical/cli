@@ -61,6 +61,46 @@ func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string)
 	return container, port.Int()
 }
 
+func dumpInfraState(ctx context.Context, infra *PAMTestInfra) {
+	slog.Error("=== INFRA STATE DUMP ===")
+	slog.Error("Relay process running", "running", infra.RelayCmd.IsRunning(), "exitCode", infra.RelayCmd.ExitCode())
+	slog.Error("Gateway process running", "running", infra.GatewayCmd.IsRunning(), "exitCode", infra.GatewayCmd.ExitCode())
+	slog.Error("Relay stdout (last 3000 chars)", "stdout", truncateTail(infra.RelayCmd.Stdout(), 3000))
+	slog.Error("Relay stderr (last 3000 chars)", "stderr", truncateTail(infra.RelayCmd.Stderr(), 3000))
+	slog.Error("Gateway stdout (last 3000 chars)", "stdout", truncateTail(infra.GatewayCmd.Stdout(), 3000))
+	slog.Error("Gateway stderr (last 3000 chars)", "stderr", truncateTail(infra.GatewayCmd.Stderr(), 3000))
+
+	gwResp, err := infra.ApiClient.ListGatewaysWithResponse(ctx)
+	if err != nil {
+		slog.Error("Failed to list gateways", "error", err)
+	} else if gwResp.StatusCode() == http.StatusOK && gwResp.JSON200 != nil {
+		for _, gw := range *gwResp.JSON200 {
+			slog.Error("Gateway from API",
+				"id", gw.Id,
+				"name", gw.Name,
+				"heartbeat", gw.Heartbeat,
+			)
+		}
+	} else {
+		slog.Error("ListGateways returned non-200", "status", gwResp.StatusCode(), "body", string(gwResp.Body))
+	}
+
+	backendLogs, err := infra.Infisical.Stack.BackendLogs(ctx, 3000)
+	if err != nil {
+		slog.Error("Failed to get backend logs", "error", err)
+	} else {
+		slog.Error("Backend container logs (last 3000 chars)", "logs", backendLogs)
+	}
+	slog.Error("=== END INFRA STATE DUMP ===")
+}
+
+func truncateTail(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return "..." + s[len(s)-maxLen:]
+}
+
 func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
 	resp, err := infra.ApiClient.CreateSshPamResourceWithResponse(
 		ctx,
@@ -78,7 +118,18 @@ func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode())
+	if resp.StatusCode() != http.StatusOK {
+		slog.Error("CreateSshPamResource failed",
+			"status", resp.StatusCode(),
+			"body", string(resp.Body),
+			"gatewayId", infra.GatewayId,
+			"projectId", infra.ProjectId,
+			"host", host,
+			"port", port,
+		)
+		dumpInfraState(ctx, infra)
+		t.Fatalf("CreateSshPamResource returned %d: %s", resp.StatusCode(), string(resp.Body))
+	}
 	slog.Info("Created SSH PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
 	return resp.JSON200.Resource.Id
 }
