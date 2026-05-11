@@ -82,8 +82,25 @@ jobs:
           go-version: "1.25.9"
       - name: Install dependencies
         run: go get .
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-bridge-cargo-${{ runner.os }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-bridge-cargo-${{ runner.os }}-
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        run: rustup show active-toolchain
+      - name: Build Rust RDP bridge
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo build --release
       - name: Build the CLI
-        run: go build -o infisical-cli
+        run: CGO_ENABLED=1 go build -tags rdp -o infisical-cli
+      - name: Install RDP test dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends freerdp2-x11 xvfb
       - name: Checkout infisical repo
         uses: actions/checkout@v6
         with:

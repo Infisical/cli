@@ -37,3 +37,5 @@ output-options:
     - createSshPamResource
     - createSshPamAccount
     - createRedisPamAccount
+    - createWindowsPamResource
+    - createWindowsPamAccount
