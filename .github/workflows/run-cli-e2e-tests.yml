@@ -105,3 +105,4 @@ jobs:
           INFISICAL_LICENSE_KEY: ${{ secrets.INFISICAL_LICENSE_KEY }}
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-cli
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
+
