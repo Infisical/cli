@@ -1,10 +1,8 @@
 //! Capability sets advertised by the acceptor (browser-facing half).
 //!
-//! Copied almost verbatim from `ironrdp-server::capabilities`. The goal is a
-//! conservative, widely-supported set so both the inbound client and the
-//! outbound target agree on formats without transcoding. Advanced codecs
-//! (RemoteFX, EGFX) are left out deliberately: we want both handshakes to
-//! land on basic bitmap.
+//! Both the acceptor and connector advertise codec support (including RemoteFX)
+//! so the browser client and target server agree on formats and the bridge can
+//! forward encoded bitmap updates byte-for-byte without transcoding.
 
 use ironrdp_pdu::rdp::capability_sets::{
     self, BitmapCodecs, BitmapDrawingFlags, CapabilitySet, CmdFlags, GeneralExtraFlags, InputFlags,

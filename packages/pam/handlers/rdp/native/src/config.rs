@@ -55,7 +55,7 @@ pub fn connector_config(username: String, password: String, domain: Option<Strin
     }
 }
 
-pub fn connector_config_browser(username: String, password: String, width: u16, height: u16) -> Config {
+pub fn connector_config_browser(username: String, password: String, domain: Option<String>, width: u16, height: u16) -> Config {
     Config {
         desktop_size: DesktopSize { width, height },
         desktop_scale_factor: 0,
@@ -64,7 +64,7 @@ pub fn connector_config_browser(username: String, password: String, width: u16, 
         enable_credssp: true,
 
         credentials: Credentials::UsernamePassword { username, password },
-        domain: None,
+        domain,
 
         client_build: 0,
         client_name: "infisical-pam".to_owned(),

@@ -12,6 +12,7 @@ use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{
     connect_finalize, mark_as_upgraded, skip_connect_begin, FramedWrite, TokioFramed,
 };
+use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
@@ -49,7 +50,7 @@ async fn handle_browser_session(
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     debug!("rdcleanpath: reading RDCleanPath request from client");
-    let request_pdu = read_rdcleanpath_pdu(&mut client_tcp)
+    let (request_pdu, client_leftover) = read_rdcleanpath_pdu(&mut client_tcp)
         .await
         .context("read RDCleanPath Request")?;
     debug!("rdcleanpath: received RDCleanPath request");
@@ -118,6 +119,7 @@ async fn handle_browser_session(
     let config = connector_config_browser(
         target.username.clone(),
         target.password.clone(),
+        target.domain.clone(),
         width,
         height,
     );
@@ -198,7 +200,7 @@ async fn handle_browser_session(
     acceptor.mark_security_upgrade_as_done();
 
     let client_erased: ErasedStream = Box::new(client_tcp);
-    let client_framed: TokioFramed<ErasedStream> = TokioFramed::new(client_erased);
+    let client_framed: TokioFramed<ErasedStream> = TokioFramed::new_with_leftover(client_erased, client_leftover);
 
     debug!("rdcleanpath: running accept_finalize on client");
     let (client_final_framed, acceptor_result): (TokioFramed<ErasedStream>, AcceptorResult) =
@@ -217,13 +219,13 @@ async fn handle_browser_session(
 
 const RDCLEANPATH_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-async fn read_rdcleanpath_pdu(tcp: &mut TcpStream) -> Result<RDCleanPathPdu> {
+async fn read_rdcleanpath_pdu(tcp: &mut TcpStream) -> Result<(RDCleanPathPdu, BytesMut)> {
     timeout(RDCLEANPATH_READ_TIMEOUT, read_rdcleanpath_pdu_inner(tcp))
         .await
         .map_err(|_| anyhow!("timed out waiting for RDCleanPath PDU ({}s)", RDCLEANPATH_READ_TIMEOUT.as_secs()))?
 }
 
-async fn read_rdcleanpath_pdu_inner(tcp: &mut TcpStream) -> Result<RDCleanPathPdu> {
+async fn read_rdcleanpath_pdu_inner(tcp: &mut TcpStream) -> Result<(RDCleanPathPdu, BytesMut)> {
     let mut buf = Vec::with_capacity(512);
     loop {
         let mut chunk = [0u8; 512];
@@ -238,15 +240,11 @@ async fn read_rdcleanpath_pdu_inner(tcp: &mut TcpStream) -> Result<RDCleanPathPd
         match RDCleanPathPdu::detect(&buf) {
             DetectionResult::Detected { total_length, .. } => {
                 if buf.len() >= total_length {
-                    if buf.len() > total_length {
-                        warn!(
-                            extra = buf.len() - total_length,
-                            "extra bytes after RDCleanPath PDU; ignoring"
-                        );
-                        buf.truncate(total_length);
-                    }
-                    return RDCleanPathPdu::from_der(&buf)
-                        .map_err(|e| anyhow!("decode RDCleanPath PDU: {e:?}"));
+                    let leftover = BytesMut::from(&buf[total_length..]);
+                    buf.truncate(total_length);
+                    let pdu = RDCleanPathPdu::from_der(&buf)
+                        .map_err(|e| anyhow!("decode RDCleanPath PDU: {e:?}"))?;
+                    return Ok((pdu, leftover));
                 }
             }
             DetectionResult::NotEnoughBytes => {}
