@@ -3,6 +3,7 @@
 //! that breaks strict clients (Windows App, mstsc).
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -130,6 +131,14 @@ where
     let (mut client_read, mut client_write) = ironrdp_tokio::split_tokio_framed(client_framed);
     let (mut target_read, mut target_write) = ironrdp_tokio::split_tokio_framed(target_framed);
 
+    // Recording starts when the first FastPath frame arrives from the target
+    // (actual bitmap/surface data). Pre-visual negotiation PDUs are forwarded
+    // but not recorded, eliminating the black-screen preamble.
+    // The offset stores the nanosecond mark when recording activates so all
+    // recorded timestamps are relative to the first visual frame.
+    const NOT_ACTIVE: u64 = u64::MAX;
+    let recording_offset_ns = Arc::new(AtomicU64::new(NOT_ACTIVE));
+    let recording_offset_c2t = recording_offset_ns.clone();
     let started_at = Instant::now();
     let tx_c2t = tx.clone();
     let tx_t2c = tx;
@@ -147,7 +156,10 @@ where
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err::<_, anyhow::Error>(e.into()),
             };
-            tap_client_to_target(action, &frame, started_at, &tx_c2t);
+            let offset = recording_offset_c2t.load(Ordering::Relaxed);
+            if offset != NOT_ACTIVE {
+                tap_client_to_target(action, &frame, started_at, offset, &tx_c2t);
+            }
 
             let bytes_to_forward: Vec<u8> = match cap_filter.consider(action, &frame) {
                 CapFilterDecision::Forward => frame.to_vec(),
@@ -168,7 +180,18 @@ where
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err::<_, anyhow::Error>(e.into()),
             };
-            tap_target_to_client(action, &frame, started_at, &tx_t2c);
+            let mut offset = recording_offset_ns.load(Ordering::Relaxed);
+            if offset == NOT_ACTIVE && action == Action::FastPath {
+                offset = elapsed_ns_since(started_at);
+                recording_offset_ns.store(offset, Ordering::Relaxed);
+                debug!(
+                    skip_ms = offset / 1_000_000,
+                    "first FastPath target frame, recording starts"
+                );
+            }
+            if offset != NOT_ACTIVE {
+                tap_target_to_client(action, &frame, started_at, offset, &tx_t2c);
+            }
             client_write
                 .write_all(&frame)
                 .await
@@ -390,7 +413,13 @@ fn try_filter_confirm_active(frame: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
+fn tap_client_to_target(
+    action: Action,
+    frame: &[u8],
+    started_at: Instant,
+    offset_ns: u64,
+    tx: &EventSender,
+) {
     if action != Action::FastPath {
         return;
     }
@@ -401,7 +430,7 @@ fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &
             return;
         }
     };
-    let elapsed_ns = elapsed_ns_since(started_at);
+    let elapsed_ns = elapsed_ns_since(started_at).saturating_sub(offset_ns);
     for event in input.input_events() {
         let session_event = match *event {
             FastPathInputEvent::KeyboardEvent(flags, scancode) => SessionEvent::KeyboardInput {
@@ -439,14 +468,17 @@ fn tap_client_to_target(action: Action, frame: &[u8], started_at: Instant, tx: &
     }
 }
 
-fn tap_target_to_client(action: Action, frame: &[u8], started_at: Instant, tx: &EventSender) {
-    // try_send: see tap_client_to_target. Heavy-graphics RDP can produce
-    // hundreds of TargetFrames/sec; if the consumer (Go fsync-bound logger)
-    // can't keep up, drop frames rather than queueing unbounded.
+fn tap_target_to_client(
+    action: Action,
+    frame: &[u8],
+    started_at: Instant,
+    offset_ns: u64,
+    tx: &EventSender,
+) {
     if let Err(e) = tx.try_send(SessionEvent::TargetFrame {
         action,
         payload: frame.to_vec(),
-        elapsed_ns: elapsed_ns_since(started_at),
+        elapsed_ns: elapsed_ns_since(started_at).saturating_sub(offset_ns),
     }) {
         if matches!(e, mpsc::error::TrySendError::Full(_)) {
             warn!("session event channel full, dropping target frame");

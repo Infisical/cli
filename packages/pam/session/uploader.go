@@ -348,15 +348,17 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 	return payload, newOffset, lastEntryElapsedMs, nil
 }
 
-// Stable across gateway restarts and per-connection bridge restarts.
-func (su *SessionUploader) GetSessionStartedAt(sessionID string) (time.Time, bool) {
+// GetPriorElapsedNs returns the last recorded elapsed time for this session
+// in nanoseconds. On reconnects this is added to the bridge's elapsed_ns so
+// timestamps stay monotonic across bridge restarts.
+func (su *SessionUploader) GetPriorElapsedNs(sessionID string) uint64 {
 	su.activeSessionsMu.RLock()
 	defer su.activeSessionsMu.RUnlock()
 	state, ok := su.activeSessions[sessionID]
 	if !ok {
-		return time.Time{}, false
+		return 0
 	}
-	return state.startedAt, true
+	return uint64(state.lastEndElapsedMs) * 1_000_000
 }
 
 // RegisterSession registers a session for incremental batch uploads, resuming from

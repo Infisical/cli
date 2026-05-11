@@ -18,13 +18,12 @@ type RDPProxyConfig struct {
 	InjectPassword string
 	// Empty for local accounts; AD domain name (e.g. "CORP.EXAMPLE.COM") for
 	// domain-joined NTLM CredSSP. Backend session credentials populate this.
-	InjectDomain  string
-	SessionID     string
+	InjectDomain string
+	SessionID    string
 	SessionLogger session.SessionLogger
-	// Session-anchored origin for elapsedNs. The Rust bridge restarts its
-	// own clock per RDP client connection; we rewrite each event's elapsedNs
-	// against this anchor so timestamps stay monotonic across reconnects.
-	SessionStartedAt time.Time
+	// Added to every event's elapsed_ns so timestamps stay monotonic across
+	// RDP reconnects within the same PAM session. Zero for the first connection.
+	PriorElapsedNs uint64
 }
 
 type RDPProxy struct {
@@ -73,7 +72,7 @@ var errUnknownRdpEventType = errors.New("rdp: unknown event type")
 
 // Logger errors are warned but don't stop the drain; dropping one event is
 // better than back-pressuring the bridge byte stream.
-func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, sessionStartedAt time.Time) {
+func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, priorElapsedNs uint64) {
 	if logger == nil {
 		return
 	}
@@ -92,9 +91,7 @@ func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLog
 		case PollTimeout:
 			continue
 		case PollOK:
-			if !sessionStartedAt.IsZero() {
-				ev.ElapsedNs = uint64(time.Since(sessionStartedAt).Nanoseconds())
-			}
+			ev.ElapsedNs += priorElapsedNs
 			data, encErr := encodeRdpEvent(ev)
 			if encErr != nil {
 				log.Warn().Err(encErr).Str("sessionID", sessionID).Uint8("type", uint8(ev.Type)).Msg("encode RDP event")

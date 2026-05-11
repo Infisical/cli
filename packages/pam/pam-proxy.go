@@ -417,9 +417,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		if credentials.Port <= 0 || credentials.Port > 65535 {
 			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
 		}
-		// Anchor event timestamps to the session-level start so reconnects
-		// within the same PAM session don't restart elapsedNs from zero.
-		sessionStartedAt, _ := pamConfig.SessionUploader.GetSessionStartedAt(pamConfig.SessionId)
 		rdpConfig := rdp.RDPProxyConfig{
 			TargetHost:       credentials.Host,
 			TargetPort:       uint16(credentials.Port),
@@ -428,7 +425,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			InjectDomain:     credentials.Domain,
 			SessionID:        pamConfig.SessionId,
 			SessionLogger:    sessionLogger,
-			SessionStartedAt: sessionStartedAt,
+			PriorElapsedNs:   pamConfig.SessionUploader.GetPriorElapsedNs(pamConfig.SessionId),
 		}
 		proxy := rdp.NewRDPProxy(rdpConfig)
 		log.Info().
