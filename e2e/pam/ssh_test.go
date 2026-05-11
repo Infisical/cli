@@ -324,9 +324,13 @@ func TestPAM_SSH(t *testing.T) {
 	infra := SetupPAMInfra(t, ctx)
 	LoginUser(t, ctx, infra)
 
-	// EXPERIMENT: using getOutboundIP to reproduce the flake in CI.
-	// This should fail intermittently with "connection refused" due to iptables race.
-	resourceHost := getOutboundIP(t)
+	// Use localhost rather than the outbound IP for the SSH resource host.
+	// The gateway (which dials this address) runs on the host, so localhost
+	// reaches Docker's port mapping via docker-proxy on the loopback interface.
+	// Using the outbound IP (e.g. 10.1.0.34) relies on iptables DNAT rules
+	// which can have a brief propagation delay after container start, causing
+	// intermittent "connection refused" during the backend's validateConnection.
+	resourceHost := "localhost"
 
 	methods := []string{"password", "public-key", "certificate"}
 	for _, method := range methods {
