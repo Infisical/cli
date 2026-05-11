@@ -52,7 +52,7 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
-		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME, "PROJECT_ID"}, "")
+		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 		if err != nil {
 			util.HandleError(err)
 		}
