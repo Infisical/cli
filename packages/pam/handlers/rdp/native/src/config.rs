@@ -3,7 +3,9 @@
 
 use ironrdp_connector::{BitmapConfig, Config, Credentials, DesktopSize};
 use ironrdp_pdu::gcc::KeyboardType;
-use ironrdp_pdu::rdp::capability_sets::{client_codecs_capabilities, BitmapCodecs, MajorPlatformType};
+use ironrdp_pdu::rdp::capability_sets::{
+    client_codecs_capabilities, BitmapCodecs, MajorPlatformType,
+};
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 
 pub const DEFAULT_WIDTH: u16 = 1920;
@@ -55,7 +57,13 @@ pub fn connector_config(username: String, password: String, domain: Option<Strin
     }
 }
 
-pub fn connector_config_browser(username: String, password: String, domain: Option<String>, width: u16, height: u16) -> Config {
+pub fn connector_config_browser(
+    username: String,
+    password: String,
+    domain: Option<String>,
+    width: u16,
+    height: u16,
+) -> Config {
     Config {
         desktop_size: DesktopSize { width, height },
         desktop_scale_factor: 0,

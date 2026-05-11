@@ -5,8 +5,8 @@
 //! forward encoded bitmap updates byte-for-byte without transcoding.
 
 use ironrdp_pdu::rdp::capability_sets::{
-    self, BitmapCodecs, BitmapDrawingFlags, CapabilitySet, CmdFlags, GeneralExtraFlags, InputFlags,
-    OrderFlags, OrderSupportExFlags, VirtualChannelFlags, server_codecs_capabilities,
+    self, server_codecs_capabilities, BitmapCodecs, BitmapDrawingFlags, CapabilitySet, CmdFlags,
+    GeneralExtraFlags, InputFlags, OrderFlags, OrderSupportExFlags, VirtualChannelFlags,
 };
 
 const DEFAULT_WIDTH: u16 = 1920;

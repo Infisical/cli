@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Context, Result};
-use ironrdp_acceptor::{accept_finalize, Acceptor, AcceptorResult, DesktopSize as AcceptorDesktopSize};
+use bytes::BytesMut;
+use ironrdp_acceptor::{
+    accept_finalize, Acceptor, AcceptorResult, DesktopSize as AcceptorDesktopSize,
+};
 use ironrdp_connector::{ClientConnector, Sequence};
 use ironrdp_core::{encode_buf, WriteBuf};
 use ironrdp_pdu::nego::{
@@ -12,7 +15,6 @@ use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{
     connect_finalize, mark_as_upgraded, skip_connect_begin, FramedWrite, TokioFramed,
 };
-use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
@@ -112,7 +114,10 @@ async fn handle_browser_session(
         .write_all(&response_der)
         .await
         .context("write RDCleanPath Response to client")?;
-    debug!(len = response_der.len(), "rdcleanpath: sent RDCleanPath response");
+    debug!(
+        len = response_der.len(),
+        "rdcleanpath: sent RDCleanPath response"
+    );
 
     let (width, height) = default_desktop_size();
 
@@ -200,7 +205,8 @@ async fn handle_browser_session(
     acceptor.mark_security_upgrade_as_done();
 
     let client_erased: ErasedStream = Box::new(client_tcp);
-    let client_framed: TokioFramed<ErasedStream> = TokioFramed::new_with_leftover(client_erased, client_leftover);
+    let client_framed: TokioFramed<ErasedStream> =
+        TokioFramed::new_with_leftover(client_erased, client_leftover);
 
     debug!("rdcleanpath: running accept_finalize on client");
     let (client_final_framed, acceptor_result): (TokioFramed<ErasedStream>, AcceptorResult) =
@@ -222,7 +228,12 @@ const RDCLEANPATH_READ_TIMEOUT: Duration = Duration::from_secs(30);
 async fn read_rdcleanpath_pdu(tcp: &mut TcpStream) -> Result<(RDCleanPathPdu, BytesMut)> {
     timeout(RDCLEANPATH_READ_TIMEOUT, read_rdcleanpath_pdu_inner(tcp))
         .await
-        .map_err(|_| anyhow!("timed out waiting for RDCleanPath PDU ({}s)", RDCLEANPATH_READ_TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            anyhow!(
+                "timed out waiting for RDCleanPath PDU ({}s)",
+                RDCLEANPATH_READ_TIMEOUT.as_secs()
+            )
+        })?
 }
 
 async fn read_rdcleanpath_pdu_inner(tcp: &mut TcpStream) -> Result<(RDCleanPathPdu, BytesMut)> {
@@ -296,12 +307,9 @@ where
 }
 
 fn generate_throwaway_cert() -> Result<Vec<u8>> {
-    let subject_alt_names = vec![
-        "localhost".to_string(),
-        "infisical-rdp-gateway".to_string(),
-    ];
-    let cert =
-        rcgen::generate_simple_self_signed(subject_alt_names).context("generate self-signed cert")?;
+    let subject_alt_names = vec!["localhost".to_string(), "infisical-rdp-gateway".to_string()];
+    let cert = rcgen::generate_simple_self_signed(subject_alt_names)
+        .context("generate self-signed cert")?;
     Ok(cert.cert.der().to_vec())
 }
 
