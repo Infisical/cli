@@ -80,9 +80,32 @@ func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra
 		},
 	)
 	require.NoError(t, err)
-	require.Equalf(t, http.StatusOK, resp.StatusCode(),
-		"CreateSshPamResource returned %d (host=%s port=%d): %s",
-		resp.StatusCode(), host, port, string(resp.Body))
+	if resp.StatusCode() != http.StatusOK {
+		slog.Error("CreateSshPamResource failed",
+			"status", resp.StatusCode(),
+			"body", string(resp.Body),
+			"host", host,
+			"port", port,
+		)
+		slog.Error("Relay running", "running", infra.RelayCmd.IsRunning(), "exitCode", infra.RelayCmd.ExitCode())
+		slog.Error("Gateway running", "running", infra.GatewayCmd.IsRunning(), "exitCode", infra.GatewayCmd.ExitCode())
+		slog.Error("Gateway stderr (last 2000 chars)", "stderr", func() string {
+			s := infra.GatewayCmd.Stderr()
+			if len(s) > 2000 {
+				return "..." + s[len(s)-2000:]
+			}
+			return s
+		}())
+		slog.Error("Relay stderr (last 2000 chars)", "stderr", func() string {
+			s := infra.RelayCmd.Stderr()
+			if len(s) > 2000 {
+				return "..." + s[len(s)-2000:]
+			}
+			return s
+		}())
+		t.Fatalf("CreateSshPamResource returned %d (host=%s port=%d): %s",
+			resp.StatusCode(), host, port, string(resp.Body))
+	}
 	slog.Info("Created SSH PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
 	return resp.JSON200.Resource.Id
 }
