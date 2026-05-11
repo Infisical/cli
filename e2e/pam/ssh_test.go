@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -230,12 +229,20 @@ func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, c
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, "sshd reload should succeed")
 
-	// Wait for sshd to be responsive after config reload.
+	// Wait for sshd to be fully responsive after config reload.
+	// A TCP dial is not enough — sshd never closes the listen socket during
+	// SIGHUP, so the port is always reachable. Instead, do an actual SSH
+	// handshake to confirm sshd is serving connections after the reload.
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		Timeout:  10 * time.Second,
 		Interval: 500 * time.Millisecond,
 		Condition: func() helpers.ConditionResult {
-			conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", sshPort), time.Second)
+			conn, err := ssh.Dial("tcp", fmt.Sprintf("localhost:%d", sshPort), &ssh.ClientConfig{
+				User:            sshUser,
+				Auth:            []ssh.AuthMethod{ssh.Password(sshPassword)},
+				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				Timeout:         2 * time.Second,
+			})
 			if err != nil {
 				return helpers.ConditionWait
 			}
