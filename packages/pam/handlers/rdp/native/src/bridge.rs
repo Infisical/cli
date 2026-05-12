@@ -423,12 +423,23 @@ fn tap_client_to_target(
     if action != Action::FastPath {
         return;
     }
-    let input: FastPathInput = match decode_fast_path_input(frame) {
+    // Microsoft Remote Desktop / Windows App on Mac sets
+    // FASTPATH_INPUT_SECURE_CHECKSUM (bit 6) on input PDUs even when TLS +
+    // CredSSP is in use; the MAC trailer the bit advertises isn't actually
+    // present. IronRDP's strict header decoder rejects any non-zero flags,
+    // so we copy the frame and mask off bits 6-7 before decoding. No MAC
+    // verification is performed regardless (TLS already authenticates).
+    let mut sanitized: Vec<u8>;
+    let bytes_for_decode: &[u8] = if frame.first().copied().unwrap_or(0) & 0xC0 != 0 {
+        sanitized = frame.to_vec();
+        sanitized[0] &= 0x3F;
+        &sanitized
+    } else {
+        frame
+    };
+    let input: FastPathInput = match decode_fast_path_input(bytes_for_decode) {
         Ok(input) => input,
-        Err(e) => {
-            warn!(?e, "failed to decode FastPathInput");
-            return;
-        }
+        Err(_) => return,
     };
     let elapsed_ns = elapsed_ns_since(started_at).saturating_sub(offset_ns);
     for event in input.input_events() {
@@ -452,8 +463,19 @@ fn tap_client_to_target(
                 wheel_delta: pdu.number_of_wheel_rotation_units,
                 elapsed_ns,
             },
-            // MouseEventEx, MouseEventRel, QoeEvent, SyncEvent: skip for now;
-            // uncommon in normal sessions and not needed for replay V1.
+            // Windows clients route most mouse moves through MouseEventEx
+            // (XButton-aware variant). Replay only needs x/y to position the
+            // cursor; the X-button flags don't map onto PointerFlags so we
+            // surface MouseEventEx as a MouseInput with empty flags.
+            FastPathInputEvent::MouseEventEx(pdu) => SessionEvent::MouseInput {
+                x: pdu.x_position,
+                y: pdu.y_position,
+                flags: ironrdp_pdu::input::mouse::PointerFlags::empty(),
+                wheel_delta: 0,
+                elapsed_ns,
+            },
+            // MouseEventRel, QoeEvent, SyncEvent: skip; uncommon and not
+            // needed for replay V1.
             _ => continue,
         };
         // try_send: never block the bridge byte stream on a slow consumer.
