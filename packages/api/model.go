@@ -958,7 +958,6 @@ type UploadSessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-// UploadSessionEvent represents a terminal session event for upload
 type UploadSessionEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"eventType"`
