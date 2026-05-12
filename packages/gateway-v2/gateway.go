@@ -88,6 +88,7 @@ type GatewayConfig struct {
 type pamSessionEntry struct {
 	cancel context.CancelFunc
 	conn   *tls.Conn
+	done   chan struct{} // closed when HandlePAMProxy has fully returned for this entry
 }
 
 type Gateway struct {
@@ -166,10 +167,12 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 }
 
 // RegisterPAMSession registers an active PAM proxy connection for cancellation support
-func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) {
+func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) *pamSessionEntry {
+	entry := &pamSessionEntry{cancel: cancel, conn: conn, done: make(chan struct{})}
 	g.pamSessionsMu.Lock()
 	defer g.pamSessionsMu.Unlock()
-	g.pamSessions[sessionID] = append(g.pamSessions[sessionID], &pamSessionEntry{cancel: cancel, conn: conn})
+	g.pamSessions[sessionID] = append(g.pamSessions[sessionID], entry)
+	return entry
 }
 
 // DeregisterPAMSession removes a specific connection from the session registry.
@@ -178,16 +181,48 @@ func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc
 // The proxy is cleaned up on session cancellation or gateway shutdown.
 func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) {
 	g.pamSessionsMu.Lock()
-	defer g.pamSessionsMu.Unlock()
 	entries := g.pamSessions[sessionID]
+	var removed *pamSessionEntry
 	for i, e := range entries {
 		if e.conn == conn {
+			removed = e
 			g.pamSessions[sessionID] = append(entries[:i], entries[i+1:]...)
 			break
 		}
 	}
 	if len(g.pamSessions[sessionID]) == 0 {
 		delete(g.pamSessions, sessionID)
+	}
+	g.pamSessionsMu.Unlock()
+	if removed != nil {
+		close(removed.done)
+	}
+}
+
+// Cancels prior entries and waits for them to clean up. RDP needs serial
+// bridges so drain writes don't interleave into the recording file.
+func (g *Gateway) evictExistingPAMSessions(sessionID string, timeout time.Duration) {
+	g.pamSessionsMu.Lock()
+	prior := g.pamSessions[sessionID]
+	g.pamSessionsMu.Unlock()
+	if len(prior) == 0 {
+		return
+	}
+	log.Info().Str("sessionId", sessionID).Int("priorCount", len(prior)).
+		Msg("Evicting existing PAM connections before starting new RDP bridge")
+	for _, e := range prior {
+		_ = e.conn.Close()
+		e.cancel()
+	}
+	deadline := time.After(timeout)
+	for _, e := range prior {
+		select {
+		case <-e.done:
+		case <-deadline:
+			log.Warn().Str("sessionId", sessionID).
+				Msg("Timed out waiting for prior PAM connection to clean up; proceeding anyway")
+			return
+		}
 	}
 }
 
@@ -205,6 +240,7 @@ func (g *Gateway) CancelPAMSession(sessionID string) bool {
 	for _, e := range entries {
 		e.conn.Close()
 		e.cancel()
+		close(e.done)
 	}
 	g.closeMongoProxy(sessionID)
 	return true
@@ -750,6 +786,11 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAM {
+		// RDP only: prior bridge must fully tear down before the new one starts,
+		// else overlapping drains write non-monotonic elapsedMs to the recording.
+		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows {
+			g.evictExistingPAMSessions(forwardConfig.PAMConfig.SessionId, 5*time.Second)
+		}
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
 		g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
 		defer g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)

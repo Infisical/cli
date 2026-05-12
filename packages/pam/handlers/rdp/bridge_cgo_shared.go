@@ -47,7 +47,7 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.PriorElapsedNs)
+		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.PriorElapsedNs, p.config.SessionUploader)
 	}()
 	// Wait for the drain to finish naturally on the normal-end path so the
 	// tail of the recording isn't dropped: PollEnded fires after the Rust

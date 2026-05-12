@@ -24,6 +24,8 @@ type RDPProxyConfig struct {
 	// Added to every event's elapsed_ns so timestamps stay monotonic across
 	// RDP reconnects within the same PAM session. Zero for the first connection.
 	PriorElapsedNs uint64
+	// drain calls RecordEmittedElapsedNs after each persisted event.
+	SessionUploader *session.SessionUploader
 }
 
 type RDPProxy struct {
@@ -72,7 +74,7 @@ var errUnknownRdpEventType = errors.New("rdp: unknown event type")
 
 // Logger errors are warned but don't stop the drain; dropping one event is
 // better than back-pressuring the bridge byte stream.
-func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, priorElapsedNs uint64) {
+func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, priorElapsedNs uint64, uploader *session.SessionUploader) {
 	if logger == nil {
 		return
 	}
@@ -106,6 +108,10 @@ func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLog
 			}
 			if logErr := logger.LogSessionEvent(te); logErr != nil {
 				log.Warn().Err(logErr).Str("sessionID", sessionID).Msg("log RDP event")
+				continue
+			}
+			if uploader != nil {
+				uploader.RecordEmittedElapsedNs(sessionID, ev.ElapsedNs)
 			}
 		}
 	}

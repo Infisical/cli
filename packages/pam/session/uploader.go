@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -47,7 +48,10 @@ type sessionUploadState struct {
 	legacyMode       bool   // true if the batch upload endpoint returned 404 (platform too old); fall back to bulk upload at session end
 	startedAt        time.Time
 	lastEndElapsedMs int64
-	mu               sync.Mutex
+	// Advanced per-event by streaming writers so GetPriorElapsedNs sees a fresh
+	// anchor between flush ticks (rapid RDP reconnects within the 10s window).
+	lastEmittedElapsedNs atomic.Uint64
+	mu                   sync.Mutex
 }
 
 type SessionUploader struct {
@@ -358,7 +362,31 @@ func (su *SessionUploader) GetPriorElapsedNs(sessionID string) uint64 {
 	if !ok {
 		return 0
 	}
-	return uint64(state.lastEndElapsedMs) * 1_000_000
+	emitted := state.lastEmittedElapsedNs.Load()
+	flushed := uint64(state.lastEndElapsedMs) * 1_000_000
+	if emitted > flushed {
+		return emitted
+	}
+	return flushed
+}
+
+// Monotonically advances the per-session GetPriorElapsedNs anchor; stale values are ignored.
+func (su *SessionUploader) RecordEmittedElapsedNs(sessionID string, elapsedNs uint64) {
+	su.activeSessionsMu.RLock()
+	state, ok := su.activeSessions[sessionID]
+	su.activeSessionsMu.RUnlock()
+	if !ok {
+		return
+	}
+	for {
+		cur := state.lastEmittedElapsedNs.Load()
+		if elapsedNs <= cur {
+			return
+		}
+		if state.lastEmittedElapsedNs.CompareAndSwap(cur, elapsedNs) {
+			return
+		}
+	}
 }
 
 // RegisterSession registers a session for incremental batch uploads, resuming from
@@ -386,12 +414,14 @@ func (su *SessionUploader) RegisterSession(sessionID string) {
 	// rewind on reconnect. The persisted .offset only catches up after a flush,
 	// so it can't be the source of truth here.
 	if _, exists := su.activeSessions[sessionID]; !exists {
-		su.activeSessions[sessionID] = &sessionUploadState{
+		state := &sessionUploadState{
 			fileOffset:       startOffset,
 			filename:         fileInfo.Filename,
 			startedAt:        time.Now().Add(-time.Duration(lastEndElapsedMs) * time.Millisecond),
 			lastEndElapsedMs: lastEndElapsedMs,
 		}
+		state.lastEmittedElapsedNs.Store(uint64(lastEndElapsedMs) * 1_000_000)
+		su.activeSessions[sessionID] = state
 	}
 	su.activeSessionsMu.Unlock()
 
@@ -548,11 +578,13 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 				break
 			}
 
-			// Prefer the last event's actual elapsedTime; fall back to wallclock for
-			// non-terminal sessions whose entries lack the field (HTTP, Kubernetes).
+			// Wallclock fallback only when the chunk carried no elapsedTime at all
+			// (HTTP/Kubernetes); otherwise it includes reconnect idle gaps.
 			endElapsedMs := lastEntryElapsedMs
-			if endElapsedMs <= startElapsedMs {
+			if lastEntryElapsedMs == 0 {
 				endElapsedMs = time.Since(state.startedAt).Milliseconds()
+			} else if endElapsedMs < startElapsedMs {
+				endElapsedMs = startElapsedMs
 			}
 
 			pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, payload, startElapsedMs, endElapsedMs)
