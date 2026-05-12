@@ -34,17 +34,17 @@ type SSHProxy struct {
 	mutex             sync.Mutex
 	sessionData       []byte                      // Store session data for logging
 	inputBuffer       []byte                      // Buffer for input data to batch keystrokes
-	inputChannelType  session.TerminalChannelType  // Channel type for buffered input
+	inputChannelType  session.SessionChannelType  // Channel type for buffered input
 	escapeState       int                          // 0=normal, 1=got ESC, 2=in CSI sequence
 	outputMutex       sync.Mutex
 	outputBuffer      []byte                      // Buffer for output data to enable masking across chunks
-	outputChannelType session.TerminalChannelType  // Channel type for buffered output
+	outputChannelType session.SessionChannelType  // Channel type for buffered output
 }
 
 // channelState holds per-channel state for tracking session type
 type channelState struct {
 	mutex           sync.Mutex
-	channelType     session.TerminalChannelType // Type of channel (terminal, exec, sftp)
+	channelType     session.SessionChannelType // Type of channel (terminal, exec, sftp)
 	isBinarySession bool                        // True if this channel is SFTP/SCP binary protocol
 	sftpParser      *SFTPParser                 // Parser for SFTP protocol to extract file operations
 }
@@ -335,13 +335,13 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 							Msg("Blocked SSH exec command")
 
 						// Log the blocked exec to session recording
-						blockedEvent := session.TerminalEvent{
+						blockedEvent := session.SessionEvent{
 							Timestamp:   time.Now(),
-							EventType:   session.TerminalEventInput,
-							ChannelType: session.TerminalChannelExec,
+							EventType:   session.SessionEventInput,
+							ChannelType: session.SessionChannelExec,
 							Data:        []byte(fmt.Sprintf("$ %s\n[BLOCKED] Command not permitted\n", command)),
 						}
-						if err := p.config.SessionLogger.LogTerminalEvent(blockedEvent); err != nil {
+						if err := p.config.SessionLogger.LogSessionEvent(blockedEvent); err != nil {
 							log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log blocked exec command")
 						}
 
@@ -357,9 +357,9 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 					if isSCP {
 						// Mark this channel as binary so we don't log the raw file data
 						chState.isBinarySession = true
-						chState.channelType = session.TerminalChannelSFTP // SCP is file transfer
+						chState.channelType = session.SessionChannelSFTP // SCP is file transfer
 					} else {
-						chState.channelType = session.TerminalChannelExec
+						chState.channelType = session.SessionChannelExec
 					}
 					chState.mutex.Unlock()
 
@@ -370,9 +370,9 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 					// Log the exec command to the session recording
 					var logMessage string
-					var channelType session.TerminalChannelType
+					var channelType session.SessionChannelType
 					if isSCP {
-						channelType = session.TerminalChannelSFTP
+						channelType = session.SessionChannelSFTP
 						// Parse SCP command for more readable logging
 						// scp -t /path = receiving file TO server
 						// scp -f /path = sending file FROM server
@@ -386,17 +386,17 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 							logMessage = fmt.Sprintf("$ %s\n", command)
 						}
 					} else {
-						channelType = session.TerminalChannelExec
+						channelType = session.SessionChannelExec
 						logMessage = fmt.Sprintf("$ %s\n", command)
 					}
 
-					event := session.TerminalEvent{
+					event := session.SessionEvent{
 						Timestamp:   time.Now(),
-						EventType:   session.TerminalEventInput,
+						EventType:   session.SessionEventInput,
 						ChannelType: channelType,
 						Data:        []byte(logMessage),
 					}
-					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+					if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 						log.Error().Err(err).
 							Str("sessionID", sessionID).
 							Str("command", command).
@@ -406,7 +406,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 			}
 		case "shell":
 			chState.mutex.Lock()
-			chState.channelType = session.TerminalChannelShell
+			chState.channelType = session.SessionChannelShell
 			chState.mutex.Unlock()
 			log.Info().
 				Str("sessionID", sessionID).
@@ -426,18 +426,18 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 					// Log SFTP sessions and set up SFTP parser for file operation logging
 					if subsystem == "sftp" {
 						chState.mutex.Lock()
-						chState.channelType = session.TerminalChannelSFTP
+						chState.channelType = session.SessionChannelSFTP
 						chState.isBinarySession = true
 						chState.sftpParser = NewSFTPParser()
 						chState.mutex.Unlock()
 
-						event := session.TerminalEvent{
+						event := session.SessionEvent{
 							Timestamp:   time.Now(),
-							EventType:   session.TerminalEventInput,
-							ChannelType: session.TerminalChannelSFTP,
+							EventType:   session.SessionEventInput,
+							ChannelType: session.SessionChannelSFTP,
 							Data:        []byte("File transfer session started\n"),
 						}
-						if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+						if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 							log.Error().Err(err).
 								Str("sessionID", sessionID).
 								Msg("Failed to log SFTP session start")
@@ -513,13 +513,13 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				for _, op := range operations {
 					// Log each SFTP operation
 					logMsg := FormatOperation(op) + "\n"
-					event := session.TerminalEvent{
+					event := session.SessionEvent{
 						Timestamp:   time.Now(),
-						EventType:   session.TerminalEventInput,
-						ChannelType: session.TerminalChannelSFTP,
+						EventType:   session.SessionEventInput,
+						ChannelType: session.SessionChannelSFTP,
 						Data:        []byte(logMsg),
 					}
-					if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+					if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 						log.Error().Err(err).
 							Str("sessionID", sessionID).
 							Str("operation", op.Type).
@@ -565,7 +565,7 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 // bufferInput accumulates input data and logs the effective command after processing edits.
 // It interprets control characters (backspace, Ctrl+C/U/W) so that the logged command
 // reflects what the user actually sent, not the raw keystrokes.
-func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.TerminalChannelType) {
+func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.SessionChannelType) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -640,18 +640,18 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 		return
 	}
 
-	event := session.TerminalEvent{
+	event := session.SessionEvent{
 		Timestamp:   time.Now(),
-		EventType:   session.TerminalEventInput,
+		EventType:   session.SessionEventInput,
 		ChannelType: p.inputChannelType,
 		Data:        make([]byte, len(p.inputBuffer)),
 	}
 	copy(event.Data, p.inputBuffer)
 
-	if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+	if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 		log.Error().Err(err).
 			Str("sessionID", sessionID).
-			Str("eventType", string(session.TerminalEventInput)).
+			Str("eventType", string(session.SessionEventInput)).
 			Msg("Failed to log terminal event")
 	}
 
@@ -662,7 +662,7 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 // bufferOutput accumulates output data and flushes on newline or size limit.
 // This allows session log masking patterns to match across character-by-character echo,
 // because the regex sees a full line rather than individual bytes.
-func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType session.TerminalChannelType) {
+func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType session.SessionChannelType) {
 	p.outputMutex.Lock()
 	defer p.outputMutex.Unlock()
 
@@ -691,18 +691,18 @@ func (p *SSHProxy) flushOutputBufferUnsafe(sessionID string) {
 		return
 	}
 
-	event := session.TerminalEvent{
+	event := session.SessionEvent{
 		Timestamp:   time.Now(),
-		EventType:   session.TerminalEventOutput,
+		EventType:   session.SessionEventOutput,
 		ChannelType: p.outputChannelType,
 		Data:        make([]byte, len(p.outputBuffer)),
 	}
 	copy(event.Data, p.outputBuffer)
 
-	if err := p.config.SessionLogger.LogTerminalEvent(event); err != nil {
+	if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 		log.Error().Err(err).
 			Str("sessionID", sessionID).
-			Str("eventType", string(session.TerminalEventOutput)).
+			Str("eventType", string(session.SessionEventOutput)).
 			Msg("Failed to log terminal event")
 	}
 
@@ -756,13 +756,13 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 					operations := sftpParser.Parse(buf[:n])
 					for _, op := range operations {
 						logMsg := FormatOperation(op) + "\n"
-						event := session.TerminalEvent{
+						event := session.SessionEvent{
 							Timestamp:   time.Now(),
-							EventType:   session.TerminalEventInput,
-							ChannelType: session.TerminalChannelSFTP,
+							EventType:   session.SessionEventInput,
+							ChannelType: session.SessionChannelSFTP,
 							Data:        []byte(logMsg),
 						}
-						if logErr := p.config.SessionLogger.LogTerminalEvent(event); logErr != nil {
+						if logErr := p.config.SessionLogger.LogSessionEvent(event); logErr != nil {
 							log.Error().Err(logErr).
 								Str("sessionID", sessionID).
 								Str("operation", op.Type).
@@ -811,13 +811,13 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 							clientWriter.Write([]byte(blockedMsg))
 
 							// Log the blocked message as output so it appears in session replay
-							blockedEvent := session.TerminalEvent{
+							blockedEvent := session.SessionEvent{
 								Timestamp:   time.Now(),
-								EventType:   session.TerminalEventOutput,
+								EventType:   session.SessionEventOutput,
 								ChannelType: channelType,
 								Data:        []byte(blockedMsg),
 							}
-							if logErr := p.config.SessionLogger.LogTerminalEvent(blockedEvent); logErr != nil {
+							if logErr := p.config.SessionLogger.LogSessionEvent(blockedEvent); logErr != nil {
 								log.Error().Err(logErr).Str("sessionID", sessionID).Msg("Failed to log blocked command event")
 							}
 

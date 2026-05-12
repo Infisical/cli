@@ -34,7 +34,7 @@ func NewRDPProxy(config RDPProxyConfig) *RDPProxy {
 	return &RDPProxy{config: config}
 }
 
-// Wire envelopes carried inside TerminalEvent.Data for ChannelType=RDP.
+// Wire envelopes carried inside SessionEvent.Data for ChannelType=RDP.
 type rdpTargetFrameEnvelope struct {
 	Type      string `json:"type"`    // "target_frame"
 	Action    string `json:"action"`  // "x224" | "fastpath"
@@ -97,14 +97,14 @@ func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLog
 				log.Warn().Err(encErr).Str("sessionID", sessionID).Uint8("type", uint8(ev.Type)).Msg("encode RDP event")
 				continue
 			}
-			te := session.TerminalEvent{
+			te := session.SessionEvent{
 				Timestamp:   time.Now(),
-				EventType:   session.TerminalEventRDP,
-				ChannelType: session.TerminalChannelRDP,
+				EventType:   session.SessionEventRDP,
+				ChannelType: session.SessionChannelRDP,
 				Data:        data,
 				ElapsedTime: float64(ev.ElapsedNs) / 1e9,
 			}
-			if logErr := logger.LogTerminalEvent(te); logErr != nil {
+			if logErr := logger.LogSessionEvent(te); logErr != nil {
 				log.Warn().Err(logErr).Str("sessionID", sessionID).Msg("log RDP event")
 			}
 		}

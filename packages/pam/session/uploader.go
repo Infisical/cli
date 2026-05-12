@@ -227,8 +227,8 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 	return readEncryptedEntries[SessionLogEntry](filename, encryptionKey)
 }
 
-func ReadEncryptedTerminalEventsFromFile(filename string, encryptionKey string) ([]TerminalEvent, error) {
-	return readEncryptedEntries[TerminalEvent](filename, encryptionKey)
+func ReadEncryptedSessionEventsFromFile(filename string, encryptionKey string) ([]SessionEvent, error) {
+	return readEncryptedEntries[SessionEvent](filename, encryptionKey)
 }
 
 func ReadEncryptedHttpEventsFromFile(filename string, encryptionKey string) ([]HttpEvent, error) {
@@ -613,12 +613,12 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
-	// SSH and Windows both write TerminalEvent records (SSH uses input/output/
+	// SSH and Windows both write SessionEvent records (SSH uses input/output/
 	// resize/error; Windows uses ChannelType=rdp). Bulk-uploading either via
 	// the Database fallback would silently zero-fill input/output, dropping
 	// the entire recording.
 	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows {
-		terminalEvents, err := ReadEncryptedTerminalEventsFromFile(fileInfo.Filename, encryptionKey)
+		terminalEvents, err := ReadEncryptedSessionEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to read terminal session file: %w", err)
 		}
@@ -629,9 +629,9 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 			Int("eventCount", len(terminalEvents)).
 			Msg("Uploading terminal session events")
 
-		var logs []api.UploadTerminalEvent
+		var logs []api.UploadSessionEvent
 		for _, event := range terminalEvents {
-			logs = append(logs, api.UploadTerminalEvent{
+			logs = append(logs, api.UploadSessionEvent{
 				Timestamp:   event.Timestamp,
 				EventType:   string(event.EventType),
 				ChannelType: string(event.ChannelType),
