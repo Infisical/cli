@@ -365,8 +365,8 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			}
 		}()
 
-		// Phase 2: Regular heartbeat every 30 minutes
-		regularTicker := time.NewTicker(30 * time.Minute)
+		// Phase 2: Regular heartbeat every 3 minutes
+		regularTicker := time.NewTicker(3 * time.Minute)
 		defer regularTicker.Stop()
 
 		for {
