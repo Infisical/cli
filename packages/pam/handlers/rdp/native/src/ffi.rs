@@ -263,7 +263,9 @@ fn spawn_session(
 ///
 /// `client_fd` ownership transfers to the bridge on OK, stays with the
 /// caller on error. Strings must be NUL-terminated valid UTF-8. `domain`
-/// may be NULL or empty for non-domain sessions.
+/// and `acceptor_username` may be NULL or empty. When `acceptor_username`
+/// is non-empty the bridge runs the RDCleanPath (browser) flow; otherwise
+/// it runs the native RDP flow.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
@@ -273,6 +275,7 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     username: *const c_char,
     password: *const c_char,
     domain: *const c_char,
+    acceptor_username: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -290,8 +293,11 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
         Some(v) => v,
         None => return RDP_BRIDGE_BAD_ARG,
     };
-    // Empty domain string is treated the same as NULL: no domain.
     let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
+    let flow = match unsafe { c_str_to_owned(acceptor_username) }.filter(|s| !s.is_empty()) {
+        Some(acceptor_username) => SessionFlow::Rdcleanpath { acceptor_username },
+        None => SessionFlow::Native,
+    };
 
     use std::os::unix::io::FromRawFd;
     let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
@@ -303,7 +309,7 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
         username,
         password,
         domain,
-        SessionFlow::Native,
+        flow,
     ) {
         Ok(id) => {
             unsafe { *out_handle = id };
@@ -328,6 +334,7 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     username: *const c_char,
     password: *const c_char,
     domain: *const c_char,
+    acceptor_username: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -346,6 +353,10 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
         None => return RDP_BRIDGE_BAD_ARG,
     };
     let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
+    let flow = match unsafe { c_str_to_owned(acceptor_username) }.filter(|s| !s.is_empty()) {
+        Some(acceptor_username) => SessionFlow::Rdcleanpath { acceptor_username },
+        None => SessionFlow::Native,
+    };
 
     use std::os::windows::io::{FromRawSocket, RawSocket};
     let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
@@ -357,7 +368,7 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
         username,
         password,
         domain,
-        SessionFlow::Native,
+        flow,
     ) {
         Ok(id) => {
             unsafe { *out_handle = id };
@@ -365,130 +376,6 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
         }
         Err(e) => {
             error!(error = ?e, "rdp_bridge_start_windows_socket: failed to spawn session");
-            RDP_BRIDGE_RUNTIME_ERROR
-        }
-    }
-}
-
-/// Browser-flow start. Same shape as `rdp_bridge_start_unix_fd`, plus
-/// `acceptor_username`: the username the browser is configured to present
-/// during the acceptor-side CredSSP exchange (decoupled from the real
-/// target username we inject into the connector).
-///
-/// # Safety
-///
-/// `client_fd` ownership transfers to the bridge on OK, stays with the
-/// caller on error. Strings must be NUL-terminated valid UTF-8.
-#[cfg(unix)]
-#[no_mangle]
-pub unsafe extern "C" fn rdp_bridge_start_rdcleanpath_unix_fd(
-    client_fd: std::ffi::c_int,
-    target_host: *const c_char,
-    target_port: u16,
-    username: *const c_char,
-    password: *const c_char,
-    domain: *const c_char,
-    acceptor_username: *const c_char,
-    out_handle: *mut u64,
-) -> i32 {
-    if out_handle.is_null() {
-        return RDP_BRIDGE_BAD_ARG;
-    }
-    let host = match unsafe { c_str_to_owned(target_host) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
-    let username = match unsafe { c_str_to_owned(username) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
-    let password = match unsafe { c_str_to_owned(password) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
-    let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
-    let acceptor_username = match unsafe { c_str_to_owned(acceptor_username) } {
-        Some(v) if !v.is_empty() => v,
-        _ => return RDP_BRIDGE_BAD_ARG,
-    };
-
-    use std::os::unix::io::FromRawFd;
-    let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
-
-    match spawn_session(
-        client_tcp,
-        host,
-        target_port,
-        username,
-        password,
-        domain,
-        SessionFlow::Rdcleanpath { acceptor_username },
-    ) {
-        Ok(id) => {
-            unsafe { *out_handle = id };
-            RDP_BRIDGE_OK
-        }
-        Err(e) => {
-            error!(error = ?e, "rdp_bridge_start_rdcleanpath_unix_fd: failed to spawn session");
-            RDP_BRIDGE_RUNTIME_ERROR
-        }
-    }
-}
-
-/// # Safety
-///
-/// See `rdp_bridge_start_rdcleanpath_unix_fd`.
-#[cfg(windows)]
-#[no_mangle]
-pub unsafe extern "C" fn rdp_bridge_start_rdcleanpath_windows_socket(
-    client_socket: usize,
-    target_host: *const c_char,
-    target_port: u16,
-    username: *const c_char,
-    password: *const c_char,
-    domain: *const c_char,
-    acceptor_username: *const c_char,
-    out_handle: *mut u64,
-) -> i32 {
-    if out_handle.is_null() {
-        return RDP_BRIDGE_BAD_ARG;
-    }
-    let host = match unsafe { c_str_to_owned(target_host) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
-    let username = match unsafe { c_str_to_owned(username) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
-    let password = match unsafe { c_str_to_owned(password) } {
-        Some(v) => v,
-        None => return RDP_BRIDGE_BAD_ARG,
-    };
-    let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
-    let acceptor_username = match unsafe { c_str_to_owned(acceptor_username) } {
-        Some(v) if !v.is_empty() => v,
-        _ => return RDP_BRIDGE_BAD_ARG,
-    };
-
-    use std::os::windows::io::{FromRawSocket, RawSocket};
-    let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
-
-    match spawn_session(
-        client_tcp,
-        host,
-        target_port,
-        username,
-        password,
-        domain,
-        SessionFlow::Rdcleanpath { acceptor_username },
-    ) {
-        Ok(id) => {
-            unsafe { *out_handle = id };
-            RDP_BRIDGE_OK
-        }
-        Err(e) => {
-            error!(error = ?e, "rdp_bridge_start_rdcleanpath_windows_socket: failed to spawn session");
             RDP_BRIDGE_RUNTIME_ERROR
         }
     }

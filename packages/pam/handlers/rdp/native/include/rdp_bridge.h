@@ -17,40 +17,11 @@ extern "C" {
 #define RDP_BRIDGE_BAD_ARG           -2
 #define RDP_BRIDGE_RUNTIME_ERROR     -3
 
-// `domain` is optional. NULL or empty string means no domain (NTLM falls back
-// to local-account auth). Set this for AD domain accounts so NTLM CredSSP
-// authenticates against the target's AD binding rather than its local SAM.
+/* `domain` and `acceptor_username` are optional (NULL or empty = unused).
+ * When `acceptor_username` is non-empty, the bridge runs the RDCleanPath
+ * (browser) flow; otherwise it runs the native RDP flow. */
 #if defined(__unix__) || defined(__APPLE__)
 int32_t rdp_bridge_start_unix_fd(
-    int          client_fd,
-    const char  *target_host,
-    uint16_t     target_port,
-    const char  *username,
-    const char  *password,
-    const char  *domain,
-    uint64_t    *out_handle
-);
-#endif
-
-#if defined(_WIN32) || defined(_WIN64)
-int32_t rdp_bridge_start_windows_socket(
-    uintptr_t    client_socket,
-    const char  *target_host,
-    uint16_t     target_port,
-    const char  *username,
-    const char  *password,
-    const char  *domain,
-    uint64_t    *out_handle
-);
-#endif
-
-/* Browser-flow start. Same as the native start, plus `acceptor_username`:
- * the username the browser is configured to present during the acceptor's
- * CredSSP exchange (decoupled from the real target username injected into
- * the connector). The browser speaks RDCleanPath over the inbound stream;
- * the gateway's WS upstream has already stripped framing. */
-#if defined(__unix__) || defined(__APPLE__)
-int32_t rdp_bridge_start_rdcleanpath_unix_fd(
     int          client_fd,
     const char  *target_host,
     uint16_t     target_port,
@@ -63,7 +34,7 @@ int32_t rdp_bridge_start_rdcleanpath_unix_fd(
 #endif
 
 #if defined(_WIN32) || defined(_WIN64)
-int32_t rdp_bridge_start_rdcleanpath_windows_socket(
+int32_t rdp_bridge_start_windows_socket(
     uintptr_t    client_socket,
     const char  *target_host,
     uint16_t     target_port,

@@ -60,32 +60,23 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 		defer C.free(unsafe.Pointer(cDomain))
 	}
 
-	var handle C.uint64_t
-	var rc C.int32_t
-	if acceptorUsername == "" {
-		rc = C.rdp_bridge_start_unix_fd(
-			C.int(dupFd),
-			cHost,
-			C.uint16_t(targetPort),
-			cUser,
-			cPass,
-			cDomain,
-			&handle,
-		)
-	} else {
-		cAcceptor := C.CString(acceptorUsername)
+	var cAcceptor *C.char
+	if acceptorUsername != "" {
+		cAcceptor = C.CString(acceptorUsername)
 		defer C.free(unsafe.Pointer(cAcceptor))
-		rc = C.rdp_bridge_start_rdcleanpath_unix_fd(
-			C.int(dupFd),
-			cHost,
-			C.uint16_t(targetPort),
-			cUser,
-			cPass,
-			cDomain,
-			cAcceptor,
-			&handle,
-		)
 	}
+
+	var handle C.uint64_t
+	rc := C.rdp_bridge_start_unix_fd(
+		C.int(dupFd),
+		cHost,
+		C.uint16_t(targetPort),
+		cUser,
+		cPass,
+		cDomain,
+		cAcceptor,
+		&handle,
+	)
 	if rc != C.RDP_BRIDGE_OK {
 		return nil, fmt.Errorf("rdp bridge: start failed (status %d)", int32(rc))
 	}
