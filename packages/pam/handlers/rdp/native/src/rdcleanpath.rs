@@ -312,4 +312,3 @@ fn generate_throwaway_cert() -> Result<Vec<u8>> {
         .context("generate self-signed cert")?;
     Ok(cert.cert.der().to_vec())
 }
-
