@@ -401,7 +401,7 @@ pub extern "C" fn rdp_bridge_wait(handle: u64) -> i32 {
                 error!(handle, error = ?e, "rdp_bridge_wait: session failed");
                 RDP_BRIDGE_SESSION_ERROR
             }
-            Err(panic) => {
+            Err(_) => {
                 error!(handle, "rdp_bridge_wait: session thread panicked");
                 RDP_BRIDGE_THREAD_PANIC
             }
