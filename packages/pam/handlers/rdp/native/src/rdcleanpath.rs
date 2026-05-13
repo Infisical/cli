@@ -251,6 +251,7 @@ async fn read_rdcleanpath_pdu(tcp: &mut TcpStream) -> Result<(RDCleanPathPdu, By
         })?
 }
 
+/// Accumulates TCP reads until a complete DER-encoded RDCleanPath PDU is detected.
 async fn read_rdcleanpath_pdu_inner(tcp: &mut TcpStream) -> Result<(RDCleanPathPdu, BytesMut)> {
     let mut buf = Vec::with_capacity(512);
     loop {
@@ -284,6 +285,7 @@ async fn read_rdcleanpath_pdu_inner(tcp: &mut TcpStream) -> Result<(RDCleanPathP
     }
 }
 
+/// Reads a single TPKT-framed PDU (4-byte header with big-endian length) from raw TCP.
 async fn read_tpkt_pdu<S>(framed: &mut TokioFramed<S>) -> Result<Vec<u8>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
