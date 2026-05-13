@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::bridge::{
     bridge_pdus, build_acceptor_tls_with_cert, filter_client_mcs_connect_initial,
@@ -49,11 +49,9 @@ async fn handle_browser_session(
     info!(host = %target.host, port = target.port, "rdcleanpath: starting browser session");
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    debug!("rdcleanpath: reading RDCleanPath request from client");
     let (request_pdu, client_leftover) = read_rdcleanpath_pdu(&mut client_tcp)
         .await
         .context("read RDCleanPath Request")?;
-    debug!("rdcleanpath: received RDCleanPath request");
     let request = request_pdu
         .into_enum()
         .map_err(|e| anyhow!("RDCleanPath enum: {e}"))?;
@@ -67,11 +65,9 @@ async fn handle_browser_session(
     };
     info!(destination, "RDCleanPath: received Request");
 
-    debug!("rdcleanpath: connecting to target");
     let target_tcp = TcpStream::connect((target.host.as_str(), target.port))
         .await
         .with_context(|| format!("connect target {}:{}", target.host, target.port))?;
-    debug!("rdcleanpath: target TCP connected");
     let target_addr = target_tcp.local_addr().context("local_addr")?;
     let mut target_framed = TokioFramed::new(target_tcp);
 
@@ -82,14 +78,11 @@ async fn handle_browser_session(
     let x224_cc_target = read_tpkt_pdu(&mut target_framed)
         .await
         .context("read X.224 CC")?;
-    debug!(len = x224_cc_target.len(), "received X.224 CC from target");
 
     let (initial_stream, target_leftover) = target_framed.into_inner();
-    debug!("rdcleanpath: TLS upgrading target");
     let (upgraded_stream, target_cert) = ironrdp_tls::upgrade(initial_stream, &target.host)
         .await
         .context("TLS upgrade to target")?;
-    debug!("rdcleanpath: target TLS upgraded");
 
     let (_tls_config, acceptor_public_key, throwaway_cert_der) =
         build_acceptor_tls_with_cert().context("build throwaway cert")?;
@@ -113,10 +106,6 @@ async fn handle_browser_session(
         .write_all(&response_der)
         .await
         .context("write RDCleanPath Response to client")?;
-    debug!(
-        len = response_der.len(),
-        "rdcleanpath: sent RDCleanPath response"
-    );
 
     // --- Connector: advance past X.224, then CredSSP only ---
 
@@ -145,7 +134,6 @@ async fn handle_browser_session(
     let server_public_key = ironrdp_tls::extract_tls_server_public_key(&target_cert)
         .ok_or_else(|| anyhow!("extract target public key"))?;
 
-    debug!("rdcleanpath: connector CredSSP");
     if connector.should_perform_credssp() {
         perform_connector_credssp(
             &mut connector,
@@ -206,7 +194,6 @@ async fn handle_browser_session(
     let mut client_framed: TokioFramed<ErasedStream> =
         TokioFramed::new_with_leftover(client_erased, client_leftover);
 
-    debug!("rdcleanpath: acceptor CredSSP");
     if acceptor.should_perform_credssp() {
         ironrdp_acceptor::accept_credssp(
             &mut client_framed,
@@ -246,7 +233,6 @@ async fn handle_browser_session(
         .await
         .context("flush target stream before passthrough")?;
 
-    debug!("rdcleanpath: bridging PDUs");
     let client_framed = ironrdp_tokio::TokioFramed::new(client_stream);
     let target_framed = ironrdp_tokio::TokioFramed::new(target_stream);
     bridge_pdus(client_framed, target_framed, tx).await

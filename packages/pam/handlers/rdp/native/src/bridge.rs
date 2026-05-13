@@ -31,7 +31,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::cap_filter;
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
@@ -184,10 +184,6 @@ where
             if offset == NOT_ACTIVE && action == Action::FastPath {
                 offset = elapsed_ns_since(started_at);
                 recording_offset_ns.store(offset, Ordering::Relaxed);
-                debug!(
-                    skip_ms = offset / 1_000_000,
-                    "first FastPath target frame, recording starts"
-                );
             }
             if offset != NOT_ACTIVE {
                 tap_target_to_client(action, &frame, started_at, offset, &tx_t2c);
@@ -375,7 +371,6 @@ fn try_filter_client_info(frame: &[u8]) -> Option<Vec<u8>> {
     if !cap_filter::client_info::clear_compression(user_data.slice_mut(&mut out)) {
         return None;
     }
-    debug!("Client Info PDU: cleared INFO_COMPRESSION + CompressionTypeMask");
     Some(out)
 }
 
@@ -409,7 +404,6 @@ fn try_filter_confirm_active(frame: &[u8]) -> Option<Vec<u8>> {
     if let Some(codecs_offset) = codecs_body_offset_in_frame {
         cap_filter::bitmap_codecs_cap::clear_codec_count(&mut out[codecs_offset..]);
     }
-    debug!("Confirm Active: cleared Order support + BitmapCodecs count");
     Some(out)
 }
 
