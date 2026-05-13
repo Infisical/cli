@@ -42,8 +42,8 @@ pub async fn run_mitm_rdcleanpath(
 
 /// Browser MITM flow for clients that speak RDCleanPath (IronRDP WASM).
 ///
-/// 1. Read RDCleanPath Request from client, extract the X.224 CR.
-/// 2. Forward CR to target, read CC, TLS-upgrade the target connection.
+/// 1. Read RDCleanPath Request from client, extract the X.224 CR (Connection Request).
+/// 2. Forward CR to target, read CC (Connection Confirm), TLS-upgrade the target connection.
 /// 3. Build a throwaway cert, wrap a fake CC + cert in an RDCleanPath Response, send to client.
 /// 4. Advance connector past X.224, run CredSSP to the target.
 /// 5. Advance acceptor with synthetic X.224 CR/CC, run CredSSP to the client.
