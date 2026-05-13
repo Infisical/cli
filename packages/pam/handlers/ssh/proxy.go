@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
@@ -26,6 +27,7 @@ type SSHProxyConfig struct {
 	SessionID              string
 	SessionLogger          session.SessionLogger
 	BlockedCommandPatterns []*regexp.Regexp // Regex patterns for command blocking (nil = no blocking)
+	OnActivity             func()           // Called when channel data flows
 }
 
 // SSHProxy handles proxying SSH connections with credential injection
@@ -122,6 +124,29 @@ func (p *SSHProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 
 	// Discard global requests (not needed for basic remote access)
 	go ssh.DiscardRequests(clientRequests)
+
+	// SSH keepalive: detect dead connections where TCP goes silent. Probes both sides every 30s
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := util.SSHKeepalive(clientSSHConn, 15*time.Second); err != nil {
+					log.Info().Err(err).Str("sessionID", sessionID).Msg("SSH keepalive to client failed, tearing down connection")
+					clientConn.Close()
+					return
+				}
+				if err := util.SSHKeepalive(serverSSHConn, 15*time.Second); err != nil {
+					log.Info().Err(err).Str("sessionID", sessionID).Msg("SSH keepalive to target failed, tearing down connection")
+					clientConn.Close()
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Handle channels from client (this is where actual SSH sessions happen)
 	for newChannel := range clientChannels {
@@ -500,6 +525,10 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
+			if p.config.OnActivity != nil {
+				p.config.OnActivity()
+			}
+
 			// Check if this channel is a binary session (SFTP/SCP)
 			chState.mutex.Lock()
 			isBinary := chState.isBinarySession
@@ -744,6 +773,10 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
+			if p.config.OnActivity != nil {
+				p.config.OnActivity()
+			}
+
 			chState.mutex.Lock()
 			isBinary := chState.isBinarySession
 			sftpParser := chState.sftpParser

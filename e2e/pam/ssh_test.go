@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -33,8 +32,8 @@ const (
 	sshPassword = "testpass"
 )
 
-func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string) (testcontainers.Container, int) {
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string) (testcontainers.Container, string, int) {
+	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			FromDockerfile: testcontainers.FromDockerfile{
 				Context:    "testdata/ssh-server",
@@ -45,20 +44,25 @@ func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string)
 			HostConfigModifier: func(hc *container.HostConfig) {
 				hc.ExtraHosts = append(hc.ExtraHosts, "host.docker.internal:host-gateway")
 			},
-			WaitingFor: wait.ForListeningPort("22/tcp").WithStartupTimeout(30 * time.Second),
+			WaitingFor: wait.ForAll(
+				wait.ForListeningPort("22/tcp"),
+				wait.ForLog("Server listening"),
+			).WithStartupTimeout(30 * time.Second),
 		},
 		Started: true,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		if err := container.Terminate(ctx); err != nil {
+		if err := ctr.Terminate(ctx); err != nil {
 			t.Logf("Failed to terminate SSH container: %v", err)
 		}
 	})
 
-	port, err := container.MappedPort(ctx, "22")
+	host, err := ctr.Host(ctx)
 	require.NoError(t, err)
-	return container, port.Int()
+	port, err := ctr.MappedPort(ctx, "22")
+	require.NoError(t, err)
+	return ctr, host, port.Int()
 }
 
 func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
@@ -200,12 +204,20 @@ func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, c
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, "sshd reload should succeed")
 
-	// Wait for sshd to be responsive after config reload.
+	// Wait for sshd to be fully responsive after config reload.
+	// A TCP dial is not enough — sshd never closes the listen socket during
+	// SIGHUP, so the port is always reachable. Instead, do an actual SSH
+	// handshake to confirm sshd is serving connections after the reload.
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		Timeout:  10 * time.Second,
 		Interval: 500 * time.Millisecond,
 		Condition: func() helpers.ConditionResult {
-			conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", sshPort), time.Second)
+			conn, err := ssh.Dial("tcp", fmt.Sprintf("localhost:%d", sshPort), &ssh.ClientConfig{
+				User:            sshUser,
+				Auth:            []ssh.AuthMethod{ssh.Password(sshPassword)},
+				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				Timeout:         2 * time.Second,
+			})
 			if err != nil {
 				return helpers.ConditionWait
 			}
@@ -221,7 +233,7 @@ func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, c
 //   - password:    uses hardcoded testuser/testpass from entrypoint; account gets username + password
 //   - public-key:  container gets SSH_AUTHORIZED_KEY (generated ed25519); account gets username + privateKey
 //   - certificate: container configured via curl | bash (ssh-ca-setup endpoint); account gets just username
-func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceHost string, method string) {
+func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, method string) {
 	containerEnv := map[string]string{}
 	accountCreds := map[string]interface{}{
 		"authMethod": method,
@@ -249,11 +261,11 @@ func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, reso
 		// Cert auth is configured after resource creation via curl | bash.
 	}
 
-	container, sshPort := startSSHContainer(t, ctx, containerEnv)
-	slog.Info("SSH container started", "method", method, "host", resourceHost, "port", sshPort)
+	container, sshHost, sshPort := startSSHContainer(t, ctx, containerEnv)
+	slog.Info("SSH container started", "method", method, "host", sshHost, "port", sshPort)
 
 	resourceName := fmt.Sprintf("ssh-%s-resource", method)
-	resourceId := createSSHPamResource(t, ctx, infra, resourceName, resourceHost, sshPort)
+	resourceId := createSSHPamResource(t, ctx, infra, resourceName, sshHost, sshPort)
 
 	if method == "certificate" {
 		configureCertAuth(t, ctx, infra, container, sshPort, resourceId)
@@ -273,12 +285,10 @@ func TestPAM_SSH(t *testing.T) {
 	infra := SetupPAMInfra(t, ctx)
 	LoginUser(t, ctx, infra)
 
-	resourceHost := getOutboundIP(t)
-
 	methods := []string{"password", "public-key", "certificate"}
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
-			runSSHAuthTest(t, ctx, infra, resourceHost, method)
+			runSSHAuthTest(t, ctx, infra, method)
 		})
 	}
 }
