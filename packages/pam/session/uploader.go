@@ -327,7 +327,7 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 			break // would exceed budget; caller will loop for the rest
 		}
 
-		// Probe the entry's elapsedTime field. Absent on non-terminal events.
+		// Probe the entry's elapsedTime field. Absent on HTTP/Kubernetes events.
 		var probe struct {
 			ElapsedTime float64 `json:"elapsedTime"`
 		}
@@ -650,19 +650,19 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 	// the Database fallback would silently zero-fill input/output, dropping
 	// the entire recording.
 	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows {
-		terminalEvents, err := ReadEncryptedSessionEventsFromFile(fileInfo.Filename, encryptionKey)
+		sessionEvents, err := ReadEncryptedSessionEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
-			return fmt.Errorf("failed to read terminal session file: %w", err)
+			return fmt.Errorf("failed to read session event file: %w", err)
 		}
 
 		log.Debug().
 			Str("sessionId", fileInfo.SessionID).
 			Str("resourceType", fileInfo.ResourceType).
-			Int("eventCount", len(terminalEvents)).
-			Msg("Uploading terminal session events")
+			Int("eventCount", len(sessionEvents)).
+			Msg("Uploading session events")
 
 		var logs []api.UploadSessionEvent
-		for _, event := range terminalEvents {
+		for _, event := range sessionEvents {
 			logs = append(logs, api.UploadSessionEvent{
 				Timestamp:   event.Timestamp,
 				EventType:   string(event.EventType),
@@ -685,7 +685,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 			Str("sessionId", fileInfo.SessionID).
 			Str("resourceType", fileInfo.ResourceType).
 			Int("eventCount", len(httpEvents)).
-			Msg("Uploading terminal session events")
+			Msg("Uploading Kubernetes session events")
 
 		var logs []api.UploadHttpEvent
 		for _, event := range httpEvents {
