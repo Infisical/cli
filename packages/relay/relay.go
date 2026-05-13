@@ -420,24 +420,23 @@ func (r *Relay) handleSSHAgent(conn net.Conn) {
 	gatewayName := sshConn.Permissions.Extensions["gateway-name"]
 	log.Info().Msgf("SSH handshake successful for gateway: %s (%s)", gatewayName, gatewayId)
 
-	// Store the connection (ensure only one connection per gateway)
+	// Store the connection, replacing any stale one from a previous session.
 	r.mu.Lock()
-	if _, exists := r.tunnels[gatewayId]; exists {
-		r.mu.Unlock()
-		log.Warn().Msgf("Gateway %s (%s) already has an active connection, rejecting new connection", gatewayName, gatewayId)
-		sshConn.Close()
-		return
+	if old, exists := r.tunnels[gatewayId]; exists {
+		log.Warn().Msgf("Gateway %s (%s) reconnected, closing stale SSH connection", gatewayName, gatewayId)
+		old.Close()
 	}
-
 	r.tunnels[gatewayId] = sshConn
 	r.mu.Unlock()
 
 	// Clean up when agent disconnects
 	defer func() {
 		r.mu.Lock()
-		delete(r.tunnels, gatewayId)
+		if r.tunnels[gatewayId] == sshConn {
+			delete(r.tunnels, gatewayId)
+			log.Info().Msgf("Gateway %s (%s) disconnected", gatewayName, gatewayId)
+		}
 		r.mu.Unlock()
-		log.Info().Msgf("Gateway %s (%s) disconnected", gatewayName, gatewayId)
 	}()
 
 	// Handle global requests (reject all for security)
