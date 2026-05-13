@@ -4,7 +4,6 @@
 
 pub mod bridge;
 pub mod cap_filter;
-pub mod caps;
 pub mod config;
 pub mod events;
 pub mod ffi;

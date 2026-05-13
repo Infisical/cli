@@ -1,8 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
-use ironrdp_acceptor::{
-    accept_finalize, Acceptor, AcceptorResult, DesktopSize as AcceptorDesktopSize,
-};
+use ironrdp_acceptor::{Acceptor, DesktopSize as AcceptorDesktopSize};
 use ironrdp_connector::{ClientConnector, Sequence};
 use ironrdp_core::{encode_buf, WriteBuf};
 use ironrdp_pdu::nego::{
@@ -12,18 +10,18 @@ use ironrdp_pdu::rdp::client_info::Credentials as AcceptorCredentials;
 use ironrdp_pdu::x224::X224;
 use ironrdp_rdcleanpath::{DetectionResult, RDCleanPath, RDCleanPathPdu};
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
-use ironrdp_tokio::{
-    connect_finalize, mark_as_upgraded, skip_connect_begin, FramedWrite, TokioFramed,
-};
+use ironrdp_tokio::{mark_as_upgraded, skip_connect_begin, FramedWrite, TokioFramed};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-use crate::bridge::{bridge_pdus, ErasedStream, TargetEndpoint};
-use crate::caps::{acceptor_capabilities, default_desktop_size};
-use crate::config::connector_config_browser;
+use crate::bridge::{
+    bridge_pdus, build_acceptor_tls_with_cert, filter_client_mcs_connect_initial,
+    perform_connector_credssp, ErasedStream, TargetEndpoint,
+};
+use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 use crate::events::EventSender;
 
 pub async fn run_mitm_rdcleanpath(
@@ -86,14 +84,15 @@ async fn handle_browser_session(
         .context("read X.224 CC")?;
     debug!(len = x224_cc_target.len(), "received X.224 CC from target");
 
-    let (initial_stream, leftover) = target_framed.into_inner();
+    let (initial_stream, target_leftover) = target_framed.into_inner();
     debug!("rdcleanpath: TLS upgrading target");
     let (upgraded_stream, target_cert) = ironrdp_tls::upgrade(initial_stream, &target.host)
         .await
         .context("TLS upgrade to target")?;
     debug!("rdcleanpath: target TLS upgraded");
 
-    let throwaway_cert_der = generate_throwaway_cert().context("throwaway cert")?;
+    let (_tls_config, acceptor_public_key, throwaway_cert_der) =
+        build_acceptor_tls_with_cert().context("build throwaway cert")?;
 
     let fake_cc_bytes = encode_x224(X224(ConnectionConfirm::Response {
         flags: ResponseFlags::empty(),
@@ -119,14 +118,12 @@ async fn handle_browser_session(
         "rdcleanpath: sent RDCleanPath response"
     );
 
-    let (width, height) = default_desktop_size();
+    // --- Connector: advance past X.224, then CredSSP only ---
 
-    let config = connector_config_browser(
+    let config = connector_config(
         target.username.clone(),
         target.password.clone(),
         target.domain.clone(),
-        width,
-        height,
     );
     let mut connector = ClientConnector::new(config, target_addr);
 
@@ -140,31 +137,30 @@ async fn handle_browser_session(
         .map_err(|e| anyhow!("connector step CC: {e:?}"))?;
 
     let should_upgrade = skip_connect_begin(&mut connector);
-    let upgraded = mark_as_upgraded(should_upgrade, &mut connector);
+    let _ = mark_as_upgraded(should_upgrade, &mut connector);
 
     let target_erased: ErasedStream = Box::new(upgraded_stream);
-    let mut target_upgraded_framed = TokioFramed::new_with_leftover(target_erased, leftover);
+    let mut target_framed = TokioFramed::new_with_leftover(target_erased, target_leftover);
 
     let server_public_key = ironrdp_tls::extract_tls_server_public_key(&target_cert)
         .ok_or_else(|| anyhow!("extract target public key"))?;
 
-    debug!("rdcleanpath: running connect_finalize on target");
-    let connection_result = connect_finalize(
-        upgraded,
-        connector,
-        &mut target_upgraded_framed,
-        &mut ReqwestNetworkClient::new(),
-        ironrdp_connector::ServerName::new(&target.host),
-        server_public_key.to_owned(),
-        None,
-    )
-    .await
-    .map_err(|e| anyhow!("target connect_finalize: {e:?}"))?;
-    info!(
-        width = connection_result.desktop_size.width,
-        height = connection_result.desktop_size.height,
-        "rdcleanpath: target reached active stage"
-    );
+    debug!("rdcleanpath: connector CredSSP");
+    if connector.should_perform_credssp() {
+        perform_connector_credssp(
+            &mut connector,
+            &mut target_framed,
+            &mut ReqwestNetworkClient::new(),
+            ironrdp_connector::ServerName::new(&target.host),
+            server_public_key.to_vec(),
+            None,
+        )
+        .await
+        .context("connector: CredSSP")?;
+    }
+    info!("rdcleanpath: connector CredSSP complete");
+
+    // --- Acceptor: advance past X.224, then CredSSP only ---
 
     let placeholder_creds = AcceptorCredentials {
         username: if acceptor_username.is_empty() {
@@ -177,8 +173,11 @@ async fn handle_browser_session(
     };
     let mut acceptor = Acceptor::new(
         SecurityProtocol::SSL,
-        AcceptorDesktopSize { width, height },
-        acceptor_capabilities(width, height),
+        AcceptorDesktopSize {
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+        },
+        Vec::new(),
         Some(placeholder_creds),
     );
 
@@ -197,7 +196,6 @@ async fn handle_browser_session(
     acceptor
         .step(&[], &mut acc_scratch)
         .map_err(|e| anyhow!("acceptor step empty: {e:?}"))?;
-    acc_scratch.clear();
 
     if acceptor.reached_security_upgrade().is_none() {
         anyhow::bail!("acceptor did not reach SecurityUpgrade after synthetic CR/CC");
@@ -205,22 +203,53 @@ async fn handle_browser_session(
     acceptor.mark_security_upgrade_as_done();
 
     let client_erased: ErasedStream = Box::new(client_tcp);
-    let client_framed: TokioFramed<ErasedStream> =
+    let mut client_framed: TokioFramed<ErasedStream> =
         TokioFramed::new_with_leftover(client_erased, client_leftover);
 
-    debug!("rdcleanpath: running accept_finalize on client");
-    let (client_final_framed, acceptor_result): (TokioFramed<ErasedStream>, AcceptorResult) =
-        accept_finalize(client_framed, &mut acceptor)
+    debug!("rdcleanpath: acceptor CredSSP");
+    if acceptor.should_perform_credssp() {
+        ironrdp_acceptor::accept_credssp(
+            &mut client_framed,
+            &mut acceptor,
+            &mut ReqwestNetworkClient::new(),
+            ironrdp_connector::ServerName::new("infisical-rdp-bridge"),
+            acceptor_public_key,
+            None,
+        )
+        .await
+        .context("acceptor: CredSSP")?;
+    }
+    info!("rdcleanpath: acceptor CredSSP complete");
+
+    // --- Bridge MCS/capabilities + PDUs (same as native path) ---
+
+    let (mut client_stream, client_lo) = client_framed.into_inner();
+    let (mut target_stream, target_lo) = target_framed.into_inner();
+
+    filter_client_mcs_connect_initial(&mut client_stream, &mut target_stream, client_lo)
+        .await
+        .context("filter client MCS Connect Initial")?;
+
+    if !target_lo.is_empty() {
+        client_stream
+            .write_all(&target_lo)
             .await
-            .map_err(|e| anyhow!("accept_finalize: {e:?}"))?;
-    info!(
-        user_ch = acceptor_result.user_channel_id,
-        io_ch = acceptor_result.io_channel_id,
-        "rdcleanpath: client reached active stage"
-    );
+            .context("flush target leftover to client")?;
+    }
+
+    client_stream
+        .flush()
+        .await
+        .context("flush client stream before passthrough")?;
+    target_stream
+        .flush()
+        .await
+        .context("flush target stream before passthrough")?;
 
     debug!("rdcleanpath: bridging PDUs");
-    bridge_pdus(client_final_framed, target_upgraded_framed, tx).await
+    let client_framed = ironrdp_tokio::TokioFramed::new(client_stream);
+    let target_framed = ironrdp_tokio::TokioFramed::new(target_stream);
+    bridge_pdus(client_framed, target_framed, tx).await
 }
 
 const RDCLEANPATH_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -304,11 +333,4 @@ where
     let mut buf = WriteBuf::new();
     encode_buf(&pdu, &mut buf).map_err(|e| anyhow!("encode X.224 PDU: {e:?}"))?;
     Ok(buf.filled().to_vec())
-}
-
-fn generate_throwaway_cert() -> Result<Vec<u8>> {
-    let subject_alt_names = vec!["localhost".to_string(), "infisical-rdp-gateway".to_string()];
-    let cert = rcgen::generate_simple_self_signed(subject_alt_names)
-        .context("generate self-signed cert")?;
-    Ok(cert.cert.der().to_vec())
 }
