@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::bridge::{run_mitm, TargetEndpoint};
+use crate::bridge::{run_mitm_native, TargetEndpoint};
 use crate::events::{self, SessionEvent};
 use crate::rdcleanpath::run_mitm_rdcleanpath;
 
@@ -235,7 +235,7 @@ fn spawn_session(
                 };
                 match flow {
                     SessionFlow::Native => {
-                        run_mitm(client, endpoint, cancel_for_thread, events_tx).await
+                        run_mitm_native(client, endpoint, cancel_for_thread, events_tx).await
                     }
                     SessionFlow::Rdcleanpath { acceptor_username } => {
                         run_mitm_rdcleanpath(

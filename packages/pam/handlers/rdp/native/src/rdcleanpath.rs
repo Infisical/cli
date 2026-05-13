@@ -32,7 +32,7 @@ pub async fn run_mitm_rdcleanpath(
     tx: EventSender,
 ) -> Result<()> {
     tokio::select! {
-        result = handle_browser_session(client_tcp, target, acceptor_username, tx) => result,
+        result = run_mitm_rdcleanpath_inner(client_tcp, target, acceptor_username, tx) => result,
         _ = cancel.cancelled() => {
             info!("rdcleanpath session canceled by caller");
             Ok(())
@@ -40,7 +40,7 @@ pub async fn run_mitm_rdcleanpath(
     }
 }
 
-async fn handle_browser_session(
+async fn run_mitm_rdcleanpath_inner(
     mut client_tcp: TcpStream,
     target: TargetEndpoint,
     acceptor_username: String,

@@ -56,14 +56,14 @@ pub struct TargetEndpoint {
     pub domain: Option<String>,
 }
 
-pub async fn run_mitm(
+pub async fn run_mitm_native(
     client_tcp: TcpStream,
     target: TargetEndpoint,
     cancel: CancellationToken,
     tx: EventSender,
 ) -> Result<()> {
     tokio::select! {
-        result = run_mitm_inner(client_tcp, target, tx) => result,
+        result = run_mitm_native_inner(client_tcp, target, tx) => result,
         _ = cancel.cancelled() => {
             info!("session canceled by caller");
             Ok(())
@@ -71,7 +71,7 @@ pub async fn run_mitm(
     }
 }
 
-async fn run_mitm_inner(
+async fn run_mitm_native_inner(
     client_tcp: TcpStream,
     target: TargetEndpoint,
     tx: EventSender,
