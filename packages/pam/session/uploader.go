@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -31,7 +32,8 @@ const (
 	ResourceTypeSSH        = "ssh"
 	ResourceTypeKubernetes = "kubernetes"
 	ResourceTypeMongodb    = "mongodb"
-	ResourceTypeWindows    = "windows"
+	ResourceTypeOracledb = "oracledb"
+	ResourceTypeWindows  = "windows"
 )
 
 type SessionFileInfo struct {
@@ -47,7 +49,10 @@ type sessionUploadState struct {
 	legacyMode       bool   // true if the batch upload endpoint returned 404 (platform too old); fall back to bulk upload at session end
 	startedAt        time.Time
 	lastEndElapsedMs int64
-	mu               sync.Mutex
+	// Advanced per-event by streaming writers so GetPriorElapsedNs sees a fresh
+	// anchor between flush ticks (rapid RDP reconnects within the 10s window).
+	lastEmittedElapsedNs atomic.Uint64
+	mu                   sync.Mutex
 }
 
 type SessionUploader struct {
@@ -75,7 +80,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeWindows)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 
@@ -227,8 +232,8 @@ func ReadEncryptedSessionLogByFilename(filename string, encryptionKey string) ([
 	return readEncryptedEntries[SessionLogEntry](filename, encryptionKey)
 }
 
-func ReadEncryptedTerminalEventsFromFile(filename string, encryptionKey string) ([]TerminalEvent, error) {
-	return readEncryptedEntries[TerminalEvent](filename, encryptionKey)
+func ReadEncryptedSessionEventsFromFile(filename string, encryptionKey string) ([]SessionEvent, error) {
+	return readEncryptedEntries[SessionEvent](filename, encryptionKey)
 }
 
 func ReadEncryptedHttpEventsFromFile(filename string, encryptionKey string) ([]HttpEvent, error) {
@@ -323,7 +328,7 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 			break // would exceed budget; caller will loop for the rest
 		}
 
-		// Probe the entry's elapsedTime field. Absent on non-terminal events.
+		// Probe the entry's elapsedTime field. Absent on HTTP/Kubernetes events.
 		var probe struct {
 			ElapsedTime float64 `json:"elapsedTime"`
 		}
@@ -348,15 +353,41 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 	return payload, newOffset, lastEntryElapsedMs, nil
 }
 
-// Stable across gateway restarts and per-connection bridge restarts.
-func (su *SessionUploader) GetSessionStartedAt(sessionID string) (time.Time, bool) {
+// GetPriorElapsedNs returns the last recorded elapsed time for this session
+// in nanoseconds. On reconnects this is added to the bridge's elapsed_ns so
+// timestamps stay monotonic across bridge restarts.
+func (su *SessionUploader) GetPriorElapsedNs(sessionID string) uint64 {
 	su.activeSessionsMu.RLock()
 	defer su.activeSessionsMu.RUnlock()
 	state, ok := su.activeSessions[sessionID]
 	if !ok {
-		return time.Time{}, false
+		return 0
 	}
-	return state.startedAt, true
+	emitted := state.lastEmittedElapsedNs.Load()
+	flushed := uint64(state.lastEndElapsedMs) * 1_000_000
+	if emitted > flushed {
+		return emitted
+	}
+	return flushed
+}
+
+// Monotonically advances the per-session GetPriorElapsedNs anchor; stale values are ignored.
+func (su *SessionUploader) RecordEmittedElapsedNs(sessionID string, elapsedNs uint64) {
+	su.activeSessionsMu.RLock()
+	state, ok := su.activeSessions[sessionID]
+	su.activeSessionsMu.RUnlock()
+	if !ok {
+		return
+	}
+	for {
+		cur := state.lastEmittedElapsedNs.Load()
+		if elapsedNs <= cur {
+			return
+		}
+		if state.lastEmittedElapsedNs.CompareAndSwap(cur, elapsedNs) {
+			return
+		}
+	}
 }
 
 // RegisterSession registers a session for incremental batch uploads, resuming from
@@ -384,12 +415,14 @@ func (su *SessionUploader) RegisterSession(sessionID string) {
 	// rewind on reconnect. The persisted .offset only catches up after a flush,
 	// so it can't be the source of truth here.
 	if _, exists := su.activeSessions[sessionID]; !exists {
-		su.activeSessions[sessionID] = &sessionUploadState{
+		state := &sessionUploadState{
 			fileOffset:       startOffset,
 			filename:         fileInfo.Filename,
 			startedAt:        time.Now().Add(-time.Duration(lastEndElapsedMs) * time.Millisecond),
 			lastEndElapsedMs: lastEndElapsedMs,
 		}
+		state.lastEmittedElapsedNs.Store(uint64(lastEndElapsedMs) * 1_000_000)
+		su.activeSessions[sessionID] = state
 	}
 	su.activeSessionsMu.Unlock()
 
@@ -546,11 +579,13 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 				break
 			}
 
-			// Prefer the last event's actual elapsedTime; fall back to wallclock for
-			// non-terminal sessions whose entries lack the field (HTTP, Kubernetes).
+			// Wallclock fallback only when the chunk carried no elapsedTime at all
+			// (HTTP/Kubernetes); otherwise it includes reconnect idle gaps.
 			endElapsedMs := lastEntryElapsedMs
-			if endElapsedMs <= startElapsedMs {
+			if lastEntryElapsedMs == 0 {
 				endElapsedMs = time.Since(state.startedAt).Milliseconds()
+			} else if endElapsedMs < startElapsedMs {
+				endElapsedMs = startElapsedMs
 			}
 
 			pc, encErr := su.chunkUploader.EncryptAndQueueChunk(sessionID, payload, startElapsedMs, endElapsedMs)
@@ -611,25 +646,25 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
-	// SSH and Windows both write TerminalEvent records (SSH uses input/output/
+	// SSH and Windows both write SessionEvent records (SSH uses input/output/
 	// resize/error; Windows uses ChannelType=rdp). Bulk-uploading either via
 	// the Database fallback would silently zero-fill input/output, dropping
 	// the entire recording.
 	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows {
-		terminalEvents, err := ReadEncryptedTerminalEventsFromFile(fileInfo.Filename, encryptionKey)
+		sessionEvents, err := ReadEncryptedSessionEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
-			return fmt.Errorf("failed to read terminal session file: %w", err)
+			return fmt.Errorf("failed to read session event file: %w", err)
 		}
 
 		log.Debug().
 			Str("sessionId", fileInfo.SessionID).
 			Str("resourceType", fileInfo.ResourceType).
-			Int("eventCount", len(terminalEvents)).
-			Msg("Uploading terminal session events")
+			Int("eventCount", len(sessionEvents)).
+			Msg("Uploading session events")
 
-		var logs []api.UploadTerminalEvent
-		for _, event := range terminalEvents {
-			logs = append(logs, api.UploadTerminalEvent{
+		var logs []api.UploadSessionEvent
+		for _, event := range sessionEvents {
+			logs = append(logs, api.UploadSessionEvent{
 				Timestamp:   event.Timestamp,
 				EventType:   string(event.EventType),
 				ChannelType: string(event.ChannelType),
@@ -651,7 +686,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 			Str("sessionId", fileInfo.SessionID).
 			Str("resourceType", fileInfo.ResourceType).
 			Int("eventCount", len(httpEvents)).
-			Msg("Uploading terminal session events")
+			Msg("Uploading Kubernetes session events")
 
 		var logs []api.UploadHttpEvent
 		for _, event := range httpEvents {

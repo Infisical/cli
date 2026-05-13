@@ -65,7 +65,7 @@ func (p *RDPProxy) handleConnectionWith(ctx context.Context, clientConn net.Conn
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.SessionStartedAt)
+		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.PriorElapsedNs, p.config.SessionUploader)
 	}()
 	// Let drain finish so recording tail isn't dropped; cancel paths bail early
 	defer func() {

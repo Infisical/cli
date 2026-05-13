@@ -16,11 +16,16 @@ type RDPProxyConfig struct {
 	TargetPort     uint16
 	InjectUsername string
 	InjectPassword string
-	InjectDomain  string
-	SessionID     string
+	// Empty for local accounts; AD domain name (e.g. "CORP.EXAMPLE.COM") for
+	// domain-joined NTLM CredSSP. Backend session credentials populate this.
+	InjectDomain string
+	SessionID    string
 	SessionLogger session.SessionLogger
-	// Rewrite bridge elapsedNs against this anchor so timestamps stay monotonic across reconnects
-	SessionStartedAt time.Time
+	// Added to every event's elapsed_ns so timestamps stay monotonic across
+	// RDP reconnects within the same PAM session. Zero for the first connection.
+	PriorElapsedNs uint64
+	// drain calls RecordEmittedElapsedNs after each persisted event.
+	SessionUploader *session.SessionUploader
 }
 
 type RDPProxy struct {
@@ -34,7 +39,7 @@ func NewRDPProxy(config RDPProxyConfig) *RDPProxy {
 // Fixed NLA username the browser presents; carries no security weight
 const BrowserAcceptorUsername = "infisical"
 
-// Wire envelopes carried inside TerminalEvent.Data for ChannelType=RDP.
+// Wire envelopes carried inside SessionEvent.Data for ChannelType=RDP.
 type rdpTargetFrameEnvelope struct {
 	Type      string `json:"type"`    // "target_frame"
 	Action    string `json:"action"`  // "x224" | "fastpath"
@@ -70,7 +75,9 @@ const pollTimeout = 250 * time.Millisecond
 
 var errUnknownRdpEventType = errors.New("rdp: unknown event type")
 
-func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, sessionStartedAt time.Time) {
+// Logger errors are warned but don't stop the drain; dropping one event is
+// better than back-pressuring the bridge byte stream.
+func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, priorElapsedNs uint64, uploader *session.SessionUploader) {
 	if logger == nil {
 		return
 	}
@@ -89,23 +96,25 @@ func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLog
 		case PollTimeout:
 			continue
 		case PollOK:
-			if !sessionStartedAt.IsZero() {
-				ev.ElapsedNs = uint64(time.Since(sessionStartedAt).Nanoseconds())
-			}
+			ev.ElapsedNs += priorElapsedNs
 			data, encErr := encodeRdpEvent(ev)
 			if encErr != nil {
 				log.Warn().Err(encErr).Str("sessionID", sessionID).Uint8("type", uint8(ev.Type)).Msg("encode RDP event")
 				continue
 			}
-			te := session.TerminalEvent{
+			te := session.SessionEvent{
 				Timestamp:   time.Now(),
-				EventType:   session.TerminalEventRDP,
-				ChannelType: session.TerminalChannelRDP,
+				EventType:   session.SessionEventRDP,
+				ChannelType: session.SessionChannelRDP,
 				Data:        data,
 				ElapsedTime: float64(ev.ElapsedNs) / 1e9,
 			}
-			if logErr := logger.LogTerminalEvent(te); logErr != nil {
+			if logErr := logger.LogSessionEvent(te); logErr != nil {
 				log.Warn().Err(logErr).Str("sessionID", sessionID).Msg("log RDP event")
+				continue
+			}
+			if uploader != nil {
+				uploader.RecordEmittedElapsedNs(sessionID, ev.ElapsedNs)
 			}
 		}
 	}
