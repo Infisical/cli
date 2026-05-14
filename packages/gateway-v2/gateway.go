@@ -874,24 +874,16 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
 		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		defer func() {
+			sessionCancel()
+			g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
+		}()
 		forwardConfig.PAMConfig.OnActivity = touchSession
 		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
-			}
-		}
-		sessionCancel()
-		// RDP reconnects via a stable .rdp file within the session's validity
-		// window; terminating on disconnect would break that. Idle reaper /
-		// expiry / explicit cancel still end the session normally.
-		isRDP := forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows
-		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn && !isRDP {
-			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
-				forwardConfig.PAMConfig.SessionId, "connection_closed",
-			); err != nil {
-				log.Error().Err(err).Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Failed to cleanup PAM session")
 			}
 		}
 		return
