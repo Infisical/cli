@@ -107,11 +107,16 @@ func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *Gatew
 	// Kill the active proxy connection if it exists in the registry
 	if cancelled := cancelSession(pamConfig.SessionId); cancelled {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("Active proxy session cancelled via registry")
-		if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
-			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
-		}
 	} else {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("No active proxy session found in registry (may have already ended)")
+	}
+
+	// Always run cleanup on explicit cancellation. RDP keeps sessions alive
+	// across client disconnects to support .rdp-file reconnects, so when the
+	// CLI ctrl-C arrives the registry is already empty but the platform-side
+	// session is still active and needs to be terminated.
+	if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
+		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
 	}
 
 	conn.Close()
@@ -459,13 +464,15 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
 		}
 		rdpConfig := rdp.RDPProxyConfig{
-			TargetHost:     credentials.Host,
-			TargetPort:     uint16(credentials.Port),
-			InjectUsername: credentials.Username,
-			InjectPassword: credentials.Password,
-			InjectDomain:   credentials.Domain,
-			SessionID:      pamConfig.SessionId,
-			SessionLogger:  sessionLogger,
+			TargetHost:      credentials.Host,
+			TargetPort:      uint16(credentials.Port),
+			InjectUsername:  credentials.Username,
+			InjectPassword:  credentials.Password,
+			InjectDomain:    credentials.Domain,
+			SessionID:       pamConfig.SessionId,
+			SessionLogger:   sessionLogger,
+			PriorElapsedNs:  pamConfig.SessionUploader.GetPriorElapsedNs(pamConfig.SessionId),
+			SessionUploader: pamConfig.SessionUploader,
 		}
 		proxy := rdp.NewRDPProxy(rdpConfig)
 		log.Info().

@@ -25,29 +25,31 @@ type SessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-// TerminalEventType represents the type of terminal event
-type TerminalEventType string
+// SessionEventType represents the type of session event
+type SessionEventType string
 
 const (
-	TerminalEventInput  TerminalEventType = "input"  // Data from user to server
-	TerminalEventOutput TerminalEventType = "output" // Data from server to user
+	SessionEventInput  SessionEventType = "input"  // Data from user to server
+	SessionEventOutput SessionEventType = "output" // Data from server to user
+	SessionEventRDP    SessionEventType = "rdp"    // RDP tap event (see SessionChannelRDP)
 )
 
-// TerminalChannelType represents the type of SSH channel
-type TerminalChannelType string
+// SessionChannelType represents the type of SSH channel
+type SessionChannelType string
 
 const (
-	TerminalChannelShell TerminalChannelType = "terminal" // Interactive shell session
-	TerminalChannelExec  TerminalChannelType = "exec"     // Single command execution
-	TerminalChannelSFTP  TerminalChannelType = "sftp"     // SFTP file transfer
+	SessionChannelShell SessionChannelType = "terminal" // Interactive shell session
+	SessionChannelExec  SessionChannelType = "exec"     // Single command execution
+	SessionChannelSFTP  SessionChannelType = "sftp"     // SFTP file transfer
+	SessionChannelRDP   SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
 )
 
-// TerminalEvent represents a single event in a terminal session
-type TerminalEvent struct {
+// SessionEvent represents a single event in a recorded session (SSH or RDP).
+type SessionEvent struct {
 	Timestamp   time.Time            `json:"timestamp"`
-	EventType   TerminalEventType    `json:"eventType"`
-	ChannelType TerminalChannelType  `json:"channelType,omitempty"` // Type of SSH channel
-	Data        []byte               `json:"data"`                  // Raw terminal data
+	EventType   SessionEventType    `json:"eventType"`
+	ChannelType SessionChannelType  `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
+	Data        []byte               `json:"data"`                  // SSH: raw terminal bytes; RDP: JSON envelope (base64-marshaled)
 	ElapsedTime float64              `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
@@ -73,7 +75,7 @@ const (
 
 type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
-	LogTerminalEvent(event TerminalEvent) error
+	LogSessionEvent(event SessionEvent) error
 	LogHttpEvent(event HttpEvent) error
 	Close() error
 }
@@ -300,12 +302,19 @@ func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
 	})
 }
 
-func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
+func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
 		if event.ElapsedTime == 0 {
 			event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
 		}
-		event.Data = sl.applyMasking(event.Data)
+		// RDP carries a structured JSON envelope (with base64-encoded PDU
+		// bytes, scancodes, etc.) in Data, not free-form terminal text.
+		// Masking patterns are SSH-shaped regexes; running them over the
+		// envelope would corrupt valid recordings whenever a pattern
+		// happened to match a substring of the JSON or base64.
+		if event.ChannelType != SessionChannelRDP {
+			event.Data = sl.applyMasking(event.Data)
+		}
 		return json.Marshal(event)
 	})
 }

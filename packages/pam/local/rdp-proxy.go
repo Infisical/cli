@@ -19,22 +19,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RDPProxyServer exposes a local loopback TCP listener that tunnels bytes
-// to the gateway's RDP MITM bridge via the existing mTLS + SSH relay. The
-// user's RDP client connects to the loopback port; the gateway takes care
-// of credential injection and forwarding to the Windows target.
+// Loopback listener that tunnels RDP client traffic to the gateway's MITM bridge.
 type RDPProxyServer struct {
 	BaseProxyServer
 	server      net.Listener
 	port        int
-	rdpFilePath string // path to the generated .rdp file, if any
+	rdpFilePath string
 }
 
-// StartRDPLocalProxy is the CLI entry point for `infisical pam rdp access`.
-// It creates a PAM session with the backend, binds a loopback listener,
-// writes a .rdp file pointing at that loopback, optionally launches the
-// user's default RDP client, and forwards accepted connections to the
-// gateway.
+// CLI entry point for `infisical pam rdp access`.
 func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string, port int, noLaunch bool) {
 	log.Info().Msgf("Starting RDP proxy for account: %s", accessParams.GetDisplayName())
 	log.Info().Msgf("Session duration: %s", durationStr)
@@ -171,10 +164,8 @@ func (p *RDPProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
 		log.Info().Msg("Starting graceful shutdown of RDP proxy...")
 
-		// Remove the .rdp file first: p.cancel() below unblocks Run(),
-		// which returns to main, which may exit before the rest of this
-		// goroutine completes. Do the cleanup that has to happen before
-		// anything that could let main race ahead.
+		// p.cancel() below can return main before this goroutine finishes;
+		// remove the .rdp file before risking that race.
 		if p.rdpFilePath != "" {
 			if err := os.Remove(p.rdpFilePath); err != nil && !os.IsNotExist(err) {
 				log.Debug().Err(err).Str("path", p.rdpFilePath).Msg("Failed to remove .rdp file on exit")
@@ -315,15 +306,8 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 	log.Info().Msgf("RDP connection closed for client: %s", clientConn.RemoteAddr().String())
 }
 
-// writeRDPFile creates a .rdp file pointing at the local loopback
-// listener. Files live under `~/.infisical/rdp/` to match the CLI's
-// existing convention for per-user state (alongside the login config
-// and update-check cache). Filename includes the session ID so
-// concurrent sessions don't collide. The file is removed on graceful
-// shutdown (see gracefulShutdown) since the embedded loopback port
-// becomes invalid as soon as the CLI exits; reopening the file later
-// would just dial a dead port.
-// Falls back to the OS temp dir if the home directory can't be resolved.
+// Generates a per-session .rdp file under ~/.infisical/rdp/ pointing at
+// the loopback listener. Removed on graceful shutdown.
 func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)
 
@@ -336,9 +320,14 @@ func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	}
 	path := filepath.Join(dir, filename)
 
+	// authentication level:i:0 -> mstsc connects even if it can't verify the
+	// server's TLS cert. The bridge presents a self-signed cert, so without
+	// this mstsc terminates with "unexpected server authentication certificate".
+	// FreeRDP/Windows App ignore the cert by default; mstsc is the strict one.
 	content := fmt.Sprintf(
 		"full address:s:127.0.0.1:%d\r\n"+
-			"username:s:%s\r\n",
+			"username:s:%s\r\n"+
+			"authentication level:i:0\r\n",
 		listenPort,
 		username,
 	)

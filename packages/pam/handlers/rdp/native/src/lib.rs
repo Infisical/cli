@@ -3,5 +3,7 @@
 //! passes bytes through.
 
 pub mod bridge;
+pub mod cap_filter;
 pub mod config;
+pub mod events;
 pub mod ffi;

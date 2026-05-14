@@ -958,8 +958,7 @@ type UploadSessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-// UploadTerminalEvent represents a terminal session event for upload
-type UploadTerminalEvent struct {
+type UploadSessionEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"eventType"`
 	ChannelType string    `json:"channelType,omitempty"`
@@ -979,7 +978,7 @@ type UploadHttpEvent struct {
 }
 
 type UploadPAMSessionLogsRequest struct {
-	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadTerminalEvent
+	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadSessionEvent
 }
 
 type RelayHeartbeatRequest struct {
