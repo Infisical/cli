@@ -423,12 +423,8 @@ fn tap_client_to_target(
     if action != Action::FastPath {
         return;
     }
-    // Microsoft Remote Desktop / Windows App on Mac sets
-    // FASTPATH_INPUT_SECURE_CHECKSUM (bit 6) on input PDUs even when TLS +
-    // CredSSP is in use; the MAC trailer the bit advertises isn't actually
-    // present. IronRDP's strict header decoder rejects any non-zero flags,
-    // so we copy the frame and mask off bits 6-7 before decoding. No MAC
-    // verification is performed regardless (TLS already authenticates).
+    // Microsoft's Mac client sets spurious header flags that IronRDP
+    // rejects; mask them off before decoding (forwarded bytes are untouched).
     let mut sanitized: Vec<u8>;
     let bytes_for_decode: &[u8] = if frame.first().copied().unwrap_or(0) & 0xC0 != 0 {
         sanitized = frame.to_vec();
