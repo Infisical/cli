@@ -883,17 +883,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			}
 		}
 		sessionCancel()
-		// RDP reconnects via a stable .rdp file within the session's validity
-		// window; terminating on disconnect would break that. Idle reaper /
-		// expiry / explicit cancel still end the session normally.
-		isRDP := forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows
-		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn && !isRDP {
-			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
-				forwardConfig.PAMConfig.SessionId, "connection_closed",
-			); err != nil {
-				log.Error().Err(err).Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Failed to cleanup PAM session")
-			}
-		}
+		g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
 		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
