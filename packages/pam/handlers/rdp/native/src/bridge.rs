@@ -417,7 +417,17 @@ fn tap_client_to_target(
     if action != Action::FastPath {
         return;
     }
-    let input: FastPathInput = match decode_fast_path_input(frame) {
+    // Microsoft's Mac client sets spurious header flags that IronRDP
+    // rejects; mask them off before decoding (forwarded bytes are untouched).
+    let mut sanitized: Vec<u8>;
+    let bytes_for_decode: &[u8] = if frame.first().copied().unwrap_or(0) & 0xC0 != 0 {
+        sanitized = frame.to_vec();
+        sanitized[0] &= 0x3F;
+        &sanitized
+    } else {
+        frame
+    };
+    let input: FastPathInput = match decode_fast_path_input(bytes_for_decode) {
         Ok(input) => input,
         Err(_) => return,
     };
