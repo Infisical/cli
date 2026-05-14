@@ -874,6 +874,10 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
 		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		defer func() {
+			sessionCancel()
+			g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
+		}()
 		forwardConfig.PAMConfig.OnActivity = touchSession
 		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
 			if err.Error() == "unexpected EOF" {
@@ -882,8 +886,6 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
 			}
 		}
-		sessionCancel()
-		g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
 		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
