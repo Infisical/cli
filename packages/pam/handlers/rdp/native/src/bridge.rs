@@ -582,8 +582,9 @@ async fn run_acceptor_half(
     client_tcp: TcpStream,
     username: String,
 ) -> Result<(ErasedStream, bytes::BytesMut)> {
-    let (server_tls, acceptor_public_key, _cert_der) =
-        build_acceptor_tls_with_cert().context("build acceptor TLS config")?;
+    let (acceptor_public_key, _cert_der, certified_key) =
+        generate_acceptor_cert().context("generate acceptor cert")?;
+    let server_tls = build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?;
     let server_tls = Arc::new(server_tls);
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
@@ -843,8 +844,7 @@ where
     Ok(())
 }
 
-pub(crate) fn build_acceptor_tls_with_cert(
-) -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>, Vec<u8>)> {
+pub(crate) fn generate_acceptor_cert() -> Result<(Vec<u8>, Vec<u8>, rcgen::CertifiedKey)> {
     use x509_cert::der::Decode;
 
     let subject_alt_names = vec!["localhost".to_string(), "infisical-rdp-bridge".to_string()];
@@ -859,13 +859,19 @@ pub(crate) fn build_acceptor_tls_with_cert(
         .to_vec();
 
     let cert_der_bytes = cert_der.as_ref().to_vec();
-    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
-    let config = tokio_rustls::rustls::ServerConfig::builder()
+    Ok((public_key, cert_der_bytes, cert))
+}
+
+pub(crate) fn build_acceptor_tls_config(
+    certified: rcgen::CertifiedKey,
+) -> Result<tokio_rustls::rustls::ServerConfig> {
+    let cert_der = certified.cert.der().clone();
+    let key_der =
+        rustls::pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+    tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], key_der)
-        .context("rustls ServerConfig")?;
-
-    Ok((config, public_key, cert_der_bytes))
+        .context("rustls ServerConfig")
 }
 
 pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}

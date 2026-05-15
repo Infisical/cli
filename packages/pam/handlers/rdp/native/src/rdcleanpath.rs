@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::bridge::{
-    bridge_pdus, build_acceptor_tls_with_cert, filter_client_mcs_connect_initial,
+    bridge_pdus, filter_client_mcs_connect_initial, generate_acceptor_cert,
     perform_connector_credssp, ErasedStream, TargetEndpoint,
 };
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
@@ -92,8 +92,8 @@ async fn run_mitm_rdcleanpath_inner(
         .await
         .context("TLS upgrade to target")?;
 
-    let (_tls_config, acceptor_public_key, throwaway_cert_der) =
-        build_acceptor_tls_with_cert().context("build throwaway cert")?;
+    let (acceptor_public_key, throwaway_cert_der, _certified_key) =
+        generate_acceptor_cert().context("generate throwaway cert")?;
 
     let fake_cc_bytes = encode_x224(X224(ConnectionConfirm::Response {
         flags: ResponseFlags::empty(),
