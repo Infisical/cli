@@ -159,11 +159,7 @@ async fn run_mitm_rdcleanpath_inner(
     // --- Acceptor: advance past X.224, then CredSSP only ---
 
     let placeholder_creds = AcceptorCredentials {
-        username: if acceptor_username.is_empty() {
-            "infisical".to_owned()
-        } else {
-            acceptor_username
-        },
+        username: acceptor_username,
         password: "infisical".to_owned(),
         domain: None,
     };
