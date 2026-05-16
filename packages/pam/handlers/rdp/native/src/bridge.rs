@@ -584,7 +584,8 @@ async fn run_acceptor_half(
 ) -> Result<(ErasedStream, bytes::BytesMut)> {
     let (acceptor_public_key, _cert_der, certified_key) =
         generate_acceptor_cert().context("generate acceptor cert")?;
-    let server_tls = build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?;
+    let server_tls =
+        build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?;
     let server_tls = Arc::new(server_tls);
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
