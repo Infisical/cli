@@ -1311,6 +1311,7 @@ dependencies = [
  "ironrdp-connector",
  "ironrdp-core",
  "ironrdp-pdu",
+ "ironrdp-rdcleanpath",
  "ironrdp-tls",
  "ironrdp-tokio",
  "libc",
@@ -1446,6 +1447,15 @@ dependencies = [
  "tap",
  "thiserror",
  "x509-cert",
+]
+
+[[package]]
+name = "ironrdp-rdcleanpath"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e9011b8f48be356a51c75757a09075af787601a03542815424da493d2d2757"
+dependencies = [
+ "der 0.7.10",
 ]
 
 [[package]]

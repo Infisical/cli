@@ -14,8 +14,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::bridge::{run_mitm, TargetEndpoint};
+use crate::bridge::{run_mitm_native, TargetEndpoint};
 use crate::events::{self, SessionEvent};
+use crate::rdcleanpath::run_mitm_rdcleanpath;
 
 pub const RDP_BRIDGE_OK: i32 = 0;
 pub const RDP_BRIDGE_SESSION_ERROR: i32 = 1;
@@ -189,6 +190,19 @@ unsafe fn c_str_to_owned(ptr: *const c_char) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Selects which MITM flow runs on the spawned session thread. Both flows
+/// share the connector / event-tap halves and only differ in how the
+/// acceptor is bootstrapped.
+enum SessionFlow {
+    /// Native client → CLI loopback → gateway. Acceptor does X.224 + TLS +
+    /// CredSSP normally.
+    Native,
+    /// Browser → backend WS pump → gateway. Acceptor short-circuits X.224
+    /// via RDCleanPath; `acceptor_username` is the browser-presented NLA
+    /// username (typically a fixed string like "infisical").
+    Rdcleanpath { acceptor_username: String },
+}
+
 fn spawn_session(
     client_tcp: StdTcpStream,
     host: String,
@@ -196,6 +210,7 @@ fn spawn_session(
     username: String,
     password: String,
     domain: Option<String>,
+    flow: SessionFlow,
 ) -> anyhow::Result<u64> {
     client_tcp.set_nonblocking(true)?;
     let cancel = CancellationToken::new();
@@ -218,7 +233,21 @@ fn spawn_session(
                     password,
                     domain,
                 };
-                run_mitm(client, endpoint, cancel_for_thread, events_tx).await
+                match flow {
+                    SessionFlow::Native => {
+                        run_mitm_native(client, endpoint, cancel_for_thread, events_tx).await
+                    }
+                    SessionFlow::Rdcleanpath { acceptor_username } => {
+                        run_mitm_rdcleanpath(
+                            client,
+                            endpoint,
+                            acceptor_username,
+                            cancel_for_thread,
+                            events_tx,
+                        )
+                        .await
+                    }
+                }
             })
         })?;
 
@@ -234,7 +263,9 @@ fn spawn_session(
 ///
 /// `client_fd` ownership transfers to the bridge on OK, stays with the
 /// caller on error. Strings must be NUL-terminated valid UTF-8. `domain`
-/// may be NULL or empty for non-domain sessions.
+/// and `acceptor_username` may be NULL or empty. When `acceptor_username`
+/// is non-empty the bridge runs the RDCleanPath (browser) flow; otherwise
+/// it runs the native RDP flow.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
@@ -244,6 +275,7 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
     username: *const c_char,
     password: *const c_char,
     domain: *const c_char,
+    acceptor_username: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -261,13 +293,24 @@ pub unsafe extern "C" fn rdp_bridge_start_unix_fd(
         Some(v) => v,
         None => return RDP_BRIDGE_BAD_ARG,
     };
-    // Empty domain string is treated the same as NULL: no domain.
     let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
+    let flow = match unsafe { c_str_to_owned(acceptor_username) }.filter(|s| !s.is_empty()) {
+        Some(acceptor_username) => SessionFlow::Rdcleanpath { acceptor_username },
+        None => SessionFlow::Native,
+    };
 
     use std::os::unix::io::FromRawFd;
     let client_tcp = unsafe { StdTcpStream::from_raw_fd(client_fd) };
 
-    match spawn_session(client_tcp, host, target_port, username, password, domain) {
+    match spawn_session(
+        client_tcp,
+        host,
+        target_port,
+        username,
+        password,
+        domain,
+        flow,
+    ) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
@@ -291,6 +334,7 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
     username: *const c_char,
     password: *const c_char,
     domain: *const c_char,
+    acceptor_username: *const c_char,
     out_handle: *mut u64,
 ) -> i32 {
     if out_handle.is_null() {
@@ -309,11 +353,23 @@ pub unsafe extern "C" fn rdp_bridge_start_windows_socket(
         None => return RDP_BRIDGE_BAD_ARG,
     };
     let domain = unsafe { c_str_to_owned(domain) }.filter(|s| !s.is_empty());
+    let flow = match unsafe { c_str_to_owned(acceptor_username) }.filter(|s| !s.is_empty()) {
+        Some(acceptor_username) => SessionFlow::Rdcleanpath { acceptor_username },
+        None => SessionFlow::Native,
+    };
 
     use std::os::windows::io::{FromRawSocket, RawSocket};
     let client_tcp = unsafe { StdTcpStream::from_raw_socket(client_socket as RawSocket) };
 
-    match spawn_session(client_tcp, host, target_port, username, password, domain) {
+    match spawn_session(
+        client_tcp,
+        host,
+        target_port,
+        username,
+        password,
+        domain,
+        flow,
+    ) {
         Ok(id) => {
             unsafe { *out_handle = id };
             RDP_BRIDGE_OK
@@ -343,12 +399,10 @@ pub extern "C" fn rdp_bridge_wait(handle: u64) -> i32 {
             }
             Ok(Err(e)) => {
                 error!(handle, error = ?e, "rdp_bridge_wait: session failed");
-                eprintln!("rdp bridge session failed (handle={handle}): {e:?}");
                 RDP_BRIDGE_SESSION_ERROR
             }
-            Err(panic) => {
+            Err(_) => {
                 error!(handle, "rdp_bridge_wait: session thread panicked");
-                eprintln!("rdp bridge session thread panicked (handle={handle}): {panic:?}");
                 RDP_BRIDGE_THREAD_PANIC
             }
         },

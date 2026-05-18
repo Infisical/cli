@@ -36,6 +36,9 @@ func NewRDPProxy(config RDPProxyConfig) *RDPProxy {
 	return &RDPProxy{config: config}
 }
 
+// Fixed NLA username the browser presents; carries no security weight
+const BrowserAcceptorUsername = "infisical"
+
 // Wire envelopes carried inside SessionEvent.Data for ChannelType=RDP.
 type rdpTargetFrameEnvelope struct {
 	Type      string `json:"type"`    // "target_frame"
