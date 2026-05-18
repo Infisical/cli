@@ -35,6 +35,7 @@ const (
 	ForwardModeHTTP            ForwardMode = "HTTP"
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
+	ForwardModePAMRDPBrowser   ForwardMode = "PAM_RDP_BROWSER"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
@@ -703,7 +704,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-rdp-browser", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
 	}
 
 	return nil
@@ -866,7 +867,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("TCP proxy handler completed")
 		}
 		return
-	} else if forwardConfig.Mode == ForwardModePAM {
+	} else if forwardConfig.Mode == ForwardModePAM || forwardConfig.Mode == ForwardModePAMRDPBrowser {
 		// RDP only: prior bridge must fully tear down before the new one starts,
 		// else overlapping drains write non-monotonic elapsedMs to the recording.
 		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows {
@@ -874,24 +875,17 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
 		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		defer func() {
+			sessionCancel()
+			g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
+		}()
 		forwardConfig.PAMConfig.OnActivity = touchSession
-		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+		browserRDP := forwardConfig.Mode == ForwardModePAMRDPBrowser
+		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, browserRDP); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
-			}
-		}
-		sessionCancel()
-		// RDP reconnects via a stable .rdp file within the session's validity
-		// window; terminating on disconnect would break that. Idle reaper /
-		// expiry / explicit cancel still end the session normally.
-		isRDP := forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows
-		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn && !isRDP {
-			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
-				forwardConfig.PAMConfig.SessionId, "connection_closed",
-			); err != nil {
-				log.Error().Err(err).Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Failed to cleanup PAM session")
 			}
 		}
 		return
@@ -948,6 +942,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pam-proxy":
 		config.Mode = ForwardModePAM
+		return config, nil
+
+	case "infisical-pam-rdp-browser":
+		config.Mode = ForwardModePAMRDPBrowser
 		return config, nil
 
 	case "infisical-pam-session-cancellation":

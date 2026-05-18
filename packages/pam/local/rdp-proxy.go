@@ -164,8 +164,7 @@ func (p *RDPProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
 		log.Info().Msg("Starting graceful shutdown of RDP proxy...")
 
-		// p.cancel() below can return main before this goroutine finishes;
-		// remove the .rdp file before risking that race.
+		// Remove before cancel() can return main
 		if p.rdpFilePath != "" {
 			if err := os.Remove(p.rdpFilePath); err != nil && !os.IsNotExist(err) {
 				log.Debug().Err(err).Str("path", p.rdpFilePath).Msg("Failed to remove .rdp file on exit")
@@ -233,9 +232,7 @@ func (p *RDPProxyServer) Run() {
 	}
 }
 
-// handleConnection forwards bytes between the RDP client and the gateway
-// tunnel. Identical shape to the database proxy; the gateway's RDP
-// handler takes over on the other side.
+// handleConnection forwards bytes between the RDP client and the gateway tunnel.
 func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 	defer func() {
 		clientConn.Close()
@@ -306,8 +303,7 @@ func (p *RDPProxyServer) handleConnection(clientConn net.Conn) {
 	log.Info().Msgf("RDP connection closed for client: %s", clientConn.RemoteAddr().String())
 }
 
-// Generates a per-session .rdp file under ~/.infisical/rdp/ pointing at
-// the loopback listener. Removed on graceful shutdown.
+// Generates a per-session .rdp file; removed on graceful shutdown.
 func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	filename := fmt.Sprintf("infisical-rdp-%s.rdp", sessionID)
 
@@ -320,10 +316,7 @@ func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	}
 	path := filepath.Join(dir, filename)
 
-	// authentication level:i:0 -> mstsc connects even if it can't verify the
-	// server's TLS cert. The bridge presents a self-signed cert, so without
-	// this mstsc terminates with "unexpected server authentication certificate".
-	// FreeRDP/Windows App ignore the cert by default; mstsc is the strict one.
+	// auth level 0: bridge presents self-signed cert, mstsc rejects without this
 	content := fmt.Sprintf(
 		"full address:s:127.0.0.1:%d\r\n"+
 			"username:s:%s\r\n"+
@@ -338,8 +331,7 @@ func writeRDPFile(listenPort int, sessionID, username string) (string, error) {
 	return path, nil
 }
 
-// rdpFileDir returns ~/.infisical/rdp (the conventional per-user state
-// location for CLI data; see util.CONFIG_FOLDER_NAME).
+// rdpFileDir returns ~/.infisical/rdp.
 func rdpFileDir() (string, error) {
 	home, err := util.GetHomeDir()
 	if err != nil {
@@ -348,9 +340,7 @@ func rdpFileDir() (string, error) {
 	return filepath.Join(home, util.CONFIG_FOLDER_NAME, "rdp"), nil
 }
 
-// launchRDPClient opens the given .rdp file with the user's default RDP
-// client. Failure is non-fatal; the caller can still manually connect
-// using the printed connection details.
+// launchRDPClient opens the .rdp file with the default client. Non-fatal on failure.
 func launchRDPClient(rdpFilePath string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

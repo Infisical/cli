@@ -559,7 +559,6 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 
 	if !exists {
 		log.Warn().Msgf("Gateway '%s' (%s) not connected", gatewayName, gatewayId)
-		tlsConn.Write([]byte("ERROR: Gateway not connected\n"))
 		return
 	}
 
@@ -568,7 +567,6 @@ func (r *Relay) handleClient(tlsConn *tls.Conn) {
 	channel, _, err := conn.OpenChannel("direct-tcpip", nil)
 	if err != nil {
 		log.Error().Msgf("Failed to connect to gateway: %v", err)
-		tlsConn.Write([]byte("ERROR: Failed to connect to gateway\n"))
 		return
 	}
 	defer channel.Close()
