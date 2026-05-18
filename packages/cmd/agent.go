@@ -49,7 +49,7 @@ const DEFAULT_INFISICAL_CLOUD_URL = "https://app.infisical.com"
 
 const CACHE_TYPE_KUBERNETES = "kubernetes"
 
-const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%s"
+const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%s-%s"
 
 // duration to reduce from expiry of dynamic leases so that it gets triggered before expiry
 const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
@@ -273,6 +273,7 @@ type DynamicSecretLeaseWithTTL struct {
 	Data              map[string]interface{}
 	TemplateIDs       []int
 	RequestedLeaseTTL string
+	Principals        string
 }
 
 func (c *CacheManager) WriteToCache(key string, value interface{}, ttl *time.Duration) error {
@@ -399,6 +400,7 @@ func (d *DynamicSecretLeaseManager) WriteLeaseToCache(lease *DynamicSecretLeaseW
 		lease.SecretPath,
 		lease.Slug,
 		requestedLeaseTTL,
+		lease.Principals,
 	)
 
 	ttl := time.Until(lease.ExpireAt)
@@ -412,13 +414,13 @@ func (d *DynamicSecretLeaseManager) WriteLeaseToCache(lease *DynamicSecretLeaseW
 	}
 }
 
-func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment, secretPath, slug string, requestedLeaseTTL string) *DynamicSecretLeaseWithTTL {
+func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals string) *DynamicSecretLeaseWithTTL {
 
 	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
 		return nil
 	}
 
-	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals)
 	var lease *DynamicSecretLeaseWithTTL
 	err := d.cacheManager.ReadFromCache(cacheKey, &lease)
 	if err != nil {
@@ -431,12 +433,12 @@ func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment,
 	return lease
 }
 
-func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL string) error {
+func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals string) error {
 	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
 		return nil
 	}
 
-	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals)
 	err := d.cacheManager.DeleteFromCache(cacheKey)
 	if err != nil {
 		return fmt.Errorf("unable to delete lease from cache: %v", err)
@@ -503,7 +505,8 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 				s.Environment == cachedLease.Environment &&
 				s.SecretPath == cachedLease.SecretPath &&
 				s.Slug == cachedLease.Slug &&
-				s.RequestedLeaseTTL == cachedLease.RequestedLeaseTTL
+				s.RequestedLeaseTTL == cachedLease.RequestedLeaseTTL &&
+				s.Principals == cachedLease.Principals
 
 			if match {
 				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s]",
@@ -532,6 +535,7 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 				cachedLease.SecretPath,
 				cachedLease.Slug,
 				cachedLease.RequestedLeaseTTL,
+				cachedLease.Principals,
 			); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
@@ -551,7 +555,7 @@ func (d *DynamicSecretLeaseManager) Prune() {
 		shouldDelete := time.Now().After(s.ExpireAt.Add(DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER * time.Second))
 
 		if shouldDelete {
-			if err := d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.RequestedLeaseTTL); err != nil {
+			if err := d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.RequestedLeaseTTL, s.Principals); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
 		}
@@ -563,9 +567,9 @@ func (d *DynamicSecretLeaseManager) Prune() {
 func (d *DynamicSecretLeaseManager) AppendUnsafe(lease DynamicSecretLeaseWithTTL) {
 
 	index := slices.IndexFunc(d.leases, func(s DynamicSecretLeaseWithTTL) bool {
-		// match by configuration (project, env, path, slug, TTL) and same lease ID
+		// match by configuration (project, env, path, slug, TTL, principals) and same lease ID
 		// this allows merging template IDs when the same lease is added multiple times
-		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID && lease.RequestedLeaseTTL == s.RequestedLeaseTTL {
+		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID && lease.RequestedLeaseTTL == s.RequestedLeaseTTL && lease.Principals == s.Principals {
 			return true
 		}
 		return false
@@ -588,12 +592,12 @@ func (d *DynamicSecretLeaseManager) AppendUnsafe(lease DynamicSecretLeaseWithTTL
 }
 
 // Expects a lock to be held before invocation
-func (d *DynamicSecretLeaseManager) RegisterTemplateUnsafe(projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) {
+func (d *DynamicSecretLeaseManager) RegisterTemplateUnsafe(projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL, principals string) {
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLeaseWithTTL) bool {
 		// find lease by configuration, not by template ID
 		// this allows us to register new template IDs to existing leases
-		return lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL
+		return lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL && lease.Principals == principals
 	})
 
 	log.Debug().Msgf("\n[cache]: registering template [template-id=%d] for lease [project=%s], [env=%s], [path=%s], [slug=%s]\nIndex: %d", templateId, projectSlug, environment, secretPath, slug, index)
@@ -616,21 +620,21 @@ func (d *DynamicSecretLeaseManager) RegisterTemplateUnsafe(projectSlug, environm
 }
 
 // Expects a lock to be held before invocation
-func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) *DynamicSecretLeaseWithTTL {
+func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL, principals string) *DynamicSecretLeaseWithTTL {
 	// first try to get from in-memory storage
 
-	// find lease by configuration (project, env, path, slug, TTL) regardless of template IDs
+	// find lease by configuration (project, env, path, slug, TTL, principals) regardless of template IDs
 	// this allows multiple templates to share the same lease
 	for i := range d.leases {
 		lease := &d.leases[i]
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL && lease.Principals == principals {
 			log.Debug().Msgf("[cache]: lease found in in-memory storage: [project=%s], [env=%s], [path=%s], [slug=%s]", projectSlug, environment, secretPath, slug)
 			return lease
 		}
 	}
 
 	// if no lease is found in in-memory storage, try to get from cache
-	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals)
 
 	if leaseFromCache == nil {
 		log.Info().Msgf("[cache]: cache miss, no lease found [template-id=%d]", templateId)
@@ -651,7 +655,7 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 			// lease not found in API, delete it from cache and return nil
 			if errors.Is(err, api.ErrNotFound) {
 				log.Warn().Msgf("dynamic secret lease does not exist, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-				if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL); err != nil {
+				if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL, leaseFromCache.Principals); err != nil {
 					log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 				}
 
@@ -661,7 +665,7 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 			// lease is found in cache but not in the the API, and the API returned a non 404-error. We should attempt to revoke it
 			// at this point we know that we should be able to reach the API because we've done authentication successfully
 			log.Warn().Msgf("unable to get dynamic secret lease from API. Revoking lease from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL); err != nil {
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL, leaseFromCache.Principals); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
 
@@ -676,7 +680,7 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 		// lease is expired or about to expire, delete from cache and attempt to revoke it
 		if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(CACHE_LEASE_EXPIRE_BUFFER)) {
 			log.Warn().Msgf("dynamic secret lease is expired or about to expire, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL); err != nil {
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL, leaseFromCache.Principals); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
 
@@ -942,22 +946,25 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		defer dynamicSecretManager.mutex.Unlock()
 
 		argLength := len(args)
-		if argLength != 4 && argLength != 5 {
+		if argLength < 4 || argLength > 6 {
 			return nil, fmt.Errorf("invalid arguments found for dynamic-secret function. Check template %d", templateId)
 		}
 
-		projectSlug, envSlug, secretPath, slug, ttl := args[0], args[1], args[2], args[3], ""
-		if argLength == 5 {
+		projectSlug, envSlug, secretPath, slug, ttl, principals := args[0], args[1], args[2], args[3], "", ""
+		if argLength >= 5 {
 			ttl = args[4]
 		}
+		if argLength == 6 {
+			principals = args[5]
+		}
 
-		dynamicSecretData := dynamicSecretManager.GetLeaseUnsafe(accessToken, projectSlug, envSlug, secretPath, slug, templateId, ttl)
+		dynamicSecretData := dynamicSecretManager.GetLeaseUnsafe(accessToken, projectSlug, envSlug, secretPath, slug, templateId, ttl, principals)
 
 		// if a lease is found (either in memory or in cache), we register the template and return the data
 		if dynamicSecretData != nil {
-			dynamicSecretManager.RegisterTemplateUnsafe(projectSlug, envSlug, secretPath, slug, templateId, ttl)
+			dynamicSecretManager.RegisterTemplateUnsafe(projectSlug, envSlug, secretPath, slug, templateId, ttl, principals)
 
-			etagData := fmt.Sprintf("%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl)
+			etagData := fmt.Sprintf("%s-%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl, principals)
 			dynamicSecretDataBytes, err := json.Marshal(dynamicSecretData.Data)
 			if err != nil {
 				return nil, err
@@ -980,19 +987,34 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 
 		// if there's no lease (either in memory or in cache), we create a new lease
 
+		leaseConfig := map[string]any{}
+		if principals != "" {
+			var parsedPrincipals []string
+			for _, p := range strings.Split(principals, ",") {
+				trimmed := strings.TrimSpace(p)
+				if trimmed != "" {
+					parsedPrincipals = append(parsedPrincipals, trimmed)
+				}
+			}
+			if len(parsedPrincipals) > 0 {
+				leaseConfig["principals"] = parsedPrincipals
+			}
+		}
+
 		leaseData, _, res, err := temporaryInfisicalClient.DynamicSecrets().Leases().Create(infisicalSdk.CreateDynamicSecretLeaseOptions{
 			DynamicSecretName: slug,
 			ProjectSlug:       projectSlug,
 			EnvironmentSlug:   envSlug,
 			SecretPath:        secretPath,
 			TTL:               ttl,
+			Config:            leaseConfig,
 		})
 
 		if err != nil {
 			return nil, err
 		}
 
-		dynamicSecretManager.AppendUnsafe(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl})
+		dynamicSecretManager.AppendUnsafe(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl, Principals: principals})
 
 		return leaseData, nil
 	}
