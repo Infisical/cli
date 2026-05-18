@@ -63,6 +63,9 @@ const (
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
+	operationCallRelayLogin                        = "CallRelayLogin"
+	operationCallRelayConnect                      = "CallRelayConnect"
+	operationCallRelayHeartbeatV2                  = "CallRelayHeartbeatV2"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
 	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
@@ -899,6 +902,62 @@ func CallGetRelays(httpClient *resty.Client) (GetRelaysResponse, error) {
 	}
 
 	return resBody, nil
+}
+
+func CallRelayLogin(httpClient *resty.Client, request RelayLoginRequest) (RelayLoginResponse, error) {
+	var resBody RelayLoginResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/relays/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return RelayLoginResponse{}, NewGenericRequestError(operationCallRelayLogin, err)
+	}
+
+	if response.IsError() {
+		return RelayLoginResponse{}, NewAPIErrorWithResponse(operationCallRelayLogin, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRelayConnect(httpClient *resty.Client) (RelayConnectResponse, error) {
+	var resBody RelayConnectResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/relays/connect", config.INFISICAL_URL))
+
+	if err != nil {
+		return RelayConnectResponse{}, NewGenericRequestError(operationCallRelayConnect, err)
+	}
+
+	if response.IsError() {
+		return RelayConnectResponse{}, NewAPIErrorWithResponse(operationCallRelayConnect, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRelayHeartbeatV2(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/relays/heartbeat", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallRelayHeartbeatV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallRelayHeartbeatV2, response, nil)
+	}
+
+	return nil
 }
 
 func CallConnectGateway(httpClient *resty.Client, request ConnectGatewayRequest) (RegisterGatewayResponse, error) {
