@@ -273,3 +273,9 @@ func handlePing(ctx context.Context, conn *tls.Conn, reader *bufio.Reader) error
 	conn.Write([]byte("PONG\n"))
 	return nil
 }
+
+func handleHealth(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, heartbeatTTL int) error {
+	response := fmt.Sprintf(`{"status":"ok","heartbeatTTL":%d}`, heartbeatTTL)
+	conn.Write([]byte(response + "\n"))
+	return nil
+}
