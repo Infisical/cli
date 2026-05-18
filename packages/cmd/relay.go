@@ -45,6 +45,10 @@ var relayStartCmd = &cobra.Command{
 		if enrollMethod == "" {
 			enrollMethod = os.Getenv("INFISICAL_RELAY_ENROLL_METHOD")
 		}
+		if enrollMethod != "" && enrollMethod != relay.EnrollMethodToken && enrollMethod != relay.EnrollMethodAws {
+			util.HandleError(fmt.Errorf("invalid --enroll-method %q: supported values are %q and %q",
+				enrollMethod, relay.EnrollMethodToken, relay.EnrollMethodAws))
+		}
 
 		host, _ := util.GetCmdFlagOrEnv(cmd, "host", []string{gatewayv2.RELAY_HOST_ENV_NAME})
 		if host == "" && enrollMethod == "" {
@@ -126,6 +130,8 @@ var relayStartCmd = &cobra.Command{
 				domain, _ := cmd.Flags().GetString("domain")
 				if domain != "" {
 					config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
+				} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
+					config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
 				}
 
 				httpClient, err := util.GetRestyClientWithCustomHeaders()
