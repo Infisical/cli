@@ -39,6 +39,7 @@ const (
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
+	ForwardModeHealth          ForwardMode = "HEALTH"
 )
 
 type ActorType string
@@ -47,6 +48,8 @@ const (
 	ActorTypePlatform ActorType = "platform"
 	ActorTypeUser     ActorType = "user"
 )
+
+const heartbeatInterval = 3 * time.Minute
 
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
@@ -400,8 +403,8 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			}
 		}()
 
-		// Phase 2: Regular heartbeat every 30 minutes
-		regularTicker := time.NewTicker(30 * time.Minute)
+		// Phase 2: Regular heartbeat
+		regularTicker := time.NewTicker(heartbeatInterval)
 		defer regularTicker.Stop()
 
 		for {
@@ -704,7 +707,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-rdp-browser", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-health", "infisical-ping", "infisical-pam-proxy", "infisical-pam-rdp-browser", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
 	}
 
 	return nil
@@ -910,6 +913,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("Ping handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeHealth {
+		log.Info().Msg("Starting health handler")
+		if err := handleHealth(g.ctx, tlsConn, reader, int(heartbeatInterval.Seconds())); err != nil {
+			log.Error().Err(err).Msg("Health handler ended with error")
+		} else {
+			log.Info().Msg("Health handler completed")
+		}
+		return
 	}
 }
 
@@ -958,6 +969,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-ping":
 		config.Mode = ForwardModePing
+		return config, nil
+
+	case "infisical-health":
+		config.Mode = ForwardModeHealth
 		return config, nil
 
 	default:
