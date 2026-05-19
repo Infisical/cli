@@ -17,6 +17,13 @@ type ConfigFile struct {
 	VaultBackendType       string         `json:"vaultBackendType,omitempty"`
 	VaultBackendPassphrase string         `json:"vaultBackendPassphrase,omitempty"`
 	Domains                []string       `json:"domains,omitempty"`
+	// LastIdentifiedEmail tracks the most recent email for which a PostHog
+	// Identify/Alias call has been issued. It is used to ensure that telemetry
+	// person records are enriched with `email` (and aliased from any anonymous
+	// machine ID) exactly once per email per machine, even when the login
+	// happened on an older CLI version that predates the IdentifyUser flow,
+	// or when the email is changed via `infisical user switch`.
+	LastIdentifiedEmail string `json:"lastIdentifiedEmail,omitempty"`
 }
 
 type LoggedInUser struct {
