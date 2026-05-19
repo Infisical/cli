@@ -492,11 +492,12 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 	// now we need to check if any of the cached leases are not in the d.leases list. If they are not, we need to delete them from the cache.
 	for _, cachedLease := range cachedLeases {
 		log.Debug().Msgf(
-			"[cache]: checking cached lease: [project=%s], [env=%s], [path=%s], [slug=%s]",
+			"[cache]: checking cached lease: [project=%s], [env=%s], [path=%s], [slug=%s], [principals=%s]",
 			cachedLease.ProjectSlug,
 			cachedLease.Environment,
 			cachedLease.SecretPath,
 			cachedLease.Slug,
+			cachedLease.Principals,
 		)
 
 		// check if a lease with the same configuration exists (not comparing LeaseID since that changes on refresh)
@@ -509,11 +510,12 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 				s.Principals == cachedLease.Principals
 
 			if match {
-				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s]",
+				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s], [principals=%s]",
 					s.ProjectSlug,
 					s.Environment,
 					s.SecretPath,
 					s.Slug,
+					s.Principals,
 				)
 			}
 			return match
@@ -521,12 +523,13 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 
 		if !found {
 			log.Info().Msgf(
-				"[cache]: no matching active lease found, deleting cached lease: [lease-id=%s], [project=%s], [env=%s], [path=%s], [slug=%s]",
+				"[cache]: no matching active lease found, deleting cached lease: [lease-id=%s], [project=%s], [env=%s], [path=%s], [slug=%s], [principals=%s]",
 				cachedLease.LeaseID,
 				cachedLease.ProjectSlug,
 				cachedLease.Environment,
 				cachedLease.SecretPath,
 				cachedLease.Slug,
+				cachedLease.Principals,
 			)
 
 			if err := d.DeleteLeaseFromCache(
