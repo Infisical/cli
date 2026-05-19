@@ -110,9 +110,9 @@ jobs:
 
       - name: Run smoke tests on ${{ matrix.distro }}
         run: |
-          chmod +x artifacts/smoke-tests/smoke.sh
+          chmod +x artifacts/smoke.sh
           docker run --rm \
-            -v "${{ github.workspace }}/artifacts/smoke-tests/dist:/dist" \
-            -v "${{ github.workspace }}/artifacts/smoke-tests/smoke.sh:/smoke.sh" \
+            -v "${{ github.workspace }}/artifacts/dist:/dist" \
+            -v "${{ github.workspace }}/artifacts/smoke.sh:/smoke.sh" \
             ${{ matrix.image }} \
             sh -c "${{ matrix.install }} /dist/${{ matrix.pkg }} && /smoke.sh"
