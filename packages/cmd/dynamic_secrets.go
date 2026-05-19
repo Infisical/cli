@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"context"
-	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -282,13 +281,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		config["namespace"] = kubernetesNamespace
 	}
 	if principalsStr != "" {
-		var principals []string
-		for _, p := range strings.Split(principalsStr, ",") {
-			trimmed := strings.TrimSpace(p)
-			if trimmed != "" {
-				principals = append(principals, trimmed)
-			}
-		}
+		principals := util.ParsePrincipals(principalsStr)
 		if len(principals) > 0 {
 			config["principals"] = principals
 		}

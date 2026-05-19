@@ -992,13 +992,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 
 		leaseConfig := map[string]any{}
 		if principals != "" {
-			var parsedPrincipals []string
-			for _, p := range strings.Split(principals, ",") {
-				trimmed := strings.TrimSpace(p)
-				if trimmed != "" {
-					parsedPrincipals = append(parsedPrincipals, trimmed)
-				}
-			}
+			parsedPrincipals := util.ParsePrincipals(principals)
 			if len(parsedPrincipals) > 0 {
 				leaseConfig["principals"] = parsedPrincipals
 			}
