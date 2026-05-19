@@ -55,6 +55,7 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 	helper := &agentHelpers.CertAgentTestHelper{
 		T:              t,
 		AdminToken:     infisical.ProvisionResult().Token,
+		IdentityToken:  identityToken,
 		InfisicalURL:   infisical.ApiUrl(t),
 		TempDir:        t.TempDir(),
 		IdentityClient: identityClient,
@@ -76,6 +77,8 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 	helper.ProjectSlug = projectResp.JSON200.Project.Slug
 	slog.Info("Created cert-manager project", "id", helper.ProjectID, "slug", helper.ProjectSlug)
 
+	helper.SetActiveCertManagerProject()
+
 	helper.CreateInternalCA()
 	slog.Info("Created internal CA", "id", helper.CaID)
 
@@ -84,6 +87,9 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 
 	helper.CreateCertificateProfile("test-profile-" + helpers.RandomSlug(2))
 	slog.Info("Created certificate profile", "id", helper.ProfileID, "name", helper.ProfileSlug)
+
+	helper.CreateApplicationWithProfile("test-app-" + helpers.RandomSlug(2))
+	slog.Info("Created application with API enrollment", "id", helper.ApplicationID, "name", helper.ApplicationName)
 
 	return helper
 }
@@ -105,7 +111,7 @@ func certAgent_BasicCertificateIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "test.example.com",
 				TTL:                 "1h",
@@ -176,7 +182,7 @@ func certAgent_CertificateRenewal(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "renew.example.com",
 				TTL:                 "2m",
@@ -261,7 +267,7 @@ func certAgent_PostHookExecution(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "hook.example.com",
 				TTL:                 "1h",
@@ -314,6 +320,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 
 	helper.CreateCertificateProfile("second-profile-" + helpers.RandomSlug(2))
 	secondProfileName := helper.ProfileSlug
+	helper.AttachProfileWithApiEnrollment(helper.ProfileID)
 	slog.Info("Created second certificate profile", "name", secondProfileName)
 
 	certDir1 := filepath.Join(helper.TempDir, "cert1")
@@ -331,7 +338,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         firstProfileName,
 				CommonName:          "multi1.example.com",
 				TTL:                 "1h",
@@ -342,7 +349,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 				ChainPath:           chainPath1,
 			},
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         secondProfileName,
 				CommonName:          "multi2.example.com",
 				TTL:                 "1h",
@@ -417,7 +424,7 @@ func certAgent_FilePermissions(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "perms.example.com",
 				TTL:                 "1h",
@@ -484,7 +491,7 @@ func certAgent_AltNames(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "altnames.example.com",
 				TTL:                 "1h",
@@ -552,7 +559,7 @@ func certAgent_CSRBasedIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "csr-test.example.com",
 				TTL:                 "1h",
@@ -629,7 +636,7 @@ func certAgent_CSRPathBasedIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "csrpath-test.example.com",
 				TTL:                 "1h",
@@ -696,7 +703,7 @@ func certAgent_AcmeCA_CertificateIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "acme-test.example.com",
 				TTL:                 "1h",
@@ -784,6 +791,7 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 	helper := &agentHelpers.CertAgentTestHelper{
 		T:              t,
 		AdminToken:     infisical.ProvisionResult().Token,
+		IdentityToken:  identityToken,
 		InfisicalURL:   infisical.ApiUrl(t),
 		TempDir:        t.TempDir(),
 		IdentityClient: identityClient,
@@ -807,6 +815,8 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 		t.Skip("BDD nock API not available — backend was not built with Dockerfile.dev")
 	}
 
+	helper.SetActiveCertManagerProject()
+
 	nockCertCount := 1
 	if len(certCount) > 0 && certCount[0] > 1 {
 		nockCertCount = certCount[0]
@@ -819,6 +829,8 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 
 	helper.CreateCertificatePolicy("acme-policy-"+helpers.RandomSlug(2), policyOpts...)
 	helper.CreateCertificateProfile("acme-profile-" + helpers.RandomSlug(2))
+
+	helper.CreateApplicationWithProfile("acme-app-" + helpers.RandomSlug(2))
 
 	return helper, connectionID
 }
@@ -945,7 +957,7 @@ func certAgent_AcmeCA_DisabledCA(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "disabled-ca.example.com",
 				TTL:                 "1h",
@@ -1004,6 +1016,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 
 	helper.CreateCertificateProfile("acme-profile2-" + helpers.RandomSlug(2))
 	secondProfileSlug := helper.ProfileSlug
+	helper.AttachProfileWithApiEnrollment(helper.ProfileID)
 
 	certDir1 := filepath.Join(helper.TempDir, "cert1")
 	certDir2 := filepath.Join(helper.TempDir, "cert2")
@@ -1020,7 +1033,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         firstProfileSlug,
 				CommonName:          "acme-multi1.example.com",
 				TTL:                 "1h",
@@ -1031,7 +1044,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 				ChainPath:           chainPath1,
 			},
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         secondProfileSlug,
 				CommonName:          "acme-multi2.example.com",
 				TTL:                 "1h",
@@ -1106,7 +1119,7 @@ func certAgent_AcmeCA_PostHookExecution(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "acme-hook.example.com",
 				TTL:                 "1h",
@@ -1184,7 +1197,7 @@ func certAgent_AcmeCA_CSRBasedIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "acme-csr.example.com",
 				TTL:                 "1h",
@@ -1256,7 +1269,7 @@ func certAgent_IssuanceFailureReporting(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         "nonexistent-profile-" + helpers.RandomSlug(2),
 				CommonName:          "failure.example.com",
 				TTL:                 "1h",
@@ -1336,7 +1349,7 @@ func certAgent_CertificateWithFullAttributes(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "fullattrs.example.com",
 				TTL:                 "1h",
@@ -1412,7 +1425,7 @@ func certAgent_Validation_RenewBeforeExpiryExceedsTTL(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "invalid-renew.example.com",
 				TTL:                 "1h",
@@ -1484,7 +1497,7 @@ func certAgent_Validation_BothCSRAndCSRPath(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "both-csr.example.com",
 				TTL:                 "1h",
@@ -1557,7 +1570,7 @@ func certAgent_Validation_InvalidAuthCredentials(t *testing.T) {
 		ClientSecretPath: fakeClientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "badauth.example.com",
 				TTL:                 "1h",
@@ -1620,7 +1633,7 @@ func certAgent_Validation_MissingCertificatePath(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "nopath.example.com",
 				TTL:                 "1h",
@@ -1673,7 +1686,7 @@ func certAgent_Validation_MissingCertificatePath(t *testing.T) {
 		"Stderr should report a path-related validation error, got:\n%s", stderr)
 }
 
-func certAgent_Validation_NonexistentProjectSlug(t *testing.T) {
+func certAgent_Validation_NonexistentApplicationName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1690,9 +1703,9 @@ func certAgent_Validation_NonexistentProjectSlug(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         "nonexistent-project-slug",
+				ApplicationName:     "nonexistent-application",
 				ProfileSlug:         helper.ProfileSlug,
-				CommonName:          "bad-project.example.com",
+				CommonName:          "bad-app.example.com",
 				TTL:                 "1h",
 				RenewBeforeExpiry:   "10m",
 				StatusCheckInterval: "5s",
@@ -1733,14 +1746,13 @@ func certAgent_Validation_NonexistentProjectSlug(t *testing.T) {
 	})
 
 	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
-		"Agent should fail with nonexistent project slug")
+		"Agent should fail with nonexistent application name")
 
 	stderr := cmd.Stderr()
 	require.Contains(t, stderr, "failed to resolve",
 		"Agent should report resolution failure for nonexistent project slug")
 
 }
-
 
 func certAgent_OnRenewalPostHook(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1766,7 +1778,7 @@ func certAgent_OnRenewalPostHook(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "renewal-hook.example.com",
 				TTL:                 "2m",
@@ -1850,7 +1862,7 @@ func certAgent_SignatureAlgorithm(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "sigalg.example.com",
 				TTL:                 "1h",
@@ -1903,6 +1915,205 @@ func certAgent_SignatureAlgorithm(t *testing.T) {
 	agentHelpers.VerifyCertificateCommonName(t, certPath, "sigalg.example.com")
 }
 
+func certAgent_V1LegacyIssuance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		Version:          "v1",
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ProjectSlug:         helper.ProjectSlug,
+				ProfileSlug:         helper.ProfileSlug,
+				ApplicationName:     helper.ApplicationName,
+				CommonName:          "v1-legacy.example.com",
+				TTL:                 "1h",
+				RenewBeforeExpiry:   "10m",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate management engine starting",
+		Timeout:          60 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Agent failed to start cert management engine (v1)")
+
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate issued successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "v1 legacy certificate was not issued successfully")
+
+	agentHelpers.VerifyCertificateFile(t, certPath)
+	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
+	agentHelpers.VerifyChainFile(t, chainPath)
+	agentHelpers.VerifyCertificateCommonName(t, certPath, "v1-legacy.example.com")
+}
+
+func certAgent_V1ValidationRejectsAppOnly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		Version:          "v1",
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ApplicationName:     helper.ApplicationName,
+				ProfileSlug:         helper.ProfileSlug,
+				CommonName:          "v1-bad.example.com",
+				TTL:                 "1h",
+				RenewBeforeExpiry:   "10m",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			stderr := cmd.Stderr()
+			if strings.Contains(stderr, "(version v1): must specify either 'certificate-id' or both 'project-slug' and 'profile-name'") {
+				return helpers.ConditionSuccess
+			}
+			if !cmd.IsRunning() {
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionWait
+		},
+	})
+
+	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
+		"Agent should reject v1 config that's missing project-slug. stderr:\n%s", cmd.Stderr())
+	require.Contains(t, cmd.Stderr(), "(version v1)",
+		"Stderr should carry the v1-specific validation error")
+}
+
+func certAgent_V2ValidationRejectsProjectSlug(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		Version:          "v2",
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
+				ProfileSlug:         helper.ProfileSlug,
+				CommonName:          "v2-bad.example.com",
+				TTL:                 "1h",
+				RenewBeforeExpiry:   "10m",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			stderr := cmd.Stderr()
+			if strings.Contains(stderr, "(version v2): 'project-slug' is not supported") {
+				return helpers.ConditionSuccess
+			}
+			if !cmd.IsRunning() {
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionWait
+		},
+	})
+
+	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
+		"Agent should reject v2 config that carries project-slug. stderr:\n%s", cmd.Stderr())
+}
+
 func TestCertAgent_InternalCA(t *testing.T) {
 	t.Run("BasicCertificateIssuance", certAgent_BasicCertificateIssuance)
 	t.Run("CertificateRenewal", certAgent_CertificateRenewal)
@@ -1918,7 +2129,10 @@ func TestCertAgent_InternalCA(t *testing.T) {
 	t.Run("Validation_BothCSRAndCSRPath", certAgent_Validation_BothCSRAndCSRPath)
 	t.Run("Validation_InvalidAuthCredentials", certAgent_Validation_InvalidAuthCredentials)
 	t.Run("Validation_MissingCertificatePath", certAgent_Validation_MissingCertificatePath)
-	t.Run("Validation_NonexistentProjectSlug", certAgent_Validation_NonexistentProjectSlug)
+	t.Run("Validation_NonexistentApplicationName", certAgent_Validation_NonexistentApplicationName)
+	t.Run("V1LegacyIssuance", certAgent_V1LegacyIssuance)
+	t.Run("V1ValidationRejectsAppOnly", certAgent_V1ValidationRejectsAppOnly)
+	t.Run("V2ValidationRejectsProjectSlug", certAgent_V2ValidationRejectsProjectSlug)
 	t.Run("OnRenewalPostHook", certAgent_OnRenewalPostHook)
 	t.Run("SignatureAlgorithm", certAgent_SignatureAlgorithm)
 }

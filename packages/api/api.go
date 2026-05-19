@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -343,6 +344,29 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 	return Project(projectResponse), nil
 }
 
+func CallGetPkiApplicationByName(httpClient *resty.Client, projectId, name string) (PkiApplication, error) {
+	var applicationResponse GetPkiApplicationResponse
+	req := httpClient.
+		R().
+		SetResult(&applicationResponse).
+		SetHeader("User-Agent", USER_AGENT)
+
+	if projectId != "" {
+		req = req.SetQueryParam("projectId", projectId)
+	}
+
+	response, err := req.Get(fmt.Sprintf("%v/v1/cert-manager/applications/by-name/%s", config.INFISICAL_URL, url.PathEscape(name)))
+	if err != nil {
+		return PkiApplication{}, NewGenericRequestError("CallGetPkiApplicationByName", err)
+	}
+
+	if response.IsError() {
+		return PkiApplication{}, NewAPIErrorWithResponse("CallGetPkiApplicationByName", response, nil)
+	}
+
+	return applicationResponse.Application, nil
+}
+
 func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug string) (CertificateProfile, error) {
 	var profileResponse GetCertificateProfileResponse
 	response, err := httpClient.
@@ -350,7 +374,7 @@ func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug s
 		SetResult(&profileResponse).
 		SetHeader("User-Agent", USER_AGENT).
 		SetQueryParam("projectId", projectId).
-		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, slug))
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
 
 	if err != nil {
 		return CertificateProfile{}, NewGenericRequestError("CallGetCertificateProfileBySlug", err)
@@ -361,6 +385,25 @@ func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug s
 	}
 
 	return profileResponse.CertificateProfile, nil
+}
+
+func CallListPkiApplicationProfiles(httpClient *resty.Client, applicationId string) ([]PkiApplicationProfile, error) {
+	var listResponse ListPkiApplicationProfilesResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/%s/profiles", config.INFISICAL_URL, url.PathEscape(applicationId)))
+
+	if err != nil {
+		return nil, NewGenericRequestError("CallListPkiApplicationProfiles", err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse("CallListPkiApplicationProfiles", response, nil)
+	}
+
+	return listResponse.Profiles, nil
 }
 
 func CallIsAuthenticated(httpClient *resty.Client) bool {

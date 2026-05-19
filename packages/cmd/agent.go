@@ -219,6 +219,8 @@ type CertificateAttributes struct {
 
 type AgentCertificateConfig struct {
 	ProjectName     string                 `yaml:"project-slug,omitempty"`
+	ApplicationName string                 `yaml:"application-name,omitempty"`
+	ApplicationID   string                 `yaml:"-"`
 	ProfileName     string                 `yaml:"profile-name,omitempty"`
 	ProfileID       string                 `yaml:"-"`
 	CertificateID   string                 `yaml:"certificate-id,omitempty"`
@@ -800,31 +802,35 @@ func validateAgentConfigVersionCompatibility(config *Config) error {
 	return validateAgentConfigVersionCompatibilityWithMode(config, false)
 }
 
+const (
+	AgentConfigVersionV1 = "v1"
+	AgentConfigVersionV2 = "v2"
+)
+
 func validateAgentConfigVersionCompatibilityWithMode(config *Config, isCertManagerMode bool) error {
 	if config.Version == "" {
 		if len(config.Certificates) > 0 {
-			return fmt.Errorf("certificates are configured but 'version' field is not specified. Add 'version: v1' to your config")
+			return fmt.Errorf("certificates are configured but 'version' field is not specified: add 'version: v2' to your config")
 		}
 		return nil
 	}
 
 	switch config.Version {
-	case "v1":
+	case AgentConfigVersionV1, AgentConfigVersionV2:
 		if isCertManagerMode {
-			return validateCertificateManagementV1ForCertManager(config)
-		} else {
-			return validateCertificateManagementV1(config)
+			return validateCertificateManagementForCertManager(config)
 		}
+		return validateCertificateManagementForLegacyAgent(config)
 	default:
-		return fmt.Errorf("unsupported version: %s. Supported versions: v1", config.Version)
+		return fmt.Errorf("unsupported version: %s. Supported versions: v1, v2", config.Version)
 	}
 }
 
-func validateCertificateManagementV1(config *Config) error {
-	return fmt.Errorf("version: v1 is for certificate management. Please use 'infisical cert-manager agent' for certificate configurations")
+func validateCertificateManagementForLegacyAgent(config *Config) error {
+	return fmt.Errorf("version: %s is for certificate management; use 'infisical cert-manager agent' for certificate configurations", config.Version)
 }
 
-func validateCertificateManagementV1ForCertManager(config *Config) error {
+func validateCertificateManagementForCertManager(config *Config) error {
 	if len(config.Certificates) == 0 {
 		return fmt.Errorf("certificate management requires at least one certificate to be configured")
 	}
@@ -2007,6 +2013,8 @@ func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) 
 				certName = fmt.Sprintf("certificate '%s'", commonName)
 			} else if len(altNames) > 0 {
 				certName = fmt.Sprintf("certificate '%s'", altNames[0])
+			} else if cert.ApplicationName != "" && cert.ProfileName != "" {
+				certName = fmt.Sprintf("certificate '%s/%s'", cert.ApplicationName, cert.ProfileName)
 			} else if cert.ProjectName != "" && cert.ProfileName != "" {
 				certName = fmt.Sprintf("certificate '%s/%s'", cert.ProjectName, cert.ProfileName)
 			}
@@ -2032,7 +2040,7 @@ func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) 
 	return nil
 }
 
-func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
+func resolveCertificateNameReferences(version string, certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
 	for i := range *certificates {
 		cert := &(*certificates)[i]
 
@@ -2040,35 +2048,108 @@ func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, ht
 			continue
 		}
 
-		if cert.ProjectName == "" || cert.ProfileName == "" {
-			return fmt.Errorf("certificate configuration must specify both 'project-slug' and 'profile-name' (or 'certificate-id' to reference an existing certificate)")
+		switch version {
+		case AgentConfigVersionV1:
+			if err := resolveCertificateLegacyReferences(cert, httpClient); err != nil {
+				return err
+			}
+		case AgentConfigVersionV2:
+			if err := resolveCertificateApplicationReferences(cert, httpClient); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported version: %s. Supported versions: v1, v2", version)
 		}
-
-		project, err := api.CallGetProjectBySlug(httpClient, cert.ProjectName)
-		if err != nil {
-			return fmt.Errorf("failed to resolve project name '%s': %v. Please check that the project exists and you have access to it", cert.ProjectName, err)
-		}
-
-		if project.ID == "" {
-			return fmt.Errorf("project '%s' was found but returned empty ID. This may indicate a server issue", cert.ProjectName)
-		}
-
-		profile, err := api.CallGetCertificateProfileBySlug(httpClient, project.ID, cert.ProfileName)
-		if err != nil {
-			return fmt.Errorf("failed to resolve profile name '%s' in project '%s' (project ID: %s): %v. Please check that the certificate profile exists in this project", cert.ProfileName, cert.ProjectName, project.ID, err)
-		}
-
-		cert.ProfileID = profile.ID
 	}
 	return nil
 }
 
-func validateCertificateSourceConfig(certificates *[]AgentCertificateConfig) error {
+func resolveCertificateLegacyReferences(cert *AgentCertificateConfig, httpClient *resty.Client) error {
+	project, err := api.CallGetProjectBySlug(httpClient, cert.ProjectName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve project slug '%s': %v", cert.ProjectName, err)
+	}
+	if project.ID == "" {
+		return fmt.Errorf("project '%s' returned an empty ID", cert.ProjectName)
+	}
+
+	profile, err := api.CallGetCertificateProfileBySlug(httpClient, project.ID, cert.ProfileName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve profile '%s' in project '%s': %v", cert.ProfileName, cert.ProjectName, err)
+	}
+	cert.ProfileID = profile.ID
+
+	if cert.ApplicationName != "" {
+		application, err := api.CallGetPkiApplicationByName(httpClient, project.ID, cert.ApplicationName)
+		if err != nil {
+			return fmt.Errorf("failed to resolve application '%s' in project '%s': %v", cert.ApplicationName, cert.ProjectName, err)
+		}
+		if application.ID == "" {
+			return fmt.Errorf("application '%s' returned an empty ID", cert.ApplicationName)
+		}
+		cert.ApplicationID = application.ID
+	}
+
+	return nil
+}
+
+func resolveCertificateApplicationReferences(cert *AgentCertificateConfig, httpClient *resty.Client) error {
+	if cert.ApplicationName == "" || cert.ProfileName == "" {
+		return fmt.Errorf("certificate configuration must specify either 'certificate-id' or both 'application-name' and 'profile-name'")
+	}
+
+	application, err := api.CallGetPkiApplicationByName(httpClient, "", cert.ApplicationName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve application '%s': %v", cert.ApplicationName, err)
+	}
+	if application.ID == "" {
+		return fmt.Errorf("application '%s' returned an empty ID", cert.ApplicationName)
+	}
+	cert.ApplicationID = application.ID
+
+	profiles, err := api.CallListPkiApplicationProfiles(httpClient, application.ID)
+	if err != nil {
+		return fmt.Errorf("failed to list profiles for application '%s': %v", cert.ApplicationName, err)
+	}
+
+	var matched *api.PkiApplicationProfile
+	for j := range profiles {
+		if profiles[j].ProfileSlug == cert.ProfileName {
+			matched = &profiles[j]
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Errorf("profile '%s' is not attached to application '%s'", cert.ProfileName, cert.ApplicationName)
+	}
+
+	if matched.APIConfigID == nil || *matched.APIConfigID == "" {
+		return fmt.Errorf("profile '%s' on application '%s' does not have API enrollment configured", cert.ProfileName, cert.ApplicationName)
+	}
+
+	cert.ProfileID = matched.ProfileID
+	return nil
+}
+
+func validateCertificateSourceConfig(version string, certificates *[]AgentCertificateConfig) error {
+	switch version {
+	case AgentConfigVersionV1, AgentConfigVersionV2:
+	default:
+		return fmt.Errorf("unsupported version: %s. Supported versions: v1, v2", version)
+	}
+
 	for i, cert := range *certificates {
 		certIndex := i + 1
+
 		if cert.HasCertificateID() {
-			if cert.ProjectName != "" || cert.ProfileName != "" {
-				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'project-slug' or 'profile-name'", certIndex)
+			if cert.ProjectName != "" {
+				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'project-slug'", certIndex)
+			}
+			if cert.ProfileName != "" {
+				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'profile-name'", certIndex)
+			}
+			if cert.ApplicationName != "" {
+				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'application-name'", certIndex)
 			}
 			if cert.CSR != "" || cert.CSRPath != "" {
 				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'csr' or 'csr-path'", certIndex)
@@ -2079,8 +2160,18 @@ func validateCertificateSourceConfig(certificates *[]AgentCertificateConfig) err
 			continue
 		}
 
-		if cert.ProjectName == "" || cert.ProfileName == "" {
-			return fmt.Errorf("certificate %d: must specify either 'certificate-id' or both 'project-slug' and 'profile-name'", certIndex)
+		switch version {
+		case AgentConfigVersionV1:
+			if cert.ProjectName == "" || cert.ProfileName == "" {
+				return fmt.Errorf("certificate %d (version v1): must specify either 'certificate-id' or both 'project-slug' and 'profile-name'", certIndex)
+			}
+		case AgentConfigVersionV2:
+			if cert.ProjectName != "" {
+				return fmt.Errorf("certificate %d (version v2): 'project-slug' is not supported; use 'application-name' + 'profile-name', or set 'version: v1' for the legacy flow", certIndex)
+			}
+			if cert.ApplicationName == "" || cert.ProfileName == "" {
+				return fmt.Errorf("certificate %d (version v2): must specify either 'certificate-id' or both 'application-name' and 'profile-name'", certIndex)
+			}
 		}
 	}
 	return nil
@@ -2311,7 +2402,8 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 	state := tm.certificateStates[certificateId]
 
 	request := api.IssueCertificateRequest{
-		ProfileID: certificate.ProfileID,
+		ProfileID:     certificate.ProfileID,
+		ApplicationID: certificate.ApplicationID,
 	}
 
 	if certificate.CSR != "" {
@@ -3240,7 +3332,7 @@ var agentCmd = &cobra.Command{
 			return
 		}
 
-		err = validateCertificateSourceConfig(&agentConfig.Certificates)
+		err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
 		if err != nil {
 			log.Error().Msgf("Certificate configuration validation failed: %v", err)
 			return
@@ -3369,7 +3461,7 @@ var agentCmd = &cobra.Command{
 					return
 				}
 
-				if err := resolveCertificateNameReferences(&agentConfig.Certificates, httpClient); err != nil {
+				if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
 					log.Error().Msgf("failed to resolve certificate name references: %v", err)
 					return
 				}
@@ -3429,8 +3521,8 @@ var agentCmd = &cobra.Command{
 }
 
 func validateCertificateOnlyMode(config *Config) error {
-	if config.Version != "v1" {
-		return fmt.Errorf("certificate management requires version: v1")
+	if config.Version != AgentConfigVersionV1 && config.Version != AgentConfigVersionV2 {
+		return fmt.Errorf("certificate management requires 'version: v1' or 'version: v2'")
 	}
 
 	if len(config.Certificates) == 0 {
@@ -3517,7 +3609,7 @@ var certManagerAgentCmd = &cobra.Command{
 			return
 		}
 
-		err = validateCertificateSourceConfig(&agentConfig.Certificates)
+		err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
 		if err != nil {
 			log.Error().Msgf("Certificate configuration validation failed: %v", err)
 			return
@@ -3590,7 +3682,7 @@ var certManagerAgentCmd = &cobra.Command{
 					return
 				}
 
-				if err := resolveCertificateNameReferences(&agentConfig.Certificates, httpClient); err != nil {
+				if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
 					log.Error().Msgf("failed to resolve certificate name references: %v", err)
 					return
 				}
