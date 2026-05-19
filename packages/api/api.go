@@ -331,7 +331,7 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 		R().
 		SetResult(&projectResponse).
 		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, slug))
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
 
 	if err != nil {
 		return Project{}, NewGenericRequestError("CallGetProjectBySlug", err)

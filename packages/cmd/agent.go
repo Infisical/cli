@@ -2132,6 +2132,10 @@ func resolveCertificateApplicationReferences(cert *AgentCertificateConfig, httpC
 }
 
 func validateCertificateSourceConfig(version string, certificates *[]AgentCertificateConfig) error {
+	if len(*certificates) == 0 {
+		return nil
+	}
+
 	switch version {
 	case AgentConfigVersionV1, AgentConfigVersionV2:
 	default:
