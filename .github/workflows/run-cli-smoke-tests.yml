@@ -1,0 +1,118 @@
+name: CLI Distro Smoke Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".goreleaser.yaml"
+      - "smoke-tests/**"
+      - ".github/workflows/run-cli-smoke-tests.yml"
+
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build CLI + packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.25.9"
+
+      - name: Build static binary
+        run: |
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION=0.0.0-smoke" \
+            -o infisical .
+
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Create packages
+        run: |
+          mkdir -p smoke-tests/dist
+          nfpm package --config smoke-tests/nfpm.yaml --packager deb --target smoke-tests/dist/infisical.deb
+          nfpm package --config smoke-tests/nfpm.yaml --packager rpm --target smoke-tests/dist/infisical.rpm
+          nfpm package --config smoke-tests/nfpm.yaml --packager apk --target smoke-tests/dist/infisical.apk
+          nfpm package --config smoke-tests/nfpm.yaml --packager archlinux --target smoke-tests/dist/infisical.pkg.tar.zst
+
+      - name: Upload packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: smoke-test-packages
+          path: |
+            smoke-tests/dist/
+            smoke-tests/smoke.sh
+          retention-days: 1
+
+  smoke-test:
+    name: ${{ matrix.distro }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu-22.04
+            image: ubuntu:22.04
+            pkg: infisical.deb
+            install: "dpkg -i"
+
+          - distro: ubuntu-24.04
+            image: ubuntu:24.04
+            pkg: infisical.deb
+            install: "dpkg -i"
+
+          - distro: debian-12
+            image: debian:12
+            pkg: infisical.deb
+            install: "dpkg -i"
+
+          - distro: fedora-40
+            image: fedora:40
+            pkg: infisical.rpm
+            install: "rpm -i"
+
+          - distro: rockylinux-9
+            image: rockylinux:9
+            pkg: infisical.rpm
+            install: "rpm -i"
+
+          - distro: amazonlinux-2023
+            image: amazonlinux:2023
+            pkg: infisical.rpm
+            install: "rpm -i"
+
+          - distro: alpine-3.20
+            image: alpine:3.20
+            pkg: infisical.apk
+            install: "apk add --allow-untrusted"
+
+          - distro: archlinux
+            image: archlinux:latest
+            pkg: infisical.pkg.tar.zst
+            install: "pacman -U --noconfirm"
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: smoke-test-packages
+          path: artifacts
+
+      - name: Run smoke tests on ${{ matrix.distro }}
+        run: |
+          chmod +x artifacts/smoke-tests/smoke.sh
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts/smoke-tests/dist:/dist" \
+            -v "${{ github.workspace }}/artifacts/smoke-tests/smoke.sh:/smoke.sh" \
+            ${{ matrix.image }} \
+            sh -c "${{ matrix.install }} /dist/${{ matrix.pkg }} && /smoke.sh"
