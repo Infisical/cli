@@ -313,6 +313,8 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			InjectUsername: credentials.Username,
 			InjectPassword: credentials.Password,
 			InjectDatabase: credentials.Database,
+			InjectDomain:   credentials.Domain,
+			AuthMethod:     credentials.AuthMethod,
 			EnableTLS:      credentials.SSLEnabled,
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,

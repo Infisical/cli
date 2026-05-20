@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/go-ntlmssp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
 )
@@ -18,6 +19,8 @@ type MssqlProxyConfig struct {
 	InjectUsername string
 	InjectPassword string
 	InjectDatabase string
+	InjectDomain string
+	AuthMethod   string // "sql-login" or "ntlm"
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
@@ -231,7 +234,19 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		log.Info().Str("sessionID", p.config.SessionID).Msg("TLS established with server")
 	}
 
-	// 4. Send LOGIN7 with injected credentials
+	if p.config.AuthMethod == "ntlm" {
+		return p.authenticateNTLM(serverConn)
+	}
+	return p.authenticateSQL(serverConn)
+}
+
+func (p *MssqlProxy) authenticateSQL(serverConn net.Conn) (_ net.Conn, _ []*TDSPacket, retErr error) {
+	defer func() {
+		if retErr != nil {
+			serverConn.Close()
+		}
+	}()
+
 	loginMsg := &Login7Message{
 		Username: p.config.InjectUsername,
 		Password: p.config.InjectPassword,
@@ -247,7 +262,6 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		Payload:  loginMsg.Encode(),
 	}
 	if err := loginPkt.Write(serverConn); err != nil {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("send login to server: %w", err)
 	}
 
@@ -257,11 +271,8 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		Int("loginPktLen", len(loginPkt.Payload)+TDSHeaderSize).
 		Msg("Sent LOGIN7 to server")
 
-	// 5. Read login response - forward to client
-	log.Info().Str("sessionID", p.config.SessionID).Msg("Waiting for login response...")
 	response, err := ReadAllPackets(serverConn)
 	if err != nil {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("read login response: %w", err)
 	}
 	log.Info().
@@ -271,15 +282,106 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 
 	respPayload := CombinePayloads(response)
 	if ContainsToken(respPayload, TokenError) {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("server authentication failed")
 	}
 	if !ContainsToken(respPayload, TokenLoginAck) {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("no login ack from server")
 	}
 
 	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL server authentication successful")
+	return serverConn, response, nil
+}
+
+func (p *MssqlProxy) authenticateNTLM(serverConn net.Conn) (_ net.Conn, _ []*TDSPacket, retErr error) {
+	defer func() {
+		if retErr != nil {
+			serverConn.Close()
+		}
+	}()
+
+	negotiate, err := ntlmssp.NewNegotiateMessage(p.config.InjectDomain, "infisical-proxy")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create NTLM negotiate message: %w", err)
+	}
+
+	loginMsg := &Login7Message{
+		Database: p.config.InjectDatabase,
+		AppName:  "Infisical PAM Proxy",
+		Hostname: "infisical-proxy",
+		SSPIData: negotiate,
+	}
+
+	loginPkt := &TDSPacket{
+		Type:     PacketTypeLogin7,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  loginMsg.Encode(),
+	}
+	if err := loginPkt.Write(serverConn); err != nil {
+		return nil, nil, fmt.Errorf("send NTLM login to server: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Str("domain", p.config.InjectDomain).
+		Str("user", p.config.InjectUsername).
+		Msg("Sent LOGIN7 with NTLM negotiate to server")
+
+	challengeResponse, err := ReadAllPackets(serverConn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read NTLM challenge: %w", err)
+	}
+
+	challengePayload := CombinePayloads(challengeResponse)
+
+	if ContainsToken(challengePayload, TokenError) {
+		return nil, nil, fmt.Errorf("server rejected NTLM negotiate")
+	}
+
+	challengeToken, err := ExtractSSPIToken(challengePayload)
+	if err != nil {
+		return nil, nil, fmt.Errorf("extract NTLM challenge: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Int("challengeLen", len(challengeToken)).
+		Msg("Received NTLM challenge from server")
+
+	// domainNeeded=true: include domain in the NTLM authenticate response
+	authenticate, err := ntlmssp.ProcessChallenge(challengeToken, p.config.InjectUsername, p.config.InjectPassword, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("process NTLM challenge: %w", err)
+	}
+
+	sspiPkt := &TDSPacket{
+		Type:     PacketTypeSSPI,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  authenticate,
+	}
+	if err := sspiPkt.Write(serverConn); err != nil {
+		return nil, nil, fmt.Errorf("send NTLM authenticate: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Msg("Sent NTLM authenticate to server")
+
+	response, err := ReadAllPackets(serverConn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read NTLM login response: %w", err)
+	}
+
+	respPayload := CombinePayloads(response)
+	if ContainsToken(respPayload, TokenError) {
+		return nil, nil, fmt.Errorf("NTLM authentication failed")
+	}
+	if !ContainsToken(respPayload, TokenLoginAck) {
+		return nil, nil, fmt.Errorf("no login ack after NTLM authentication")
+	}
+
+	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL NTLM authentication successful")
 	return serverConn, response, nil
 }
 

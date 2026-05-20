@@ -53,6 +53,17 @@ const (
 	MaxPackets    = 100
 )
 
+var ntlmsspSignature = []byte("NTLMSSP\x00")
+
+// ExtractSSPIToken finds the NTLM token in a TDS server response by scanning for the NTLMSSP signature.
+func ExtractSSPIToken(payload []byte) ([]byte, error) {
+	idx := bytes.Index(payload, ntlmsspSignature)
+	if idx < 0 {
+		return nil, fmt.Errorf("no NTLMSSP token found in server response")
+	}
+	return payload[idx:], nil
+}
+
 // TDSPacket represents a TDS packet
 type TDSPacket struct {
 	Type     uint8
@@ -294,6 +305,7 @@ type Login7Message struct {
 	Password string
 	AppName  string
 	Database string
+	SSPIData []byte
 }
 
 // ParseLogin7 parses a LOGIN7 message (extracts only what we need)
@@ -324,7 +336,8 @@ const (
 	fSetLang = 0x80
 
 	// OptionFlags2
-	fODBC = 0x02
+	fODBC        = 0x02
+	fIntSecurity = 0x80 // Integrated Security (SSPI/NTLM)
 )
 
 // Encode serializes the LOGIN7 message
@@ -341,9 +354,19 @@ func (m *Login7Message) Encode() []byte {
 	m.Header.OptionFlags1 = fUseDB | fSetLang
 	m.Header.OptionFlags2 = fODBC
 
+	useSSPI := len(m.SSPIData) > 0
+
 	hostname := encodeUTF16(m.Hostname)
-	username := encodeUTF16(m.Username)
-	password := manglePassword(m.Password)
+	var username, password []byte
+	if useSSPI {
+		// NTLM: username and password are empty in LOGIN7; auth is via SSPI blob
+		username = nil
+		password = nil
+		m.Header.OptionFlags2 |= fIntSecurity
+	} else {
+		username = encodeUTF16(m.Username)
+		password = manglePassword(m.Password)
+	}
 	appname := encodeUTF16(m.AppName)
 	database := encodeUTF16(m.Database)
 	cltIntName := encodeUTF16("ODBC") // Client interface name
@@ -385,12 +408,24 @@ func (m *Login7Message) Encode() []byte {
 	offset += uint16(len(database))
 
 	m.Header.SSPIOffset = offset
-	m.Header.SSPILength = 0
+	if useSSPI {
+		sspiLen := len(m.SSPIData)
+		if sspiLen <= 65535 {
+			m.Header.SSPILength = uint16(sspiLen)
+			m.Header.SSPILongLength = 0
+		} else {
+			m.Header.SSPILength = 0
+			m.Header.SSPILongLength = uint32(sspiLen)
+		}
+		offset += uint16(sspiLen)
+	} else {
+		m.Header.SSPILength = 0
+		m.Header.SSPILongLength = 0
+	}
 	m.Header.AtchDBFileOffset = offset
 	m.Header.AtchDBFileLength = 0
 	m.Header.ChangePasswordOff = offset
 	m.Header.ChangePasswordLen = 0
-	m.Header.SSPILongLength = 0
 
 	m.Header.Length = uint32(offset)
 
@@ -404,6 +439,9 @@ func (m *Login7Message) Encode() []byte {
 	buf.Write(appname)
 	buf.Write(cltIntName)
 	buf.Write(database)
+	if useSSPI {
+		buf.Write(m.SSPIData)
+	}
 
 	return buf.Bytes()
 }

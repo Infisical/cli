@@ -3,6 +3,7 @@ module github.com/Infisical/infisical-merge
 go 1.25.9
 
 require (
+	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/BobuSumisu/aho-corasick v1.0.3
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/awnumar/memguard v0.23.0
