@@ -19,8 +19,8 @@ type MssqlProxyConfig struct {
 	InjectUsername string
 	InjectPassword string
 	InjectDatabase string
-	InjectDomain string
-	AuthMethod   string // "sql-login" or "ntlm"
+	InjectDomain   string
+	AuthMethod     string // "sql-login" or "ntlm"
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
