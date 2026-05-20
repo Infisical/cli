@@ -271,9 +271,20 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
+	principalsStr, err := cmd.Flags().GetString("principals")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
 	config := map[string]any{}
 	if kubernetesNamespace != "" {
 		config["namespace"] = kubernetesNamespace
+	}
+	if principalsStr != "" {
+		principals := util.ParsePrincipals(principalsStr)
+		if len(principals) > 0 {
+			config["principals"] = principals
+		}
 	}
 
 	leaseCredentials, _, leaseDetails, err := infisicalClient.DynamicSecrets().Leases().Create(infisicalSdk.CreateDynamicSecretLeaseOptions{
@@ -715,6 +726,9 @@ func init() {
 
 	// Kubernetes specific flags
 	dynamicSecretLeaseCreateCmd.Flags().String("kubernetes-namespace", "", "The namespace to create the lease in. Only used for Kubernetes dynamic secrets.")
+
+	// SSH specific flags
+	dynamicSecretLeaseCreateCmd.Flags().String("principals", "", "Comma-separated list of principals for SSH dynamic secret leases")
 
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseCreateCmd)
 
