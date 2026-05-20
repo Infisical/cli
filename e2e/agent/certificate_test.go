@@ -1935,7 +1935,6 @@ func certAgent_V1LegacyIssuance(t *testing.T) {
 			{
 				ProjectSlug:         helper.ProjectSlug,
 				ProfileSlug:         helper.ProfileSlug,
-				ApplicationName:     helper.ApplicationName,
 				CommonName:          "v1-legacy.example.com",
 				TTL:                 "1h",
 				RenewBeforeExpiry:   "10m",
