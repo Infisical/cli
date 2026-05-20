@@ -347,8 +347,8 @@ func (p *MssqlProxy) authenticateNTLM(serverConn net.Conn) (_ net.Conn, _ []*TDS
 		Int("challengeLen", len(challengeToken)).
 		Msg("Received NTLM challenge from server")
 
-	// domainNeeded=true: include domain in the NTLM authenticate response
-	authenticate, err := ntlmssp.ProcessChallenge(challengeToken, p.config.InjectUsername, p.config.InjectPassword, true)
+	ntlmUsername := p.config.InjectDomain + "\\" + p.config.InjectUsername
+	authenticate, err := ntlmssp.ProcessChallenge(challengeToken, ntlmUsername, p.config.InjectPassword, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("process NTLM challenge: %w", err)
 	}
