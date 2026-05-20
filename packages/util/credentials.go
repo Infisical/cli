@@ -19,6 +19,8 @@ type LoggedInUserDetails struct {
 	UserCredentials models.UserCredentials
 }
 
+var ErrUserNotLoggedIn = errors.New("we couldn't find your logged in details, try running [infisical login] then try again")
+
 func StoreUserCredsInKeyRing(userCred *models.UserCredentials) error {
 	userCredMarshalled, err := json.Marshal(userCred)
 	if err != nil {
@@ -69,7 +71,7 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 		userCreds, err := GetUserCredsFromKeyRing(configFile.LoggedInUserEmail)
 		if err != nil {
 			if strings.Contains(err.Error(), "credentials not found in system keyring") {
-				return LoggedInUserDetails{}, errors.New("we couldn't find your logged in details, try running [infisical login] then try again")
+				return LoggedInUserDetails{}, ErrUserNotLoggedIn
 			} else {
 				return LoggedInUserDetails{}, fmt.Errorf("failed to fetch credentials from keyring because [err=%s]", err)
 			}
