@@ -13,10 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func strPtr(s string) *string {
-	return &s
-}
-
 func newApplicationServer(t *testing.T, applicationName, applicationID string, profiles []api.PkiApplicationProfile) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(
@@ -44,7 +40,7 @@ func withMockInfisicalURL(t *testing.T, url string) {
 	t.Cleanup(func() { config.INFISICAL_URL = orig })
 }
 
-func TestResolveCertificateNameReferences_AttachedProfileWithAPIEnrollment(t *testing.T) {
+func TestResolveCertificateNameReferences_AttachedProfile(t *testing.T) {
 	const (
 		applicationName = "my-app"
 		applicationID   = "app-uuid-1"
@@ -57,7 +53,6 @@ func TestResolveCertificateNameReferences_AttachedProfileWithAPIEnrollment(t *te
 			ApplicationID: applicationID,
 			ProfileID:     profileID,
 			ProfileSlug:   profileSlug,
-			APIConfigID:   strPtr("api-cfg-1"),
 		},
 	})
 	t.Cleanup(server.Close)
@@ -72,32 +67,6 @@ func TestResolveCertificateNameReferences_AttachedProfileWithAPIEnrollment(t *te
 	assert.Equal(t, profileID, certs[0].ProfileID)
 }
 
-func TestResolveCertificateNameReferences_MissingAPIEnrollment(t *testing.T) {
-	const (
-		applicationName = "my-app"
-		applicationID   = "app-uuid-2"
-		profileSlug     = "no-api-profile"
-	)
-
-	server := newApplicationServer(t, applicationName, applicationID, []api.PkiApplicationProfile{
-		{
-			ApplicationID: applicationID,
-			ProfileID:     "profile-uuid-2",
-			ProfileSlug:   profileSlug,
-		},
-	})
-	t.Cleanup(server.Close)
-	withMockInfisicalURL(t, server.URL)
-
-	certs := []AgentCertificateConfig{
-		{ApplicationName: applicationName, ProfileName: profileSlug},
-	}
-
-	err := resolveCertificateNameReferences(AgentConfigVersionV2, &certs, resty.New())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "API enrollment")
-}
-
 func TestResolveCertificateNameReferences_ProfileNotAttached(t *testing.T) {
 	const (
 		applicationName = "my-app"
@@ -105,7 +74,7 @@ func TestResolveCertificateNameReferences_ProfileNotAttached(t *testing.T) {
 	)
 
 	server := newApplicationServer(t, applicationName, applicationID, []api.PkiApplicationProfile{
-		{ApplicationID: applicationID, ProfileID: "x", ProfileSlug: "other-profile", APIConfigID: strPtr("y")},
+		{ApplicationID: applicationID, ProfileID: "x", ProfileSlug: "other-profile"},
 	})
 	t.Cleanup(server.Close)
 	withMockInfisicalURL(t, server.URL)
@@ -133,7 +102,7 @@ func TestResolveCertificateNameReferences_UnsupportedVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported version")
 }
 
-func newLegacyServer(t *testing.T, projectSlug, projectID, profileSlug, profileID string, optionalApp *api.PkiApplication) *httptest.Server {
+func newLegacyServer(t *testing.T, projectSlug, projectID, profileSlug, profileID string) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,14 +119,6 @@ func newLegacyServer(t *testing.T, projectSlug, projectID, profileSlug, profileI
 					CertificateProfile: api.CertificateProfile{ID: profileID, Slug: profileSlug, ProjectID: projectID},
 				})
 			default:
-				if optionalApp != nil && r.URL.Path == "/v1/cert-manager/applications/by-name/"+optionalApp.Name {
-					if r.URL.Query().Get("projectId") != projectID {
-						http.Error(w, "wrong projectId", http.StatusBadRequest)
-						return
-					}
-					_ = json.NewEncoder(w).Encode(api.GetPkiApplicationResponse{Application: *optionalApp})
-					return
-				}
 				http.NotFound(w, r)
 			}
 		}),
@@ -173,7 +134,7 @@ func TestResolveCertificateNameReferences_LegacyProjectAndProfile(t *testing.T) 
 		profileID   = "profile-uuid-legacy"
 	)
 
-	server := newLegacyServer(t, projectSlug, projectID, profileSlug, profileID, nil)
+	server := newLegacyServer(t, projectSlug, projectID, profileSlug, profileID)
 	t.Cleanup(server.Close)
 	withMockInfisicalURL(t, server.URL)
 
@@ -184,33 +145,6 @@ func TestResolveCertificateNameReferences_LegacyProjectAndProfile(t *testing.T) 
 	require.NoError(t, resolveCertificateNameReferences(AgentConfigVersionV1, &certs, resty.New()))
 	assert.Equal(t, profileID, certs[0].ProfileID)
 	assert.Empty(t, certs[0].ApplicationID, "application-id should remain empty when no application-name supplied")
-}
-
-func TestResolveCertificateNameReferences_LegacyProjectProfileWithApplication(t *testing.T) {
-	const (
-		projectSlug     = "my-project"
-		projectID       = "project-uuid-legacy"
-		profileSlug     = "legacy-profile"
-		profileID       = "profile-uuid-legacy"
-		applicationName = "legacy-app"
-		applicationID   = "app-uuid-legacy"
-	)
-
-	server := newLegacyServer(t, projectSlug, projectID, profileSlug, profileID, &api.PkiApplication{
-		ID:        applicationID,
-		Name:      applicationName,
-		ProjectID: projectID,
-	})
-	t.Cleanup(server.Close)
-	withMockInfisicalURL(t, server.URL)
-
-	certs := []AgentCertificateConfig{
-		{ProjectName: projectSlug, ProfileName: profileSlug, ApplicationName: applicationName},
-	}
-
-	require.NoError(t, resolveCertificateNameReferences(AgentConfigVersionV1, &certs, resty.New()))
-	assert.Equal(t, profileID, certs[0].ProfileID)
-	assert.Equal(t, applicationID, certs[0].ApplicationID)
 }
 
 func TestResolveCertificateNameReferences_LegacyProjectMissingProfile(t *testing.T) {
@@ -261,10 +195,19 @@ func TestResolveCertificateNameReferences_LegacyProjectNotFound(t *testing.T) {
 func TestValidateCertificateSourceConfig_V1Accepted(t *testing.T) {
 	certs := []AgentCertificateConfig{
 		{ProjectName: "proj", ProfileName: "p"},
-		{ProjectName: "proj", ProfileName: "p", ApplicationName: "app"},
 		{CertificateID: "00000000-0000-0000-0000-000000000000"},
 	}
 	require.NoError(t, validateCertificateSourceConfig(AgentConfigVersionV1, &certs))
+}
+
+func TestValidateCertificateSourceConfig_V1RejectsApplicationName(t *testing.T) {
+	certs := []AgentCertificateConfig{
+		{ProjectName: "proj", ProfileName: "p", ApplicationName: "app"},
+	}
+	err := validateCertificateSourceConfig(AgentConfigVersionV1, &certs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "v1")
+	assert.Contains(t, err.Error(), "application-name")
 }
 
 func TestValidateCertificateSourceConfig_V2Accepted(t *testing.T) {
@@ -397,11 +340,11 @@ func TestResolveCertificateNameReferences_MultipleCerts(t *testing.T) {
 	)
 
 	appAProfiles := []api.PkiApplicationProfile{
-		{ApplicationID: appAID, ProfileID: "profile-a1", ProfileSlug: "a1", APIConfigID: strPtr("cfg-a1")},
-		{ApplicationID: appAID, ProfileID: "profile-a2", ProfileSlug: "a2", APIConfigID: strPtr("cfg-a2")},
+		{ApplicationID: appAID, ProfileID: "profile-a1", ProfileSlug: "a1"},
+		{ApplicationID: appAID, ProfileID: "profile-a2", ProfileSlug: "a2"},
 	}
 	appBProfiles := []api.PkiApplicationProfile{
-		{ApplicationID: appBID, ProfileID: "profile-b1", ProfileSlug: "b1", APIConfigID: strPtr("cfg-b1")},
+		{ApplicationID: appBID, ProfileID: "profile-b1", ProfileSlug: "b1"},
 	}
 
 	server := httptest.NewServer(

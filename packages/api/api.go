@@ -344,18 +344,14 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 	return Project(projectResponse), nil
 }
 
-func CallGetPkiApplicationByName(httpClient *resty.Client, projectId, name string) (PkiApplication, error) {
+func CallGetPkiApplicationByName(httpClient *resty.Client, name string) (PkiApplication, error) {
 	var applicationResponse GetPkiApplicationResponse
-	req := httpClient.
+	response, err := httpClient.
 		R().
 		SetResult(&applicationResponse).
-		SetHeader("User-Agent", USER_AGENT)
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/by-name/%s", config.INFISICAL_URL, url.PathEscape(name)))
 
-	if projectId != "" {
-		req = req.SetQueryParam("projectId", projectId)
-	}
-
-	response, err := req.Get(fmt.Sprintf("%v/v1/cert-manager/applications/by-name/%s", config.INFISICAL_URL, url.PathEscape(name)))
 	if err != nil {
 		return PkiApplication{}, NewGenericRequestError("CallGetPkiApplicationByName", err)
 	}

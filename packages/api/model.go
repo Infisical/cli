@@ -160,10 +160,9 @@ type GetCertificateProfileResponse struct {
 }
 
 type PkiApplicationProfile struct {
-	ApplicationID string  `json:"applicationId"`
-	ProfileID     string  `json:"profileId"`
-	ProfileSlug   string  `json:"profileSlug"`
-	APIConfigID   *string `json:"apiConfigId,omitempty"`
+	ApplicationID string `json:"applicationId"`
+	ProfileID     string `json:"profileId"`
+	ProfileSlug   string `json:"profileSlug"`
 }
 
 type ListPkiApplicationProfilesResponse struct {

@@ -1,4 +1,4 @@
-version: v2 # v2 issues from a profile attached to a PKI Application. Use v1 for the legacy project-based flow.
+version: v2 # v2 issues from a profile attached to an Application. Use v1 for the legacy project-based flow.
 
 infisical:
   address: "https://app.infisical.com/"

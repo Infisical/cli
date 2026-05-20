@@ -2079,17 +2079,6 @@ func resolveCertificateLegacyReferences(cert *AgentCertificateConfig, httpClient
 	}
 	cert.ProfileID = profile.ID
 
-	if cert.ApplicationName != "" {
-		application, err := api.CallGetPkiApplicationByName(httpClient, project.ID, cert.ApplicationName)
-		if err != nil {
-			return fmt.Errorf("failed to resolve application '%s' in project '%s': %v", cert.ApplicationName, cert.ProjectName, err)
-		}
-		if application.ID == "" {
-			return fmt.Errorf("application '%s' returned an empty ID", cert.ApplicationName)
-		}
-		cert.ApplicationID = application.ID
-	}
-
 	return nil
 }
 
@@ -2098,7 +2087,7 @@ func resolveCertificateApplicationReferences(cert *AgentCertificateConfig, httpC
 		return fmt.Errorf("certificate configuration must specify either 'certificate-id' or both 'application-name' and 'profile-name'")
 	}
 
-	application, err := api.CallGetPkiApplicationByName(httpClient, "", cert.ApplicationName)
+	application, err := api.CallGetPkiApplicationByName(httpClient, cert.ApplicationName)
 	if err != nil {
 		return fmt.Errorf("failed to resolve application '%s': %v", cert.ApplicationName, err)
 	}
@@ -2121,10 +2110,6 @@ func resolveCertificateApplicationReferences(cert *AgentCertificateConfig, httpC
 	}
 	if matched == nil {
 		return fmt.Errorf("profile '%s' is not attached to application '%s'", cert.ProfileName, cert.ApplicationName)
-	}
-
-	if matched.APIConfigID == nil || *matched.APIConfigID == "" {
-		return fmt.Errorf("profile '%s' on application '%s' does not have API enrollment configured", cert.ProfileName, cert.ApplicationName)
 	}
 
 	cert.ProfileID = matched.ProfileID
@@ -2166,6 +2151,9 @@ func validateCertificateSourceConfig(version string, certificates *[]AgentCertif
 
 		switch version {
 		case AgentConfigVersionV1:
+			if cert.ApplicationName != "" {
+				return fmt.Errorf("certificate %d (version v1): 'application-name' is not supported; use 'project-slug' + 'profile-name', or set 'version: v2' for the application-based flow", certIndex)
+			}
 			if cert.ProjectName == "" || cert.ProfileName == "" {
 				return fmt.Errorf("certificate %d (version v1): must specify either 'certificate-id' or both 'project-slug' and 'profile-name'", certIndex)
 			}
