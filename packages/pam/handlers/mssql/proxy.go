@@ -334,12 +334,11 @@ func (p *MssqlProxy) authenticateNTLM(serverConn net.Conn) (_ net.Conn, _ []*TDS
 
 	challengePayload := CombinePayloads(challengeResponse)
 
-	if ContainsToken(challengePayload, TokenError) {
-		return nil, nil, fmt.Errorf("server rejected NTLM negotiate")
-	}
-
 	challengeToken, err := ExtractSSPIToken(challengePayload)
 	if err != nil {
+		if ContainsToken(challengePayload, TokenError) {
+			return nil, nil, fmt.Errorf("server rejected NTLM negotiate")
+		}
 		return nil, nil, fmt.Errorf("extract NTLM challenge: %w", err)
 	}
 

@@ -410,7 +410,7 @@ func (m *Login7Message) Encode() []byte {
 	m.Header.SSPIOffset = offset
 	if useSSPI {
 		sspiLen := len(m.SSPIData)
-		if sspiLen <= 65535 {
+		if sspiLen < 65535 {
 			m.Header.SSPILength = uint16(sspiLen)
 			m.Header.SSPILongLength = 0
 		} else {
