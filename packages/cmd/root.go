@@ -135,8 +135,8 @@ func init() {
 
 	}
 
-	// if config.INFISICAL_URL is set to the default value, check if INFISICAL_URL is set in the environment
-	// this is used to allow overrides of the default value
+	// Override the default domain if the --domain flag was not explicitly set.
+	// Priority order (highest to lowest): --domain flag > INFISICAL_API_URL env var > .infisical.json apiUrl field > default
 	if !RootCmd.Flag("domain").Changed {
 		if envInfisicalBackendUrl, ok := os.LookupEnv("INFISICAL_API_URL"); ok {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(envInfisicalBackendUrl)
