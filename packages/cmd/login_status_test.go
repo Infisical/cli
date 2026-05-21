@@ -346,6 +346,137 @@ func TestPerformVerification_NetworkError(t *testing.T) {
 	}
 }
 
+func TestClassifyToken(t *testing.T) {
+	exp := time.Now().Add(time.Hour).Unix()
+
+	t.Run("service token prefix", func(t *testing.T) {
+		kind, _, err := classifyToken("st.abc.def")
+		if err != nil {
+			t.Fatalf("classifyToken: unexpected error: %v", err)
+		}
+		if kind != principalKindServiceToken {
+			t.Errorf("kind = %q, want %q", kind, principalKindServiceToken)
+		}
+	})
+
+	t.Run("identity access token routes to machine identity", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"authTokenType": authTokenTypeIdentityAccess,
+			"identityId":    "id-1",
+			"exp":           exp,
+		})
+		kind, claims, err := classifyToken(token)
+		if err != nil {
+			t.Fatalf("classifyToken: unexpected error: %v", err)
+		}
+		if kind != principalKindMachineIdentity {
+			t.Errorf("kind = %q, want %q", kind, principalKindMachineIdentity)
+		}
+		if claims.IdentityID != "id-1" {
+			t.Errorf("claims.IdentityID = %q, want %q", claims.IdentityID, "id-1")
+		}
+	})
+
+	t.Run("user access token routes to user even without keyring", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"authTokenType":  authTokenTypeAccess,
+			"userId":         "u-1",
+			"organizationId": "org-1",
+			"exp":            exp,
+		})
+		kind, claims, err := classifyToken(token)
+		if err != nil {
+			t.Fatalf("classifyToken: unexpected error: %v", err)
+		}
+		if kind != principalKindUser {
+			t.Errorf("kind = %q, want %q (user JWT misclassified)", kind, principalKindUser)
+		}
+		if claims.OrganizationID != "org-1" {
+			t.Errorf("claims.OrganizationID = %q, want %q", claims.OrganizationID, "org-1")
+		}
+	})
+
+	t.Run("unsupported authTokenType returns error", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"authTokenType": "refreshToken",
+			"userId":        "u-1",
+			"exp":           exp,
+		})
+		_, _, err := classifyToken(token)
+		if err == nil {
+			t.Fatalf("classifyToken: expected error for refresh token, got nil")
+		}
+	})
+
+	t.Run("legacy JWT with identityId falls back to machine identity", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"identityId": "id-1",
+			"exp":        exp,
+		})
+		kind, _, err := classifyToken(token)
+		if err != nil {
+			t.Fatalf("classifyToken: unexpected error: %v", err)
+		}
+		if kind != principalKindMachineIdentity {
+			t.Errorf("kind = %q, want %q", kind, principalKindMachineIdentity)
+		}
+	})
+
+	t.Run("legacy JWT with userId falls back to user", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"userId": "u-1",
+			"exp":    exp,
+		})
+		kind, _, err := classifyToken(token)
+		if err != nil {
+			t.Fatalf("classifyToken: unexpected error: %v", err)
+		}
+		if kind != principalKindUser {
+			t.Errorf("kind = %q, want %q", kind, principalKindUser)
+		}
+	})
+
+	t.Run("malformed JWT returns parse error", func(t *testing.T) {
+		_, _, err := classifyToken("not-a-jwt")
+		if err == nil {
+			t.Fatalf("classifyToken: expected parse error, got nil")
+		}
+	})
+}
+
+func TestBuildContextFromToken(t *testing.T) {
+	t.Run("user JWT via --token verifies against auth/checkAuth", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"authTokenType": authTokenTypeAccess,
+			"userId":        "u-1",
+			"exp":           time.Now().Add(time.Hour).Unix(),
+		})
+		ctx, err := buildContextFromToken(token, "--token flag", "https://example.test")
+		if err != nil {
+			t.Fatalf("buildContextFromToken: unexpected error: %v", err)
+		}
+		if ctx.kind != principalKindUser {
+			t.Fatalf("ctx.kind = %q, want %q", ctx.kind, principalKindUser)
+		}
+		if ctx.tokenSource != "--token flag" {
+			t.Errorf("ctx.tokenSource = %q, want %q", ctx.tokenSource, "--token flag")
+		}
+		if ctx.loggedInUser.IsUserLoggedIn {
+			t.Errorf("ctx.loggedInUser.IsUserLoggedIn = true, want false (no keyring session)")
+		}
+	})
+
+	t.Run("unsupported token type surfaces error", func(t *testing.T) {
+		token := makeUnsignedJWT(t, map[string]any{
+			"authTokenType": "mfaToken",
+			"exp":           time.Now().Add(time.Hour).Unix(),
+		})
+		if _, err := buildContextFromToken(token, "--token flag", "https://example.test"); err == nil {
+			t.Errorf("buildContextFromToken: expected error for mfaToken, got nil")
+		}
+	})
+}
+
 func makeUnsignedJWT(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	headerJSON, _ := json.Marshal(map[string]string{"alg": "none", "typ": "JWT"})

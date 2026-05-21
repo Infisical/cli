@@ -32,12 +32,12 @@ const (
 	verifyStateUnknown  = "unknown"
 	verifyStateSkipped  = "skipped"
 
-	authMethodLoginLabel        = "login"
-	authMethodServiceTokenLabel = "service-token"
-
 	tokenSourceLoginSession = "infisical login (keyring)"
 
 	verifyTimeout = 10 * time.Second
+
+	authTokenTypeAccess         = "accessToken"
+	authTokenTypeIdentityAccess = "identityAccessToken"
 )
 
 var (
@@ -73,7 +73,10 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 				util.PrintErrorMessageAndExit("--token requires --domain (or INFISICAL_API_URL) to be set so the status reflects the correct Infisical instance")
 			}
 		}
-		ctx := buildMachineIdentityContext(flagToken, "--token flag", envDomain)
+		ctx, err := buildContextFromToken(flagToken, "--token flag", envDomain)
+		if err != nil {
+			util.PrintErrorMessageAndExit(err.Error())
+		}
 		ctx.verification = verifySession(ctx)
 		emitLoginStatus([]loginStatusContext{ctx}, jsonOutput)
 		if shouldExitWithError(ctx) {
@@ -85,7 +88,11 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 	var sessions []loginStatusContext
 
 	if token, source, ok := detectMachineIdentityEnvToken(); ok {
-		sessions = append(sessions, buildMachineIdentityContext(token, source, envDomain))
+		ctx, err := buildContextFromToken(token, source, envDomain)
+		if err != nil {
+			util.PrintErrorMessageAndExit(err.Error())
+		}
+		sessions = append(sessions, ctx)
 	}
 
 	loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -127,36 +134,71 @@ func buildUserContext(details util.LoggedInUserDetails, domain string) loginStat
 	}
 }
 
-func buildMachineIdentityContext(token, source, domain string) loginStatusContext {
+// classifyToken determines whether a raw credential is a service token, a user
+// session JWT, or a machine identity access token JWT. Service tokens are
+// recognized by their "st." prefix; JWTs are dispatched on the authTokenType
+// claim the backend stamps into every token it signs. For very old JWTs that
+// pre-date that claim, falls back to looking for identityId / userId so we
+// preserve back-compat without misclassifying a user JWT as a machine identity.
+func classifyToken(token string) (string, loginTokenClaims, error) {
 	if strings.HasPrefix(token, "st.") {
-		return loginStatusContext{
-			kind:        principalKindServiceToken,
-			domain:      domain,
-			rawToken:    token,
-			tokenSource: source,
-		}
+		return principalKindServiceToken, loginTokenClaims{}, nil
 	}
 
-	claims, claimsErr := parseLoginJWTClaims(token)
+	claims, err := parseLoginJWTClaims(token)
+	if err != nil {
+		return "", claims, err
+	}
 
-	return loginStatusContext{
-		kind:        principalKindMachineIdentity,
-		domain:      domain,
-		rawToken:    token,
-		tokenSource: source,
-		claims:      claims,
-		claimsErr:   claimsErr,
+	switch claims.AuthTokenType {
+	case authTokenTypeIdentityAccess:
+		return principalKindMachineIdentity, claims, nil
+	case authTokenTypeAccess:
+		return principalKindUser, claims, nil
+	case "":
+		// Legacy tokens issued before authTokenType existed.
+		if claims.IdentityID != "" {
+			return principalKindMachineIdentity, claims, nil
+		}
+		if claims.UserID != "" {
+			return principalKindUser, claims, nil
+		}
+		return principalKindMachineIdentity, claims, nil
+	default:
+		return "", claims, fmt.Errorf("unsupported token type %q (CLI only accepts user access tokens and machine identity access tokens)", claims.AuthTokenType)
 	}
 }
 
-func isContextExpired(ctx loginStatusContext) bool {
-	switch ctx.kind {
-	case principalKindUser:
-		return ctx.loggedInUser.LoginExpired
-	case principalKindMachineIdentity:
-		return ctx.claimsErr == nil && ctx.claims.ExpiresAt != nil && !ctx.claims.ExpiresAt.After(time.Now())
+// buildContextFromToken constructs a status context for any externally-supplied
+// token (--token flag or environment variable). The principal kind is derived
+// from the token itself rather than from where it came from.
+func buildContextFromToken(token, source, domain string) (loginStatusContext, error) {
+	kind, claims, classifyErr := classifyToken(token)
+	if classifyErr != nil && kind == "" {
+		return loginStatusContext{}, classifyErr
 	}
-	return false
+
+	ctx := loginStatusContext{
+		kind:        kind,
+		domain:      domain,
+		rawToken:    token,
+		tokenSource: source,
+	}
+	if kind != principalKindServiceToken {
+		ctx.claims = claims
+		ctx.claimsErr = classifyErr
+	}
+	return ctx, nil
+}
+
+func isContextExpired(ctx loginStatusContext) bool {
+	if ctx.kind == principalKindUser && ctx.loggedInUser.LoginExpired {
+		return true
+	}
+	if ctx.kind == principalKindServiceToken {
+		return false
+	}
+	return ctx.claimsErr == nil && ctx.claims.ExpiresAt != nil && !ctx.claims.ExpiresAt.After(time.Now())
 }
 
 func contextStatus(ctx loginStatusContext) string {
@@ -227,6 +269,7 @@ type loginStatusSessionJSON struct {
 	Status          string                       `json:"status,omitempty"`
 	Domain          string                       `json:"domain,omitempty"`
 	Email           string                       `json:"email,omitempty"`
+	UserID          string                       `json:"userId,omitempty"`
 	AuthMethod      string                       `json:"authMethod,omitempty"`
 	TokenSource     string                       `json:"tokenSource,omitempty"`
 	Identity        *loginStatusIdentityJSON     `json:"identity,omitempty"`
@@ -273,6 +316,9 @@ func buildSessionJSON(ctx loginStatusContext) loginStatusSessionJSON {
 		session.Email = ctx.loggedInUser.UserCredentials.Email
 		if ctx.claimsErr != nil {
 			return session
+		}
+		if ctx.claims.UserID != "" {
+			session.UserID = ctx.claims.UserID
 		}
 		if ctx.claims.ExpiresAt != nil {
 			session.Token = &loginStatusTokenJSON{Exp: ctx.claims.ExpiresAt.Unix()}
@@ -355,6 +401,9 @@ func renderHuman(ctx loginStatusContext) {
 	if ctx.kind != principalKindServiceToken {
 		printStatusItem("Token expiration", tokenStatusLine(ctx.claims, ctx.claimsErr))
 	}
+	if ctx.kind == principalKindUser && ctx.claimsErr == nil && ctx.claims.UserID != "" {
+		printStatusItem("User ID", ctx.claims.UserID)
+	}
 	if org := organizationLineFor(ctx); org != "" {
 		printStatusItem("Organization", org)
 	}
@@ -367,7 +416,7 @@ func renderHuman(ctx loginStatusContext) {
 		case principalKindUser:
 			util.PrintlnStdout("  - Run `infisical login` to re-authenticate.")
 		case principalKindMachineIdentity:
-			util.PrintlnStdout("  - Run `infisical login` to re-authenticate and re-export your token.")
+			util.PrintlnStdout("  - Verify the domain being used or run `infisical login` to re-authenticate and re-export your token.")
 		case principalKindServiceToken:
 			util.PrintlnStdout("  - Verify the service token has not been revoked or expired in your Infisical instance.")
 		}
@@ -394,7 +443,10 @@ func verificationLine(v verificationResult) string {
 func principalLabel(ctx loginStatusContext) string {
 	switch ctx.kind {
 	case principalKindUser:
-		return ctx.loggedInUser.UserCredentials.Email
+		if email := ctx.loggedInUser.UserCredentials.Email; email != "" {
+			return email
+		}
+		return "user"
 	case principalKindMachineIdentity:
 		if ctx.claimsErr == nil && ctx.claims.IdentityName != "" {
 			return ctx.claims.IdentityName
@@ -407,24 +459,20 @@ func principalLabel(ctx loginStatusContext) string {
 }
 
 func authMethodLabel(ctx loginStatusContext) string {
-	switch ctx.kind {
-	case principalKindUser:
-		return authMethodLoginLabel
-	case principalKindMachineIdentity:
-		if ctx.claimsErr == nil {
-			return ctx.claims.AuthMethod
-		}
-	case principalKindServiceToken:
-		return authMethodServiceTokenLabel
+	if ctx.claimsErr == nil {
+		return ctx.claims.AuthMethod
 	}
-	return ""
+	return "unknown"
 }
 
 func tokenSourceLabel(ctx loginStatusContext) string {
+	if ctx.tokenSource != "" {
+		return ctx.tokenSource
+	}
 	if ctx.kind == principalKindUser {
 		return tokenSourceLoginSession
 	}
-	return ctx.tokenSource
+	return ""
 }
 
 func organizationLineFor(ctx loginStatusContext) string {
@@ -463,7 +511,11 @@ func printStatusItem(key, value string) {
 }
 
 type loginTokenClaims struct {
+	// Token kind discriminator stamped by the backend on every JWT it issues.
+	AuthTokenType string `json:"authTokenType"`
+
 	// User session JWT claims
+	UserID            string `json:"userId"`
 	OrganizationID    string `json:"organizationId"`
 	SubOrganizationID string `json:"subOrganizationId"`
 
