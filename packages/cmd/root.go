@@ -112,6 +112,12 @@ func init() {
 
 		config.INFISICAL_URL = util.AppendAPIEndpoint(config.INFISICAL_URL)
 
+		if workspaceConfigApiUrlMalformed {
+			util.PrintWarningWithWriter("The 'apiUrl' field in .infisical.json is not a valid URL (must start with http:// or https://). It will be ignored.", cmd.ErrOrStderr())
+		} else if domainFromWorkspaceConfig != "" && !silent {
+			fmt.Fprintf(cmd.ErrOrStderr(), "[INFO] Using domain '%s' from .infisical.json\n", domainFromWorkspaceConfig)
+		}
+
 		// util.DisplayAptInstallationChangeBannerWithWriter(silent, cmd.ErrOrStderr())
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
