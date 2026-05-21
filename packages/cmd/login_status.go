@@ -232,14 +232,8 @@ func emitLoginStatus(sessions []loginStatusContext, jsonOutput bool) {
 }
 
 func detectMachineIdentityEnvToken() (token, source string, ok bool) {
-	candidates := []string{
-		util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
-		util.INFISICAL_TOKEN_NAME,
-	}
-	for _, name := range candidates {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return v, fmt.Sprintf("%s environment variable", name), true
-		}
+	if v := strings.TrimSpace(os.Getenv(util.INFISICAL_TOKEN_NAME)); v != "" {
+		return v, fmt.Sprintf("%s environment variable", util.INFISICAL_TOKEN_NAME), true
 	}
 	return "", "", false
 }

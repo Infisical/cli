@@ -148,33 +148,15 @@ func TestParseLoginJWTClaims(t *testing.T) {
 }
 
 func TestDetectMachineIdentityEnvToken(t *testing.T) {
-	t.Run("no env vars set", func(t *testing.T) {
-		t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, "")
+	t.Run("no env var set", func(t *testing.T) {
 		t.Setenv(util.INFISICAL_TOKEN_NAME, "")
 
 		if _, _, ok := detectMachineIdentityEnvToken(); ok {
-			t.Errorf("detectMachineIdentityEnvToken() = ok, want !ok when no env vars set")
+			t.Errorf("detectMachineIdentityEnvToken() = ok, want !ok when no env var set")
 		}
 	})
 
-	t.Run("universal-auth access token takes precedence", func(t *testing.T) {
-		t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, "ua-token")
-		t.Setenv(util.INFISICAL_TOKEN_NAME, "should-be-ignored")
-
-		token, source, ok := detectMachineIdentityEnvToken()
-		if !ok {
-			t.Fatalf("detectMachineIdentityEnvToken() = !ok, want ok")
-		}
-		if token != "ua-token" {
-			t.Errorf("token = %q, want %q", token, "ua-token")
-		}
-		if !strings.Contains(source, util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME) {
-			t.Errorf("source = %q, want it to contain %q", source, util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME)
-		}
-	})
-
-	t.Run("falls back to INFISICAL_TOKEN", func(t *testing.T) {
-		t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, "")
+	t.Run("returns INFISICAL_TOKEN when set", func(t *testing.T) {
 		t.Setenv(util.INFISICAL_TOKEN_NAME, "st.abc.def")
 
 		token, source, ok := detectMachineIdentityEnvToken()
@@ -190,8 +172,7 @@ func TestDetectMachineIdentityEnvToken(t *testing.T) {
 	})
 
 	t.Run("whitespace-only env value is ignored", func(t *testing.T) {
-		t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, "   ")
-		t.Setenv(util.INFISICAL_TOKEN_NAME, "")
+		t.Setenv(util.INFISICAL_TOKEN_NAME, "   ")
 
 		if _, _, ok := detectMachineIdentityEnvToken(); ok {
 			t.Errorf("detectMachineIdentityEnvToken() = ok for whitespace-only value, want !ok")
