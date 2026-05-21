@@ -32,6 +32,11 @@ const (
 	verifyStateUnknown  = "unknown"
 	verifyStateSkipped  = "skipped"
 
+	authMethodLoginLabel        = "login"
+	authMethodServiceTokenLabel = "service-token"
+
+	tokenSourceLoginSession = "infisical login (keyring)"
+
 	verifyTimeout = 10 * time.Second
 )
 
@@ -51,25 +56,24 @@ var loginStatusCmd = &cobra.Command{
 	Run:                   runLoginStatus,
 }
 
-const (
-	authMethodLoginLabel        = "login"
-	authMethodServiceTokenLabel = "service-token"
-
-	tokenSourceLoginSession = "infisical login (keyring)"
-)
-
 func runLoginStatus(cmd *cobra.Command, args []string) {
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 
-	// --token is a one-off inspection
-	if flagToken, _ := cmd.Flags().GetString("token"); strings.TrimSpace(flagToken) != "" {
+	// Machine identity / service token domain comes from the env/flag-driven
+	// config.INFISICAL_URL. The user-session domain is whatever the user's
+	// saved config points at, which GetCurrentLoggedInUserDetails(true) writes
+	// back into config.INFISICAL_URL — so capture the env value first.
+	envDomain := strings.TrimSuffix(config.INFISICAL_URL, "/api")
+
+	flagToken, _ := cmd.Flags().GetString("token")
+	flagToken = strings.TrimSpace(flagToken)
+	if flagToken != "" {
 		if !cmd.Flags().Changed("domain") {
 			if _, envSet := os.LookupEnv("INFISICAL_API_URL"); !envSet {
 				util.PrintErrorMessageAndExit("--token requires --domain (or INFISICAL_API_URL) to be set so the status reflects the correct Infisical instance")
 			}
 		}
-		ctx := buildMachineIdentityContext(strings.TrimSpace(flagToken), "--token flag",
-			strings.TrimSuffix(config.INFISICAL_URL, "/api"))
+		ctx := buildMachineIdentityContext(flagToken, "--token flag", envDomain)
 		ctx.verification = verifySession(ctx)
 		emitLoginStatus([]loginStatusContext{ctx}, jsonOutput)
 		if shouldExitWithError(ctx) {
@@ -80,10 +84,8 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 
 	var sessions []loginStatusContext
 
-	machineIdentityDomain := strings.TrimSuffix(config.INFISICAL_URL, "/api")
-
 	if token, source, ok := detectMachineIdentityEnvToken(); ok {
-		sessions = append(sessions, buildMachineIdentityContext(token, source, machineIdentityDomain))
+		sessions = append(sessions, buildMachineIdentityContext(token, source, envDomain))
 	}
 
 	loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -126,7 +128,6 @@ func buildUserContext(details util.LoggedInUserDetails, domain string) loginStat
 }
 
 func buildMachineIdentityContext(token, source, domain string) loginStatusContext {
-	// Service tokens (`st.<id>.<key>` format) are opaque — no JWT to decode.
 	if strings.HasPrefix(token, "st.") {
 		return loginStatusContext{
 			kind:        principalKindServiceToken,
@@ -137,7 +138,6 @@ func buildMachineIdentityContext(token, source, domain string) loginStatusContex
 	}
 
 	claims, claimsErr := parseLoginJWTClaims(token)
-	expired := claimsErr == nil && claims.ExpiresAt != nil && !claims.ExpiresAt.After(time.Now())
 
 	return loginStatusContext{
 		kind:        principalKindMachineIdentity,
@@ -146,7 +146,6 @@ func buildMachineIdentityContext(token, source, domain string) loginStatusContex
 		tokenSource: source,
 		claims:      claims,
 		claimsErr:   claimsErr,
-		expired:     expired,
 	}
 }
 
@@ -155,7 +154,7 @@ func isContextExpired(ctx loginStatusContext) bool {
 	case principalKindUser:
 		return ctx.loggedInUser.LoginExpired
 	case principalKindMachineIdentity:
-		return ctx.expired
+		return ctx.claimsErr == nil && ctx.claims.ExpiresAt != nil && !ctx.claims.ExpiresAt.After(time.Now())
 	}
 	return false
 }
@@ -190,10 +189,6 @@ func emitLoginStatus(sessions []loginStatusContext, jsonOutput bool) {
 	}
 }
 
-// detectMachineIdentityEnvToken returns the machine-identity / service-token
-// credential exported in the environment, mirroring the precedence used by
-// util.GetInfisicalToken. The legacy `TOKEN` gateway variable is intentionally
-// omitted here because its name collides with too many unrelated tools.
 func detectMachineIdentityEnvToken() (token, source string, ok bool) {
 	candidates := []string{
 		util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
@@ -213,7 +208,6 @@ type loginStatusContext struct {
 	loggedInUser util.LoggedInUserDetails // populated when kind == principalKindUser
 	rawToken     string                   // bearer credential used for backend verification
 	tokenSource  string                   // populated for machine-identity / service-token
-	expired      bool                     // populated for machine-identity
 	claims       loginTokenClaims
 	claimsErr    error
 	verification verificationResult
@@ -381,26 +375,20 @@ func renderHuman(ctx loginStatusContext) {
 }
 
 func verificationLine(v verificationResult) string {
-	switch v.state {
-	case verifyStateVerified:
-		return "verified"
-	case verifyStateRejected:
-		if v.reason != "" {
-			return fmt.Sprintf("rejected (%s)", v.reason)
-		}
-		return "rejected"
-	case verifyStateUnknown:
-		if v.reason != "" {
-			return fmt.Sprintf("unreachable (%s)", v.reason)
-		}
-		return "unreachable"
-	case verifyStateSkipped:
-		if v.reason != "" {
-			return fmt.Sprintf("skipped (%s)", v.reason)
-		}
-		return "skipped"
+	labels := map[string]string{
+		verifyStateVerified: "verified",
+		verifyStateRejected: "rejected",
+		verifyStateUnknown:  "unreachable",
+		verifyStateSkipped:  "skipped",
 	}
-	return ""
+	label, ok := labels[v.state]
+	if !ok {
+		return ""
+	}
+	if v.reason != "" && v.state != verifyStateVerified {
+		return fmt.Sprintf("%s (%s)", label, v.reason)
+	}
+	return label
 }
 
 func principalLabel(ctx loginStatusContext) string {
@@ -442,40 +430,32 @@ func tokenSourceLabel(ctx loginStatusContext) string {
 func organizationLineFor(ctx loginStatusContext) string {
 	switch ctx.kind {
 	case principalKindUser:
-		return orgStatusLine(ctx.claims, ctx.claimsErr)
+		return orgStatusLine(ctx.claims.OrganizationID, ctx.claimsErr)
 	case principalKindMachineIdentity:
-		return machineIdentityOrgStatusLine(ctx.claims, ctx.claimsErr)
+		return orgStatusLine(ctx.claims.OrgID, ctx.claimsErr)
 	}
 	return ""
 }
 
 func tokenStatusLine(claims loginTokenClaims, claimsErr error) string {
-	if claimsErr == nil && claims.ExpiresAt != nil {
-		return fmt.Sprintf("%s", formatExpiry(claims.ExpiresAt.Time))
+	if claimsErr != nil {
+		return "unknown (could not parse token)"
 	}
-	return "undefined"
+	if claims.ExpiresAt == nil {
+		return "no expiration set"
+	}
+	return formatExpiry(claims.ExpiresAt.Time)
 }
 
-func orgStatusLine(claims loginTokenClaims, claimsErr error) string {
+func orgStatusLine(orgID string, claimsErr error) string {
 	if claimsErr != nil {
 		log.Debug().Err(claimsErr).Msg("login status: unable to decode token payload")
 		return "unknown (could not parse token)"
 	}
-	if claims.OrganizationID == "" {
+	if orgID == "" {
 		return "none (token is not scoped to an organization)"
 	}
-	return claims.OrganizationID
-}
-
-func machineIdentityOrgStatusLine(claims loginTokenClaims, claimsErr error) string {
-	if claimsErr != nil {
-		log.Debug().Err(claimsErr).Msg("login status: unable to decode machine identity token")
-		return "unknown (could not parse token)"
-	}
-	if claims.OrgID == "" {
-		return "none (token is not scoped to an organization)"
-	}
-	return claims.OrgID
+	return orgID
 }
 
 func printStatusItem(key, value string) {

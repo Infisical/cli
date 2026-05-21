@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/util"
+	jwt "github.com/golang-jwt/jwt/v5"
 )
 
 func TestFormatExpiry(t *testing.T) {
@@ -34,18 +35,18 @@ func TestFormatExpiry(t *testing.T) {
 		},
 		{
 			name:       "minutes only",
-			expiresAt:  now.Add(15 * time.Minute),
-			wantPrefix: "in ",
+			expiresAt:  now.Add(15*time.Minute + 30*time.Second),
+			wantPrefix: "15m",
 		},
 		{
 			name:       "hours and minutes",
 			expiresAt:  now.Add(5*time.Hour + 30*time.Minute),
-			wantPrefix: "in 5h ",
+			wantPrefix: "5h ",
 		},
 		{
 			name:       "days and hours",
-			expiresAt:  now.Add(50 * time.Hour),
-			wantPrefix: "in 2d ",
+			expiresAt:  now.Add(50*time.Hour + 30*time.Second),
+			wantPrefix: "2d ",
 		},
 	}
 
@@ -220,7 +221,14 @@ func TestContextStatus(t *testing.T) {
 		},
 		{
 			name: "machine identity locally expired",
-			ctx:  loginStatusContext{kind: principalKindMachineIdentity, expired: true},
+			ctx: loginStatusContext{
+				kind: principalKindMachineIdentity,
+				claims: loginTokenClaims{
+					RegisteredClaims: jwt.RegisteredClaims{
+						ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Minute)),
+					},
+				},
+			},
 			want: statusExpired,
 		},
 		{
