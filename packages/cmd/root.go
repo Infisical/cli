@@ -102,7 +102,7 @@ func init() {
 	cobra.OnInitialize(initLog)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
-	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_API_URL environment variable. Required for non-US Cloud users.")
+	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_API_URL environment variable or the 'apiUrl' field in .infisical.json. Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
 	RootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		silent, err := cmd.Flags().GetBool("silent")
