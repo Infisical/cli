@@ -21,6 +21,14 @@ import (
 
 var Telemetry *telemetry.Telemetry
 
+// domainFromWorkspaceConfig holds the apiUrl value read from .infisical.json during init(),
+// so that PersistentPreRun can print an informational message about it.
+var domainFromWorkspaceConfig string
+
+// workspaceConfigApiUrlMalformed is set during init() when .infisical.json contains a
+// non-empty apiUrl that does not begin with http:// or https://.
+var workspaceConfigApiUrlMalformed bool
+
 var RootCmd = &cobra.Command{
 	Use:               "infisical",
 	Short:             "Infisical CLI is used to inject environment variables into any process",
@@ -126,6 +134,13 @@ func init() {
 	if !RootCmd.Flag("domain").Changed {
 		if envInfisicalBackendUrl, ok := os.LookupEnv("INFISICAL_API_URL"); ok {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(envInfisicalBackendUrl)
+		} else if workspaceConfig, err := util.GetWorkSpaceFromFile(); err == nil && workspaceConfig.ApiUrl != "" {
+			if strings.HasPrefix(workspaceConfig.ApiUrl, "http://") || strings.HasPrefix(workspaceConfig.ApiUrl, "https://") {
+				config.INFISICAL_URL = util.AppendAPIEndpoint(workspaceConfig.ApiUrl)
+				domainFromWorkspaceConfig = workspaceConfig.ApiUrl
+			} else {
+				workspaceConfigApiUrlMalformed = true
+			}
 		}
 	}
 
