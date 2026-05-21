@@ -1,0 +1,6 @@
+{
+    "workspaceId": "test-workspace-id",
+    "defaultEnvironment": "dev",
+    "gitBranchToEnvironmentMapping": null,
+    "apiUrl": "https://custom.infisical.com/api"
+}
