@@ -3,7 +3,10 @@ package cmd
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,6 +196,146 @@ func TestDetectMachineIdentityEnvToken(t *testing.T) {
 			t.Errorf("detectMachineIdentityEnvToken() = ok for whitespace-only value, want !ok")
 		}
 	})
+}
+
+func TestContextStatus(t *testing.T) {
+	cases := []struct {
+		name string
+		ctx  loginStatusContext
+		want string
+	}{
+		{
+			name: "user not expired, no verification",
+			ctx:  loginStatusContext{kind: principalKindUser},
+			want: statusAuthenticated,
+		},
+		{
+			name: "locally expired user trumps backend",
+			ctx: loginStatusContext{
+				kind:         principalKindUser,
+				loggedInUser: util.LoggedInUserDetails{LoginExpired: true},
+				verification: verificationResult{state: verifyStateVerified},
+			},
+			want: statusExpired,
+		},
+		{
+			name: "machine identity locally expired",
+			ctx:  loginStatusContext{kind: principalKindMachineIdentity, expired: true},
+			want: statusExpired,
+		},
+		{
+			name: "backend rejected downgrades to rejected",
+			ctx: loginStatusContext{
+				kind:         principalKindUser,
+				verification: verificationResult{state: verifyStateRejected},
+			},
+			want: statusRejected,
+		},
+		{
+			name: "unknown verification stays authenticated",
+			ctx: loginStatusContext{
+				kind:         principalKindUser,
+				verification: verificationResult{state: verifyStateUnknown},
+			},
+			want: statusAuthenticated,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := contextStatus(tc.ctx); got != tc.want {
+				t.Errorf("contextStatus = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifySession_NoToken(t *testing.T) {
+	got := verifySession(loginStatusContext{kind: principalKindUser})
+	if got.state != verifyStateSkipped {
+		t.Errorf("verifySession no-token = %q, want %q", got.state, verifyStateSkipped)
+	}
+}
+
+func TestVerifySession_LocallyExpiredSkipsCall(t *testing.T) {
+	var hit int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hit, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx := loginStatusContext{
+		kind:         principalKindUser,
+		rawToken:     "tok",
+		domain:       server.URL,
+		loggedInUser: util.LoggedInUserDetails{LoginExpired: true},
+	}
+	got := verifySession(ctx)
+	if got.state != verifyStateSkipped {
+		t.Errorf("verifySession locally-expired = %q, want %q", got.state, verifyStateSkipped)
+	}
+	if atomic.LoadInt32(&hit) != 0 {
+		t.Errorf("verifySession hit server %d times for locally-expired ctx, want 0", hit)
+	}
+}
+
+func TestPerformVerification(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		path       string
+		method     string
+		want       string
+	}{
+		{name: "user 200 verified", statusCode: http.StatusOK, path: "/api/v1/auth/checkAuth", method: http.MethodPost, want: verifyStateVerified},
+		{name: "user 401 rejected", statusCode: http.StatusUnauthorized, path: "/api/v1/auth/checkAuth", method: http.MethodPost, want: verifyStateRejected},
+		{name: "user 403 rejected", statusCode: http.StatusForbidden, path: "/api/v1/auth/checkAuth", method: http.MethodPost, want: verifyStateRejected},
+		{name: "user 500 unknown", statusCode: http.StatusInternalServerError, path: "/api/v1/auth/checkAuth", method: http.MethodPost, want: verifyStateUnknown},
+		{name: "machine identity 200 verified", statusCode: http.StatusOK, path: "/api/v1/identities/details", method: http.MethodGet, want: verifyStateVerified},
+		{name: "machine identity 401 rejected", statusCode: http.StatusUnauthorized, path: "/api/v1/identities/details", method: http.MethodGet, want: verifyStateRejected},
+		{name: "machine identity 403 rejected", statusCode: http.StatusForbidden, path: "/api/v1/identities/details", method: http.MethodGet, want: verifyStateRejected},
+		{name: "service token 200 verified", statusCode: http.StatusOK, path: "/api/v2/service-token", method: http.MethodGet, want: verifyStateVerified},
+		{name: "service token 401 rejected", statusCode: http.StatusUnauthorized, path: "/api/v2/service-token", method: http.MethodGet, want: verifyStateRejected},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath, gotMethod, gotAuth string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotMethod = r.Method
+				gotAuth = r.Header.Get("Authorization")
+				w.WriteHeader(tc.statusCode)
+			}))
+			t.Cleanup(server.Close)
+
+			got := performVerification("tok-abc", server.URL, tc.path, tc.method)
+			if got.state != tc.want {
+				t.Errorf("performVerification state = %q, want %q (detail=%q)", got.state, tc.want, got.reason)
+			}
+			if gotPath != tc.path {
+				t.Errorf("server saw path %q, want %q", gotPath, tc.path)
+			}
+			if gotMethod != tc.method {
+				t.Errorf("server saw method %q, want %q", gotMethod, tc.method)
+			}
+			if gotAuth != "Bearer tok-abc" {
+				t.Errorf("server saw Authorization %q, want %q", gotAuth, "Bearer tok-abc")
+			}
+		})
+	}
+}
+
+func TestPerformVerification_NetworkError(t *testing.T) {
+	// Close the server immediately so dialing fails.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.Close()
+
+	got := performVerification("tok", server.URL, "/api/v1/auth/checkAuth", http.MethodPost)
+	if got.state != verifyStateUnknown {
+		t.Errorf("performVerification network-error state = %q, want %q", got.state, verifyStateUnknown)
+	}
 }
 
 func makeUnsignedJWT(t *testing.T, claims map[string]any) string {

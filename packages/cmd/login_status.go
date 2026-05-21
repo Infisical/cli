@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
@@ -19,10 +21,18 @@ import (
 const (
 	statusAuthenticated = "authenticated"
 	statusExpired       = "expired"
+	statusRejected      = "rejected"
 
 	principalKindUser            = "user"
 	principalKindMachineIdentity = "machine-identity"
 	principalKindServiceToken    = "service-token"
+
+	verifyStateVerified = "verified"
+	verifyStateRejected = "rejected"
+	verifyStateUnknown  = "unknown"
+	verifyStateSkipped  = "skipped"
+
+	verifyTimeout = 10 * time.Second
 )
 
 var (
@@ -51,19 +61,18 @@ const (
 func runLoginStatus(cmd *cobra.Command, args []string) {
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 
-	// --token is a one-off inspection: we only render that token's status and
-	// skip the user-session check entirely. Mirrors how `--token` overrides
-	// session-based auth in every other CLI command. We require --domain
-	// alongside --token so the displayed domain unambiguously matches the
-	// instance the inspected token belongs to (rather than silently defaulting).
+	// --token is a one-off inspection
 	if flagToken, _ := cmd.Flags().GetString("token"); strings.TrimSpace(flagToken) != "" {
 		if !cmd.Flags().Changed("domain") {
-			util.PrintErrorMessageAndExit("--token requires --domain to be set so the status reflects the correct Infisical instance")
+			if _, envSet := os.LookupEnv("INFISICAL_API_URL"); !envSet {
+				util.PrintErrorMessageAndExit("--token requires --domain (or INFISICAL_API_URL) to be set so the status reflects the correct Infisical instance")
+			}
 		}
 		ctx := buildMachineIdentityContext(strings.TrimSpace(flagToken), "--token flag",
 			strings.TrimSuffix(config.INFISICAL_URL, "/api"))
+		ctx.verification = verifySession(ctx)
 		emitLoginStatus([]loginStatusContext{ctx}, jsonOutput)
-		if isContextExpired(ctx) {
+		if shouldExitWithError(ctx) {
 			os.Exit(1)
 		}
 		return
@@ -71,9 +80,6 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 
 	var sessions []loginStatusContext
 
-	// Capture the API URL BEFORE GetCurrentLoggedInUserDetails(true) overwrites
-	// it with the logged-in user's domain — this is the domain a machine
-	// identity token would actually authenticate against.
 	machineIdentityDomain := strings.TrimSuffix(config.INFISICAL_URL, "/api")
 
 	if token, source, ok := detectMachineIdentityEnvToken(); ok {
@@ -94,10 +100,14 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	for i := range sessions {
+		sessions[i].verification = verifySession(sessions[i])
+	}
+
 	emitLoginStatus(sessions, jsonOutput)
 
 	for _, s := range sessions {
-		if isContextExpired(s) {
+		if shouldExitWithError(s) {
 			os.Exit(1)
 		}
 	}
@@ -109,6 +119,7 @@ func buildUserContext(details util.LoggedInUserDetails, domain string) loginStat
 		kind:         principalKindUser,
 		domain:       domain,
 		loggedInUser: details,
+		rawToken:     details.UserCredentials.JTWToken,
 		claims:       claims,
 		claimsErr:    claimsErr,
 	}
@@ -120,6 +131,7 @@ func buildMachineIdentityContext(token, source, domain string) loginStatusContex
 		return loginStatusContext{
 			kind:        principalKindServiceToken,
 			domain:      domain,
+			rawToken:    token,
 			tokenSource: source,
 		}
 	}
@@ -130,6 +142,7 @@ func buildMachineIdentityContext(token, source, domain string) loginStatusContex
 	return loginStatusContext{
 		kind:        principalKindMachineIdentity,
 		domain:      domain,
+		rawToken:    token,
 		tokenSource: source,
 		claims:      claims,
 		claimsErr:   claimsErr,
@@ -145,6 +158,21 @@ func isContextExpired(ctx loginStatusContext) bool {
 		return ctx.expired
 	}
 	return false
+}
+
+func contextStatus(ctx loginStatusContext) string {
+	if isContextExpired(ctx) {
+		return statusExpired
+	}
+	if ctx.verification.state == verifyStateRejected {
+		return statusRejected
+	}
+	return statusAuthenticated
+}
+
+func shouldExitWithError(ctx loginStatusContext) bool {
+	s := contextStatus(ctx)
+	return s == statusExpired || s == statusRejected
 }
 
 func emitLoginStatus(sessions []loginStatusContext, jsonOutput bool) {
@@ -183,10 +211,17 @@ type loginStatusContext struct {
 	kind         string
 	domain       string
 	loggedInUser util.LoggedInUserDetails // populated when kind == principalKindUser
+	rawToken     string                   // bearer credential used for backend verification
 	tokenSource  string                   // populated for machine-identity / service-token
 	expired      bool                     // populated for machine-identity
 	claims       loginTokenClaims
 	claimsErr    error
+	verification verificationResult
+}
+
+type verificationResult struct {
+	state  string
+	reason string
 }
 
 type loginStatusJSONOutput struct {
@@ -194,29 +229,31 @@ type loginStatusJSONOutput struct {
 }
 
 type loginStatusSessionJSON struct {
-	PrincipalType   string                   `json:"principalType,omitempty"`
-	Status          string                   `json:"status,omitempty"`
-	Domain          string                   `json:"domain,omitempty"`
-	Email           string                   `json:"email,omitempty"`
-	AuthMethod      string                   `json:"authMethod,omitempty"`
-	TokenSource     string                   `json:"tokenSource,omitempty"`
-	Identity        *loginStatusIdentityJSON `json:"identity,omitempty"`
-	Token           *loginStatusTokenJSON    `json:"token,omitempty"`
-	Organization    *loginStatusOrgJSON      `json:"organization,omitempty"`
-	SubOrganization *loginStatusOrgJSON      `json:"subOrganization,omitempty"`
+	PrincipalType   string                       `json:"principalType,omitempty"`
+	Status          string                       `json:"status,omitempty"`
+	Domain          string                       `json:"domain,omitempty"`
+	Email           string                       `json:"email,omitempty"`
+	AuthMethod      string                       `json:"authMethod,omitempty"`
+	TokenSource     string                       `json:"tokenSource,omitempty"`
+	Identity        *loginStatusIdentityJSON     `json:"identity,omitempty"`
+	Token           *loginStatusTokenJSON        `json:"token,omitempty"`
+	Organization    *string                      `json:"organization,omitempty"`
+	SubOrganization *string                      `json:"subOrganization,omitempty"`
+	Verification    *loginStatusVerificationJSON `json:"verification,omitempty"`
 }
 
 type loginStatusTokenJSON struct {
 	Exp int64 `json:"exp,omitempty"`
 }
 
-type loginStatusOrgJSON struct {
-	ID string `json:"id,omitempty"`
-}
-
 type loginStatusIdentityJSON struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
+}
+
+type loginStatusVerificationJSON struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func buildJSONOutput(sessions []loginStatusContext) loginStatusJSONOutput {
@@ -233,15 +270,13 @@ func buildSessionJSON(ctx loginStatusContext) loginStatusSessionJSON {
 		Domain:        ctx.domain,
 		AuthMethod:    authMethodLabel(ctx),
 		TokenSource:   tokenSourceLabel(ctx),
-		Status:        statusAuthenticated,
+		Status:        contextStatus(ctx),
+		Verification:  verificationJSON(ctx.verification),
 	}
 
 	switch ctx.kind {
 	case principalKindUser:
 		session.Email = ctx.loggedInUser.UserCredentials.Email
-		if ctx.loggedInUser.LoginExpired {
-			session.Status = statusExpired
-		}
 		if ctx.claimsErr != nil {
 			return session
 		}
@@ -249,16 +284,13 @@ func buildSessionJSON(ctx loginStatusContext) loginStatusSessionJSON {
 			session.Token = &loginStatusTokenJSON{Exp: ctx.claims.ExpiresAt.Unix()}
 		}
 		if ctx.claims.OrganizationID != "" {
-			session.Organization = &loginStatusOrgJSON{ID: ctx.claims.OrganizationID}
+			session.Organization = &ctx.claims.OrganizationID
 		}
 		if ctx.claims.SubOrganizationID != "" {
-			session.SubOrganization = &loginStatusOrgJSON{ID: ctx.claims.SubOrganizationID}
+			session.SubOrganization = &ctx.claims.SubOrganizationID
 		}
 
 	case principalKindMachineIdentity:
-		if ctx.expired {
-			session.Status = statusExpired
-		}
 		if ctx.claimsErr != nil {
 			return session
 		}
@@ -272,11 +304,18 @@ func buildSessionJSON(ctx loginStatusContext) loginStatusSessionJSON {
 			session.Token = &loginStatusTokenJSON{Exp: ctx.claims.ExpiresAt.Unix()}
 		}
 		if ctx.claims.OrgID != "" {
-			session.Organization = &loginStatusOrgJSON{ID: ctx.claims.OrgID}
+			session.Organization = &ctx.claims.OrgID
 		}
 	}
 
 	return session
+}
+
+func verificationJSON(v verificationResult) *loginStatusVerificationJSON {
+	if v.state == "" {
+		return nil
+	}
+	return &loginStatusVerificationJSON{State: v.state, Reason: v.reason}
 }
 
 func writeLoginStatusJSON(out loginStatusJSONOutput) error {
@@ -290,25 +329,22 @@ func writeLoginStatusJSON(out loginStatusJSONOutput) error {
 
 func renderHuman(ctx loginStatusContext) {
 	label := principalLabel(ctx)
-	expired := isContextExpired(ctx)
+	status := contextStatus(ctx)
 
-	if expired {
-		util.PrintfStdout("%s Authenticated as %s (expired)\n",
-			redStyle.Sprint("x"), boldStyle.Sprint(label))
-		if ctx.domain != "" {
-			printStatusItem("Domain", ctx.domain)
-		}
-		switch ctx.kind {
-		case principalKindUser:
-			util.PrintlnStdout("  - Run `infisical login` to re-authenticate.")
-		case principalKindMachineIdentity:
-			util.PrintlnStdout("  - Refresh your machine identity access token and re-export it.")
-		}
-		return
+	if status == statusAuthenticated {
+		util.PrintfStdout("%s Authenticated as %s\n", greenStyle.Sprint("✓"), boldStyle.Sprint(label))
+	} else {
+		util.PrintfStdout("%s Failed to authenticate as %s\n", redStyle.Sprint("x"), boldStyle.Sprint(label))
 	}
 
-	util.PrintfStdout("%s Authenticated as %s\n",
-		greenStyle.Sprint("✓"), boldStyle.Sprint(label))
+	if status != statusAuthenticated {
+		if status == statusExpired {
+			printStatusItem("Reason", "session expired")
+		}
+		if line := verificationLine(ctx.verification); line != "" {
+			printStatusItem("Reason", line)
+		}
+	}
 
 	if ctx.domain != "" {
 		printStatusItem("Domain", ctx.domain)
@@ -323,7 +359,7 @@ func renderHuman(ctx loginStatusContext) {
 		printStatusItem("Token source", source)
 	}
 	if ctx.kind != principalKindServiceToken {
-		printStatusItem("Token", tokenStatusLine(ctx.claims, ctx.claimsErr))
+		printStatusItem("Token expiration", tokenStatusLine(ctx.claims, ctx.claimsErr))
 	}
 	if org := organizationLineFor(ctx); org != "" {
 		printStatusItem("Organization", org)
@@ -331,6 +367,40 @@ func renderHuman(ctx loginStatusContext) {
 	if ctx.kind == principalKindUser && ctx.claimsErr == nil && ctx.claims.SubOrganizationID != "" {
 		printStatusItem("Sub-organization", ctx.claims.SubOrganizationID)
 	}
+
+	if status != statusAuthenticated {
+		switch ctx.kind {
+		case principalKindUser:
+			util.PrintlnStdout("  - Run `infisical login` to re-authenticate.")
+		case principalKindMachineIdentity:
+			util.PrintlnStdout("  - Run `infisical login` to re-authenticate and re-export your token.")
+		case principalKindServiceToken:
+			util.PrintlnStdout("  - Verify the service token has not been revoked or expired in your Infisical instance.")
+		}
+	}
+}
+
+func verificationLine(v verificationResult) string {
+	switch v.state {
+	case verifyStateVerified:
+		return "verified"
+	case verifyStateRejected:
+		if v.reason != "" {
+			return fmt.Sprintf("rejected (%s)", v.reason)
+		}
+		return "rejected"
+	case verifyStateUnknown:
+		if v.reason != "" {
+			return fmt.Sprintf("unreachable (%s)", v.reason)
+		}
+		return "unreachable"
+	case verifyStateSkipped:
+		if v.reason != "" {
+			return fmt.Sprintf("skipped (%s)", v.reason)
+		}
+		return "skipped"
+	}
+	return ""
 }
 
 func principalLabel(ctx loginStatusContext) string {
@@ -381,9 +451,9 @@ func organizationLineFor(ctx loginStatusContext) string {
 
 func tokenStatusLine(claims loginTokenClaims, claimsErr error) string {
 	if claimsErr == nil && claims.ExpiresAt != nil {
-		return fmt.Sprintf("true (expires %s)", formatExpiry(claims.ExpiresAt.Time))
+		return fmt.Sprintf("%s", formatExpiry(claims.ExpiresAt.Time))
 	}
-	return "true"
+	return "undefined"
 }
 
 func orgStatusLine(claims loginTokenClaims, claimsErr error) string {
@@ -443,12 +513,12 @@ func formatExpiry(expiresAt time.Time) string {
 	hours := int(remaining.Hours())
 	if hours >= 24 {
 		days := hours / 24
-		return fmt.Sprintf("in %dd %dh", days, hours%24)
+		return fmt.Sprintf("%dd %dh", days, hours%24)
 	}
 	if hours > 0 {
-		return fmt.Sprintf("in %dh %dm", hours, int(remaining.Minutes())%60)
+		return fmt.Sprintf("%dh %dm", hours, int(remaining.Minutes())%60)
 	}
-	return fmt.Sprintf("in %dm", int(remaining.Minutes()))
+	return fmt.Sprintf("%dm", int(remaining.Minutes()))
 }
 
 func renderNotAuthenticated(jsonOutput bool) {
@@ -459,6 +529,71 @@ func renderNotAuthenticated(jsonOutput bool) {
 		return
 	}
 	util.PrintfStdout("%s You are not authenticated.\nRun `infisical login` to log in.\n", redStyle.Sprint("x"))
+}
+
+// verifySession asks the backend whether the credential associated with the
+// context is still valid. Local-only signals (missing token,
+// already-expired-by-clock) short-circuit the network call.
+func verifySession(ctx loginStatusContext) verificationResult {
+	if ctx.rawToken == "" {
+		return verificationResult{state: verifyStateSkipped, reason: "no token available"}
+	}
+	if isContextExpired(ctx) {
+		return verificationResult{state: verifyStateSkipped, reason: "locally expired"}
+	}
+	switch ctx.kind {
+	case principalKindServiceToken:
+		return performVerification(ctx.rawToken, ctx.domain, "/api/v2/service-token", http.MethodGet)
+	case principalKindMachineIdentity:
+		return performVerification(ctx.rawToken, ctx.domain, "/api/v1/identities/details", http.MethodGet)
+	}
+	return performVerification(ctx.rawToken, ctx.domain, "/api/v1/auth/checkAuth", http.MethodPost)
+}
+
+func performVerification(token, domain, path, method string) verificationResult {
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return verificationResult{state: verifyStateUnknown, reason: err.Error()}
+	}
+	httpClient.
+		SetAuthToken(token).
+		SetHeader("Accept", "application/json").
+		SetTimeout(verifyTimeout)
+
+	url := strings.TrimRight(domain, "/") + path
+	req := httpClient.R().SetHeader("User-Agent", api.USER_AGENT)
+
+	var (
+		statusCode int
+		callErr    error
+	)
+	switch method {
+	case http.MethodGet:
+		resp, e := req.Get(url)
+		callErr = e
+		if resp != nil {
+			statusCode = resp.StatusCode()
+		}
+	default:
+		resp, e := req.Post(url)
+		callErr = e
+		if resp != nil {
+			statusCode = resp.StatusCode()
+		}
+	}
+
+	if callErr != nil {
+		log.Debug().Err(callErr).Str("url", url).Msg("login status: backend verification call failed")
+		return verificationResult{state: verifyStateUnknown, reason: "network error"}
+	}
+	switch {
+	case statusCode >= 200 && statusCode < 300:
+		return verificationResult{state: verifyStateVerified}
+	case statusCode == http.StatusUnauthorized, statusCode == http.StatusForbidden:
+		return verificationResult{state: verifyStateRejected, reason: fmt.Sprintf("HTTP %d", statusCode)}
+	default:
+		return verificationResult{state: verifyStateUnknown, reason: fmt.Sprintf("HTTP %d", statusCode)}
+	}
 }
 
 func init() {
