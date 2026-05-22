@@ -42,6 +42,8 @@ type RelayConfig struct {
 
 	// Network Configuration
 	Host string
+
+	EnrollMethod string
 }
 
 type Relay struct {
@@ -91,11 +93,15 @@ func (r *Relay) SetToken(token string) {
 func (r *Relay) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
 		var err error
-		heartbeatBody := api.RelayHeartbeatRequest{Name: r.config.RelayName}
-		if r.config.Type == "instance" {
-			err = api.CallInstanceRelayHeartBeat(r.httpClient, heartbeatBody)
+		if r.config.EnrollMethod != "" {
+			err = api.CallRelayHeartbeatV2(r.httpClient)
 		} else {
-			err = api.CallOrgRelayHeartBeat(r.httpClient, heartbeatBody)
+			heartbeatBody := api.RelayHeartbeatRequest{Name: r.config.RelayName}
+			if r.config.Type == "instance" {
+				err = api.CallInstanceRelayHeartBeat(r.httpClient, heartbeatBody)
+			} else {
+				err = api.CallOrgRelayHeartBeat(r.httpClient, heartbeatBody)
+			}
 		}
 
 		if err != nil {
@@ -201,6 +207,19 @@ func (r *Relay) Start(ctx context.Context) error {
 }
 
 func (r *Relay) registerRelay() error {
+	if r.config.EnrollMethod != "" {
+		certResp, err := api.CallRelayConnect(r.httpClient)
+		if err != nil {
+			return fmt.Errorf("failed to connect relay via v2: %v", err)
+		}
+		r.certificates = &api.RegisterRelayResponse{
+			PKI: certResp.PKI,
+			SSH: certResp.SSH,
+		}
+		log.Info().Msg("Successfully connected relay and received certificates via v2 API")
+		return nil
+	}
+
 	body := api.RegisterRelayRequest{
 		Host: r.config.Host,
 		Name: r.config.RelayName,

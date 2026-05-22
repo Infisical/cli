@@ -1002,6 +1002,35 @@ type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
 }
 
+type RelayLoginRequest struct {
+	Method            string `json:"method"`
+	Token             string `json:"token,omitempty"`
+	RelayID           string `json:"relayId,omitempty"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod,omitempty"`
+	IamRequestBody    string `json:"iamRequestBody,omitempty"`
+	IamRequestHeaders string `json:"iamRequestHeaders,omitempty"`
+}
+
+type RelayLoginResponse struct {
+	AccessToken string `json:"accessToken"`
+	RelayID     string `json:"relayId"`
+	TokenType   string `json:"tokenType"`
+}
+
+type RelayConnectResponse struct {
+	RelayID string `json:"relayId"`
+	PKI     struct {
+		ServerCertificate      string `json:"serverCertificate"`
+		ServerPrivateKey       string `json:"serverPrivateKey"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
+	} `json:"pki"`
+	SSH struct {
+		ServerCertificate string `json:"serverCertificate"`
+		ServerPrivateKey  string `json:"serverPrivateKey"`
+		ClientCAPublicKey string `json:"clientCAPublicKey"`
+	} `json:"ssh"`
+}
+
 type AltName struct {
 	Type  string `json:"type"`
 	Value string `json:"value"`
