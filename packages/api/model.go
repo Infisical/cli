@@ -138,17 +138,34 @@ type GetProjectByIdResponse struct {
 
 type GetProjectBySlugResponse Project
 
+type PkiApplication struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type GetPkiApplicationResponse struct {
+	Application PkiApplication `json:"application"`
+}
+
 type CertificateProfile struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Description           string `json:"description"`
-	ProjectID             string `json:"projectId"`
-	CaID                  string `json:"caId"`
-	CertificateTemplateID string `json:"certificateTemplateId"`
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	ProjectID   string `json:"projectId,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type GetCertificateProfileResponse struct {
 	CertificateProfile CertificateProfile `json:"certificateProfile"`
+}
+
+type PkiApplicationProfile struct {
+	ApplicationID string `json:"applicationId"`
+	ProfileID     string `json:"profileId"`
+	ProfileSlug   string `json:"profileSlug"`
+}
+
+type ListPkiApplicationProfilesResponse struct {
+	Profiles []PkiApplicationProfile `json:"profiles"`
 }
 
 type Organization struct {
@@ -1004,9 +1021,10 @@ type CertificateAttributes struct {
 }
 
 type IssueCertificateRequest struct {
-	ProfileID  string                 `json:"profileId"`
-	CSR        string                 `json:"csr,omitempty"`
-	Attributes *CertificateAttributes `json:"attributes,omitempty"`
+	ProfileID     string                 `json:"profileId"`
+	ApplicationID string                 `json:"applicationId,omitempty"`
+	CSR           string                 `json:"csr,omitempty"`
+	Attributes    *CertificateAttributes `json:"attributes,omitempty"`
 }
 
 type CertificateData struct {
@@ -1033,7 +1051,6 @@ type RetrieveCertificateResponse struct {
 		CommonName        string    `json:"commonName"`
 		NotBefore         time.Time `json:"notBefore"`
 		NotAfter          time.Time `json:"notAfter"`
-		ProjectId         string    `json:"projectId"`
 		CaId              string    `json:"caId"`
 		KeyUsages         []string  `json:"keyUsages"`
 		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
@@ -1069,7 +1086,6 @@ type GetCertificateRequestResponse struct {
 	CreatedAt            time.Time `json:"createdAt"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 	CommonName           string    `json:"commonName,omitempty"`
-	ProjectID            string    `json:"projectId,omitempty"`
 	ProfileID            string    `json:"profileId,omitempty"`
 	Certificate          *string   `json:"certificate,omitempty"`
 	IssuingCaCertificate *string   `json:"issuingCaCertificate,omitempty"`
