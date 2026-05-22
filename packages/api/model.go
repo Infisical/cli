@@ -139,9 +139,8 @@ type GetProjectByIdResponse struct {
 type GetProjectBySlugResponse Project
 
 type PkiApplication struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ProjectID string `json:"projectId,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type GetPkiApplicationResponse struct {
