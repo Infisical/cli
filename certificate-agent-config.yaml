@@ -1,4 +1,4 @@
-version: v1
+version: v2 # v2 issues from a profile attached to an Application. Use v1 for the legacy project-based flow.
 
 infisical:
   address: "https://app.infisical.com/"
@@ -11,9 +11,8 @@ auth:
     remove_client_secret_on_read: false
 
 certificates:
-  # Issue a new certificate from a profile
-  - profile-name: "my-profile-name"
-    project-slug: "my-project-slug"
+  - application-name: "my-application-name"
+    profile-name: "my-profile-name"
 
     # Certificate parameters
     attributes:

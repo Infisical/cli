@@ -25,20 +25,23 @@ import (
 )
 
 type CertAgentTestHelper struct {
-	T              *testing.T
-	ProjectID      string
-	ProjectSlug    string
-	ProfileSlug    string
-	ProfileID      string
-	PolicyID       string
-	CaID           string
-	AdminToken     string
-	InfisicalURL   string
-	TempDir        string
-	ClientID       string
-	ClientSecret   string
-	IdentityClient *client.ClientWithResponses
-	AdminClient    *client.ClientWithResponses
+	T               *testing.T
+	ProjectID       string
+	ProjectSlug     string
+	ProfileSlug     string
+	ProfileID       string
+	PolicyID        string
+	CaID            string
+	ApplicationID   string
+	ApplicationName string
+	AdminToken      string
+	IdentityToken   string
+	InfisicalURL    string
+	TempDir         string
+	ClientID        string
+	ClientSecret    string
+	IdentityClient  *client.ClientWithResponses
+	AdminClient     *client.ClientWithResponses
 }
 
 func (h *CertAgentTestHelper) CreateInternalCA() {
@@ -290,6 +293,94 @@ func (h *CertAgentTestHelper) SetupUniversalAuth(identityID string) {
 	h.ClientSecret = csResp.JSON200.ClientSecret
 }
 
+func (h *CertAgentTestHelper) doRequestWithToken(method, path string, body interface{}, token string) []byte {
+	t := h.T
+
+	var bodyReader io.Reader
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		require.NoError(t, err)
+		bodyReader = bytes.NewReader(jsonBody)
+	}
+
+	url := h.InfisicalURL + "/api" + path
+	req, err := http.NewRequest(method, url, bodyReader)
+	require.NoError(t, err)
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.True(t, resp.StatusCode >= 200 && resp.StatusCode < 300,
+		"API %s %s failed with status %d: %s", method, path, resp.StatusCode, string(respBody))
+
+	return respBody
+}
+
+func (h *CertAgentTestHelper) SetActiveCertManagerProject() {
+	h.doRequestWithToken(
+		"POST",
+		"/v1/cert-manager/instance/active-project",
+		map[string]string{"projectId": h.ProjectID},
+		h.AdminToken,
+	)
+}
+
+func (h *CertAgentTestHelper) CreateApplicationWithProfile(name string) {
+	t := h.T
+
+	respBody := h.doRequestWithToken(
+		"POST",
+		"/v1/cert-manager/applications",
+		map[string]interface{}{
+			"name":       name,
+			"profileIds": []string{h.ProfileID},
+		},
+		h.IdentityToken,
+	)
+
+	var parsed struct {
+		Application struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"application"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotEmpty(t, parsed.Application.ID, "create application returned empty id: %s", string(respBody))
+
+	h.ApplicationID = parsed.Application.ID
+	h.ApplicationName = parsed.Application.Name
+
+	h.doRequestWithToken(
+		"PUT",
+		fmt.Sprintf("/v1/cert-manager/applications/%s/profiles/%s/enrollment/api", h.ApplicationID, h.ProfileID),
+		map[string]interface{}{"autoRenew": false},
+		h.IdentityToken,
+	)
+}
+
+func (h *CertAgentTestHelper) AttachProfileWithApiEnrollment(profileID string) {
+	h.doRequestWithToken(
+		"POST",
+		fmt.Sprintf("/v1/cert-manager/applications/%s/profiles", h.ApplicationID),
+		map[string]interface{}{"profileIds": []string{profileID}},
+		h.IdentityToken,
+	)
+	h.doRequestWithToken(
+		"PUT",
+		fmt.Sprintf("/v1/cert-manager/applications/%s/profiles/%s/enrollment/api", h.ApplicationID, profileID),
+		map[string]interface{}{"autoRenew": false},
+		h.IdentityToken,
+	)
+}
+
 func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string) {
 	t := h.T
 	ctx := context.Background()
@@ -302,7 +393,7 @@ func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string)
 			AccountEmail       string             `json:"accountEmail"`
 			DirectoryUrl       string             `json:"directoryUrl"`
 			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
-			DnsProviderConfig struct {
+			DnsProviderConfig  struct {
 				HostedZoneId string                                                                                `json:"hostedZoneId"`
 				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
@@ -381,7 +472,7 @@ func (h *CertAgentTestHelper) CreateAcmeCARaw(name, dnsConnectionID, directoryUr
 			AccountEmail       string             `json:"accountEmail"`
 			DirectoryUrl       string             `json:"directoryUrl"`
 			DnsAppConnectionId openapi_types.UUID `json:"dnsAppConnectionId"`
-			DnsProviderConfig struct {
+			DnsProviderConfig  struct {
 				HostedZoneId string                                                                                `json:"hostedZoneId"`
 				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
@@ -467,14 +558,15 @@ type agentUniversalAuthConfig struct {
 }
 
 type agentCertificateConfig struct {
-	ProjectSlug string                      `yaml:"project-slug"`
-	ProfileName string                      `yaml:"profile-name"`
-	CSR         string                      `yaml:"csr,omitempty"`
-	CSRPath     string                      `yaml:"csr-path,omitempty"`
-	Attributes  *agentCertificateAttributes `yaml:"attributes,omitempty"`
-	Lifecycle   agentCertificateLifecycle   `yaml:"lifecycle"`
-	FileOutput  agentCertificateFileOutput  `yaml:"file-output"`
-	PostHooks   *agentCertificatePostHooks  `yaml:"post-hooks,omitempty"`
+	ProjectSlug     string                      `yaml:"project-slug,omitempty"`
+	ApplicationName string                      `yaml:"application-name,omitempty"`
+	ProfileName     string                      `yaml:"profile-name"`
+	CSR             string                      `yaml:"csr,omitempty"`
+	CSRPath         string                      `yaml:"csr-path,omitempty"`
+	Attributes      *agentCertificateAttributes `yaml:"attributes,omitempty"`
+	Lifecycle       agentCertificateLifecycle   `yaml:"lifecycle"`
+	FileOutput      agentCertificateFileOutput  `yaml:"file-output"`
+	PostHooks       *agentCertificatePostHooks  `yaml:"post-hooks,omitempty"`
 }
 
 type agentCertificateAttributes struct {
@@ -520,10 +612,11 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 	var certs []agentCertificateConfig
 	for _, cert := range opts.Certificates {
 		c := agentCertificateConfig{
-			ProjectSlug: cert.ProjectSlug,
-			ProfileName: cert.ProfileSlug,
-			CSR:         cert.CSR,
-			CSRPath:     cert.CSRPath,
+			ProjectSlug:     cert.ProjectSlug,
+			ApplicationName: cert.ApplicationName,
+			ProfileName:     cert.ProfileSlug,
+			CSR:             cert.CSR,
+			CSRPath:         cert.CSRPath,
 			Attributes: &agentCertificateAttributes{
 				CommonName:         cert.CommonName,
 				TTL:                cert.TTL,
@@ -560,8 +653,12 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 		certs = append(certs, c)
 	}
 
+	version := opts.Version
+	if version == "" {
+		version = "v2"
+	}
 	cfg := agentConfig{
-		Version: "v1",
+		Version: version,
 		Infisical: agentInfisicalConfig{
 			Address: h.InfisicalURL,
 		},
@@ -586,6 +683,9 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 }
 
 type AgentConfigOptions struct {
+	// Version selects the agent schema: "v1" (legacy project-based) or "v2" (application-based).
+	// Empty defaults to "v2".
+	Version          string
 	ClientIDPath     string
 	ClientSecretPath string
 	Certificates     []CertificateConfigEntry
@@ -593,6 +693,7 @@ type AgentConfigOptions struct {
 
 type CertificateConfigEntry struct {
 	ProjectSlug         string
+	ApplicationName     string
 	ProfileSlug         string
 	CommonName          string
 	TTL                 string
