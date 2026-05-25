@@ -33,7 +33,7 @@ var getCmd = &cobra.Command{
 			}
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetProjectIdFromFlag(cmd)
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -110,7 +110,7 @@ var createCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetProjectIdFromFlag(cmd)
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -202,7 +202,7 @@ var deleteCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetProjectIdFromFlag(cmd)
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}

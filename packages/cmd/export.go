@@ -52,7 +52,7 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetProjectIdFromFlag(cmd)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -271,7 +271,7 @@ func init() {
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
-	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
+	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from. Can also be set via INFISICAL_PROJECT_ID env variable")
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")

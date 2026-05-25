@@ -884,7 +884,7 @@ func sshAddHost(cmd *cobra.Command, args []string) {
 		infisicalToken = loggedInUserDetails.UserCredentials.JTWToken
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetProjectIdFromFlag(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse --projectId flag")
 	}
@@ -1127,7 +1127,7 @@ func init() {
 	sshCmd.AddCommand(sshConnectCmd)
 
 	sshAddHostCmd.Flags().String("token", "", "Use a machine identity access token")
-	sshAddHostCmd.Flags().String("projectId", "", "Project ID the host belongs to (required)")
+	sshAddHostCmd.Flags().String("projectId", "", "Project ID the host belongs to (required). Can also be set via INFISICAL_PROJECT_ID env variable")
 	sshAddHostCmd.Flags().String("hostname", "", "Hostname of the SSH host (required)")
 	sshAddHostCmd.Flags().String("alias", "", "Alias for the SSH host")
 	sshAddHostCmd.Flags().Bool("write-user-ca-to-file", false, "Write User CA public key to /etc/ssh/infisical_user_ca.pub")
