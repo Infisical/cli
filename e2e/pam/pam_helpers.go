@@ -77,6 +77,9 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 	identity := svc.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
 	require.NotNil(t, identity)
 
+	// Start relay.
+	// Use the host's outbound IP so the pam access subprocess (which runs
+	// on the host) can resolve the relay address returned by the backend API.
 	relayHost := getOutboundIP(t)
 	relayName := helpers.RandomSlug(2)
 	relayCmd := &helpers.Command{
@@ -97,6 +100,7 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 	})
 	require.Equal(t, helpers.WaitSuccess, result)
 
+	// Start gateway
 	tmpLogDir := t.TempDir()
 	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
 	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
