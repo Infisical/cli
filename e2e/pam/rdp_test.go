@@ -205,11 +205,7 @@ func findFreeRDPBinary(t *testing.T) string {
 	return ""
 }
 
-// connectFreeRDP starts a full xfreerdp session and waits holdTime to see if
-// it stays alive. If the process is still running after holdTime the connection
-// is considered successful and the process is killed. If it exits before
-// holdTime the combined output is returned as an error.
-func connectFreeRDP(t *testing.T, ctx context.Context, binary string, host string, port int, user, pass string, holdTime time.Duration) error {
+func buildFreeRDPArgs(t *testing.T, binary string, host string, port int, user, pass string) []string {
 	rdpArgs := []string{
 		binary,
 		fmt.Sprintf("/v:%s:%d", host, port),
@@ -218,17 +214,16 @@ func connectFreeRDP(t *testing.T, ctx context.Context, binary string, host strin
 		"/cert:ignore",
 	}
 
-	var args []string
 	if os.Getenv("DISPLAY") == "" {
 		if xvfb, err := exec.LookPath("xvfb-run"); err == nil {
-			args = append([]string{xvfb, "--auto-servernum", "--"}, rdpArgs...)
-		} else {
-			t.Skip("no DISPLAY and xvfb-run not found")
+			return append([]string{xvfb, "--auto-servernum", "--"}, rdpArgs...)
 		}
-	} else {
-		args = rdpArgs
+		t.Skip("no DISPLAY and xvfb-run not found")
 	}
+	return rdpArgs
+}
 
+func tryConnectFreeRDP(ctx context.Context, args []string, holdTime time.Duration) error {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	var output bytes.Buffer
 	cmd.Stdout = &output
@@ -245,7 +240,6 @@ func connectFreeRDP(t *testing.T, ctx context.Context, binary string, host strin
 	case err := <-exited:
 		return fmt.Errorf("xfreerdp exited early (exit %v): %s", err, output.String())
 	case <-time.After(holdTime):
-		slog.Info("xfreerdp stayed alive, connection successful", "holdTime", holdTime)
 		cmd.Process.Kill()
 		<-exited
 		return nil
@@ -256,27 +250,31 @@ func connectFreeRDP(t *testing.T, ctx context.Context, binary string, host strin
 	}
 }
 
-// expectFreeRDPFailure starts xfreerdp and expects it to exit with an error
-// within the given timeout.
-func expectFreeRDPFailure(t *testing.T, ctx context.Context, binary string, host string, port int, user, pass string, timeout time.Duration) error {
-	rdpArgs := []string{
-		binary,
-		fmt.Sprintf("/v:%s:%d", host, port),
-		fmt.Sprintf("/u:%s", user),
-		fmt.Sprintf("/p:%s", pass),
-		"/cert:ignore",
-	}
+// connectFreeRDP starts a full xfreerdp session and waits holdTime to see if
+// it stays alive. Retries up to 3 times on transport failures caused by the
+// proxy chain's bridge startup latency.
+func connectFreeRDP(t *testing.T, ctx context.Context, binary string, host string, port int, user, pass string, holdTime time.Duration) error {
+	args := buildFreeRDPArgs(t, binary, host, port, user, pass)
 
-	var args []string
-	if os.Getenv("DISPLAY") == "" {
-		if xvfb, err := exec.LookPath("xvfb-run"); err == nil {
-			args = append([]string{xvfb, "--auto-servernum", "--"}, rdpArgs...)
-		} else {
-			t.Skip("no DISPLAY and xvfb-run not found")
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			slog.Info("Retrying xfreerdp after transport failure", "attempt", attempt+1)
+			time.Sleep(2 * time.Second)
 		}
-	} else {
-		args = rdpArgs
+		lastErr = tryConnectFreeRDP(ctx, args, holdTime)
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "ERRCONNECT_CONNECT_TRANSPORT_FAILED") {
+			return lastErr
+		}
 	}
+	return lastErr
+}
+
+func expectFreeRDPFailure(t *testing.T, ctx context.Context, binary string, host string, port int, user, pass string, timeout time.Duration) error {
+	args := buildFreeRDPArgs(t, binary, host, port, user, pass)
 
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
