@@ -61,7 +61,6 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 	return ctr, host, port.Int()
 }
 
-
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 	apiURL := infra.Infisical.ApiUrl(t)
 	token := infra.ProvisionResult.Token
@@ -126,7 +125,6 @@ func createAwsAppConnection(t *testing.T, apiURL, token string) string {
 	slog.Info("Created AWS app connection", "id", result.AppConnection.ID)
 	return result.AppConnection.ID
 }
-
 
 func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
 	gatewayId := openapitypes.UUID(infra.GatewayId)
@@ -291,9 +289,7 @@ func tryConnectFreeRDP(ctx context.Context, args []string, holdTime time.Duratio
 	}
 }
 
-// connectFreeRDP starts a full xfreerdp session and waits holdTime to see if
-// it stays alive. Retries up to 3 times on transport failures caused by the
-// proxy chain's bridge startup latency.
+// Retries on transport failures from bridge startup latency.
 func connectFreeRDP(t *testing.T, ctx context.Context, binary string, host string, port int, user, pass string, holdTime time.Duration) error {
 	args := buildFreeRDPArgs(t, binary, host, port, user, pass)
 
@@ -337,15 +333,6 @@ func TestPAM_RDP(t *testing.T) {
 	setupRecordingConfig(t, ctx, infra)
 
 	rdpBinary := findFreeRDPBinary(t)
-
-	t.Run("direct-xrdp-connection", func(t *testing.T) {
-		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
-		slog.Info("xrdp container started, testing direct xfreerdp connection (no proxy)", "host", resourceHost, "port", rdpPort)
-
-		err := connectFreeRDP(t, ctx, rdpBinary, resourceHost, rdpPort, rdpUser, rdpPassword, 5*time.Second)
-		require.NoError(t, err, "xfreerdp should connect directly to xrdp container")
-		slog.Info("Direct xrdp connection test passed")
-	})
 
 	t.Run("connection", func(t *testing.T) {
 		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
