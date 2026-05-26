@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -63,6 +64,9 @@ const (
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
+	operationCallRelayLogin                        = "CallRelayLogin"
+	operationCallRelayConnect                      = "CallRelayConnect"
+	operationCallRelayHeartbeatV2                  = "CallRelayHeartbeatV2"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
 	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
@@ -333,7 +337,7 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 		R().
 		SetResult(&projectResponse).
 		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, slug))
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
 
 	if err != nil {
 		return Project{}, NewGenericRequestError("CallGetProjectBySlug", err)
@@ -346,6 +350,25 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 	return Project(projectResponse), nil
 }
 
+func CallGetPkiApplicationByName(httpClient *resty.Client, name string) (PkiApplication, error) {
+	var applicationResponse GetPkiApplicationResponse
+	response, err := httpClient.
+		R().
+		SetResult(&applicationResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/by-name/%s", config.INFISICAL_URL, url.PathEscape(name)))
+
+	if err != nil {
+		return PkiApplication{}, NewGenericRequestError("CallGetPkiApplicationByName", err)
+	}
+
+	if response.IsError() {
+		return PkiApplication{}, NewAPIErrorWithResponse("CallGetPkiApplicationByName", response, nil)
+	}
+
+	return applicationResponse.Application, nil
+}
+
 func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug string) (CertificateProfile, error) {
 	var profileResponse GetCertificateProfileResponse
 	response, err := httpClient.
@@ -353,7 +376,7 @@ func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug s
 		SetResult(&profileResponse).
 		SetHeader("User-Agent", USER_AGENT).
 		SetQueryParam("projectId", projectId).
-		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, slug))
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
 
 	if err != nil {
 		return CertificateProfile{}, NewGenericRequestError("CallGetCertificateProfileBySlug", err)
@@ -364,6 +387,25 @@ func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug s
 	}
 
 	return profileResponse.CertificateProfile, nil
+}
+
+func CallListPkiApplicationProfiles(httpClient *resty.Client, applicationId string) ([]PkiApplicationProfile, error) {
+	var listResponse ListPkiApplicationProfilesResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/%s/profiles", config.INFISICAL_URL, url.PathEscape(applicationId)))
+
+	if err != nil {
+		return nil, NewGenericRequestError("CallListPkiApplicationProfiles", err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse("CallListPkiApplicationProfiles", response, nil)
+	}
+
+	return listResponse.Profiles, nil
 }
 
 func CallIsAuthenticated(httpClient *resty.Client) bool {
@@ -899,6 +941,62 @@ func CallGetRelays(httpClient *resty.Client) (GetRelaysResponse, error) {
 	}
 
 	return resBody, nil
+}
+
+func CallRelayLogin(httpClient *resty.Client, request RelayLoginRequest) (RelayLoginResponse, error) {
+	var resBody RelayLoginResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/relays/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return RelayLoginResponse{}, NewGenericRequestError(operationCallRelayLogin, err)
+	}
+
+	if response.IsError() {
+		return RelayLoginResponse{}, NewAPIErrorWithResponse(operationCallRelayLogin, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRelayConnect(httpClient *resty.Client) (RelayConnectResponse, error) {
+	var resBody RelayConnectResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/relays/connect", config.INFISICAL_URL))
+
+	if err != nil {
+		return RelayConnectResponse{}, NewGenericRequestError(operationCallRelayConnect, err)
+	}
+
+	if response.IsError() {
+		return RelayConnectResponse{}, NewAPIErrorWithResponse(operationCallRelayConnect, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRelayHeartbeatV2(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/relays/heartbeat", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallRelayHeartbeatV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallRelayHeartbeatV2, response, nil)
+	}
+
+	return nil
 }
 
 func CallConnectGateway(httpClient *resty.Client, request ConnectGatewayRequest) (RegisterGatewayResponse, error) {
