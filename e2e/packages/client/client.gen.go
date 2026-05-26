@@ -64,12 +64,27 @@ const (
 
 // Defines values for CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm.
 const (
-	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECPrime256v1 CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_prime256v1"
-	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECSecp384r1  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_secp384r1"
-	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECSecp521r1  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_secp521r1"
-	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA2048      CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_2048"
-	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA3072      CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_3072"
-	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA4096      CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_4096"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECPrime256v1    CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_prime256v1"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECSecp384r1     CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_secp384r1"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmECSecp521r1     CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "EC_secp521r1"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmMLDSA44         CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "ML-DSA-44"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmMLDSA65         CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "ML-DSA-65"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmMLDSA87         CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "ML-DSA-87"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA2048         CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_2048"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA3072         CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_3072"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA4096         CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "RSA_4096"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHA2128f  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHA2-128f"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHA2128s  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHA2-128s"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHA2192f  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHA2-192f"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHA2192s  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHA2-192s"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHA2256f  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHA2-256f"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHA2256s  CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHA2-256s"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE128f CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-128f"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE128s CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-128s"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE192f CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-192f"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE192s CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-192s"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE256f CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-256f"
+	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE256s CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-256s"
 )
 
 // Defines values for CreateInternalCertificateAuthorityV1JSONBodyConfigurationType.
@@ -191,11 +206,27 @@ const (
 
 // Defines values for CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm.
 const (
-	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECPrime256v1 CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_prime256v1"
-	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECSecp384r1  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_secp384r1"
-	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA2048      CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_2048"
-	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA3072      CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_3072"
-	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA4096      CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_4096"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECPrime256v1    CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_prime256v1"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECSecp384r1     CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_secp384r1"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmECSecp521r1     CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "EC_secp521r1"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmMLDSA44         CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "ML-DSA-44"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmMLDSA65         CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "ML-DSA-65"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmMLDSA87         CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "ML-DSA-87"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA2048         CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_2048"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA3072         CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_3072"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmRSA4096         CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "RSA_4096"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHA2128f  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHA2-128f"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHA2128s  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHA2-128s"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHA2192f  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHA2-192f"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHA2192s  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHA2-192s"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHA2256f  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHA2-256f"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHA2256s  CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHA2-256s"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHAKE128f CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHAKE-128f"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHAKE128s CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHAKE-128s"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHAKE192f CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHAKE-192f"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHAKE192s CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHAKE-192s"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHAKE256f CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHAKE-256f"
+	CreateCertificateProfileJSONBodyDefaultsKeyAlgorithmSLHDSASHAKE256s CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm = "SLH-DSA-SHAKE-256s"
 )
 
 // Defines values for CreateCertificateProfileJSONBodyDefaultsKeyUsages.
@@ -213,12 +244,27 @@ const (
 
 // Defines values for CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm.
 const (
-	ECDSASHA256 CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA256"
-	ECDSASHA384 CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA384"
-	ECDSASHA512 CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA512"
-	RSASHA256   CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA256"
-	RSASHA384   CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA384"
-	RSASHA512   CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA512"
+	ECDSASHA256     CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA256"
+	ECDSASHA384     CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA384"
+	ECDSASHA512     CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ECDSA-SHA512"
+	MLDSA44         CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ML-DSA-44"
+	MLDSA65         CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ML-DSA-65"
+	MLDSA87         CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "ML-DSA-87"
+	RSASHA256       CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA256"
+	RSASHA384       CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA384"
+	RSASHA512       CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "RSA-SHA512"
+	SLHDSASHA2128f  CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHA2-128f"
+	SLHDSASHA2128s  CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHA2-128s"
+	SLHDSASHA2192f  CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHA2-192f"
+	SLHDSASHA2192s  CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHA2-192s"
+	SLHDSASHA2256f  CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHA2-256f"
+	SLHDSASHA2256s  CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHA2-256s"
+	SLHDSASHAKE128f CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-128f"
+	SLHDSASHAKE128s CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-128s"
+	SLHDSASHAKE192f CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-192f"
+	SLHDSASHAKE192s CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-192s"
+	SLHDSASHAKE256f CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-256f"
+	SLHDSASHAKE256s CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-256s"
 )
 
 // Defines values for CreateCertificateProfileJSONBodyEnrollmentType.
@@ -233,6 +279,12 @@ const (
 const (
 	Ca         CreateCertificateProfileJSONBodyIssuerType = "ca"
 	SelfSigned CreateCertificateProfileJSONBodyIssuerType = "self-signed"
+)
+
+// Defines values for CreateCertificateProfileJSONBodyScepConfigChallengeType.
+const (
+	Dynamic CreateCertificateProfileJSONBodyScepConfigChallengeType = "dynamic"
+	Static  CreateCertificateProfileJSONBodyScepConfigChallengeType = "static"
 )
 
 // Defines values for CreateSshPamAccountJSONBodyCredentials0AuthMethod.
@@ -250,9 +302,20 @@ const (
 	CreateSshPamAccountJSONBodyCredentials2AuthMethodCertificate CreateSshPamAccountJSONBodyCredentials2AuthMethod = "certificate"
 )
 
+// Defines values for CreateWindowsPamAccountJSONBodyInternalMetadataAccountType.
+const (
+	Service CreateWindowsPamAccountJSONBodyInternalMetadataAccountType = "service"
+	User    CreateWindowsPamAccountJSONBodyInternalMetadataAccountType = "user"
+)
+
 // Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
 const (
 	ServiceAccountToken CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "service-account-token"
+)
+
+// Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod.
+const (
+	GatewayKubernetesAuth CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod = "gateway-kubernetes-auth"
 )
 
 // Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
@@ -268,6 +331,11 @@ const (
 // Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod.
 const (
 	CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethodCertificate CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod = "certificate"
+)
+
+// Defines values for CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol.
+const (
+	Rdp CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol = "rdp"
 )
 
 // Defines values for CreateProjectJSONBodyType.
@@ -374,6 +442,9 @@ type CreateCloudflareAppConnectionJSONBody struct {
 	// GatewayId Not supported for Cloudflare Connections.
 	GatewayId *CreateCloudflareAppConnectionJSONBody_GatewayId `json:"gatewayId,omitempty"`
 
+	// GatewayPoolId Not supported for Cloudflare Connections.
+	GatewayPoolId *CreateCloudflareAppConnectionJSONBody_GatewayPoolId `json:"gatewayPoolId,omitempty"`
+
 	// IsAutoRotationEnabled Not supported for Cloudflare Connections.
 	IsAutoRotationEnabled *CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled `json:"isAutoRotationEnabled,omitempty"`
 
@@ -398,6 +469,17 @@ type CreateCloudflareAppConnectionJSONBodyGatewayId1 = interface{}
 
 // CreateCloudflareAppConnectionJSONBody_GatewayId defines parameters for CreateCloudflareAppConnection.
 type CreateCloudflareAppConnectionJSONBody_GatewayId struct {
+	union json.RawMessage
+}
+
+// CreateCloudflareAppConnectionJSONBodyGatewayPoolId0 defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyGatewayPoolId0 = interface{}
+
+// CreateCloudflareAppConnectionJSONBodyGatewayPoolId1 defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBodyGatewayPoolId1 = interface{}
+
+// CreateCloudflareAppConnectionJSONBody_GatewayPoolId defines parameters for CreateCloudflareAppConnection.
+type CreateCloudflareAppConnectionJSONBody_GatewayPoolId struct {
 	union json.RawMessage
 }
 
@@ -587,7 +669,10 @@ type CreateInternalCertificateAuthorityV1JSONBody struct {
 
 		// Country The country name (C) for the CA.
 		Country *string `json:"country,omitempty"`
-		Dn      *string `json:"dn"`
+
+		// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is always included as the primary.
+		CrlDistributionPointUrls *[]string `json:"crlDistributionPointUrls,omitempty"`
+		Dn                       *string   `json:"dn"`
 
 		// FriendlyName A friendly name for the CA.
 		FriendlyName *string `json:"friendlyName,omitempty"`
@@ -748,9 +833,12 @@ type CreateCertificateProfileJSONBody struct {
 	IssuerType      *CreateCertificateProfileJSONBodyIssuerType       `json:"issuerType,omitempty"`
 	ProjectId       string                                            `json:"projectId"`
 	ScepConfig      *struct {
-		AllowCertBasedRenewal   *bool  `json:"allowCertBasedRenewal,omitempty"`
-		ChallengePassword       string `json:"challengePassword"`
-		IncludeCaCertInResponse *bool  `json:"includeCaCertInResponse,omitempty"`
+		AllowCertBasedRenewal         *bool                                                    `json:"allowCertBasedRenewal,omitempty"`
+		ChallengePassword             *string                                                  `json:"challengePassword,omitempty"`
+		ChallengeType                 *CreateCertificateProfileJSONBodyScepConfigChallengeType `json:"challengeType,omitempty"`
+		DynamicChallengeExpiryMinutes *int                                                     `json:"dynamicChallengeExpiryMinutes,omitempty"`
+		DynamicChallengeMaxPending    *int                                                     `json:"dynamicChallengeMaxPending,omitempty"`
+		IncludeCaCertInResponse       *bool                                                    `json:"includeCaCertInResponse,omitempty"`
 	} `json:"scepConfig,omitempty"`
 	Slug string `json:"slug"`
 }
@@ -785,6 +873,15 @@ type CreateCertificateProfileJSONBodyExternalConfigs2 = map[string]interface{}
 // CreateCertificateProfileJSONBodyExternalConfigs3 defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyExternalConfigs3 = map[string]interface{}
 
+// CreateCertificateProfileJSONBodyExternalConfigs4 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs4 = map[string]interface{}
+
+// CreateCertificateProfileJSONBodyExternalConfigs5 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs5 = map[string]interface{}
+
+// CreateCertificateProfileJSONBodyExternalConfigs6 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs6 = map[string]interface{}
+
 // CreateCertificateProfileJSONBody_ExternalConfigs defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBody_ExternalConfigs struct {
 	union json.RawMessage
@@ -792,6 +889,9 @@ type CreateCertificateProfileJSONBody_ExternalConfigs struct {
 
 // CreateCertificateProfileJSONBodyIssuerType defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyIssuerType string
+
+// CreateCertificateProfileJSONBodyScepConfigChallengeType defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyScepConfigChallengeType string
 
 // CreateMachineIdentityJSONBody defines parameters for CreateMachineIdentity.
 type CreateMachineIdentityJSONBody struct {
@@ -824,9 +924,10 @@ type CreatePostgresPamAccountJSONBody struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
-	Name       string             `json:"name"`
-	RequireMfa *bool              `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID `json:"resourceId"`
+	Name       string              `json:"name"`
+	PolicyId   *openapi_types.UUID `json:"policyId"`
+	RequireMfa *bool               `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID  `json:"resourceId"`
 }
 
 // CreateRedisPamAccountJSONBody defines parameters for CreateRedisPamAccount.
@@ -841,9 +942,10 @@ type CreateRedisPamAccountJSONBody struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
-	Name       string             `json:"name"`
-	RequireMfa *bool              `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID `json:"resourceId"`
+	Name       string              `json:"name"`
+	PolicyId   *openapi_types.UUID `json:"policyId"`
+	RequireMfa *bool               `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID  `json:"resourceId"`
 }
 
 // CreateSshPamAccountJSONBody defines parameters for CreateSshPamAccount.
@@ -855,9 +957,10 @@ type CreateSshPamAccountJSONBody struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
-	Name       string             `json:"name"`
-	RequireMfa *bool              `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID `json:"resourceId"`
+	Name       string              `json:"name"`
+	PolicyId   *openapi_types.UUID `json:"policyId"`
+	RequireMfa *bool               `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID  `json:"resourceId"`
 }
 
 // CreateSshPamAccountJSONBodyCredentials0 defines parameters for CreateSshPamAccount.
@@ -894,6 +997,34 @@ type CreateSshPamAccountJSONBody_Credentials struct {
 	union json.RawMessage
 }
 
+// CreateWindowsPamAccountJSONBody defines parameters for CreateWindowsPamAccount.
+type CreateWindowsPamAccountJSONBody struct {
+	Credentials struct {
+		Password string `json:"password"`
+		Username string `json:"username"`
+	} `json:"credentials"`
+	Description      *string             `json:"description"`
+	FolderId         *openapi_types.UUID `json:"folderId,omitempty"`
+	InternalMetadata struct {
+		AccountType     CreateWindowsPamAccountJSONBodyInternalMetadataAccountType `json:"accountType"`
+		Enabled         *bool                                                      `json:"enabled,omitempty"`
+		LastLogon       *string                                                    `json:"lastLogon,omitempty"`
+		PasswordLastSet *string                                                    `json:"passwordLastSet,omitempty"`
+		Sid             *string                                                    `json:"sid,omitempty"`
+	} `json:"internalMetadata"`
+	Metadata *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name       string              `json:"name"`
+	PolicyId   *openapi_types.UUID `json:"policyId"`
+	RequireMfa *bool               `json:"requireMfa,omitempty"`
+	ResourceId openapi_types.UUID  `json:"resourceId"`
+}
+
+// CreateWindowsPamAccountJSONBodyInternalMetadataAccountType defines parameters for CreateWindowsPamAccount.
+type CreateWindowsPamAccountJSONBodyInternalMetadataAccountType string
+
 // CreateKubernetesPamResourceJSONBody defines parameters for CreateKubernetesPamResource.
 type CreateKubernetesPamResourceJSONBody struct {
 	ConnectionDetails struct {
@@ -901,8 +1032,9 @@ type CreateKubernetesPamResourceJSONBody struct {
 		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 		Url                   string  `json:"url"`
 	} `json:"connectionDetails"`
-	GatewayId openapi_types.UUID `json:"gatewayId"`
-	Metadata  *[]struct {
+	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+	Metadata      *[]struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
@@ -920,6 +1052,16 @@ type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 struct {
 // CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod defines parameters for CreateKubernetesPamResource.
 type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod string
 
+// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1 defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1 struct {
+	AuthMethod         CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod `json:"authMethod"`
+	Namespace          string                                                                   `json:"namespace"`
+	ServiceAccountName string                                                                   `json:"serviceAccountName"`
+}
+
+// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod defines parameters for CreateKubernetesPamResource.
+type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod string
+
 // CreateKubernetesPamResourceJSONBody_RotationAccountCredentials defines parameters for CreateKubernetesPamResource.
 type CreateKubernetesPamResourceJSONBody_RotationAccountCredentials struct {
 	union json.RawMessage
@@ -935,8 +1077,9 @@ type CreatePostgresPamResourceJSONBody struct {
 		SslEnabled            bool    `json:"sslEnabled"`
 		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 	} `json:"connectionDetails"`
-	GatewayId openapi_types.UUID `json:"gatewayId"`
-	Metadata  *[]struct {
+	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+	Metadata      *[]struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
@@ -957,8 +1100,9 @@ type CreateRedisPamResourceJSONBody struct {
 		SslEnabled            bool    `json:"sslEnabled"`
 		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 	} `json:"connectionDetails"`
-	GatewayId openapi_types.UUID `json:"gatewayId"`
-	Metadata  *[]struct {
+	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+	Metadata      *[]struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
@@ -976,8 +1120,9 @@ type CreateSshPamResourceJSONBody struct {
 		Host string  `json:"host"`
 		Port float32 `json:"port"`
 	} `json:"connectionDetails"`
-	GatewayId openapi_types.UUID `json:"gatewayId"`
-	Metadata  *[]struct {
+	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+	Metadata      *[]struct {
 		Key   string  `json:"key"`
 		Value *string `json:"value,omitempty"`
 	} `json:"metadata,omitempty"`
@@ -1019,6 +1164,36 @@ type CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod string
 type CreateSshPamResourceJSONBody_RotationAccountCredentials struct {
 	union json.RawMessage
 }
+
+// CreateWindowsPamResourceJSONBody defines parameters for CreateWindowsPamResource.
+type CreateWindowsPamResourceJSONBody struct {
+	ConnectionDetails struct {
+		Hostname                string                                                    `json:"hostname"`
+		Port                    int                                                       `json:"port"`
+		Protocol                CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol `json:"protocol"`
+		UseWinrmHttps           bool                                                      `json:"useWinrmHttps"`
+		WinrmCaCert             *string                                                   `json:"winrmCaCert,omitempty"`
+		WinrmPort               int                                                       `json:"winrmPort"`
+		WinrmRejectUnauthorized bool                                                      `json:"winrmRejectUnauthorized"`
+		WinrmTlsServerName      *string                                                   `json:"winrmTlsServerName,omitempty"`
+	} `json:"connectionDetails"`
+	DomainId      *openapi_types.UUID `json:"domainId"`
+	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+	Metadata      *[]struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value,omitempty"`
+	} `json:"metadata,omitempty"`
+	Name                       string             `json:"name"`
+	ProjectId                  openapi_types.UUID `json:"projectId"`
+	RotationAccountCredentials *struct {
+		Password string `json:"password"`
+		Username string `json:"username"`
+	} `json:"rotationAccountCredentials"`
+}
+
+// CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol defines parameters for CreateWindowsPamResource.
+type CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol string
 
 // CreateProjectJSONBody defines parameters for CreateProject.
 type CreateProjectJSONBody struct {
@@ -1291,6 +1466,9 @@ type CreateRedisPamAccountJSONRequestBody CreateRedisPamAccountJSONBody
 // CreateSshPamAccountJSONRequestBody defines body for CreateSshPamAccount for application/json ContentType.
 type CreateSshPamAccountJSONRequestBody CreateSshPamAccountJSONBody
 
+// CreateWindowsPamAccountJSONRequestBody defines body for CreateWindowsPamAccount for application/json ContentType.
+type CreateWindowsPamAccountJSONRequestBody CreateWindowsPamAccountJSONBody
+
 // CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
 type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
 
@@ -1302,6 +1480,9 @@ type CreateRedisPamResourceJSONRequestBody CreateRedisPamResourceJSONBody
 
 // CreateSshPamResourceJSONRequestBody defines body for CreateSshPamResource for application/json ContentType.
 type CreateSshPamResourceJSONRequestBody CreateSshPamResourceJSONBody
+
+// CreateWindowsPamResourceJSONRequestBody defines body for CreateWindowsPamResource for application/json ContentType.
+type CreateWindowsPamResourceJSONRequestBody CreateWindowsPamResourceJSONBody
 
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody CreateProjectJSONBody
@@ -1469,6 +1650,11 @@ type ClientInterface interface {
 
 	CreateSshPamAccount(ctx context.Context, body CreateSshPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateWindowsPamAccountWithBody request with any body
+	CreateWindowsPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateWindowsPamAccount(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateKubernetesPamResourceWithBody request with any body
 	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1488,6 +1674,11 @@ type ClientInterface interface {
 	CreateSshPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateSshPamResource(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateWindowsPamResourceWithBody request with any body
+	CreateWindowsPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateWindowsPamResource(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateProjectWithBody request with any body
 	CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1899,6 +2090,30 @@ func (c *Client) CreateSshPamAccount(ctx context.Context, body CreateSshPamAccou
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateWindowsPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateWindowsPamAccountRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateWindowsPamAccount(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateWindowsPamAccountRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateKubernetesPamResourceRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -1985,6 +2200,30 @@ func (c *Client) CreateSshPamResourceWithBody(ctx context.Context, contentType s
 
 func (c *Client) CreateSshPamResource(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateSshPamResourceRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateWindowsPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateWindowsPamResourceRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateWindowsPamResource(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateWindowsPamResourceRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2825,6 +3064,46 @@ func NewCreateSshPamAccountRequestWithBody(server string, contentType string, bo
 	return req, nil
 }
 
+// NewCreateWindowsPamAccountRequest calls the generic CreateWindowsPamAccount builder with application/json body
+func NewCreateWindowsPamAccountRequest(server string, body CreateWindowsPamAccountJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateWindowsPamAccountRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateWindowsPamAccountRequestWithBody generates requests for CreateWindowsPamAccount with any type of body
+func NewCreateWindowsPamAccountRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/accounts/windows")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreateKubernetesPamResourceRequest calls the generic CreateKubernetesPamResource builder with application/json body
 func NewCreateKubernetesPamResourceRequest(server string, body CreateKubernetesPamResourceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2966,6 +3245,46 @@ func NewCreateSshPamResourceRequestWithBody(server string, contentType string, b
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/pam/resources/ssh")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateWindowsPamResourceRequest calls the generic CreateWindowsPamResource builder with application/json body
+func NewCreateWindowsPamResourceRequest(server string, body CreateWindowsPamResourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateWindowsPamResourceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateWindowsPamResourceRequestWithBody generates requests for CreateWindowsPamResource with any type of body
+func NewCreateWindowsPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/resources/windows")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3738,6 +4057,11 @@ type ClientWithResponsesInterface interface {
 
 	CreateSshPamAccountWithResponse(ctx context.Context, body CreateSshPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error)
 
+	// CreateWindowsPamAccountWithBodyWithResponse request with any body
+	CreateWindowsPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error)
+
+	CreateWindowsPamAccountWithResponse(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error)
+
 	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
 	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
 
@@ -3757,6 +4081,11 @@ type ClientWithResponsesInterface interface {
 	CreateSshPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error)
 
 	CreateSshPamResourceWithResponse(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error)
+
+	// CreateWindowsPamResourceWithBodyWithResponse request with any body
+	CreateWindowsPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error)
+
+	CreateWindowsPamResourceWithResponse(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error)
 
 	// CreateProjectWithBodyWithResponse request with any body
 	CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
@@ -3839,26 +4168,14 @@ type AdminSignUpResponse struct {
 		} `json:"organization"`
 		Token string `json:"token"`
 		User  struct {
-			AuthMethods                       *[]string          `json:"authMethods"`
-			ConsecutiveFailedMfaAttempts      *float32           `json:"consecutiveFailedMfaAttempts"`
-			ConsecutiveFailedPasswordAttempts *float32           `json:"consecutiveFailedPasswordAttempts"`
-			CreatedAt                         time.Time          `json:"createdAt"`
-			Devices                           interface{}        `json:"devices"`
-			Email                             *string            `json:"email"`
-			FirstName                         *string            `json:"firstName"`
-			Id                                openapi_types.UUID `json:"id"`
-			IsAccepted                        *bool              `json:"isAccepted"`
-			IsEmailVerified                   *bool              `json:"isEmailVerified"`
-			IsGhost                           *bool              `json:"isGhost,omitempty"`
-			IsLocked                          *bool              `json:"isLocked"`
-			IsMfaEnabled                      *bool              `json:"isMfaEnabled"`
-			LastName                          *string            `json:"lastName"`
-			MfaMethods                        *[]string          `json:"mfaMethods"`
-			SelectedMfaMethod                 *string            `json:"selectedMfaMethod"`
-			SuperAdmin                        *bool              `json:"superAdmin"`
-			TemporaryLockDateEnd              *time.Time         `json:"temporaryLockDateEnd"`
-			UpdatedAt                         time.Time          `json:"updatedAt"`
-			Username                          string             `json:"username"`
+			AuthMethods     *[]string          `json:"authMethods"`
+			Email           *string            `json:"email"`
+			FirstName       *string            `json:"firstName"`
+			Id              openapi_types.UUID `json:"id"`
+			IsEmailVerified *bool              `json:"isEmailVerified"`
+			LastName        *string            `json:"lastName"`
+			PublicKey       *string            `json:"publicKey"`
+			Username        string             `json:"username"`
 		} `json:"user"`
 	}
 	JSON400 *struct {
@@ -3977,6 +4294,7 @@ type CreateCloudflareAppConnection200AppConnection0 struct {
 	CredentialsHash              *string                                              `json:"credentialsHash,omitempty"`
 	Description                  *string                                              `json:"description"`
 	GatewayId                    *openapi_types.UUID                                  `json:"gatewayId"`
+	GatewayPoolId                *openapi_types.UUID                                  `json:"gatewayPoolId"`
 	Id                           openapi_types.UUID                                   `json:"id"`
 	IsAutoRotationEnabled        *bool                                                `json:"isAutoRotationEnabled,omitempty"`
 	IsPlatformManagedCredentials *bool                                                `json:"isPlatformManagedCredentials"`
@@ -4051,6 +4369,7 @@ type RefreshAuthTokenResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		OrganizationId    *string `json:"organizationId,omitempty"`
+		RefreshToken      *string `json:"refreshToken,omitempty"`
 		SubOrganizationId *string `json:"subOrganizationId,omitempty"`
 		Token             string  `json:"token"`
 	}
@@ -4664,7 +4983,10 @@ type CreateInternalCertificateAuthorityV1Response struct {
 
 			// Country The country name (C) for the CA.
 			Country *string `json:"country,omitempty"`
-			Dn      *string `json:"dn"`
+
+			// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is always included as the primary.
+			CrlDistributionPointUrls *[]string `json:"crlDistributionPointUrls,omitempty"`
+			Dn                       *string   `json:"dn"`
 
 			// FriendlyName A friendly name for the CA.
 			FriendlyName *string `json:"friendlyName,omitempty"`
@@ -4977,6 +5299,9 @@ type CreateCertificateProfile200CertificateProfileExternalConfigs0 struct {
 type CreateCertificateProfile200CertificateProfileExternalConfigs1 = map[string]interface{}
 type CreateCertificateProfile200CertificateProfileExternalConfigs2 = map[string]interface{}
 type CreateCertificateProfile200CertificateProfileExternalConfigs3 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs4 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs5 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs6 = map[string]interface{}
 type CreateCertificateProfile_200_CertificateProfile_ExternalConfigs struct {
 	union json.RawMessage
 }
@@ -5095,8 +5420,14 @@ type CreatePostgresPamAccountResponse struct {
 			Credentials struct {
 				Username string `json:"username"`
 			} `json:"credentials"`
-			Description                  *string             `json:"description"`
-			DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+			Description          *string `json:"description"`
+			DiscoveryFingerprint *string `json:"discoveryFingerprint"`
+			Domain               *struct {
+				DomainType string             `json:"domainType"`
+				Id         openapi_types.UUID `json:"id"`
+				Name       string             `json:"name"`
+			} `json:"domain"`
+			DomainId                     *openapi_types.UUID `json:"domainId"`
 			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
 			FolderId                     *openapi_types.UUID `json:"folderId"`
 			Id                           openapi_types.UUID  `json:"id"`
@@ -5108,19 +5439,22 @@ type CreatePostgresPamAccountResponse struct {
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
 			} `json:"metadata,omitempty"`
-			Name       string `json:"name"`
-			ProjectId  string `json:"projectId"`
-			RequireMfa *bool  `json:"requireMfa"`
-			Resource   struct {
+			Name          string                                       `json:"name"`
+			ParentType    CreatePostgresPamAccount200AccountParentType `json:"parentType"`
+			PolicyId      *openapi_types.UUID                          `json:"policyId"`
+			PolicyName    *string                                      `json:"policyName"`
+			ProjectId     string                                       `json:"projectId"`
+			RequireMfa    *bool                                        `json:"requireMfa"`
+			RequireReason *bool                                        `json:"requireReason,omitempty"`
+			Resource      *struct {
 				Id                            openapi_types.UUID `json:"id"`
 				Name                          string             `json:"name"`
 				ResourceType                  string             `json:"resourceType"`
 				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 			} `json:"resource"`
-			ResourceId     openapi_types.UUID                             `json:"resourceId"`
-			ResourceType   CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
-			RotationStatus *string                                        `json:"rotationStatus"`
-			UpdatedAt      time.Time                                      `json:"updatedAt"`
+			ResourceId     *openapi_types.UUID `json:"resourceId"`
+			RotationStatus *string             `json:"rotationStatus"`
+			UpdatedAt      time.Time           `json:"updatedAt"`
 		} `json:"account"`
 	}
 	JSON400 *struct {
@@ -5162,7 +5496,7 @@ type CreatePostgresPamAccountResponse struct {
 		StatusCode CreatePostgresPamAccount500StatusCode `json:"statusCode"`
 	}
 }
-type CreatePostgresPamAccount200AccountResourceType string
+type CreatePostgresPamAccount200AccountParentType string
 type CreatePostgresPamAccount400StatusCode float32
 type CreatePostgresPamAccount401StatusCode float32
 type CreatePostgresPamAccount403StatusCode float32
@@ -5195,8 +5529,14 @@ type CreateRedisPamAccountResponse struct {
 			Credentials struct {
 				Username *string `json:"username,omitempty"`
 			} `json:"credentials"`
-			Description                  *string             `json:"description"`
-			DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+			Description          *string `json:"description"`
+			DiscoveryFingerprint *string `json:"discoveryFingerprint"`
+			Domain               *struct {
+				DomainType string             `json:"domainType"`
+				Id         openapi_types.UUID `json:"id"`
+				Name       string             `json:"name"`
+			} `json:"domain"`
+			DomainId                     *openapi_types.UUID `json:"domainId"`
 			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
 			FolderId                     *openapi_types.UUID `json:"folderId"`
 			Id                           openapi_types.UUID  `json:"id"`
@@ -5208,19 +5548,22 @@ type CreateRedisPamAccountResponse struct {
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
 			} `json:"metadata,omitempty"`
-			Name       string `json:"name"`
-			ProjectId  string `json:"projectId"`
-			RequireMfa *bool  `json:"requireMfa"`
-			Resource   struct {
+			Name          string                                    `json:"name"`
+			ParentType    CreateRedisPamAccount200AccountParentType `json:"parentType"`
+			PolicyId      *openapi_types.UUID                       `json:"policyId"`
+			PolicyName    *string                                   `json:"policyName"`
+			ProjectId     string                                    `json:"projectId"`
+			RequireMfa    *bool                                     `json:"requireMfa"`
+			RequireReason *bool                                     `json:"requireReason,omitempty"`
+			Resource      *struct {
 				Id                            openapi_types.UUID `json:"id"`
 				Name                          string             `json:"name"`
 				ResourceType                  string             `json:"resourceType"`
 				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 			} `json:"resource"`
-			ResourceId     openapi_types.UUID                          `json:"resourceId"`
-			ResourceType   CreateRedisPamAccount200AccountResourceType `json:"resourceType"`
-			RotationStatus *string                                     `json:"rotationStatus"`
-			UpdatedAt      time.Time                                   `json:"updatedAt"`
+			ResourceId     *openapi_types.UUID `json:"resourceId"`
+			RotationStatus *string             `json:"rotationStatus"`
+			UpdatedAt      time.Time           `json:"updatedAt"`
 		} `json:"account"`
 	}
 	JSON400 *struct {
@@ -5262,7 +5605,7 @@ type CreateRedisPamAccountResponse struct {
 		StatusCode CreateRedisPamAccount500StatusCode `json:"statusCode"`
 	}
 }
-type CreateRedisPamAccount200AccountResourceType string
+type CreateRedisPamAccount200AccountParentType string
 type CreateRedisPamAccount400StatusCode float32
 type CreateRedisPamAccount401StatusCode float32
 type CreateRedisPamAccount403StatusCode float32
@@ -5291,34 +5634,43 @@ type CreateSshPamAccountResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Account struct {
-			CreatedAt                    time.Time                                   `json:"createdAt"`
-			Credentials                  CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
-			Description                  *string                                     `json:"description"`
-			DiscoveryFingerprint         *string                                     `json:"discoveryFingerprint"`
-			EncryptedLastRotationMessage interface{}                                 `json:"encryptedLastRotationMessage"`
-			FolderId                     *openapi_types.UUID                         `json:"folderId"`
-			Id                           openapi_types.UUID                          `json:"id"`
-			InternalMetadata             interface{}                                 `json:"internalMetadata"`
-			LastRotatedAt                *time.Time                                  `json:"lastRotatedAt"`
-			LastRotationMessage          *string                                     `json:"lastRotationMessage"`
+			CreatedAt            time.Time                                   `json:"createdAt"`
+			Credentials          CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
+			Description          *string                                     `json:"description"`
+			DiscoveryFingerprint *string                                     `json:"discoveryFingerprint"`
+			Domain               *struct {
+				DomainType string             `json:"domainType"`
+				Id         openapi_types.UUID `json:"id"`
+				Name       string             `json:"name"`
+			} `json:"domain"`
+			DomainId                     *openapi_types.UUID `json:"domainId"`
+			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+			FolderId                     *openapi_types.UUID `json:"folderId"`
+			Id                           openapi_types.UUID  `json:"id"`
+			InternalMetadata             interface{}         `json:"internalMetadata"`
+			LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
+			LastRotationMessage          *string             `json:"lastRotationMessage"`
 			Metadata                     *[]struct {
 				Id    openapi_types.UUID `json:"id"`
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
 			} `json:"metadata,omitempty"`
-			Name       string `json:"name"`
-			ProjectId  string `json:"projectId"`
-			RequireMfa *bool  `json:"requireMfa"`
-			Resource   struct {
+			Name          string                                  `json:"name"`
+			ParentType    CreateSshPamAccount200AccountParentType `json:"parentType"`
+			PolicyId      *openapi_types.UUID                     `json:"policyId"`
+			PolicyName    *string                                 `json:"policyName"`
+			ProjectId     string                                  `json:"projectId"`
+			RequireMfa    *bool                                   `json:"requireMfa"`
+			RequireReason *bool                                   `json:"requireReason,omitempty"`
+			Resource      *struct {
 				Id                            openapi_types.UUID `json:"id"`
 				Name                          string             `json:"name"`
 				ResourceType                  string             `json:"resourceType"`
 				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 			} `json:"resource"`
-			ResourceId     openapi_types.UUID                        `json:"resourceId"`
-			ResourceType   CreateSshPamAccount200AccountResourceType `json:"resourceType"`
-			RotationStatus *string                                   `json:"rotationStatus"`
-			UpdatedAt      time.Time                                 `json:"updatedAt"`
+			ResourceId     *openapi_types.UUID `json:"resourceId"`
+			RotationStatus *string             `json:"rotationStatus"`
+			UpdatedAt      time.Time           `json:"updatedAt"`
 		} `json:"account"`
 	}
 	JSON400 *struct {
@@ -5378,7 +5730,7 @@ type CreateSshPamAccount200AccountCredentials2AuthMethod string
 type CreateSshPamAccount_200_Account_Credentials struct {
 	union json.RawMessage
 }
-type CreateSshPamAccount200AccountResourceType string
+type CreateSshPamAccount200AccountParentType string
 type CreateSshPamAccount400StatusCode float32
 type CreateSshPamAccount401StatusCode float32
 type CreateSshPamAccount403StatusCode float32
@@ -5402,23 +5754,139 @@ func (r CreateSshPamAccountResponse) StatusCode() int {
 	return 0
 }
 
+type CreateWindowsPamAccountResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Account struct {
+			CreatedAt   time.Time `json:"createdAt"`
+			Credentials struct {
+				Username string `json:"username"`
+			} `json:"credentials"`
+			Description          *string `json:"description"`
+			DiscoveryFingerprint *string `json:"discoveryFingerprint"`
+			Domain               *struct {
+				DomainType string             `json:"domainType"`
+				Id         openapi_types.UUID `json:"id"`
+				Name       string             `json:"name"`
+			} `json:"domain"`
+			DomainId                     *openapi_types.UUID `json:"domainId"`
+			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+			FolderId                     *openapi_types.UUID `json:"folderId"`
+			Id                           openapi_types.UUID  `json:"id"`
+			InternalMetadata             struct {
+				AccountType     CreateWindowsPamAccount200AccountInternalMetadataAccountType `json:"accountType"`
+				Enabled         *bool                                                        `json:"enabled,omitempty"`
+				LastLogon       *string                                                      `json:"lastLogon,omitempty"`
+				PasswordLastSet *string                                                      `json:"passwordLastSet,omitempty"`
+				Sid             *string                                                      `json:"sid,omitempty"`
+			} `json:"internalMetadata"`
+			LastRotatedAt       *time.Time `json:"lastRotatedAt"`
+			LastRotationMessage *string    `json:"lastRotationMessage"`
+			Metadata            *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name          string                                      `json:"name"`
+			ParentType    CreateWindowsPamAccount200AccountParentType `json:"parentType"`
+			PolicyId      *openapi_types.UUID                         `json:"policyId"`
+			PolicyName    *string                                     `json:"policyName"`
+			ProjectId     string                                      `json:"projectId"`
+			RequireMfa    *bool                                       `json:"requireMfa"`
+			RequireReason *bool                                       `json:"requireReason,omitempty"`
+			Resource      *struct {
+				Id                            openapi_types.UUID `json:"id"`
+				Name                          string             `json:"name"`
+				ResourceType                  string             `json:"resourceType"`
+				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+			} `json:"resource"`
+			ResourceId     *openapi_types.UUID `json:"resourceId"`
+			RotationStatus *string             `json:"rotationStatus"`
+			UpdatedAt      time.Time           `json:"updatedAt"`
+		} `json:"account"`
+	}
+	JSON400 *struct {
+		Details    interface{}                          `json:"details,omitempty"`
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateWindowsPamAccount400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateWindowsPamAccount401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                          `json:"details,omitempty"`
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateWindowsPamAccount403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateWindowsPamAccount404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                               `json:"error"`
+		Message    interface{}                          `json:"message,omitempty"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateWindowsPamAccount422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                               `json:"error"`
+		Message    string                               `json:"message"`
+		ReqId      string                               `json:"reqId"`
+		StatusCode CreateWindowsPamAccount500StatusCode `json:"statusCode"`
+	}
+}
+type CreateWindowsPamAccount200AccountInternalMetadataAccountType string
+type CreateWindowsPamAccount200AccountParentType string
+type CreateWindowsPamAccount400StatusCode float32
+type CreateWindowsPamAccount401StatusCode float32
+type CreateWindowsPamAccount403StatusCode float32
+type CreateWindowsPamAccount404StatusCode float32
+type CreateWindowsPamAccount422StatusCode float32
+type CreateWindowsPamAccount500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateWindowsPamAccountResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateWindowsPamAccountResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreateKubernetesPamResourceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Resource struct {
-			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-			ConnectionDetails  struct {
+			ConnectionDetails struct {
 				SslCertificate        *string `json:"sslCertificate,omitempty"`
 				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 				Url                   string  `json:"url"`
 			} `json:"connectionDetails"`
-			CreatedAt                 time.Time           `json:"createdAt"`
-			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-			Id                        openapi_types.UUID  `json:"id"`
-			Metadata                  *[]struct {
+			CreatedAt            time.Time           `json:"createdAt"`
+			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+			DomainId             *openapi_types.UUID `json:"domainId"`
+			GatewayId            *openapi_types.UUID `json:"gatewayId"`
+			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+			Id                   openapi_types.UUID  `json:"id"`
+			Metadata             *[]struct {
 				Id    openapi_types.UUID `json:"id"`
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
@@ -5427,7 +5895,12 @@ type CreateKubernetesPamResourceResponse struct {
 			ProjectId                  string                                                               `json:"projectId"`
 			ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
 			RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-			UpdatedAt                  time.Time                                                            `json:"updatedAt"`
+			SessionSummaryConfig       *struct {
+				AiInsightsEnabled bool                                                            `json:"aiInsightsEnabled"`
+				ConnectionId      openapi_types.UUID                                              `json:"connectionId"`
+				Model             CreateKubernetesPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+			} `json:"sessionSummaryConfig"`
+			UpdatedAt time.Time `json:"updatedAt"`
 		} `json:"resource"`
 	}
 	JSON400 *struct {
@@ -5474,9 +5947,16 @@ type CreateKubernetesPamResource200ResourceRotationAccountCredentials0 struct {
 	AuthMethod CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod `json:"authMethod"`
 }
 type CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod string
+type CreateKubernetesPamResource200ResourceRotationAccountCredentials1 struct {
+	AuthMethod         CreateKubernetesPamResource200ResourceRotationAccountCredentials1AuthMethod `json:"authMethod"`
+	Namespace          string                                                                      `json:"namespace"`
+	ServiceAccountName string                                                                      `json:"serviceAccountName"`
+}
+type CreateKubernetesPamResource200ResourceRotationAccountCredentials1AuthMethod string
 type CreateKubernetesPamResource_200_Resource_RotationAccountCredentials struct {
 	union json.RawMessage
 }
+type CreateKubernetesPamResource200ResourceSessionSummaryConfigModel string
 type CreateKubernetesPamResource400StatusCode float32
 type CreateKubernetesPamResource401StatusCode float32
 type CreateKubernetesPamResource403StatusCode float32
@@ -5505,8 +5985,7 @@ type CreatePostgresPamResourceResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Resource struct {
-			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-			ConnectionDetails  struct {
+			ConnectionDetails struct {
 				Database              string  `json:"database"`
 				Host                  string  `json:"host"`
 				Port                  float32 `json:"port"`
@@ -5514,12 +5993,13 @@ type CreatePostgresPamResourceResponse struct {
 				SslEnabled            bool    `json:"sslEnabled"`
 				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 			} `json:"connectionDetails"`
-			CreatedAt                 time.Time           `json:"createdAt"`
-			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-			Id                        openapi_types.UUID  `json:"id"`
-			Metadata                  *[]struct {
+			CreatedAt            time.Time           `json:"createdAt"`
+			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+			DomainId             *openapi_types.UUID `json:"domainId"`
+			GatewayId            *openapi_types.UUID `json:"gatewayId"`
+			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+			Id                   openapi_types.UUID  `json:"id"`
+			Metadata             *[]struct {
 				Id    openapi_types.UUID `json:"id"`
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
@@ -5530,6 +6010,11 @@ type CreatePostgresPamResourceResponse struct {
 			RotationAccountCredentials *struct {
 				Username string `json:"username"`
 			} `json:"rotationAccountCredentials"`
+			SessionSummaryConfig *struct {
+				AiInsightsEnabled bool                                                          `json:"aiInsightsEnabled"`
+				ConnectionId      openapi_types.UUID                                            `json:"connectionId"`
+				Model             CreatePostgresPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+			} `json:"sessionSummaryConfig"`
 			UpdatedAt time.Time `json:"updatedAt"`
 		} `json:"resource"`
 	}
@@ -5573,6 +6058,7 @@ type CreatePostgresPamResourceResponse struct {
 	}
 }
 type CreatePostgresPamResource200ResourceResourceType string
+type CreatePostgresPamResource200ResourceSessionSummaryConfigModel string
 type CreatePostgresPamResource400StatusCode float32
 type CreatePostgresPamResource401StatusCode float32
 type CreatePostgresPamResource403StatusCode float32
@@ -5601,20 +6087,20 @@ type CreateRedisPamResourceResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Resource struct {
-			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-			ConnectionDetails  struct {
+			ConnectionDetails struct {
 				Host                  string  `json:"host"`
 				Port                  float32 `json:"port"`
 				SslCertificate        *string `json:"sslCertificate,omitempty"`
 				SslEnabled            bool    `json:"sslEnabled"`
 				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 			} `json:"connectionDetails"`
-			CreatedAt                 time.Time           `json:"createdAt"`
-			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-			Id                        openapi_types.UUID  `json:"id"`
-			Metadata                  *[]struct {
+			CreatedAt            time.Time           `json:"createdAt"`
+			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+			DomainId             *openapi_types.UUID `json:"domainId"`
+			GatewayId            *openapi_types.UUID `json:"gatewayId"`
+			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+			Id                   openapi_types.UUID  `json:"id"`
+			Metadata             *[]struct {
 				Id    openapi_types.UUID `json:"id"`
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
@@ -5625,6 +6111,11 @@ type CreateRedisPamResourceResponse struct {
 			RotationAccountCredentials *struct {
 				Username *string `json:"username,omitempty"`
 			} `json:"rotationAccountCredentials"`
+			SessionSummaryConfig *struct {
+				AiInsightsEnabled bool                                                       `json:"aiInsightsEnabled"`
+				ConnectionId      openapi_types.UUID                                         `json:"connectionId"`
+				Model             CreateRedisPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+			} `json:"sessionSummaryConfig"`
 			UpdatedAt time.Time `json:"updatedAt"`
 		} `json:"resource"`
 	}
@@ -5668,6 +6159,7 @@ type CreateRedisPamResourceResponse struct {
 	}
 }
 type CreateRedisPamResource200ResourceResourceType string
+type CreateRedisPamResource200ResourceSessionSummaryConfigModel string
 type CreateRedisPamResource400StatusCode float32
 type CreateRedisPamResource401StatusCode float32
 type CreateRedisPamResource403StatusCode float32
@@ -5696,17 +6188,17 @@ type CreateSshPamResourceResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Resource struct {
-			AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-			ConnectionDetails  struct {
+			ConnectionDetails struct {
 				Host string  `json:"host"`
 				Port float32 `json:"port"`
 			} `json:"connectionDetails"`
-			CreatedAt                 time.Time           `json:"createdAt"`
-			DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-			EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-			GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-			Id                        openapi_types.UUID  `json:"id"`
-			Metadata                  *[]struct {
+			CreatedAt            time.Time           `json:"createdAt"`
+			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+			DomainId             *openapi_types.UUID `json:"domainId"`
+			GatewayId            *openapi_types.UUID `json:"gatewayId"`
+			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+			Id                   openapi_types.UUID  `json:"id"`
+			Metadata             *[]struct {
 				Id    openapi_types.UUID `json:"id"`
 				Key   string             `json:"key"`
 				Value *string            `json:"value"`
@@ -5715,7 +6207,12 @@ type CreateSshPamResourceResponse struct {
 			ProjectId                  string                                                        `json:"projectId"`
 			ResourceType               CreateSshPamResource200ResourceResourceType                   `json:"resourceType"`
 			RotationAccountCredentials *CreateSshPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-			UpdatedAt                  time.Time                                                     `json:"updatedAt"`
+			SessionSummaryConfig       *struct {
+				AiInsightsEnabled bool                                                     `json:"aiInsightsEnabled"`
+				ConnectionId      openapi_types.UUID                                       `json:"connectionId"`
+				Model             CreateSshPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+			} `json:"sessionSummaryConfig"`
+			UpdatedAt time.Time `json:"updatedAt"`
 		} `json:"resource"`
 	}
 	JSON400 *struct {
@@ -5776,6 +6273,7 @@ type CreateSshPamResource200ResourceRotationAccountCredentials2AuthMethod string
 type CreateSshPamResource_200_Resource_RotationAccountCredentials struct {
 	union json.RawMessage
 }
+type CreateSshPamResource200ResourceSessionSummaryConfigModel string
 type CreateSshPamResource400StatusCode float32
 type CreateSshPamResource401StatusCode float32
 type CreateSshPamResource403StatusCode float32
@@ -5793,6 +6291,111 @@ func (r CreateSshPamResourceResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r CreateSshPamResourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateWindowsPamResourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Resource struct {
+			ConnectionDetails struct {
+				Hostname                string                                                       `json:"hostname"`
+				Port                    int                                                          `json:"port"`
+				Protocol                CreateWindowsPamResource200ResourceConnectionDetailsProtocol `json:"protocol"`
+				UseWinrmHttps           bool                                                         `json:"useWinrmHttps"`
+				WinrmCaCert             *string                                                      `json:"winrmCaCert,omitempty"`
+				WinrmPort               int                                                          `json:"winrmPort"`
+				WinrmRejectUnauthorized bool                                                         `json:"winrmRejectUnauthorized"`
+				WinrmTlsServerName      *string                                                      `json:"winrmTlsServerName,omitempty"`
+			} `json:"connectionDetails"`
+			CreatedAt            time.Time           `json:"createdAt"`
+			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+			DomainId             *openapi_types.UUID `json:"domainId"`
+			GatewayId            *openapi_types.UUID `json:"gatewayId"`
+			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+			Id                   openapi_types.UUID  `json:"id"`
+			Metadata             *[]struct {
+				Id    openapi_types.UUID `json:"id"`
+				Key   string             `json:"key"`
+				Value *string            `json:"value"`
+			} `json:"metadata,omitempty"`
+			Name                       string                                          `json:"name"`
+			ProjectId                  string                                          `json:"projectId"`
+			ResourceType               CreateWindowsPamResource200ResourceResourceType `json:"resourceType"`
+			RotationAccountCredentials *struct {
+				Username string `json:"username"`
+			} `json:"rotationAccountCredentials"`
+			SessionSummaryConfig *struct {
+				AiInsightsEnabled bool                                                         `json:"aiInsightsEnabled"`
+				ConnectionId      openapi_types.UUID                                           `json:"connectionId"`
+				Model             CreateWindowsPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+			} `json:"sessionSummaryConfig"`
+			UpdatedAt time.Time `json:"updatedAt"`
+		} `json:"resource"`
+	}
+	JSON400 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateWindowsPamResource400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateWindowsPamResource401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateWindowsPamResource403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateWindowsPamResource404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                `json:"error"`
+		Message    interface{}                           `json:"message,omitempty"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateWindowsPamResource422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreateWindowsPamResource500StatusCode `json:"statusCode"`
+	}
+}
+type CreateWindowsPamResource200ResourceConnectionDetailsProtocol string
+type CreateWindowsPamResource200ResourceResourceType string
+type CreateWindowsPamResource200ResourceSessionSummaryConfigModel string
+type CreateWindowsPamResource400StatusCode float32
+type CreateWindowsPamResource401StatusCode float32
+type CreateWindowsPamResource403StatusCode float32
+type CreateWindowsPamResource404StatusCode float32
+type CreateWindowsPamResource422StatusCode float32
+type CreateWindowsPamResource500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateWindowsPamResourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateWindowsPamResourceResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -5978,14 +6581,14 @@ type ListGatewaysResponse struct {
 		CreatedAt               time.Time          `json:"createdAt"`
 		Heartbeat               *time.Time         `json:"heartbeat"`
 		Id                      openapi_types.UUID `json:"id"`
-		Identity                struct {
+		Identity                *struct {
 			Id   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"identity"`
-		IdentityId            openapi_types.UUID `json:"identityId"`
-		LastHealthCheckStatus *string            `json:"lastHealthCheckStatus"`
-		Name                  string             `json:"name"`
-		UpdatedAt             time.Time          `json:"updatedAt"`
+		IdentityId            *openapi_types.UUID `json:"identityId"`
+		LastHealthCheckStatus *string             `json:"lastHealthCheckStatus"`
+		Name                  string              `json:"name"`
+		UpdatedAt             time.Time           `json:"updatedAt"`
 	}
 	JSON400 *struct {
 		Details    interface{}               `json:"details,omitempty"`
@@ -6965,6 +7568,23 @@ func (c *ClientWithResponses) CreateSshPamAccountWithResponse(ctx context.Contex
 	return ParseCreateSshPamAccountResponse(rsp)
 }
 
+// CreateWindowsPamAccountWithBodyWithResponse request with arbitrary body returning *CreateWindowsPamAccountResponse
+func (c *ClientWithResponses) CreateWindowsPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error) {
+	rsp, err := c.CreateWindowsPamAccountWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateWindowsPamAccountResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateWindowsPamAccountWithResponse(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error) {
+	rsp, err := c.CreateWindowsPamAccount(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateWindowsPamAccountResponse(rsp)
+}
+
 // CreateKubernetesPamResourceWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamResourceResponse
 func (c *ClientWithResponses) CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
 	rsp, err := c.CreateKubernetesPamResourceWithBody(ctx, contentType, body, reqEditors...)
@@ -7031,6 +7651,23 @@ func (c *ClientWithResponses) CreateSshPamResourceWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseCreateSshPamResourceResponse(rsp)
+}
+
+// CreateWindowsPamResourceWithBodyWithResponse request with arbitrary body returning *CreateWindowsPamResourceResponse
+func (c *ClientWithResponses) CreateWindowsPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error) {
+	rsp, err := c.CreateWindowsPamResourceWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateWindowsPamResourceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateWindowsPamResourceWithResponse(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error) {
+	rsp, err := c.CreateWindowsPamResource(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateWindowsPamResourceResponse(rsp)
 }
 
 // CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
@@ -7209,26 +7846,14 @@ func ParseAdminSignUpResponse(rsp *http.Response) (*AdminSignUpResponse, error) 
 			} `json:"organization"`
 			Token string `json:"token"`
 			User  struct {
-				AuthMethods                       *[]string          `json:"authMethods"`
-				ConsecutiveFailedMfaAttempts      *float32           `json:"consecutiveFailedMfaAttempts"`
-				ConsecutiveFailedPasswordAttempts *float32           `json:"consecutiveFailedPasswordAttempts"`
-				CreatedAt                         time.Time          `json:"createdAt"`
-				Devices                           interface{}        `json:"devices"`
-				Email                             *string            `json:"email"`
-				FirstName                         *string            `json:"firstName"`
-				Id                                openapi_types.UUID `json:"id"`
-				IsAccepted                        *bool              `json:"isAccepted"`
-				IsEmailVerified                   *bool              `json:"isEmailVerified"`
-				IsGhost                           *bool              `json:"isGhost,omitempty"`
-				IsLocked                          *bool              `json:"isLocked"`
-				IsMfaEnabled                      *bool              `json:"isMfaEnabled"`
-				LastName                          *string            `json:"lastName"`
-				MfaMethods                        *[]string          `json:"mfaMethods"`
-				SelectedMfaMethod                 *string            `json:"selectedMfaMethod"`
-				SuperAdmin                        *bool              `json:"superAdmin"`
-				TemporaryLockDateEnd              *time.Time         `json:"temporaryLockDateEnd"`
-				UpdatedAt                         time.Time          `json:"updatedAt"`
-				Username                          string             `json:"username"`
+				AuthMethods     *[]string          `json:"authMethods"`
+				Email           *string            `json:"email"`
+				FirstName       *string            `json:"firstName"`
+				Id              openapi_types.UUID `json:"id"`
+				IsEmailVerified *bool              `json:"isEmailVerified"`
+				LastName        *string            `json:"lastName"`
+				PublicKey       *string            `json:"publicKey"`
+				Username        string             `json:"username"`
 			} `json:"user"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -7434,6 +8059,7 @@ func ParseRefreshAuthTokenResponse(rsp *http.Response) (*RefreshAuthTokenRespons
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			OrganizationId    *string `json:"organizationId,omitempty"`
+			RefreshToken      *string `json:"refreshToken,omitempty"`
 			SubOrganizationId *string `json:"subOrganizationId,omitempty"`
 			Token             string  `json:"token"`
 		}
@@ -8278,7 +8904,10 @@ func ParseCreateInternalCertificateAuthorityV1Response(rsp *http.Response) (*Cre
 
 				// Country The country name (C) for the CA.
 				Country *string `json:"country,omitempty"`
-				Dn      *string `json:"dn"`
+
+				// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is always included as the primary.
+				CrlDistributionPointUrls *[]string `json:"crlDistributionPointUrls,omitempty"`
+				Dn                       *string   `json:"dn"`
 
 				// FriendlyName A friendly name for the CA.
 				FriendlyName *string `json:"friendlyName,omitempty"`
@@ -8818,8 +9447,14 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 				Credentials struct {
 					Username string `json:"username"`
 				} `json:"credentials"`
-				Description                  *string             `json:"description"`
-				DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+				Description          *string `json:"description"`
+				DiscoveryFingerprint *string `json:"discoveryFingerprint"`
+				Domain               *struct {
+					DomainType string             `json:"domainType"`
+					Id         openapi_types.UUID `json:"id"`
+					Name       string             `json:"name"`
+				} `json:"domain"`
+				DomainId                     *openapi_types.UUID `json:"domainId"`
 				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
 				FolderId                     *openapi_types.UUID `json:"folderId"`
 				Id                           openapi_types.UUID  `json:"id"`
@@ -8831,19 +9466,22 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
 				} `json:"metadata,omitempty"`
-				Name       string `json:"name"`
-				ProjectId  string `json:"projectId"`
-				RequireMfa *bool  `json:"requireMfa"`
-				Resource   struct {
+				Name          string                                       `json:"name"`
+				ParentType    CreatePostgresPamAccount200AccountParentType `json:"parentType"`
+				PolicyId      *openapi_types.UUID                          `json:"policyId"`
+				PolicyName    *string                                      `json:"policyName"`
+				ProjectId     string                                       `json:"projectId"`
+				RequireMfa    *bool                                        `json:"requireMfa"`
+				RequireReason *bool                                        `json:"requireReason,omitempty"`
+				Resource      *struct {
 					Id                            openapi_types.UUID `json:"id"`
 					Name                          string             `json:"name"`
 					ResourceType                  string             `json:"resourceType"`
 					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 				} `json:"resource"`
-				ResourceId     openapi_types.UUID                             `json:"resourceId"`
-				ResourceType   CreatePostgresPamAccount200AccountResourceType `json:"resourceType"`
-				RotationStatus *string                                        `json:"rotationStatus"`
-				UpdatedAt      time.Time                                      `json:"updatedAt"`
+				ResourceId     *openapi_types.UUID `json:"resourceId"`
+				RotationStatus *string             `json:"rotationStatus"`
+				UpdatedAt      time.Time           `json:"updatedAt"`
 			} `json:"account"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -8951,8 +9589,14 @@ func ParseCreateRedisPamAccountResponse(rsp *http.Response) (*CreateRedisPamAcco
 				Credentials struct {
 					Username *string `json:"username,omitempty"`
 				} `json:"credentials"`
-				Description                  *string             `json:"description"`
-				DiscoveryFingerprint         *string             `json:"discoveryFingerprint"`
+				Description          *string `json:"description"`
+				DiscoveryFingerprint *string `json:"discoveryFingerprint"`
+				Domain               *struct {
+					DomainType string             `json:"domainType"`
+					Id         openapi_types.UUID `json:"id"`
+					Name       string             `json:"name"`
+				} `json:"domain"`
+				DomainId                     *openapi_types.UUID `json:"domainId"`
 				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
 				FolderId                     *openapi_types.UUID `json:"folderId"`
 				Id                           openapi_types.UUID  `json:"id"`
@@ -8964,19 +9608,22 @@ func ParseCreateRedisPamAccountResponse(rsp *http.Response) (*CreateRedisPamAcco
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
 				} `json:"metadata,omitempty"`
-				Name       string `json:"name"`
-				ProjectId  string `json:"projectId"`
-				RequireMfa *bool  `json:"requireMfa"`
-				Resource   struct {
+				Name          string                                    `json:"name"`
+				ParentType    CreateRedisPamAccount200AccountParentType `json:"parentType"`
+				PolicyId      *openapi_types.UUID                       `json:"policyId"`
+				PolicyName    *string                                   `json:"policyName"`
+				ProjectId     string                                    `json:"projectId"`
+				RequireMfa    *bool                                     `json:"requireMfa"`
+				RequireReason *bool                                     `json:"requireReason,omitempty"`
+				Resource      *struct {
 					Id                            openapi_types.UUID `json:"id"`
 					Name                          string             `json:"name"`
 					ResourceType                  string             `json:"resourceType"`
 					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 				} `json:"resource"`
-				ResourceId     openapi_types.UUID                          `json:"resourceId"`
-				ResourceType   CreateRedisPamAccount200AccountResourceType `json:"resourceType"`
-				RotationStatus *string                                     `json:"rotationStatus"`
-				UpdatedAt      time.Time                                   `json:"updatedAt"`
+				ResourceId     *openapi_types.UUID `json:"resourceId"`
+				RotationStatus *string             `json:"rotationStatus"`
+				UpdatedAt      time.Time           `json:"updatedAt"`
 			} `json:"account"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -9080,34 +9727,43 @@ func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountR
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Account struct {
-				CreatedAt                    time.Time                                   `json:"createdAt"`
-				Credentials                  CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
-				Description                  *string                                     `json:"description"`
-				DiscoveryFingerprint         *string                                     `json:"discoveryFingerprint"`
-				EncryptedLastRotationMessage interface{}                                 `json:"encryptedLastRotationMessage"`
-				FolderId                     *openapi_types.UUID                         `json:"folderId"`
-				Id                           openapi_types.UUID                          `json:"id"`
-				InternalMetadata             interface{}                                 `json:"internalMetadata"`
-				LastRotatedAt                *time.Time                                  `json:"lastRotatedAt"`
-				LastRotationMessage          *string                                     `json:"lastRotationMessage"`
+				CreatedAt            time.Time                                   `json:"createdAt"`
+				Credentials          CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
+				Description          *string                                     `json:"description"`
+				DiscoveryFingerprint *string                                     `json:"discoveryFingerprint"`
+				Domain               *struct {
+					DomainType string             `json:"domainType"`
+					Id         openapi_types.UUID `json:"id"`
+					Name       string             `json:"name"`
+				} `json:"domain"`
+				DomainId                     *openapi_types.UUID `json:"domainId"`
+				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+				FolderId                     *openapi_types.UUID `json:"folderId"`
+				Id                           openapi_types.UUID  `json:"id"`
+				InternalMetadata             interface{}         `json:"internalMetadata"`
+				LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
+				LastRotationMessage          *string             `json:"lastRotationMessage"`
 				Metadata                     *[]struct {
 					Id    openapi_types.UUID `json:"id"`
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
 				} `json:"metadata,omitempty"`
-				Name       string `json:"name"`
-				ProjectId  string `json:"projectId"`
-				RequireMfa *bool  `json:"requireMfa"`
-				Resource   struct {
+				Name          string                                  `json:"name"`
+				ParentType    CreateSshPamAccount200AccountParentType `json:"parentType"`
+				PolicyId      *openapi_types.UUID                     `json:"policyId"`
+				PolicyName    *string                                 `json:"policyName"`
+				ProjectId     string                                  `json:"projectId"`
+				RequireMfa    *bool                                   `json:"requireMfa"`
+				RequireReason *bool                                   `json:"requireReason,omitempty"`
+				Resource      *struct {
 					Id                            openapi_types.UUID `json:"id"`
 					Name                          string             `json:"name"`
 					ResourceType                  string             `json:"resourceType"`
 					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
 				} `json:"resource"`
-				ResourceId     openapi_types.UUID                        `json:"resourceId"`
-				ResourceType   CreateSshPamAccount200AccountResourceType `json:"resourceType"`
-				RotationStatus *string                                   `json:"rotationStatus"`
-				UpdatedAt      time.Time                                 `json:"updatedAt"`
+				ResourceId     *openapi_types.UUID `json:"resourceId"`
+				RotationStatus *string             `json:"rotationStatus"`
+				UpdatedAt      time.Time           `json:"updatedAt"`
 			} `json:"account"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -9194,6 +9850,154 @@ func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountR
 	return response, nil
 }
 
+// ParseCreateWindowsPamAccountResponse parses an HTTP response from a CreateWindowsPamAccountWithResponse call
+func ParseCreateWindowsPamAccountResponse(rsp *http.Response) (*CreateWindowsPamAccountResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateWindowsPamAccountResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Account struct {
+				CreatedAt   time.Time `json:"createdAt"`
+				Credentials struct {
+					Username string `json:"username"`
+				} `json:"credentials"`
+				Description          *string `json:"description"`
+				DiscoveryFingerprint *string `json:"discoveryFingerprint"`
+				Domain               *struct {
+					DomainType string             `json:"domainType"`
+					Id         openapi_types.UUID `json:"id"`
+					Name       string             `json:"name"`
+				} `json:"domain"`
+				DomainId                     *openapi_types.UUID `json:"domainId"`
+				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
+				FolderId                     *openapi_types.UUID `json:"folderId"`
+				Id                           openapi_types.UUID  `json:"id"`
+				InternalMetadata             struct {
+					AccountType     CreateWindowsPamAccount200AccountInternalMetadataAccountType `json:"accountType"`
+					Enabled         *bool                                                        `json:"enabled,omitempty"`
+					LastLogon       *string                                                      `json:"lastLogon,omitempty"`
+					PasswordLastSet *string                                                      `json:"passwordLastSet,omitempty"`
+					Sid             *string                                                      `json:"sid,omitempty"`
+				} `json:"internalMetadata"`
+				LastRotatedAt       *time.Time `json:"lastRotatedAt"`
+				LastRotationMessage *string    `json:"lastRotationMessage"`
+				Metadata            *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name          string                                      `json:"name"`
+				ParentType    CreateWindowsPamAccount200AccountParentType `json:"parentType"`
+				PolicyId      *openapi_types.UUID                         `json:"policyId"`
+				PolicyName    *string                                     `json:"policyName"`
+				ProjectId     string                                      `json:"projectId"`
+				RequireMfa    *bool                                       `json:"requireMfa"`
+				RequireReason *bool                                       `json:"requireReason,omitempty"`
+				Resource      *struct {
+					Id                            openapi_types.UUID `json:"id"`
+					Name                          string             `json:"name"`
+					ResourceType                  string             `json:"resourceType"`
+					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
+				} `json:"resource"`
+				ResourceId     *openapi_types.UUID `json:"resourceId"`
+				RotationStatus *string             `json:"rotationStatus"`
+				UpdatedAt      time.Time           `json:"updatedAt"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                          `json:"details,omitempty"`
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateWindowsPamAccount400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateWindowsPamAccount401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                          `json:"details,omitempty"`
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateWindowsPamAccount403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateWindowsPamAccount404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    interface{}                          `json:"message,omitempty"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateWindowsPamAccount422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                               `json:"error"`
+			Message    string                               `json:"message"`
+			ReqId      string                               `json:"reqId"`
+			StatusCode CreateWindowsPamAccount500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateKubernetesPamResourceResponse parses an HTTP response from a CreateKubernetesPamResourceWithResponse call
 func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubernetesPamResourceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -9211,18 +10015,18 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Resource struct {
-				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-				ConnectionDetails  struct {
+				ConnectionDetails struct {
 					SslCertificate        *string `json:"sslCertificate,omitempty"`
 					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 					Url                   string  `json:"url"`
 				} `json:"connectionDetails"`
-				CreatedAt                 time.Time           `json:"createdAt"`
-				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-				Id                        openapi_types.UUID  `json:"id"`
-				Metadata                  *[]struct {
+				CreatedAt            time.Time           `json:"createdAt"`
+				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+				DomainId             *openapi_types.UUID `json:"domainId"`
+				GatewayId            *openapi_types.UUID `json:"gatewayId"`
+				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+				Id                   openapi_types.UUID  `json:"id"`
+				Metadata             *[]struct {
 					Id    openapi_types.UUID `json:"id"`
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
@@ -9231,7 +10035,12 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 				ProjectId                  string                                                               `json:"projectId"`
 				ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
 				RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-				UpdatedAt                  time.Time                                                            `json:"updatedAt"`
+				SessionSummaryConfig       *struct {
+					AiInsightsEnabled bool                                                            `json:"aiInsightsEnabled"`
+					ConnectionId      openapi_types.UUID                                              `json:"connectionId"`
+					Model             CreateKubernetesPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+				} `json:"sessionSummaryConfig"`
+				UpdatedAt time.Time `json:"updatedAt"`
 			} `json:"resource"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -9335,8 +10144,7 @@ func ParseCreatePostgresPamResourceResponse(rsp *http.Response) (*CreatePostgres
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Resource struct {
-				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-				ConnectionDetails  struct {
+				ConnectionDetails struct {
 					Database              string  `json:"database"`
 					Host                  string  `json:"host"`
 					Port                  float32 `json:"port"`
@@ -9344,12 +10152,13 @@ func ParseCreatePostgresPamResourceResponse(rsp *http.Response) (*CreatePostgres
 					SslEnabled            bool    `json:"sslEnabled"`
 					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 				} `json:"connectionDetails"`
-				CreatedAt                 time.Time           `json:"createdAt"`
-				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-				Id                        openapi_types.UUID  `json:"id"`
-				Metadata                  *[]struct {
+				CreatedAt            time.Time           `json:"createdAt"`
+				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+				DomainId             *openapi_types.UUID `json:"domainId"`
+				GatewayId            *openapi_types.UUID `json:"gatewayId"`
+				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+				Id                   openapi_types.UUID  `json:"id"`
+				Metadata             *[]struct {
 					Id    openapi_types.UUID `json:"id"`
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
@@ -9360,6 +10169,11 @@ func ParseCreatePostgresPamResourceResponse(rsp *http.Response) (*CreatePostgres
 				RotationAccountCredentials *struct {
 					Username string `json:"username"`
 				} `json:"rotationAccountCredentials"`
+				SessionSummaryConfig *struct {
+					AiInsightsEnabled bool                                                          `json:"aiInsightsEnabled"`
+					ConnectionId      openapi_types.UUID                                            `json:"connectionId"`
+					Model             CreatePostgresPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+				} `json:"sessionSummaryConfig"`
 				UpdatedAt time.Time `json:"updatedAt"`
 			} `json:"resource"`
 		}
@@ -9464,20 +10278,20 @@ func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamRes
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Resource struct {
-				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-				ConnectionDetails  struct {
+				ConnectionDetails struct {
 					Host                  string  `json:"host"`
 					Port                  float32 `json:"port"`
 					SslCertificate        *string `json:"sslCertificate,omitempty"`
 					SslEnabled            bool    `json:"sslEnabled"`
 					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 				} `json:"connectionDetails"`
-				CreatedAt                 time.Time           `json:"createdAt"`
-				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-				Id                        openapi_types.UUID  `json:"id"`
-				Metadata                  *[]struct {
+				CreatedAt            time.Time           `json:"createdAt"`
+				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+				DomainId             *openapi_types.UUID `json:"domainId"`
+				GatewayId            *openapi_types.UUID `json:"gatewayId"`
+				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+				Id                   openapi_types.UUID  `json:"id"`
+				Metadata             *[]struct {
 					Id    openapi_types.UUID `json:"id"`
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
@@ -9488,6 +10302,11 @@ func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamRes
 				RotationAccountCredentials *struct {
 					Username *string `json:"username,omitempty"`
 				} `json:"rotationAccountCredentials"`
+				SessionSummaryConfig *struct {
+					AiInsightsEnabled bool                                                       `json:"aiInsightsEnabled"`
+					ConnectionId      openapi_types.UUID                                         `json:"connectionId"`
+					Model             CreateRedisPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+				} `json:"sessionSummaryConfig"`
 				UpdatedAt time.Time `json:"updatedAt"`
 			} `json:"resource"`
 		}
@@ -9592,17 +10411,17 @@ func ParseCreateSshPamResourceResponse(rsp *http.Response) (*CreateSshPamResourc
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Resource struct {
-				AdServerResourceId *openapi_types.UUID `json:"adServerResourceId"`
-				ConnectionDetails  struct {
+				ConnectionDetails struct {
 					Host string  `json:"host"`
 					Port float32 `json:"port"`
 				} `json:"connectionDetails"`
-				CreatedAt                 time.Time           `json:"createdAt"`
-				DiscoveryFingerprint      *string             `json:"discoveryFingerprint"`
-				EncryptedResourceMetadata interface{}         `json:"encryptedResourceMetadata"`
-				GatewayId                 *openapi_types.UUID `json:"gatewayId"`
-				Id                        openapi_types.UUID  `json:"id"`
-				Metadata                  *[]struct {
+				CreatedAt            time.Time           `json:"createdAt"`
+				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+				DomainId             *openapi_types.UUID `json:"domainId"`
+				GatewayId            *openapi_types.UUID `json:"gatewayId"`
+				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+				Id                   openapi_types.UUID  `json:"id"`
+				Metadata             *[]struct {
 					Id    openapi_types.UUID `json:"id"`
 					Key   string             `json:"key"`
 					Value *string            `json:"value"`
@@ -9611,7 +10430,12 @@ func ParseCreateSshPamResourceResponse(rsp *http.Response) (*CreateSshPamResourc
 				ProjectId                  string                                                        `json:"projectId"`
 				ResourceType               CreateSshPamResource200ResourceResourceType                   `json:"resourceType"`
 				RotationAccountCredentials *CreateSshPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-				UpdatedAt                  time.Time                                                     `json:"updatedAt"`
+				SessionSummaryConfig       *struct {
+					AiInsightsEnabled bool                                                     `json:"aiInsightsEnabled"`
+					ConnectionId      openapi_types.UUID                                       `json:"connectionId"`
+					Model             CreateSshPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+				} `json:"sessionSummaryConfig"`
+				UpdatedAt time.Time `json:"updatedAt"`
 			} `json:"resource"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -9687,6 +10511,142 @@ func ParseCreateSshPamResourceResponse(rsp *http.Response) (*CreateSshPamResourc
 			Message    string                            `json:"message"`
 			ReqId      string                            `json:"reqId"`
 			StatusCode CreateSshPamResource500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateWindowsPamResourceResponse parses an HTTP response from a CreateWindowsPamResourceWithResponse call
+func ParseCreateWindowsPamResourceResponse(rsp *http.Response) (*CreateWindowsPamResourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateWindowsPamResourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Resource struct {
+				ConnectionDetails struct {
+					Hostname                string                                                       `json:"hostname"`
+					Port                    int                                                          `json:"port"`
+					Protocol                CreateWindowsPamResource200ResourceConnectionDetailsProtocol `json:"protocol"`
+					UseWinrmHttps           bool                                                         `json:"useWinrmHttps"`
+					WinrmCaCert             *string                                                      `json:"winrmCaCert,omitempty"`
+					WinrmPort               int                                                          `json:"winrmPort"`
+					WinrmRejectUnauthorized bool                                                         `json:"winrmRejectUnauthorized"`
+					WinrmTlsServerName      *string                                                      `json:"winrmTlsServerName,omitempty"`
+				} `json:"connectionDetails"`
+				CreatedAt            time.Time           `json:"createdAt"`
+				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
+				DomainId             *openapi_types.UUID `json:"domainId"`
+				GatewayId            *openapi_types.UUID `json:"gatewayId"`
+				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
+				Id                   openapi_types.UUID  `json:"id"`
+				Metadata             *[]struct {
+					Id    openapi_types.UUID `json:"id"`
+					Key   string             `json:"key"`
+					Value *string            `json:"value"`
+				} `json:"metadata,omitempty"`
+				Name                       string                                          `json:"name"`
+				ProjectId                  string                                          `json:"projectId"`
+				ResourceType               CreateWindowsPamResource200ResourceResourceType `json:"resourceType"`
+				RotationAccountCredentials *struct {
+					Username string `json:"username"`
+				} `json:"rotationAccountCredentials"`
+				SessionSummaryConfig *struct {
+					AiInsightsEnabled bool                                                         `json:"aiInsightsEnabled"`
+					ConnectionId      openapi_types.UUID                                           `json:"connectionId"`
+					Model             CreateWindowsPamResource200ResourceSessionSummaryConfigModel `json:"model"`
+				} `json:"sessionSummaryConfig"`
+				UpdatedAt time.Time `json:"updatedAt"`
+			} `json:"resource"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateWindowsPamResource400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateWindowsPamResource401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateWindowsPamResource403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateWindowsPamResource404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    interface{}                           `json:"message,omitempty"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateWindowsPamResource422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreateWindowsPamResource500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -9957,14 +10917,14 @@ func ParseListGatewaysResponse(rsp *http.Response) (*ListGatewaysResponse, error
 			CreatedAt               time.Time          `json:"createdAt"`
 			Heartbeat               *time.Time         `json:"heartbeat"`
 			Id                      openapi_types.UUID `json:"id"`
-			Identity                struct {
+			Identity                *struct {
 				Id   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"identity"`
-			IdentityId            openapi_types.UUID `json:"identityId"`
-			LastHealthCheckStatus *string            `json:"lastHealthCheckStatus"`
-			Name                  string             `json:"name"`
-			UpdatedAt             time.Time          `json:"updatedAt"`
+			IdentityId            *openapi_types.UUID `json:"identityId"`
+			LastHealthCheckStatus *string             `json:"lastHealthCheckStatus"`
+			Name                  string              `json:"name"`
+			UpdatedAt             time.Time           `json:"updatedAt"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

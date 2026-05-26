@@ -63,22 +63,23 @@ func (h *CertAgentTestHelper) CreateInternalCA() {
 		ProjectId: uuid.MustParse(h.ProjectID),
 		Status:    client.Active,
 		Configuration: struct {
-			ActiveCaCertId *openapi_types.UUID                                                          `json:"activeCaCertId"`
-			CommonName     *string                                                                      `json:"commonName,omitempty"`
-			Country        *string                                                                      `json:"country,omitempty"`
-			Dn             *string                                                                      `json:"dn"`
-			FriendlyName   *string                                                                      `json:"friendlyName,omitempty"`
-			KeyAlgorithm   client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm `json:"keyAlgorithm"`
-			Locality       *string                                                                      `json:"locality,omitempty"`
-			MaxPathLength  *float32                                                                     `json:"maxPathLength"`
-			NotAfter       *string                                                                      `json:"notAfter,omitempty"`
-			NotBefore      *string                                                                      `json:"notBefore,omitempty"`
-			Organization   *string                                                                      `json:"organization,omitempty"`
-			Ou             *string                                                                      `json:"ou,omitempty"`
-			ParentCaId     *openapi_types.UUID                                                          `json:"parentCaId"`
-			Province       *string                                                                      `json:"province,omitempty"`
-			SerialNumber   *string                                                                      `json:"serialNumber"`
-			Type           client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationType         `json:"type"`
+			ActiveCaCertId           *openapi_types.UUID                                                          `json:"activeCaCertId"`
+			CommonName               *string                                                                      `json:"commonName,omitempty"`
+			Country                  *string                                                                      `json:"country,omitempty"`
+			CrlDistributionPointUrls *[]string                                                                    `json:"crlDistributionPointUrls,omitempty"`
+			Dn                       *string                                                                      `json:"dn"`
+			FriendlyName             *string                                                                      `json:"friendlyName,omitempty"`
+			KeyAlgorithm             client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+			Locality                 *string                                                                      `json:"locality,omitempty"`
+			MaxPathLength            *float32                                                                     `json:"maxPathLength"`
+			NotAfter                 *string                                                                      `json:"notAfter,omitempty"`
+			NotBefore                *string                                                                      `json:"notBefore,omitempty"`
+			Organization             *string                                                                      `json:"organization,omitempty"`
+			Ou                       *string                                                                      `json:"ou,omitempty"`
+			ParentCaId               *openapi_types.UUID                                                          `json:"parentCaId"`
+			Province                 *string                                                                      `json:"province,omitempty"`
+			SerialNumber             *string                                                                      `json:"serialNumber"`
+			Type                     client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationType         `json:"type"`
 		}{
 			Type:          client.Root,
 			FriendlyName:  &friendlyName,

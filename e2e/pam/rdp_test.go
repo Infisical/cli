@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -17,8 +17,10 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/jackc/pgx/v5"
+	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -56,25 +58,6 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 	return ctr, port.Int()
 }
 
-func pamAPIRequest(t *testing.T, infra *PAMTestInfra, method, path string, body interface{}) (int, []byte) {
-	jsonBody, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	url := infra.Infisical.ApiUrl(t) + path
-	req, err := http.NewRequest(method, url, bytes.NewReader(jsonBody))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+infra.ProvisionResult.Token)
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	return resp.StatusCode, respBody
-}
-
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 	dbContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "db")
 	require.NoError(t, err)
@@ -103,33 +86,40 @@ func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra
 }
 
 func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
-	status, respBody := pamAPIRequest(t, infra, "POST", "/api/v1/pam/resources/windows", map[string]interface{}{
-		"projectId": infra.ProjectId,
-		"gatewayId": infra.GatewayId,
-		"name":      name,
-		"connectionDetails": map[string]interface{}{
-			"protocol":                "rdp",
-			"hostname":                host,
-			"port":                    port,
-			"winrmPort":               5985,
-			"useWinrmHttps":           false,
-			"winrmRejectUnauthorized": false,
+	gatewayId := openapitypes.UUID(infra.GatewayId)
+	resp, err := infra.ApiClient.CreateWindowsPamResourceWithResponse(
+		ctx,
+		client.CreateWindowsPamResourceJSONRequestBody{
+			ProjectId: openapitypes.UUID(uuid.MustParse(infra.ProjectId)),
+			GatewayId: &gatewayId,
+			Name:      name,
+			ConnectionDetails: struct {
+				Hostname                string                                                    `json:"hostname"`
+				Port                    int                                                       `json:"port"`
+				Protocol                client.CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol `json:"protocol"`
+				UseWinrmHttps           bool                                                      `json:"useWinrmHttps"`
+				WinrmCaCert             *string                                                   `json:"winrmCaCert,omitempty"`
+				WinrmPort               int                                                       `json:"winrmPort"`
+				WinrmRejectUnauthorized bool                                                      `json:"winrmRejectUnauthorized"`
+				WinrmTlsServerName      *string                                                   `json:"winrmTlsServerName,omitempty"`
+			}{
+				Hostname:                host,
+				Port:                    port,
+				Protocol:                client.Rdp,
+				WinrmPort:               5985,
+				UseWinrmHttps:           false,
+				WinrmRejectUnauthorized: false,
+			},
 		},
-	})
-	require.Equal(t, http.StatusOK, status, "create Windows resource: %s", string(respBody))
-
-	var result struct {
-		Resource struct {
-			Id uuid.UUID `json:"id"`
-		} `json:"resource"`
-	}
-	require.NoError(t, json.Unmarshal(respBody, &result))
-	slog.Info("Created Windows PAM resource", "resourceId", result.Resource.Id, "name", name)
-	return result.Resource.Id
+	)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create Windows resource: %s", string(resp.Body))
+	slog.Info("Created Windows PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
+	return uuid.UUID(resp.JSON200.Resource.Id)
 }
 
 func createRDPPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceId uuid.UUID, name, username, password string) {
-	body := map[string]interface{}{
+	body, err := json.Marshal(map[string]interface{}{
 		"resourceId": resourceId.String(),
 		"name":       name,
 		"credentials": map[string]interface{}{
@@ -139,15 +129,22 @@ func createRDPPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra,
 		"internalMetadata": map[string]interface{}{
 			"accountType": "user",
 		},
-	}
+	})
+	require.NoError(t, err)
 
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		Timeout:  90 * time.Second,
 		Interval: 3 * time.Second,
 		Condition: func() helpers.ConditionResult {
-			status, respBody := pamAPIRequest(t, infra, "POST", "/api/v1/pam/accounts/windows", body)
-			if status != http.StatusOK {
-				slog.Warn("Windows PAM account creation returned non-200, retrying...", "status", status, "body", string(respBody))
+			resp, callErr := infra.ApiClient.CreateWindowsPamAccountWithBodyWithResponse(
+				ctx, "application/json", bytes.NewReader(append([]byte(nil), body...)),
+			)
+			if callErr != nil {
+				slog.Warn("Windows PAM account creation attempt failed, retrying...", "error", callErr)
+				return helpers.ConditionWait
+			}
+			if resp.StatusCode() != http.StatusOK {
+				slog.Warn("Windows PAM account creation returned non-200, retrying...", "status", resp.StatusCode(), "body", string(resp.Body))
 				return helpers.ConditionWait
 			}
 			return helpers.ConditionSuccess
@@ -207,7 +204,7 @@ func findFreeRDPBinary(t *testing.T) string {
 }
 
 func authOnlyFreeRDP(t *testing.T, ctx context.Context, binary string, proxyPort int, timeout time.Duration) error {
-	args := []string{
+	rdpArgs := []string{
 		binary,
 		fmt.Sprintf("/v:127.0.0.1:%d", proxyPort),
 		"/u:testuser",
@@ -215,6 +212,17 @@ func authOnlyFreeRDP(t *testing.T, ctx context.Context, binary string, proxyPort
 		"/cert:ignore",
 		"/auth-only",
 		fmt.Sprintf("/timeout:%d", int(timeout.Milliseconds())),
+	}
+
+	var args []string
+	if os.Getenv("DISPLAY") == "" {
+		if xvfb, err := exec.LookPath("xvfb-run"); err == nil {
+			args = append([]string{xvfb, "--auto-servernum", "--"}, rdpArgs...)
+		} else {
+			t.Skip("no DISPLAY and xvfb-run not found")
+		}
+	} else {
+		args = rdpArgs
 	}
 
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
