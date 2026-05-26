@@ -100,7 +100,7 @@ jobs:
       - name: Build the CLI
         run: CGO_ENABLED=1 go build -tags rdp -o infisical-cli
       - name: Install RDP test dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends freerdp2-x11 xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends freerdp3-x11 xvfb
       - name: Checkout infisical repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

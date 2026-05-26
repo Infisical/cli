@@ -214,43 +214,26 @@ func authOnlyFreeRDP(t *testing.T, ctx context.Context, binary string, proxyPort
 		fmt.Sprintf("/timeout:%d", int(timeout.Milliseconds())),
 	}
 
-	var baseArgs []string
+	var args []string
 	if os.Getenv("DISPLAY") == "" {
 		if xvfb, err := exec.LookPath("xvfb-run"); err == nil {
-			baseArgs = append([]string{xvfb, "--auto-servernum", "--"}, rdpArgs...)
+			args = append([]string{xvfb, "--auto-servernum", "--"}, rdpArgs...)
 		} else {
 			t.Skip("no DISPLAY and xvfb-run not found")
 		}
 	} else {
-		baseArgs = rdpArgs
+		args = rdpArgs
 	}
 
-	// freerdp2 treats EAGAIN on the first BIO_read as fatal rather than
-	// retrying, so if the gateway is still fetching credentials when xfreerdp
-	// connects, the transport fails immediately. Retry a few times to give the
-	// bridge time to start.
-	const maxAttempts = 3
-	var lastErr error
-	for attempt := range maxAttempts {
-		if attempt > 0 {
-			time.Sleep(3 * time.Second)
-		}
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	defer cancel()
 
-		cmdCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
-		cmd := exec.CommandContext(cmdCtx, baseArgs[0], baseArgs[1:]...)
-		output, err := cmd.CombinedOutput()
-		cancel()
-
-		if err == nil {
-			return nil
-		}
-		lastErr = fmt.Errorf("xfreerdp /auth-only failed (exit %v): %s", err, string(output))
-		if !strings.Contains(string(output), "ERRCONNECT_CONNECT_TRANSPORT_FAILED") {
-			return lastErr
-		}
-		slog.Warn("xfreerdp transport failed, retrying...", "attempt", attempt+1, "maxAttempts", maxAttempts)
+	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("xfreerdp /auth-only failed (exit %v): %s", err, string(output))
 	}
-	return lastErr
+	return nil
 }
 
 func TestPAM_RDP(t *testing.T) {
