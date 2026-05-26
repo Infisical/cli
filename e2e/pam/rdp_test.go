@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,12 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
-	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/infisical/cli/e2e-tests/packages/client"
-	"github.com/jackc/pgx/v5"
+	helpers "github.com/infisical/cli/e2e-tests/util"
 	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -62,40 +64,82 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 }
 
 
+const recordingBucket = "e2e_recording_bucket"
+
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
-	dbContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "db")
+	apiURL := infra.Infisical.ApiUrl(t)
+	token := infra.ProvisionResult.Token
+
+	localstackContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "localstack")
 	require.NoError(t, err)
-	dbPort, err := dbContainer.MappedPort(ctx, nat.Port("5432"))
+	lsPort, err := localstackContainer.MappedPort(ctx, nat.Port("4566"))
+	require.NoError(t, err)
+	localstackURL := fmt.Sprintf("http://localhost:%s", lsPort.Port())
+
+	s3Client := s3.New(s3.Options{
+		BaseEndpoint:     aws.String(localstackURL),
+		Region:           "us-east-1",
+		Credentials:      credentials.NewStaticCredentialsProvider("test", "test", ""),
+		UsePathStyle:     true,
+	})
+	_, err = s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(recordingBucket),
+	})
+	require.NoError(t, err)
+	slog.Info("Created S3 bucket on LocalStack", "bucket", recordingBucket)
+
+	connectionID := createAwsAppConnection(t, apiURL, token)
+	createRecordingConfig(t, apiURL, token, infra.ProjectId, connectionID)
+}
+
+func apiPost(t *testing.T, baseURL, path, token string, body interface{}) []byte {
+	data, err := json.Marshal(body)
 	require.NoError(t, err)
 
-	connStr := fmt.Sprintf("postgres://infisical:infisical@localhost:%s/infisical", dbPort.Port())
-	conn, err := pgx.Connect(ctx, connStr)
+	req, err := http.NewRequest("POST", baseURL+path, bytes.NewReader(data))
 	require.NoError(t, err)
-	defer conn.Close(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 
-	_, err = conn.Exec(ctx, `SET session_replication_role = 'replica'`)
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer func() {
-		_, _ = conn.Exec(ctx, `SET session_replication_role = 'origin'`)
-	}()
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "API %s: %s", path, string(respBody))
+	return respBody
+}
 
-	connectionId := uuid.New().String()
-	_, err = conn.Exec(ctx, `
-		INSERT INTO app_connections (id, name, app, method, "encryptedCredentials", "orgId")
-		VALUES ($1, 'e2e-dummy-connection', 'aws', 'assume-role', '\x00', $2)
-		ON CONFLICT (id) DO NOTHING`,
-		connectionId, infra.ProvisionResult.OrgId,
-	)
-	require.NoError(t, err)
+func createAwsAppConnection(t *testing.T, apiURL, token string) string {
+	body := map[string]interface{}{
+		"name":   "e2e-localstack-aws",
+		"method": "access-key",
+		"credentials": map[string]string{
+			"accessKeyId":     "test",
+			"secretAccessKey": "test",
+		},
+	}
+	resp := apiPost(t, apiURL, "/api/v1/app-connections/aws", token, body)
 
-	_, err = conn.Exec(ctx, `
-		INSERT INTO pam_project_recording_configs (id, "projectId", "storageBackend", "connectionId", bucket, region)
-		VALUES ($1, $2, 'postgres', $3, 'unused', 'unused')
-		ON CONFLICT ("projectId") DO NOTHING`,
-		uuid.New().String(), infra.ProjectId, connectionId,
-	)
-	require.NoError(t, err)
-	slog.Info("Inserted recording config for project", "projectId", infra.ProjectId)
+	var result struct {
+		AppConnection struct {
+			ID string `json:"id"`
+		} `json:"appConnection"`
+	}
+	require.NoError(t, json.Unmarshal(resp, &result))
+	slog.Info("Created AWS app connection", "id", result.AppConnection.ID)
+	return result.AppConnection.ID
+}
+
+func createRecordingConfig(t *testing.T, apiURL, token, projectID, connectionID string) {
+	body := map[string]interface{}{
+		"storageBackend": "aws-s3",
+		"connectionId":   connectionID,
+		"bucket":         recordingBucket,
+		"region":         "us-east-1",
+	}
+	apiPost(t, apiURL, fmt.Sprintf("/api/v1/pam/projects/%s/recording-config", projectID), token, body)
+	slog.Info("Created recording config", "projectId", projectID)
 }
 
 func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
@@ -302,7 +346,7 @@ func TestPAM_RDP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infra := SetupPAMInfra(t, ctx)
+	infra := SetupPAMInfra(t, ctx, WithLocalStack())
 	LoginUser(t, ctx, infra)
 	setupRecordingConfig(t, ctx, infra)
 
@@ -315,61 +359,6 @@ func TestPAM_RDP(t *testing.T) {
 		err := connectFreeRDP(t, ctx, rdpBinary, resourceHost, rdpPort, rdpUser, rdpPassword, 5*time.Second)
 		require.NoError(t, err, "xfreerdp should connect directly to xrdp container")
 		slog.Info("Direct xrdp connection test passed")
-	})
-
-	t.Run("proxy-tcp-debug", func(t *testing.T) {
-		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
-		slog.Info("RDP container started for TCP debug", "host", resourceHost, "port", rdpPort)
-
-		resourceName := "rdp-debug-resource"
-		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
-		createRDPPamAccount(t, ctx, infra, resourceId, "rdp-debug-account", rdpUser, rdpPassword)
-
-		proxyPort := helpers.GetFreePort()
-		_, proxyCmd := startRDPProxy(t, ctx, infra, resourceName, "rdp-debug-account", "5m", proxyPort)
-
-		slog.Info("Proxy stderr before TCP connect", "stderr", proxyCmd.Stderr())
-
-		t0 := time.Now()
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 10*time.Second)
-		require.NoError(t, err)
-		defer conn.Close()
-		slog.Info("TCP connected to proxy", "elapsed", time.Since(t0))
-
-		x224CR := []byte{
-			0x03, 0x00, 0x00, 0x13,
-			0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x01, 0x00, 0x08, 0x00, 0x0b, 0x00, 0x00, 0x00,
-		}
-
-		t1 := time.Now()
-		_, err = conn.Write(x224CR)
-		require.NoError(t, err)
-		slog.Info("Sent X.224 CR to proxy", "elapsed", time.Since(t0))
-
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		buf := make([]byte, 256)
-		n, err := conn.Read(buf)
-		readElapsed := time.Since(t1)
-		slog.Info("First read from proxy completed",
-			"elapsed_total", time.Since(t0),
-			"elapsed_since_write", readElapsed,
-			"bytes", n,
-			"err", err,
-		)
-
-		time.Sleep(500 * time.Millisecond)
-		slog.Info("Proxy stderr after TCP probe", "stderr", proxyCmd.Stderr())
-		slog.Info("Gateway stderr after TCP probe", "stderr", infra.GatewayCmd.Stderr())
-
-		if err != nil {
-			slog.Error("--- PROXY OUTPUT ---")
-			proxyCmd.DumpOutput()
-			slog.Error("--- GATEWAY OUTPUT ---")
-			infra.GatewayCmd.DumpOutput()
-			t.Fatalf("proxy read failed after %v: %v", readElapsed, err)
-		}
-		slog.Info("X.224 CC received", "bytes", n, "data", fmt.Sprintf("%x", buf[:n]))
 	})
 
 	t.Run("connection", func(t *testing.T) {

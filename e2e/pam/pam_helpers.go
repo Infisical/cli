@@ -14,6 +14,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/infisical/cli/e2e-tests/packages/client"
+	infisicalpkg "github.com/infisical/cli/e2e-tests/packages/infisical"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
@@ -48,28 +49,41 @@ type PAMTestInfra struct {
 	SharedHomeDir   string
 }
 
-func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
-	infisical := helpers.NewInfisicalService().
-		WithBackendEnvironment(types.NewMappingWithEquals([]string{
-			"ALLOW_INTERNAL_IP_CONNECTIONS=true",
-			"NODE_ENV=test",
-		})).
-		Up(t, ctx)
+type SetupPAMOption func(svc *helpers.InfisicalService, extraEnv *[]string)
 
-	c := infisical.ApiClient()
-	identity := infisical.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
+func WithLocalStack() SetupPAMOption {
+	return func(svc *helpers.InfisicalService, extraEnv *[]string) {
+		infisicalpkg.WithLocalStackService()(svc.Stack)
+		*extraEnv = append(*extraEnv, "AWS_ENDPOINT_URL=http://localstack:4566")
+	}
+}
+
+func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *PAMTestInfra {
+	svc := helpers.NewInfisicalService()
+
+	var extraEnv []string
+	for _, opt := range opts {
+		opt(svc, &extraEnv)
+	}
+
+	env := append([]string{
+		"ALLOW_INTERNAL_IP_CONNECTIONS=true",
+		"NODE_ENV=test",
+	}, extraEnv...)
+
+	svc.WithBackendEnvironment(types.NewMappingWithEquals(env)).Up(t, ctx)
+
+	c := svc.ApiClient()
+	identity := svc.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
 	require.NotNil(t, identity)
 
-	// Start relay.
-	// Use the host's outbound IP so the pam access subprocess (which runs
-	// on the host) can resolve the relay address returned by the backend API.
 	relayHost := getOutboundIP(t)
 	relayName := helpers.RandomSlug(2)
 	relayCmd := &helpers.Command{
 		Test: t,
-		Args: []string{"relay", "start", "--domain", infisical.ApiUrl(t)},
+		Args: []string{"relay", "start", "--domain", svc.ApiUrl(t)},
 		Env: map[string]string{
-			"INFISICAL_API_URL":    infisical.ApiUrl(t),
+			"INFISICAL_API_URL":    svc.ApiUrl(t),
 			"INFISICAL_RELAY_NAME": relayName,
 			"INFISICAL_RELAY_HOST": relayHost,
 			"INFISICAL_TOKEN":      *identity.TokenAuthToken,
@@ -83,7 +97,6 @@ func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
 	})
 	require.Equal(t, helpers.WaitSuccess, result)
 
-	// Start gateway
 	tmpLogDir := t.TempDir()
 	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
 	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
@@ -95,7 +108,7 @@ func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
 			fmt.Sprintf("--pam-session-recording-path=%s", sessionRecordingPath),
 		},
 		Env: map[string]string{
-			"INFISICAL_API_URL": infisical.ApiUrl(t),
+			"INFISICAL_API_URL": svc.ApiUrl(t),
 			"INFISICAL_TOKEN":   *identity.TokenAuthToken,
 		},
 	}
@@ -152,14 +165,14 @@ func SetupPAMInfra(t *testing.T, ctx context.Context) *PAMTestInfra {
 	))
 
 	return &PAMTestInfra{
-		Infisical:       infisical,
+		Infisical:       svc,
 		ApiClient:       c,
 		Identity:        identity,
 		ProjectId:       projectId,
 		GatewayId:       gatewayId,
 		RelayCmd:        relayCmd,
 		GatewayCmd:      gatewayCmd,
-		ProvisionResult: infisical.ProvisionResult(),
+		ProvisionResult: svc.ProvisionResult(),
 		SharedHomeDir:   sharedHomeDir,
 	}
 }

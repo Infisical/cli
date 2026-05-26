@@ -283,6 +283,21 @@ func WithRedisService() StackOption {
 	}
 }
 
+func WithLocalStackService() StackOption {
+	return func(s *Stack) {
+		if s.Project.Services == nil {
+			s.Project.Services = types.Services{}
+		}
+		s.Project.Services["localstack"] = types.ServiceConfig{
+			Image: "localstack/localstack:4.4",
+			Ports: []types.ServicePortConfig{{Published: "", Target: 4566}},
+			Environment: types.NewMappingWithEquals([]string{
+				"SERVICES=s3,sts",
+			}),
+		}
+	}
+}
+
 func WithPebbleService() StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
