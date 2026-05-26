@@ -64,7 +64,7 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 }
 
 
-const recordingBucket = "e2e_recording_bucket"
+const recordingBucket = "e2e-recording-bucket"
 
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 	apiURL := infra.Infisical.ApiUrl(t)
