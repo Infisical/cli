@@ -277,12 +277,12 @@ func warmBridgeProxy(t *testing.T, proxyPort int) (listenPort int, cleanup func(
 	}
 }
 
-func authOnlyFreeRDP(t *testing.T, ctx context.Context, binary string, proxyPort int, timeout time.Duration) error {
+func authOnlyFreeRDP(t *testing.T, ctx context.Context, binary string, host string, port int, user, pass string, timeout time.Duration) error {
 	rdpArgs := []string{
 		binary,
-		fmt.Sprintf("/v:127.0.0.1:%d", proxyPort),
-		"/u:testuser",
-		"/p:",
+		fmt.Sprintf("/v:%s:%d", host, port),
+		fmt.Sprintf("/u:%s", user),
+		fmt.Sprintf("/p:%s", pass),
 		"/cert:ignore",
 		"/auth-only",
 		fmt.Sprintf("/timeout:%d", int(timeout.Milliseconds())),
@@ -320,6 +320,15 @@ func TestPAM_RDP(t *testing.T) {
 
 	rdpBinary := findFreeRDPBinary(t)
 
+	t.Run("direct-xrdp-connection", func(t *testing.T) {
+		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
+		slog.Info("xrdp container started, testing direct xfreerdp connection (no proxy)", "host", resourceHost, "port", rdpPort)
+
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, resourceHost, rdpPort, rdpUser, rdpPassword, 60*time.Second)
+		require.NoError(t, err, "xfreerdp /auth-only should succeed directly against xrdp container")
+		slog.Info("Direct xrdp connection test passed")
+	})
+
 	t.Run("connection", func(t *testing.T) {
 		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 		slog.Info("RDP container started", "host", resourceHost, "port", rdpPort)
@@ -334,7 +343,7 @@ func TestPAM_RDP(t *testing.T) {
 		warmPort, warmCleanup := warmBridgeProxy(t, proxyPort)
 		defer warmCleanup()
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, warmPort, 60*time.Second)
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, "127.0.0.1", warmPort, "testuser", "", 60*time.Second)
 		require.NoError(t, err, "NLA authentication through proxy should succeed")
 		slog.Info("RDP connection test passed")
 	})
@@ -349,7 +358,7 @@ func TestPAM_RDP(t *testing.T) {
 		proxyPort := helpers.GetFreePort()
 		startRDPProxy(t, ctx, infra, resourceName, "rdp-badcreds-account", "5m", proxyPort)
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, "127.0.0.1", proxyPort, "testuser", "", 60*time.Second)
 		require.Error(t, err, "NLA authentication should fail with bad credentials")
 		slog.Info("Bad credentials test passed", "error", err)
 	})
@@ -366,7 +375,7 @@ func TestPAM_RDP(t *testing.T) {
 		proxyPort := helpers.GetFreePort()
 		startRDPProxy(t, ctx, infra, resourceName, "rdp-unreachable-account", "5m", proxyPort)
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, "127.0.0.1", proxyPort, "testuser", "", 60*time.Second)
 		require.Error(t, err, "NLA authentication should fail when target is down")
 		slog.Info("Unreachable target test passed", "error", err)
 	})
@@ -391,7 +400,7 @@ func TestPAM_RDP(t *testing.T) {
 			go func(idx, port int, cleanup func()) {
 				defer wg.Done()
 				defer cleanup()
-				errs[idx] = authOnlyFreeRDP(t, ctx, rdpBinary, port, 60*time.Second)
+				errs[idx] = authOnlyFreeRDP(t, ctx, rdpBinary, "127.0.0.1", port, "testuser", "", 60*time.Second)
 			}(i, warmPort, warmCleanup)
 		}
 
