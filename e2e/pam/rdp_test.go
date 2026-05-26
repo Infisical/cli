@@ -350,9 +350,13 @@ func TestPAM_RDP(t *testing.T) {
 
 		time.Sleep(500 * time.Millisecond)
 		slog.Info("Proxy stderr after TCP probe", "stderr", proxyCmd.Stderr())
+		slog.Info("Gateway stderr after TCP probe", "stderr", infra.GatewayCmd.Stderr())
 
 		if err != nil {
+			slog.Error("--- PROXY OUTPUT ---")
 			proxyCmd.DumpOutput()
+			slog.Error("--- GATEWAY OUTPUT ---")
+			infra.GatewayCmd.DumpOutput()
 			t.Fatalf("proxy read failed after %v: %v", readElapsed, err)
 		}
 		slog.Info("X.224 CC received", "bytes", n, "data", fmt.Sprintf("%x", buf[:n]))
