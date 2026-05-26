@@ -138,17 +138,34 @@ type GetProjectByIdResponse struct {
 
 type GetProjectBySlugResponse Project
 
+type PkiApplication struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type GetPkiApplicationResponse struct {
+	Application PkiApplication `json:"application"`
+}
+
 type CertificateProfile struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Description           string `json:"description"`
-	ProjectID             string `json:"projectId"`
-	CaID                  string `json:"caId"`
-	CertificateTemplateID string `json:"certificateTemplateId"`
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	ProjectID   string `json:"projectId,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type GetCertificateProfileResponse struct {
 	CertificateProfile CertificateProfile `json:"certificateProfile"`
+}
+
+type PkiApplicationProfile struct {
+	ApplicationID string `json:"applicationId"`
+	ProfileID     string `json:"profileId"`
+	ProfileSlug   string `json:"profileSlug"`
+}
+
+type ListPkiApplicationProfilesResponse struct {
+	Profiles []PkiApplicationProfile `json:"profiles"`
 }
 
 type Organization struct {
@@ -958,8 +975,7 @@ type UploadSessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-// UploadTerminalEvent represents a terminal session event for upload
-type UploadTerminalEvent struct {
+type UploadSessionEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"eventType"`
 	ChannelType string    `json:"channelType,omitempty"`
@@ -979,11 +995,40 @@ type UploadHttpEvent struct {
 }
 
 type UploadPAMSessionLogsRequest struct {
-	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadTerminalEvent
+	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadSessionEvent
 }
 
 type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
+}
+
+type RelayLoginRequest struct {
+	Method            string `json:"method"`
+	Token             string `json:"token,omitempty"`
+	RelayID           string `json:"relayId,omitempty"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod,omitempty"`
+	IamRequestBody    string `json:"iamRequestBody,omitempty"`
+	IamRequestHeaders string `json:"iamRequestHeaders,omitempty"`
+}
+
+type RelayLoginResponse struct {
+	AccessToken string `json:"accessToken"`
+	RelayID     string `json:"relayId"`
+	TokenType   string `json:"tokenType"`
+}
+
+type RelayConnectResponse struct {
+	RelayID string `json:"relayId"`
+	PKI     struct {
+		ServerCertificate      string `json:"serverCertificate"`
+		ServerPrivateKey       string `json:"serverPrivateKey"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
+	} `json:"pki"`
+	SSH struct {
+		ServerCertificate string `json:"serverCertificate"`
+		ServerPrivateKey  string `json:"serverPrivateKey"`
+		ClientCAPublicKey string `json:"clientCAPublicKey"`
+	} `json:"ssh"`
 }
 
 type AltName struct {
@@ -1005,9 +1050,10 @@ type CertificateAttributes struct {
 }
 
 type IssueCertificateRequest struct {
-	ProfileID  string                 `json:"profileId"`
-	CSR        string                 `json:"csr,omitempty"`
-	Attributes *CertificateAttributes `json:"attributes,omitempty"`
+	ProfileID     string                 `json:"profileId"`
+	ApplicationID string                 `json:"applicationId,omitempty"`
+	CSR           string                 `json:"csr,omitempty"`
+	Attributes    *CertificateAttributes `json:"attributes,omitempty"`
 }
 
 type CertificateData struct {
@@ -1034,7 +1080,6 @@ type RetrieveCertificateResponse struct {
 		CommonName        string    `json:"commonName"`
 		NotBefore         time.Time `json:"notBefore"`
 		NotAfter          time.Time `json:"notAfter"`
-		ProjectId         string    `json:"projectId"`
 		CaId              string    `json:"caId"`
 		KeyUsages         []string  `json:"keyUsages"`
 		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
@@ -1070,7 +1115,6 @@ type GetCertificateRequestResponse struct {
 	CreatedAt            time.Time `json:"createdAt"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 	CommonName           string    `json:"commonName,omitempty"`
-	ProjectID            string    `json:"projectId,omitempty"`
 	ProfileID            string    `json:"profileId,omitempty"`
 	Certificate          *string   `json:"certificate,omitempty"`
 	IssuingCaCertificate *string   `json:"issuingCaCertificate,omitempty"`

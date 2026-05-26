@@ -35,9 +35,11 @@ const (
 	ForwardModeHTTP            ForwardMode = "HTTP"
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
+	ForwardModePAMRDPBrowser   ForwardMode = "PAM_RDP_BROWSER"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
+	ForwardModeHealth          ForwardMode = "HEALTH"
 )
 
 type ActorType string
@@ -46,6 +48,8 @@ const (
 	ActorTypePlatform ActorType = "platform"
 	ActorTypeUser     ActorType = "user"
 )
+
+const heartbeatInterval = 3 * time.Minute
 
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
@@ -89,6 +93,7 @@ type GatewayConfig struct {
 type pamSessionEntry struct {
 	cancel       context.CancelFunc
 	conn         *tls.Conn
+	done         chan struct{} // closed when HandlePAMProxy has fully returned for this entry
 	lastActivity atomic.Int64
 }
 
@@ -170,7 +175,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 // RegisterPAMSession registers an active PAM proxy connection for cancellation support
 // Returns a function that handlers should call when data flows through the connection
 func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) func() {
-	entry := &pamSessionEntry{cancel: cancel, conn: conn}
+	entry := &pamSessionEntry{cancel: cancel, conn: conn, done: make(chan struct{})}
 	entry.lastActivity.Store(time.Now().Unix())
 
 	g.pamSessionsMu.Lock()
@@ -189,23 +194,55 @@ func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc
 // The proxy is cleaned up on session cancellation or gateway shutdown.
 func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) bool {
 	g.pamSessionsMu.Lock()
-	defer g.pamSessionsMu.Unlock()
-
 	entries, exists := g.pamSessions[sessionID]
 	if !exists {
+		g.pamSessionsMu.Unlock()
 		return false
 	}
+	var removed *pamSessionEntry
 	for i, e := range entries {
 		if e.conn == conn {
+			removed = e
 			g.pamSessions[sessionID] = append(entries[:i], entries[i+1:]...)
 			break
 		}
 	}
-	if len(g.pamSessions[sessionID]) == 0 {
+	isLast := len(g.pamSessions[sessionID]) == 0
+	if isLast {
 		delete(g.pamSessions, sessionID)
-		return true
 	}
-	return false
+	g.pamSessionsMu.Unlock()
+	if removed != nil {
+		close(removed.done)
+	}
+	return isLast
+}
+
+// Cancels prior entries and waits for them to clean up. RDP needs serial
+// bridges so drain writes don't interleave into the recording file.
+func (g *Gateway) evictExistingPAMSessions(sessionID string, timeout time.Duration) {
+	g.pamSessionsMu.Lock()
+	prior := g.pamSessions[sessionID]
+	g.pamSessionsMu.Unlock()
+	if len(prior) == 0 {
+		return
+	}
+	log.Info().Str("sessionId", sessionID).Int("priorCount", len(prior)).
+		Msg("Evicting existing PAM connections before starting new RDP bridge")
+	for _, e := range prior {
+		_ = e.conn.Close()
+		e.cancel()
+	}
+	deadline := time.After(timeout)
+	for _, e := range prior {
+		select {
+		case <-e.done:
+		case <-deadline:
+			log.Warn().Str("sessionId", sessionID).
+				Msg("Timed out waiting for prior PAM connection to clean up; proceeding anyway")
+			return
+		}
+	}
 }
 
 // CancelPAMSession kills all active connections for a PAM session
@@ -222,6 +259,7 @@ func (g *Gateway) CancelPAMSession(sessionID string) bool {
 	for _, e := range entries {
 		e.conn.Close()
 		e.cancel()
+		close(e.done)
 	}
 	g.closeMongoProxy(sessionID)
 	return true
@@ -365,8 +403,8 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			}
 		}()
 
-		// Phase 2: Regular heartbeat every 30 minutes
-		regularTicker := time.NewTicker(30 * time.Minute)
+		// Phase 2: Regular heartbeat
+		regularTicker := time.NewTicker(heartbeatInterval)
 		defer regularTicker.Stop()
 
 		for {
@@ -669,7 +707,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
+		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-health", "infisical-ping", "infisical-pam-proxy", "infisical-pam-rdp-browser", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
 	}
 
 	return nil
@@ -832,23 +870,25 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("TCP proxy handler completed")
 		}
 		return
-	} else if forwardConfig.Mode == ForwardModePAM {
+	} else if forwardConfig.Mode == ForwardModePAM || forwardConfig.Mode == ForwardModePAMRDPBrowser {
+		// RDP only: prior bridge must fully tear down before the new one starts,
+		// else overlapping drains write non-monotonic elapsedMs to the recording.
+		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows {
+			g.evictExistingPAMSessions(forwardConfig.PAMConfig.SessionId, 5*time.Second)
+		}
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
 		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		defer func() {
+			sessionCancel()
+			g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
+		}()
 		forwardConfig.PAMConfig.OnActivity = touchSession
-		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+		browserRDP := forwardConfig.Mode == ForwardModePAMRDPBrowser
+		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, browserRDP); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
 				log.Error().Err(err).Msg("PAM proxy handler ended with error")
-			}
-		}
-		sessionCancel()
-		if lastConn := g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn); lastConn {
-			if err := forwardConfig.PAMConfig.SessionUploader.CleanupPAMSession(
-				forwardConfig.PAMConfig.SessionId, "connection_closed",
-			); err != nil {
-				log.Error().Err(err).Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Failed to cleanup PAM session")
 			}
 		}
 		return
@@ -871,6 +911,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Error().Err(err).Msg("Ping handler ended with error")
 		} else {
 			log.Info().Msg("Ping handler completed")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeHealth {
+		log.Info().Msg("Starting health handler")
+		if err := handleHealth(g.ctx, tlsConn, reader, int(heartbeatInterval.Seconds())); err != nil {
+			log.Error().Err(err).Msg("Health handler ended with error")
+		} else {
+			log.Info().Msg("Health handler completed")
 		}
 		return
 	}
@@ -907,6 +955,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 		config.Mode = ForwardModePAM
 		return config, nil
 
+	case "infisical-pam-rdp-browser":
+		config.Mode = ForwardModePAMRDPBrowser
+		return config, nil
+
 	case "infisical-pam-session-cancellation":
 		config.Mode = ForwardModePAMCancellation
 		return config, nil
@@ -917,6 +969,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-ping":
 		config.Mode = ForwardModePing
+		return config, nil
+
+	case "infisical-health":
+		config.Mode = ForwardModeHealth
 		return config, nil
 
 	default:

@@ -679,3 +679,14 @@ func ParseTimeDurationString(pollingInterval string, allowLessThanOneSecond bool
 		return 0, fmt.Errorf("invalid time unit")
 	}
 }
+
+func ParsePrincipals(s string) []string {
+	var principals []string
+	for _, p := range strings.Split(s, ",") {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			principals = append(principals, trimmed)
+		}
+	}
+	return principals
+}

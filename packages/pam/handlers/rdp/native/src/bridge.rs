@@ -31,7 +31,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::cap_filter;
 use crate::config::{connector_config, DEFAULT_HEIGHT, DEFAULT_WIDTH};
@@ -56,14 +56,14 @@ pub struct TargetEndpoint {
     pub domain: Option<String>,
 }
 
-pub async fn run_mitm(
+pub async fn run_mitm_native(
     client_tcp: TcpStream,
     target: TargetEndpoint,
     cancel: CancellationToken,
     tx: EventSender,
 ) -> Result<()> {
     tokio::select! {
-        result = run_mitm_inner(client_tcp, target, tx) => result,
+        result = run_mitm_native_inner(client_tcp, target, tx) => result,
         _ = cancel.cancelled() => {
             info!("session canceled by caller");
             Ok(())
@@ -71,7 +71,7 @@ pub async fn run_mitm(
     }
 }
 
-async fn run_mitm_inner(
+async fn run_mitm_native_inner(
     client_tcp: TcpStream,
     target: TargetEndpoint,
     tx: EventSender,
@@ -119,7 +119,7 @@ async fn run_mitm_inner(
     bridge_pdus(client_framed, target_framed, tx).await
 }
 
-async fn bridge_pdus<C, T>(
+pub async fn bridge_pdus<C, T>(
     client_framed: ironrdp_tokio::TokioFramed<C>,
     target_framed: ironrdp_tokio::TokioFramed<T>,
     tx: EventSender,
@@ -184,10 +184,6 @@ where
             if offset == NOT_ACTIVE && action == Action::FastPath {
                 offset = elapsed_ns_since(started_at);
                 recording_offset_ns.store(offset, Ordering::Relaxed);
-                debug!(
-                    skip_ms = offset / 1_000_000,
-                    "first FastPath target frame, recording starts"
-                );
             }
             if offset != NOT_ACTIVE {
                 tap_target_to_client(action, &frame, started_at, offset, &tx_t2c);
@@ -375,7 +371,6 @@ fn try_filter_client_info(frame: &[u8]) -> Option<Vec<u8>> {
     if !cap_filter::client_info::clear_compression(user_data.slice_mut(&mut out)) {
         return None;
     }
-    debug!("Client Info PDU: cleared INFO_COMPRESSION + CompressionTypeMask");
     Some(out)
 }
 
@@ -409,7 +404,6 @@ fn try_filter_confirm_active(frame: &[u8]) -> Option<Vec<u8>> {
     if let Some(codecs_offset) = codecs_body_offset_in_frame {
         cap_filter::bitmap_codecs_cap::clear_codec_count(&mut out[codecs_offset..]);
     }
-    debug!("Confirm Active: cleared Order support + BitmapCodecs count");
     Some(out)
 }
 
@@ -423,12 +417,19 @@ fn tap_client_to_target(
     if action != Action::FastPath {
         return;
     }
-    let input: FastPathInput = match decode_fast_path_input(frame) {
+    // Microsoft's Mac client sets spurious header flags that IronRDP
+    // rejects; mask them off before decoding (forwarded bytes are untouched).
+    let mut sanitized: Vec<u8>;
+    let bytes_for_decode: &[u8] = if frame.first().copied().unwrap_or(0) & 0xC0 != 0 {
+        sanitized = frame.to_vec();
+        sanitized[0] &= 0x3F;
+        &sanitized
+    } else {
+        frame
+    };
+    let input: FastPathInput = match decode_fast_path_input(bytes_for_decode) {
         Ok(input) => input,
-        Err(e) => {
-            warn!(?e, "failed to decode FastPathInput");
-            return;
-        }
+        Err(_) => return,
     };
     let elapsed_ns = elapsed_ns_since(started_at).saturating_sub(offset_ns);
     for event in input.input_events() {
@@ -452,8 +453,19 @@ fn tap_client_to_target(
                 wheel_delta: pdu.number_of_wheel_rotation_units,
                 elapsed_ns,
             },
-            // MouseEventEx, MouseEventRel, QoeEvent, SyncEvent: skip for now;
-            // uncommon in normal sessions and not needed for replay V1.
+            // Windows clients route most mouse moves through MouseEventEx
+            // (XButton-aware variant). Replay only needs x/y to position the
+            // cursor; the X-button flags don't map onto PointerFlags so we
+            // surface MouseEventEx as a MouseInput with empty flags.
+            FastPathInputEvent::MouseEventEx(pdu) => SessionEvent::MouseInput {
+                x: pdu.x_position,
+                y: pdu.y_position,
+                flags: ironrdp_pdu::input::mouse::PointerFlags::empty(),
+                wheel_delta: 0,
+                elapsed_ns,
+            },
+            // MouseEventRel, QoeEvent, SyncEvent: skip; uncommon and not
+            // needed for replay V1.
             _ => continue,
         };
         // try_send: never block the bridge byte stream on a slow consumer.
@@ -497,7 +509,7 @@ fn decode_fast_path_input(frame: &[u8]) -> anyhow::Result<FastPathInput> {
 //     wrong value, and target servers reject mismatched echoes)
 //   - clear CS_NET.channels so the target doesn't try to open virtual
 //     channels (clipboard, drives, audio, USB) the bridge can't service
-async fn filter_client_mcs_connect_initial(
+pub(crate) async fn filter_client_mcs_connect_initial(
     client_stream: &mut ErasedStream,
     target_stream: &mut ErasedStream,
     leftover: bytes::BytesMut,
@@ -570,8 +582,10 @@ async fn run_acceptor_half(
     client_tcp: TcpStream,
     username: String,
 ) -> Result<(ErasedStream, bytes::BytesMut)> {
-    let (server_tls, acceptor_public_key) =
-        build_acceptor_tls().context("build acceptor TLS config")?;
+    let (acceptor_public_key, _cert_der, certified_key) =
+        generate_acceptor_cert().context("generate acceptor cert")?;
+    let server_tls =
+        build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?;
     let server_tls = Arc::new(server_tls);
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
@@ -748,7 +762,7 @@ where
 
 // Replicated from ironrdp-async's private perform_credssp_step so we can
 // stop before connect_finalize (which would start MCS/capability exchange).
-async fn perform_connector_credssp<S>(
+pub(crate) async fn perform_connector_credssp<S>(
     connector: &mut ClientConnector,
     framed: &mut ironrdp_tokio::TokioFramed<S>,
     network_client: &mut ReqwestNetworkClient,
@@ -831,7 +845,7 @@ where
     Ok(())
 }
 
-fn build_acceptor_tls() -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>)> {
+pub(crate) fn generate_acceptor_cert() -> Result<(Vec<u8>, Vec<u8>, rcgen::CertifiedKey)> {
     use x509_cert::der::Decode;
 
     let subject_alt_names = vec!["localhost".to_string(), "infisical-rdp-bridge".to_string()];
@@ -845,13 +859,20 @@ fn build_acceptor_tls() -> Result<(tokio_rustls::rustls::ServerConfig, Vec<u8>)>
         .ok_or_else(|| anyhow::anyhow!("extract public key from self-signed cert"))?
         .to_vec();
 
-    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
-    let config = tokio_rustls::rustls::ServerConfig::builder()
+    let cert_der_bytes = cert_der.as_ref().to_vec();
+    Ok((public_key, cert_der_bytes, cert))
+}
+
+pub(crate) fn build_acceptor_tls_config(
+    certified: rcgen::CertifiedKey,
+) -> Result<tokio_rustls::rustls::ServerConfig> {
+    let cert_der = certified.cert.der().clone();
+    let key_der =
+        rustls::pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+    tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], key_der)
-        .context("rustls ServerConfig")?;
-
-    Ok((config, public_key))
+        .context("rustls ServerConfig")
 }
 
 pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}

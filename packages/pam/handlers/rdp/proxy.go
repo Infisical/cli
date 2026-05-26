@@ -24,6 +24,8 @@ type RDPProxyConfig struct {
 	// Added to every event's elapsed_ns so timestamps stay monotonic across
 	// RDP reconnects within the same PAM session. Zero for the first connection.
 	PriorElapsedNs uint64
+	// drain calls RecordEmittedElapsedNs after each persisted event.
+	SessionUploader *session.SessionUploader
 }
 
 type RDPProxy struct {
@@ -34,7 +36,10 @@ func NewRDPProxy(config RDPProxyConfig) *RDPProxy {
 	return &RDPProxy{config: config}
 }
 
-// Wire envelopes carried inside TerminalEvent.Data for ChannelType=RDP.
+// Fixed NLA username the browser presents; carries no security weight
+const BrowserAcceptorUsername = "infisical"
+
+// Wire envelopes carried inside SessionEvent.Data for ChannelType=RDP.
 type rdpTargetFrameEnvelope struct {
 	Type      string `json:"type"`    // "target_frame"
 	Action    string `json:"action"`  // "x224" | "fastpath"
@@ -72,7 +77,7 @@ var errUnknownRdpEventType = errors.New("rdp: unknown event type")
 
 // Logger errors are warned but don't stop the drain; dropping one event is
 // better than back-pressuring the bridge byte stream.
-func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, priorElapsedNs uint64) {
+func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLogger, sessionID string, priorElapsedNs uint64, uploader *session.SessionUploader) {
 	if logger == nil {
 		return
 	}
@@ -97,15 +102,19 @@ func drainBridgeEvents(ctx context.Context, b *Bridge, logger session.SessionLog
 				log.Warn().Err(encErr).Str("sessionID", sessionID).Uint8("type", uint8(ev.Type)).Msg("encode RDP event")
 				continue
 			}
-			te := session.TerminalEvent{
+			te := session.SessionEvent{
 				Timestamp:   time.Now(),
-				EventType:   session.TerminalEventRDP,
-				ChannelType: session.TerminalChannelRDP,
+				EventType:   session.SessionEventRDP,
+				ChannelType: session.SessionChannelRDP,
 				Data:        data,
 				ElapsedTime: float64(ev.ElapsedNs) / 1e9,
 			}
-			if logErr := logger.LogTerminalEvent(te); logErr != nil {
+			if logErr := logger.LogSessionEvent(te); logErr != nil {
 				log.Warn().Err(logErr).Str("sessionID", sessionID).Msg("log RDP event")
+				continue
+			}
+			if uploader != nil {
+				uploader.RecordEmittedElapsedNs(sessionID, ev.ElapsedNs)
 			}
 		}
 	}

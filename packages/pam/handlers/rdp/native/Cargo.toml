@@ -17,6 +17,7 @@ ironrdp-core = "0.1"
 ironrdp-tokio = { version = "0.8", features = ["reqwest"] }
 ironrdp-pdu = "0.7"
 ironrdp-tls = { version = "0.2", features = ["rustls"] }
+ironrdp-rdcleanpath = "0.2"
 x509-cert = { version = "0.2", features = ["std"] }
 libc = "0.2"
 

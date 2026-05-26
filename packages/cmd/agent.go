@@ -49,7 +49,7 @@ const DEFAULT_INFISICAL_CLOUD_URL = "https://app.infisical.com"
 
 const CACHE_TYPE_KUBERNETES = "kubernetes"
 
-const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%s"
+const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%s-%s"
 
 // duration to reduce from expiry of dynamic leases so that it gets triggered before expiry
 const DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER = -15
@@ -219,6 +219,8 @@ type CertificateAttributes struct {
 
 type AgentCertificateConfig struct {
 	ProjectName     string                 `yaml:"project-slug,omitempty"`
+	ApplicationName string                 `yaml:"application-name,omitempty"`
+	ApplicationID   string                 `yaml:"-"`
 	ProfileName     string                 `yaml:"profile-name,omitempty"`
 	ProfileID       string                 `yaml:"-"`
 	CertificateID   string                 `yaml:"certificate-id,omitempty"`
@@ -273,6 +275,7 @@ type DynamicSecretLeaseWithTTL struct {
 	Data              map[string]interface{}
 	TemplateIDs       []int
 	RequestedLeaseTTL string
+	Principals        string
 }
 
 func (c *CacheManager) WriteToCache(key string, value interface{}, ttl *time.Duration) error {
@@ -399,6 +402,7 @@ func (d *DynamicSecretLeaseManager) WriteLeaseToCache(lease *DynamicSecretLeaseW
 		lease.SecretPath,
 		lease.Slug,
 		requestedLeaseTTL,
+		lease.Principals,
 	)
 
 	ttl := time.Until(lease.ExpireAt)
@@ -412,13 +416,13 @@ func (d *DynamicSecretLeaseManager) WriteLeaseToCache(lease *DynamicSecretLeaseW
 	}
 }
 
-func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment, secretPath, slug string, requestedLeaseTTL string) *DynamicSecretLeaseWithTTL {
+func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals string) *DynamicSecretLeaseWithTTL {
 
 	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
 		return nil
 	}
 
-	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals)
 	var lease *DynamicSecretLeaseWithTTL
 	err := d.cacheManager.ReadFromCache(cacheKey, &lease)
 	if err != nil {
@@ -431,12 +435,12 @@ func (d *DynamicSecretLeaseManager) ReadLeaseFromCache(projectSlug, environment,
 	return lease
 }
 
-func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL string) error {
+func (d *DynamicSecretLeaseManager) DeleteLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals string) error {
 	if d.cacheManager == nil || !d.cacheManager.IsEnabled {
 		return nil
 	}
 
-	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+	cacheKey := fmt.Sprintf(DYNAMIC_SECRET_LEASE_TEMPLATE, projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals)
 	err := d.cacheManager.DeleteFromCache(cacheKey)
 	if err != nil {
 		return fmt.Errorf("unable to delete lease from cache: %v", err)
@@ -490,11 +494,12 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 	// now we need to check if any of the cached leases are not in the d.leases list. If they are not, we need to delete them from the cache.
 	for _, cachedLease := range cachedLeases {
 		log.Debug().Msgf(
-			"[cache]: checking cached lease: [project=%s], [env=%s], [path=%s], [slug=%s]",
+			"[cache]: checking cached lease: [project=%s], [env=%s], [path=%s], [slug=%s], [principals=%s]",
 			cachedLease.ProjectSlug,
 			cachedLease.Environment,
 			cachedLease.SecretPath,
 			cachedLease.Slug,
+			cachedLease.Principals,
 		)
 
 		// check if a lease with the same configuration exists (not comparing LeaseID since that changes on refresh)
@@ -503,14 +508,16 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 				s.Environment == cachedLease.Environment &&
 				s.SecretPath == cachedLease.SecretPath &&
 				s.Slug == cachedLease.Slug &&
-				s.RequestedLeaseTTL == cachedLease.RequestedLeaseTTL
+				s.RequestedLeaseTTL == cachedLease.RequestedLeaseTTL &&
+				s.Principals == cachedLease.Principals
 
 			if match {
-				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s]",
+				log.Debug().Msgf("[cache]: found matching active lease: [project=%s], [env=%s], [path=%s], [slug=%s], [principals=%s]",
 					s.ProjectSlug,
 					s.Environment,
 					s.SecretPath,
 					s.Slug,
+					s.Principals,
 				)
 			}
 			return match
@@ -518,12 +525,13 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 
 		if !found {
 			log.Info().Msgf(
-				"[cache]: no matching active lease found, deleting cached lease: [lease-id=%s], [project=%s], [env=%s], [path=%s], [slug=%s]",
+				"[cache]: no matching active lease found, deleting cached lease: [lease-id=%s], [project=%s], [env=%s], [path=%s], [slug=%s], [principals=%s]",
 				cachedLease.LeaseID,
 				cachedLease.ProjectSlug,
 				cachedLease.Environment,
 				cachedLease.SecretPath,
 				cachedLease.Slug,
+				cachedLease.Principals,
 			)
 
 			if err := d.DeleteLeaseFromCache(
@@ -532,6 +540,7 @@ func (d *DynamicSecretLeaseManager) DeleteUnusedLeasesFromCache() error {
 				cachedLease.SecretPath,
 				cachedLease.Slug,
 				cachedLease.RequestedLeaseTTL,
+				cachedLease.Principals,
 			); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
@@ -551,7 +560,7 @@ func (d *DynamicSecretLeaseManager) Prune() {
 		shouldDelete := time.Now().After(s.ExpireAt.Add(DYNAMIC_SECRET_PRUNE_EXPIRE_BUFFER * time.Second))
 
 		if shouldDelete {
-			if err := d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.RequestedLeaseTTL); err != nil {
+			if err := d.DeleteLeaseFromCache(s.ProjectSlug, s.Environment, s.SecretPath, s.Slug, s.RequestedLeaseTTL, s.Principals); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
 		}
@@ -563,9 +572,9 @@ func (d *DynamicSecretLeaseManager) Prune() {
 func (d *DynamicSecretLeaseManager) AppendUnsafe(lease DynamicSecretLeaseWithTTL) {
 
 	index := slices.IndexFunc(d.leases, func(s DynamicSecretLeaseWithTTL) bool {
-		// match by configuration (project, env, path, slug, TTL) and same lease ID
+		// match by configuration (project, env, path, slug, TTL, principals) and same lease ID
 		// this allows merging template IDs when the same lease is added multiple times
-		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID && lease.RequestedLeaseTTL == s.RequestedLeaseTTL {
+		if lease.SecretPath == s.SecretPath && lease.Environment == s.Environment && lease.ProjectSlug == s.ProjectSlug && lease.Slug == s.Slug && lease.LeaseID == s.LeaseID && lease.RequestedLeaseTTL == s.RequestedLeaseTTL && lease.Principals == s.Principals {
 			return true
 		}
 		return false
@@ -588,12 +597,12 @@ func (d *DynamicSecretLeaseManager) AppendUnsafe(lease DynamicSecretLeaseWithTTL
 }
 
 // Expects a lock to be held before invocation
-func (d *DynamicSecretLeaseManager) RegisterTemplateUnsafe(projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) {
+func (d *DynamicSecretLeaseManager) RegisterTemplateUnsafe(projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL, principals string) {
 
 	index := slices.IndexFunc(d.leases, func(lease DynamicSecretLeaseWithTTL) bool {
 		// find lease by configuration, not by template ID
 		// this allows us to register new template IDs to existing leases
-		return lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL
+		return lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL && lease.Principals == principals
 	})
 
 	log.Debug().Msgf("\n[cache]: registering template [template-id=%d] for lease [project=%s], [env=%s], [path=%s], [slug=%s]\nIndex: %d", templateId, projectSlug, environment, secretPath, slug, index)
@@ -616,21 +625,21 @@ func (d *DynamicSecretLeaseManager) RegisterTemplateUnsafe(projectSlug, environm
 }
 
 // Expects a lock to be held before invocation
-func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL string) *DynamicSecretLeaseWithTTL {
+func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, environment, secretPath, slug string, templateId int, requestedLeaseTTL, principals string) *DynamicSecretLeaseWithTTL {
 	// first try to get from in-memory storage
 
-	// find lease by configuration (project, env, path, slug, TTL) regardless of template IDs
+	// find lease by configuration (project, env, path, slug, TTL, principals) regardless of template IDs
 	// this allows multiple templates to share the same lease
 	for i := range d.leases {
 		lease := &d.leases[i]
-		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL {
+		if lease.SecretPath == secretPath && lease.Environment == environment && lease.ProjectSlug == projectSlug && lease.Slug == slug && lease.RequestedLeaseTTL == requestedLeaseTTL && lease.Principals == principals {
 			log.Debug().Msgf("[cache]: lease found in in-memory storage: [project=%s], [env=%s], [path=%s], [slug=%s]", projectSlug, environment, secretPath, slug)
 			return lease
 		}
 	}
 
 	// if no lease is found in in-memory storage, try to get from cache
-	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL)
+	leaseFromCache := d.ReadLeaseFromCache(projectSlug, environment, secretPath, slug, requestedLeaseTTL, principals)
 
 	if leaseFromCache == nil {
 		log.Info().Msgf("[cache]: cache miss, no lease found [template-id=%d]", templateId)
@@ -651,7 +660,7 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 			// lease not found in API, delete it from cache and return nil
 			if errors.Is(err, api.ErrNotFound) {
 				log.Warn().Msgf("dynamic secret lease does not exist, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-				if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL); err != nil {
+				if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL, leaseFromCache.Principals); err != nil {
 					log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 				}
 
@@ -661,7 +670,7 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 			// lease is found in cache but not in the the API, and the API returned a non 404-error. We should attempt to revoke it
 			// at this point we know that we should be able to reach the API because we've done authentication successfully
 			log.Warn().Msgf("unable to get dynamic secret lease from API. Revoking lease from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL); err != nil {
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL, leaseFromCache.Principals); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
 
@@ -676,7 +685,7 @@ func (d *DynamicSecretLeaseManager) GetLeaseUnsafe(accessToken, projectSlug, env
 		// lease is expired or about to expire, delete from cache and attempt to revoke it
 		if dynamicSecretLease.Lease.ExpireAt.Before(time.Now().Add(CACHE_LEASE_EXPIRE_BUFFER)) {
 			log.Warn().Msgf("dynamic secret lease is expired or about to expire, deleting from cache: [lease-id=%s]", leaseFromCache.LeaseID)
-			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL); err != nil {
+			if err := d.DeleteLeaseFromCache(leaseFromCache.ProjectSlug, leaseFromCache.Environment, leaseFromCache.SecretPath, leaseFromCache.Slug, leaseFromCache.RequestedLeaseTTL, leaseFromCache.Principals); err != nil {
 				log.Warn().Msgf("[cache]: unable to delete lease from cache: %v", err)
 			}
 
@@ -800,31 +809,35 @@ func validateAgentConfigVersionCompatibility(config *Config) error {
 	return validateAgentConfigVersionCompatibilityWithMode(config, false)
 }
 
+const (
+	AgentConfigVersionV1 = "v1"
+	AgentConfigVersionV2 = "v2"
+)
+
 func validateAgentConfigVersionCompatibilityWithMode(config *Config, isCertManagerMode bool) error {
 	if config.Version == "" {
 		if len(config.Certificates) > 0 {
-			return fmt.Errorf("certificates are configured but 'version' field is not specified. Add 'version: v1' to your config")
+			return fmt.Errorf("certificates are configured but 'version' field is not specified: add 'version: v2' to your config")
 		}
 		return nil
 	}
 
 	switch config.Version {
-	case "v1":
+	case AgentConfigVersionV1, AgentConfigVersionV2:
 		if isCertManagerMode {
-			return validateCertificateManagementV1ForCertManager(config)
-		} else {
-			return validateCertificateManagementV1(config)
+			return validateCertificateManagementForCertManager(config)
 		}
+		return validateCertificateManagementForLegacyAgent(config)
 	default:
-		return fmt.Errorf("unsupported version: %s. Supported versions: v1", config.Version)
+		return fmt.Errorf("unsupported version: %s. Supported versions: v1, v2", config.Version)
 	}
 }
 
-func validateCertificateManagementV1(config *Config) error {
-	return fmt.Errorf("version: v1 is for certificate management. Please use 'infisical cert-manager agent' for certificate configurations")
+func validateCertificateManagementForLegacyAgent(config *Config) error {
+	return fmt.Errorf("version: %s is for certificate management; use 'infisical cert-manager agent' for certificate configurations", config.Version)
 }
 
-func validateCertificateManagementV1ForCertManager(config *Config) error {
+func validateCertificateManagementForCertManager(config *Config) error {
 	if len(config.Certificates) == 0 {
 		return fmt.Errorf("certificate management requires at least one certificate to be configured")
 	}
@@ -942,22 +955,25 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		defer dynamicSecretManager.mutex.Unlock()
 
 		argLength := len(args)
-		if argLength != 4 && argLength != 5 {
+		if argLength < 4 || argLength > 6 {
 			return nil, fmt.Errorf("invalid arguments found for dynamic-secret function. Check template %d", templateId)
 		}
 
-		projectSlug, envSlug, secretPath, slug, ttl := args[0], args[1], args[2], args[3], ""
-		if argLength == 5 {
+		projectSlug, envSlug, secretPath, slug, ttl, principals := args[0], args[1], args[2], args[3], "", ""
+		if argLength >= 5 {
 			ttl = args[4]
 		}
+		if argLength == 6 {
+			principals = args[5]
+		}
 
-		dynamicSecretData := dynamicSecretManager.GetLeaseUnsafe(accessToken, projectSlug, envSlug, secretPath, slug, templateId, ttl)
+		dynamicSecretData := dynamicSecretManager.GetLeaseUnsafe(accessToken, projectSlug, envSlug, secretPath, slug, templateId, ttl, principals)
 
 		// if a lease is found (either in memory or in cache), we register the template and return the data
 		if dynamicSecretData != nil {
-			dynamicSecretManager.RegisterTemplateUnsafe(projectSlug, envSlug, secretPath, slug, templateId, ttl)
+			dynamicSecretManager.RegisterTemplateUnsafe(projectSlug, envSlug, secretPath, slug, templateId, ttl, principals)
 
-			etagData := fmt.Sprintf("%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl)
+			etagData := fmt.Sprintf("%s-%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl, principals)
 			dynamicSecretDataBytes, err := json.Marshal(dynamicSecretData.Data)
 			if err != nil {
 				return nil, err
@@ -980,19 +996,28 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 
 		// if there's no lease (either in memory or in cache), we create a new lease
 
+		leaseConfig := map[string]any{}
+		if principals != "" {
+			parsedPrincipals := util.ParsePrincipals(principals)
+			if len(parsedPrincipals) > 0 {
+				leaseConfig["principals"] = parsedPrincipals
+			}
+		}
+
 		leaseData, _, res, err := temporaryInfisicalClient.DynamicSecrets().Leases().Create(infisicalSdk.CreateDynamicSecretLeaseOptions{
 			DynamicSecretName: slug,
 			ProjectSlug:       projectSlug,
 			EnvironmentSlug:   envSlug,
 			SecretPath:        secretPath,
 			TTL:               ttl,
+			Config:            leaseConfig,
 		})
 
 		if err != nil {
 			return nil, err
 		}
 
-		dynamicSecretManager.AppendUnsafe(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl})
+		dynamicSecretManager.AppendUnsafe(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl, Principals: principals})
 
 		return leaseData, nil
 	}
@@ -2007,6 +2032,8 @@ func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) 
 				certName = fmt.Sprintf("certificate '%s'", commonName)
 			} else if len(altNames) > 0 {
 				certName = fmt.Sprintf("certificate '%s'", altNames[0])
+			} else if cert.ApplicationName != "" && cert.ProfileName != "" {
+				certName = fmt.Sprintf("certificate '%s/%s'", cert.ApplicationName, cert.ProfileName)
 			} else if cert.ProjectName != "" && cert.ProfileName != "" {
 				certName = fmt.Sprintf("certificate '%s/%s'", cert.ProjectName, cert.ProfileName)
 			}
@@ -2032,7 +2059,7 @@ func validateCertificateLifecycleConfig(certificates *[]AgentCertificateConfig) 
 	return nil
 }
 
-func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
+func resolveCertificateNameReferences(version string, certificates *[]AgentCertificateConfig, httpClient *resty.Client) error {
 	for i := range *certificates {
 		cert := &(*certificates)[i]
 
@@ -2040,35 +2067,97 @@ func resolveCertificateNameReferences(certificates *[]AgentCertificateConfig, ht
 			continue
 		}
 
-		if cert.ProjectName == "" || cert.ProfileName == "" {
-			return fmt.Errorf("certificate configuration must specify both 'project-slug' and 'profile-name' (or 'certificate-id' to reference an existing certificate)")
+		switch version {
+		case AgentConfigVersionV1:
+			if err := resolveCertificateLegacyReferences(cert, httpClient); err != nil {
+				return err
+			}
+		case AgentConfigVersionV2:
+			if err := resolveCertificateApplicationReferences(cert, httpClient); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported version: %s. Supported versions: v1, v2", version)
 		}
-
-		project, err := api.CallGetProjectBySlug(httpClient, cert.ProjectName)
-		if err != nil {
-			return fmt.Errorf("failed to resolve project name '%s': %v. Please check that the project exists and you have access to it", cert.ProjectName, err)
-		}
-
-		if project.ID == "" {
-			return fmt.Errorf("project '%s' was found but returned empty ID. This may indicate a server issue", cert.ProjectName)
-		}
-
-		profile, err := api.CallGetCertificateProfileBySlug(httpClient, project.ID, cert.ProfileName)
-		if err != nil {
-			return fmt.Errorf("failed to resolve profile name '%s' in project '%s' (project ID: %s): %v. Please check that the certificate profile exists in this project", cert.ProfileName, cert.ProjectName, project.ID, err)
-		}
-
-		cert.ProfileID = profile.ID
 	}
 	return nil
 }
 
-func validateCertificateSourceConfig(certificates *[]AgentCertificateConfig) error {
+func resolveCertificateLegacyReferences(cert *AgentCertificateConfig, httpClient *resty.Client) error {
+	project, err := api.CallGetProjectBySlug(httpClient, cert.ProjectName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve project slug '%s': %v", cert.ProjectName, err)
+	}
+	if project.ID == "" {
+		return fmt.Errorf("project '%s' returned an empty ID", cert.ProjectName)
+	}
+
+	profile, err := api.CallGetCertificateProfileBySlug(httpClient, project.ID, cert.ProfileName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve profile '%s' in project '%s': %v", cert.ProfileName, cert.ProjectName, err)
+	}
+	cert.ProfileID = profile.ID
+
+	return nil
+}
+
+func resolveCertificateApplicationReferences(cert *AgentCertificateConfig, httpClient *resty.Client) error {
+	if cert.ApplicationName == "" || cert.ProfileName == "" {
+		return fmt.Errorf("certificate configuration must specify either 'certificate-id' or both 'application-name' and 'profile-name'")
+	}
+
+	application, err := api.CallGetPkiApplicationByName(httpClient, cert.ApplicationName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve application '%s': %v", cert.ApplicationName, err)
+	}
+	if application.ID == "" {
+		return fmt.Errorf("application '%s' returned an empty ID", cert.ApplicationName)
+	}
+	cert.ApplicationID = application.ID
+
+	profiles, err := api.CallListPkiApplicationProfiles(httpClient, application.ID)
+	if err != nil {
+		return fmt.Errorf("failed to list profiles for application '%s': %v", cert.ApplicationName, err)
+	}
+
+	var matched *api.PkiApplicationProfile
+	for j := range profiles {
+		if profiles[j].ProfileSlug == cert.ProfileName {
+			matched = &profiles[j]
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Errorf("profile '%s' is not attached to application '%s'", cert.ProfileName, cert.ApplicationName)
+	}
+
+	cert.ProfileID = matched.ProfileID
+	return nil
+}
+
+func validateCertificateSourceConfig(version string, certificates *[]AgentCertificateConfig) error {
+	if len(*certificates) == 0 {
+		return nil
+	}
+
+	switch version {
+	case AgentConfigVersionV1, AgentConfigVersionV2:
+	default:
+		return fmt.Errorf("unsupported version: %s. Supported versions: v1, v2", version)
+	}
+
 	for i, cert := range *certificates {
 		certIndex := i + 1
+
 		if cert.HasCertificateID() {
-			if cert.ProjectName != "" || cert.ProfileName != "" {
-				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'project-slug' or 'profile-name'", certIndex)
+			if cert.ProjectName != "" {
+				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'project-slug'", certIndex)
+			}
+			if cert.ProfileName != "" {
+				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'profile-name'", certIndex)
+			}
+			if cert.ApplicationName != "" {
+				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'application-name'", certIndex)
 			}
 			if cert.CSR != "" || cert.CSRPath != "" {
 				return fmt.Errorf("certificate %d: 'certificate-id' cannot be used together with 'csr' or 'csr-path'", certIndex)
@@ -2079,8 +2168,21 @@ func validateCertificateSourceConfig(certificates *[]AgentCertificateConfig) err
 			continue
 		}
 
-		if cert.ProjectName == "" || cert.ProfileName == "" {
-			return fmt.Errorf("certificate %d: must specify either 'certificate-id' or both 'project-slug' and 'profile-name'", certIndex)
+		switch version {
+		case AgentConfigVersionV1:
+			if cert.ApplicationName != "" {
+				return fmt.Errorf("certificate %d (version v1): 'application-name' is not supported; use 'project-slug' + 'profile-name', or set 'version: v2' for the application-based flow", certIndex)
+			}
+			if cert.ProjectName == "" || cert.ProfileName == "" {
+				return fmt.Errorf("certificate %d (version v1): must specify either 'certificate-id' or both 'project-slug' and 'profile-name'", certIndex)
+			}
+		case AgentConfigVersionV2:
+			if cert.ProjectName != "" {
+				return fmt.Errorf("certificate %d (version v2): 'project-slug' is not supported; use 'application-name' + 'profile-name', or set 'version: v1' for the legacy flow", certIndex)
+			}
+			if cert.ApplicationName == "" || cert.ProfileName == "" {
+				return fmt.Errorf("certificate %d (version v2): must specify either 'certificate-id' or both 'application-name' and 'profile-name'", certIndex)
+			}
 		}
 	}
 	return nil
@@ -2311,7 +2413,8 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 	state := tm.certificateStates[certificateId]
 
 	request := api.IssueCertificateRequest{
-		ProfileID: certificate.ProfileID,
+		ProfileID:     certificate.ProfileID,
+		ApplicationID: certificate.ApplicationID,
 	}
 
 	if certificate.CSR != "" {
@@ -3240,7 +3343,7 @@ var agentCmd = &cobra.Command{
 			return
 		}
 
-		err = validateCertificateSourceConfig(&agentConfig.Certificates)
+		err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
 		if err != nil {
 			log.Error().Msgf("Certificate configuration validation failed: %v", err)
 			return
@@ -3369,7 +3472,7 @@ var agentCmd = &cobra.Command{
 					return
 				}
 
-				if err := resolveCertificateNameReferences(&agentConfig.Certificates, httpClient); err != nil {
+				if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
 					log.Error().Msgf("failed to resolve certificate name references: %v", err)
 					return
 				}
@@ -3429,8 +3532,8 @@ var agentCmd = &cobra.Command{
 }
 
 func validateCertificateOnlyMode(config *Config) error {
-	if config.Version != "v1" {
-		return fmt.Errorf("certificate management requires version: v1")
+	if config.Version != AgentConfigVersionV1 && config.Version != AgentConfigVersionV2 {
+		return fmt.Errorf("certificate management requires 'version: v1' or 'version: v2'")
 	}
 
 	if len(config.Certificates) == 0 {
@@ -3517,7 +3620,7 @@ var certManagerAgentCmd = &cobra.Command{
 			return
 		}
 
-		err = validateCertificateSourceConfig(&agentConfig.Certificates)
+		err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
 		if err != nil {
 			log.Error().Msgf("Certificate configuration validation failed: %v", err)
 			return
@@ -3590,7 +3693,7 @@ var certManagerAgentCmd = &cobra.Command{
 					return
 				}
 
-				if err := resolveCertificateNameReferences(&agentConfig.Certificates, httpClient); err != nil {
+				if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
 					log.Error().Msgf("failed to resolve certificate name references: %v", err)
 					return
 				}

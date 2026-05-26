@@ -62,7 +62,7 @@ jobs:
       - validate-tag-branch
       - cli-tests
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
 
@@ -111,22 +111,22 @@ jobs:
       needs.build-rdp-bridge.result == 'success' &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
       - name: 🐋 Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
       - name: 🔧 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@885d1462b80bc1c1c7f0b00334ad271f09369c55 # v2.10.0
       - run: git fetch --force --tags
       - run: echo "Ref name ${{github.ref_name}}"
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@be3c94b385c4f180051c996d336f57a34c397495 # v3.6.1
         with:
           go-version: "1.25.9"
           cache: true
@@ -167,7 +167,7 @@ jobs:
             echo "/opt/musl-cross/${triple}/bin" >> "$GITHUB_PATH"
           done
       - name: Download RDP bridge static libs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: rdp-bridge-*
           path: /tmp/rdp-bridge-artifacts/
@@ -187,7 +187,7 @@ jobs:
           done
       - name: GoReleaser (dry-run snapshot)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -200,7 +200,7 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - name: Upload dry-run dist as workflow artifact
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: goreleaser-dist-linux
           path: dist/
@@ -251,7 +251,7 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
       - name: GoReleaser (release)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -262,7 +262,7 @@ jobs:
           FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
           python-version: "3.12"
       - name: Install mkrepo and dependencies
@@ -271,7 +271,7 @@ jobs:
         run: pip install awscli
       - name: Install rpm-sign
         run: sudo apt-get install -y rpm
-      - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252
+      - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252 # v1.229.0
         with:
           ruby-version: "3.3" # Not needed with a .ruby-version, .tool-versions or mise.toml
           bundler-cache: true # runs 'bundle install' and caches installed gems automatically
@@ -317,21 +317,21 @@ jobs:
       needs.build-rdp-bridge.result == 'success' &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
       - name: Fetch all tags
         run: git fetch --force --tags
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.25.9"
           cache: true
           cache-dependency-path: go.sum
 
       - name: Download darwin RDP bridge static libs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: rdp-bridge-*-apple-darwin
           path: /tmp/rdp-bridge-artifacts/
@@ -347,7 +347,7 @@ jobs:
 
       - name: GoReleaser Darwin (dry-run snapshot)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -359,7 +359,7 @@ jobs:
 
       - name: GoReleaser Darwin (release)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -371,7 +371,7 @@ jobs:
 
       - name: Upload dry-run dist as workflow artifact
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: goreleaser-dist-darwin
           path: dist/
@@ -396,7 +396,7 @@ jobs:
       needs.cli-tests.result == 'success' &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
 
@@ -404,14 +404,14 @@ jobs:
         run: git fetch --force --tags
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@be3c94b385c4f180051c996d336f57a34c397495 # v3.6.1
         with:
           go-version: "1.25.9"
           cache: true
           cache-dependency-path: go.sum
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -433,14 +433,14 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: 🐋 Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: GoReleaser Windows (dry-run snapshot)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -452,7 +452,7 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - name: GoReleaser Windows (release)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -464,7 +464,7 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - name: Upload dry-run dist as workflow artifact
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: goreleaser-dist-windows
           path: dist/
