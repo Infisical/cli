@@ -316,7 +316,9 @@ func TestPAM_RDP(t *testing.T) {
 		createRDPPamAccount(t, ctx, infra, resourceId, "rdp-debug-account", rdpUser, rdpPassword)
 
 		proxyPort := helpers.GetFreePort()
-		startRDPProxy(t, ctx, infra, resourceName, "rdp-debug-account", "5m", proxyPort)
+		_, proxyCmd := startRDPProxy(t, ctx, infra, resourceName, "rdp-debug-account", "5m", proxyPort)
+
+		slog.Info("Proxy stderr before TCP connect", "stderr", proxyCmd.Stderr())
 
 		t0 := time.Now()
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 10*time.Second)
@@ -345,24 +347,15 @@ func TestPAM_RDP(t *testing.T) {
 			"bytes", n,
 			"err", err,
 		)
+
+		time.Sleep(500 * time.Millisecond)
+		slog.Info("Proxy stderr after TCP probe", "stderr", proxyCmd.Stderr())
+
 		if err != nil {
-			slog.Error("Read failed", "error", err)
+			proxyCmd.DumpOutput()
 			t.Fatalf("proxy read failed after %v: %v", readElapsed, err)
 		}
 		slog.Info("X.224 CC received", "bytes", n, "data", fmt.Sprintf("%x", buf[:n]))
-
-		conn.Close()
-		slog.Info("TCP debug test complete, proxy chain works at TCP level")
-
-		// Now try xfreerdp through the same proxy setup (new proxy instance)
-		proxyPort2 := helpers.GetFreePort()
-		startRDPProxy(t, ctx, infra, resourceName, "rdp-debug-account", "5m", proxyPort2)
-
-		err = connectFreeRDP(t, ctx, rdpBinary, "127.0.0.1", proxyPort2, "testuser", "", 10*time.Second)
-		if err != nil {
-			slog.Error("xfreerdp still failed after TCP debug confirmed proxy works", "error", err)
-		}
-		require.NoError(t, err, "xfreerdp should connect through proxy")
 	})
 
 	t.Run("connection", func(t *testing.T) {
