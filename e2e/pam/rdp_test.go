@@ -16,11 +16,9 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/infisical/cli/e2e-tests/packages/client"
-	"github.com/jackc/pgx/v5"
 	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -61,32 +59,6 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 	return ctr, host, port.Int()
 }
 
-func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
-	dbContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "db")
-	require.NoError(t, err)
-	dbPort, err := dbContainer.MappedPort(ctx, nat.Port("5432"))
-	require.NoError(t, err)
-
-	connStr := fmt.Sprintf("postgres://infisical:infisical@localhost:%s/infisical", dbPort.Port())
-	conn, err := pgx.Connect(ctx, connStr)
-	require.NoError(t, err)
-	defer conn.Close(ctx)
-
-	_, err = conn.Exec(ctx, `SET session_replication_role = 'replica'`)
-	require.NoError(t, err)
-	defer func() {
-		_, _ = conn.Exec(ctx, `SET session_replication_role = 'origin'`)
-	}()
-
-	_, err = conn.Exec(ctx, `
-		INSERT INTO pam_project_recording_configs (id, "projectId", "storageBackend", "connectionId", bucket, region)
-		VALUES ($1, $2, 'aws-s3', $3, 'e2e-test-bucket', 'us-east-1')
-		ON CONFLICT ("projectId") DO NOTHING`,
-		uuid.New().String(), infra.ProjectId, uuid.New().String(),
-	)
-	require.NoError(t, err)
-	slog.Info("Inserted recording config for project", "projectId", infra.ProjectId)
-}
 
 func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
 	gatewayId := openapitypes.UUID(infra.GatewayId)
@@ -294,7 +266,6 @@ func TestPAM_RDP(t *testing.T) {
 
 	infra := SetupPAMInfra(t, ctx)
 	LoginUser(t, ctx, infra)
-	setupRecordingConfig(t, ctx, infra)
 
 	rdpBinary := findFreeRDPBinary(t)
 
