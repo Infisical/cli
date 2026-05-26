@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -205,6 +207,76 @@ func findFreeRDPBinary(t *testing.T) string {
 	return ""
 }
 
+// warmBridgeProxy pre-connects to the RDP proxy so the relay+gateway tunnel
+// and Rust bridge are established, then accepts a single client connection
+// and bridges the two sides. This avoids the race where freerdp's first
+// BIO_read gets EAGAIN because the bridge hasn't started yet.
+func warmBridgeProxy(t *testing.T, proxyPort int) (listenPort int, cleanup func()) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	listenPort = ln.Addr().(*net.TCPAddr).Port
+
+	// Pre-connect to the actual proxy — this triggers tunnel+bridge setup
+	backConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 10*time.Second)
+	require.NoError(t, err)
+
+	// Wait for the bridge to become ready by polling until the backend
+	// responds to an X.224 Connection Request.
+	x224CR := []byte{
+		0x03, 0x00, 0x00, 0x2b, // TPKT header (length 43)
+		0x26, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, // X.224 CR
+		0x43, 0x6f, 0x6f, 0x6b, 0x69, 0x65, 0x3a, 0x20, // "Cookie: "
+		0x6d, 0x73, 0x74, 0x73, 0x68, 0x61, 0x73, 0x68, // "mstshash"
+		0x3d, 0x74, 0x65, 0x73, 0x74, 0x0d, 0x0a, // "=test\r\n"
+		0x01, 0x00, 0x08, 0x00, 0x0b, 0x00, 0x00, 0x00, // RDP Nego Req (HYBRID|HYBRID_EX|SSL)
+	}
+	_, err = backConn.Write(x224CR)
+	require.NoError(t, err)
+
+	// Read the X.224 CC (TPKT header = 4 bytes minimum)
+	backConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	hdr := make([]byte, 4)
+	_, err = io.ReadFull(backConn, hdr)
+	require.NoError(t, err, "bridge should respond with X.224 CC")
+	backConn.SetReadDeadline(time.Time{})
+
+	// Read the rest of the CC packet
+	pktLen := int(hdr[2])<<8 | int(hdr[3])
+	if pktLen > 4 {
+		rest := make([]byte, pktLen-4)
+		_, err = io.ReadFull(backConn, rest)
+		require.NoError(t, err)
+	}
+
+	// Bridge is confirmed working. Now close this probe connection and let
+	// the test connect a fresh xfreerdp through a new pre-warmed tunnel.
+	backConn.Close()
+
+	// Pre-connect again for the real xfreerdp connection
+	backConn, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 10*time.Second)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		defer backConn.Close()
+
+		go io.Copy(backConn, client)
+		io.Copy(client, backConn)
+	}()
+
+	return listenPort, func() {
+		ln.Close()
+		backConn.Close()
+		<-done
+	}
+}
+
 func authOnlyFreeRDP(t *testing.T, ctx context.Context, binary string, proxyPort int, timeout time.Duration) error {
 	rdpArgs := []string{
 		binary,
@@ -259,7 +331,10 @@ func TestPAM_RDP(t *testing.T) {
 		proxyPort := helpers.GetFreePort()
 		startRDPProxy(t, ctx, infra, resourceName, "rdp-connection-account", "5m", proxyPort)
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
+		warmPort, warmCleanup := warmBridgeProxy(t, proxyPort)
+		defer warmCleanup()
+
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, warmPort, 60*time.Second)
 		require.NoError(t, err, "NLA authentication through proxy should succeed")
 		slog.Info("RDP connection test passed")
 	})
@@ -311,11 +386,13 @@ func TestPAM_RDP(t *testing.T) {
 		errs := make([]error, numClients)
 
 		for i := 0; i < numClients; i++ {
+			warmPort, warmCleanup := warmBridgeProxy(t, proxyPort)
 			wg.Add(1)
-			go func(idx int) {
+			go func(idx, port int, cleanup func()) {
 				defer wg.Done()
-				errs[idx] = authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
-			}(i)
+				defer cleanup()
+				errs[idx] = authOnlyFreeRDP(t, ctx, rdpBinary, port, 60*time.Second)
+			}(i, warmPort, warmCleanup)
 		}
 
 		wg.Wait()
