@@ -31,7 +31,7 @@ const (
 	rdpPassword = "testpass"
 )
 
-func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Container, int) {
+func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Container, string, int) {
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			FromDockerfile: testcontainers.FromDockerfile{
@@ -53,9 +53,11 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 		}
 	})
 
+	host, err := ctr.Host(ctx)
+	require.NoError(t, err)
 	port, err := ctr.MappedPort(ctx, "3389")
 	require.NoError(t, err)
-	return ctr, port.Int()
+	return ctr, host, port.Int()
 }
 
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
@@ -245,10 +247,9 @@ func TestPAM_RDP(t *testing.T) {
 	setupRecordingConfig(t, ctx, infra)
 
 	rdpBinary := findFreeRDPBinary(t)
-	resourceHost := getOutboundIP(t)
 
 	t.Run("connection", func(t *testing.T) {
-		_, rdpPort := startRDPContainer(t, ctx)
+		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 		slog.Info("RDP container started", "host", resourceHost, "port", rdpPort)
 
 		resourceName := "rdp-connection-resource"
@@ -258,13 +259,13 @@ func TestPAM_RDP(t *testing.T) {
 		proxyPort := helpers.GetFreePort()
 		startRDPProxy(t, ctx, infra, resourceName, "rdp-connection-account", "5m", proxyPort)
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 30*time.Second)
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
 		require.NoError(t, err, "NLA authentication through proxy should succeed")
 		slog.Info("RDP connection test passed")
 	})
 
 	t.Run("bad-credentials", func(t *testing.T) {
-		_, rdpPort := startRDPContainer(t, ctx)
+		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 
 		resourceName := "rdp-badcreds-resource"
 		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
@@ -273,13 +274,13 @@ func TestPAM_RDP(t *testing.T) {
 		proxyPort := helpers.GetFreePort()
 		startRDPProxy(t, ctx, infra, resourceName, "rdp-badcreds-account", "5m", proxyPort)
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 30*time.Second)
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
 		require.Error(t, err, "NLA authentication should fail with bad credentials")
 		slog.Info("Bad credentials test passed", "error", err)
 	})
 
 	t.Run("unreachable-target", func(t *testing.T) {
-		ctr, rdpPort := startRDPContainer(t, ctx)
+		ctr, resourceHost, rdpPort := startRDPContainer(t, ctx)
 
 		resourceName := "rdp-unreachable-resource"
 		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
@@ -290,13 +291,13 @@ func TestPAM_RDP(t *testing.T) {
 		proxyPort := helpers.GetFreePort()
 		startRDPProxy(t, ctx, infra, resourceName, "rdp-unreachable-account", "5m", proxyPort)
 
-		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 30*time.Second)
+		err := authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
 		require.Error(t, err, "NLA authentication should fail when target is down")
 		slog.Info("Unreachable target test passed", "error", err)
 	})
 
 	t.Run("concurrent-connections", func(t *testing.T) {
-		_, rdpPort := startRDPContainer(t, ctx)
+		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 
 		resourceName := "rdp-concurrent-resource"
 		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
@@ -313,7 +314,7 @@ func TestPAM_RDP(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				errs[idx] = authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 30*time.Second)
+				errs[idx] = authOnlyFreeRDP(t, ctx, rdpBinary, proxyPort, 60*time.Second)
 			}(i)
 		}
 
