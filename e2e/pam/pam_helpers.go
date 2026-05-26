@@ -51,9 +51,9 @@ type PAMTestInfra struct {
 
 type SetupPAMOption func(svc *helpers.InfisicalService, extraEnv *[]string)
 
-func WithLocalStack() SetupPAMOption {
+func WithLocalStack(s3Buckets ...string) SetupPAMOption {
 	return func(svc *helpers.InfisicalService, extraEnv *[]string) {
-		infisicalpkg.WithLocalStackService()(svc.Stack)
+		infisicalpkg.WithLocalStackService(s3Buckets...)(svc.Stack)
 		*extraEnv = append(*extraEnv, "AWS_ENDPOINT_URL=http://localstack:4566")
 	}
 }
