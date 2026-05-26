@@ -8,6 +8,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".goreleaser.yaml"
+      - "packages/pam/handlers/rdp/native/**"
       - "smoke-tests/**"
       - ".github/workflows/run-cli-smoke-tests.yml"
 
@@ -26,10 +27,60 @@ jobs:
         with:
           go-version: "1.25.9"
 
+      - name: Cache cargo registry + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-smoke-cargo-${{ runner.os }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-smoke-cargo-${{ runner.os }}-
+
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        run: rustup show active-toolchain
+
+      - name: cargo fmt --check
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo fmt --check
+
+      - name: cargo clippy -D warnings
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Install cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build RDP bridge for musl
+        working-directory: packages/pam/handlers/rdp/native
+        run: cross build --release --target x86_64-unknown-linux-musl
+
+      - name: Install musl cross-compiler
+        run: |
+          set -euo pipefail
+          MUSL_CROSS_TAG=20260430
+          sudo mkdir -p /opt/musl-cross
+          triple=x86_64-unknown-linux-musl
+          sha=2495cfe18fc1f406d5cab93d902176af75a78f0ae93137f3e8b2df7708ec32fa
+          tarball="/tmp/${triple}.tar.xz"
+          curl --retry 5 --retry-delay 10 --retry-all-errors \
+               --connect-timeout 30 --max-time 240 \
+               -fsSL "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_CROSS_TAG}/${triple}.tar.xz" \
+               -o "$tarball"
+          echo "${sha}  ${tarball}" | sha256sum -c -
+          sudo tar -xJ -f "$tarball" -C /opt/musl-cross
+          rm -f "$tarball"
+          echo "/opt/musl-cross/${triple}/bin" >> "$GITHUB_PATH"
+
       - name: Build static binary
         run: |
-          CGO_ENABLED=0 go build -trimpath \
-            -ldflags "-X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION=0.0.0-smoke" \
+          CGO_ENABLED=1 \
+          CC=x86_64-unknown-linux-musl-gcc \
+          CGO_LDFLAGS="-L packages/pam/handlers/rdp/native/target/x86_64-unknown-linux-musl/release" \
+          go build -trimpath \
+            -tags=rdp,osusergo,netgo \
+            -ldflags "-X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION=0.0.0-smoke -extldflags '-static'" \
             -o infisical .
 
       - name: Install nfpm

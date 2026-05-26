@@ -45,13 +45,20 @@ else
 fi
 
 # core subcommands
-for cmd in secrets run export login agent gateway; do
+for cmd in secrets run export login agent gateway pam; do
   if infisical "$cmd" --help >/dev/null 2>&1; then
     pass "$cmd --help"
   else
     fail "$cmd --help"
   fi
 done
+
+# RDP bridge subcommand (verifies the Rust bridge linked correctly)
+if infisical pam rdp access --help >/dev/null 2>&1; then
+  pass "pam rdp access --help"
+else
+  fail "pam rdp access --help"
+fi
 
 # shared library check
 BINARY_PATH=$(command -v infisical)
