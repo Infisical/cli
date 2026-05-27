@@ -25,8 +25,6 @@ const (
 	FormatYaml         string = "yaml"
 	FormatDotEnvExport string = "dotenv-export"
 	FormatAppSettings  string = "appsettings"
-	FormatDotnetJson   string = "dotnet-json"
-	FormatAspnetJson   string = "aspnet-json"
 )
 
 // exportCmd represents the export command
@@ -234,7 +232,7 @@ func getDefaultFilename(format string) string {
 	switch strings.ToLower(format) {
 	case FormatJson:
 		return "secrets.json"
-	case FormatAppSettings, FormatDotnetJson, FormatAspnetJson:
+	case FormatAppSettings:
 		return "appsettings.json"
 	case FormatCSV:
 		return "secrets.csv"
@@ -252,7 +250,7 @@ func getDefaultFilename(format string) string {
 // getDefaultExtension returns the default file extension based on the format
 func getDefaultExtension(format string) string {
 	switch strings.ToLower(format) {
-	case FormatJson, FormatAppSettings, FormatDotnetJson, FormatAspnetJson:
+	case FormatJson, FormatAppSettings:
 		return ".json"
 	case FormatCSV:
 		return ".csv"
@@ -295,10 +293,10 @@ func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string,
 		return formatAsCSV(envs), nil
 	case FormatYaml:
 		return formatAsYaml(envs)
-	case FormatAppSettings, FormatDotnetJson, FormatAspnetJson:
+	case FormatAppSettings:
 		return formatAsAppSettingsJson(envs), nil
 	default:
-		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport, FormatAppSettings, FormatDotnetJson, FormatAspnetJson})
+		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport, FormatAppSettings})
 	}
 }
 
