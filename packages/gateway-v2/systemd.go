@@ -303,12 +303,6 @@ func UninstallGatewaySystemdService(name string) error {
 		return fmt.Errorf("failed to remove config file: %v", err)
 	}
 
-	if isLegacy {
-		if err := os.RemoveAll(gatewaysConfigDir); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove gateways config directory: %v", err)
-		}
-	}
-
 	reloadCmd := exec.Command("systemctl", "daemon-reload")
 	if err := reloadCmd.Run(); err != nil {
 		return fmt.Errorf("failed to reload systemd: %v", err)
