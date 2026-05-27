@@ -22,6 +22,16 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for CreateAwsAppConnectionJSONBodyIsAutoRotationEnabled.
+const (
+	CreateAwsAppConnectionJSONBodyIsAutoRotationEnabledFalse CreateAwsAppConnectionJSONBodyIsAutoRotationEnabled = false
+)
+
+// Defines values for CreateAwsAppConnectionJSONBodyIsPlatformManagedCredentials.
+const (
+	CreateAwsAppConnectionJSONBodyIsPlatformManagedCredentialsFalse CreateAwsAppConnectionJSONBodyIsPlatformManagedCredentials = false
+)
+
 // Defines values for CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled.
 const (
 	CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabledFalse CreateCloudflareAppConnectionJSONBodyIsAutoRotationEnabled = false
@@ -432,6 +442,72 @@ type AdminSignUpJSONBody struct {
 	FirstName string              `json:"firstName"`
 	LastName  *string             `json:"lastName,omitempty"`
 	Password  string              `json:"password"`
+}
+
+// CreateAwsAppConnectionJSONBody defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBody struct {
+	// Description An optional description for the AWS Connection.
+	Description *string `json:"description"`
+
+	// GatewayId Not supported for AWS Connections.
+	GatewayId *CreateAwsAppConnectionJSONBody_GatewayId `json:"gatewayId,omitempty"`
+
+	// GatewayPoolId Not supported for AWS Connections.
+	GatewayPoolId *CreateAwsAppConnectionJSONBody_GatewayPoolId `json:"gatewayPoolId,omitempty"`
+
+	// IsAutoRotationEnabled Not supported for AWS Connections.
+	IsAutoRotationEnabled *CreateAwsAppConnectionJSONBodyIsAutoRotationEnabled `json:"isAutoRotationEnabled,omitempty"`
+
+	// IsPlatformManagedCredentials Not supported for AWS Connections.
+	IsPlatformManagedCredentials *CreateAwsAppConnectionJSONBodyIsPlatformManagedCredentials `json:"isPlatformManagedCredentials,omitempty"`
+
+	// Name The name of the AWS Connection to create. Must be slug-friendly.
+	Name string `json:"name"`
+
+	// ProjectId The ID of the project to create the AWS Connection in.
+	ProjectId *string `json:"projectId,omitempty"`
+
+	// Rotation Not supported for AWS Connections.
+	Rotation *CreateAwsAppConnectionJSONBody_Rotation `json:"rotation,omitempty"`
+}
+
+// CreateAwsAppConnectionJSONBodyGatewayId0 defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyGatewayId0 = interface{}
+
+// CreateAwsAppConnectionJSONBodyGatewayId1 defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyGatewayId1 = interface{}
+
+// CreateAwsAppConnectionJSONBody_GatewayId defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBody_GatewayId struct {
+	union json.RawMessage
+}
+
+// CreateAwsAppConnectionJSONBodyGatewayPoolId0 defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyGatewayPoolId0 = interface{}
+
+// CreateAwsAppConnectionJSONBodyGatewayPoolId1 defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyGatewayPoolId1 = interface{}
+
+// CreateAwsAppConnectionJSONBody_GatewayPoolId defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBody_GatewayPoolId struct {
+	union json.RawMessage
+}
+
+// CreateAwsAppConnectionJSONBodyIsAutoRotationEnabled defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyIsAutoRotationEnabled bool
+
+// CreateAwsAppConnectionJSONBodyIsPlatformManagedCredentials defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyIsPlatformManagedCredentials bool
+
+// CreateAwsAppConnectionJSONBodyRotation0 defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyRotation0 = interface{}
+
+// CreateAwsAppConnectionJSONBodyRotation1 defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBodyRotation1 = interface{}
+
+// CreateAwsAppConnectionJSONBody_Rotation defines parameters for CreateAwsAppConnection.
+type CreateAwsAppConnectionJSONBody_Rotation struct {
+	union json.RawMessage
 }
 
 // CreateCloudflareAppConnectionJSONBody defines parameters for CreateCloudflareAppConnection.
@@ -1424,6 +1500,9 @@ type CreateSecretV4JSONBodyType string
 // AdminSignUpJSONRequestBody defines body for AdminSignUp for application/json ContentType.
 type AdminSignUpJSONRequestBody AdminSignUpJSONBody
 
+// CreateAwsAppConnectionJSONRequestBody defines body for CreateAwsAppConnection for application/json ContentType.
+type CreateAwsAppConnectionJSONRequestBody CreateAwsAppConnectionJSONBody
+
 // CreateCloudflareAppConnectionJSONRequestBody defines body for CreateCloudflareAppConnection for application/json ContentType.
 type CreateCloudflareAppConnectionJSONRequestBody CreateCloudflareAppConnectionJSONBody
 
@@ -1576,6 +1655,11 @@ type ClientInterface interface {
 	AdminSignUpWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	AdminSignUp(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateAwsAppConnectionWithBody request with any body
+	CreateAwsAppConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateAwsAppConnection(ctx context.Context, body CreateAwsAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateCloudflareAppConnectionWithBody request with any body
 	CreateCloudflareAppConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1732,6 +1816,30 @@ func (c *Client) AdminSignUpWithBody(ctx context.Context, contentType string, bo
 
 func (c *Client) AdminSignUp(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAdminSignUpRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAwsAppConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAwsAppConnectionRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAwsAppConnection(ctx context.Context, body CreateAwsAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAwsAppConnectionRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2423,6 +2531,46 @@ func NewAdminSignUpRequestWithBody(server string, contentType string, body io.Re
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/admin/signup")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateAwsAppConnectionRequest calls the generic CreateAwsAppConnection builder with application/json body
+func NewCreateAwsAppConnectionRequest(server string, body CreateAwsAppConnectionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateAwsAppConnectionRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateAwsAppConnectionRequestWithBody generates requests for CreateAwsAppConnection with any type of body
+func NewCreateAwsAppConnectionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/app-connections/aws")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3984,6 +4132,11 @@ type ClientWithResponsesInterface interface {
 
 	AdminSignUpWithResponse(ctx context.Context, body AdminSignUpJSONRequestBody, reqEditors ...RequestEditorFn) (*AdminSignUpResponse, error)
 
+	// CreateAwsAppConnectionWithBodyWithResponse request with any body
+	CreateAwsAppConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAwsAppConnectionResponse, error)
+
+	CreateAwsAppConnectionWithResponse(ctx context.Context, body CreateAwsAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAwsAppConnectionResponse, error)
+
 	// CreateCloudflareAppConnectionWithBodyWithResponse request with any body
 	CreateCloudflareAppConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCloudflareAppConnectionResponse, error)
 
@@ -4234,6 +4387,181 @@ func (r AdminSignUpResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r AdminSignUpResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateAwsAppConnectionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		AppConnection CreateAwsAppConnection_200_AppConnection `json:"appConnection"`
+	}
+	JSON400 *struct {
+		Details    interface{}                         `json:"details,omitempty"`
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateAwsAppConnection400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateAwsAppConnection401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                         `json:"details,omitempty"`
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateAwsAppConnection403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateAwsAppConnection404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                              `json:"error"`
+		Message    interface{}                         `json:"message,omitempty"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateAwsAppConnection422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                              `json:"error"`
+		Message    string                              `json:"message"`
+		ReqId      string                              `json:"reqId"`
+		StatusCode CreateAwsAppConnection500StatusCode `json:"statusCode"`
+	}
+}
+type CreateAwsAppConnection200AppConnection0 struct {
+	App                          CreateAwsAppConnection200AppConnection0App    `json:"app"`
+	CreatedAt                    time.Time                                     `json:"createdAt"`
+	Credentials                  map[string]interface{}                        `json:"credentials"`
+	CredentialsHash              *string                                       `json:"credentialsHash,omitempty"`
+	Description                  *string                                       `json:"description"`
+	GatewayId                    *openapi_types.UUID                           `json:"gatewayId"`
+	GatewayPoolId                *openapi_types.UUID                           `json:"gatewayPoolId"`
+	Id                           openapi_types.UUID                            `json:"id"`
+	IsAutoRotationEnabled        *bool                                         `json:"isAutoRotationEnabled,omitempty"`
+	IsPlatformManagedCredentials *bool                                         `json:"isPlatformManagedCredentials"`
+	Method                       CreateAwsAppConnection200AppConnection0Method `json:"method"`
+	Name                         string                                        `json:"name"`
+	OrgId                        openapi_types.UUID                            `json:"orgId"`
+	Project                      *struct {
+		Id   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+		Type string `json:"type"`
+	} `json:"project"`
+	ProjectId *string `json:"projectId"`
+
+	// Rotation The credential rotation configuration, if configured.
+	Rotation *struct {
+		// LastRotationMessage The message from the last rotation attempt.
+		LastRotationMessage *string `json:"lastRotationMessage"`
+
+		// NextRotationAt The next scheduled rotation time.
+		NextRotationAt *time.Time `json:"nextRotationAt"`
+
+		// RotateAtUtc The UTC time of day at which rotation should occur.
+		RotateAtUtc struct {
+			// Hours The hour (0-23) at which to rotate.
+			Hours float32 `json:"hours"`
+
+			// Minutes The minute (0-59) at which to rotate.
+			Minutes float32 `json:"minutes"`
+		} `json:"rotateAtUtc"`
+
+		// RotationInterval The interval in days between credential rotations.
+		RotationInterval float32 `json:"rotationInterval"`
+
+		// RotationStatus The status of the last rotation attempt.
+		RotationStatus CreateAwsAppConnection200AppConnection0RotationRotationStatus `json:"rotationStatus"`
+	} `json:"rotation,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Version   *float32  `json:"version,omitempty"`
+}
+type CreateAwsAppConnection200AppConnection0App string
+type CreateAwsAppConnection200AppConnection0Method string
+type CreateAwsAppConnection200AppConnection0RotationRotationStatus string
+type CreateAwsAppConnection200AppConnection1 struct {
+	App         CreateAwsAppConnection200AppConnection1App `json:"app"`
+	CreatedAt   time.Time                                  `json:"createdAt"`
+	Credentials struct {
+		AccessKeyId string `json:"accessKeyId"`
+	} `json:"credentials"`
+	CredentialsHash              *string                                       `json:"credentialsHash,omitempty"`
+	Description                  *string                                       `json:"description"`
+	GatewayId                    *openapi_types.UUID                           `json:"gatewayId"`
+	GatewayPoolId                *openapi_types.UUID                           `json:"gatewayPoolId"`
+	Id                           openapi_types.UUID                            `json:"id"`
+	IsAutoRotationEnabled        *bool                                         `json:"isAutoRotationEnabled,omitempty"`
+	IsPlatformManagedCredentials *bool                                         `json:"isPlatformManagedCredentials"`
+	Method                       CreateAwsAppConnection200AppConnection1Method `json:"method"`
+	Name                         string                                        `json:"name"`
+	OrgId                        openapi_types.UUID                            `json:"orgId"`
+	Project                      *struct {
+		Id   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+		Type string `json:"type"`
+	} `json:"project"`
+	ProjectId *string `json:"projectId"`
+
+	// Rotation The credential rotation configuration, if configured.
+	Rotation *struct {
+		// LastRotationMessage The message from the last rotation attempt.
+		LastRotationMessage *string `json:"lastRotationMessage"`
+
+		// NextRotationAt The next scheduled rotation time.
+		NextRotationAt *time.Time `json:"nextRotationAt"`
+
+		// RotateAtUtc The UTC time of day at which rotation should occur.
+		RotateAtUtc struct {
+			// Hours The hour (0-23) at which to rotate.
+			Hours float32 `json:"hours"`
+
+			// Minutes The minute (0-59) at which to rotate.
+			Minutes float32 `json:"minutes"`
+		} `json:"rotateAtUtc"`
+
+		// RotationInterval The interval in days between credential rotations.
+		RotationInterval float32 `json:"rotationInterval"`
+
+		// RotationStatus The status of the last rotation attempt.
+		RotationStatus CreateAwsAppConnection200AppConnection1RotationRotationStatus `json:"rotationStatus"`
+	} `json:"rotation,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Version   *float32  `json:"version,omitempty"`
+}
+type CreateAwsAppConnection200AppConnection1App string
+type CreateAwsAppConnection200AppConnection1Method string
+type CreateAwsAppConnection200AppConnection1RotationRotationStatus string
+type CreateAwsAppConnection_200_AppConnection struct {
+	union json.RawMessage
+}
+type CreateAwsAppConnection400StatusCode float32
+type CreateAwsAppConnection401StatusCode float32
+type CreateAwsAppConnection403StatusCode float32
+type CreateAwsAppConnection404StatusCode float32
+type CreateAwsAppConnection422StatusCode float32
+type CreateAwsAppConnection500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreateAwsAppConnectionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateAwsAppConnectionResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -7321,6 +7649,23 @@ func (c *ClientWithResponses) AdminSignUpWithResponse(ctx context.Context, body 
 	return ParseAdminSignUpResponse(rsp)
 }
 
+// CreateAwsAppConnectionWithBodyWithResponse request with arbitrary body returning *CreateAwsAppConnectionResponse
+func (c *ClientWithResponses) CreateAwsAppConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAwsAppConnectionResponse, error) {
+	rsp, err := c.CreateAwsAppConnectionWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAwsAppConnectionResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateAwsAppConnectionWithResponse(ctx context.Context, body CreateAwsAppConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAwsAppConnectionResponse, error) {
+	rsp, err := c.CreateAwsAppConnection(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAwsAppConnectionResponse(rsp)
+}
+
 // CreateCloudflareAppConnectionWithBodyWithResponse request with arbitrary body returning *CreateCloudflareAppConnectionResponse
 func (c *ClientWithResponses) CreateCloudflareAppConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCloudflareAppConnectionResponse, error) {
 	rsp, err := c.CreateCloudflareAppConnectionWithBody(ctx, contentType, body, reqEditors...)
@@ -7929,6 +8274,108 @@ func ParseAdminSignUpResponse(rsp *http.Response) (*AdminSignUpResponse, error) 
 			Message    string                   `json:"message"`
 			ReqId      string                   `json:"reqId"`
 			StatusCode AdminSignUp500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateAwsAppConnectionResponse parses an HTTP response from a CreateAwsAppConnectionWithResponse call
+func ParseCreateAwsAppConnectionResponse(rsp *http.Response) (*CreateAwsAppConnectionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateAwsAppConnectionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			AppConnection CreateAwsAppConnection_200_AppConnection `json:"appConnection"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                         `json:"details,omitempty"`
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateAwsAppConnection400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateAwsAppConnection401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                         `json:"details,omitempty"`
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateAwsAppConnection403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateAwsAppConnection404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    interface{}                         `json:"message,omitempty"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateAwsAppConnection422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                              `json:"error"`
+			Message    string                              `json:"message"`
+			ReqId      string                              `json:"reqId"`
+			StatusCode CreateAwsAppConnection500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err

@@ -39,3 +39,4 @@ output-options:
     - createRedisPamAccount
     - createWindowsPamResource
     - createWindowsPamAccount
+    - createAwsAppConnection

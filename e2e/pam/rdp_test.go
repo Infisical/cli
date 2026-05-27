@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -62,7 +61,7 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 }
 
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
-	connectionID := createAwsAppConnection(t, infra.Infisical.ApiUrl(t), infra.ProvisionResult.Token)
+	connectionID := createAwsAppConnection(t, ctx, infra)
 
 	dbContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "db")
 	require.NoError(t, err)
@@ -83,41 +82,27 @@ func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra
 	slog.Info("Inserted recording config", "projectId", infra.ProjectId)
 }
 
-func apiPost(t *testing.T, baseURL, path, token string, body interface{}) []byte {
-	data, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	req, err := http.NewRequest("POST", baseURL+path, bytes.NewReader(data))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode, "API %s: %s", path, string(respBody))
-	return respBody
-}
-
-func createAwsAppConnection(t *testing.T, apiURL, token string) string {
-	body := map[string]interface{}{
+func createAwsAppConnection(t *testing.T, ctx context.Context, infra *PAMTestInfra) string {
+	body, err := json.Marshal(map[string]interface{}{
 		"name":   "e2e-localstack-aws",
 		"method": "access-key",
 		"credentials": map[string]string{
 			"accessKeyId":     "test",
 			"secretAccessKey": "test",
 		},
-	}
-	resp := apiPost(t, apiURL, "/api/v1/app-connections/aws", token, body)
+	})
+	require.NoError(t, err)
+
+	resp, err := infra.ApiClient.CreateAwsAppConnectionWithBodyWithResponse(ctx, "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create AWS app connection: %s", string(resp.Body))
 
 	var result struct {
 		AppConnection struct {
 			ID string `json:"id"`
 		} `json:"appConnection"`
 	}
-	require.NoError(t, json.Unmarshal(resp, &result))
+	require.NoError(t, json.Unmarshal(resp.Body, &result))
 	slog.Info("Created AWS app connection", "id", result.AppConnection.ID)
 	return result.AppConnection.ID
 }
