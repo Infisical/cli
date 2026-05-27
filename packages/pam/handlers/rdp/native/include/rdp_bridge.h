@@ -17,9 +17,9 @@ extern "C" {
 #define RDP_BRIDGE_BAD_ARG           -2
 #define RDP_BRIDGE_RUNTIME_ERROR     -3
 
-// `domain` is optional. NULL or empty string means no domain (NTLM falls back
-// to local-account auth). Set this for AD domain accounts so NTLM CredSSP
-// authenticates against the target's AD binding rather than its local SAM.
+/* `domain` and `acceptor_username` are optional (NULL or empty = unused).
+ * When `acceptor_username` is non-empty, the bridge runs the RDCleanPath
+ * (browser) flow; otherwise it runs the native RDP flow. */
 #if defined(__unix__) || defined(__APPLE__)
 int32_t rdp_bridge_start_unix_fd(
     int          client_fd,
@@ -28,6 +28,7 @@ int32_t rdp_bridge_start_unix_fd(
     const char  *username,
     const char  *password,
     const char  *domain,
+    const char  *acceptor_username,
     uint64_t    *out_handle
 );
 #endif
@@ -40,6 +41,7 @@ int32_t rdp_bridge_start_windows_socket(
     const char  *username,
     const char  *password,
     const char  *domain,
+    const char  *acceptor_username,
     uint64_t    *out_handle
 );
 #endif

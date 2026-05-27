@@ -21,19 +21,25 @@ import (
 )
 
 // StartWithConn hands an independent dup of conn's fd to the bridge.
-// For TLS-wrapped or otherwise non-fd-backed conns, use StartWithReadWriter.
-// `domain` is empty for local accounts; set to the AD domain name for
-// domain-joined NTLM CredSSP.
 func StartWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
 	dupFd, err := dupConnFD(conn)
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: dup client fd: %w", err)
 	}
-	return startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain)
+	return startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain, "")
 }
 
-// Ownership of dupFd transfers to Rust on success; we close it on failure.
-func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+// StartRDCleanPathWithConn is the browser-flow analog of StartWithConn.
+func StartRDCleanPathWithConn(conn net.Conn, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
+	dupFd, err := dupConnFD(conn)
+	if err != nil {
+		return nil, fmt.Errorf("rdp bridge: dup client fd: %w", err)
+	}
+	return startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain, acceptorUsername)
+}
+
+// Ownership of dupFd transfers to Rust on success; closed on failure.
+func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
 	success := false
 	defer func() {
 		if !success {
@@ -48,11 +54,16 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 	cPass := C.CString(password)
 	defer C.free(unsafe.Pointer(cPass))
 
-	// Empty domain -> NULL pointer; bridge treats both the same way.
 	var cDomain *C.char
 	if domain != "" {
 		cDomain = C.CString(domain)
 		defer C.free(unsafe.Pointer(cDomain))
+	}
+
+	var cAcceptor *C.char
+	if acceptorUsername != "" {
+		cAcceptor = C.CString(acceptorUsername)
+		defer C.free(unsafe.Pointer(cAcceptor))
 	}
 
 	var handle C.uint64_t
@@ -63,6 +74,7 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 		cUser,
 		cPass,
 		cDomain,
+		cAcceptor,
 		&handle,
 	)
 	if rc != C.RDP_BRIDGE_OK {
@@ -72,9 +84,17 @@ func startWithDupedFD(dupFd int, targetHost string, targetPort uint16, username,
 	return &Bridge{handle: uint64(handle)}, nil
 }
 
-// Adapts an fd-less Go byte stream to the Rust bridge (which needs a real fd
-// for tokio's TcpStream::from_raw_fd) by routing through a loopback TCP pair.
+// Routes fd-less Go streams through a loopback TCP pair for tokio.
 func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain string) (*Bridge, error) {
+	return startWithReadWriterCommon(rw, targetHost, targetPort, username, password, domain, "")
+}
+
+// Browser-flow analog of StartWithReadWriter.
+func StartRDCleanPathWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
+	return startWithReadWriterCommon(rw, targetHost, targetPort, username, password, domain, acceptorUsername)
+}
+
+func startWithReadWriterCommon(rw io.ReadWriter, targetHost string, targetPort uint16, username, password, domain, acceptorUsername string) (*Bridge, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("rdp bridge: loopback listen: %w", err)
@@ -109,7 +129,7 @@ func StartWithReadWriter(rw io.ReadWriter, targetHost string, targetPort uint16,
 		return nil, fmt.Errorf("rdp bridge: dup accepted fd: %w", err)
 	}
 
-	bridge, err := startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain)
+	bridge, err := startWithDupedFD(dupFd, targetHost, targetPort, username, password, domain, acceptorUsername)
 	if err != nil {
 		_ = peer.Close()
 		return nil, err

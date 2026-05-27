@@ -7,3 +7,4 @@ pub mod cap_filter;
 pub mod config;
 pub mod events;
 pub mod ffi;
+pub mod rdcleanpath;

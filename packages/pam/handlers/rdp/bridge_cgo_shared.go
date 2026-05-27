@@ -20,6 +20,34 @@ import (
 )
 
 func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
+	return p.handleConnectionWith(ctx, clientConn, func() (*Bridge, error) {
+		return StartWithReadWriter(
+			clientConn,
+			p.config.TargetHost,
+			p.config.TargetPort,
+			p.config.InjectUsername,
+			p.config.InjectPassword,
+			p.config.InjectDomain,
+		)
+	})
+}
+
+// HandleConnectionRDCleanPath is the browser-flow variant (RDCleanPath instead of X.224).
+func (p *RDPProxy) HandleConnectionRDCleanPath(ctx context.Context, clientConn net.Conn) error {
+	return p.handleConnectionWith(ctx, clientConn, func() (*Bridge, error) {
+		return StartRDCleanPathWithReadWriter(
+			clientConn,
+			p.config.TargetHost,
+			p.config.TargetPort,
+			p.config.InjectUsername,
+			p.config.InjectPassword,
+			p.config.InjectDomain,
+			BrowserAcceptorUsername,
+		)
+	})
+}
+
+func (p *RDPProxy) handleConnectionWith(ctx context.Context, clientConn net.Conn, start func() (*Bridge, error)) error {
 	defer clientConn.Close()
 	if p.config.SessionLogger != nil {
 		defer func() {
@@ -27,38 +55,24 @@ func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 		}()
 	}
 
-	bridge, err := StartWithReadWriter(
-		clientConn,
-		p.config.TargetHost,
-		p.config.TargetPort,
-		p.config.InjectUsername,
-		p.config.InjectPassword,
-		p.config.InjectDomain,
-	)
+	bridge, err := start()
 	if err != nil {
 		return fmt.Errorf("rdp proxy: start bridge: %w", err)
 	}
 	defer bridge.Close()
 
-	// Drain bridge tap events into the session logger. The Rust side closes
-	// the events channel when the session ends, so the goroutine exits via
-	// PollEnded without needing an explicit shutdown signal.
 	drainCtx, cancelDrain := context.WithCancel(ctx)
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
 		drainBridgeEvents(drainCtx, bridge, p.config.SessionLogger, p.config.SessionID, p.config.PriorElapsedNs, p.config.SessionUploader)
 	}()
-	// Wait for the drain to finish naturally on the normal-end path so the
-	// tail of the recording isn't dropped: PollEnded fires after the Rust
-	// side closes the events channel (post bridge.Wait return). Cancellation
-	// paths trigger cancelDrain() explicitly below to bail early.
+	// Let drain finish so recording tail isn't dropped; cancel paths bail early
 	defer func() {
 		select {
 		case <-drainDone:
 		case <-time.After(2 * pollTimeout):
 		}
-		// Always release the drain context (no-op if already cancelled).
 		cancelDrain()
 	}()
 
@@ -95,8 +109,7 @@ func (b *Bridge) Wait() error {
 	}
 }
 
-// Cancel is idempotent and safe from any goroutine, including
-// concurrently with Wait.
+// Cancel is idempotent and safe from any goroutine.
 func (b *Bridge) Cancel() error {
 	rc := C.rdp_bridge_cancel(C.uint64_t(b.handle))
 	if rc == C.RDP_BRIDGE_INVALID_HANDLE {
@@ -120,9 +133,7 @@ func (b *Bridge) Close() error {
 // True when the real bridge is compiled in (vs the stub).
 func IsSupported() bool { return true }
 
-// PollEvent drains one tap event with the given timeout. The returned Event
-// is only meaningful when result == PollOK. PollEvent is not safe to call
-// concurrently for the same Bridge; serialize calls in a single goroutine.
+// PollEvent drains one tap event. Not safe to call concurrently for the same Bridge.
 func (b *Bridge) PollEvent(timeout time.Duration) (PollResult, Event, error) {
 	timeoutMs := timeout.Milliseconds()
 	if timeoutMs < 0 {
@@ -164,8 +175,7 @@ func (b *Bridge) PollEvent(timeout time.Duration) (PollResult, Event, error) {
 		ev.X = uint16(raw.value_a)
 		ev.Y = uint16(raw.value_b)
 	case EventTypeTargetFrame:
-		// Always free the libc-malloc'd buffer Rust handed us, even if
-		// the copy below is empty -- ownership transfer is unconditional.
+		// Ownership transferred from Rust; always free even if empty
 		if raw.payload_ptr != nil {
 			defer C.free(unsafe.Pointer(raw.payload_ptr))
 			if raw.payload_len > 0 {
