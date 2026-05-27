@@ -283,29 +283,18 @@ func WithRedisService() StackOption {
 	}
 }
 
-func WithLocalStackService(s3BucketAliases ...string) StackOption {
+func WithLocalStackService() StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
 			s.Project.Services = types.Services{}
 		}
-		svc := types.ServiceConfig{
+		s.Project.Services["localstack"] = types.ServiceConfig{
 			Image: "localstack/localstack:4.4",
 			Ports: []types.ServicePortConfig{{Published: "", Target: 4566}},
 			Environment: types.NewMappingWithEquals([]string{
 				"SERVICES=s3,sts",
-				"LOCALSTACK_HOST=localstack",
 			}),
 		}
-		if len(s3BucketAliases) > 0 {
-			aliases := make([]string, len(s3BucketAliases))
-			for i, b := range s3BucketAliases {
-				aliases[i] = b + ".localstack"
-			}
-			svc.Networks = map[string]*types.ServiceNetworkConfig{
-				"default": {Aliases: aliases},
-			}
-		}
-		s.Project.Services["localstack"] = svc
 	}
 }
 

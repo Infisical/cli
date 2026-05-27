@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
+	"github.com/jackc/pgx/v5"
 	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -59,39 +61,26 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 	return ctr, host, port.Int()
 }
 
-const recordingBucket = "e2e-recording-bucket"
-
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
-	apiURL := infra.Infisical.ApiUrl(t)
-	token := infra.ProvisionResult.Token
+	connectionID := createAwsAppConnection(t, infra.Infisical.ApiUrl(t), infra.ProvisionResult.Token)
 
-	localstackContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "localstack")
+	dbContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "db")
 	require.NoError(t, err)
-	lsPort, err := localstackContainer.MappedPort(ctx, "4566")
+	dbPort, err := dbContainer.MappedPort(ctx, nat.Port("5432"))
 	require.NoError(t, err)
-	localstackURL := fmt.Sprintf("http://localhost:%s", lsPort.Port())
 
-	req, err := http.NewRequest("PUT", localstackURL+"/"+recordingBucket, nil)
+	conn, err := pgx.Connect(ctx, fmt.Sprintf("postgres://infisical:infisical@localhost:%s/infisical", dbPort.Port()))
 	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
+	defer conn.Close(ctx)
+
+	_, err = conn.Exec(ctx, `
+		INSERT INTO pam_project_recording_configs (id, "projectId", "storageBackend", "connectionId", bucket, region)
+		VALUES ($1, $2, 'aws-s3', $3, 'e2e-unused', 'us-east-1')
+		ON CONFLICT ("projectId") DO NOTHING`,
+		uuid.New().String(), infra.ProjectId, connectionID,
+	)
 	require.NoError(t, err)
-	resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "create S3 bucket on LocalStack")
-	slog.Info("Created S3 bucket on LocalStack", "bucket", recordingBucket)
-
-	connectionID := createAwsAppConnection(t, apiURL, token)
-	createRecordingConfig(t, apiURL, token, infra.ProjectId, connectionID)
-}
-
-func createRecordingConfig(t *testing.T, apiURL, token, projectID, connectionID string) {
-	body := map[string]interface{}{
-		"storageBackend": "aws-s3",
-		"connectionId":   connectionID,
-		"bucket":         recordingBucket,
-		"region":         "us-east-1",
-	}
-	apiPost(t, apiURL, fmt.Sprintf("/api/v1/pam/projects/%s/recording-config", projectID), token, body)
-	slog.Info("Created recording config", "projectId", projectID)
+	slog.Info("Inserted recording config", "projectId", infra.ProjectId)
 }
 
 func apiPost(t *testing.T, baseURL, path, token string, body interface{}) []byte {
@@ -335,7 +324,7 @@ func TestPAM_RDP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infra := SetupPAMInfra(t, ctx, WithLocalStack(recordingBucket))
+	infra := SetupPAMInfra(t, ctx, WithLocalStack())
 	LoginUser(t, ctx, infra)
 	setupRecordingConfig(t, ctx, infra)
 
