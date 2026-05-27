@@ -462,19 +462,9 @@ func (p *MssqlProxy) authenticateKerberos(serverConn net.Conn) (_ net.Conn, _ []
 
 	respPayload := CombinePayloads(response)
 
-	// Kerberos mutual auth: server sends SSPI accept-incomplete before LoginAck.
-	// Acknowledge with an empty SSPI packet to complete the handshake.
+	// Kerberos mutual auth: server may send SSPI accept before LoginAck.
+	// Read the next batch which should contain LoginAck.
 	if !ContainsToken(respPayload, TokenLoginAck) && !ContainsToken(respPayload, TokenError) {
-
-		sspiAck := &TDSPacket{
-			Type:     PacketTypeSSPI,
-			Status:   StatusEOM,
-			PacketID: 1,
-		}
-		if err := sspiAck.Write(serverConn); err != nil {
-			return nil, nil, fmt.Errorf("send Kerberos SSPI acknowledgement: %w", err)
-		}
-
 		response, err = ReadAllPackets(serverConn)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read Kerberos final response: %w", err)
