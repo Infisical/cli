@@ -60,6 +60,9 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 	return ctr, host, port.Int()
 }
 
+// Inserts recording config directly into Postgres. The API route validates
+// the bucket via S3 HeadBucket using virtual-hosted-style addressing, which
+// fails in Docker because "bucket.localstack" doesn't resolve.
 func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 	connectionID := createAwsAppConnection(t, ctx, infra)
 
