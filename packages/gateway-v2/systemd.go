@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
@@ -41,22 +40,8 @@ func detectLegacyService() legacyInfo {
 		return legacyInfo{}
 	}
 
-	data, err := os.ReadFile(legacyConfigPath)
-	if err != nil {
-		return legacyInfo{exists: true}
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, GATEWAY_NAME_ENV_NAME+"=") {
-			return legacyInfo{
-				exists:      true,
-				gatewayName: strings.TrimPrefix(line, GATEWAY_NAME_ENV_NAME+"="),
-			}
-		}
-	}
-
-	return legacyInfo{exists: true}
+	name, _ := readKeyFromConfFile(legacyConfigPath, GATEWAY_NAME_ENV_NAME)
+	return legacyInfo{exists: true, gatewayName: name}
 }
 
 func logLegacyWarning(svcName string) {
