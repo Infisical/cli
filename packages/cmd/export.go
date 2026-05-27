@@ -24,6 +24,9 @@ const (
 	FormatCSV          string = "csv"
 	FormatYaml         string = "yaml"
 	FormatDotEnvExport string = "dotenv-export"
+	FormatAppSettings  string = "appsettings"
+	FormatDotnetJson   string = "dotnet-json"
+	FormatAspnetJson   string = "aspnet-json"
 )
 
 // exportCmd represents the export command
@@ -231,6 +234,8 @@ func getDefaultFilename(format string) string {
 	switch strings.ToLower(format) {
 	case FormatJson:
 		return "secrets.json"
+	case FormatAppSettings, FormatDotnetJson, FormatAspnetJson:
+		return "appsettings.json"
 	case FormatCSV:
 		return "secrets.csv"
 	case FormatYaml:
@@ -247,7 +252,7 @@ func getDefaultFilename(format string) string {
 // getDefaultExtension returns the default file extension based on the format
 func getDefaultExtension(format string) string {
 	switch strings.ToLower(format) {
-	case FormatJson:
+	case FormatJson, FormatAppSettings, FormatDotnetJson, FormatAspnetJson:
 		return ".json"
 	case FormatCSV:
 		return ".csv"
@@ -266,7 +271,7 @@ func init() {
 	RootCmd.AddCommand(exportCmd)
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
-	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv)")
+	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv, yaml, appsettings)")
 	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
@@ -290,8 +295,10 @@ func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string,
 		return formatAsCSV(envs), nil
 	case FormatYaml:
 		return formatAsYaml(envs)
+	case FormatAppSettings, FormatDotnetJson, FormatAspnetJson:
+		return formatAsAppSettingsJson(envs), nil
 	default:
-		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport})
+		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport, FormatAppSettings, FormatDotnetJson, FormatAspnetJson})
 	}
 }
 
@@ -348,6 +355,89 @@ func formatAsJson(envs []models.SingleEnvironmentVariable) string {
 		return ""
 	}
 	return string(json)
+}
+
+// Attempts to parse a string value as JSON (object, array, number, boolean, null)
+// falls back to the raw string on error.
+func parseSecretValue(val string) interface{} {
+	trimmed := strings.TrimSpace(val)
+	var parsed interface{}
+	err := json.Unmarshal([]byte(trimmed), &parsed)
+	if err != nil {
+		return val
+	}
+	if parsed == nil && trimmed != "null" {
+		return val
+	}
+	return parsed
+}
+
+// Recursively merges two maps
+func mergeMaps(dest, src map[string]interface{}) {
+	for k, v := range src {
+		destVal, exists := dest[k]
+		if !exists {
+			dest[k] = v
+			continue
+		}
+
+		destMap, destIsMap := destVal.(map[string]interface{})
+		srcMap, srcIsMap := v.(map[string]interface{})
+		if destIsMap && srcIsMap {
+			mergeMaps(destMap, srcMap)
+		} else {
+			dest[k] = v
+		}
+	}
+}
+
+// Formats environment variables into a nested JSON object structure compatible with ASP.NET Core appsettings.json
+func formatAsAppSettingsJson(envs []models.SingleEnvironmentVariable) string {
+	result := make(map[string]interface{})
+
+	for _, env := range envs {
+		val := parseSecretValue(env.Value)
+
+		normalizedKey := strings.ReplaceAll(env.Key, "__", ":")
+		parts := strings.Split(normalizedKey, ":")
+
+		current := result
+		for i, part := range parts {
+			if i == len(parts)-1 {
+				existingVal, exists := current[part]
+				existingMap, existingIsMap := existingVal.(map[string]interface{})
+				newMap, newIsMap := val.(map[string]interface{})
+				if exists && existingIsMap && newIsMap {
+					mergeMaps(existingMap, newMap)
+				} else {
+					current[part] = val
+				}
+			} else {
+				next, exists := current[part]
+				if !exists {
+					nextMap := make(map[string]interface{})
+					current[part] = nextMap
+					current = nextMap
+				} else {
+					nextMap, ok := next.(map[string]interface{})
+					if !ok {
+						nextMap = make(map[string]interface{})
+						current[part] = nextMap
+						current = nextMap
+					} else {
+						current = nextMap
+					}
+				}
+			}
+		}
+	}
+
+	jsonBytes, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		log.Err(err).Msgf("Unable to marshal environment variables to appsettings JSON")
+		return ""
+	}
+	return string(jsonBytes)
 }
 
 func escapeNewLinesIfRequired(env models.SingleEnvironmentVariable) string {

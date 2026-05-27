@@ -77,3 +77,116 @@ func TestFormatAsYaml(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatAsAppSettingsJson(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []models.SingleEnvironmentVariable
+		expected string
+	}{
+		{
+			name:     "Empty input",
+			input:    []models.SingleEnvironmentVariable{},
+			expected: "{}\n",
+		},
+		{
+			name: "Flat primitive types parsing",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "PORT", Value: "8080"},
+				{Key: "DEBUG", Value: "true"},
+				{Key: "NAME", Value: "MyApplication"},
+				{Key: "NULL_VAL", Value: "null"},
+			},
+			expected: `{
+  "DEBUG": true,
+  "NAME": "MyApplication",
+  "NULL_VAL": null,
+  "PORT": 8080
+}`,
+		},
+		{
+			name: "Nested keys with colons",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "AWS:Region", Value: "us-east-1"},
+				{Key: "ConnectionStrings:Default", Value: "Server=myServerAddress;Database=myDataBase;"},
+			},
+			expected: `{
+  "AWS": {
+    "Region": "us-east-1"
+  },
+  "ConnectionStrings": {
+    "Default": "Server=myServerAddress;Database=myDataBase;"
+  }
+}`,
+		},
+		{
+			name: "Nested keys with double underscores",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "AWS__Region", Value: "us-east-2"},
+				{Key: "ConnectionStrings__Default", Value: "Server=otherServer;"},
+			},
+			expected: `{
+  "AWS": {
+    "Region": "us-east-2"
+  },
+  "ConnectionStrings": {
+    "Default": "Server=otherServer;"
+  }
+}`,
+		},
+		{
+			name: "Values as JSON objects/arrays",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "AWS", Value: `{"Region":"us-west-2","Version":"v2"}`},
+				{Key: "TAGS", Value: `["production","web"]`},
+			},
+			expected: `{
+  "AWS": {
+    "Region": "us-west-2",
+    "Version": "v2"
+  },
+  "TAGS": [
+    "production",
+    "web"
+  ]
+}`,
+		},
+		{
+			name: "Deep nesting and merging objects",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "AWS:Credentials:AccessKey", Value: "AKIAIOSFODNN7EXAMPLE"},
+				{Key: "AWS:Credentials:SecretKey", Value: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+				{Key: "AWS:Region", Value: "us-east-1"},
+			},
+			expected: `{
+  "AWS": {
+    "Credentials": {
+      "AccessKey": "AKIAIOSFODNN7EXAMPLE",
+      "SecretKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    },
+    "Region": "us-east-1"
+  }
+}`,
+		},
+		{
+			name: "Merging parsed JSON objects and explicit nested keys in any order",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "AWS", Value: `{"Region":"us-east-1"}`},
+				{Key: "AWS:SecretKey", Value: "abc"},
+			},
+			expected: `{
+  "AWS": {
+    "Region": "us-east-1",
+    "SecretKey": "abc"
+  }
+}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatAsAppSettingsJson(tt.input)
+			assert.JSONEq(t, tt.expected, result)
+		})
+	}
+}
