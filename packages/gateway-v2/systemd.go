@@ -18,12 +18,8 @@ const (
 	gatewaysConfigDir  = "/etc/infisical/gateways"
 )
 
-func serviceName(name string) string {
-	return name
-}
-
 func serviceFilePath(name string) string {
-	return fmt.Sprintf("/etc/systemd/system/%s.service", serviceName(name))
+	return fmt.Sprintf("/etc/systemd/system/%s.service", name)
 }
 
 func gatewayConfigPath(name string) string {
@@ -70,7 +66,7 @@ func resolveInstallPaths(name string) installResult {
 	}
 
 	return installResult{
-		serviceName: serviceName(name),
+		serviceName: name,
 		configPath:  gatewayConfigPath(name),
 		isLegacy:    false,
 	}
@@ -266,7 +262,7 @@ func UninstallGatewaySystemdService(name string) error {
 	}
 
 	namedServicePath := serviceFilePath(name)
-	svcName := serviceName(name)
+	svcName := name
 	configPath := gatewayConfigPath(name)
 	isLegacy := false
 
