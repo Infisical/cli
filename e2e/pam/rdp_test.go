@@ -377,15 +377,23 @@ func TestPAM_RDP(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, numClients)
 
+		type proxyInfo struct {
+			port int
+			args []string
+		}
+		proxies := make([]proxyInfo, numClients)
 		for i := 0; i < numClients; i++ {
-			proxyPort := helpers.GetFreePort()
-			startRDPProxy(t, ctx, infra, resourceName, "rdp-concurrent-account", "5m", proxyPort)
+			port := helpers.GetFreePort()
+			startRDPProxy(t, ctx, infra, resourceName, "rdp-concurrent-account", "5m", port)
+			proxies[i] = proxyInfo{port: port, args: buildFreeRDPArgs(t, rdpBinary, "127.0.0.1", port, "testuser", "")}
+		}
 
+		for i, p := range proxies {
 			wg.Add(1)
-			go func(idx, port int) {
+			go func(idx int, args []string) {
 				defer wg.Done()
-				errs[idx] = connectFreeRDP(t, ctx, rdpBinary, "127.0.0.1", port, "testuser", "", 10*time.Second)
-			}(i, proxyPort)
+				errs[idx] = tryConnectFreeRDP(ctx, args, 10*time.Second)
+			}(i, p.args)
 		}
 
 		wg.Wait()
