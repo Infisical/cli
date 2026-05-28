@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"unicode"
@@ -13,6 +14,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/crypto"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 	"gopkg.in/yaml.v3"
@@ -377,16 +379,6 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	return secretsToReturn, errorToReturn
 }
 
-func getSecretsByKeys(secrets []models.SingleEnvironmentVariable) map[string]models.SingleEnvironmentVariable {
-	secretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
-
-	for _, secret := range secrets {
-		secretMapByName[secret.Key] = secret
-	}
-
-	return secretMapByName
-}
-
 func OverrideSecrets(secrets []models.SingleEnvironmentVariable, secretType string) []models.SingleEnvironmentVariable {
 	personalSecrets := make(map[string]models.SingleEnvironmentVariable)
 	sharedSecrets := make(map[string]models.SingleEnvironmentVariable)
@@ -632,7 +624,7 @@ func validateSecretKey(key string) error {
 	return nil
 }
 
-func SetRawSecrets(secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string) ([]models.SecretSetOperation, error) {
+func SetRawSecrets(secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
 	if file != "" {
 		content, err := os.ReadFile(file)
 		if err != nil {
@@ -689,6 +681,15 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
 	}
 
+	var cliProvidedTagIds []string
+	for _, slug := range tagSlugs {
+		tag, err := GetOrCreateTag(httpClient, projectId, slug)
+		if err != nil {
+			return nil, err
+		}
+		cliProvidedTagIds = append(cliProvidedTagIds, tag.ID)
+	}
+
 	secretsToCreate := []api.RawSecret{}
 	secretsToModify := []api.RawSecret{}
 	secretOperations := []models.SecretSetOperation{}
@@ -734,15 +735,36 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 				SecretValue: value,
 				SecretKey:   key,
 				Type:        existingSecret.Type,
+				TagIDs:      cliProvidedTagIds,
 			}
 
+			existingTags := make(map[string]struct{}, 0)
+			for _, tag := range existingSecret.Tags {
+				existingTags[tag.ID] = struct{}{}
+			}
+
+			newTagProvided := false
+			for _, cliProvidedTagId := range cliProvidedTagIds {
+				if _, found := existingTags[cliProvidedTagId]; !found {
+					newTagProvided = true
+				}
+			}
+
+			tagsChanged := newTagProvided || len(existingTags) != len(cliProvidedTagIds)
+
 			// Only add to modifications if the value is different
-			if existingSecret.Value != value {
+			if existingSecret.Value != value || tagsChanged {
 				secretsToModify = append(secretsToModify, encryptedSecretDetails)
+				message := "SECRET VALUE MODIFIED"
+				if existingSecret.Value == value {
+					// We only display SECRET TAGS UPDATED if the value has not changed
+					// otherwise value changes should take precedence
+					message = "SECRET TAGS MODIFIED"
+				}
 				secretOperations = append(secretOperations, models.SecretSetOperation{
 					SecretKey:       key,
 					SecretValue:     value,
-					SecretOperation: "SECRET VALUE MODIFIED",
+					SecretOperation: message,
 				})
 			} else {
 				// Current value is same as existing so no change
@@ -759,6 +781,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 				SecretKey:   key,
 				SecretValue: value,
 				Type:        secretType,
+				TagIDs:      cliProvidedTagIds,
 			}
 			secretsToCreate = append(secretsToCreate, encryptedSecretDetails)
 			secretOperations = append(secretOperations, models.SecretSetOperation{
@@ -777,6 +800,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 			SecretPath:  secretsPath,
 			WorkspaceID: projectId,
 			Environment: environmentName,
+			TagIDs:      secret.TagIDs,
 		}
 
 		err = api.CallCreateRawSecretsV3(httpClient, createSecretRequest)
@@ -793,6 +817,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 			WorkspaceID: projectId,
 			Environment: environmentName,
 			Type:        secret.Type,
+			TagIDs:      secret.TagIDs,
 		}
 
 		err = api.CallUpdateRawSecretsV3(httpClient, updateSecretRequest)
@@ -803,4 +828,28 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 
 	return secretOperations, nil
 
+}
+
+func GetOrCreateTag(client *resty.Client, projectId string, slug string) (api.SecretTag, error) {
+	tag, err := api.GetTagBySlug(client, projectId, slug)
+	if err == nil {
+		return tag, nil
+	}
+
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode == http.StatusNotFound {
+			newTag, createErr := api.CreateTag(client, projectId, api.CreateTagRequest{
+				Slug:  slug,
+				Color: "",
+			})
+			if createErr != nil {
+				return api.SecretTag{}, fmt.Errorf("could not create tag %q: [err=%v]", slug, createErr)
+			}
+
+			return newTag, nil
+		}
+	}
+
+	return api.SecretTag{}, fmt.Errorf("unable to resolve tag slug %q [err=%v]", slug, err)
 }
