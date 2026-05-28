@@ -708,7 +708,7 @@ var gatewaySystemdUninstallCmd = &cobra.Command{
 	Long:                  "Uninstall and remove systemd service for the gateway. Must be run with sudo on Linux.",
 	Example:               "sudo infisical gateway systemd uninstall my-gateway",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
 			util.HandleError(fmt.Errorf("systemd service uninstallation is only supported on Linux"))
@@ -716,6 +716,13 @@ var gatewaySystemdUninstallCmd = &cobra.Command{
 
 		if os.Geteuid() != 0 {
 			util.HandleError(fmt.Errorf("systemd service uninstallation requires root/sudo privileges"))
+		}
+
+		if len(args) == 0 {
+			if err := gatewayv2.UninstallLegacyGatewaySystemdService(); err != nil {
+				util.HandleError(err, "Failed to uninstall systemd service")
+			}
+			return
 		}
 
 		if err := gatewayv2.UninstallGatewaySystemdService(args[0]); err != nil {

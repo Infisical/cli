@@ -41,7 +41,7 @@ func detectLegacyService() legacyInfo {
 }
 
 func logLegacyWarning(svcName string) {
-	log.Warn().Msgf("Using legacy service name '%s'. To migrate to the new naming format, run: sudo infisical gateway systemd uninstall %s && sudo infisical gateway systemd install %s <original-flags>", legacyServiceName, svcName, svcName)
+	log.Warn().Msgf("Using legacy service name '%s'. To migrate to the new naming format, run: sudo infisical gateway systemd uninstall %s, then get a fresh install command from the Infisical dashboard.", legacyServiceName, svcName)
 }
 
 type installResult struct {
@@ -319,4 +319,15 @@ func UninstallGatewaySystemdService(name string) error {
 
 	log.Info().Msgf("Successfully uninstalled gateway service '%s'", svcName)
 	return nil
+}
+
+func UninstallLegacyGatewaySystemdService() error {
+	legacy := detectLegacyService()
+	if !legacy.exists {
+		return fmt.Errorf("no legacy gateway service found. Please provide a gateway name: sudo infisical gateway systemd uninstall <name>")
+	}
+	if legacy.gatewayName == "" {
+		return fmt.Errorf("legacy gateway service found but has no gateway name in config")
+	}
+	return UninstallGatewaySystemdService(legacy.gatewayName)
 }
