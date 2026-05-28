@@ -519,7 +519,7 @@ func buildKrb5Config(realm, kdcAddress string) (*config.Config, error) {
 func wrapKerberosError(err error, kdcAddress string) error {
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "sending to KDC") || strings.Contains(msg, "connection refused"):
+	case strings.Contains(msg, "sending to KDC") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "dial timeout") || strings.Contains(msg, "i/o timeout"):
 		return fmt.Errorf("Kerberos: cannot reach KDC at %s (verify address and ensure port 88 is open): %w", kdcAddress, err)
 	case strings.Contains(msg, "Clock skew") || strings.Contains(msg, "KRB_AP_ERR_SKEW"):
 		return fmt.Errorf("Kerberos: clock skew too large (gateway and KDC must be within 5 minutes): %w", err)
