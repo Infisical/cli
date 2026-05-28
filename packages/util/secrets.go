@@ -681,8 +681,13 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
 	}
 
+	uniqueSlugs := make(map[string]struct{}, len(tagSlugs))
 	var cliProvidedTagIds []string
 	for _, slug := range tagSlugs {
+		if _, seen := uniqueSlugs[slug]; seen {
+			continue
+		}
+		uniqueSlugs[slug] = struct{}{}
 		tag, err := GetOrCreateTag(httpClient, projectId, slug)
 		if err != nil {
 			return nil, err
