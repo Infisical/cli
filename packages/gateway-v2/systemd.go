@@ -50,7 +50,7 @@ type installResult struct {
 	isLegacy    bool
 }
 
-func resolveInstallPaths(name string) installResult {
+func resolveInstallPaths(name string) (installResult, error) {
 	legacy := detectLegacyService()
 
 	if legacy.exists && legacy.gatewayName == name {
@@ -58,7 +58,11 @@ func resolveInstallPaths(name string) installResult {
 			serviceName: legacyServiceName,
 			configPath:  legacyConfigPath,
 			isLegacy:    true,
-		}
+		}, nil
+	}
+
+	if legacy.exists && name == legacyServiceName {
+		return installResult{}, fmt.Errorf("cannot use '%s' as a gateway name because it conflicts with the legacy gateway service", legacyServiceName)
 	}
 
 	if legacy.exists {
@@ -69,7 +73,7 @@ func resolveInstallPaths(name string) installResult {
 		serviceName: name,
 		configPath:  gatewayConfigPath(name),
 		isLegacy:    false,
-	}
+	}, nil
 }
 
 func InstallGatewaySystemdService(token string, domain string, name string, relayName string, serviceLogFile string) (string, error) {
@@ -83,7 +87,10 @@ func InstallGatewaySystemdService(token string, domain string, name string, rela
 		return "", nil
 	}
 
-	paths := resolveInstallPaths(name)
+	paths, err := resolveInstallPaths(name)
+	if err != nil {
+		return "", err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(paths.configPath), 0755); err != nil {
 		return "", fmt.Errorf("failed to create config directory: %v", err)
@@ -143,7 +150,10 @@ func InstallEnrolledGatewaySystemdService(accessToken string, domain string, nam
 		return "", nil
 	}
 
-	paths := resolveInstallPaths(name)
+	paths, err := resolveInstallPaths(name)
+	if err != nil {
+		return "", err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(paths.configPath), 0755); err != nil {
 		return "", fmt.Errorf("failed to create config directory: %v", err)
@@ -204,7 +214,10 @@ func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name s
 		return "", nil
 	}
 
-	paths := resolveInstallPaths(name)
+	paths, err := resolveInstallPaths(name)
+	if err != nil {
+		return "", err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(paths.configPath), 0755); err != nil {
 		return "", fmt.Errorf("failed to create config directory: %v", err)
