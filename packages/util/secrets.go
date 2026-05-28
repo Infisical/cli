@@ -738,19 +738,20 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 				TagIDs:      cliProvidedTagIds,
 			}
 
-			existingTags := make(map[string]struct{}, 0)
+			existingTagIds := make(map[string]struct{}, len(existingSecret.Tags))
 			for _, tag := range existingSecret.Tags {
-				existingTags[tag.ID] = struct{}{}
+				existingTagIds[tag.ID] = struct{}{}
 			}
 
-			newTagProvided := false
-			for _, cliProvidedTagId := range cliProvidedTagIds {
-				if _, found := existingTags[cliProvidedTagId]; !found {
-					newTagProvided = true
+			tagsChanged := len(cliProvidedTagIds) > 0 && len(cliProvidedTagIds) != len(existingTagIds)
+			if !tagsChanged {
+				for _, id := range cliProvidedTagIds {
+					if _, found := existingTagIds[id]; !found {
+						tagsChanged = true
+						break
+					}
 				}
 			}
-
-			tagsChanged := newTagProvided || len(existingTags) != len(cliProvidedTagIds)
 
 			// Only add to modifications if the value is different
 			if existingSecret.Value != value || tagsChanged {
