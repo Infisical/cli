@@ -289,7 +289,7 @@ func WithLocalStackService() StackOption {
 			s.Project.Services = types.Services{}
 		}
 		s.Project.Services["localstack"] = types.ServiceConfig{
-			Image: "localstack/localstack:4.4",
+			Image: "localstack/localstack:4.4@sha256:b52c16663c70b7234f217cb993a339b46686e30a1a5d9279cb5feeb2202f837c",
 			Ports: []types.ServicePortConfig{{Published: "", Target: 4566}},
 			Environment: types.NewMappingWithEquals([]string{
 				"SERVICES=s3,sts",
