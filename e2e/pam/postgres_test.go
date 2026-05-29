@@ -67,7 +67,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 		ctx,
 		client.CreatePostgresPamResourceJSONRequestBody{
 			ProjectId: uuid.MustParse(infra.ProjectId),
-			GatewayId: infra.GatewayId,
+			GatewayId: &infra.GatewayId,
 			Name:      resourceName,
 			ConnectionDetails: struct {
 				Database              string  `json:"database"`

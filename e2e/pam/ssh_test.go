@@ -70,7 +70,7 @@ func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra
 		ctx,
 		client.CreateSshPamResourceJSONRequestBody{
 			ProjectId: uuid.MustParse(infra.ProjectId),
-			GatewayId: infra.GatewayId,
+			GatewayId: &infra.GatewayId,
 			Name:      name,
 			ConnectionDetails: struct {
 				Host string  `json:"host"`
