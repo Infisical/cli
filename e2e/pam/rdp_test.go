@@ -20,7 +20,6 @@ import (
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/jackc/pgx/v5"
-	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -111,11 +110,11 @@ func createAwsAppConnection(t *testing.T, ctx context.Context, infra *PAMTestInf
 }
 
 func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
-	gatewayId := openapitypes.UUID(infra.GatewayId)
+	gatewayId := infra.GatewayId
 	resp, err := infra.ApiClient.CreateWindowsPamResourceWithResponse(
 		ctx,
 		client.CreateWindowsPamResourceJSONRequestBody{
-			ProjectId: openapitypes.UUID(uuid.MustParse(infra.ProjectId)),
+			ProjectId: uuid.MustParse(infra.ProjectId),
 			GatewayId: &gatewayId,
 			Name:      name,
 			ConnectionDetails: struct {
@@ -140,7 +139,7 @@ func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode(), "create Windows resource: %s", string(resp.Body))
 	slog.Info("Created Windows PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
-	return uuid.UUID(resp.JSON200.Resource.Id)
+	return resp.JSON200.Resource.Id
 }
 
 func createRDPPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceId uuid.UUID, name, username, password string) {
