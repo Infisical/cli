@@ -30,19 +30,14 @@ func gatewayConfPath(name string) (string, error) {
 	return filepath.Join(homeDir, ".infisical", "gateways", name+".conf"), nil
 }
 
-// loadConfKey reads a key from the named gateway's config file. Returns empty string if not found.
-func loadConfKey(name, key string) (string, error) {
-	confPath, err := gatewayConfPath(name)
-	if err != nil {
-		return "", err
-	}
-
-	data, err := os.ReadFile(confPath)
+// readKeyFromConfFile reads a key=value pair from a config file at the given path.
+func readKeyFromConfFile(path, key string) (string, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to read gateway config: %w", err)
+		return "", fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	prefix := key + "="
@@ -54,6 +49,15 @@ func loadConfKey(name, key string) (string, error) {
 	}
 
 	return "", nil
+}
+
+// loadConfKey reads a key from the named gateway's config file. Returns empty string if not found.
+func loadConfKey(name, key string) (string, error) {
+	confPath, err := gatewayConfPath(name)
+	if err != nil {
+		return "", err
+	}
+	return readKeyFromConfFile(confPath, key)
 }
 
 // saveConfKey writes a key=value pair to the named gateway's config file, preserving other keys.
