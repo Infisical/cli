@@ -26,8 +26,9 @@ jobs:
           cache-dependency-path: go.sum
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-      - name: Run govulncheck (report-only)
-        continue-on-error: true
+      # Fails on ANY vulnerable module version (deps + stdlib for the CI toolchain),
+      # regardless of reachability — matches external (Trivy-style) scanners.
+      - name: Run govulncheck (module versions)
         env:
           CGO_ENABLED: "0"
-        run: govulncheck ./...
+        run: govulncheck -scan module
