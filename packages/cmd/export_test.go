@@ -77,3 +77,63 @@ func TestFormatAsYaml(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatEnvsDotEnvQuoteStyles(t *testing.T) {
+	envs := []models.SingleEnvironmentVariable{
+		{Key: "PLAIN", Value: "value"},
+		{Key: "PRIVATE_KEY", Value: "line 1\nline 2", SkipMultilineEncoding: true},
+		{Key: "JSON", Value: `{"enabled":true}`},
+	}
+
+	tests := []struct {
+		name       string
+		quoteStyle string
+		format     string
+		expected   string
+	}{
+		{
+			name:       "single quote style preserves existing dotenv output",
+			quoteStyle: DotEnvQuoteStyleSingle,
+			format:     FormatDotenv,
+			expected:   "PLAIN='value'\nPRIVATE_KEY='line 1\\nline 2'\nJSON='{\"enabled\":true}'\n",
+		},
+		{
+			name:       "double quote style wraps dotenv values in double quotes",
+			quoteStyle: DotEnvQuoteStyleDouble,
+			format:     FormatDotenv,
+			expected:   "PLAIN=\"value\"\nPRIVATE_KEY=\"line 1\\nline 2\"\nJSON=\"{\\\"enabled\\\":true}\"\n",
+		},
+		{
+			name:       "none quote style leaves dotenv values unquoted",
+			quoteStyle: DotEnvQuoteStyleNone,
+			format:     FormatDotenv,
+			expected:   "PLAIN=value\nPRIVATE_KEY=line 1\\nline 2\nJSON={\"enabled\":true}\n",
+		},
+		{
+			name:       "double quote style works with dotenv export",
+			quoteStyle: DotEnvQuoteStyleDouble,
+			format:     FormatDotEnvExport,
+			expected:   "export PLAIN=\"value\"\nexport PRIVATE_KEY=\"line 1\\nline 2\"\nexport JSON=\"{\\\"enabled\\\":true}\"\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := formatEnvs(envs, tt.format, tt.quoteStyle)
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFormatEnvsRejectsInvalidDotEnvQuoteStyle(t *testing.T) {
+	_, err := formatEnvs(
+		[]models.SingleEnvironmentVariable{{Key: "KEY", Value: "VALUE"}},
+		FormatDotenv,
+		"invalid",
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid dotenv quote style")
+}
