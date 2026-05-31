@@ -401,10 +401,7 @@ func (p *MssqlProxy) authenticateKerberos(serverConn net.Conn) (_ net.Conn, _ []
 		}
 	}()
 
-	cfg, err := buildKrb5Config(p.config.InjectRealm, p.config.InjectKDCAddr)
-	if err != nil {
-		return nil, nil, wrapKerberosError(err, p.config.InjectKDCAddr)
-	}
+	cfg := buildKrb5Config(p.config.InjectRealm, p.config.InjectKDCAddr)
 
 	krbClient := client.NewWithPassword(
 		p.config.InjectUsername, p.config.InjectRealm, p.config.InjectPassword,
@@ -483,37 +480,24 @@ func (p *MssqlProxy) authenticateKerberos(serverConn net.Conn) (_ net.Conn, _ []
 	return serverConn, response, nil
 }
 
-func buildKrb5Config(realm, kdcAddress string) (*config.Config, error) {
-	for _, s := range []string{realm, kdcAddress} {
-		if strings.ContainsAny(s, "\n\r[]{}=") {
-			return nil, fmt.Errorf("invalid characters in Kerberos configuration")
-		}
-	}
-
-	dnsLookup := "true"
-	realmsSection := ""
+func buildKrb5Config(realm, kdcAddress string) *config.Config {
+	cfg := config.New()
+	cfg.LibDefaults.DefaultRealm = realm
+	cfg.LibDefaults.DNSLookupKDC = kdcAddress == ""
+	cfg.LibDefaults.DNSLookupRealm = false
+	cfg.LibDefaults.UDPPreferenceLimit = 1
 
 	if kdcAddress != "" {
-		dnsLookup = "false"
 		if !strings.Contains(kdcAddress, ":") {
 			kdcAddress = kdcAddress + ":88"
 		}
-		realmsSection = fmt.Sprintf(`
-[realms]
-  %s = {
-    kdc = %s
-  }`, realm, kdcAddress)
+		cfg.Realms = append(cfg.Realms, config.Realm{
+			Realm: realm,
+			KDC:   []string{kdcAddress},
+		})
 	}
 
-	cfgString := fmt.Sprintf(`
-[libdefaults]
-  default_realm = %s
-  dns_lookup_kdc = %s
-  dns_lookup_realm = false
-  udp_preference_limit = 1
-%s`, realm, dnsLookup, realmsSection)
-
-	return config.NewFromString(cfgString)
+	return cfg
 }
 
 func wrapKerberosError(err error, kdcAddress string) error {
