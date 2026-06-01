@@ -955,6 +955,9 @@ type PAMSessionCredentials struct {
 	ServiceAccountName    string `json:"serviceAccountName,omitempty"`
 	Namespace             string `json:"namespace,omitempty"`
 	Domain                string `json:"domain,omitempty"`
+	Realm                 string `json:"realm,omitempty"`
+	KDCAddress            string `json:"kdcAddress,omitempty"`
+	SPN                   string `json:"spn,omitempty"`
 }
 
 type MFASessionStatus string

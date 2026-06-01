@@ -6,10 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/Azure/go-ntlmssp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/jcmturner/gokrb5/v8/client"
+	"github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/spnego"
 	"github.com/rs/zerolog/log"
 )
 
@@ -18,6 +23,11 @@ type MssqlProxyConfig struct {
 	InjectUsername string
 	InjectPassword string
 	InjectDatabase string
+	InjectDomain   string
+	InjectRealm    string
+	InjectKDCAddr  string
+	InjectSPN      string
+	AuthMethod     string // "sql-login", "ntlm", or "kerberos"
 	EnableTLS      bool
 	TLSConfig      *tls.Config
 	SessionID      string
@@ -231,7 +241,22 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		log.Info().Str("sessionID", p.config.SessionID).Msg("TLS established with server")
 	}
 
-	// 4. Send LOGIN7 with injected credentials
+	if p.config.AuthMethod == "ntlm" {
+		return p.authenticateNTLM(serverConn)
+	}
+	if p.config.AuthMethod == "kerberos" {
+		return p.authenticateKerberos(serverConn)
+	}
+	return p.authenticateSQL(serverConn)
+}
+
+func (p *MssqlProxy) authenticateSQL(serverConn net.Conn) (_ net.Conn, _ []*TDSPacket, retErr error) {
+	defer func() {
+		if retErr != nil {
+			serverConn.Close()
+		}
+	}()
+
 	loginMsg := &Login7Message{
 		Username: p.config.InjectUsername,
 		Password: p.config.InjectPassword,
@@ -247,7 +272,6 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		Payload:  loginMsg.Encode(),
 	}
 	if err := loginPkt.Write(serverConn); err != nil {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("send login to server: %w", err)
 	}
 
@@ -257,11 +281,8 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		Int("loginPktLen", len(loginPkt.Payload)+TDSHeaderSize).
 		Msg("Sent LOGIN7 to server")
 
-	// 5. Read login response - forward to client
-	log.Info().Str("sessionID", p.config.SessionID).Msg("Waiting for login response...")
 	response, err := ReadAllPackets(serverConn)
 	if err != nil {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("read login response: %w", err)
 	}
 	log.Info().
@@ -271,16 +292,228 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 
 	respPayload := CombinePayloads(response)
 	if ContainsToken(respPayload, TokenError) {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("server authentication failed")
 	}
 	if !ContainsToken(respPayload, TokenLoginAck) {
-		serverConn.Close()
 		return nil, nil, fmt.Errorf("no login ack from server")
 	}
 
 	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL server authentication successful")
 	return serverConn, response, nil
+}
+
+func (p *MssqlProxy) authenticateNTLM(serverConn net.Conn) (_ net.Conn, _ []*TDSPacket, retErr error) {
+	defer func() {
+		if retErr != nil {
+			serverConn.Close()
+		}
+	}()
+
+	negotiate, err := ntlmssp.NewNegotiateMessage(p.config.InjectDomain, "infisical-proxy")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create NTLM negotiate message: %w", err)
+	}
+
+	loginMsg := &Login7Message{
+		Database: p.config.InjectDatabase,
+		AppName:  "Infisical PAM Proxy",
+		Hostname: "infisical-proxy",
+		SSPIData: negotiate,
+	}
+
+	loginPkt := &TDSPacket{
+		Type:     PacketTypeLogin7,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  loginMsg.Encode(),
+	}
+	if err := loginPkt.Write(serverConn); err != nil {
+		return nil, nil, fmt.Errorf("send NTLM login to server: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Str("domain", p.config.InjectDomain).
+		Str("user", p.config.InjectUsername).
+		Msg("Sent LOGIN7 with NTLM negotiate to server")
+
+	challengeResponse, err := ReadAllPackets(serverConn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read NTLM challenge: %w", err)
+	}
+
+	challengePayload := CombinePayloads(challengeResponse)
+
+	challengeToken, err := ExtractSSPIToken(challengePayload)
+	if err != nil {
+		if ContainsToken(challengePayload, TokenError) {
+			return nil, nil, fmt.Errorf("server rejected NTLM negotiate")
+		}
+		return nil, nil, fmt.Errorf("extract NTLM challenge: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Int("challengeLen", len(challengeToken)).
+		Msg("Received NTLM challenge from server")
+
+	ntlmUsername := p.config.InjectDomain + "\\" + p.config.InjectUsername
+	authenticate, err := ntlmssp.ProcessChallenge(challengeToken, ntlmUsername, p.config.InjectPassword, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("process NTLM challenge: %w", err)
+	}
+
+	sspiPkt := &TDSPacket{
+		Type:     PacketTypeSSPI,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  authenticate,
+	}
+	if err := sspiPkt.Write(serverConn); err != nil {
+		return nil, nil, fmt.Errorf("send NTLM authenticate: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Msg("Sent NTLM authenticate to server")
+
+	response, err := ReadAllPackets(serverConn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read NTLM login response: %w", err)
+	}
+
+	respPayload := CombinePayloads(response)
+	if ContainsToken(respPayload, TokenError) {
+		return nil, nil, fmt.Errorf("NTLM authentication failed")
+	}
+	if !ContainsToken(respPayload, TokenLoginAck) {
+		return nil, nil, fmt.Errorf("no login ack after NTLM authentication")
+	}
+
+	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL NTLM authentication successful")
+	return serverConn, response, nil
+}
+
+func (p *MssqlProxy) authenticateKerberos(serverConn net.Conn) (_ net.Conn, _ []*TDSPacket, retErr error) {
+	defer func() {
+		if retErr != nil {
+			serverConn.Close()
+		}
+	}()
+
+	cfg := buildKrb5Config(p.config.InjectRealm, p.config.InjectKDCAddr)
+
+	krbClient := client.NewWithPassword(
+		p.config.InjectUsername, p.config.InjectRealm, p.config.InjectPassword,
+		cfg, client.DisablePAFXFAST(true),
+	)
+	defer krbClient.Destroy()
+
+	if err := krbClient.Login(); err != nil {
+		return nil, nil, wrapKerberosError(err, p.config.InjectKDCAddr)
+	}
+
+	ticket, encryptionKey, err := krbClient.GetServiceTicket(p.config.InjectSPN)
+	if err != nil {
+		return nil, nil, wrapKerberosError(err, p.config.InjectKDCAddr)
+	}
+
+	initToken, err := spnego.NewNegTokenInitKRB5(krbClient, ticket, encryptionKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create SPNEGO token: %w", err)
+	}
+
+	tokenBytes, err := initToken.Marshal()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal SPNEGO token: %w", err)
+	}
+
+	loginMsg := &Login7Message{
+		Database: p.config.InjectDatabase,
+		AppName:  "Infisical PAM Proxy",
+		Hostname: "infisical-proxy",
+		SSPIData: tokenBytes,
+	}
+
+	loginPkt := &TDSPacket{
+		Type:     PacketTypeLogin7,
+		Status:   StatusEOM,
+		PacketID: 1,
+		Payload:  loginMsg.Encode(),
+	}
+	if err := loginPkt.Write(serverConn); err != nil {
+		return nil, nil, fmt.Errorf("send Kerberos login to server: %w", err)
+	}
+
+	log.Info().
+		Str("sessionID", p.config.SessionID).
+		Str("realm", p.config.InjectRealm).
+		Str("spn", p.config.InjectSPN).
+		Str("user", p.config.InjectUsername).
+		Msg("Sent LOGIN7 with Kerberos SPNEGO to server")
+
+	response, err := ReadAllPackets(serverConn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read Kerberos login response: %w", err)
+	}
+
+	respPayload := CombinePayloads(response)
+
+	// Kerberos mutual auth: server may send SSPI accept before LoginAck.
+	// Read the next batch which should contain LoginAck.
+	if !ContainsToken(respPayload, TokenLoginAck) && !ContainsToken(respPayload, TokenError) {
+		response, err = ReadAllPackets(serverConn)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read Kerberos final response: %w", err)
+		}
+		respPayload = CombinePayloads(response)
+	}
+
+	if ContainsToken(respPayload, TokenError) {
+		return nil, nil, fmt.Errorf("Kerberos authentication failed")
+	}
+	if !ContainsToken(respPayload, TokenLoginAck) {
+		return nil, nil, fmt.Errorf("no login ack after Kerberos authentication")
+	}
+
+	log.Info().Str("sessionID", p.config.SessionID).Msg("MSSQL Kerberos authentication successful")
+	return serverConn, response, nil
+}
+
+func buildKrb5Config(realm, kdcAddress string) *config.Config {
+	cfg := config.New()
+	cfg.LibDefaults.DefaultRealm = realm
+	cfg.LibDefaults.DNSLookupKDC = kdcAddress == ""
+	cfg.LibDefaults.DNSLookupRealm = false
+	cfg.LibDefaults.UDPPreferenceLimit = 1
+
+	if kdcAddress != "" {
+		if !strings.Contains(kdcAddress, ":") {
+			kdcAddress = kdcAddress + ":88"
+		}
+		cfg.Realms = append(cfg.Realms, config.Realm{
+			Realm: realm,
+			KDC:   []string{kdcAddress},
+		})
+	}
+
+	return cfg
+}
+
+func wrapKerberosError(err error, kdcAddress string) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "sending to KDC") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "dial timeout") || strings.Contains(msg, "i/o timeout"):
+		return fmt.Errorf("Kerberos: cannot reach KDC at %s (verify address and ensure port 88 is open): %w", kdcAddress, err)
+	case strings.Contains(msg, "Clock skew") || strings.Contains(msg, "KRB_AP_ERR_SKEW"):
+		return fmt.Errorf("Kerberos: clock skew too large (gateway and KDC must be within 5 minutes): %w", err)
+	case strings.Contains(msg, "Preauthentication") || strings.Contains(msg, "KDC_ERR_PREAUTH_FAILED"):
+		return fmt.Errorf("Kerberos: invalid credentials (check username, password, and realm): %w", err)
+	case strings.Contains(msg, "not found in Kerberos database") || strings.Contains(msg, "PRINCIPAL_UNKNOWN"):
+		return fmt.Errorf("Kerberos: principal not found (check realm and SPN): %w", err)
+	default:
+		return fmt.Errorf("Kerberos authentication failed: %w", err)
+	}
 }
 
 func (p *MssqlProxy) proxyToServer(client, server net.Conn, errCh chan error) {
