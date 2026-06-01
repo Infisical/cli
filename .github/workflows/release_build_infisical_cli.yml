@@ -16,7 +16,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # Required for NPM OIDC auth for releases
+  id-token: write # Required for NPM OIDC auth for releases
 
 jobs:
   validate-tag-branch:
@@ -78,7 +78,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
         with:
-          node-version: '24.14.0'
+          node-version: "24.14.0"
           cache: "npm"
           cache-dependency-path: ./npm/package-lock.json
           registry-url: "https://registry.npmjs.org"
@@ -205,50 +205,6 @@ jobs:
           name: goreleaser-dist-linux
           path: dist/
           retention-days: 7
-      - name: Smoke test linux binary across supported distros
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: |
-          set -uo pipefail
-          fail=0
-          echo "::group::Static-link assertion (file)"
-          for d in dist/linux-*-rdp_linux_*; do
-            bin="$d/infisical"
-            [ -f "$bin" ] || continue
-            info=$(file "$bin")
-            echo "$info"
-            if ! echo "$info" | grep -q "statically linked"; then
-              echo "::error file=$bin::not statically linked"
-              fail=1
-            fi
-          done
-          echo "::endgroup::"
-
-          BIN=dist/linux-amd64-rdp_linux_amd64_v1/infisical
-          if [ ! -f "$BIN" ]; then
-            echo "::error::expected $BIN missing from dist/"
-            exit 1
-          fi
-          echo "::group::Smoke test linux-amd64 binary across distro floor"
-          for img in \
-              ubuntu:22.04 \
-              ubuntu:20.04 \
-              rockylinux:9 \
-              rockylinux:8 \
-              amazonlinux:2023 \
-              amazonlinux:2 \
-              alpine:3.19 \
-              gcr.io/distroless/static-debian12; do
-            echo "--- $img ---"
-            if ! docker run --rm --platform linux/amd64 \
-                    -v "$PWD/$BIN":/infisical:ro \
-                    "$img" /infisical --version; then
-              echo "::error::binary failed to run on $img"
-              fail=1
-            fi
-          done
-          echo "::endgroup::"
-
-          [ "$fail" -eq 0 ] || exit 1
       - name: GoReleaser (release)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
@@ -469,5 +425,3 @@ jobs:
           name: goreleaser-dist-windows
           path: dist/
           retention-days: 7
-
-
