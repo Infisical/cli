@@ -263,7 +263,7 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 			ctx,
 			client.CreateKubernetesPamResourceJSONRequestBody{
 				ProjectId: uuid.MustParse(projectId),
-				GatewayId: gatewayId,
+				GatewayId: &gatewayId,
 				Name:      "k8s-resource",
 				ConnectionDetails: struct {
 					SslCertificate        *string `json:"sslCertificate,omitempty"`
@@ -321,7 +321,7 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 			ctx,
 			client.CreateRedisPamResourceJSONRequestBody{
 				ProjectId: uuid.MustParse(projectId),
-				GatewayId: gatewayId,
+				GatewayId: &gatewayId,
 				Name:      "redis-resource",
 				ConnectionDetails: struct {
 					Host                  string  `json:"host"`

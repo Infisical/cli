@@ -65,7 +65,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Comment: secret.SecretComment, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
 	}
 
 	if includeImports {
@@ -110,7 +110,7 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Type: secret.Type, WorkspaceId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Comment: secret.SecretComment, Type: secret.Type, WorkspaceId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
 	}
 
 	if includeImports {
@@ -239,6 +239,7 @@ func InjectRawImportedSecret(secrets []models.SingleEnvironmentVariable, importe
 					Value:       sec.SecretValue,
 					Type:        sec.Type,
 					ID:          sec.ID,
+					Comment:     sec.SecretComment,
 				})
 				hasOverriden[sec.SecretKey] = true
 			}

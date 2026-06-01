@@ -571,7 +571,7 @@ var gatewaySystemdCmd = &cobra.Command{
 	Short: "Manage systemd service for Infisical gateway",
 	Long:  "Manage systemd service for Infisical gateway. Use 'systemd install' to install and enable the service.",
 	Example: `sudo infisical gateway systemd install my-gateway --token=<token> --domain=<domain>
-  sudo infisical gateway systemd uninstall`,
+  sudo infisical gateway systemd uninstall my-gateway`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 }
@@ -619,6 +619,8 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
+		var installedServiceName string
+
 		if enrollMethod == gatewayv2.EnrollMethodToken {
 			// --- Enrollment token path ---
 			enrollToken, flagErr := cmd.Flags().GetString("token")
@@ -642,9 +644,11 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			}
 
 			// Install systemd service using the long-lived access token
-			if installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+			svcName, installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile)
+			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
+			installedServiceName = svcName
 		} else if enrollMethod == gatewayv2.EnrollMethodAws {
 			// --- AWS Auth path ---
 			// Don't perform the AWS login at install time — the gateway does it on each service
@@ -656,9 +660,11 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 			relayName, _ := util.GetRelayName(cmd, false, "")
 
-			if installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+			svcName, installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, serviceLogFile)
+			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
+			installedServiceName = svcName
 		} else {
 			// --- Machine identity token path ---
 			token, tokenErr := util.GetInfisicalToken(cmd)
@@ -675,38 +681,51 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(relayErr, "unable to get relay name")
 			}
 
-			if installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile); installErr != nil {
+			svcName, installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile)
+			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
+			installedServiceName = svcName
 		}
 
-		enableCmd := exec.Command("systemctl", "enable", "infisical-gateway")
+		if installedServiceName == "" {
+			return
+		}
+
+		enableCmd := exec.Command("systemctl", "enable", installedServiceName)
 		if err := enableCmd.Run(); err != nil {
 			util.HandleError(err, "Failed to enable systemd service")
 		}
 
-		log.Info().Msg("Successfully installed and enabled infisical-gateway service")
-		log.Info().Msg("To start the service, run: sudo systemctl start infisical-gateway")
+		log.Info().Msgf("Successfully installed and enabled %s service", installedServiceName)
+		log.Info().Msgf("To start the service, run: sudo systemctl start %s", installedServiceName)
 	},
 }
 
 var gatewaySystemdUninstallCmd = &cobra.Command{
-	Use:                   "uninstall",
+	Use:                   "uninstall [name]",
 	Short:                 "Uninstall and remove systemd service for the gateway (requires sudo)",
 	Long:                  "Uninstall and remove systemd service for the gateway. Must be run with sudo on Linux.",
-	Example:               "sudo infisical gateway systemd uninstall",
+	Example:               "sudo infisical gateway systemd uninstall my-gateway",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
-			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
+			util.HandleError(fmt.Errorf("systemd service uninstallation is only supported on Linux"))
 		}
 
 		if os.Geteuid() != 0 {
-			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
+			util.HandleError(fmt.Errorf("systemd service uninstallation requires root/sudo privileges"))
 		}
 
-		if err := gatewayv2.UninstallGatewaySystemdService(); err != nil {
+		if len(args) == 0 {
+			if err := gatewayv2.UninstallLegacyGatewaySystemdService(); err != nil {
+				util.HandleError(err, "Failed to uninstall systemd service")
+			}
+			return
+		}
+
+		if err := gatewayv2.UninstallGatewaySystemdService(args[0]); err != nil {
 			util.HandleError(err, "Failed to uninstall systemd service")
 		}
 	},

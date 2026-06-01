@@ -16,7 +16,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.25.9"
+          go-version: "1.25.10"
       - name: Install dependencies
         run: go get .
       - name: Build the CLI
@@ -52,7 +52,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.25.9"
+          go-version: "1.25.10"
       - name: Install dependencies
         run: go get .
       - name: Build the CLI
@@ -79,11 +79,31 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.25.9"
+          go-version: "1.25.10"
       - name: Install dependencies
         run: go get .
+      - name: Cache cargo registry + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-bridge-cargo-${{ runner.os }}-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-bridge-cargo-${{ runner.os }}-
+      - name: Install pinned Rust toolchain
+        working-directory: packages/pam/handlers/rdp/native
+        run: rustup show active-toolchain
+      - name: Build Rust RDP bridge
+        working-directory: packages/pam/handlers/rdp/native
+        run: cargo build --release
       - name: Build the CLI
-        run: go build -o infisical-cli
+        run: CGO_ENABLED=1 go build -tags rdp -o infisical-cli
+      - name: Install RDP test dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends freerdp3-x11 xvfb
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
       - name: Checkout infisical repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
