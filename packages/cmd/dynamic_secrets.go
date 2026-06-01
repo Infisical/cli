@@ -43,7 +43,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -171,7 +171,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -353,7 +353,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -488,7 +488,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -616,7 +616,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
