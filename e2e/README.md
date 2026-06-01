@@ -187,13 +187,14 @@ cd e2e
 go test -v -timeout 30m -count=1 github.com/infisical/cli/e2e-tests/pam
 ```
 
-To run a specific test (e.g., only SSH, Postgres, or Redis):
+To run a specific test (e.g., only SSH, Postgres, Redis, or RDP):
 
 ```bash
 cd e2e
 go test -v -timeout 30m -count=1 -run TestPAM_SSH github.com/infisical/cli/e2e-tests/pam
 go test -v -timeout 30m -count=1 -run TestPAM_Postgres github.com/infisical/cli/e2e-tests/pam
 go test -v -timeout 5m -count=1 -run TestPAM_Redis github.com/infisical/cli/e2e-tests/pam
+go test -v -timeout 30m -count=1 -run TestPAM_RDP github.com/infisical/cli/e2e-tests/pam
 ```
 
 To run a specific sub-test (e.g., only certificate auth within SSH, or ACL over SSL within Redis):
@@ -208,6 +209,47 @@ go test -v -timeout 5m -count=1 -run TestPAM_Redis/acl-over-ssl github.com/infis
 - Docker must be running (tests use testcontainers to start resource containers)
 - A built CLI binary (see note above)
 - `INFISICAL_BACKEND_DIR` must be set (see [Setting the `INFISICAL_BACKEND_DIR` value](#setting-the-infisical_backend_dir-value))
+
+### Running RDP PAM tests
+
+The RDP tests have additional prerequisites beyond the other PAM tests because the CLI must be built with the Rust RDP bridge.
+
+1. Build the Rust RDP bridge:
+
+   ```bash
+   cd packages/pam/handlers/rdp/native
+   cargo build --release
+   ```
+
+2. Build the CLI with the `rdp` build tag (from the repo root):
+
+   ```bash
+   CGO_ENABLED=1 go build -tags rdp -o e2e/infisical-merge .
+   ```
+
+3. Install `xfreerdp` and `Xvfb` (used by the tests to verify RDP connections):
+
+   ```bash
+   # macOS
+   brew install freerdp
+
+   # Ubuntu/Debian
+   sudo apt-get install -y freerdp3-x11 xvfb
+   ```
+
+4. On headless environments (CI, SSH sessions), start a virtual display before running the tests:
+
+   ```bash
+   Xvfb :99 -screen 0 1024x768x24 &
+   export DISPLAY=:99
+   ```
+
+5. Run the RDP tests:
+
+   ```bash
+   cd e2e
+   go test -v -timeout 30m -count=1 -run TestPAM_RDP github.com/infisical/cli/e2e-tests/pam
+   ```
 
 Alternatively, you can export environment variables manually:
 
