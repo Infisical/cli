@@ -66,11 +66,9 @@ if command -v ldd >/dev/null 2>&1; then
   ldd_output=$(ldd "$BINARY_PATH" 2>&1 || true)
   if echo "$ldd_output" | grep -qi "not a dynamic executable\|statically linked\|not a valid dynamic program"; then
     pass "static binary (no dynamic dependencies)"
-  elif echo "$ldd_output" | grep -qi "not found"; then
-    fail "missing shared libraries"
-    echo "$ldd_output"
   else
-    pass "no missing shared libraries"
+    fail "binary is dynamically linked (expected static)"
+    echo "$ldd_output"
   fi
 fi
 
