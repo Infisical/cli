@@ -1,0 +1,12 @@
+name: infisical
+arch: amd64
+platform: linux
+version: v0.0.0-smoke
+maintainer: "Infisical, Inc"
+description: "The official Infisical CLI"
+homepage: "https://infisical.com/"
+license: MIT
+
+contents:
+  - src: ./infisical
+    dst: /usr/bin/infisical
