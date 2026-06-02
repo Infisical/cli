@@ -62,7 +62,7 @@ var relayStartCmd = &cobra.Command{
 
 		if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
-		} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" && enrollMethod != "" {
+		} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
 		} else if configFile, cfgErr := util.GetConfigFile(); cfgErr == nil && configFile.LoggedInUserDomain != "" {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(configFile.LoggedInUserDomain)
