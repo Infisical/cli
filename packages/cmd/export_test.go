@@ -137,3 +137,77 @@ func TestFormatEnvsRejectsInvalidDotEnvQuoteStyle(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid dotenv quote style")
 }
+
+func TestFormatEnvsRejectsSingleQuoteStyleForSingleQuoteValues(t *testing.T) {
+	_, err := formatEnvs(
+		[]models.SingleEnvironmentVariable{{Key: "KEY", Value: "it's private"}},
+		FormatDotenv,
+		DotEnvQuoteStyleSingle,
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "single quote style cannot be used")
+}
+
+func TestValidateDotEnvQuoteStyleForFormatRejectsUnusedNonDefaultQuoteStyle(t *testing.T) {
+	tests := []struct {
+		name             string
+		format           string
+		quoteStyle       string
+		quoteStyleSet    bool
+		expectedErrorMsg string
+	}{
+		{
+			name:             "rejects double quote style for json output",
+			format:           FormatJson,
+			quoteStyle:       DotEnvQuoteStyleDouble,
+			quoteStyleSet:    true,
+			expectedErrorMsg: "--quote can only be used with dotenv",
+		},
+		{
+			name:             "rejects none quote style for csv output",
+			format:           FormatCSV,
+			quoteStyle:       DotEnvQuoteStyleNone,
+			quoteStyleSet:    true,
+			expectedErrorMsg: "--quote can only be used with dotenv",
+		},
+		{
+			name:          "allows unchanged default quote style for json output",
+			format:        FormatJson,
+			quoteStyle:    DotEnvQuoteStyleSingle,
+			quoteStyleSet: false,
+		},
+		{
+			name:          "allows explicit default quote style for yaml output",
+			format:        FormatYaml,
+			quoteStyle:    DotEnvQuoteStyleSingle,
+			quoteStyleSet: true,
+		},
+		{
+			name:          "allows double quote style for dotenv output",
+			format:        FormatDotenv,
+			quoteStyle:    DotEnvQuoteStyleDouble,
+			quoteStyleSet: true,
+		},
+		{
+			name:          "allows none quote style for dotenv export output",
+			format:        FormatDotEnvExport,
+			quoteStyle:    DotEnvQuoteStyleNone,
+			quoteStyleSet: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDotEnvQuoteStyleForFormat(tt.format, tt.quoteStyle, tt.quoteStyleSet)
+
+			if tt.expectedErrorMsg == "" {
+				assert.NoError(t, err)
+				return
+			}
+
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedErrorMsg)
+		})
+	}
+}

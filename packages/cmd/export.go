@@ -75,6 +75,9 @@ var exportCmd = &cobra.Command{
 		if err != nil {
 			util.HandleError(err)
 		}
+		if err := validateDotEnvQuoteStyleForFormat(format, quoteStyle, cmd.Flags().Changed("quote")); err != nil {
+			util.HandleError(err)
+		}
 
 		templatePath, err := cmd.Flags().GetString("template")
 		if err != nil {
@@ -276,7 +279,7 @@ func init() {
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
 	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv)")
-	exportCmd.Flags().String("quote", DotEnvQuoteStyleSingle, "Set the quote style for dotenv output (single, double, none)")
+	exportCmd.Flags().String("quote", DotEnvQuoteStyleSingle, "Set the quote style for dotenv or dotenv-export output (single, double, none)")
 	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
@@ -302,6 +305,21 @@ func formatEnvs(envs []models.SingleEnvironmentVariable, format string, quoteSty
 		return formatAsYaml(envs)
 	default:
 		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport})
+	}
+}
+
+func validateDotEnvQuoteStyleForFormat(format string, quoteStyle string, quoteStyleSet bool) error {
+	if !quoteStyleSet || normalizeDotEnvQuoteStyle(quoteStyle) == DotEnvQuoteStyleSingle {
+		return nil
+	}
+
+	switch strings.ToLower(format) {
+	case FormatDotenv, FormatDotEnvExport:
+		return nil
+	case FormatJson, FormatCSV, FormatYaml:
+		return fmt.Errorf("--quote can only be used with %s or %s formats", FormatDotenv, FormatDotEnvExport)
+	default:
+		return nil
 	}
 }
 
@@ -348,6 +366,9 @@ func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable, quoteStyle st
 func formatDotEnvValue(value string, quoteStyle string) (string, error) {
 	switch normalizeDotEnvQuoteStyle(quoteStyle) {
 	case DotEnvQuoteStyleSingle:
+		if strings.ContainsRune(value, '\'') {
+			return "", fmt.Errorf("single quote style cannot be used for values that contain a single quote character; use --quote=double instead")
+		}
 		return fmt.Sprintf("'%s'", value), nil
 	case DotEnvQuoteStyleDouble:
 		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(value, `"`, `\"`)), nil
