@@ -218,6 +218,11 @@ var secretsSetCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		tags, err := cmd.Flags().GetStringArray("tag")
+		if err != nil {
+			util.HandleError(err, `Unable to parse "tag" flag`)
+		}
+
 		processedArgs := []string{}
 		for _, arg := range args {
 			splitKeyValue := strings.SplitN(arg, "=", 2)
@@ -253,7 +258,7 @@ var secretsSetCmd = &cobra.Command{
 				util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 			}
 
-			secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file)
+			secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 			if err != nil {
 				util.HandleError(err, "Unable to set secrets")
@@ -280,7 +285,7 @@ var secretsSetCmd = &cobra.Command{
 			secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
 				Type:  "",
 				Token: loggedInUserDetails.UserCredentials.JTWToken,
-			}, file)
+			}, file, tags)
 
 			if err != nil {
 				util.HandleError(err, "Unable to set secrets")
@@ -835,6 +840,7 @@ func init() {
 	secretsSetCmd.Flags().String("path", "/", "set secrets within a folder path")
 	secretsSetCmd.Flags().String("type", util.SECRET_TYPE_SHARED, "the type of secret to create: personal or shared")
 	secretsSetCmd.Flags().String("file", "", "Load secrets from the specified file. File format: .env or YAML (comments: # or //). This option is mutually exclusive with command-line secrets arguments.")
+	secretsSetCmd.Flags().StringArray("tag", []string{}, "Tags to associate with the secret. Can be specified multiple times (e.g. --tag backend --tag production). When updating an existing secret, the provided tags will replace any existing tags")
 	util.AddOutputFlagsToCmd(secretsSetCmd, "The output to format the secrets in.")
 
 	secretsDeleteCmd.Flags().String("type", "personal", "the type of secret to delete: personal or shared  (default: personal)")
