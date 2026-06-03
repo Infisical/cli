@@ -1391,7 +1391,7 @@ func CreateTag(httpClient *resty.Client, projectId string, request CreateTagRequ
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/projects/%s/tags", config.INFISICAL_URL, url.PathEscape(projectId)))
+		Post(fmt.Sprintf("%s/v1/projects/%s/tags", config.INFISICAL_URL, url.PathEscape(projectId)))
 
 	if err != nil {
 		return SecretTag{}, NewGenericRequestError("CreateTag", err)
