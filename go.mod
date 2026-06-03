@@ -1,6 +1,6 @@
 module github.com/Infisical/infisical-merge
 
-go 1.25.10
+go 1.25.11
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.1
