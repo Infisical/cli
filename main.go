@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	// Trigger scan
 	log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
 	cmd.Execute()
 }
