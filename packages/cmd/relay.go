@@ -60,6 +60,14 @@ var relayStartCmd = &cobra.Command{
 			util.HandleError(err, fmt.Sprintf("unable to get type flag or %s env", gatewayv2.RELAY_TYPE_ENV_NAME))
 		}
 
+		if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
+		} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
+		} else if configFile, cfgErr := util.GetConfigFile(); cfgErr == nil && configFile.LoggedInUserDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(configFile.LoggedInUserDomain)
+		}
+
 		var enrolledAccessToken string
 
 		// --- AWS Auth path ---
@@ -74,13 +82,6 @@ var relayStartCmd = &cobra.Command{
 			}
 			if relayID == "" {
 				util.HandleError(errors.New("--relay-id is required when --enroll-method=aws"))
-			}
-
-			domain, _ := cmd.Flags().GetString("domain")
-			if domain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
-			} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
 			}
 
 			httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -100,14 +101,8 @@ var relayStartCmd = &cobra.Command{
 				util.HandleError(err, "failed to save relay id to config")
 			}
 
-			effectiveDomain := domain
-			if effectiveDomain == "" {
-				effectiveDomain = config.INFISICAL_URL
-			}
-			if effectiveDomain != "" {
-				if err := relay.SaveDomain(relayName, effectiveDomain); err != nil {
-					util.HandleError(err, "failed to save domain to config")
-				}
+			if err := relay.SaveDomain(relayName, config.INFISICAL_URL); err != nil {
+				util.HandleError(err, "failed to save domain to config")
 			}
 
 			log.Info().Msgf("Relay authenticated via AWS Auth. State saved to %s", relay.GetConfPathDisplay(relayName))
@@ -127,13 +122,6 @@ var relayStartCmd = &cobra.Command{
 			if alreadyEnrolled {
 				log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
 			} else {
-				domain, _ := cmd.Flags().GetString("domain")
-				if domain != "" {
-					config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
-				} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
-					config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
-				}
-
 				httpClient, err := util.GetRestyClientWithCustomHeaders()
 				if err != nil {
 					util.HandleError(err, "unable to create HTTP client")
@@ -156,14 +144,8 @@ var relayStartCmd = &cobra.Command{
 					util.HandleError(err, "failed to save enrollment token to config")
 				}
 
-				effectiveDomain := domain
-				if effectiveDomain == "" {
-					effectiveDomain = config.INFISICAL_URL
-				}
-				if effectiveDomain != "" {
-					if err := relay.SaveDomain(relayName, effectiveDomain); err != nil {
-						util.HandleError(err, "failed to save domain to config")
-					}
+				if err := relay.SaveDomain(relayName, config.INFISICAL_URL); err != nil {
+					util.HandleError(err, "failed to save domain to config")
 				}
 
 				log.Info().Msgf("Relay enrolled successfully. Access token saved to %s", relay.GetConfPathDisplay(relayName))
@@ -172,15 +154,7 @@ var relayStartCmd = &cobra.Command{
 			log.Info().Msg("Starting relay...")
 		}
 
-		// --- Domain resolution for resource auth / stored token ---
 		isResourceAuth := enrollMethod == relay.EnrollMethodToken || enrollMethod == relay.EnrollMethodAws
-		if isResourceAuth {
-			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
-			} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
-			}
-		}
 
 		relayInstance, err := relay.NewRelay(&relay.RelayConfig{
 			RelayName:    relayName,

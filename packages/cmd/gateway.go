@@ -230,6 +230,14 @@ var gatewayStartCmd = &cobra.Command{
 			util.HandleError(errors.New("gateway name is required (provide as positional argument)"))
 		}
 
+		if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
+		} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
+		} else if configFile, cfgErr := util.GetConfigFile(); cfgErr == nil && configFile.LoggedInUserDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(configFile.LoggedInUserDomain)
+		}
+
 		// --- AWS Auth path ---
 		if enrollMethod == gatewayv2.EnrollMethodAws {
 			gatewayID, _ := cmd.Flags().GetString("gateway-id")
@@ -242,13 +250,6 @@ var gatewayStartCmd = &cobra.Command{
 			}
 			if gatewayID == "" {
 				util.HandleError(errors.New("--gateway-id is required when --enroll-method=aws"))
-			}
-
-			domain, _ := cmd.Flags().GetString("domain")
-			if domain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
-			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
 			}
 
 			httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -272,14 +273,8 @@ var gatewayStartCmd = &cobra.Command{
 				util.HandleError(err, "failed to save gateway id to config")
 			}
 
-			effectiveDomain := domain
-			if effectiveDomain == "" {
-				effectiveDomain = config.INFISICAL_URL
-			}
-			if effectiveDomain != "" {
-				if err := gatewayv2.SaveDomain(gatewayName, effectiveDomain); err != nil {
-					util.HandleError(err, "failed to save domain to config")
-				}
+			if err := gatewayv2.SaveDomain(gatewayName, config.INFISICAL_URL); err != nil {
+				util.HandleError(err, "failed to save domain to config")
 			}
 
 			log.Info().Msgf("Gateway authenticated via AWS Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
@@ -301,11 +296,6 @@ var gatewayStartCmd = &cobra.Command{
 			if alreadyEnrolled {
 				log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
 			} else {
-				domain, _ := cmd.Flags().GetString("domain")
-				if domain != "" {
-					config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
-				}
-
 				httpClient, err := util.GetRestyClientWithCustomHeaders()
 				if err != nil {
 					util.HandleError(err, "unable to create HTTP client")
@@ -328,15 +318,8 @@ var gatewayStartCmd = &cobra.Command{
 					util.HandleError(err, "failed to save enrollment token to config")
 				}
 
-				// Always persist the effective domain so restarts use the same backend
-				effectiveDomain := domain
-				if effectiveDomain == "" {
-					effectiveDomain = config.INFISICAL_URL
-				}
-				if effectiveDomain != "" {
-					if err := gatewayv2.SaveDomain(gatewayName, effectiveDomain); err != nil {
-						util.HandleError(err, "failed to save domain to config")
-					}
+				if err := gatewayv2.SaveDomain(gatewayName, config.INFISICAL_URL); err != nil {
+					util.HandleError(err, "failed to save domain to config")
 				}
 
 				log.Info().Msgf("Gateway enrolled successfully. Access token saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
@@ -345,18 +328,7 @@ var gatewayStartCmd = &cobra.Command{
 			log.Info().Msg("Starting gateway...")
 		}
 
-		// --- Stored token / post-enrollment path ---
-		// --domain flag takes priority; fall back to domain saved at enrollment time.
-		// For enrollment flow with alreadyEnrolled, domain was set during original enrollment
-		// and needs to be loaded from config.
 		isResourceAuth := enrollMethod == gatewayv2.EnrollMethodToken || enrollMethod == gatewayv2.EnrollMethodAws
-		if !isResourceAuth || alreadyEnrolled {
-			if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
-			} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
-				config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
-			}
-		}
 
 		// Only use the stored token when no explicit identity credentials are provided.
 		// If --token or --auth-method is set, the user wants the identity-based path.
@@ -388,8 +360,8 @@ var gatewayStartCmd = &cobra.Command{
 		}
 
 		var accessToken atomic.Value
-		cancelSdk := func() {}                              // noop by default
-		var sdkTokenGetter func() string                    // nil when using stored token
+		cancelSdk := func() {}           // noop by default
+		var sdkTokenGetter func() string // nil when using stored token
 		if runningWithStoredToken {
 			if enrolledAccessToken != "" {
 				// Fresh enrollment: use the token directly to avoid env var interference
