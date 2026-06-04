@@ -155,6 +155,10 @@ func enrollKmipServer(cmd *cobra.Command, enrollMethod, serverName string) strin
 		if enrollToken == "" {
 			util.HandleError(errors.New("--token is required when --enroll-method=token and no access token is stored"))
 		}
+		// We're here because the supplied token matches the one already enrolled with, but no
+		// access token was persisted. Enrollment tokens are single-use, so re-submitting it would
+		// fail with an opaque error — surface a clear, actionable message instead of falling through.
+		util.HandleError(errors.New("this enrollment token has already been used and no access token is stored locally; generate a new enrollment token from the KMIP server's deploy command and retry"))
 	}
 
 	log.Info().Msg("Enrolling KMIP server with enrollment token...")
