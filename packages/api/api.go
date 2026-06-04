@@ -1364,3 +1364,42 @@ func CallGetCertificateRequest(httpClient *resty.Client, certificateRequestId st
 
 	return &resBody, nil
 }
+
+func GetTagBySlug(httpClient *resty.Client, projectId string, tagSlug string) (SecretTag, error) {
+	var resBody GetTagBySlugResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/%s/tags/slug/%s", config.INFISICAL_URL, url.PathEscape(projectId), url.PathEscape(tagSlug)))
+
+	if err != nil {
+		return SecretTag{}, NewGenericRequestError("GetTagBySlug", err)
+	}
+
+	if response.IsError() {
+		return SecretTag{}, NewAPIErrorWithResponse("GetTagBySlug", response, nil)
+	}
+
+	return resBody.Tag, nil
+}
+
+func CreateTag(httpClient *resty.Client, projectId string, request CreateTagRequest) (SecretTag, error) {
+	var resBody CreateTagResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%s/v1/projects/%s/tags", config.INFISICAL_URL, url.PathEscape(projectId)))
+
+	if err != nil {
+		return SecretTag{}, NewGenericRequestError("CreateTag", err)
+	}
+
+	if response.IsError() {
+		return SecretTag{}, NewAPIErrorWithResponse("CreateTag", response, nil)
+	}
+
+	return resBody.Tag, nil
+}
