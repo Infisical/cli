@@ -1020,6 +1020,21 @@ type RelayLoginResponse struct {
 	TokenType   string `json:"tokenType"`
 }
 
+type KmipServerLoginRequest struct {
+	Method            string `json:"method"`
+	Token             string `json:"token,omitempty"`
+	KmipServerID      string `json:"kmipServerId,omitempty"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod,omitempty"`
+	IamRequestBody    string `json:"iamRequestBody,omitempty"`
+	IamRequestHeaders string `json:"iamRequestHeaders,omitempty"`
+}
+
+type KmipServerLoginResponse struct {
+	AccessToken  string `json:"accessToken"`
+	KmipServerID string `json:"kmipServerId"`
+	TokenType    string `json:"tokenType"`
+}
+
 type RelayConnectResponse struct {
 	RelayID string `json:"relayId"`
 	PKI     struct {
