@@ -971,7 +971,7 @@ func CallKmipServerLogin(httpClient *resty.Client, request KmipServerLoginReques
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/kmip-servers/login", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v1/kmip/servers/login", config.INFISICAL_URL))
 
 	if err != nil {
 		return KmipServerLoginResponse{}, NewGenericRequestError(operationCallKmipServerLogin, err)
