@@ -21,8 +21,8 @@ import (
 
 var kmipCmd = &cobra.Command{
 	Example: `  infisical kmip
-  infisical kmip start --enroll-method=token --token=<enrollment-token> --server-name=<server-name> --domain=<your-infisical-domain>
-  sudo infisical kmip systemd install --enroll-method=token --token=<enrollment-token> --server-name=<server-name> --domain=<your-infisical-domain>`,
+  infisical kmip start <server-name> --enroll-method=token --token=<enrollment-token> --domain=<your-infisical-domain>
+  sudo infisical kmip systemd install <server-name> --enroll-method=token --token=<enrollment-token> --domain=<your-infisical-domain>`,
 	Short:                 "Used to manage KMIP servers",
 	Use:                   "kmip",
 	DisableFlagsInUseLine: true,
@@ -30,12 +30,31 @@ var kmipCmd = &cobra.Command{
 }
 
 var kmipStartCmd = &cobra.Command{
-	Example:               `infisical kmip start`,
+	Example:               `infisical kmip start <server-name> --enroll-method=token --token=<enrollment-token> --domain=<your-infisical-domain>`,
 	Short:                 "Used to start a KMIP server",
-	Use:                   "start",
+	Use:                   "start [server-name]",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run:                   startKmipServer,
+}
+
+// resolveKmipServerName resolves the KMIP server name from (in order) the positional argument,
+// the --server-name flag, or the INFISICAL_KMIP_SERVER_NAME env var. The name is required.
+func resolveKmipServerName(cmd *cobra.Command, args []string) string {
+	if len(args) > 0 && args[0] != "" {
+		return args[0]
+	}
+
+	serverName, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "server-name", []string{INFISICAL_KMIP_SERVER_NAME_ENV_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse server name")
+	}
+
+	if serverName == "" {
+		util.HandleError(errors.New("KMIP server name is required: pass it as an argument (e.g. 'infisical kmip start my-server') or via --server-name / INFISICAL_KMIP_SERVER_NAME"))
+	}
+
+	return serverName
 }
 
 const (
@@ -51,10 +70,7 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse listen address")
 	}
 
-	serverName, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "server-name", []string{INFISICAL_KMIP_SERVER_NAME_ENV_NAME}, "kmip-server")
-	if err != nil {
-		util.HandleError(err, "Unable to parse server name")
-	}
+	serverName := resolveKmipServerName(cmd, args)
 
 	certificateTTL, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "certificate-ttl", []string{INFISICAL_KMIP_CERTIFICATE_TTL_ENV_NAME}, "1y")
 	if err != nil {
@@ -217,19 +233,19 @@ var kmipSystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd service for Infisical KMIP server",
 	Long:  "Manage systemd service for Infisical KMIP server. Use 'systemd install' to install and enable the service.",
-	Example: `  sudo infisical kmip systemd install --enroll-method=token --token=<enrollment-token> --server-name=<server-name> --domain=<your-infisical-domain>
+	Example: `  sudo infisical kmip systemd install <server-name> --enroll-method=token --token=<enrollment-token> --domain=<your-infisical-domain>
   sudo infisical kmip systemd uninstall`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 }
 
 var kmipSystemdInstallCmd = &cobra.Command{
-	Use:                   "install",
+	Use:                   "install [server-name]",
 	Short:                 "Install and enable systemd service for the KMIP server (requires sudo)",
 	Long:                  "Install and enable systemd service for the KMIP server. Must be run with sudo on Linux.",
-	Example:               "sudo infisical kmip systemd install --enroll-method=token --token=<enrollment-token> --server-name=<server-name> --domain=<your-infisical-domain>",
+	Example:               "sudo infisical kmip systemd install <server-name> --enroll-method=token --token=<enrollment-token> --domain=<your-infisical-domain>",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
 			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
@@ -254,10 +270,7 @@ var kmipSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse listen address")
 		}
 
-		serverName, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "server-name", []string{INFISICAL_KMIP_SERVER_NAME_ENV_NAME}, "kmip-server")
-		if err != nil {
-			util.HandleError(err, "Unable to parse server name")
-		}
+		serverName := resolveKmipServerName(cmd, args)
 
 		certificateTTL, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "certificate-ttl", []string{INFISICAL_KMIP_CERTIFICATE_TTL_ENV_NAME}, "1y")
 		if err != nil {
@@ -374,7 +387,7 @@ func init() {
 	kmipStartCmd.Flags().String("identity-auth-method", string(util.AuthStrategy.UNIVERSAL_AUTH), "The auth method to use for authenticating the machine identity. Defaults to universal-auth.")
 	kmipStartCmd.Flags().String("identity-client-id", "", "Universal auth client ID of machine identity")
 	kmipStartCmd.Flags().String("identity-client-secret", "", "Universal auth client secret of machine identity")
-	kmipStartCmd.Flags().String("server-name", "", "The name of the KMIP server. Defaults to kmip-server")
+	kmipStartCmd.Flags().String("server-name", "", "The name of the KMIP server. Alternative to passing it as a positional argument; required if not passed positionally")
 	kmipStartCmd.Flags().String("certificate-ttl", "", "The TTL duration for the server certificate. Defaults to 1y")
 	kmipStartCmd.Flags().String("hostnames-or-ips", "", "Comma-separated list of hostnames or IPs")
 
@@ -386,7 +399,7 @@ func init() {
 	kmipSystemdInstallCmd.Flags().String("identity-client-secret", "", "Universal auth client secret of machine identity")
 	kmipSystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	kmipSystemdInstallCmd.Flags().String("listen-address", "", "The address for the KMIP server to listen on")
-	kmipSystemdInstallCmd.Flags().String("server-name", "", "The name of the KMIP server")
+	kmipSystemdInstallCmd.Flags().String("server-name", "", "The name of the KMIP server. Alternative to passing it as a positional argument; required if not passed positionally")
 	kmipSystemdInstallCmd.Flags().String("certificate-ttl", "", "The TTL duration for the server certificate")
 	kmipSystemdInstallCmd.Flags().String("hostnames-or-ips", "", "Comma-separated list of hostnames or IPs")
 
