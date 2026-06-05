@@ -61,7 +61,7 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse certificate TTL")
 	}
 
-	hostnamesOrIps, err := util.GetCmdFlagOrEnv(cmd, "hostnames-or-ips", []string{INFISICAL_KMIP_HOSTNAMES_OR_IPS_ENV_NAME})
+	hostnamesOrIps, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "hostnames-or-ips", []string{INFISICAL_KMIP_HOSTNAMES_OR_IPS_ENV_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse hostnames or IPs")
 	}
@@ -264,7 +264,7 @@ var kmipSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse certificate TTL")
 		}
 
-		hostnamesOrIps, err := util.GetCmdFlagOrEnv(cmd, "hostnames-or-ips", []string{INFISICAL_KMIP_HOSTNAMES_OR_IPS_ENV_NAME})
+		hostnamesOrIps, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "hostnames-or-ips", []string{INFISICAL_KMIP_HOSTNAMES_OR_IPS_ENV_NAME}, "")
 		if err != nil {
 			util.HandleError(err, "Unable to parse hostnames or IPs")
 		}
