@@ -403,7 +403,7 @@ func init() {
 	kmipStartCmd.Flags().String("enroll-method", "", "Enrollment method for the KMIP server: 'token' or 'aws'. When set, machine-identity flags are ignored.")
 	kmipStartCmd.Flags().String("token", "", "Enrollment token (when --enroll-method=token)")
 	kmipStartCmd.Flags().String("kmip-server-id", "", "KMIP server ID (when --enroll-method=aws)")
-	kmipStartCmd.Flags().String("domain", "", "Domain of your Infisical instance")
+	kmipStartCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	kmipStartCmd.Flags().String("identity-auth-method", string(util.AuthStrategy.UNIVERSAL_AUTH), "The auth method to use for authenticating the machine identity. Defaults to universal-auth.")
 	kmipStartCmd.Flags().String("identity-client-id", "", "Universal auth client ID of machine identity")
 	kmipStartCmd.Flags().String("identity-client-secret", "", "Universal auth client secret of machine identity")
