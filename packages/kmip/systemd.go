@@ -96,8 +96,10 @@ func InstallEnrolledKmipSystemdService(accessToken, domain, listenAddress, serve
 		return nil
 	}
 
-	configContent := "INFISICAL_KMIP_ENROLL_METHOD=token\n"
-	configContent += fmt.Sprintf("INFISICAL_KMIP_ACCESS_TOKEN=%s\n", accessToken)
+	// No enroll method is persisted: on restart the bare `kmip start` reuses this stored access
+	// token via the no-explicit-creds fallback (the token is long-lived). The AWS path instead
+	// persists the method so it re-authenticates via STS on each start.
+	configContent := fmt.Sprintf("INFISICAL_KMIP_ACCESS_TOKEN=%s\n", accessToken)
 	configContent = kmipCommonEnv(configContent, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps)
 
 	return writeKmipSystemdService(configContent)

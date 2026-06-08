@@ -83,6 +83,7 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 	}
 
 	enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+	// Fall back to env var for systemd-managed runs where flags aren't set.
 	if enrollMethod == "" {
 		enrollMethod = os.Getenv(localkmip.INFISICAL_KMIP_ENROLL_METHOD_KEY)
 	}
@@ -108,10 +109,23 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 		HostnamesOrIps:      hostnamesOrIps,
 	}
 
-	if enrollMethod != "" {
+	isResourceAuth := enrollMethod == localkmip.EnrollMethodToken || enrollMethod == localkmip.EnrollMethodAws
+	if isResourceAuth {
 		serverConfig.AccessToken = enrollKmipServer(cmd, enrollMethod, serverName)
 	} else {
-		serverConfig.IdentityClientId, serverConfig.IdentityClientSecret = resolveKmipIdentityCredentials(cmd)
+		// No enroll method given: reuse the stored enrollment access token unless explicit identity
+		// credentials were passed. This keeps a manual restart of an enrolled server from silently
+		// falling back to legacy machine-identity auth. Mirrors the gateway's start behavior.
+		hasExplicitCreds := cmd.Flags().Changed("identity-client-id") || cmd.Flags().Changed("identity-client-secret")
+		if !hasExplicitCreds {
+			if storedToken, _ := localkmip.LoadStoredAccessToken(serverName); storedToken != "" {
+				log.Info().Msg("Using stored KMIP server access token")
+				serverConfig.AccessToken = storedToken
+			}
+		}
+		if serverConfig.AccessToken == "" {
+			serverConfig.IdentityClientId, serverConfig.IdentityClientSecret = resolveKmipIdentityCredentials(cmd)
+		}
 	}
 
 	kmip.StartServer(serverConfig)
