@@ -71,6 +71,22 @@ func resolveEnrollMethod(cmd *cobra.Command) string {
 	return enrollMethod
 }
 
+// resolveDomain resolves the Infisical instance domain from (in order) the --domain flag, the domain
+// stored at enrollment, the logged-in user's domain, then the INFISICAL_API_URL env var. Returns the
+// raw domain (empty if none); callers append the API path.
+func resolveDomain(cmd *cobra.Command, serverName string) string {
+	if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
+		return flagDomain
+	}
+	if storedDomain, _ := localkmip.LoadStoredDomain(serverName); storedDomain != "" {
+		return storedDomain
+	}
+	if configFile, err := util.GetConfigFile(); err == nil && configFile.LoggedInUserDomain != "" {
+		return configFile.LoggedInUserDomain
+	}
+	return os.Getenv(util.INFISICAL_API_URL_ENV_NAME)
+}
+
 const (
 	INFISICAL_KMIP_LISTEN_ADDRESS_ENV_NAME   = "INFISICAL_KMIP_LISTEN_ADDRESS"
 	INFISICAL_KMIP_SERVER_NAME_ENV_NAME      = "INFISICAL_KMIP_SERVER_NAME"
@@ -98,13 +114,8 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 
 	enrollMethod := resolveEnrollMethod(cmd)
 
-	// Resolve the Infisical domain: explicit flag, then the value stored at enrollment, then the logged-in user's domain.
-	if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
-		config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
-	} else if storedDomain, _ := localkmip.LoadStoredDomain(serverName); storedDomain != "" {
-		config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
-	} else if configFile, cfgErr := util.GetConfigFile(); cfgErr == nil && configFile.LoggedInUserDomain != "" {
-		config.INFISICAL_URL = util.AppendAPIEndpoint(configFile.LoggedInUserDomain)
+	if domain := resolveDomain(cmd, serverName); domain != "" {
+		config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 	}
 
 	serverConfig := kmip.ServerConfig{
@@ -275,12 +286,10 @@ var kmipSystemdInstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
 		}
 
-		domain, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "domain", []string{util.INFISICAL_API_URL_ENV_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse domain")
-		}
+		serverName := resolveKmipServerName(cmd, args)
 
 		// Point the API client at the configured instance before any enrollment call is made.
+		domain := resolveDomain(cmd, serverName)
 		if domain != "" {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 		}
@@ -289,8 +298,6 @@ var kmipSystemdInstallCmd = &cobra.Command{
 		if err != nil {
 			util.HandleError(err, "Unable to parse listen address")
 		}
-
-		serverName := resolveKmipServerName(cmd, args)
 
 		certificateTTL, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "certificate-ttl", []string{INFISICAL_KMIP_CERTIFICATE_TTL_ENV_NAME}, "1y")
 		if err != nil {
