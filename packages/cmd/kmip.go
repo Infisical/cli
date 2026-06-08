@@ -57,6 +57,20 @@ func resolveKmipServerName(cmd *cobra.Command, args []string) string {
 	return serverName
 }
 
+// resolveEnrollMethod reads the enroll method from --enroll-method, falling back to the env var for
+// systemd-managed runs, and validates it. An empty result means the legacy machine-identity path.
+func resolveEnrollMethod(cmd *cobra.Command) string {
+	enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+	if enrollMethod == "" {
+		enrollMethod = os.Getenv(localkmip.INFISICAL_KMIP_ENROLL_METHOD_KEY)
+	}
+	if enrollMethod != "" && enrollMethod != localkmip.EnrollMethodToken && enrollMethod != localkmip.EnrollMethodAws {
+		util.HandleError(fmt.Errorf("invalid --enroll-method %q: supported values are %q and %q",
+			enrollMethod, localkmip.EnrollMethodToken, localkmip.EnrollMethodAws))
+	}
+	return enrollMethod
+}
+
 const (
 	INFISICAL_KMIP_LISTEN_ADDRESS_ENV_NAME   = "INFISICAL_KMIP_LISTEN_ADDRESS"
 	INFISICAL_KMIP_SERVER_NAME_ENV_NAME      = "INFISICAL_KMIP_SERVER_NAME"
@@ -82,15 +96,7 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse hostnames or IPs")
 	}
 
-	enrollMethod, _ := cmd.Flags().GetString("enroll-method")
-	// Fall back to env var for systemd-managed runs where flags aren't set.
-	if enrollMethod == "" {
-		enrollMethod = os.Getenv(localkmip.INFISICAL_KMIP_ENROLL_METHOD_KEY)
-	}
-	if enrollMethod != "" && enrollMethod != localkmip.EnrollMethodToken && enrollMethod != localkmip.EnrollMethodAws {
-		util.HandleError(fmt.Errorf("invalid --enroll-method %q: supported values are %q and %q",
-			enrollMethod, localkmip.EnrollMethodToken, localkmip.EnrollMethodAws))
-	}
+	enrollMethod := resolveEnrollMethod(cmd)
 
 	// Resolve the Infisical domain: explicit flag, then the value stored at enrollment, then the logged-in user's domain.
 	if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
@@ -296,14 +302,7 @@ var kmipSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse hostnames or IPs")
 		}
 
-		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
-		if enrollMethod == "" {
-			enrollMethod = os.Getenv(localkmip.INFISICAL_KMIP_ENROLL_METHOD_KEY)
-		}
-		if enrollMethod != "" && enrollMethod != localkmip.EnrollMethodToken && enrollMethod != localkmip.EnrollMethodAws {
-			util.HandleError(fmt.Errorf("invalid --enroll-method %q: supported values are %q and %q",
-				enrollMethod, localkmip.EnrollMethodToken, localkmip.EnrollMethodAws))
-		}
+		enrollMethod := resolveEnrollMethod(cmd)
 
 		switch enrollMethod {
 		case localkmip.EnrollMethodToken:
