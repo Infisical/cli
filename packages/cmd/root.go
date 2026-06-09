@@ -90,7 +90,7 @@ func Execute() {
 
 // resolveDomain picks the domain by precedence: --domain flag > env > .infisical.json > default (flagValue).
 // Must run after flag parsing (PersistentPreRun, not init) so cmd.Flags().Changed is reliable.
-func resolveDomain(cmd *cobra.Command, flagValue string, silent bool) string {
+func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	if cmd.Flags().Changed("domain") {
 		return flagValue
 	}
@@ -110,9 +110,9 @@ func resolveDomain(cmd *cobra.Command, flagValue string, silent bool) string {
 		return flagValue
 	}
 
-	if !silent && !isStructuredOutputRequested(cmd) {
-		fmt.Fprintf(cmd.ErrOrStderr(), "[INFO] Using domain '%s' from .infisical.json\n", domain)
-	}
+	// A .infisical.json is usually committed to the repo, so a malicious one could redirect requests
+	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
+	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.json; all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
 	return domain
 }
 
@@ -130,7 +130,7 @@ func init() {
 			util.HandleError(err)
 		}
 
-		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL, silent))
+		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
 
 		// util.DisplayAptInstallationChangeBannerWithWriter(silent, cmd.ErrOrStderr())
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {

@@ -69,8 +69,10 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 	flagToken = strings.TrimSpace(flagToken)
 	if flagToken != "" {
 		if !cmd.Flags().Changed("domain") {
-			if _, envSet := util.GetEnvDomain(); !envSet {
-				util.PrintErrorMessageAndExit("--token requires --domain (or INFISICAL_DOMAIN) to be set so the status reflects the correct Infisical instance")
+			_, envSet := util.GetEnvDomain()
+			workspaceConfig, _ := util.GetWorkSpaceFromFile()
+			if !envSet && workspaceConfig.Domain == "" {
+				util.PrintErrorMessageAndExit("--token requires the Infisical instance to be set via --domain, the INFISICAL_DOMAIN env var, or the 'domain' field in .infisical.json so the status reflects the correct instance")
 			}
 		}
 		ctx, err := buildContextFromToken(flagToken, "--token flag", envDomain)
