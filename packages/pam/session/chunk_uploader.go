@@ -36,6 +36,10 @@ const (
 
 	pamRecordingMaxPlaintextBytes = 64 * 1024 * 1024
 
+	// Postgres chunks are base64'd inline into the chunk API request, so they must fit the
+	// route's body limit; S3 chunks PUT direct-to-bucket and use the larger cap above.
+	pamPostgresMaxPlaintextBytes = 512 * 1024
+
 	// How long past .enc file expiry to wait before force-deleting orphaned chunks
 	// Allows time for a reconnecting user to re-populate recording secrets
 	orphanChunkGracePeriod = 5 * time.Minute

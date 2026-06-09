@@ -278,27 +278,31 @@ func deletePersistedOffset(filename string) {
 	_ = os.Remove(offsetFilePath(filename))
 }
 
-// Returns (payload JSON array, new offset, last entry's elapsedMs, err).
+// Returns (payload JSON array, new offset, last entry's elapsedMs, hasMore, err).
 // lastEntryElapsedMs is 0 if entries lack the field. maxPayloadBytes>0
-// caps the JSON array size; caller loops for the rest.
-func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadBytes int) ([]byte, int64, int64, error) {
+// caps the JSON array size; hasMore is true only when the cap was hit with at
+// least one more record already pending (a genuine backlog). The caller drains
+// while hasMore is true, then stops at the live write edge instead of spinning
+// one chunk per event as the recorder appends.
+func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadBytes int) ([]byte, int64, int64, bool, error) {
 	recordingDir := GetSessionRecordingDir()
 	fullPath := filepath.Join(recordingDir, filename)
 
 	file, err := os.Open(fullPath)
 	if err != nil {
-		return nil, offset, 0, fmt.Errorf("failed to open session file: %w", err)
+		return nil, offset, 0, false, fmt.Errorf("failed to open session file: %w", err)
 	}
 	defer file.Close()
 
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, 0, fmt.Errorf("failed to seek to offset %d: %w", offset, err)
+		return nil, offset, 0, false, fmt.Errorf("failed to seek to offset %d: %w", offset, err)
 	}
 
 	var entries []json.RawMessage
 	newOffset := offset
 	runningSize := 2 // account for JSON array brackets []
 	var lastEntryElapsedMs int64
+	hasMore := false
 
 	for {
 		lengthBytes := make([]byte, 4)
@@ -306,7 +310,7 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break // No more complete records
 			}
-			return nil, newOffset, 0, fmt.Errorf("failed to read length prefix: %w", err)
+			return nil, newOffset, 0, false, fmt.Errorf("failed to read length prefix: %w", err)
 		}
 
 		length := binary.BigEndian.Uint32(lengthBytes)
@@ -317,7 +321,7 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 
 		decryptedData, err := DecryptData(encryptedData, encryptionKey)
 		if err != nil {
-			return nil, newOffset, 0, fmt.Errorf("failed to decrypt record at offset %d: %w", newOffset, err)
+			return nil, newOffset, 0, false, fmt.Errorf("failed to decrypt record at offset %d: %w", newOffset, err)
 		}
 
 		entrySize := len(decryptedData)
@@ -325,7 +329,8 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 			entrySize++ // comma separator
 		}
 		if maxPayloadBytes > 0 && len(entries) > 0 && runningSize+entrySize > maxPayloadBytes {
-			break // would exceed budget; caller will loop for the rest
+			hasMore = true // filled a chunk with a record still pending; caller keeps draining
+			break
 		}
 
 		// Probe the entry's elapsedTime field. Absent on HTTP/Kubernetes events.
@@ -342,15 +347,15 @@ func readFromOffset(filename, encryptionKey string, offset int64, maxPayloadByte
 	}
 
 	if len(entries) == 0 {
-		return nil, newOffset, 0, nil
+		return nil, newOffset, 0, false, nil
 	}
 
 	payload, err := json.Marshal(entries)
 	if err != nil {
-		return nil, newOffset, 0, fmt.Errorf("failed to marshal event batch: %w", err)
+		return nil, newOffset, 0, false, fmt.Errorf("failed to marshal event batch: %w", err)
 	}
 
-	return payload, newOffset, lastEntryElapsedMs, nil
+	return payload, newOffset, lastEntryElapsedMs, hasMore, nil
 }
 
 // GetPriorElapsedNs returns the last recorded elapsed time for this session
@@ -566,11 +571,15 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 	}
 
 	if secrets := su.credentialsManager.GetRecordingSecrets(sessionID); secrets != nil && len(secrets.SessionKey) == 32 {
+		maxChunkBytes := pamRecordingMaxPlaintextBytes
+		if secrets.StorageBackend == storageBackendPostgres {
+			maxChunkBytes = pamPostgresMaxPlaintextBytes
+		}
 		startElapsedMs := state.lastEndElapsedMs
 		currentOffset := state.fileOffset
 
 		for {
-			payload, newOffset, lastEntryElapsedMs, err := readFromOffset(state.filename, encryptionKey, currentOffset, pamRecordingMaxPlaintextBytes)
+			payload, newOffset, lastEntryElapsedMs, hasMore, err := readFromOffset(state.filename, encryptionKey, currentOffset, maxChunkBytes)
 			if err != nil {
 				log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for chunk upload")
 				break
@@ -606,11 +615,18 @@ func (su *SessionUploader) flushSession(sessionID, encryptionKey string) error {
 			if err := writePersistedOffset(state.filename, currentOffset, endElapsedMs); err != nil {
 				log.Warn().Err(err).Str("sessionId", sessionID).Msg("Failed to persist offset after chunk flush")
 			}
+
+			// Only keep looping while there's a full chunk's worth of backlog. Once caught up
+			// to the live write edge, stop and let the next flush tick batch what arrives, rather
+			// than spinning one tiny chunk per event as the recorder appends.
+			if !hasMore {
+				break
+			}
 		}
 		return nil
 	}
 
-	payload, newOffset, _, err := readFromOffset(state.filename, encryptionKey, state.fileOffset, 0)
+	payload, newOffset, _, _, err := readFromOffset(state.filename, encryptionKey, state.fileOffset, 0)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to read session events for batch upload")
 		return err
