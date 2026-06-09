@@ -112,6 +112,7 @@ type WorkspaceConfigFile struct {
 	WorkspaceId                   string            `json:"workspaceId"`
 	DefaultEnvironment            string            `json:"defaultEnvironment"`
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
+	Domain                        string            `json:"domain,omitempty"`
 }
 
 type SymmetricEncryptionResult struct {

@@ -49,7 +49,8 @@ const (
 
 	// Generic env variable used for auth methods that require a machine identity ID
 	INFISICAL_MACHINE_IDENTITY_ID_NAME = "INFISICAL_MACHINE_IDENTITY_ID"
-	INFISICAL_API_URL_ENV_NAME         = "INFISICAL_API_URL"
+	INFISICAL_DOMAIN_ENV_NAME          = "INFISICAL_DOMAIN"
+	LEGACY_INFISICAL_API_URL_ENV_NAME  = "INFISICAL_API_URL" // superseded by INFISICAL_DOMAIN; kept for backwards compatibility
 
 	SECRET_TYPE_PERSONAL      = "personal"
 	SECRET_TYPE_SHARED        = "shared"
