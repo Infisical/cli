@@ -88,13 +88,41 @@ func Execute() {
 	}
 }
 
+// resolveDomain picks the domain by precedence: --domain flag > env > .infisical.json > default (flagValue).
+// Must run after flag parsing (PersistentPreRun, not init) so cmd.Flags().Changed is reliable.
+func resolveDomain(cmd *cobra.Command, flagValue string) string {
+	if cmd.Flags().Changed("domain") {
+		return flagValue
+	}
+
+	if envDomain, ok := util.GetEnvDomain(); ok {
+		return envDomain
+	}
+
+	workspaceConfig, err := util.GetWorkSpaceFromFile()
+	if err != nil || workspaceConfig.Domain == "" {
+		return flagValue
+	}
+
+	domain := workspaceConfig.Domain
+	if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
+		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must start with http:// or https://). It will be ignored.", cmd.ErrOrStderr())
+		return flagValue
+	}
+
+	// A .infisical.json is usually committed to the repo, so a malicious one could redirect requests
+	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
+	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.json; all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
+	return domain
+}
+
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
 	cobra.OnInitialize(initLog)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
-	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_API_URL environment variable. Required for non-US Cloud users.")
+	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'domain' field in .infisical.json. Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
 	RootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		silent, err := cmd.Flags().GetBool("silent")
@@ -102,7 +130,7 @@ func init() {
 			util.HandleError(err)
 		}
 
-		config.INFISICAL_URL = util.AppendAPIEndpoint(config.INFISICAL_URL)
+		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
 
 		// util.DisplayAptInstallationChangeBannerWithWriter(silent, cmd.ErrOrStderr())
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
@@ -119,14 +147,6 @@ func init() {
 			}
 		}
 
-	}
-
-	// if config.INFISICAL_URL is set to the default value, check if INFISICAL_URL is set in the environment
-	// this is used to allow overrides of the default value
-	if !RootCmd.Flag("domain").Changed {
-		if envInfisicalBackendUrl, ok := os.LookupEnv("INFISICAL_API_URL"); ok {
-			config.INFISICAL_URL = util.AppendAPIEndpoint(envInfisicalBackendUrl)
-		}
 	}
 
 	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")

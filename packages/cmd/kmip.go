@@ -138,7 +138,7 @@ var kmipSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse identity client secret")
 		}
 
-		domain, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "domain", []string{util.INFISICAL_API_URL_ENV_NAME}, "")
+		domain, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "domain", util.DomainEnvNames, "")
 		if err != nil {
 			util.HandleError(err, "Unable to parse domain")
 		}
