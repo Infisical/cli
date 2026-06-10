@@ -456,6 +456,21 @@ func getCurrentBranch() (string, error) {
 	return path.Base(strings.TrimSpace(out.String())), nil
 }
 
+// DomainEnvNames lists the env vars that configure the Infisical domain, in
+// precedence order: INFISICAL_DOMAIN first, then the legacy INFISICAL_API_URL.
+var DomainEnvNames = []string{INFISICAL_DOMAIN_ENV_NAME, LEGACY_INFISICAL_API_URL_ENV_NAME}
+
+// GetEnvDomain returns the Infisical domain configured via environment
+// variables, preferring INFISICAL_DOMAIN over the legacy INFISICAL_API_URL.
+func GetEnvDomain() (string, bool) {
+	for _, env := range DomainEnvNames {
+		if domain := strings.TrimSpace(os.Getenv(env)); domain != "" {
+			return domain, true
+		}
+	}
+	return "", false
+}
+
 func AppendAPIEndpoint(address string) string {
 	// if it's empty return as it is
 	// Ensure the address does not already end with "/api"

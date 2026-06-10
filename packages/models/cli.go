@@ -32,7 +32,7 @@ type LoggedInUser struct {
 }
 
 type Tag struct {
-	ID    string `json:"_id"`
+	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Slug  string `json:"slug"`
 	Color string `json:"color"`
@@ -112,6 +112,7 @@ type WorkspaceConfigFile struct {
 	WorkspaceId                   string            `json:"workspaceId"`
 	DefaultEnvironment            string            `json:"defaultEnvironment"`
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
+	Domain                        string            `json:"domain,omitempty"`
 }
 
 type SymmetricEncryptionResult struct {

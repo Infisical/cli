@@ -71,10 +71,7 @@ func resolveEnrollMethod(cmd *cobra.Command) string {
 	return enrollMethod
 }
 
-// resolveDomain resolves the Infisical instance domain from (in order) the --domain flag, the domain
-// stored at enrollment, the logged-in user's domain, then the INFISICAL_API_URL env var. Returns the
-// raw domain (empty if none); callers append the API path.
-func resolveDomain(cmd *cobra.Command, serverName string) string {
+func resolveKmipDomain(cmd *cobra.Command, serverName string) string {
 	if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
 		return flagDomain
 	}
@@ -84,7 +81,10 @@ func resolveDomain(cmd *cobra.Command, serverName string) string {
 	if configFile, err := util.GetConfigFile(); err == nil && configFile.LoggedInUserDomain != "" {
 		return configFile.LoggedInUserDomain
 	}
-	return os.Getenv(util.INFISICAL_API_URL_ENV_NAME)
+	if envDomain, ok := util.GetEnvDomain(); ok {
+		return envDomain
+	}
+	return ""
 }
 
 const (
@@ -114,7 +114,7 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 
 	enrollMethod := resolveEnrollMethod(cmd)
 
-	if domain := resolveDomain(cmd, serverName); domain != "" {
+	if domain := resolveKmipDomain(cmd, serverName); domain != "" {
 		config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 	}
 
@@ -288,8 +288,7 @@ var kmipSystemdInstallCmd = &cobra.Command{
 
 		serverName := resolveKmipServerName(cmd, args)
 
-		// Point the API client at the configured instance before any enrollment call is made.
-		domain := resolveDomain(cmd, serverName)
+		domain := resolveKmipDomain(cmd, serverName)
 		if domain != "" {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 		}

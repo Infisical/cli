@@ -439,7 +439,7 @@ func DomainOverridePrompt() (bool, error) {
 	//trim the '/' from the end of the domain url
 	config.INFISICAL_URL_MANUAL_OVERRIDE = strings.TrimRight(config.INFISICAL_URL_MANUAL_OVERRIDE, "/")
 	optionsPrompt := promptui.Select{
-		Label: fmt.Sprintf("Current INFISICAL_API_URL Domain Override: %s", config.INFISICAL_URL_MANUAL_OVERRIDE),
+		Label: fmt.Sprintf("Current Domain Override: %s", config.INFISICAL_URL_MANUAL_OVERRIDE),
 		Items: options,
 		Size:  2,
 	}
@@ -491,7 +491,7 @@ func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, shouldPr
 		boldWhite := whilte.Add(color.Bold)
 		time.Sleep(time.Second * 1)
 		if shouldPrintInfo {
-			boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_API_URL environment variable\n", parsedDomain)
+			boldWhite.Printf("[INFO] Using domain '%s' from domain flag or INFISICAL_DOMAIN environment variable\n", parsedDomain)
 		}
 
 		return true, nil

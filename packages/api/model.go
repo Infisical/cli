@@ -229,11 +229,12 @@ type Project struct {
 }
 
 type RawSecret struct {
-	SecretKey     string `json:"secretKey,omitempty"`
-	SecretValue   string `json:"secretValue,omitempty"`
-	Type          string `json:"type,omitempty"`
-	SecretComment string `json:"secretComment,omitempty"`
-	ID            string `json:"id,omitempty"`
+	SecretKey     string   `json:"secretKey,omitempty"`
+	SecretValue   string   `json:"secretValue,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	SecretComment string   `json:"secretComment,omitempty"`
+	ID            string   `json:"id,omitempty"`
+	TagIDs        []string `json:"tagIds,omitempty"`
 }
 
 type GetEncryptedWorkspaceKeyRequest struct {
@@ -487,14 +488,15 @@ type CreateSecretV3Request struct {
 }
 
 type CreateRawSecretV3Request struct {
-	SecretName            string `json:"-"`
-	WorkspaceID           string `json:"workspaceId"`
-	Type                  string `json:"type,omitempty"`
-	Environment           string `json:"environment"`
-	SecretPath            string `json:"secretPath,omitempty"`
-	SecretValue           string `json:"secretValue"`
-	SecretComment         string `json:"secretComment,omitempty"`
-	SkipMultilineEncoding bool   `json:"skipMultilineEncoding,omitempty"`
+	SecretName            string   `json:"-"`
+	WorkspaceID           string   `json:"workspaceId"`
+	Type                  string   `json:"type,omitempty"`
+	Environment           string   `json:"environment"`
+	SecretPath            string   `json:"secretPath,omitempty"`
+	SecretValue           string   `json:"secretValue"`
+	SecretComment         string   `json:"secretComment,omitempty"`
+	SkipMultilineEncoding bool     `json:"skipMultilineEncoding,omitempty"`
+	TagIDs                []string `json:"tagIds,omitempty"`
 }
 
 type DeleteSecretV3Request struct {
@@ -516,12 +518,13 @@ type UpdateSecretByNameV3Request struct {
 }
 
 type UpdateRawSecretByNameV3Request struct {
-	SecretName  string `json:"-"`
-	WorkspaceID string `json:"workspaceId"`
-	Environment string `json:"environment"`
-	SecretPath  string `json:"secretPath,omitempty"`
-	SecretValue string `json:"secretValue"`
-	Type        string `json:"type,omitempty"`
+	SecretName  string   `json:"-"`
+	WorkspaceID string   `json:"workspaceId"`
+	Environment string   `json:"environment"`
+	SecretPath  string   `json:"secretPath,omitempty"`
+	SecretValue string   `json:"secretValue"`
+	Type        string   `json:"type,omitempty"`
+	TagIDs      []string `json:"tagIds,omitempty"`
 }
 
 type GetSingleSecretByNameV3Request struct {
@@ -1141,4 +1144,23 @@ type GetCertificateRequestResponse struct {
 	SerialNumber         *string   `json:"serialNumber,omitempty"`
 	CertificateID        *string   `json:"certificateId,omitempty"`
 	ErrorMessage         *string   `json:"errorMessage,omitempty"`
+}
+
+type SecretTag struct {
+	ID   string `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type GetTagBySlugResponse struct {
+	Tag SecretTag `json:"tag"`
+}
+
+type CreateTagRequest struct {
+	Slug  string `json:"slug"`
+	Color string `json:"color"`
+}
+
+type CreateTagResponse struct {
+	Tag SecretTag `json:"tag"`
 }
