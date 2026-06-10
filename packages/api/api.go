@@ -65,6 +65,7 @@ const (
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
 	operationCallRelayLogin                        = "CallRelayLogin"
+	operationCallKmipServerLogin                   = "CallKmipServerLogin"
 	operationCallRelayConnect                      = "CallRelayConnect"
 	operationCallRelayHeartbeatV2                  = "CallRelayHeartbeatV2"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
@@ -958,6 +959,26 @@ func CallRelayLogin(httpClient *resty.Client, request RelayLoginRequest) (RelayL
 
 	if response.IsError() {
 		return RelayLoginResponse{}, NewAPIErrorWithResponse(operationCallRelayLogin, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallKmipServerLogin(httpClient *resty.Client, request KmipServerLoginRequest) (KmipServerLoginResponse, error) {
+	var resBody KmipServerLoginResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/kmip/servers/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return KmipServerLoginResponse{}, NewGenericRequestError(operationCallKmipServerLogin, err)
+	}
+
+	if response.IsError() {
+		return KmipServerLoginResponse{}, NewAPIErrorWithResponse(operationCallKmipServerLogin, response, nil)
 	}
 
 	return resBody, nil

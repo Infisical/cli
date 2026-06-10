@@ -20,7 +20,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
 	github.com/infisical/go-sdk v0.7.0
-	github.com/infisical/infisical-kmip v0.3.17
+	github.com/infisical/infisical-kmip v0.3.19
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/mattn/go-isatty v0.0.20

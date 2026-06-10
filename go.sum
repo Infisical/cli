@@ -378,8 +378,8 @@ github.com/inconshreveable/mousetrap v1.0.1 h1:U3uMjPSQEBMNp1lFxmllqCPM6P5u/Xq7P
 github.com/inconshreveable/mousetrap v1.0.1/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/infisical/go-sdk v0.7.0 h1:x9/1PczL+ioVD1jCp4LHQzPpBawatbmkjAC0S1OAtUA=
 github.com/infisical/go-sdk v0.7.0/go.mod h1:yEfXF+3YDDXiJ9zzJUSzW6me6XXPPEDK52fSU6JfpCA=
-github.com/infisical/infisical-kmip v0.3.17 h1:5dBuyzHs+BxZD30JYBNufnoxRJNyPThL6lR4YPRWf4w=
-github.com/infisical/infisical-kmip v0.3.17/go.mod h1:bO1M4YtKyutNg1bREPmlyZspC5duSR7hyQ3lPmLzrIs=
+github.com/infisical/infisical-kmip v0.3.19 h1:JDndxhM9+GoHTqSOX47H3KIxIuDmrEHsq17wvhw3RL8=
+github.com/infisical/infisical-kmip v0.3.19/go.mod h1:bO1M4YtKyutNg1bREPmlyZspC5duSR7hyQ3lPmLzrIs=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=

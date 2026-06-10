@@ -31,25 +31,8 @@ LimitRTTIME=7000000
 WantedBy=multi-user.target
 `
 
-func InstallKmipSystemdService(clientId, clientSecret, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps string) error {
-	if runtime.GOOS != "linux" {
-		log.Info().Msg("Skipping systemd service installation - not on Linux")
-		return nil
-	}
-
-	if os.Geteuid() != 0 {
-		log.Info().Msg("Skipping systemd service installation - not running as root/sudo")
-		return nil
-	}
-
-	configDir := "/etc/infisical"
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %v", err)
-	}
-
-	configContent := fmt.Sprintf("INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=%s\n", clientId)
-	configContent += fmt.Sprintf("INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=%s\n", clientSecret)
-
+// kmipCommonEnv appends the shared optional settings to a systemd environment file.
+func kmipCommonEnv(configContent, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps string) string {
 	if domain != "" {
 		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
 	}
@@ -64,6 +47,15 @@ func InstallKmipSystemdService(clientId, clientSecret, domain, listenAddress, se
 	}
 	if hostnamesOrIps != "" {
 		configContent += fmt.Sprintf("INFISICAL_KMIP_HOSTNAMES_OR_IPS=%s\n", hostnamesOrIps)
+	}
+	return configContent
+}
+
+// writeKmipSystemdService writes the environment file and service unit, then reloads systemd.
+func writeKmipSystemdService(configContent string) error {
+	configDir := "/etc/infisical"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
 	}
 
 	configPath := filepath.Join(configDir, "kmip.conf")
@@ -82,6 +74,61 @@ func InstallKmipSystemdService(clientId, clientSecret, domain, listenAddress, se
 	}
 
 	return nil
+}
+
+func systemdPreconditionsMet() bool {
+	if runtime.GOOS != "linux" {
+		log.Info().Msg("Skipping systemd service installation - not on Linux")
+		return false
+	}
+	if os.Geteuid() != 0 {
+		log.Info().Msg("Skipping systemd service installation - not running as root/sudo")
+		return false
+	}
+	return true
+}
+
+// InstallEnrolledKmipSystemdService installs the service for the token enrollment method.
+// The single-use enrollment token is exchanged for a long-lived access token before this call;
+// the access token is persisted in the environment file and reused on every service restart.
+func InstallEnrolledKmipSystemdService(accessToken, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps string) error {
+	if !systemdPreconditionsMet() {
+		return nil
+	}
+
+	// No enroll method is persisted: on restart the bare `kmip start` reuses this stored access
+	// token via the no-explicit-creds fallback (the token is long-lived). The AWS path instead
+	// persists the method so it re-authenticates via STS on each start.
+	configContent := fmt.Sprintf("INFISICAL_KMIP_ACCESS_TOKEN=%s\n", accessToken)
+	configContent = kmipCommonEnv(configContent, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps)
+
+	return writeKmipSystemdService(configContent)
+}
+
+// InstallAwsAuthKmipSystemdService installs the service for the AWS enrollment method.
+// No token is persisted; the server re-authenticates via AWS STS on every service start.
+func InstallAwsAuthKmipSystemdService(kmipServerID, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps string) error {
+	if !systemdPreconditionsMet() {
+		return nil
+	}
+
+	configContent := "INFISICAL_KMIP_ENROLL_METHOD=aws\n"
+	configContent += fmt.Sprintf("INFISICAL_KMIP_SERVER_ID=%s\n", kmipServerID)
+	configContent = kmipCommonEnv(configContent, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps)
+
+	return writeKmipSystemdService(configContent)
+}
+
+func InstallKmipSystemdService(clientId, clientSecret, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps string) error {
+	if !systemdPreconditionsMet() {
+		return nil
+	}
+
+	configContent := fmt.Sprintf("INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=%s\n", clientId)
+	configContent += fmt.Sprintf("INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=%s\n", clientSecret)
+	configContent = kmipCommonEnv(configContent, domain, listenAddress, serverName, certificateTTL, hostnamesOrIps)
+
+	return writeKmipSystemdService(configContent)
 }
 
 func UninstallKmipSystemdService() error {
