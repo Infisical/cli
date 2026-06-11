@@ -4,11 +4,15 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -136,6 +140,20 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		injectPlaceholders, _ := cmd.Flags().GetBool("inject-placeholders")
+		if !injectPlaceholders {
+			injectPlaceholders = os.Getenv("INFISICAL_INJECT_PLACEHOLDERS") == "true"
+		}
+
+		// Auto-detect running broker unless --no-broker is set
+		noBroker, _ := cmd.Flags().GetBool("no-broker")
+		brokerInfo := detectRunningBroker()
+		useBroker := brokerInfo != nil && !noBroker
+		if useBroker {
+			injectPlaceholders = true
+			log.Info().Int("port", brokerInfo.Port).Msg("Detected running broker, enabling proxy mode")
+		}
+
 		request := models.GetMultiPathSecretsParameters{
 			Environment:            environmentName,
 			WorkspaceId:            projectId,
@@ -144,6 +162,7 @@ var runCmd = &cobra.Command{
 			IncludeImport:          includeImports,
 			Recursive:              recursive,
 			ExpandSecretReferences: shouldExpandSecrets,
+			InjectPlaceholders:     injectPlaceholders,
 		}
 
 		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
@@ -152,6 +171,32 @@ var runCmd = &cobra.Command{
 		}
 
 		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
+
+		// If broker is running, set proxy env vars on child process
+		if useBroker {
+			proxyAddr := fmt.Sprintf("http://localhost:%d", brokerInfo.Port)
+			injectableEnvironment.Variables = append(injectableEnvironment.Variables,
+				"HTTP_PROXY="+proxyAddr,
+				"HTTPS_PROXY="+proxyAddr,
+				"SSL_CERT_FILE="+brokerInfo.CombinedCACertPath,
+				"NODE_EXTRA_CA_CERTS="+brokerInfo.CACertPath,
+				"REQUESTS_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
+				"CURL_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
+				"DENO_CERT="+brokerInfo.CACertPath,
+				"NO_PROXY=localhost,127.0.0.1,"+brokerInfo.NoProxyHost,
+				"INFISICAL_API_URL="+brokerInfo.Domain,
+				"NODE_USE_ENV_PROXY=1",
+			)
+		}
+
+		if injectPlaceholders {
+			// Inject the auth token so agents can call Infisical API for proposals
+			if token != nil && token.Token != "" {
+				injectableEnvironment.Variables = append(injectableEnvironment.Variables, "INFISICAL_TOKEN="+token.Token)
+			}
+			// Install broker skill for known agents
+			maybeInstallBrokerSkill(args)
+		}
 
 		if watchMode {
 			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
@@ -222,6 +267,8 @@ func init() {
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
 	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
+	runCmd.Flags().Bool("inject-placeholders", false, "return placeholder values for proxy-enabled secrets instead of real values")
+	runCmd.Flags().Bool("no-broker", false, "disable auto-detection of running broker proxy")
 }
 
 // Will execute a single command and pass in the given secrets into the process
@@ -451,6 +498,7 @@ func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir
 			IncludeImport:          request.IncludeImport,
 			Recursive:              request.Recursive,
 			ExpandSecretReferences: request.ExpandSecretReferences,
+			InjectPlaceholders:     request.InjectPlaceholders,
 		}
 
 		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -516,3 +564,96 @@ func fetchAndFormatSecretsForShell(request models.GetMultiPathSecretsParameters,
 
 	return formatSecretsForShell(secrets), nil
 }
+
+type brokerInfoFile struct {
+	Port              int    `json:"port"`
+	CACertPath        string `json:"caCertPath"`
+	CombinedCACertPath string `json:"combinedCACertPath"`
+	Domain            string `json:"domain"`
+	NoProxyHost       string `json:"noProxyHost"`
+	PID               int    `json:"pid"`
+}
+
+func detectRunningBroker() *brokerInfoFile {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	infoPath := filepath.Join(home, ".infisical", "broker", "broker.json")
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		return nil
+	}
+
+	var info brokerInfoFile
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil
+	}
+
+	// Health check: is the broker actually running?
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/ca.pem", info.Port))
+	if err != nil || resp.StatusCode != 200 {
+		return nil
+	}
+	resp.Body.Close()
+
+	return &info
+}
+
+type knownAgent struct {
+	binary  string
+	homeDir string
+}
+
+var knownAgents = []knownAgent{
+	{binary: "claude", homeDir: ".claude"},
+	{binary: "cursor", homeDir: ".cursor"},
+	{binary: "agent", homeDir: ".cursor"},
+	{binary: "codex", homeDir: ".agents"},
+	{binary: "hermes", homeDir: ".hermes"},
+	{binary: "opencode", homeDir: ".opencode"},
+	{binary: "openclaw", homeDir: ".openclaw"},
+}
+
+func maybeInstallBrokerSkill(args []string) {
+	if len(args) == 0 {
+		return
+	}
+
+	binary := args[0]
+	// strip path to get just the binary name
+	if idx := strings.LastIndex(binary, "/"); idx >= 0 {
+		binary = binary[idx+1:]
+	}
+
+	var agentHomeDir string
+	for _, agent := range knownAgents {
+		if strings.EqualFold(binary, agent.binary) {
+			agentHomeDir = agent.homeDir
+			break
+		}
+	}
+
+	if agentHomeDir == "" {
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	skillDir := fmt.Sprintf("%s/%s/skills/infisical-broker", home, agentHomeDir)
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return
+	}
+
+	skillPath := skillDir + "/SKILL.md"
+	os.WriteFile(skillPath, []byte(brokerSkillContent), 0644)
+	log.Debug().Str("path", skillPath).Msg("Installed broker skill for agent")
+}
+
+//go:embed skill_broker.md
+var brokerSkillContent string

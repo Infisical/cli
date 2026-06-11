@@ -671,6 +671,7 @@ type GetRawSecretsV3Request struct {
 	Recursive              bool   `json:"recursive"`
 	TagSlugs               string `json:"tagSlugs,omitempty"`
 	ExpandSecretReferences bool   `json:"expandSecretReferences,omitempty"`
+	InjectPlaceholders     bool   `json:"injectPlaceholders,omitempty"`
 }
 
 type GetRawSecretsV3Response struct {

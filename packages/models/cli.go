@@ -128,6 +128,7 @@ type GetMultiPathSecretsParameters struct {
 	IncludeImport          bool
 	Recursive              bool
 	ExpandSecretReferences bool
+	InjectPlaceholders     bool
 }
 
 type GetAllSecretsParameters struct {
@@ -141,6 +142,7 @@ type GetAllSecretsParameters struct {
 	IncludeImport            bool
 	Recursive                bool
 	ExpandSecretReferences   bool
+	InjectPlaceholders       bool
 }
 
 type InjectableEnvironmentResult struct {

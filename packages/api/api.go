@@ -623,6 +623,10 @@ func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Reques
 		req.SetQueryParam("expandSecretReferences", "true")
 	}
 
+	if request.InjectPlaceholders {
+		req.SetQueryParam("injectPlaceholders", "true")
+	}
+
 	response, err := req.Get(fmt.Sprintf("%v/v3/secrets/raw", config.INFISICAL_URL))
 
 	if err != nil {
