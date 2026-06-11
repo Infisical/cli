@@ -683,6 +683,7 @@ type GetRawSecretsV3Response struct {
 		Environment           string       `json:"environment"`
 		SecretKey             string       `json:"secretKey"`
 		SecretValue           string       `json:"secretValue"`
+		SecretPlaceholder     string       `json:"secretPlaceholder,omitempty"`
 		SecretComment         string       `json:"secretComment"`
 		SecretPath            string       `json:"secretPath"`
 		SkipMultilineEncoding bool         `json:"skipMultilineEncoding"`

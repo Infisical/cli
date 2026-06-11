@@ -11,9 +11,11 @@ import (
 )
 
 type Config struct {
-	Port         int
-	PollInterval time.Duration
-	CADir        string
+	Port              int
+	PollInterval      time.Duration
+	CADir             string
+	AllowedHosts      []string
+	BlockUnknownHosts bool
 }
 
 type SecretWithProxyConfig struct {
@@ -51,7 +53,7 @@ func New(cfg Config, fetchFn FetchFunc) (*Broker, error) {
 	}
 
 	rules := ParseRules(entries)
-	proxy := NewProxy(certAuthority, rules)
+	proxy := NewProxy(certAuthority, rules, cfg.AllowedHosts, cfg.BlockUnknownHosts)
 
 	return &Broker{
 		proxy:  proxy,
@@ -62,6 +64,10 @@ func New(cfg Config, fetchFn FetchFunc) (*Broker, error) {
 
 func (b *Broker) CACertPEM() []byte {
 	return b.proxy.ca.CertPEM()
+}
+
+func (b *Broker) SetProposalFunc(fn ProposalFunc) {
+	b.proxy.SetProposalFunc(fn)
 }
 
 func (b *Broker) Start(ctx context.Context) error {

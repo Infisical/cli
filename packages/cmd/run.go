@@ -184,18 +184,33 @@ var runCmd = &cobra.Command{
 				"CURL_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
 				"DENO_CERT="+brokerInfo.CACertPath,
 				"NO_PROXY=localhost,127.0.0.1,"+brokerInfo.NoProxyHost,
-				"INFISICAL_API_URL="+brokerInfo.Domain,
 				"NODE_USE_ENV_PROXY=1",
 			)
 		}
 
 		if injectPlaceholders {
-			// Inject the auth token so agents can call Infisical API for proposals
-			if token != nil && token.Token != "" {
-				injectableEnvironment.Variables = append(injectableEnvironment.Variables, "INFISICAL_TOKEN="+token.Token)
-			}
 			// Install broker skill for known agents
 			maybeInstallBrokerSkill(args)
+		}
+
+		// Auto-wrap with SRT if broker is detected and SRT is configured
+		srtWrapped := false
+		if useBroker {
+			home, _ := os.UserHomeDir()
+			srtSettingsPath := filepath.Join(home, ".srt-settings.json")
+			if _, srtErr := os.Stat(srtSettingsPath); srtErr == nil {
+				// SRT settings exist -- check if srt/npx is available
+				if srtPath, lookErr := exec.LookPath("srt"); lookErr == nil {
+					_ = srtPath
+					// Wrap the command with SRT, inject CA cert inside the sandbox
+					origCmd := strings.Join(args, " ")
+					srtCmd := fmt.Sprintf("export NODE_EXTRA_CA_CERTS=%s SSL_CERT_FILE=%s CURL_CA_BUNDLE=%s && %s",
+						brokerInfo.CACertPath, brokerInfo.CombinedCACertPath, brokerInfo.CombinedCACertPath, origCmd)
+					args = []string{"srt", "-s", srtSettingsPath, "-c", srtCmd}
+					srtWrapped = true
+					log.Info().Str("command", origCmd).Msg("Wrapping with SRT for OS-level isolation")
+				}
+			}
 		}
 
 		if watchMode {
@@ -203,6 +218,14 @@ var runCmd = &cobra.Command{
 		} else {
 			if cmd.Flags().Changed("command") {
 				command := cmd.Flag("command").Value.String()
+				if srtWrapped {
+					// For --command mode with SRT, wrap the whole command string
+					home, _ := os.UserHomeDir()
+					srtSettingsPath := filepath.Join(home, ".srt-settings.json")
+					srtCmd := fmt.Sprintf("export NODE_EXTRA_CA_CERTS=%s SSL_CERT_FILE=%s CURL_CA_BUNDLE=%s && %s",
+						brokerInfo.CACertPath, brokerInfo.CombinedCACertPath, brokerInfo.CombinedCACertPath, command)
+					command = fmt.Sprintf("srt -s %s -c \"%s\"", srtSettingsPath, srtCmd)
+				}
 				err = executeMultipleCommandWithEnvs(command, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
 				if err != nil {
 					util.PrintlnStderr(err)

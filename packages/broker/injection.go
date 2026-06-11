@@ -35,8 +35,6 @@ func InjectAuth(req *http.Request, rule *ParsedRule) {
 				req.Header.Set(headerName, headerValue)
 			}
 		}
-	case "passthrough":
-		// no credential injection
 	}
 
 	ApplySubstitutions(req, rule)

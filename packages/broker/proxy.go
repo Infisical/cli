@@ -15,17 +15,44 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type Proxy struct {
-	ca       *ca.CA
-	rules    []ParsedRule
-	rulesMu  sync.RWMutex
-	listener net.Listener
+type ProposalRequest struct {
+	SecretKey      string `json:"secretKey"`
+	Host           string `json:"host"`
+	AuthType       string `json:"authType"`
+	HeaderName     string `json:"headerName,omitempty"`
+	Username       string `json:"username,omitempty"`
+	HeaderTemplate string `json:"headerTemplate,omitempty"`
+	Comment        string `json:"comment,omitempty"`
 }
 
-func NewProxy(certAuthority *ca.CA, rules []ParsedRule) *Proxy {
+type ProposalResponse struct {
+	Status    string `json:"status"`
+	ReviewURL string `json:"reviewUrl,omitempty"`
+	Message   string `json:"message"`
+}
+
+type ProposalFunc func(req ProposalRequest) (*ProposalResponse, error)
+
+type Proxy struct {
+	ca                *ca.CA
+	rules             []ParsedRule
+	allowedHosts      map[string]bool
+	blockUnknownHosts bool
+	proposalFn        ProposalFunc
+	rulesMu           sync.RWMutex
+	listener          net.Listener
+}
+
+func NewProxy(certAuthority *ca.CA, rules []ParsedRule, allowedHosts []string, blockUnknownHosts bool) *Proxy {
+	hostMap := make(map[string]bool)
+	for _, h := range allowedHosts {
+		hostMap[strings.ToLower(strings.TrimSpace(h))] = true
+	}
 	return &Proxy{
-		ca:    certAuthority,
-		rules: rules,
+		ca:                certAuthority,
+		rules:             rules,
+		allowedHosts:      hostMap,
+		blockUnknownHosts: blockUnknownHosts,
 	}
 }
 
@@ -39,6 +66,82 @@ func (p *Proxy) getRules() []ParsedRule {
 	p.rulesMu.RLock()
 	defer p.rulesMu.RUnlock()
 	return p.rules
+}
+
+func (p *Proxy) isHostAllowed(host string) bool {
+	return p.allowedHosts[strings.ToLower(host)]
+}
+
+func (p *Proxy) SetProposalFunc(fn ProposalFunc) {
+	p.proposalFn = fn
+}
+
+func (p *Proxy) handleInternal(conn net.Conn, req *http.Request) {
+	switch req.URL.Path {
+	case "/_internal/propose":
+		p.handlePropose(conn, req)
+	case "/_internal/discover":
+		p.handleDiscover(conn, req)
+	default:
+		writeErrorResponse(conn, 404, "Not Found")
+	}
+}
+
+func (p *Proxy) handlePropose(conn net.Conn, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeErrorResponse(conn, 405, "Method Not Allowed")
+		return
+	}
+	if p.proposalFn == nil {
+		writeJSONResponse(conn, 501, ProposalResponse{Status: "error", Message: "Proposals not configured"})
+		return
+	}
+
+	var proposal ProposalRequest
+	if err := json.NewDecoder(req.Body).Decode(&proposal); err != nil {
+		writeJSONResponse(conn, 400, ProposalResponse{Status: "error", Message: "Invalid request body"})
+		return
+	}
+
+	if proposal.SecretKey == "" || proposal.Host == "" || proposal.AuthType == "" {
+		writeJSONResponse(conn, 400, ProposalResponse{Status: "error", Message: "secretKey, host, and authType are required"})
+		return
+	}
+
+	log.Info().Str("secretKey", proposal.SecretKey).Str("host", proposal.Host).Str("authType", proposal.AuthType).Msg("Received proposal")
+
+	resp, err := p.proposalFn(proposal)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create proposal")
+		writeJSONResponse(conn, 500, ProposalResponse{Status: "error", Message: err.Error()})
+		return
+	}
+
+	writeJSONResponse(conn, 200, resp)
+}
+
+func (p *Proxy) handleDiscover(conn net.Conn, req *http.Request) {
+	rules := p.getRules()
+	type service struct {
+		Host     string `json:"host"`
+		AuthType string `json:"authType"`
+	}
+	services := make([]service, 0, len(rules))
+	seen := make(map[string]bool)
+	for _, r := range rules {
+		key := r.Host + ":" + r.AuthType
+		if !seen[key] {
+			services = append(services, service{Host: r.Host, AuthType: r.AuthType})
+			seen[key] = true
+		}
+	}
+	writeJSONResponse(conn, 200, map[string]interface{}{"services": services})
+}
+
+func writeJSONResponse(conn net.Conn, code int, body interface{}) {
+	data, _ := json.Marshal(body)
+	resp := fmt.Sprintf("HTTP/1.1 %d OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", code, len(data), data)
+	conn.Write([]byte(resp))
 }
 
 func (p *Proxy) ListenAndServe(addr string) error {
@@ -85,6 +188,8 @@ func (p *Proxy) handleConnection(conn net.Conn) {
 		p.handleConnect(conn, req)
 	} else if req.URL.Path == "/ca.pem" {
 		p.serveCAPEM(conn, req)
+	} else if strings.HasPrefix(req.URL.Path, "/_internal/") {
+		p.handleInternal(conn, req)
 	} else {
 		p.handleForward(conn, req)
 	}
@@ -144,15 +249,16 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 	matched := MatchRule(host, port, path, rules)
 
 	if matched == nil {
-		log.Warn().Str("host", host).Msg("No matching rule, returning 403")
-		p.writeForbidden(tlsConn, host)
-		return
+		if p.blockUnknownHosts && !p.isHostAllowed(host) {
+			log.Warn().Str("host", host).Msg("No matching rule, returning 403")
+			p.writeForbidden(tlsConn, host)
+			return
+		}
+		log.Debug().Str("host", host).Msg("No matching rule, passing through")
+	} else {
+		log.Info().Str("host", host).Str("authType", matched.AuthType).Str("secretKey", matched.SecretKey).Msg("Matched rule, injecting credentials")
+		InjectAuth(tunnelReq, matched)
 	}
-
-	log.Info().Str("host", host).Str("authType", matched.AuthType).Str("secretKey", matched.SecretKey).Msg("Matched rule, injecting credentials")
-
-	// Inject credentials
-	InjectAuth(tunnelReq, matched)
 
 	// Forward to upstream
 	upstreamAddr := req.Host
