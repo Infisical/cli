@@ -195,22 +195,36 @@ var runCmd = &cobra.Command{
 
 		// Auto-wrap with SRT if broker is detected and SRT is configured
 		srtWrapped := false
+		srtCommand := "" // tracks the srt invocation prefix for --command mode
 		if useBroker {
 			home, _ := os.UserHomeDir()
 			srtSettingsPath := filepath.Join(home, ".srt-settings.json")
 			if _, srtErr := os.Stat(srtSettingsPath); srtErr == nil {
-				if _, lookErr := exec.LookPath("srt"); lookErr == nil {
+				srtBin := ""
+				if p, err := exec.LookPath("srt"); err == nil {
+					srtBin = p
+				} else if p, err := exec.LookPath("npx"); err == nil {
+					srtBin = p
+				}
+				if srtBin != "" {
 					// Set CA cert env vars so they're inherited into the sandbox
 					injectableEnvironment.Variables = append(injectableEnvironment.Variables,
 						"NODE_EXTRA_CA_CERTS="+brokerInfo.CACertPath,
 						"SSL_CERT_FILE="+brokerInfo.CombinedCACertPath,
 						"CURL_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
 					)
-					// Use direct exec mode (not -c) to preserve TTY for interactive TUI apps
 					origCmd := args[0]
-					srtArgs := []string{"srt", "-s", srtSettingsPath, origCmd}
-					srtArgs = append(srtArgs, args[1:]...)
-					args = srtArgs
+					if strings.HasSuffix(srtBin, "npx") {
+						srtArgs := []string{"npx", "@anthropic-ai/sandbox-runtime", "-s", srtSettingsPath, origCmd}
+						srtArgs = append(srtArgs, args[1:]...)
+						args = srtArgs
+						srtCommand = fmt.Sprintf("npx @anthropic-ai/sandbox-runtime -s %s", srtSettingsPath)
+					} else {
+						srtArgs := []string{"srt", "-s", srtSettingsPath, origCmd}
+						srtArgs = append(srtArgs, args[1:]...)
+						args = srtArgs
+						srtCommand = fmt.Sprintf("srt -s %s", srtSettingsPath)
+					}
 					srtWrapped = true
 					log.Info().Str("command", origCmd).Msg("Wrapping with SRT for OS-level isolation")
 				}
@@ -223,9 +237,7 @@ var runCmd = &cobra.Command{
 			if cmd.Flags().Changed("command") {
 				command := cmd.Flag("command").Value.String()
 				if srtWrapped {
-					home, _ := os.UserHomeDir()
-					srtSettingsPath := filepath.Join(home, ".srt-settings.json")
-					command = fmt.Sprintf("srt -s %s -c \"%s\"", srtSettingsPath, command)
+					command = fmt.Sprintf("%s -c \"%s\"", srtCommand, command)
 				}
 				err = executeMultipleCommandWithEnvs(command, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
 				if err != nil {
