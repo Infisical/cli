@@ -84,9 +84,11 @@ jobs:
 
       # --- safety: prod must not point at a non-prod bucket ----------------
       - name: Sanity-check target
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
-          echo "Target: ${{ inputs.target }}   Bucket: $INFISICAL_CLI_S3_BUCKET"
+          echo "Target: $INPUT_TARGET   Bucket: $INFISICAL_CLI_S3_BUCKET"
           [ -n "$INFISICAL_CLI_S3_BUCKET" ] || { echo "bucket secret not set for this target"; exit 1; }
 
       # --- keys: import exactly like the release workflow ------------------
@@ -119,17 +121,22 @@ jobs:
 
       # --- run the backfill ------------------------------------------------
       - name: Backfill
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_APPLY: ${{ inputs.apply }}
+          INPUT_INVALIDATE: ${{ inputs.invalidate }}
         run: |
           set -euo pipefail
           ARGS=()
-          if [ "${{ inputs.mode }}" = "all" ]; then
+          if [ "$INPUT_MODE" = "all" ]; then
             ARGS+=(--all)
           else
-            [ -n "${{ inputs.version }}" ] || { echo "version input required when mode=version"; exit 1; }
-            ARGS+=(--version "${{ inputs.version }}")
+            [ -n "$INPUT_VERSION" ] || { echo "version input required when mode=version"; exit 1; }
+            ARGS+=(--version "$INPUT_VERSION")
           fi
-          [ "${{ inputs.apply }}" = "true" ]       && ARGS+=(--apply)
-          [ "${{ inputs.invalidate }}" != "true" ] && ARGS+=(--no-invalidate)
+          [ "$INPUT_APPLY" = "true" ]       && ARGS+=(--apply)
+          [ "$INPUT_INVALIDATE" != "true" ] && ARGS+=(--no-invalidate)
           bash scripts/backfill_from_cloudsmith.sh "${ARGS[@]}"
 
       # --- prove the invalidation completed (auditable) --------------------
@@ -158,10 +165,13 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Validate installs through CloudFront
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.mode }}" = "all" ]; then
+          if [ "$INPUT_MODE" = "all" ]; then
             bash scripts/validate_backfill.sh --all
           else
-            bash scripts/validate_backfill.sh --version "${{ inputs.version }}"
+            bash scripts/validate_backfill.sh --version "$INPUT_VERSION"
           fi
