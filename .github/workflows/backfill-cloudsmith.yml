@@ -46,9 +46,6 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    # Gate prod behind a protected environment (add required reviewers to
-    # cli-backfill-prod in repo settings for a manual approval step).
-    environment: ${{ inputs.target == 'prod' && 'cli-backfill-prod' || 'cli-backfill-test' }}
     env:
       # Select the secret set from the target. prod reuses the release secrets.
       INFISICAL_CLI_S3_BUCKET: ${{ inputs.target == 'prod' && secrets.INFISICAL_CLI_S3_BUCKET || secrets.POC_CLI_S3_BUCKET }}
