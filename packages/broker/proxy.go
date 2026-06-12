@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/ca"
 	"github.com/rs/zerolog/log"
@@ -41,6 +44,7 @@ type Proxy struct {
 	proposalFn        ProposalFunc
 	rulesMu           sync.RWMutex
 	listener          net.Listener
+	upstream          *http.Transport
 }
 
 func NewProxy(certAuthority *ca.CA, rules []ParsedRule, allowedHosts []string, blockUnknownHosts bool) *Proxy {
@@ -53,6 +57,14 @@ func NewProxy(certAuthority *ca.CA, rules []ParsedRule, allowedHosts []string, b
 		rules:             rules,
 		allowedHosts:      hostMap,
 		blockUnknownHosts: blockUnknownHosts,
+		upstream: &http.Transport{
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+			ForceAttemptHTTP2:     false,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Minute,
+		},
 	}
 }
 
@@ -169,6 +181,7 @@ func (p *Proxy) ListenAndServe(addr string) error {
 }
 
 func (p *Proxy) Close() error {
+	p.upstream.CloseIdleConnections()
 	if p.listener != nil {
 		return p.listener.Close()
 	}
@@ -257,70 +270,91 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 	}
 
 	// Host has a proxy config: MITM to inject credentials
-	tlsConfig := &tls.Config{
+	tlsConn := tls.Server(clientConn, &tls.Config{
 		GetCertificate: p.ca.GetCertificate,
-	}
-	tlsConn := tls.Server(clientConn, tlsConfig)
+	})
 	if err := tlsConn.Handshake(); err != nil {
 		log.Error().Err(err).Str("host", host).Msg("TLS handshake with client failed")
 		return
 	}
-	defer tlsConn.Close()
 
-	// Connect to upstream TLS
-	upstreamAddr := req.Host
-	if !strings.Contains(upstreamAddr, ":") {
-		upstreamAddr = upstreamAddr + ":443"
-	}
-	upstreamConn, err := tls.Dial("tcp", upstreamAddr, &tls.Config{
-		ServerName: host,
-	})
-	if err != nil {
-		log.Error().Err(err).Str("upstream", upstreamAddr).Msg("Failed to connect to upstream")
-		writeErrorResponse(tlsConn, 502, "Bad Gateway")
-		return
-	}
-	defer upstreamConn.Close()
-
-	// Read the first request, inject credentials, forward
-	br := bufio.NewReader(tlsConn)
-	tunnelReq, err := http.ReadRequest(br)
-	if err != nil {
-		log.Error().Err(err).Str("host", host).Msg("Failed to read tunneled request")
-		return
-	}
-	tunnelReq.URL.Scheme = "https"
-	tunnelReq.URL.Host = req.Host
-
-	log.Info().Str("host", host).Str("method", tunnelReq.Method).Str("path", tunnelReq.URL.Path).Msg("Proxying request")
-	log.Info().Str("host", host).Str("authType", matched.AuthType).Str("secretKey", matched.SecretKey).Msg("Matched rule, injecting credentials")
-	InjectAuth(tunnelReq, matched)
-
-	tunnelReq.Header.Del("Proxy-Authorization")
-	tunnelReq.Header.Del("Proxy-Connection")
-	tunnelReq.RequestURI = ""
-	if err := tunnelReq.Write(upstreamConn); err != nil {
-		log.Error().Err(err).Msg("Failed to write to upstream")
-		return
+	connectHost := req.Host
+	if !strings.Contains(connectHost, ":") {
+		connectHost = connectHost + ":443"
 	}
 
-	// After first request, switch to bidirectional byte streaming.
-	// This handles SSE, keep-alive, and subsequent requests on the same connection.
-	done := make(chan struct{}, 2)
-	go func() {
-		if br.Buffered() > 0 {
-			buffered := make([]byte, br.Buffered())
-			br.Read(buffered)
-			upstreamConn.Write(buffered)
+	listener := newOneShotListener(tlsConn)
+	srv := &http.Server{
+		Handler:           p.forwardMITMRequest(connectHost, host, port),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      30 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateHijacked || state == http.StateClosed {
+				_ = listener.Close()
+			}
+		},
+	}
+	_ = srv.Serve(listener)
+}
+
+func (p *Proxy) forwardMITMRequest(connectHost string, host string, port int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rules := p.getRules()
+		matched := MatchRule(host, port, r.URL.Path, rules)
+
+		if matched == nil {
+			log.Debug().Str("host", host).Str("path", r.URL.Path).Msg("No rule matches this path, forwarding without injection")
+		} else {
+			log.Info().Str("host", host).Str("method", r.Method).Str("path", r.URL.Path).Str("authType", matched.AuthType).Str("secretKey", matched.SecretKey).Msg("Matched rule, injecting credentials")
+			InjectAuth(r, matched)
 		}
-		io.Copy(upstreamConn, tlsConn)
-		done <- struct{}{}
-	}()
-	go func() {
-		io.Copy(tlsConn, upstreamConn)
-		done <- struct{}{}
-	}()
-	<-done
+
+		outURL := &url.URL{
+			Scheme:   "https",
+			Host:     connectHost,
+			Path:     r.URL.Path,
+			RawPath:  r.URL.RawPath,
+			RawQuery: r.URL.RawQuery,
+		}
+
+		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), r.Body)
+		if err != nil {
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			return
+		}
+		for k, vv := range r.Header {
+			for _, v := range vv {
+				outReq.Header.Add(k, v)
+			}
+		}
+		outReq.ContentLength = r.ContentLength
+		outReq.Header.Del("Proxy-Authorization")
+		outReq.Header.Del("Proxy-Connection")
+		outReq.Host = connectHost
+
+		resp, err := p.upstream.RoundTrip(outReq)
+		if err != nil {
+			log.Error().Err(err).Str("host", connectHost).Msg("Upstream request failed")
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+
+		var dst io.Writer = w
+		if f, ok := w.(http.Flusher); ok {
+			dst = &flushingWriter{w: w, f: f}
+		}
+		io.Copy(dst, resp.Body)
+	}
 }
 
 func (p *Proxy) handleForward(clientConn net.Conn, req *http.Request) {
@@ -394,4 +428,55 @@ func (p *Proxy) writeForbiddenConn(conn net.Conn, host string) {
 func writeErrorResponse(w io.Writer, code int, message string) {
 	resp := fmt.Sprintf("HTTP/1.1 %d %s\r\nContent-Length: %d\r\n\r\n%s", code, message, len(message), message)
 	w.Write([]byte(resp))
+}
+
+type oneShotListener struct {
+	conn   net.Conn
+	yield  chan net.Conn
+	closed chan struct{}
+}
+
+func newOneShotListener(c net.Conn) *oneShotListener {
+	l := &oneShotListener{
+		conn:   c,
+		yield:  make(chan net.Conn, 1),
+		closed: make(chan struct{}),
+	}
+	l.yield <- c
+	return l
+}
+
+var errListenerClosed = errors.New("broker: one-shot listener closed")
+
+func (l *oneShotListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.yield:
+		return c, nil
+	case <-l.closed:
+		return nil, errListenerClosed
+	}
+}
+
+func (l *oneShotListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *oneShotListener) Addr() net.Addr { return l.conn.LocalAddr() }
+
+type flushingWriter struct {
+	w io.Writer
+	f http.Flusher
+}
+
+func (fw *flushingWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if n > 0 {
+		fw.f.Flush()
+	}
+	return n, err
 }
