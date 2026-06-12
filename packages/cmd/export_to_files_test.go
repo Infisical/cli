@@ -96,3 +96,41 @@ func TestMapPathToFile(t *testing.T) {
 		})
 	}
 }
+
+func TestExpandToFilePathsTerminatesOnCycle(t *testing.T) {
+	// A buggy/adversarial server could return a folder graph with a cycle.
+	tree := map[string][]string{
+		"/":    {"/a"},
+		"/a":   {"/a/b"},
+		"/a/b": {"/a"}, // cycle back to an ancestor
+	}
+	listChildren := func(parent string) ([]string, error) {
+		return tree[parent], nil
+	}
+
+	result, err := expandToFilePaths("/", listChildren)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"/", "/a", "/a/b"}, result)
+}
+
+func TestIsSafeFolderSegment(t *testing.T) {
+	tests := []struct {
+		name string
+		safe bool
+	}{
+		{name: "apps", safe: true},
+		{name: "eslint-config", safe: true},
+		{name: "", safe: false},
+		{name: ".", safe: false},
+		{name: "..", safe: false},
+		{name: "../../.ssh", safe: false},
+		{name: "a/b", safe: false},
+		{name: "a\\b", safe: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.safe, isSafeFolderSegment(tt.name))
+		})
+	}
+}

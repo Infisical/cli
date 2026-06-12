@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -25,6 +24,16 @@ func normalizeSecretPath(path string) string {
 		path = strings.TrimRight(path, "/")
 	}
 	return path
+}
+
+// isSafeFolderSegment guards against a server returning a folder name that would
+// escape the target directory once mirrored into the filesystem (e.g. ".." or a
+// name containing a path separator).
+func isSafeFolderSegment(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, "/\\")
 }
 
 // expandToFilePaths resolves the export --path pattern into the concrete secret
@@ -49,13 +58,26 @@ func expandToFilePaths(pattern string, listChildren func(parent string) ([]strin
 }
 
 func walkFolderTree(root string, listChildren func(parent string) ([]string, error)) ([]string, error) {
+	return walkFolderTreeVisited(root, listChildren, map[string]bool{})
+}
+
+func walkFolderTreeVisited(
+	root string,
+	listChildren func(parent string) ([]string, error),
+	visited map[string]bool,
+) ([]string, error) {
+	if visited[root] {
+		return nil, nil
+	}
+	visited[root] = true
+
 	paths := []string{root}
 	children, err := listChildren(root)
 	if err != nil {
 		return nil, err
 	}
 	for _, child := range children {
-		descendants, err := walkFolderTree(child, listChildren)
+		descendants, err := walkFolderTreeVisited(child, listChildren, visited)
 		if err != nil {
 			return nil, err
 		}
@@ -92,6 +114,11 @@ func runExportToFiles(request models.GetAllSecretsParameters, format string, tag
 		base := strings.TrimRight(parent, "/")
 		paths := make([]string, 0, len(folders))
 		for _, folder := range folders {
+			if !isSafeFolderSegment(folder.Name) {
+				return nil, fmt.Errorf(
+					"refusing to export: server returned unsafe folder name %q", folder.Name,
+				)
+			}
 			paths = append(paths, base+"/"+folder.Name)
 		}
 		return paths, nil
@@ -129,11 +156,6 @@ func runExportToFiles(request models.GetAllSecretsParameters, format string, tag
 		}
 
 		outputFile := mapPathToFile(path, format)
-		if dir := filepath.Dir(outputFile); dir != "." {
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", dir, err)
-			}
-		}
 		if err := writeToFile(outputFile, output, 0644); err != nil {
 			return fmt.Errorf("failed to write %s: %w", outputFile, err)
 		}
