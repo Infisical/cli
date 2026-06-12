@@ -92,6 +92,11 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		toFiles, err := cmd.Flags().GetBool("to-files")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
 		request := models.GetAllSecretsParameters{
 			Environment:            environmentName,
 			TagSlugs:               tagSlugs,
@@ -128,6 +133,16 @@ var exportCmd = &cobra.Command{
 				util.HandleError(err)
 			}
 			util.PrintStdout(processedTemplate.String())
+			return
+		}
+
+		if toFiles {
+			if outputFile != "" {
+				util.PrintErrorMessageAndExit("--to-files cannot be combined with --output-file")
+			}
+			if err := runExportToFiles(request, format, tagSlugs, secretOverriding); err != nil {
+				util.HandleError(err, "Failed to export secrets to files")
+			}
 			return
 		}
 
@@ -275,6 +290,7 @@ func init() {
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
+	exportCmd.Flags().Bool("to-files", false, "Write one file per logical path, mirroring the folder path into the filesystem (e.g. apps/cli/.env). Use with --path=\"apps/*\" to target the immediate subfolders of apps, or omit --path to export every folder. Cannot be combined with --output-file")
 }
 
 // Format according to the format flag
