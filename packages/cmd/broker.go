@@ -382,7 +382,7 @@ var brokerSetupSrtCmd = &cobra.Command{
 			"filesystem": map[string]interface{}{
 				"denyRead":   []string{"~/.infisical", "~/.ssh", "~/.aws", "~/.config/gcloud"},
 				"allowRead":  []string{"~/.infisical/broker"},
-				"allowWrite": []string{".", "~/.claude", "/tmp"},
+				"allowWrite": []string{".", "~", "/tmp"},
 				"denyWrite":  []string{},
 			},
 			"allowPty": true,
