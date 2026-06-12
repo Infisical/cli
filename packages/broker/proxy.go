@@ -221,7 +221,42 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 	// Send 200 Connection Established
 	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
-	// TLS handshake with the client using a minted leaf cert
+	// Check if this host needs credential injection
+	// For hosts without proxy configs (passthrough), do pure TCP tunneling
+	// without any request parsing or TLS termination overhead.
+	rules := p.getRules()
+	matched := MatchRule(host, port, "/", rules)
+
+	if matched == nil {
+		if p.blockUnknownHosts && !p.isHostAllowed(host) {
+			log.Warn().Str("host", host).Msg("No matching rule, returning 403")
+			tlsConn := tls.Server(clientConn, &tls.Config{GetCertificate: p.ca.GetCertificate})
+			if err := tlsConn.Handshake(); err != nil {
+				return
+			}
+			p.writeForbidden(tlsConn, host)
+			tlsConn.Close()
+			return
+		}
+		// Passthrough: pure TCP tunnel, no MITM
+		log.Debug().Str("host", host).Msg("No matching rule, tunneling without MITM")
+		upstreamAddr := req.Host
+		if !strings.Contains(upstreamAddr, ":") {
+			upstreamAddr = upstreamAddr + ":443"
+		}
+		upstreamConn, err := net.Dial("tcp", upstreamAddr)
+		if err != nil {
+			return
+		}
+		defer upstreamConn.Close()
+		done := make(chan struct{}, 2)
+		go func() { io.Copy(upstreamConn, clientConn); done <- struct{}{} }()
+		go func() { io.Copy(clientConn, upstreamConn); done <- struct{}{} }()
+		<-done
+		return
+	}
+
+	// Host has a proxy config: MITM to inject credentials
 	tlsConfig := &tls.Config{
 		GetCertificate: p.ca.GetCertificate,
 	}
@@ -232,35 +267,7 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 	}
 	defer tlsConn.Close()
 
-	// Read the actual HTTP request from the TLS tunnel
-	br := bufio.NewReader(tlsConn)
-	tunnelReq, err := http.ReadRequest(br)
-	if err != nil {
-		log.Error().Err(err).Str("host", host).Msg("Failed to read tunneled request")
-		return
-	}
-	tunnelReq.URL.Scheme = "https"
-	tunnelReq.URL.Host = req.Host
-
-	path := tunnelReq.URL.Path
-	log.Info().Str("host", host).Str("method", tunnelReq.Method).Str("path", path).Msg("Proxying request")
-
-	rules := p.getRules()
-	matched := MatchRule(host, port, path, rules)
-
-	if matched == nil {
-		if p.blockUnknownHosts && !p.isHostAllowed(host) {
-			log.Warn().Str("host", host).Msg("No matching rule, returning 403")
-			p.writeForbidden(tlsConn, host)
-			return
-		}
-		log.Debug().Str("host", host).Msg("No matching rule, passing through")
-	} else {
-		log.Info().Str("host", host).Str("authType", matched.AuthType).Str("secretKey", matched.SecretKey).Msg("Matched rule, injecting credentials")
-		InjectAuth(tunnelReq, matched)
-	}
-
-	// Forward to upstream
+	// Connect to upstream TLS
 	upstreamAddr := req.Host
 	if !strings.Contains(upstreamAddr, ":") {
 		upstreamAddr = upstreamAddr + ":443"
@@ -275,6 +282,20 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 	}
 	defer upstreamConn.Close()
 
+	// Read the first request, inject credentials, forward
+	br := bufio.NewReader(tlsConn)
+	tunnelReq, err := http.ReadRequest(br)
+	if err != nil {
+		log.Error().Err(err).Str("host", host).Msg("Failed to read tunneled request")
+		return
+	}
+	tunnelReq.URL.Scheme = "https"
+	tunnelReq.URL.Host = req.Host
+
+	log.Info().Str("host", host).Str("method", tunnelReq.Method).Str("path", tunnelReq.URL.Path).Msg("Proxying request")
+	log.Info().Str("host", host).Str("authType", matched.AuthType).Str("secretKey", matched.SecretKey).Msg("Matched rule, injecting credentials")
+	InjectAuth(tunnelReq, matched)
+
 	tunnelReq.Header.Del("Proxy-Authorization")
 	tunnelReq.Header.Del("Proxy-Connection")
 	tunnelReq.RequestURI = ""
@@ -283,17 +304,23 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 		return
 	}
 
-	upstreamBr := bufio.NewReader(upstreamConn)
-	resp, err := http.ReadResponse(upstreamBr, tunnelReq)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to read upstream response")
-		return
-	}
-	defer resp.Body.Close()
-
-	log.Info().Str("host", host).Int("status", resp.StatusCode).Msg("Upstream response")
-	resp.Header.Del("Set-Cookie")
-	resp.Write(tlsConn)
+	// After first request, switch to bidirectional byte streaming.
+	// This handles SSE, keep-alive, and subsequent requests on the same connection.
+	done := make(chan struct{}, 2)
+	go func() {
+		if br.Buffered() > 0 {
+			buffered := make([]byte, br.Buffered())
+			br.Read(buffered)
+			upstreamConn.Write(buffered)
+		}
+		io.Copy(upstreamConn, tlsConn)
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(tlsConn, upstreamConn)
+		done <- struct{}{}
+	}()
+	<-done
 }
 
 func (p *Proxy) handleForward(clientConn net.Conn, req *http.Request) {
