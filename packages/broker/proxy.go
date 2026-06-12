@@ -325,7 +325,7 @@ func (p *Proxy) handleConnect(clientConn net.Conn, req *http.Request) {
 
 func (p *Proxy) handleForward(clientConn net.Conn, req *http.Request) {
 	host, port := ExtractHostPort(req.Host)
-	if port == 443 {
+	if port == 0 {
 		port = 80
 	}
 	path := req.URL.Path
@@ -333,14 +333,23 @@ func (p *Proxy) handleForward(clientConn net.Conn, req *http.Request) {
 	matched := MatchRule(host, port, path, rules)
 
 	if matched == nil {
-		p.writeForbiddenConn(clientConn, host)
-		return
+		if p.blockUnknownHosts && !p.isHostAllowed(host) {
+			p.writeForbiddenConn(clientConn, host)
+			return
+		}
+		// Passthrough: forward without credential injection
+		log.Debug().Str("host", host).Msg("No matching rule, forwarding HTTP request without injection")
+	} else {
+		InjectAuth(req, matched)
 	}
 
-	InjectAuth(req, matched)
+	// Build upstream URL
+	upstreamHost := req.Host
+	if !strings.Contains(upstreamHost, ":") {
+		upstreamHost = upstreamHost + ":80"
+	}
 
-	// Forward
-	upstream, err := net.Dial("tcp", req.Host)
+	upstream, err := net.Dial("tcp", upstreamHost)
 	if err != nil {
 		writeErrorResponse(clientConn, 502, "Bad Gateway")
 		return
@@ -361,7 +370,6 @@ func (p *Proxy) handleForward(clientConn net.Conn, req *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	resp.Header.Del("Set-Cookie")
 	resp.Write(clientConn)
 }
 
