@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/broker"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -70,91 +69,7 @@ var brokerStartCmd = &cobra.Command{
 			BlockUnknownHosts: blockUnknownHosts,
 		}
 
-		fetchFn := func() ([]broker.SecretWithProxyConfig, error) {
-			log.Debug().
-				Str("env", environmentName).
-				Str("projectId", projectId).
-				Msg("Fetching proxy configs from Infisical")
-
-			// Resolve auth token
-			var accessToken string
-			if token != nil && token.Token != "" {
-				accessToken = token.Token
-			} else {
-				loggedInDetails, err := util.GetCurrentLoggedInUserDetails(true)
-				if err != nil || !loggedInDetails.IsUserLoggedIn {
-					return nil, fmt.Errorf("not authenticated -- use --token or infisical login")
-				}
-				accessToken = loggedInDetails.UserCredentials.JTWToken
-			}
-
-			// Fetch raw secrets (with real values)
-			httpClient, err := util.GetRestyClientWithCustomHeaders()
-			if err != nil {
-				return nil, fmt.Errorf("creating HTTP client: %w", err)
-			}
-			httpClient.SetAuthToken(accessToken).SetHeader("Accept", "application/json")
-
-			rawSecrets, err := api.CallGetRawSecretsV3(httpClient, api.GetRawSecretsV3Request{
-				WorkspaceId:   projectId,
-				Environment:   environmentName,
-				SecretPath:    "/",
-				IncludeImport: true,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("fetching secrets: %w", err)
-			}
-
-			// Fetch proxy configs
-			type proxyConfigResp struct {
-				ProxyConfigs []struct {
-					SecretId    string          `json:"secretId"`
-					Placeholder string          `json:"placeholder"`
-					Rules       json.RawMessage `json:"rules"`
-				} `json:"proxyConfigs"`
-			}
-			var pcResp proxyConfigResp
-			pcResponse, err := httpClient.R().
-				SetResult(&pcResp).
-				SetQueryParam("environment", environmentName).
-				SetQueryParam("secretPath", "/").
-				Get(fmt.Sprintf("%v/v1/projects/%v/secrets/http-proxy-configs", config.INFISICAL_URL, projectId))
-			if err != nil || pcResponse.IsError() {
-				log.Warn().Err(err).Msg("Failed to fetch proxy configs, continuing with empty rules")
-				return []broker.SecretWithProxyConfig{}, nil
-			}
-
-			// Build lookup: secretId -> proxy config
-			type pcEntry struct {
-				placeholder string
-				rules       json.RawMessage
-			}
-			pcMap := make(map[string]pcEntry)
-			for _, pc := range pcResp.ProxyConfigs {
-				pcMap[pc.SecretId] = pcEntry{placeholder: pc.Placeholder, rules: pc.Rules}
-			}
-
-			// Merge: only include secrets that have proxy configs
-			var result []broker.SecretWithProxyConfig
-			for _, secret := range rawSecrets.Secrets {
-				pc, ok := pcMap[secret.ID]
-				if !ok {
-					continue
-				}
-				var rules []broker.ProxyRule
-				json.Unmarshal(pc.rules, &rules)
-				result = append(result, broker.SecretWithProxyConfig{
-					SecretKey:   secret.SecretKey,
-					SecretValue: secret.SecretValue,
-					ProxyConfig: broker.ProxyConfig{
-						Placeholder: pc.placeholder,
-						Rules:       rules,
-					},
-				})
-			}
-
-			return result, nil
-		}
+		fetchFn := buildBrokerFetchFn(token, projectId, environmentName)
 
 		b, err := broker.New(cfg, fetchFn)
 		if err != nil {
@@ -217,54 +132,7 @@ var brokerStartCmd = &cobra.Command{
 			os.Exit(1)
 		}()
 
-		// Wire up broker-mediated proposals
-		b.SetProposalFunc(func(proposal broker.ProposalRequest) (*broker.ProposalResponse, error) {
-			var accessToken string
-			if token != nil && token.Token != "" {
-				accessToken = token.Token
-			} else {
-				loggedInDetails, loginErr := util.GetCurrentLoggedInUserDetails(true)
-				if loginErr != nil || !loggedInDetails.IsUserLoggedIn {
-					return nil, fmt.Errorf("not authenticated for proposals")
-				}
-				accessToken = loggedInDetails.UserCredentials.JTWToken
-			}
-
-			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
-			if clientErr != nil {
-				return nil, fmt.Errorf("creating HTTP client: %w", clientErr)
-			}
-			httpClient.SetAuthToken(accessToken).SetHeader("Accept", "application/json")
-
-			// Create the secret with empty value + proxy config via Infisical API
-			body := map[string]interface{}{
-				"workspaceId": projectId,
-				"environment": environmentName,
-				"secretPath":  "/",
-				"secretValue": "",
-				"secretComment": proposal.Comment,
-				"type":        "shared",
-			}
-			resp, apiErr := httpClient.R().
-				SetBody(body).
-				Post(fmt.Sprintf("%v/v3/secrets/raw/%v", config.INFISICAL_URL, proposal.SecretKey))
-
-			if apiErr != nil {
-				return nil, fmt.Errorf("creating secret: %w", apiErr)
-			}
-			if resp.IsError() {
-				return &broker.ProposalResponse{
-					Status:  "error",
-					Message: fmt.Sprintf("API error: %s", resp.String()),
-				}, nil
-			}
-
-			// TODO: add proxy config to the created secret and return reviewUrl
-			return &broker.ProposalResponse{
-				Status:  "pending",
-				Message: fmt.Sprintf("Secret %s created. Add proxy config in the dashboard.", proposal.SecretKey),
-			}, nil
-		})
+		b.SetProposalFunc(buildProposalFunc(token, projectId, environmentName))
 
 		log.Info().
 			Int("port", port).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/ca"
@@ -70,11 +71,32 @@ func (b *Broker) SetProposalFunc(fn ProposalFunc) {
 	b.proxy.SetProposalFunc(fn)
 }
 
-func (b *Broker) Start(ctx context.Context) error {
-	go b.pollLoop(ctx)
-
+func (b *Broker) Listen() error {
 	addr := fmt.Sprintf(":%d", b.config.Port)
-	return b.proxy.ListenAndServe(addr)
+	return b.proxy.Listen(addr)
+}
+
+func (b *Broker) Serve(ctx context.Context) error {
+	go b.pollLoop(ctx)
+	return b.proxy.Serve()
+}
+
+func (b *Broker) Start(ctx context.Context) error {
+	if err := b.Listen(); err != nil {
+		return err
+	}
+	return b.Serve(ctx)
+}
+
+func (b *Broker) Port() int {
+	addr := b.proxy.Addr()
+	if addr == nil {
+		return 0
+	}
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+		return tcpAddr.Port
+	}
+	return 0
 }
 
 func (b *Broker) Stop() error {

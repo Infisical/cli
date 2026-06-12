@@ -4,22 +4,23 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
+	"context"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/broker"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/rs/zerolog/log"
@@ -140,20 +141,182 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		injectPlaceholders, _ := cmd.Flags().GetBool("inject-placeholders")
-		if !injectPlaceholders {
-			injectPlaceholders = os.Getenv("INFISICAL_INJECT_PLACEHOLDERS") == "true"
+		brokerEnabled, _ := cmd.Flags().GetBool("broker")
+
+		var brokerCleanup func()
+		if brokerEnabled {
+			if projectId == "" {
+				util.HandleError(fmt.Errorf("--projectId is required when using --broker, or run 'infisical init'"))
+			}
+
+			pollInterval, _ := cmd.Flags().GetInt("broker-poll-interval")
+			allowHostsStr, _ := cmd.Flags().GetString("broker-allow-hosts")
+			blockUnknownHosts, _ := cmd.Flags().GetBool("broker-block-unknown-hosts")
+
+			var allowedHosts []string
+			if allowHostsStr != "" {
+				for _, h := range strings.Split(allowHostsStr, ",") {
+					if trimmed := strings.TrimSpace(h); trimmed != "" {
+						allowedHosts = append(allowedHosts, trimmed)
+					}
+				}
+			}
+
+			runDir, err := createBrokerRunDir()
+			if err != nil {
+				util.HandleError(err, "Failed to create broker run directory")
+			}
+
+			cfg := broker.Config{
+				Port:              0,
+				PollInterval:      time.Duration(pollInterval) * time.Second,
+				CADir:             runDir,
+				AllowedHosts:      allowedHosts,
+				BlockUnknownHosts: blockUnknownHosts,
+			}
+
+			fetchFn := buildBrokerFetchFn(token, projectId, environmentName)
+			b, err := broker.New(cfg, fetchFn)
+			if err != nil {
+				os.RemoveAll(runDir)
+				util.HandleError(err, "Failed to initialize embedded broker")
+			}
+
+			if err := b.Listen(); err != nil {
+				os.RemoveAll(runDir)
+				util.HandleError(err, "Failed to start embedded broker")
+			}
+			actualPort := b.Port()
+
+			brokerCtx, brokerCancel := context.WithCancel(context.Background())
+			go func() {
+				if err := b.Serve(brokerCtx); err != nil {
+					log.Error().Err(err).Msg("Embedded broker stopped unexpectedly")
+				}
+			}()
+
+			b.SetProposalFunc(buildProposalFunc(token, projectId, environmentName))
+
+			caCertPath, combinedCAPath := writeBrokerCACerts(runDir, b.CACertPEM())
+			srtConfigPath := writeSRTConfig(runDir, actualPort)
+
+			domain := config.INFISICAL_URL
+			noProxyHost := domain
+			if parsed, parseErr := url.Parse(domain); parseErr == nil && parsed.Hostname() != "" {
+				noProxyHost = parsed.Hostname()
+			}
+
+			brokerCleanup = func() {
+				brokerCancel()
+				b.Stop()
+				os.RemoveAll(runDir)
+			}
+
+			// These will be appended to injectableEnvironment after secrets are fetched
+			defer func() {
+				if brokerCleanup != nil {
+					// Only clean up here if execBasicCmd didn't run (early error path)
+				}
+			}()
+
+			// Fetch secrets first, then append broker env vars
+			request := models.GetMultiPathSecretsParameters{
+				Environment:            environmentName,
+				WorkspaceId:            projectId,
+				TagSlugs:               tagSlugs,
+				SecretsPaths:           secretsPaths,
+				IncludeImport:          includeImports,
+				Recursive:              recursive,
+				ExpandSecretReferences: shouldExpandSecrets,
+				InjectPlaceholders:     true,
+			}
+
+			injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+			if err != nil {
+				brokerCleanup()
+				util.HandleError(err, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
+			}
+
+			proxyAddr := fmt.Sprintf("http://localhost:%d", actualPort)
+			injectableEnvironment.Variables = append(injectableEnvironment.Variables,
+				"HTTP_PROXY="+proxyAddr,
+				"HTTPS_PROXY="+proxyAddr,
+				"SSL_CERT_FILE="+combinedCAPath,
+				"NODE_EXTRA_CA_CERTS="+caCertPath,
+				"REQUESTS_CA_BUNDLE="+combinedCAPath,
+				"CURL_CA_BUNDLE="+combinedCAPath,
+				"DENO_CERT="+caCertPath,
+				"NO_PROXY=localhost,127.0.0.1,"+noProxyHost,
+				"NODE_USE_ENV_PROXY=1",
+			)
+
+			maybeInstallBrokerSkill(args)
+
+			log.Info().Int("port", actualPort).Msg("Embedded broker started")
+
+			// SRT wrapping
+			srtWrapped := false
+			srtCommand := ""
+			srtBin := ""
+			if p, lookErr := exec.LookPath("srt"); lookErr == nil {
+				srtBin = p
+			} else if p, lookErr := exec.LookPath("npx"); lookErr == nil {
+				srtBin = p
+			}
+			if srtBin != "" {
+				origCmd := args[0]
+				if strings.HasSuffix(srtBin, "npx") {
+					srtArgs := []string{"npx", "@anthropic-ai/sandbox-runtime", "-s", srtConfigPath, origCmd}
+					srtArgs = append(srtArgs, args[1:]...)
+					args = srtArgs
+					srtCommand = fmt.Sprintf("npx @anthropic-ai/sandbox-runtime -s %s", srtConfigPath)
+				} else {
+					srtArgs := []string{"srt", "-s", srtConfigPath, origCmd}
+					srtArgs = append(srtArgs, args[1:]...)
+					args = srtArgs
+					srtCommand = fmt.Sprintf("srt -s %s", srtConfigPath)
+				}
+				srtWrapped = true
+				log.Info().Str("command", origCmd).Msg("Wrapping with SRT for OS-level isolation")
+			}
+
+			if watchMode {
+				executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
+				brokerCleanup()
+			} else {
+				var childCmd *exec.Cmd
+				if cmd.Flags().Changed("command") {
+					cmdStr := cmd.Flag("command").Value.String()
+					if srtWrapped {
+						cmdStr = fmt.Sprintf("%s -c \"%s\"", srtCommand, cmdStr)
+					}
+					log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", injectableEnvironment.SecretsCount))
+					shell := [2]string{"sh", "-c"}
+					if runtime.GOOS == "windows" {
+						shell = [2]string{"cmd", "/C"}
+					} else if envShell := os.Getenv("SHELL"); envShell != "" {
+						shell[0] = envShell
+					}
+					childCmd = exec.Command(shell[0], shell[1], cmdStr)
+				} else {
+					log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", injectableEnvironment.SecretsCount))
+					childCmd = exec.Command(args[0], args[1:]...)
+				}
+				childCmd.Stdin = os.Stdin
+				childCmd.Stdout = os.Stdout
+				childCmd.Stderr = os.Stderr
+				childCmd.Env = injectableEnvironment.Variables
+				err = execBasicCmdWithCleanup(childCmd, brokerCleanup)
+				if err != nil {
+					brokerCleanup()
+					util.PrintlnStderr(err)
+					os.Exit(1)
+				}
+			}
+			return
 		}
 
-		// Auto-detect running broker unless --no-broker is set
-		noBroker, _ := cmd.Flags().GetBool("no-broker")
-		brokerInfo := detectRunningBroker()
-		useBroker := brokerInfo != nil && !noBroker
-		if useBroker {
-			injectPlaceholders = true
-			log.Info().Int("port", brokerInfo.Port).Msg("Detected running broker, enabling proxy mode")
-		}
-
+		// Legacy path (no --broker)
 		request := models.GetMultiPathSecretsParameters{
 			Environment:            environmentName,
 			WorkspaceId:            projectId,
@@ -162,7 +325,7 @@ var runCmd = &cobra.Command{
 			IncludeImport:          includeImports,
 			Recursive:              recursive,
 			ExpandSecretReferences: shouldExpandSecrets,
-			InjectPlaceholders:     injectPlaceholders,
+			InjectPlaceholders:     false,
 		}
 
 		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
@@ -172,79 +335,16 @@ var runCmd = &cobra.Command{
 
 		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
 
-		// If broker is running, set proxy env vars on child process
-		if useBroker {
-			proxyAddr := fmt.Sprintf("http://localhost:%d", brokerInfo.Port)
-			injectableEnvironment.Variables = append(injectableEnvironment.Variables,
-				"HTTP_PROXY="+proxyAddr,
-				"HTTPS_PROXY="+proxyAddr,
-				"SSL_CERT_FILE="+brokerInfo.CombinedCACertPath,
-				"NODE_EXTRA_CA_CERTS="+brokerInfo.CACertPath,
-				"REQUESTS_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
-				"CURL_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
-				"DENO_CERT="+brokerInfo.CACertPath,
-				"NO_PROXY=localhost,127.0.0.1,"+brokerInfo.NoProxyHost,
-				"NODE_USE_ENV_PROXY=1",
-			)
-		}
-
-		if injectPlaceholders {
-			// Install broker skill for known agents
-			maybeInstallBrokerSkill(args)
-		}
-
-		// Auto-wrap with SRT if broker is detected and SRT is configured
-		srtWrapped := false
-		srtCommand := "" // tracks the srt invocation prefix for --command mode
-		if useBroker {
-			home, _ := os.UserHomeDir()
-			srtSettingsPath := filepath.Join(home, ".srt-settings.json")
-			if _, srtErr := os.Stat(srtSettingsPath); srtErr == nil {
-				srtBin := ""
-				if p, err := exec.LookPath("srt"); err == nil {
-					srtBin = p
-				} else if p, err := exec.LookPath("npx"); err == nil {
-					srtBin = p
-				}
-				if srtBin != "" {
-					// Set CA cert env vars so they're inherited into the sandbox
-					injectableEnvironment.Variables = append(injectableEnvironment.Variables,
-						"NODE_EXTRA_CA_CERTS="+brokerInfo.CACertPath,
-						"SSL_CERT_FILE="+brokerInfo.CombinedCACertPath,
-						"CURL_CA_BUNDLE="+brokerInfo.CombinedCACertPath,
-					)
-					origCmd := args[0]
-					if strings.HasSuffix(srtBin, "npx") {
-						srtArgs := []string{"npx", "@anthropic-ai/sandbox-runtime", "-s", srtSettingsPath, origCmd}
-						srtArgs = append(srtArgs, args[1:]...)
-						args = srtArgs
-						srtCommand = fmt.Sprintf("npx @anthropic-ai/sandbox-runtime -s %s", srtSettingsPath)
-					} else {
-						srtArgs := []string{"srt", "-s", srtSettingsPath, origCmd}
-						srtArgs = append(srtArgs, args[1:]...)
-						args = srtArgs
-						srtCommand = fmt.Sprintf("srt -s %s", srtSettingsPath)
-					}
-					srtWrapped = true
-					log.Info().Str("command", origCmd).Msg("Wrapping with SRT for OS-level isolation")
-				}
-			}
-		}
-
 		if watchMode {
 			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
 		} else {
 			if cmd.Flags().Changed("command") {
 				command := cmd.Flag("command").Value.String()
-				if srtWrapped {
-					command = fmt.Sprintf("%s -c \"%s\"", srtCommand, command)
-				}
 				err = executeMultipleCommandWithEnvs(command, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
 				if err != nil {
 					util.PrintlnStderr(err)
 					os.Exit(1)
 				}
-
 			} else {
 				err = executeSingleCommandWithEnvs(args, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
 				if err != nil {
@@ -303,8 +403,10 @@ func init() {
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
 	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
-	runCmd.Flags().Bool("inject-placeholders", false, "return placeholder values for proxy-enabled secrets instead of real values")
-	runCmd.Flags().Bool("no-broker", false, "disable auto-detection of running broker proxy")
+	runCmd.Flags().Bool("broker", false, "enable embedded credential broker proxy with SRT isolation")
+	runCmd.Flags().Int("broker-poll-interval", 10, "poll interval in seconds for broker config updates")
+	runCmd.Flags().String("broker-allow-hosts", "", "comma-separated list of hosts to pass through without credential injection")
+	runCmd.Flags().Bool("broker-block-unknown-hosts", false, "block requests to hosts without proxy configs")
 }
 
 // Will execute a single command and pass in the given secrets into the process
@@ -347,6 +449,10 @@ func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []
 }
 
 func execBasicCmd(cmd *exec.Cmd) error {
+	return execBasicCmdWithCleanup(cmd, nil)
+}
+
+func execBasicCmdWithCleanup(cmd *exec.Cmd, cleanup func()) error {
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel)
 
@@ -357,15 +463,21 @@ func execBasicCmd(cmd *exec.Cmd) error {
 	go func() {
 		for {
 			sig := <-sigChannel
-			_ = cmd.Process.Signal(sig) // process all sigs
+			_ = cmd.Process.Signal(sig)
 		}
 	}()
 
 	if err := cmd.Wait(); err != nil {
 		_ = cmd.Process.Signal(os.Kill)
+		if cleanup != nil {
+			cleanup()
+		}
 		return fmt.Errorf("failed to wait for command termination: %v", err)
 	}
 
+	if cleanup != nil {
+		cleanup()
+	}
 	waitStatus := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	os.Exit(waitStatus.ExitStatus())
 	return nil
@@ -601,42 +713,6 @@ func fetchAndFormatSecretsForShell(request models.GetMultiPathSecretsParameters,
 	return formatSecretsForShell(secrets), nil
 }
 
-type brokerInfoFile struct {
-	Port              int    `json:"port"`
-	CACertPath        string `json:"caCertPath"`
-	CombinedCACertPath string `json:"combinedCACertPath"`
-	Domain            string `json:"domain"`
-	NoProxyHost       string `json:"noProxyHost"`
-	PID               int    `json:"pid"`
-}
-
-func detectRunningBroker() *brokerInfoFile {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-
-	infoPath := filepath.Join(home, ".infisical", "broker", "broker.json")
-	data, err := os.ReadFile(infoPath)
-	if err != nil {
-		return nil
-	}
-
-	var info brokerInfoFile
-	if err := json.Unmarshal(data, &info); err != nil {
-		return nil
-	}
-
-	// Health check: is the broker actually running?
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/ca.pem", info.Port))
-	if err != nil || resp.StatusCode != 200 {
-		return nil
-	}
-	resp.Body.Close()
-
-	return &info
-}
 
 type knownAgent struct {
 	binary  string

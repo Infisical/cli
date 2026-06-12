@@ -156,19 +156,22 @@ func writeJSONResponse(conn net.Conn, code int, body interface{}) {
 	conn.Write([]byte(resp))
 }
 
-func (p *Proxy) ListenAndServe(addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ca.pem", p.handleCAPEM)
-
+func (p *Proxy) Listen(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	p.listener = ln
-	log.Info().Str("addr", addr).Msg("Broker proxy listening")
+	return nil
+}
 
+func (p *Proxy) Serve() error {
+	if p.listener == nil {
+		return fmt.Errorf("proxy: not listening, call Listen first")
+	}
+	log.Info().Str("addr", p.listener.Addr().String()).Msg("Broker proxy listening")
 	for {
-		conn, err := ln.Accept()
+		conn, err := p.listener.Accept()
 		if err != nil {
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				return nil
@@ -178,6 +181,20 @@ func (p *Proxy) ListenAndServe(addr string) error {
 		}
 		go p.handleConnection(conn)
 	}
+}
+
+func (p *Proxy) ListenAndServe(addr string) error {
+	if err := p.Listen(addr); err != nil {
+		return err
+	}
+	return p.Serve()
+}
+
+func (p *Proxy) Addr() net.Addr {
+	if p.listener != nil {
+		return p.listener.Addr()
+	}
+	return nil
 }
 
 func (p *Proxy) Close() error {
