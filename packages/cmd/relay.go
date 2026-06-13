@@ -347,7 +347,11 @@ var relaySystemdInstallCmd = &cobra.Command{
 
 		switch enrollMethod {
 		case relay.EnrollMethodToken:
-			// token is treated as a one-time enrollment token rather than a machine-identity token.
+			// --token is an enrollment token here; fall back to INFISICAL_RELAY_ENROLLMENT_TOKEN
+			// (not INFISICAL_TOKEN) when the flag is unset, matching `relay start`.
+			if !cmd.Flags().Changed("token") {
+				token = os.Getenv(relay.INFISICAL_RELAY_ENROLLMENT_TOKEN_KEY)
+			}
 			if token == "" {
 				util.HandleError(fmt.Errorf("--token is required when --enroll-method=token"))
 			}
@@ -356,7 +360,6 @@ var relaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(fmt.Errorf("--relay-id is required when --enroll-method=aws"))
 			}
 		case "":
-			// Legacy machine-identity auth.
 			if instanceType == "instance" && relayAuthSecret == "" {
 				util.HandleError(fmt.Errorf("for type 'instance', --relay-auth-secret flag or %s env must be set", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
 			}
