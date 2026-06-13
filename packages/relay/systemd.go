@@ -13,9 +13,14 @@ import (
 )
 
 // InstallRelaySystemdService installs the systemd unit and writes configuration for the relay.
-// token is used for org-type relays (written as INFISICAL_TOKEN). For instance-type relays,
-// relayAuthSecret is written as INFISICAL_RELAY_AUTH_SECRET.
-func InstallRelaySystemdService(token string, domain string, name string, host string, instanceType string, relayAuthSecret string, serviceLogFile string) error {
+//
+// The auth variables written depend on enrollMethod:
+//   - "" (legacy):  token is written as INFISICAL_TOKEN for org-type relays, or
+//     relayAuthSecret as INFISICAL_RELAY_AUTH_SECRET for instance-type relays.
+//   - "token":      token is treated as a one-time enrollment token and written as
+//     INFISICAL_RELAY_ENROLLMENT_TOKEN alongside INFISICAL_RELAY_ENROLL_METHOD.
+//   - "aws":        relayID is written as INFISICAL_RELAY_ID alongside INFISICAL_RELAY_ENROLL_METHOD.
+func InstallRelaySystemdService(token string, domain string, name string, host string, instanceType string, relayAuthSecret string, serviceLogFile string, enrollMethod string, relayID string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return nil
@@ -44,13 +49,29 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 	}
 
 	// Auth settings
-	if instanceType == "instance" {
-		if relayAuthSecret != "" {
-			configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME, relayAuthSecret)
-		}
-	} else {
+	switch enrollMethod {
+	case EnrollMethodToken:
+		// token is a one-time enrollment token; relay start exchanges it for an access token on first boot.
+		configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLL_METHOD_KEY, enrollMethod)
 		if token != "" {
-			configContent += fmt.Sprintf("INFISICAL_TOKEN=%s\n", token)
+			configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLLMENT_TOKEN_KEY, token)
+		}
+	case EnrollMethodAws:
+		// relay start authenticates via signed STS GetCallerIdentity using the relay id.
+		configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLL_METHOD_KEY, enrollMethod)
+		if relayID != "" {
+			configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ID_KEY, relayID)
+		}
+	default:
+		// Legacy machine-identity auth (unchanged).
+		if instanceType == "instance" {
+			if relayAuthSecret != "" {
+				configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME, relayAuthSecret)
+			}
+		} else {
+			if token != "" {
+				configContent += fmt.Sprintf("%s=%s\n", gatewayv2.INFISICAL_TOKEN_ENV_NAME, token)
+			}
 		}
 	}
 
