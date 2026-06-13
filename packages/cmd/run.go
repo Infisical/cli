@@ -251,17 +251,21 @@ var runCmd = &cobra.Command{
 			)
 
 			maybeInstallBrokerSkill(args)
+			args = maybeInjectSandboxBypass(args)
 
 			log.Info().Int("port", actualPort).Msg("Embedded broker started")
 
-			// SRT wrapping
+			// SRT wrapping (skip if --no-srt, e.g. for agents with their own sandbox)
+			noSRT, _ := cmd.Flags().GetBool("no-srt")
 			srtWrapped := false
 			srtCommand := ""
 			srtBin := ""
-			if p, lookErr := exec.LookPath("srt"); lookErr == nil {
-				srtBin = p
-			} else if p, lookErr := exec.LookPath("npx"); lookErr == nil {
-				srtBin = p
+			if !noSRT {
+				if p, lookErr := exec.LookPath("srt"); lookErr == nil {
+					srtBin = p
+				} else if p, lookErr := exec.LookPath("npx"); lookErr == nil {
+					srtBin = p
+				}
 			}
 			if srtBin != "" {
 				origCmd := args[0]
@@ -407,6 +411,7 @@ func init() {
 	runCmd.Flags().Int("broker-poll-interval", 10, "poll interval in seconds for broker config updates")
 	runCmd.Flags().String("broker-allow-hosts", "", "comma-separated list of hosts to pass through without credential injection")
 	runCmd.Flags().Bool("broker-block-unknown-hosts", false, "block requests to hosts without proxy configs")
+	runCmd.Flags().Bool("no-srt", false, "skip SRT sandbox wrapping (for agents with their own sandbox, e.g. Codex)")
 }
 
 // Will execute a single command and pass in the given secrets into the process
@@ -727,6 +732,29 @@ var knownAgents = []knownAgent{
 	{binary: "hermes", homeDir: ".hermes"},
 	{binary: "opencode", homeDir: ".opencode"},
 	{binary: "openclaw", homeDir: ".openclaw"},
+}
+
+// maybeInjectSandboxBypass appends sandbox bypass flags for agents that have
+// their own sandbox which conflicts with SRT. Since SRT provides the external
+// sandbox, the agent's internal sandbox must be disabled to avoid nested
+// Seatbelt profile errors on macOS.
+func maybeInjectSandboxBypass(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	binary := args[0]
+	if idx := strings.LastIndex(binary, "/"); idx >= 0 {
+		binary = binary[idx+1:]
+	}
+	if strings.EqualFold(binary, "codex") {
+		for _, a := range args {
+			if a == "--dangerously-bypass-approvals-and-sandbox" {
+				return args
+			}
+		}
+		return append(args, "--dangerously-bypass-approvals-and-sandbox")
+	}
+	return args
 }
 
 func maybeInstallBrokerSkill(args []string) {
