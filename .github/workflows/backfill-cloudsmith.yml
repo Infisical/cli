@@ -35,6 +35,10 @@ on:
         description: "Invalidate the CloudFront distribution after publishing"
         type: boolean
         default: true
+      reindex:
+        description: "Force rpm/apk metadata regeneration even if no packages were uploaded (use to repair broken repodata)"
+        type: boolean
+        default: false
       validate:
         description: "Run install validation after an apply"
         type: boolean
@@ -65,9 +69,12 @@ jobs:
       # --- toolchain: identical to the release publish job -----------------
       - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
-          python-version: "3.12"
+          python-version: "3.9"
       - name: Install mkrepo and dependencies
-        run: pip install mkrepo==1.0.2 univers==30.9.0 boto3==1.17.5
+        run: |
+          python -m venv /opt/mkrepo-venv
+          /opt/mkrepo-venv/bin/pip install mkrepo==1.0.2 univers==30.9.0 boto3==1.17.5 botocore==1.20.5
+          echo "/opt/mkrepo-venv/bin" >> "$GITHUB_PATH"
       - name: Install rpm-sign, jq and unzip
         run: sudo apt-get update && sudo apt-get install -y rpm jq unzip
       - name: Install AWS CLI v2 (pinned)
@@ -126,6 +133,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_APPLY: ${{ inputs.apply }}
           INPUT_INVALIDATE: ${{ inputs.invalidate }}
+          INPUT_REINDEX: ${{ inputs.reindex }}
         run: |
           set -euo pipefail
           ARGS=()
@@ -137,6 +145,7 @@ jobs:
           fi
           [ "$INPUT_APPLY" = "true" ]       && ARGS+=(--apply)
           [ "$INPUT_INVALIDATE" != "true" ] && ARGS+=(--no-invalidate)
+          [ "$INPUT_REINDEX" = "true" ]     && ARGS+=(--reindex)
           bash scripts/backfill_from_cloudsmith.sh "${ARGS[@]}"
 
       # --- prove the invalidation completed (auditable) --------------------
