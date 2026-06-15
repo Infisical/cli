@@ -71,7 +71,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install mkrepo and dependencies
-        run: pip install mkrepo==1.0.2 univers==30.9.0 boto3==1.17.5 botocore==1.20.5
+        run: |
+          python -m venv /opt/mkrepo-venv
+          /opt/mkrepo-venv/bin/pip install mkrepo==1.0.2 univers==30.9.0 boto3==1.17.5 botocore==1.20.5
+          echo "/opt/mkrepo-venv/bin" >> "$GITHUB_PATH"
       - name: Install rpm-sign, jq and unzip
         run: sudo apt-get update && sudo apt-get install -y rpm jq unzip
       - name: Install AWS CLI v2 (pinned)
