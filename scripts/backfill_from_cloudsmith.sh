@@ -563,6 +563,7 @@ publish_apk_file() {
 
     log "apk stage: $filename ($arch) -> ${archdir}/${alpine_filename}"
     if [ "$APPLY" -eq 1 ]; then
+        mkdir -p "$(dirname "$target")"
         cp "$file" "$target"
     else
         log "DRY-RUN would copy $filename to staging ${archdir}/${alpine_filename}"
