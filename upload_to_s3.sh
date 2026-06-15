@@ -122,24 +122,37 @@ done
 
 
 # ============================================
-# RPM - Upload to S3 and regenerate repo metadata
+# RPM - per-arch repos: rpm/<arch>/ (matches setup.rpm.sh baseurl=.../rpm/$basearch)
+#
+# Flat layout is unsafe: mkrepo keys packages by name-version-release, so a
+# version's 5 arches collapse to 1 and yum cannot install the others. One arch
+# per dir = one package per version = no collapse, and mkrepo updates each arch's
+# metadata in place on S3 (no full-repo download).
+#
+# Steps: sign each rpm -> upload to rpm/<arch>/Packages/ -> mkrepo per touched arch.
 # ============================================
+rpm_arches=""
 for i in *.rpm; do
     [ -f "$i" ] || break
-    
+
+    # Real package arch from the rpm header (x86_64, aarch64, i386, armv6hl, armv7hl).
+    arch="$(rpm -qp --queryformat '%{ARCH}' "$i")"
+
     # Sign the RPM package
     rpmsign --addsign --key-id="$INFISICAL_CLI_REPO_SIGNING_KEY_ID" "$i"
-    
-    # Upload to S3
-    aws s3 cp "$i" "s3://$INFISICAL_CLI_S3_BUCKET/rpm/Packages/"
+
+    # Upload to the per-arch path
+    aws s3 cp "$i" "s3://$INFISICAL_CLI_S3_BUCKET/rpm/${arch}/Packages/"
+
+    case " $rpm_arches " in *" $arch "*) ;; *) rpm_arches="$rpm_arches $arch" ;; esac
 done
 
-# Regenerate RPM repository metadata with mkrepo
-# Note: mkrepo uses boto3 which automatically reads AWS_ACCESS_KEY_ID and
-# AWS_SECRET_ACCESS_KEY from environment variables set in the workflow
-if ls *.rpm 1> /dev/null 2>&1; then
+# Regenerate repodata once per arch we touched. mkrepo reads/writes metadata
+# directly on S3 (incremental)
+for arch in $rpm_arches; do
+    echo "Regenerating rpm/${arch} repository metadata with mkrepo..."
     export GPG_SIGN_KEY=$INFISICAL_CLI_REPO_SIGNING_KEY_ID
-    mkrepo "s3://$INFISICAL_CLI_S3_BUCKET/rpm" \
+    mkrepo "s3://$INFISICAL_CLI_S3_BUCKET/rpm/${arch}" \
         --s3-region="us-east-1" \
         --sign
-fi
+done

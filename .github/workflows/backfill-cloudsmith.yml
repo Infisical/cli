@@ -1,0 +1,177 @@
+name: Backfill CLI packages from Cloudsmith
+
+# Backfill of historical CLI packages from the legacy Cloudsmith repo into the
+# AWS package repo, run from CI for an auditable trail. Mirrors the publish +
+# invalidate steps of release_build_infisical_cli.yml.
+#
+#   target=test : uses the POC_* secrets (test bucket / test CloudFront).
+#   target=prod : reuses the EXACT release publish secrets (real bucket, real
+#                 signing keys clients already trust, real CloudFront dist).
+#
+# Manual trigger only. Defaults to a dry run; flip `apply` to publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "test (POC bucket) or prod (real repo)"
+        type: choice
+        options: ["test", "prod"]
+        default: "test"
+      mode:
+        description: "version (single) or all"
+        type: choice
+        options: ["version", "all"]
+        default: "version"
+      version:
+        description: "Version to backfill when mode=version (e.g. 0.43.54)"
+        type: string
+        required: false
+      apply:
+        description: "Actually publish (unchecked = dry run)"
+        type: boolean
+        default: false
+      invalidate:
+        description: "Invalidate the CloudFront distribution after publishing"
+        type: boolean
+        default: true
+      validate:
+        description: "Run install validation after an apply"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    env:
+      # Select the secret set from the target. prod reuses the release secrets.
+      INFISICAL_CLI_S3_BUCKET: ${{ inputs.target == 'prod' && secrets.INFISICAL_CLI_S3_BUCKET || secrets.POC_CLI_S3_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ inputs.target == 'prod' && secrets.INFISICAL_CLI_REPO_CLOUDFRONT_DISTRIBUTION_ID || secrets.POC_CLOUDFRONT_DISTRIBUTION_ID }}
+      AWS_ACCESS_KEY_ID: ${{ inputs.target == 'prod' && secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID || secrets.POC_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ inputs.target == 'prod' && secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY || secrets.POC_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
+      CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+      APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
+      # Key material (base64) and the explicit prod key id (empty for test -> derived).
+      GPG_SIGNING_KEY_B64: ${{ inputs.target == 'prod' && secrets.GPG_SIGNING_KEY || secrets.POC_GPG_SIGNING_KEY }}
+      APK_PRIVATE_KEY_B64: ${{ inputs.target == 'prod' && secrets.APK_PRIVATE_KEY || secrets.POC_APK_PRIVATE_KEY }}
+      PROD_SIGNING_KEY_ID: ${{ inputs.target == 'prod' && secrets.INFISICAL_CLI_REPO_SIGNING_KEY_ID || '' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # --- toolchain: identical to the release publish job -----------------
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
+        with:
+          python-version: "3.12"
+      - name: Install mkrepo and dependencies
+        run: pip install mkrepo==1.0.2 univers==30.9.0 boto3==1.17.5
+      - name: Install rpm-sign, jq and unzip
+        run: sudo apt-get update && sudo apt-get install -y rpm jq unzip
+      - name: Install AWS CLI v2 (pinned)
+        run: |
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.15.0.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          rm -rf /tmp/aws /tmp/awscliv2.zip
+      - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252 # v1.229.0
+        with:
+          ruby-version: "3.3"
+      - name: Install deb-s3
+        run: gem install deb-s3
+
+      # --- safety: prod must not point at a non-prod bucket ----------------
+      - name: Sanity-check target
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          echo "Target: $INPUT_TARGET   Bucket: $INFISICAL_CLI_S3_BUCKET"
+          [ -n "$INFISICAL_CLI_S3_BUCKET" ] || { echo "bucket secret not set for this target"; exit 1; }
+
+      # --- keys: import exactly like the release workflow ------------------
+      - name: Configure GPG signing key
+        run: |
+          set -euo pipefail
+          echo -n "$GPG_SIGNING_KEY_B64" | base64 --decode | gpg --batch --import
+          KEYID="$PROD_SIGNING_KEY_ID"
+          if [ -z "$KEYID" ]; then
+            KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+          fi
+          [ -n "$KEYID" ] || { echo "could not determine GPG signing key id"; exit 1; }
+          echo "INFISICAL_CLI_REPO_SIGNING_KEY_ID=$KEYID" >> "$GITHUB_ENV"
+      - name: Configure APK signing key
+        run: |
+          set -euo pipefail
+          echo -n "$APK_PRIVATE_KEY_B64" | base64 --decode > /tmp/infisical-apk.rsa
+          chmod 600 /tmp/infisical-apk.rsa
+
+      # --- TEST ONLY: publish the POC public keys so a test client can verify.
+      # Never done for prod -- the real public keys are already in the bucket.
+      - name: Publish POC public keys to test bucket
+        if: ${{ inputs.apply && inputs.target == 'test' }}
+        run: |
+          set -euo pipefail
+          gpg --armor --export "$INFISICAL_CLI_REPO_SIGNING_KEY_ID" > infisical.gpg
+          openssl rsa -in /tmp/infisical-apk.rsa -pubout -out infisical.rsa.pub
+          aws s3 cp infisical.gpg     "s3://$INFISICAL_CLI_S3_BUCKET/infisical.gpg"
+          aws s3 cp infisical.rsa.pub "s3://$INFISICAL_CLI_S3_BUCKET/apk/infisical.rsa.pub"
+
+      # --- run the backfill ------------------------------------------------
+      - name: Backfill
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_APPLY: ${{ inputs.apply }}
+          INPUT_INVALIDATE: ${{ inputs.invalidate }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ "$INPUT_MODE" = "all" ]; then
+            ARGS+=(--all)
+          else
+            [ -n "$INPUT_VERSION" ] || { echo "version input required when mode=version"; exit 1; }
+            ARGS+=(--version "$INPUT_VERSION")
+          fi
+          [ "$INPUT_APPLY" = "true" ]       && ARGS+=(--apply)
+          [ "$INPUT_INVALIDATE" != "true" ] && ARGS+=(--no-invalidate)
+          bash scripts/backfill_from_cloudsmith.sh "${ARGS[@]}"
+
+      # --- prove the invalidation completed (auditable) --------------------
+      - name: Wait for CloudFront invalidation to complete
+        if: ${{ inputs.apply && inputs.invalidate }}
+        run: |
+          set -euo pipefail
+          [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] || { echo "no CloudFront dist id; skipping"; exit 0; }
+          ID=$(aws cloudfront list-invalidations --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+                --query 'InvalidationList.Items[0].Id' --output text)
+          echo "Latest invalidation: $ID"
+          aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$ID"
+          aws cloudfront get-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$ID" \
+                --query 'Invalidation.Status' --output text
+
+  validate:
+    needs: backfill
+    if: ${{ inputs.apply && inputs.validate }}
+    runs-on: ubuntu-latest
+    env:
+      # prod is served at artifacts-cli.infisical.com; test at the POC CloudFront URL.
+      PKG_URL: ${{ inputs.target == 'prod' && 'https://artifacts-cli.infisical.com' || secrets.POC_PKG_URL }}
+      CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Validate installs through CloudFront
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$INPUT_MODE" = "all" ]; then
+            bash scripts/validate_backfill.sh --all
+          else
+            bash scripts/validate_backfill.sh --version "$INPUT_VERSION"
+          fi
