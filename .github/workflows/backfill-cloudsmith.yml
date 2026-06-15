@@ -35,6 +35,10 @@ on:
         description: "Invalidate the CloudFront distribution after publishing"
         type: boolean
         default: true
+      reindex:
+        description: "Force rpm/apk metadata regeneration even if no packages were uploaded (use to repair broken repodata)"
+        type: boolean
+        default: false
       validate:
         description: "Run install validation after an apply"
         type: boolean
@@ -126,6 +130,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_APPLY: ${{ inputs.apply }}
           INPUT_INVALIDATE: ${{ inputs.invalidate }}
+          INPUT_REINDEX: ${{ inputs.reindex }}
         run: |
           set -euo pipefail
           ARGS=()
@@ -137,6 +142,7 @@ jobs:
           fi
           [ "$INPUT_APPLY" = "true" ]       && ARGS+=(--apply)
           [ "$INPUT_INVALIDATE" != "true" ] && ARGS+=(--no-invalidate)
+          [ "$INPUT_REINDEX" = "true" ]     && ARGS+=(--reindex)
           bash scripts/backfill_from_cloudsmith.sh "${ARGS[@]}"
 
       # --- prove the invalidation completed (auditable) --------------------
