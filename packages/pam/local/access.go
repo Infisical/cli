@@ -57,7 +57,7 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	// Normalize path for display (ensure leading slash)
 	displayPath := normalizePath(path)
 
-	log.Info().Msgf("Starting PAM access for: %s", displayPath)
+	log.Info().Msgf("Starting PAM access for: %s", strings.TrimPrefix(displayPath, "/"))
 	log.Info().Msgf("Session duration: %s", durationStr)
 
 	httpClient := resty.New()
@@ -79,18 +79,13 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 
 	// Route based on account type from API response
 	switch pamResponse.AccountType {
-	case AccountTypePostgres:
-		startPostgresProxy(httpClient, &pamResponse, displayPath, durationStr, port)
+	// Database types - all use the same proxy mechanism with different display configs
+	case AccountTypePostgres, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB:
+		startDatabaseProxy(httpClient, &pamResponse, displayPath, durationStr, port)
+
+	// Non-database types - not yet implemented
 	case AccountTypeSSH:
 		util.PrintErrorMessageAndExit("SSH access not yet supported in the new PAM model")
-	case AccountTypeMySQL:
-		util.PrintErrorMessageAndExit("MySQL access not yet supported in the new PAM model")
-	case AccountTypeMsSQL:
-		util.PrintErrorMessageAndExit("MsSQL access not yet supported in the new PAM model")
-	case AccountTypeMongoDB:
-		util.PrintErrorMessageAndExit("MongoDB access not yet supported in the new PAM model")
-	case AccountTypeOracleDB:
-		util.PrintErrorMessageAndExit("OracleDB access not yet supported in the new PAM model")
 	case AccountTypeRedis:
 		util.PrintErrorMessageAndExit("Redis access not yet supported in the new PAM model")
 	case AccountTypeKubernetes:
@@ -106,11 +101,101 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	}
 }
 
-// startPostgresProxy starts a local Postgres proxy for the given session
-func startPostgresProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+// DatabaseDisplayConfig holds the display configuration for a database type
+type DatabaseDisplayConfig struct {
+	TypeLabel        string                                             // e.g., "PostgreSQL", "MySQL", "SQL Server"
+	DefaultPort      int                                                // default port for this database type
+	ConnectionString func(username, database string, port int) string   // builds the connection string
+	UsageExamples    func(username, database string, port int) []string // CLI usage examples
+}
+
+// databaseConfigs maps account types to their display configurations
+var databaseConfigs = map[string]DatabaseDisplayConfig{
+	AccountTypePostgres: {
+		TypeLabel:   "PostgreSQL",
+		DefaultPort: 5432,
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("postgres://%s@localhost:%d/%s", username, port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("psql -h localhost -p %d -U %s -d %s", port, username, database),
+			}
+		},
+	},
+	AccountTypeMySQL: {
+		TypeLabel:   "MySQL",
+		DefaultPort: 3306,
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("mysql://%s@localhost:%d/%s", username, port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("mysql -h 127.0.0.1 -P %d -u %s %s", port, username, database),
+			}
+		},
+	},
+	AccountTypeMsSQL: {
+		TypeLabel:   "SQL Server",
+		DefaultPort: 1433,
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("sqlserver://%s@localhost:%d?database=%s", username, port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("sqlcmd -S localhost,%d -U %s -d %s", port, username, database),
+			}
+		},
+	},
+	AccountTypeMongoDB: {
+		TypeLabel:   "MongoDB",
+		DefaultPort: 27017,
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("mongodb://localhost:%d/%s", port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("mongosh --host localhost --port %d %s", port, database),
+			}
+		},
+	},
+	AccountTypeOracleDB: {
+		TypeLabel:   "Oracle",
+		DefaultPort: 1521,
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("%s@localhost:%d/%s", username, port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("sqlplus %s@localhost:%d/%s", username, port, database),
+			}
+		},
+	},
+}
+
+// startDatabaseProxy starts a local database proxy for any SQL-like database type
+func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	config, ok := databaseConfigs[response.AccountType]
+	if !ok {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("No display config for database type: %s", response.AccountType))
+		return
+	}
+
 	duration, err := time.ParseDuration(durationStr)
 	if err != nil {
 		util.HandleError(err, "Failed to parse duration")
+		return
+	}
+
+	// Get connection details from metadata (validate before starting proxy)
+	username, ok := response.Metadata["username"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
+		return
+	}
+	database, ok := response.Metadata["database"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'database'"), "Failed to start proxy server")
 		return
 	}
 
@@ -146,25 +231,30 @@ func startPostgresProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 		return
 	}
 
-	// Get connection details from metadata
-	username, ok := response.Metadata["username"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
-		return
-	}
-	database, ok := response.Metadata["database"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'database'"), "Failed to start proxy server")
-		return
-	}
-
 	// Parse path into folder and account
 	folder, account := parsePath(path)
 
-	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
+	log.Info().Msgf("%s proxy server listening on port %d", config.TypeLabel, proxy.port)
+	printDatabaseSessionInfo(config, folder, account, duration, username, database, proxy.port)
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
+		proxy.gracefulShutdown()
+	}()
+
+	proxy.Run()
+}
+
+// printDatabaseSessionInfo prints the connection info banner for database sessions
+func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account string, duration time.Duration, username, database string, port int) {
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                  Database Proxy Session Started!                    \n")
+	fmt.Printf("              %s Proxy Session Started!                \n", config.TypeLabel)
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
 	if folder != "" {
@@ -178,29 +268,36 @@ func startPostgresProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Host:      localhost\n")
-	fmt.Printf("  Port:      %d\n", proxy.port)
-	fmt.Printf("  Username:  %s\n", username)
+	fmt.Printf("  Port:      %d\n", port)
+	if username != "" {
+		fmt.Printf("  Username:  %s\n", username)
+	}
 	fmt.Printf("  Password:  (injected by gateway)\n")
-	fmt.Printf("  Database:  %s\n", database)
+	if database != "" {
+		fmt.Printf("  Database:  %s\n", database)
+	}
 	fmt.Printf("\n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("                        Connection String                             \n")
+	fmt.Printf("                           How to Connect                             \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
-	util.PrintfStderr("  postgres://%s@localhost:%d/%s\n", username, proxy.port, database)
+	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
+	fmt.Printf("  to localhost:%d. The password will be injected automatically.\n", port)
+	fmt.Printf("\n")
+	if config.UsageExamples != nil {
+		examples := config.UsageExamples(username, database, port)
+		if len(examples) > 0 {
+			fmt.Printf("  Example:\n")
+			for _, ex := range examples {
+				util.PrintfStderr("    $ %s\n", ex)
+			}
+			fmt.Printf("\n")
+		}
+	}
+	fmt.Printf("  Connection string:\n")
+	connStr := config.ConnectionString(username, database, port)
+	util.PrintfStderr("    %s\n", connStr)
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
-
-	// Handle shutdown signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
-		proxy.gracefulShutdown()
-	}()
-
-	proxy.Run()
 }
