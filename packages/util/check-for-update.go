@@ -214,8 +214,10 @@ func writeUpdateCheckCache(cache *UpdateCheckCache) error {
 const migrationNoticeCacheTTL = 24 * time.Hour
 
 // migrationGuideURL is where users are sent to repoint off Cloudsmith.
-// TODO: replace with the published migration guide URL before release.
-const migrationGuideURL = "https://infisical.com/docs/cli/usage"
+const migrationGuideURL = "https://infisical.com/docs/cli/cloudsmith-migration"
+
+// migrationCloudsmithSunset is the date the old Cloudsmith repo stops serving.
+const migrationCloudsmithSunset = "September 16, 2026"
 
 type migrationNoticeCache struct {
 	LastShownTime time.Time `json:"lastShownTime"`
@@ -284,10 +286,13 @@ func DisplayPackageRepoMigrationNoticeWithWriter(isSilent bool, w io.Writer) {
 	}
 
 	yellow := color.New(color.FgYellow).SprintFunc()
+	bold := color.New(color.FgYellow, color.Bold).SprintFunc()
+	fmt.Fprintln(w, bold("Important: the Infisical CLI Linux package repository is moving off Cloudsmith."))
 	fmt.Fprintln(w, yellow(
-		"Notice: the Infisical CLI Linux package repository has moved off Cloudsmith.\n"+
-			"If you installed the CLI on Linux via apt, yum/dnf, or apk, repoint your machine(s) to keep receiving updates: "+
-			migrationGuideURL+"\n",
+		"What's happening: Cloudsmith stops serving on "+migrationCloudsmithSunset+". After that, installing or\n"+
+			"updating the CLI on Linux from the old Cloudsmith URL (apt, yum/dnf, apk) will fail.\n"+
+			"What to do: repoint your machine to the new host (artifacts-cli.infisical.com).\n"+
+			"Migration steps: "+migrationGuideURL+"\n",
 	))
 
 	recordMigrationNoticeShown()
