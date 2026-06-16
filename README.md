@@ -7,6 +7,9 @@
   <b>The official Infisical CLI</b>: Inject secrets into applications and manage your Infisical infrastructure.
 </p>
 
+> [!IMPORTANT]
+> **The Linux package repository has moved off Cloudsmith.** We've migrated the Infisical CLI Linux package repository to our own host at `artifacts-cli.infisical.com`. Cloudsmith shuts down on **[DATE]**; after that, installs and updates from the old URL will fail. Every release, including older versions, is already on the new host. Reinstall the CLI by following the [migration steps]([MIGRATION_GUIDE_URL]) to repoint your machine.
+
 ## Introduction
 
 The **[Infisical CLI](https://infisical.com/docs/cli/overview)** is a powerful command-line tool for secret management that allows you to:

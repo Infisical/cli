@@ -209,27 +209,88 @@ func writeUpdateCheckCache(cache *UpdateCheckCache) error {
 	return nil
 }
 
-func DisplayAptInstallationChangeBanner(isSilent bool) {
-	DisplayAptInstallationChangeBannerWithWriter(isSilent, os.Stderr)
+// migrationNoticeCacheTTL throttles the Cloudsmith migration notice so it shows
+// at most once per interval instead of on every command.
+const migrationNoticeCacheTTL = 24 * time.Hour
+
+// migrationGuideURL is where users are sent to repoint off Cloudsmith.
+// TODO: replace with the published migration guide URL before release.
+const migrationGuideURL = "https://infisical.com/docs/cli/usage"
+
+type migrationNoticeCache struct {
+	LastShownTime time.Time `json:"lastShownTime"`
 }
 
-func DisplayAptInstallationChangeBannerWithWriter(isSilent bool, w io.Writer) {
+func getMigrationNoticeCachePath() (string, error) {
+	homeDir, err := GetHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, CONFIG_FOLDER_NAME, MIGRATION_NOTICE_CACHE_FILE_NAME), nil
+}
+
+// migrationNoticeRecentlyShown returns true if the notice was shown within the TTL.
+func migrationNoticeRecentlyShown() bool {
+	path, err := getMigrationNoticeCachePath()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var cache migrationNoticeCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return false
+	}
+	return time.Since(cache.LastShownTime) < migrationNoticeCacheTTL
+}
+
+// recordMigrationNoticeShown stamps the cache so the notice is throttled.
+func recordMigrationNoticeShown() {
+	path, err := getMigrationNoticeCachePath()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return
+	}
+	data, err := json.Marshal(migrationNoticeCache{LastShownTime: time.Now()})
+	if err != nil {
+		return
+	}
+	// Best-effort write; a failure just means the notice may show again next run.
+	_ = os.WriteFile(path, data, 0600)
+}
+
+func DisplayPackageRepoMigrationNotice(isSilent bool) {
+	DisplayPackageRepoMigrationNoticeWithWriter(isSilent, os.Stderr)
+}
+
+// DisplayPackageRepoMigrationNoticeWithWriter prints a one-time-per-day notice
+// that the Linux package repository has moved off Cloudsmith. It shows on every
+// platform (so a macOS/Windows developer knows their Linux CI, containers, or
+// teammates need repointing), stays quiet in --silent mode, and can be disabled
+// with INFISICAL_DISABLE_MIGRATION_NOTICE.
+func DisplayPackageRepoMigrationNoticeWithWriter(isSilent bool, w io.Writer) {
 	if isSilent {
 		return
 	}
-
-	if runtime.GOOS == "linux" {
-		_, err := exec.LookPath("apt-get")
-		isApt := err == nil
-		if isApt {
-			yellow := color.New(color.FgYellow).SprintFunc()
-			msg := fmt.Sprintf("%s",
-				yellow("Update Required: Your current package installation script is outdated and will no longer receive updates.\nPlease update to the new installation script which can be found here https://infisical.com/docs/cli/overview#installation debian section\n"),
-			)
-
-			fmt.Fprintln(w, msg)
-		}
+	if os.Getenv("INFISICAL_DISABLE_MIGRATION_NOTICE") != "" {
+		return
 	}
+	if migrationNoticeRecentlyShown() {
+		return
+	}
+
+	yellow := color.New(color.FgYellow).SprintFunc()
+	fmt.Fprintln(w, yellow(
+		"Notice: the Infisical CLI Linux package repository has moved off Cloudsmith.\n"+
+			"If you installed the CLI on Linux via apt, yum/dnf, or apk, repoint your machine(s) to keep receiving updates: "+
+			migrationGuideURL+"\n",
+	))
+
+	recordMigrationNoticeShown()
 }
 
 func getLatestTag(repoOwner string, repoName string) (string, time.Time, bool, error) {
