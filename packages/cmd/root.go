@@ -132,9 +132,9 @@ func init() {
 
 		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
 
-		// util.DisplayAptInstallationChangeBannerWithWriter(silent, cmd.ErrOrStderr())
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
+			util.DisplayPackageRepoMigrationNoticeWithWriter(silent, cmd.ErrOrStderr())
 		}
 
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
