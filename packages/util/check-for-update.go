@@ -209,14 +209,10 @@ func writeUpdateCheckCache(cache *UpdateCheckCache) error {
 	return nil
 }
 
-// migrationNoticeCacheTTL throttles the Cloudsmith migration notice so it shows
-// at most once per interval instead of on every command.
 const migrationNoticeCacheTTL = 24 * time.Hour
 
-// migrationGuideURL is where users are sent to repoint off Cloudsmith.
 const migrationGuideURL = "https://infisical.com/docs/cli/cloudsmith-migration"
 
-// migrationCloudsmithSunset is the date the old Cloudsmith repo stops serving.
 const migrationCloudsmithSunset = "September 16, 2026"
 
 type migrationNoticeCache struct {
@@ -270,10 +266,8 @@ func DisplayPackageRepoMigrationNotice(isSilent bool) {
 }
 
 // DisplayPackageRepoMigrationNoticeWithWriter prints a one-time-per-day notice
-// that the Linux package repository has moved off Cloudsmith. It shows on every
-// platform (so a macOS/Windows developer knows their Linux CI, containers, or
-// teammates need repointing), stays quiet in --silent mode, and can be disabled
-// with INFISICAL_DISABLE_MIGRATION_NOTICE.
+// that the Linux package repository has moved off Cloudsmith.
+// Stays quiet in --silent mode, and can be disabled with INFISICAL_DISABLE_MIGRATION_NOTICE.
 func DisplayPackageRepoMigrationNoticeWithWriter(isSilent bool, w io.Writer) {
 	if isSilent {
 		return

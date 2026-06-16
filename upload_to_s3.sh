@@ -65,7 +65,20 @@ if ls *.apk 1> /dev/null 2>&1; then
     # Sync existing packages from S3 (to preserve old versions)
     echo "Syncing existing APK packages from S3..."
     aws s3 sync "s3://$INFISICAL_CLI_S3_BUCKET/apk/" apk-staging/ --exclude "*/APKINDEX.tar.gz"
-    
+
+    # Integrity gate: the APKINDEX is rebuilt from staging, so a partial sync would
+    # silently drop versions. Staging = synced repo + new apks, so it must have at
+    # least as many .apk as S3 per arch; if fewer, the sync was incomplete, so abort.
+    for arch in x86_64 aarch64; do
+        s3_count=$(aws s3 ls "s3://$INFISICAL_CLI_S3_BUCKET/apk/stable/main/$arch/" 2>/dev/null | grep -c '\.apk$' || true)
+        local_count=$(ls apk-staging/stable/main/$arch/*.apk 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$local_count" -lt "$s3_count" ]; then
+            echo "Error: APK sync incomplete for $arch (S3 has $s3_count, staged $local_count). Aborting to avoid publishing a stale APKINDEX."
+            exit 1
+        fi
+        echo "APK integrity OK for $arch: staged $local_count >= S3 $s3_count"
+    done
+
     # Validate APK private key exists
     if [ ! -f "$APK_PRIVATE_KEY_PATH" ]; then
         echo "Error: APK private key not found at $APK_PRIVATE_KEY_PATH"
