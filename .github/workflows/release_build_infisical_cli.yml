@@ -253,6 +253,14 @@ jobs:
           chmod 600 /tmp/infisical-apk.rsa
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+      # upload_to_s3.sh syncs the whole apk repo down before rebuilding the index, and
+      # that repo holds the full backfilled history.
+      - name: Free disk space before publish
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
       - name: Publish packages to repositories
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: bash upload_to_s3.sh
