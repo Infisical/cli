@@ -6,21 +6,15 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
-	"github.com/Infisical/infisical-merge/packages/pam/session"
-	"github.com/Infisical/infisical-merge/packages/util"
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
 type DatabaseProxyServer struct {
-	BaseProxyServer // Embed common functionality
-	server          net.Listener
-	port            int
+	BaseProxyServer
+	server net.Listener
+	port   int
 }
 
 type ALPN string
@@ -30,123 +24,6 @@ const (
 	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
 	ALPNInfisicalPAMCapabilities ALPN = "infisical-pam-capabilities"
 )
-
-func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string, port int) {
-	log.Info().Msgf("Starting database proxy for account: %s", accessParams.GetDisplayName())
-	log.Info().Msgf("Session duration: %s", durationStr)
-
-	httpClient := resty.New()
-	httpClient.SetAuthToken(accessToken)
-	httpClient.SetHeader("User-Agent", "infisical-cli")
-
-	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
-
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
-	if err != nil {
-		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
-			return
-		}
-		util.HandleError(err, "Failed to access PAM account")
-		return
-	}
-
-	log.Info().Msgf("Database session created with ID: %s", pamResponse.SessionId)
-
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		util.HandleError(err, "Failed to parse duration")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	proxy := &DatabaseProxyServer{
-		BaseProxyServer: BaseProxyServer{
-			httpClient:             httpClient,
-			relayHost:              pamResponse.RelayHost,
-			relayClientCert:        pamResponse.RelayClientCertificate,
-			relayClientKey:         pamResponse.RelayClientPrivateKey,
-			relayServerCertChain:   pamResponse.RelayServerCertificateChain,
-			gatewayClientCert:      pamResponse.GatewayClientCertificate,
-			gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
-			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
-			sessionExpiry:          time.Now().Add(duration),
-			sessionId:              pamResponse.SessionId,
-			resourceType:           pamResponse.ResourceType,
-			ctx:                    ctx,
-			cancel:                 cancel,
-			shutdownCh:             make(chan struct{}),
-		},
-	}
-
-	if err := proxy.ValidateResourceTypeSupported(); err != nil {
-		util.HandleError(err, "Gateway version outdated")
-		return
-	}
-
-	err = proxy.Start(port)
-	if err != nil {
-		util.HandleError(err, "Failed to start proxy server")
-		return
-	}
-
-	if port == 0 {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
-	} else {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
-	}
-
-	username, ok := pamResponse.Metadata["username"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
-		return
-	}
-	database, ok := pamResponse.Metadata["database"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'database'"), "Failed to start proxy server")
-		return
-	}
-
-	log.Info().Msgf("Database proxy server listening on port %d", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                  Database Proxy Session Started!                  \n")
-	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Resource: %s\n", accessParams.ResourceName)
-	fmt.Printf("Account:  %s\n", accessParams.AccountName)
-	fmt.Printf("\n")
-	fmt.Printf("You can now connect to your database using this connection string:\n")
-
-	switch pamResponse.ResourceType {
-	case session.ResourceTypePostgres:
-		util.PrintfStderr("postgres://%s@localhost:%d/%s", username, proxy.port, database)
-	case session.ResourceTypeMysql:
-		util.PrintfStderr("mysql://%s@localhost:%d/%s", username, proxy.port, database)
-	case session.ResourceTypeMssql:
-		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
-	case session.ResourceTypeMongodb:
-		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
-	case session.ResourceTypeOracledb:
-		util.PrintfStderr("%s/%s@localhost:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
-		util.PrintfStderr("\njdbc:oracle:thin:@localhost:%d/%s  (user: %s, password: %s)", proxy.port, database, username, oracle.ProxyPasswordPlaceholder)
-		util.PrintfStderr("\n\nNote: the password shown is a protocol placeholder required by Oracle, not a secret.")
-	default:
-		util.PrintfStderr("localhost:%d", proxy.port)
-	}
-	util.PrintfStderr("\n**********************************************************************\n")
-	util.PrintfStderr("\n")
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
-		proxy.gracefulShutdown()
-	}()
-
-	proxy.Run()
-}
 
 func (p *DatabaseProxyServer) Start(port int) error {
 	var err error
@@ -170,21 +47,16 @@ func (p *DatabaseProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
 		log.Info().Msg("Starting graceful shutdown of database proxy...")
 
-		// Send session termination notification before cancelling context
 		p.NotifySessionTermination()
 
-		// Signal the accept loop to stop
 		close(p.shutdownCh)
 
-		// Close the server to stop accepting new connections
 		if p.server != nil {
 			p.server.Close()
 		}
 
-		// Cancel context to signal all goroutines to stop
 		p.cancel()
 
-		// Wait for connections to close
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("Database proxy shutdown complete")
@@ -204,7 +76,6 @@ func (p *DatabaseProxyServer) Run() {
 			log.Info().Msg("Shutdown signal received, stopping proxy server")
 			return
 		default:
-			// Check if session has expired
 			if time.Now().After(p.sessionExpiry) {
 				log.Warn().Msg("Database session expired, shutting down proxy")
 				p.gracefulShutdown()
@@ -231,7 +102,6 @@ func (p *DatabaseProxyServer) Run() {
 				}
 			}
 
-			// Track active connection
 			p.activeConnections.Add(1)
 			go p.handleConnection(conn)
 		}
@@ -274,7 +144,6 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 
 	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
-	// Gateway → Client: if this side closes first, the gateway dropped the connection
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(clientConn, gatewayConn)
@@ -288,7 +157,6 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 		gatewayErrCh <- err
 	}()
 
-	// Client → Gateway: if this side closes first, the client disconnected normally
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(gatewayConn, clientConn)

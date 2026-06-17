@@ -26,6 +26,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// PAMAccessParams holds the legacy resource-based access parameters.
+// Used by the old proxy implementations (ssh, redis, kubernetes, rdp).
 type PAMAccessParams struct {
 	ResourceName string
 	AccountName  string
@@ -317,8 +319,6 @@ func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 	}
 }
 
-const reasonRequiredErrorName = "PAM_REASON_REQUIRED"
-
 func PromptForReason(required bool) (string, error) {
 	label := "Reason for access"
 	prompt := promptui.Prompt{
@@ -337,18 +337,18 @@ func PromptForReason(required bool) (string, error) {
 	return strings.TrimSpace(result), nil
 }
 
-// CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required
-// This is a shared function used by all PAM proxies
+const reasonRequiredErrorName = "PAM_REASON_REQUIRED"
+
+// CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required.
+// This is used by the legacy proxy implementations.
 func CallPAMAccessWithMFA(
 	httpClient *resty.Client,
 	pamRequest api.PAMAccessRequest,
 	interactive bool,
 ) (api.PAMAccessResponse, error) {
-	// Initial request
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
 	if err != nil {
 		if apiErr, ok := err.(*api.APIError); ok {
-			// Reason required by account policy
 			if apiErr.Name == reasonRequiredErrorName {
 				if !interactive || !isatty.IsTerminal(os.Stdin.Fd()) {
 					return api.PAMAccessResponse{}, fmt.Errorf(
@@ -363,21 +363,17 @@ func CallPAMAccessWithMFA(
 				return CallPAMAccessWithMFA(httpClient, pamRequest, interactive)
 			}
 
-			// MFA required
 			if apiErr.Name == "SESSION_MFA_REQUIRED" {
-				// Extract MFA details from error
 				if details, ok := apiErr.Details.(map[string]interface{}); ok {
 					mfaSessionId, _ := details["mfaSessionId"].(string)
 					mfaMethod, _ := details["mfaMethod"].(string)
 
 					if mfaSessionId != "" {
-						// Handle MFA flow
 						err := util.HandleMFASession(httpClient, mfaSessionId, mfaMethod, config.INFISICAL_URL)
 						if err != nil {
 							return api.PAMAccessResponse{}, fmt.Errorf("MFA verification failed: %w", err)
 						}
 
-						// Retry request with MFA session ID
 						log.Debug().Msg("Retrying PAM access with MFA session...")
 						pamRequest.MfaSessionId = mfaSessionId
 						pamResponse, err = api.CallPAMAccess(httpClient, pamRequest)
@@ -390,7 +386,6 @@ func CallPAMAccessWithMFA(
 				}
 			}
 		}
-		// Return original error if not MFA/reason-related
 		return api.PAMAccessResponse{}, err
 	}
 
@@ -398,7 +393,7 @@ func CallPAMAccessWithMFA(
 }
 
 // HandleApprovalWorkflow checks if an error is due to an approval policy and handles the approval request flow.
-// Returns true if the error was handled (either approval request created or user declined), false otherwise.
+// Returns true if the error was handled, false otherwise.
 func HandleApprovalWorkflow(httpClient *resty.Client, err error, projectID string, accessParams PAMAccessParams, durationStr string) bool {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || apiErr.ErrorMessage != "A policy is in place for this resource" {
@@ -462,3 +457,4 @@ func askForApprovalRequestTrigger() (bool, error) {
 	}
 	return strings.ToLower(result) == "y", nil
 }
+
