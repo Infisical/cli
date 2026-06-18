@@ -24,6 +24,10 @@ const (
 	FormatCSV          string = "csv"
 	FormatYaml         string = "yaml"
 	FormatDotEnvExport string = "dotenv-export"
+
+	DotEnvQuoteStyleSingle string = "single"
+	DotEnvQuoteStyleDouble string = "double"
+	DotEnvQuoteStyleNone   string = "none"
 )
 
 // exportCmd represents the export command
@@ -31,7 +35,7 @@ var exportCmd = &cobra.Command{
 	Use:                   "export",
 	Short:                 "Used to export environment variables to a file",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
+	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json\ninfisical export --env=prod --format=dotenv --quote=double > .env",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		environmentName, _ := cmd.Flags().GetString("env")
@@ -64,6 +68,14 @@ var exportCmd = &cobra.Command{
 
 		format, err := cmd.Flags().GetString("format")
 		if err != nil {
+			util.HandleError(err)
+		}
+
+		quoteStyle, err := cmd.Flags().GetString("quote")
+		if err != nil {
+			util.HandleError(err)
+		}
+		if err := validateDotEnvQuoteStyleForFormat(format, quoteStyle, cmd.Flags().Changed("quote")); err != nil {
 			util.HandleError(err)
 		}
 
@@ -146,7 +158,7 @@ var exportCmd = &cobra.Command{
 		secrets = util.FilterSecretsByTag(secrets, tagSlugs)
 		secrets = util.SortSecretsByKeys(secrets)
 
-		output, err = formatEnvs(secrets, format)
+		output, err = formatEnvs(secrets, format, quoteStyle)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -267,6 +279,7 @@ func init() {
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
 	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv)")
+	exportCmd.Flags().String("quote", DotEnvQuoteStyleSingle, "Set the quote style for dotenv or dotenv-export output (single, double, none)")
 	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
@@ -278,12 +291,12 @@ func init() {
 }
 
 // Format according to the format flag
-func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string, error) {
+func formatEnvs(envs []models.SingleEnvironmentVariable, format string, quoteStyle string) (string, error) {
 	switch strings.ToLower(format) {
 	case FormatDotenv:
-		return formatAsDotEnv(envs), nil
+		return formatAsDotEnv(envs, quoteStyle)
 	case FormatDotEnvExport:
-		return formatAsDotEnvExport(envs), nil
+		return formatAsDotEnvExport(envs, quoteStyle)
 	case FormatJson:
 		return formatAsJson(envs), nil
 	case FormatCSV:
@@ -292,6 +305,21 @@ func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string,
 		return formatAsYaml(envs)
 	default:
 		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport})
+	}
+}
+
+func validateDotEnvQuoteStyleForFormat(format string, quoteStyle string, quoteStyleSet bool) error {
+	if !quoteStyleSet || normalizeDotEnvQuoteStyle(quoteStyle) == DotEnvQuoteStyleSingle {
+		return nil
+	}
+
+	switch strings.ToLower(format) {
+	case FormatDotenv, FormatDotEnvExport:
+		return nil
+	case FormatJson, FormatCSV, FormatYaml:
+		return fmt.Errorf("--quote can only be used with %s or %s formats", FormatDotenv, FormatDotEnvExport)
+	default:
+		return nil
 	}
 }
 
@@ -308,21 +336,60 @@ func formatAsCSV(envs []models.SingleEnvironmentVariable) string {
 }
 
 // Format environment variables as a dotenv file
-func formatAsDotEnv(envs []models.SingleEnvironmentVariable) string {
-	var dotenv string
+func formatAsDotEnv(envs []models.SingleEnvironmentVariable, quoteStyle string) (string, error) {
+	var dotenv strings.Builder
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("%s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		value, err := formatDotEnvValue(escapeNewLinesIfRequired(env), quoteStyle)
+		if err != nil {
+			return "", err
+		}
+
+		dotenv.WriteString(fmt.Sprintf("%s=%s\n", env.Key, value))
 	}
-	return dotenv
+	return dotenv.String(), nil
 }
 
 // Format environment variables as a dotenv file with export at the beginning
-func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
-	var dotenv string
+func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable, quoteStyle string) (string, error) {
+	var dotenv strings.Builder
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		value, err := formatDotEnvValue(escapeNewLinesIfRequired(env), quoteStyle)
+		if err != nil {
+			return "", err
+		}
+
+		dotenv.WriteString(fmt.Sprintf("export %s=%s\n", env.Key, value))
 	}
-	return dotenv
+	return dotenv.String(), nil
+}
+
+func formatDotEnvValue(value string, quoteStyle string) (string, error) {
+	switch normalizeDotEnvQuoteStyle(quoteStyle) {
+	case DotEnvQuoteStyleSingle:
+		if strings.ContainsRune(value, '\'') {
+			return "", fmt.Errorf("single quote style cannot be used for values that contain a single quote character; use --quote=double instead")
+		}
+		return fmt.Sprintf("'%s'", value), nil
+	case DotEnvQuoteStyleDouble:
+		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(value, `"`, `\"`)), nil
+	case DotEnvQuoteStyleNone:
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid dotenv quote style: %s. Available quote styles are %v", quoteStyle, []string{DotEnvQuoteStyleSingle, DotEnvQuoteStyleDouble, DotEnvQuoteStyleNone})
+	}
+}
+
+func normalizeDotEnvQuoteStyle(quoteStyle string) string {
+	switch strings.ToLower(quoteStyle) {
+	case "'", DotEnvQuoteStyleSingle:
+		return DotEnvQuoteStyleSingle
+	case `"`, DotEnvQuoteStyleDouble:
+		return DotEnvQuoteStyleDouble
+	case "", DotEnvQuoteStyleNone:
+		return DotEnvQuoteStyleNone
+	default:
+		return strings.ToLower(quoteStyle)
+	}
 }
 
 func formatAsYaml(envs []models.SingleEnvironmentVariable) (string, error) {
