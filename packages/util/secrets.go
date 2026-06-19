@@ -374,6 +374,23 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			errorToReturn = err
 			secretsToReturn = res.Secrets
 		}
+
+		// cache secrets on success, fallback to cached secrets on failure
+		if errorToReturn == nil && params.WorkspaceId != "" {
+			if backupEncryptionKey, err := GetBackupEncryptionKey(); err == nil {
+				WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, secretsToReturn)
+			}
+		} else if errorToReturn != nil && params.WorkspaceId != "" {
+			backupEncryptionKey, _ := GetBackupEncryptionKey()
+			if backupEncryptionKey != nil {
+				backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
+				if len(backedUpSecrets) > 0 {
+					PrintWarning("Unable to fetch the latest secret(s) due to connection error, serving secrets from last successful fetch. For more info, run with --debug")
+					secretsToReturn = backedUpSecrets
+					errorToReturn = err
+				}
+			}
+		}
 	}
 
 	return secretsToReturn, errorToReturn
