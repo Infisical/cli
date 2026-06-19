@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -401,11 +402,26 @@ var gatewayStartCmd = &cobra.Command{
 			}
 		}
 
+		pkcs11ModulePath, _ := cmd.Flags().GetString("pkcs11-module")
+		if pkcs11ModulePath != "" {
+			if !filepath.IsAbs(pkcs11ModulePath) {
+				util.HandleError(fmt.Errorf("--pkcs11-module must be an absolute path (got %q)", pkcs11ModulePath), "unable to load PKCS#11 driver")
+			}
+			info, statErr := os.Stat(pkcs11ModulePath)
+			if statErr != nil {
+				util.HandleError(fmt.Errorf("PKCS#11 driver not found at %q: %w", pkcs11ModulePath, statErr), "unable to load PKCS#11 driver")
+			}
+			if info.IsDir() {
+				util.HandleError(fmt.Errorf("--pkcs11-module path is a directory, expected a driver file: %q", pkcs11ModulePath), "unable to load PKCS#11 driver")
+			}
+		}
+
 		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
-			Name:           gatewayName,
-			RelayName:      relayName,
-			ReconnectDelay: 10 * time.Second,
-			UseV3Connect:   runningWithStoredToken,
+			Name:             gatewayName,
+			RelayName:        relayName,
+			ReconnectDelay:   10 * time.Second,
+			UseV3Connect:     runningWithStoredToken,
+			Pkcs11ModulePath: pkcs11ModulePath,
 		})
 
 		if err != nil {
@@ -759,6 +775,7 @@ func init() {
 	gatewayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	gatewayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 	gatewayStartCmd.Flags().String("pam-session-recording-path", "", "directory path for PAM session recordings (defaults to /var/lib/infisical/session_recordings)")
+	gatewayStartCmd.Flags().String("pkcs11-module", "", "absolute path to a PKCS#11 driver (e.g. /opt/fortanix/pkcs11/fortanix_pkcs11.so). When set, the gateway loads the driver, advertises pkcs11 capability on heartbeat, and serves HSM operations.")
 
 	// Legacy install command flags (v1)
 	gatewayInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
