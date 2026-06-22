@@ -272,7 +272,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	if username != "" {
 		fmt.Printf("  Username:  %s\n", username)
 	}
-	fmt.Printf("  Password:  (injected by gateway)\n")
+	fmt.Printf("  Password:  (not required)\n")
 	if database != "" {
 		fmt.Printf("  Database:  %s\n", database)
 	}
@@ -282,7 +282,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
-	fmt.Printf("  to localhost:%d. The password will be injected automatically.\n", port)
+	fmt.Printf("  to localhost:%d. No password is needed.\n", port)
 	fmt.Printf("\n")
 	if config.UsageExamples != nil {
 		examples := config.UsageExamples(username, database, port)
