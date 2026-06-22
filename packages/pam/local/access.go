@@ -83,9 +83,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	case AccountTypePostgres, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB:
 		startDatabaseProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 
-	// Non-database types - not yet implemented
 	case AccountTypeSSH:
-		util.PrintErrorMessageAndExit("SSH access not yet supported in the new PAM model")
+		startSSHAccess(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeRedis:
 		util.PrintErrorMessageAndExit("Redis access not yet supported in the new PAM model")
 	case AccountTypeKubernetes:
@@ -248,6 +247,106 @@ func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 	}()
 
 	proxy.Run()
+}
+
+func startSSHAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Failed to parse duration")
+		return
+	}
+
+	username, ok := response.Metadata["username"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start SSH session")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &SSHProxyServer{
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			relayHost:              response.RelayHost,
+			relayClientCert:        response.RelayClientCertificate,
+			relayClientKey:         response.RelayClientPrivateKey,
+			relayServerCertChain:   response.RelayServerCertificateChain,
+			gatewayClientCert:      response.GatewayClientCertificate,
+			gatewayClientKey:       response.GatewayClientPrivateKey,
+			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			sessionExpiry:          time.Now().Add(duration),
+			sessionId:              response.SessionId,
+			resourceType:           response.AccountType,
+			ctx:                    ctx,
+			cancel:                 cancel,
+			shutdownCh:             make(chan struct{}),
+		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
+	}
+
+	err = proxy.Start(port)
+	if err != nil {
+		util.HandleError(err, "Failed to start SSH proxy server")
+		return
+	}
+
+	folder, account := parsePath(path)
+
+	log.Info().Msgf("SSH proxy server listening on port %d", proxy.port)
+	printSSHSessionInfo(folder, account, duration, username, proxy.port)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
+		proxy.gracefulShutdown()
+	}()
+
+	proxy.Run()
+}
+
+func printSSHSessionInfo(folder, account string, duration time.Duration, username string, port int) {
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("              SSH Proxy Session Started!                \n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
+	if folder != "" {
+		fmt.Printf("  Folder:    %s\n", folder)
+	}
+	fmt.Printf("  Account:   %s\n", account)
+	fmt.Printf("  Duration:  %s\n", duration.String())
+	fmt.Printf("\n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("                        Connection Details                            \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Host:      127.0.0.1\n")
+	fmt.Printf("  Port:      %d\n", port)
+	fmt.Printf("  Username:  %s\n", username)
+	fmt.Printf("  Password:  (injected by gateway)\n")
+	fmt.Printf("\n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("                           How to Connect                             \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Use your preferred SSH client to connect to 127.0.0.1:%d.\n", port)
+	fmt.Printf("  Credentials will be injected automatically by the gateway.\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Examples:\n")
+	util.PrintfStderr("    $ ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null %s@127.0.0.1\n", port, username)
+	util.PrintfStderr("    $ scp -P %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null <local-file> %s@127.0.0.1:<remote-path>\n", port, username)
+	fmt.Printf("\n")
+	fmt.Printf("  Press Ctrl+C to stop the proxy.\n")
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
 }
 
 // printDatabaseSessionInfo prints the connection info banner for database sessions
