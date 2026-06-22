@@ -45,6 +45,7 @@ func ValidateInfisicalAPIConnection() (ok bool) {
 	if err != nil {
 		return false
 	}
+	defer resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 

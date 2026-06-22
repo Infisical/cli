@@ -375,19 +375,29 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			secretsToReturn = res.Secrets
 		}
 
-		// cache secrets on success, fallback to cached secrets on failure
+		// cache secrets on success, fallback to cached secrets on connection/server failure
 		if errorToReturn == nil && params.WorkspaceId != "" {
 			if backupEncryptionKey, err := GetBackupEncryptionKey(); err == nil {
 				WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, secretsToReturn)
 			}
 		} else if errorToReturn != nil && params.WorkspaceId != "" {
-			backupEncryptionKey, _ := GetBackupEncryptionKey()
-			if backupEncryptionKey != nil {
-				backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
-				if len(backedUpSecrets) > 0 {
-					PrintWarning("Unable to fetch the latest secret(s) due to connection error, serving secrets from last successful fetch. For more info, run with --debug")
-					secretsToReturn = backedUpSecrets
-					errorToReturn = err
+			// Only fall back to cache for connection errors or server errors (5xx).
+			// Do not mask client errors (4xx) like 401/403 which indicate auth issues.
+			shouldFallback := true
+			var apiErr *api.APIError
+			if errors.As(errorToReturn, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+				shouldFallback = false
+			}
+
+			if shouldFallback {
+				backupEncryptionKey, _ := GetBackupEncryptionKey()
+				if backupEncryptionKey != nil {
+					backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
+					if len(backedUpSecrets) > 0 {
+						PrintWarning("Unable to fetch the latest secret(s) due to connection error, serving secrets from last successful fetch. For more info, run with --debug")
+						secretsToReturn = backedUpSecrets
+						errorToReturn = err
+					}
 				}
 			}
 		}
