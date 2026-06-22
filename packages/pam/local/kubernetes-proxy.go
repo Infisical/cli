@@ -6,12 +6,8 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/util"
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"k8s.io/client-go/tools/clientcmd"
 	k8sapi "k8s.io/client-go/tools/clientcmd/api"
@@ -26,134 +22,6 @@ type KubernetesProxyServer struct {
 	kubeConfigOriginalContext string
 }
 
-func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams, projectId, durationStr string, port int) {
-	log.Info().
-		Str("projectId", projectId).
-		Str("account", accessParams.GetDisplayName()).
-		Str("duration", durationStr).
-		Msg("Starting kubernetes proxy")
-
-	httpClient := resty.New()
-	httpClient.SetAuthToken(accessToken)
-	httpClient.SetHeader("User-Agent", "infisical-cli")
-
-	pamRequest := accessParams.ToAPIRequest(projectId, durationStr)
-
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
-	if err != nil {
-		if HandleApprovalWorkflow(httpClient, err, projectId, accessParams, durationStr) {
-			return
-		}
-		util.HandleError(err, "Failed to access PAM account")
-		return
-	}
-
-	if pamResponse.ResourceType != "kubernetes" {
-		util.HandleError(err, "Invalid PAM response type, expected kubernetes but got %s", pamResponse.ResourceType)
-		return
-	}
-
-	log.Info().Msgf("Kubernetes session created with ID: %s", pamResponse.SessionId)
-
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		util.HandleError(err, "Failed to parse duration")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	proxy := &KubernetesProxyServer{
-		BaseProxyServer: BaseProxyServer{
-			httpClient:             httpClient,
-			relayHost:              pamResponse.RelayHost,
-			relayClientCert:        pamResponse.RelayClientCertificate,
-			relayClientKey:         pamResponse.RelayClientPrivateKey,
-			relayServerCertChain:   pamResponse.RelayServerCertificateChain,
-			gatewayClientCert:      pamResponse.GatewayClientCertificate,
-			gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
-			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
-			sessionExpiry:          time.Now().Add(duration),
-			sessionId:              pamResponse.SessionId,
-			resourceType:           pamResponse.ResourceType,
-			ctx:                    ctx,
-			cancel:                 cancel,
-			shutdownCh:             make(chan struct{}),
-		},
-	}
-
-	if err := proxy.ValidateResourceTypeSupported(); err != nil {
-		util.HandleError(err, "Gateway version outdated")
-		return
-	}
-
-	err = proxy.Start(port)
-	if err != nil {
-		util.HandleError(err, "Failed to start proxy server")
-		return
-	}
-
-	if port == 0 {
-		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
-	} else {
-		fmt.Printf("Kubernetes proxy started for account %s with duration %s on port %d\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
-	}
-
-	// TODO: we should let the user decide whether if they want to update kubeconfig or not
-	// TODO: ideally, lock the files to avoid others from writing to it
-	// TODO: use clientcmd.ModifyConfig instead?
-	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
-	config, err := configLoader.Load()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to load kubernetes config")
-		return
-	}
-
-	// Build cluster name for kubeconfig context
-	clusterName := fmt.Sprintf("infisical-k8s-pam/%s/%s", accessParams.ResourceName, accessParams.AccountName)
-
-	config.Clusters[clusterName] = &k8sapi.Cluster{
-		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
-	}
-	config.AuthInfos[clusterName] = &k8sapi.AuthInfo{}
-	config.Contexts[clusterName] = &k8sapi.Context{
-		Cluster:  clusterName,
-		AuthInfo: clusterName,
-	}
-	proxy.kubeConfigOriginalContext = config.CurrentContext
-	config.CurrentContext = clusterName
-	kubeconfig := configLoader.GetDefaultFilename()
-	if err = clientcmd.WriteToFile(*config, kubeconfig); err != nil {
-		log.Fatal().Err(err).Str("kubeconfig", kubeconfig).Msg("Failed to write kubernetes config")
-		return
-	}
-	log.Info().Str("kubeconfig", kubeconfig).Msg("Updated kubeconfig file")
-	proxy.kubeConfigClusterName = clusterName
-	proxy.kubeConfigPath = kubeconfig
-
-	log.Info().Msgf("Kubernetes proxy server listening on port %d", proxy.port)
-	fmt.Printf("\n")
-	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("                  Kubernetes Proxy Session Started!                   \n")
-	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Resource: %s\n", accessParams.ResourceName)
-	fmt.Printf("Account:  %s\n", accessParams.AccountName)
-	fmt.Printf("\nYour kubectl context has been switched to: %s\n", clusterName)
-	fmt.Printf("You can now use kubectl commands to access your Kubernetes cluster.\n")
-	fmt.Printf("\n")
-	// TODO: write kubectl config
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
-		proxy.gracefulShutdown()
-	}()
-
-	proxy.Run()
-}
 
 func (p *KubernetesProxyServer) SetupKubeconfig(clusterName string) error {
 	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
