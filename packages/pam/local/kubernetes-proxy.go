@@ -155,6 +155,33 @@ func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams,
 	proxy.Run()
 }
 
+func (p *KubernetesProxyServer) SetupKubeconfig(clusterName string) error {
+	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
+	config, err := configLoader.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load kubernetes config: %w", err)
+	}
+
+	config.Clusters[clusterName] = &k8sapi.Cluster{
+		Server: fmt.Sprintf("http://localhost:%d", p.port),
+	}
+	config.AuthInfos[clusterName] = &k8sapi.AuthInfo{}
+	config.Contexts[clusterName] = &k8sapi.Context{
+		Cluster:  clusterName,
+		AuthInfo: clusterName,
+	}
+	p.kubeConfigOriginalContext = config.CurrentContext
+	config.CurrentContext = clusterName
+	kubeconfig := configLoader.GetDefaultFilename()
+	if err = clientcmd.WriteToFile(*config, kubeconfig); err != nil {
+		return fmt.Errorf("failed to write kubernetes config: %w", err)
+	}
+	log.Info().Str("kubeconfig", kubeconfig).Msg("Updated kubeconfig file")
+	p.kubeConfigClusterName = clusterName
+	p.kubeConfigPath = kubeconfig
+	return nil
+}
+
 func (p *KubernetesProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
