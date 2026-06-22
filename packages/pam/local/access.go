@@ -332,14 +332,13 @@ func printSSHSessionInfo(folder, account string, duration time.Duration, usernam
 	if username != "" {
 		fmt.Printf("  Username:  %s\n", username)
 	}
-	fmt.Printf("  Password:  (injected by gateway)\n")
 	fmt.Printf("\n")
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("                           How to Connect                             \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Use your preferred SSH client to connect to 127.0.0.1:%d.\n", port)
-	fmt.Printf("  Credentials will be injected automatically by the gateway.\n")
+	fmt.Printf("  Credentials are handled automatically by the gateway.\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Examples:\n")
 	util.PrintfStderr("    $ ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null %s@127.0.0.1\n", port, username)
