@@ -329,7 +329,9 @@ func printSSHSessionInfo(folder, account string, duration time.Duration, usernam
 	fmt.Printf("\n")
 	fmt.Printf("  Host:      127.0.0.1\n")
 	fmt.Printf("  Port:      %d\n", port)
-	fmt.Printf("  Username:  %s\n", username)
+	if username != "" {
+		fmt.Printf("  Username:  %s\n", username)
+	}
 	fmt.Printf("  Password:  (injected by gateway)\n")
 	fmt.Printf("\n")
 	fmt.Printf("----------------------------------------------------------------------\n")
