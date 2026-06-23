@@ -117,9 +117,10 @@ builds:
     goarm:
       - "7"
 
-  # PKCS#11-enabled HSM build. Loads the vendor's PKCS#11 driver via dlopen at
-  # runtime, so it MUST be dynamically linked (no -extldflags "-static") and
-  # must use a glibc toolchain. Ships as a separate `infisical-pkcs11` artifact.
+  # PKCS#11-enabled HSM companion. Loads the vendor's PKCS#11 driver via dlopen
+  # at runtime, so it MUST be dynamically linked (no -extldflags "-static") and
+  # built with a glibc toolchain. Shipped as a separate artifact and fetched by
+  # the launcher in packages/gateway-v2/pkcs11_launcher.go.
   - id: linux-amd64-pkcs11
     binary: infisical-pkcs11
     ldflags:

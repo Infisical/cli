@@ -163,15 +163,10 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 
 	pamCredentialsManager := session.NewCredentialsManager(httpClient)
 
-	var pkcs11Module Pkcs11Module
-	if config.Pkcs11ModulePath != "" {
-		mod, err := LoadPkcs11Module(config.Pkcs11ModulePath)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to load PKCS#11 module: %w", err)
-		}
-		pkcs11Module = mod
-		log.Info().Str("path", config.Pkcs11ModulePath).Msg("PKCS#11 module loaded; Gateway will serve HSM requests")
+	pkcs11Module, err := setupPkcs11ModuleForConfig(config.Pkcs11ModulePath)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to load PKCS#11 module: %w", err)
 	}
 
 	return &Gateway{
