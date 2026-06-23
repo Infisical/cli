@@ -323,6 +323,61 @@ func GetInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err erro
 
 }
 
+// ResolveProjectSlug reads the --project-slug flag. If set, it resolves the
+// slug to a project ID via the API using whatever auth is available (machine
+// token or user session). Returns ("", nil) when --project-slug is absent.
+func ResolveProjectSlug(cmd *cobra.Command) (string, error) {
+	projectSlug, err := cmd.Flags().GetString("project-slug")
+	if err != nil {
+		return "", fmt.Errorf("unable to read --project-slug flag: %w", err)
+	}
+	if projectSlug == "" {
+		return "", nil
+	}
+
+	projectId, _ := cmd.Flags().GetString("projectId")
+	if projectId != "" {
+		return "", fmt.Errorf("cannot specify both --projectId and --project-slug; use one or the other")
+	}
+
+	var authToken string
+	token, tokenErr := GetInfisicalToken(cmd)
+	if tokenErr != nil {
+		// If the error is because the command doesn't define --token flag,
+		// fall through to user auth instead of failing
+		if cmd.Flags().Lookup("token") == nil {
+			token = nil
+		} else {
+			return "", fmt.Errorf("unable to retrieve auth token for slug resolution: %w", tokenErr)
+		}
+	}
+	if token != nil {
+		authToken = token.Token
+	} else {
+		RequireLogin()
+		loggedInDetails, err := GetCurrentLoggedInUserDetails(false)
+		if err != nil {
+			return "", fmt.Errorf("unable to get login details for slug resolution: %w", err)
+		}
+		if loggedInDetails.LoginExpired {
+			loggedInDetails = EstablishUserLoginSession()
+		}
+		authToken = loggedInDetails.UserCredentials.JTWToken
+	}
+
+	httpClient, err := GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return "", fmt.Errorf("unable to create HTTP client: %w", err)
+	}
+	httpClient.SetAuthToken(authToken)
+
+	project, err := api.CallGetProjectBySlug(httpClient, projectSlug)
+	if err != nil {
+		return "", fmt.Errorf("unable to resolve project slug %q: %w", projectSlug, err)
+	}
+	return project.ID, nil
+}
+
 func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuthLoginResponse, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
