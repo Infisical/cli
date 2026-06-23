@@ -211,7 +211,7 @@ archives:
     builds:
       - linux-amd64-pkcs11
       - linux-arm64-pkcs11
-    name_template: "{{ .ProjectName }}-pkcs11_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "infisical-pkcs11_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README*
       - LICENSE*

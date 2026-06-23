@@ -30,6 +30,10 @@ const (
 
 var pkcs11HTTPClient = &http.Client{Timeout: 90 * time.Second}
 
+func pkcs11TarballName(version, goos, goarch string) string {
+	return fmt.Sprintf("infisical-pkcs11_%s_%s_%s.tar.gz", version, goos, goarch)
+}
+
 func MaybeExecPkcs11Launcher(pkcs11ModulePath string, originalArgs []string) error {
 	if strings.TrimSpace(pkcs11ModulePath) == "" {
 		return nil
@@ -71,7 +75,7 @@ func ensurePkcs11Binary(version, goos, goarch string) (string, error) {
 	if override := os.Getenv(envReleaseURLBaseOverride); override != "" {
 		base = strings.TrimRight(override, "/")
 	}
-	tarName := fmt.Sprintf("cli-pkcs11_%s_%s_%s.tar.gz", version, goos, goarch)
+	tarName := pkcs11TarballName(version, goos, goarch)
 	sumsURL := fmt.Sprintf("%s/v%s/checksums.txt", base, version)
 	tarURL := fmt.Sprintf("%s/v%s/%s", base, version, tarName)
 

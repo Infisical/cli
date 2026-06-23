@@ -612,6 +612,11 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
+		pkcs11ModulePath, _ := cmd.Flags().GetString("pkcs11-module")
+		if pkcs11ModulePath != "" && !filepath.IsAbs(pkcs11ModulePath) {
+			util.HandleError(fmt.Errorf("--pkcs11-module must be an absolute path (got %q)", pkcs11ModulePath))
+		}
+
 		var installedServiceName string
 
 		if enrollMethod == gatewayv2.EnrollMethodToken {
@@ -637,7 +642,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			}
 
 			// Install systemd service using the long-lived access token
-			svcName, installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile)
+			svcName, installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile, pkcs11ModulePath)
 			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
@@ -653,7 +658,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 			relayName, _ := util.GetRelayName(cmd, false, "")
 
-			svcName, installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, serviceLogFile)
+			svcName, installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, serviceLogFile, pkcs11ModulePath)
 			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
@@ -674,7 +679,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(relayErr, "unable to get relay name")
 			}
 
-			svcName, installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile)
+			svcName, installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile, pkcs11ModulePath)
 			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
@@ -796,6 +801,7 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
 	gatewaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
+	gatewaySystemdInstallCmd.Flags().String("pkcs11-module", "", "absolute path to a PKCS#11 driver (e.g. /opt/fortanix/pkcs11/fortanix_pkcs11.so). When set, the systemd service starts the gateway with the PKCS#11 driver loaded for HSM operations.")
 
 	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")
