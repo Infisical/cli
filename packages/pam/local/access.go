@@ -64,11 +64,11 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
-	pamResponse, err := api.CallPAMAccess(httpClient, api.PAMAccessRequest{
+	pamResponse, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
 		Path:     path,
 		Duration: durationStr,
 		Reason:   reason,
-	})
+	}, true)
 	if err != nil {
 		util.HandleError(err, "Failed to create PAM session")
 		return
