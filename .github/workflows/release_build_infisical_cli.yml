@@ -137,6 +137,13 @@ jobs:
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
           sudo apt update
           sudo apt-get install -y libssl1.0-dev
+      - name: Install glibc cross-compilers for PKCS#11 (HSM) builds
+        run: |
+          set -euo pipefail
+          # PKCS#11 driver loading uses dlopen; the artifact must be dynamically
+          # linked against glibc. We use the system gcc for amd64 (native) and
+          # gcc-aarch64-linux-gnu for arm64.
+          sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Install cross-compile toolchains for RDP tier
         run: |
           set -euo pipefail

@@ -1008,6 +1008,10 @@ type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
 }
 
+type GatewayHeartbeatRequest struct {
+	Capabilities map[string]any `json:"capabilities,omitempty"`
+}
+
 type RelayLoginRequest struct {
 	Method            string `json:"method"`
 	Token             string `json:"token,omitempty"`
