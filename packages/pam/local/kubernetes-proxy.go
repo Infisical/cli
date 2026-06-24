@@ -113,7 +113,7 @@ func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams,
 	clusterName := fmt.Sprintf("infisical-k8s-pam/%s/%s", accessParams.ResourceName, accessParams.AccountName)
 
 	config.Clusters[clusterName] = &k8sapi.Cluster{
-		Server: fmt.Sprintf("http://localhost:%d", proxy.port),
+		Server: fmt.Sprintf("http://127.0.0.1:%d", proxy.port),
 	}
 	config.AuthInfos[clusterName] = &k8sapi.AuthInfo{}
 	config.Contexts[clusterName] = &k8sapi.Context{
@@ -158,9 +158,9 @@ func StartKubernetesLocalProxy(accessToken string, accessParams PAMAccessParams,
 func (p *KubernetesProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
-		p.server, err = net.Listen("tcp", ":0")
+		p.server, err = net.Listen("tcp", "127.0.0.1:0") // Bind to 127.0.0.1 only
 	} else {
-		p.server, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+		p.server, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	}
 
 	if err != nil {

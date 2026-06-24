@@ -119,19 +119,19 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 
 	switch pamResponse.ResourceType {
 	case session.ResourceTypePostgres:
-		util.PrintfStderr("postgres://%s@localhost:%d/%s", username, proxy.port, database)
+		util.PrintfStderr("postgres://%s@127.0.0.1:%d/%s", username, proxy.port, database)
 	case session.ResourceTypeMysql:
-		util.PrintfStderr("mysql://%s@localhost:%d/%s", username, proxy.port, database)
+		util.PrintfStderr("mysql://%s@127.0.0.1:%d/%s", username, proxy.port, database)
 	case session.ResourceTypeMssql:
-		util.PrintfStderr("sqlserver://%s@localhost:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
+		util.PrintfStderr("sqlserver://%s@127.0.0.1:%d?database=%s&encrypt=false&trustServerCertificate=true", username, proxy.port, database)
 	case session.ResourceTypeMongodb:
-		util.PrintfStderr("mongodb://localhost:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
+		util.PrintfStderr("mongodb://127.0.0.1:%d/%s?serverSelectionTimeoutMS=15000", proxy.port, database)
 	case session.ResourceTypeOracledb:
-		util.PrintfStderr("%s/%s@localhost:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
-		util.PrintfStderr("\njdbc:oracle:thin:@localhost:%d/%s  (user: %s, password: %s)", proxy.port, database, username, oracle.ProxyPasswordPlaceholder)
+		util.PrintfStderr("%s/%s@127.0.0.1:%d/%s", username, oracle.ProxyPasswordPlaceholder, proxy.port, database)
+		util.PrintfStderr("\njdbc:oracle:thin:@127.0.0.1:%d/%s  (user: %s, password: %s)", proxy.port, database, username, oracle.ProxyPasswordPlaceholder)
 		util.PrintfStderr("\n\nNote: the password shown is a protocol placeholder required by Oracle, not a secret.")
 	default:
-		util.PrintfStderr("localhost:%d", proxy.port)
+		util.PrintfStderr("127.0.0.1:%d", proxy.port)
 	}
 	util.PrintfStderr("\n**********************************************************************\n")
 	util.PrintfStderr("\n")
@@ -151,9 +151,9 @@ func StartDatabaseLocalProxy(accessToken string, accessParams PAMAccessParams, p
 func (p *DatabaseProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
-		p.server, err = net.Listen("tcp", ":0")
+		p.server, err = net.Listen("tcp", "127.0.0.1:0") // Bind to 127.0.0.1 only
 	} else {
-		p.server, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+		p.server, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	}
 
 	if err != nil {
