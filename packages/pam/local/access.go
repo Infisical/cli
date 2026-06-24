@@ -88,7 +88,7 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	case AccountTypeRedis:
 		util.PrintErrorMessageAndExit("Redis access not yet supported in the new PAM model")
 	case AccountTypeKubernetes:
-		util.PrintErrorMessageAndExit("Kubernetes access not yet supported in the new PAM model")
+		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
 		util.PrintErrorMessageAndExit("AWS IAM access not yet supported in the new PAM model")
 	case AccountTypeWindows:
@@ -372,7 +372,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	if username != "" {
 		fmt.Printf("  Username:  %s\n", username)
 	}
-	fmt.Printf("  Password:  (injected by gateway)\n")
+	fmt.Printf("  Password:  (not required)\n")
 	if database != "" {
 		fmt.Printf("  Database:  %s\n", database)
 	}
@@ -382,7 +382,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
-	fmt.Printf("  to localhost:%d. The password will be injected automatically.\n", port)
+	fmt.Printf("  to localhost:%d. No password is needed.\n", port)
 	fmt.Printf("\n")
 	if config.UsageExamples != nil {
 		examples := config.UsageExamples(username, database, port)
@@ -397,6 +397,96 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("  Connection string:\n")
 	connStr := config.ConnectionString(username, database, port)
 	util.PrintfStderr("    %s\n", connStr)
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
+}
+
+func startKubernetesProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Failed to parse duration")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &KubernetesProxyServer{
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			relayHost:              response.RelayHost,
+			relayClientCert:        response.RelayClientCertificate,
+			relayClientKey:         response.RelayClientPrivateKey,
+			relayServerCertChain:   response.RelayServerCertificateChain,
+			gatewayClientCert:      response.GatewayClientCertificate,
+			gatewayClientKey:       response.GatewayClientPrivateKey,
+			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			sessionExpiry:          time.Now().Add(duration),
+			sessionId:              response.SessionId,
+			resourceType:           response.AccountType,
+			ctx:                    ctx,
+			cancel:                 cancel,
+			shutdownCh:             make(chan struct{}),
+		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
+	}
+
+	err = proxy.Start(port)
+	if err != nil {
+		util.HandleError(err, "Failed to start proxy server")
+		return
+	}
+
+	folder, account := parsePath(path)
+	clusterName := fmt.Sprintf("infisical-k8s-pam/%s/%s", folder, account)
+
+	if err := proxy.SetupKubeconfig(clusterName); err != nil {
+		util.HandleError(err, "Failed to configure kubeconfig")
+		proxy.gracefulShutdown()
+		return
+	}
+
+	log.Info().Msgf("Kubernetes proxy server listening on port %d", proxy.port)
+	printKubernetesSessionInfo(folder, account, duration, clusterName, proxy.port)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
+		proxy.gracefulShutdown()
+	}()
+
+	proxy.Run()
+}
+
+func printKubernetesSessionInfo(folder, account string, duration time.Duration, clusterName string, port int) {
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("              Kubernetes Proxy Session Started!                       \n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
+	if folder != "" {
+		fmt.Printf("  Folder:    %s\n", folder)
+	}
+	fmt.Printf("  Account:   %s\n", account)
+	fmt.Printf("  Duration:  %s\n", duration.String())
+	fmt.Printf("\n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("                        Connection Details                            \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Your kubectl context has been switched to: %s\n", clusterName)
+	fmt.Printf("  You can now use kubectl commands to access your Kubernetes cluster.\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Example:\n")
+	util.PrintfStderr("    $ kubectl get pods\n")
+	util.PrintfStderr("    $ kubectl get namespaces\n")
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
