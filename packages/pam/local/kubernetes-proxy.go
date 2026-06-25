@@ -31,7 +31,7 @@ func (p *KubernetesProxyServer) SetupKubeconfig(clusterName string) error {
 	}
 
 	config.Clusters[clusterName] = &k8sapi.Cluster{
-		Server: fmt.Sprintf("http://localhost:%d", p.port),
+		Server: fmt.Sprintf("http://127.0.0.1:%d", p.port),
 	}
 	config.AuthInfos[clusterName] = &k8sapi.AuthInfo{}
 	config.Contexts[clusterName] = &k8sapi.Context{
@@ -53,9 +53,9 @@ func (p *KubernetesProxyServer) SetupKubeconfig(clusterName string) error {
 func (p *KubernetesProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
-		p.server, err = net.Listen("tcp", ":0")
+		p.server, err = net.Listen("tcp", "127.0.0.1:0") // Bind to 127.0.0.1 only
 	} else {
-		p.server, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+		p.server, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	}
 
 	if err != nil {
