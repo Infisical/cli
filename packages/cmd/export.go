@@ -82,7 +82,7 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		secretsPath, err := cmd.Flags().GetString("path")
+		secretsPaths, err := cmd.Flags().GetStringArray("path")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -92,19 +92,13 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		request := models.GetAllSecretsParameters{
+		multiPathRequest := models.GetMultiPathSecretsParameters{
 			Environment:            environmentName,
-			TagSlugs:               tagSlugs,
 			WorkspaceId:            projectId,
-			SecretsPath:            secretsPath,
+			TagSlugs:               tagSlugs,
+			SecretsPaths:           secretsPaths,
 			IncludeImport:          includeImports,
 			ExpandSecretReferences: shouldExpandSecrets,
-		}
-
-		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-			request.InfisicalToken = token.Token
-		} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
-			request.UniversalAuthAccessToken = token.Token
 		}
 
 		if templatePath != "" {
@@ -131,15 +125,9 @@ var exportCmd = &cobra.Command{
 			return
 		}
 
-		secrets, err := util.GetAllEnvironmentVariables(request, "")
+		secrets, err := fetchSecrets(multiPathRequest, "", secretOverriding, token)
 		if err != nil {
 			util.HandleError(err, "Unable to fetch secrets")
-		}
-
-		if secretOverriding {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-		} else {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 		}
 
 		var output string
@@ -272,7 +260,7 @@ func init() {
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
 	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
-	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
+	exportCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times to merge secrets from multiple paths)")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 }
