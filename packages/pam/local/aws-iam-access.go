@@ -33,6 +33,12 @@ func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ st
 		return
 	}
 
+	remaining := time.Until(expiresAt)
+	if remaining <= 0 {
+		util.PrintErrorMessageAndExit("AWS credentials returned by the backend are already expired")
+		return
+	}
+
 	folder, account := parsePath(path)
 	profileName := fmt.Sprintf("infisical-pam/%s/%s", folder, account)
 
@@ -69,11 +75,6 @@ func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ st
 
 	log.Info().Str("profile", profileName).Str("file", credFilePath).Msg("AWS credentials written")
 
-	remaining := time.Until(expiresAt)
-	if remaining <= 0 {
-		util.PrintErrorMessageAndExit("AWS credentials returned by the backend are already expired")
-		return
-	}
 	printAWSSessionInfo(folder, account, remaining, profileName, expiresAt)
 
 	cleanup := func() {
