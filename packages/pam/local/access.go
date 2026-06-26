@@ -90,7 +90,7 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	case AccountTypeKubernetes:
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
-		util.PrintErrorMessageAndExit("AWS IAM access not yet supported in the new PAM model")
+		startAWSAccess(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeWindows:
 		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeActiveDirectory:
