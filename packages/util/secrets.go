@@ -20,7 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool) ([]models.SingleEnvironmentVariable, error) {
+func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, error) {
 	serviceTokenParts := strings.SplitN(fullServiceToken, ".", 4)
 	if len(serviceTokenParts) < 4 {
 		return nil, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
@@ -50,14 +50,15 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 		}
 	}
 
-	rawSecrets, err := api.CallGetRawSecretsV3(httpClient, api.GetRawSecretsV3Request{
-		WorkspaceId:            serviceTokenDetails.Workspace,
-		Environment:            environment,
-		SecretPath:             secretPath,
-		IncludeImport:          includeImports,
-		Recursive:              recursive,
-		TagSlugs:               tagSlugs,
-		ExpandSecretReferences: expandSecretReferences,
+	rawSecrets, err := api.CallGetSecretsV4(httpClient, api.GetSecretsV4Request{
+		WorkspaceId:              serviceTokenDetails.Workspace,
+		Environment:              environment,
+		SecretPath:               secretPath,
+		IncludeImport:            includeImports,
+		Recursive:                recursive,
+		TagSlugs:                 tagSlugs,
+		ExpandSecretReferences:   expandSecretReferences,
+		IncludePersonalOverrides: includePersonalOverrides,
 	})
 
 	if err != nil {
@@ -81,7 +82,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 }
 
-func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentName string, secretsPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool) (models.PlaintextSecretResult, error) {
+func GetPlainTextSecretsV4(accessToken string, workspaceId string, environmentName string, secretsPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) (models.PlaintextSecretResult, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return models.PlaintextSecretResult{}, err
@@ -90,20 +91,21 @@ func GetPlainTextSecretsV3(accessToken string, workspaceId string, environmentNa
 	httpClient.SetAuthToken(accessToken).
 		SetHeader("Accept", "application/json")
 
-	getSecretsRequest := api.GetRawSecretsV3Request{
-		WorkspaceId:            workspaceId,
-		Environment:            environmentName,
-		IncludeImport:          includeImports,
-		Recursive:              recursive,
-		TagSlugs:               tagSlugs,
-		ExpandSecretReferences: expandSecretReferences,
+	getSecretsRequest := api.GetSecretsV4Request{
+		WorkspaceId:              workspaceId,
+		Environment:              environmentName,
+		IncludeImport:            includeImports,
+		Recursive:                recursive,
+		TagSlugs:                 tagSlugs,
+		ExpandSecretReferences:   expandSecretReferences,
+		IncludePersonalOverrides: includePersonalOverrides,
 	}
 
 	if secretsPath != "" {
 		getSecretsRequest.SecretPath = secretsPath
 	}
 
-	rawSecrets, err := api.CallGetRawSecretsV3(httpClient, getSecretsRequest)
+	rawSecrets, err := api.CallGetSecretsV4(httpClient, getSecretsRequest)
 
 	if err != nil {
 		return models.PlaintextSecretResult{}, err
@@ -137,7 +139,7 @@ func GetSinglePlainTextSecretByNameV3(accessToken string, workspaceId string, en
 	httpClient.SetAuthToken(accessToken).
 		SetHeader("Accept", "application/json")
 
-	getSecretsRequest := api.GetRawSecretV3ByNameRequest{
+	getSecretsRequest := api.GetSecretV4ByNameRequest{
 		WorkspaceID: workspaceId,
 		Environment: environmentName,
 		SecretName:  secretName,
@@ -331,8 +333,8 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			params.WorkspaceId = infisicalDotJson.WorkspaceId
 		}
 
-		res, err := GetPlainTextSecretsV3(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
-			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true)
+		res, err := GetPlainTextSecretsV4(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
+			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true, params.IncludePersonalOverrides)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
 		if err == nil {
@@ -361,7 +363,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	} else {
 		if params.InfisicalToken != "" {
 			log.Debug().Msg("Trying to fetch secrets using service token")
-			secretsToReturn, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences)
+			secretsToReturn, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
 		} else if params.UniversalAuthAccessToken != "" {
 
 			if params.WorkspaceId == "" {
@@ -369,7 +371,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			}
 
 			log.Debug().Msg("Trying to fetch secrets using universal auth")
-			res, err := GetPlainTextSecretsV3(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences)
+			res, err := GetPlainTextSecretsV4(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
 
 			errorToReturn = err
 			secretsToReturn = res.Secrets
@@ -377,49 +379,6 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	}
 
 	return secretsToReturn, errorToReturn
-}
-
-func OverrideSecrets(secrets []models.SingleEnvironmentVariable, secretType string) []models.SingleEnvironmentVariable {
-	personalSecrets := make(map[string]models.SingleEnvironmentVariable)
-	sharedSecrets := make(map[string]models.SingleEnvironmentVariable)
-	secretsToReturn := []models.SingleEnvironmentVariable{}
-	secretsToReturnMap := make(map[string]models.SingleEnvironmentVariable)
-
-	for _, secret := range secrets {
-		if secret.Type == PERSONAL_SECRET_TYPE_NAME {
-			personalSecrets[secret.Key] = secret
-		}
-		if secret.Type == SHARED_SECRET_TYPE_NAME {
-			sharedSecrets[secret.Key] = secret
-		}
-	}
-
-	if secretType == PERSONAL_SECRET_TYPE_NAME {
-		for _, secret := range secrets {
-			if personalSecret, exists := personalSecrets[secret.Key]; exists {
-				secretsToReturnMap[secret.Key] = personalSecret
-			} else {
-				if _, exists = secretsToReturnMap[secret.Key]; !exists {
-					secretsToReturnMap[secret.Key] = secret
-				}
-			}
-		}
-	} else if secretType == SHARED_SECRET_TYPE_NAME {
-		for _, secret := range secrets {
-			if sharedSecret, exists := sharedSecrets[secret.Key]; exists {
-				secretsToReturnMap[secret.Key] = sharedSecret
-			} else {
-				if _, exists := secretsToReturnMap[secret.Key]; !exists {
-					secretsToReturnMap[secret.Key] = secret
-				}
-			}
-		}
-	}
-
-	for _, secret := range secretsToReturnMap {
-		secretsToReturn = append(secretsToReturn, secret)
-	}
-	return secretsToReturn
 }
 
 func GetBackupEncryptionKey() ([]byte, error) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -598,36 +599,31 @@ func CallMachineIdentityRefreshAccessToken(httpClient *resty.Client, request Uni
 	return universalAuthRefreshResponse, nil
 }
 
-func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Request) (GetRawSecretsV3Response, error) {
-	var getRawSecretsV3Response GetRawSecretsV3Response
+func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (GetSecretsV4Response, error) {
+	var getRawSecretsV3Response GetSecretsV4Response
 	req := httpClient.
 		R().
 		SetResult(&getRawSecretsV3Response).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		SetQueryParam("workspaceId", request.WorkspaceId).
+		SetQueryParam("projectId", request.WorkspaceId).
 		SetQueryParam("environment", request.Environment).
-		SetQueryParam("secretPath", request.SecretPath)
+		SetQueryParam("secretPath", request.SecretPath).
+		// v4 defaults these to true, so they must always be sent explicitly to honor a false flag
+		SetQueryParam("includeImports", strconv.FormatBool(request.IncludeImport)).
+		SetQueryParam("recursive", strconv.FormatBool(request.Recursive)).
+		SetQueryParam("expandSecretReferences", strconv.FormatBool(request.ExpandSecretReferences)).
+		// v4 resolves personal overrides server-side (Priority when true, NeverInclude when false)
+		SetQueryParam("includePersonalOverrides", strconv.FormatBool(request.IncludePersonalOverrides))
 
 	if request.TagSlugs != "" {
 		req.SetQueryParam("tagSlugs", request.TagSlugs)
 	}
 
-	if request.IncludeImport {
-		req.SetQueryParam("include_imports", "true")
-	}
-	if request.Recursive {
-		req.SetQueryParam("recursive", "true")
-	}
-
-	if request.ExpandSecretReferences {
-		req.SetQueryParam("expandSecretReferences", "true")
-	}
-
-	response, err := req.Get(fmt.Sprintf("%v/v3/secrets/raw", config.INFISICAL_URL))
+	response, err := req.Get(fmt.Sprintf("%v/v4/secrets", config.INFISICAL_URL))
 
 	if err != nil {
-		return GetRawSecretsV3Response{}, NewGenericRequestError(operationCallGetRawSecretsV3, err)
+		return GetSecretsV4Response{}, NewGenericRequestError(operationCallGetRawSecretsV3, err)
 	}
 
 	if response.IsError() &&
@@ -635,11 +631,11 @@ func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Reques
 			strings.Contains(strings.ToLower(response.String()), "failed to find bot key") ||
 			strings.Contains(strings.ToLower(response.String()), "bot is not active")) {
 		additionalContext := fmt.Sprintf(`Project with id %s is incompatible with your current CLI version. Upgrade your project by visiting the project settings page. If you're self-hosting and project upgrade option isn't yet available, contact your administrator to upgrade your Infisical instance to the latest release.`, request.WorkspaceId)
-		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, &additionalContext)
+		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, &additionalContext)
 	}
 
 	if response.IsError() {
-		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
+		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
 	}
 
 	getRawSecretsV3Response.ETag = response.Header().Get(("etag"))
@@ -647,32 +643,32 @@ func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Reques
 	return getRawSecretsV3Response, nil
 }
 
-func CallFetchSingleSecretByName(httpClient *resty.Client, request GetRawSecretV3ByNameRequest) (GetRawSecretV3ByNameResponse, error) {
-	var getRawSecretV3ByNameResponse GetRawSecretV3ByNameResponse
+func CallFetchSingleSecretByName(httpClient *resty.Client, request GetSecretV4ByNameRequest) (GetSecretV4ByNameResponse, error) {
+	var getSecretV4ByNameResponse GetSecretV4ByNameResponse
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
-		SetResult(&getRawSecretV3ByNameResponse).
+		SetResult(&getSecretV4ByNameResponse).
 		SetBody(request).
 		SetQueryParam("expandSecretReferences", "true").
-		SetQueryParam("include_imports", "true").
+		SetQueryParam("includeImports", "true").
 		SetQueryParam("environment", request.Environment).
 		SetQueryParam("secretPath", request.SecretPath).
-		SetQueryParam("workspaceId", request.WorkspaceID).
+		SetQueryParam("projectId", request.WorkspaceID).
 		SetQueryParam("type", "shared").
-		Get(fmt.Sprintf("%v/v3/secrets/raw/%s", config.INFISICAL_URL, request.SecretName))
+		Get(fmt.Sprintf("%v/v4/secrets/%s", config.INFISICAL_URL, request.SecretName))
 
 	if err != nil {
-		return GetRawSecretV3ByNameResponse{}, NewGenericRequestError(operationCallFetchSingleSecretByName, err)
+		return GetSecretV4ByNameResponse{}, NewGenericRequestError(operationCallFetchSingleSecretByName, err)
 	}
 
 	if response.IsError() {
-		return GetRawSecretV3ByNameResponse{}, NewAPIErrorWithResponse(operationCallFetchSingleSecretByName, response, nil)
+		return GetSecretV4ByNameResponse{}, NewAPIErrorWithResponse(operationCallFetchSingleSecretByName, response, nil)
 	}
 
-	getRawSecretV3ByNameResponse.ETag = response.Header().Get(("etag"))
+	getSecretV4ByNameResponse.ETag = response.Header().Get(("etag"))
 
-	return getRawSecretV3ByNameResponse, nil
+	return getSecretV4ByNameResponse, nil
 }
 
 func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDynamicSecretLeaseV1Request) (CreateDynamicSecretLeaseV1Response, error) {
