@@ -107,9 +107,9 @@ func StartRedisLocalProxy(accessToken string, accessParams PAMAccessParams, proj
 	util.PrintfStderr("\n")
 	util.PrintfStderr("You can now connect to your Redis instance using:\n")
 	if username != "" {
-		util.PrintfStderr("redis://%s@localhost:%d", username, proxy.port)
+		util.PrintfStderr("redis://%s@127.0.0.1:%d", username, proxy.port)
 	} else {
-		util.PrintfStderr("redis://localhost:%d", proxy.port)
+		util.PrintfStderr("redis://127.0.0.1:%d", proxy.port)
 	}
 	util.PrintfStderr("\n**********************************************************************\n")
 	util.PrintfStderr("\n")
@@ -129,9 +129,9 @@ func StartRedisLocalProxy(accessToken string, accessParams PAMAccessParams, proj
 func (p *RedisProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
-		p.server, err = net.Listen("tcp", ":0")
+		p.server, err = net.Listen("tcp", "127.0.0.1:0") // Bind to 127.0.0.1 only
 	} else {
-		p.server, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+		p.server, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	}
 
 	if err != nil {

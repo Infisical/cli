@@ -114,11 +114,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "PostgreSQL",
 		DefaultPort: 5432,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("postgres://%s@localhost:%d/%s", username, port, database)
+			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("psql -h localhost -p %d -U %s -d %s", port, username, database),
+				fmt.Sprintf("psql -h 127.0.0.1 -p %d -U %s -d %s", port, username, database),
 			}
 		},
 	},
@@ -126,7 +126,7 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "MySQL",
 		DefaultPort: 3306,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mysql://%s@localhost:%d/%s", username, port, database)
+			return fmt.Sprintf("mysql://%s@127.0.0.1:%d/%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -138,11 +138,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "SQL Server",
 		DefaultPort: 1433,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("sqlserver://%s@localhost:%d?database=%s", username, port, database)
+			return fmt.Sprintf("sqlserver://%s@127.0.0.1:%d?database=%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("sqlcmd -S localhost,%d -U %s -d %s", port, username, database),
+				fmt.Sprintf("sqlcmd -S 127.0.0.1,%d -U %s -d %s", port, username, database),
 			}
 		},
 	},
@@ -150,11 +150,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "MongoDB",
 		DefaultPort: 27017,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mongodb://localhost:%d/%s", port, database)
+			return fmt.Sprintf("mongodb://127.0.0.1:%d/%s", port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("mongosh --host localhost --port %d %s", port, database),
+				fmt.Sprintf("mongosh --host 127.0.0.1 --port %d %s", port, database),
 			}
 		},
 	},
@@ -162,11 +162,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "Oracle",
 		DefaultPort: 1521,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("%s@localhost:%d/%s", username, port, database)
+			return fmt.Sprintf("%s@127.0.0.1:%d/%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("sqlplus %s@localhost:%d/%s", username, port, database),
+				fmt.Sprintf("sqlplus %s@127.0.0.1:%d/%s", username, port, database),
 			}
 		},
 	},
@@ -367,7 +367,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("                        Connection Details                            \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
-	fmt.Printf("  Host:      localhost\n")
+	fmt.Printf("  Host:      127.0.0.1\n")
 	fmt.Printf("  Port:      %d\n", port)
 	if username != "" {
 		fmt.Printf("  Username:  %s\n", username)
@@ -382,7 +382,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
-	fmt.Printf("  to localhost:%d. No password is needed.\n", port)
+	fmt.Printf("  to 127.0.0.1:%d. No password is needed.\n", port)
 	fmt.Printf("\n")
 	if config.UsageExamples != nil {
 		examples := config.UsageExamples(username, database, port)
