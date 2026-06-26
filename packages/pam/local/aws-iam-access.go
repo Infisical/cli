@@ -55,11 +55,7 @@ func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ st
 		return
 	}
 
-	section, err := cfg.NewSection(profileName)
-	if err != nil {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to create AWS credentials profile: %v", err))
-		return
-	}
+	section := cfg.Section(profileName)
 	section.Key("aws_access_key_id").SetValue(accessKeyId)
 	section.Key("aws_secret_access_key").SetValue(secretAccessKey)
 	section.Key("aws_session_token").SetValue(sessionToken)
@@ -69,13 +65,15 @@ func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ st
 		return
 	}
 
-	if createdFile {
-		_ = os.Chmod(credFilePath, 0o600)
-	}
+	_ = os.Chmod(credFilePath, 0o600)
 
 	log.Info().Str("profile", profileName).Str("file", credFilePath).Msg("AWS credentials written")
 
 	remaining := time.Until(expiresAt)
+	if remaining <= 0 {
+		util.PrintErrorMessageAndExit("AWS credentials returned by the backend are already expired")
+		return
+	}
 	printAWSSessionInfo(folder, account, remaining, profileName, expiresAt)
 
 	cleanup := func() {
