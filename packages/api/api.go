@@ -600,10 +600,10 @@ func CallMachineIdentityRefreshAccessToken(httpClient *resty.Client, request Uni
 }
 
 func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (GetSecretsV4Response, error) {
-	var getRawSecretsV3Response GetSecretsV4Response
+	var getRawSecretsV4Response GetSecretsV4Response
 	req := httpClient.
 		R().
-		SetResult(&getRawSecretsV3Response).
+		SetResult(&getRawSecretsV4Response).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
 		SetQueryParam("projectId", request.WorkspaceId).
@@ -638,9 +638,9 @@ func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (Ge
 		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
 	}
 
-	getRawSecretsV3Response.ETag = response.Header().Get(("etag"))
+	getRawSecretsV4Response.ETag = response.Header().Get(("etag"))
 
-	return getRawSecretsV3Response, nil
+	return getRawSecretsV4Response, nil
 }
 
 func CallFetchSingleSecretByName(httpClient *resty.Client, request GetSecretV4ByNameRequest) (GetSecretV4ByNameResponse, error) {

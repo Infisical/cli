@@ -670,7 +670,7 @@ type GetSecretsV4Request struct {
 	IncludeImport            bool   `json:"includeImports"`
 	Recursive                bool   `json:"recursive"`
 	TagSlugs                 string `json:"tagSlugs,omitempty"`
-	ExpandSecretReferences   bool   `json:"expandSecretReferences,omitempty"`
+	ExpandSecretReferences   bool   `json:"expandSecretReferences"`
 	IncludePersonalOverrides bool   `json:"includePersonalOverrides"`
 }
 
