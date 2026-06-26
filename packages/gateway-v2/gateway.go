@@ -40,6 +40,7 @@ const (
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
 	ForwardModeHealth          ForwardMode = "HEALTH"
+	ForwardModePkcs11          ForwardMode = "PKCS11"
 )
 
 type ActorType string
@@ -82,12 +83,13 @@ type ActorDetails struct {
 }
 
 type GatewayConfig struct {
-	Name           string
-	RelayName      string
-	IdentityToken  string
-	SSHPort        int
-	ReconnectDelay time.Duration
-	UseV3Connect   bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
+	Name             string
+	RelayName        string
+	IdentityToken    string
+	SSHPort          int
+	ReconnectDelay   time.Duration
+	UseV3Connect     bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
+	Pkcs11ModulePath string
 }
 
 type pamSessionEntry struct {
@@ -132,6 +134,7 @@ type Gateway struct {
 	// MongoDB proxy registry: one topology per session, shared across connections
 	mongoProxies   map[string]*mongoProxyEntry
 	mongoProxiesMu sync.Mutex
+	pkcs11Module   Pkcs11Module
 }
 
 // mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
@@ -160,6 +163,12 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 
 	pamCredentialsManager := session.NewCredentialsManager(httpClient)
 
+	pkcs11Module, err := setupPkcs11ModuleForConfig(config.Pkcs11ModulePath)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to load PKCS#11 module: %w", err)
+	}
+
 	return &Gateway{
 		httpClient:            httpClient,
 		config:                config,
@@ -169,6 +178,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		pamSessionUploader:    session.NewSessionUploader(httpClient, pamCredentialsManager),
 		pamSessions:           make(map[string][]*pamSessionEntry),
 		mongoProxies:          make(map[string]*mongoProxyEntry),
+		pkcs11Module:          pkcs11Module,
 	}, nil
 }
 
@@ -366,7 +376,12 @@ func (g *Gateway) reapIdleSessions() {
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
-		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
+		capabilities := map[string]any{}
+		if g.pkcs11Module != nil {
+			capabilities[CapabilityPkcs11] = true
+		}
+		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
+		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
 			select {
 			case errCh <- err:
@@ -501,6 +516,13 @@ func (g *Gateway) Stop() {
 	}
 	if g.pamCredentialsManager != nil {
 		g.pamCredentialsManager.Shutdown()
+	}
+
+	if g.pkcs11Module != nil {
+		if err := g.pkcs11Module.Finalize(); err != nil {
+			log.Warn().Err(err).Msg("PKCS#11 module Finalize returned an error")
+		}
+		g.pkcs11Module = nil
 	}
 }
 
@@ -707,7 +729,7 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-health", "infisical-ping", "infisical-pam-proxy", "infisical-pam-rdp-browser", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
+		NextProtos: nextProtosForGateway(g.pkcs11Module != nil),
 	}
 
 	return nil
@@ -921,6 +943,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("Health handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePkcs11 {
+		log.Info().Msg("Starting PKCS#11 handler")
+		if err := servePkcs11OverTLS(g.ctx, tlsConn, reader, g.pkcs11Module); err != nil {
+			log.Error().Err(err).Msg("PKCS#11 handler ended with error")
+		} else {
+			log.Info().Msg("PKCS#11 handler completed")
+		}
+		return
 	}
 }
 
@@ -973,6 +1003,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-health":
 		config.Mode = ForwardModeHealth
+		return config, nil
+
+	case "infisical-pkcs11":
+		config.Mode = ForwardModePkcs11
 		return config, nil
 
 	default:
@@ -1136,4 +1170,21 @@ func (g *Gateway) renewCertificates() error {
 	}
 
 	return nil
+}
+
+func nextProtosForGateway(pkcs11Loaded bool) []string {
+	base := []string{
+		"infisical-http-proxy",
+		"infisical-tcp-proxy",
+		"infisical-health",
+		"infisical-ping",
+		"infisical-pam-proxy",
+		"infisical-pam-rdp-browser",
+		"infisical-pam-session-cancellation",
+		"infisical-pam-capabilities",
+	}
+	if pkcs11Loaded {
+		base = append(base, "infisical-pkcs11")
+	}
+	return base
 }

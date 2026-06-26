@@ -812,10 +812,11 @@ func CallGatewayHeartBeatV1(httpClient *resty.Client) error {
 	return nil
 }
 
-func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
+func CallGatewayHeartBeatV2(httpClient *resty.Client, request GatewayHeartbeatRequest) error {
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
 		Post(fmt.Sprintf("%v/v2/gateways/heartbeat", config.INFISICAL_URL))
 
 	if err != nil {

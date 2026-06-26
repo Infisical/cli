@@ -297,9 +297,12 @@ func (b *BaseProxyServer) WaitForDisconnect(gatewayErrCh, clientErrCh <-chan err
 	case <-gatewayErrCh:
 		b.HandleGatewayDisconnect()
 	case <-clientErrCh:
-		// Normal client disconnect, proxy stays running
 	case <-connCtx.Done():
-		log.Info().Msg("Connection cancelled by context")
+		select {
+		case <-gatewayErrCh:
+			b.HandleGatewayDisconnect()
+		default:
+		}
 	}
 }
 

@@ -24,6 +24,7 @@ const (
 	FormatCSV          string = "csv"
 	FormatYaml         string = "yaml"
 	FormatDotEnvExport string = "dotenv-export"
+	FormatDotEnvEval   string = "dotenv-eval"
 )
 
 // exportCmd represents the export command
@@ -237,6 +238,8 @@ func getDefaultFilename(format string) string {
 		return "secrets.yaml"
 	case FormatDotEnvExport:
 		return ".env"
+	case FormatDotEnvEval:
+		return ".env"
 	case FormatDotenv:
 		return ".env"
 	default:
@@ -255,6 +258,8 @@ func getDefaultExtension(format string) string {
 		return ".yaml"
 	case FormatDotEnvExport:
 		return ".env"
+	case FormatDotEnvEval:
+		return ".env"
 	case FormatDotenv:
 		return ".env"
 	default:
@@ -266,7 +271,7 @@ func init() {
 	RootCmd.AddCommand(exportCmd)
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
-	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, json, csv)")
+	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, dotenv-export, dotenv-eval, json, csv, yaml)")
 	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
@@ -284,6 +289,8 @@ func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string,
 		return formatAsDotEnv(envs), nil
 	case FormatDotEnvExport:
 		return formatAsDotEnvExport(envs), nil
+	case FormatDotEnvEval:
+		return formatAsDotEnvEval(envs), nil
 	case FormatJson:
 		return formatAsJson(envs), nil
 	case FormatCSV:
@@ -291,7 +298,7 @@ func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string,
 	case FormatYaml:
 		return formatAsYaml(envs)
 	default:
-		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport})
+		return "", fmt.Errorf("invalid format type: %s. Available format types are [%s]", format, []string{FormatDotenv, FormatJson, FormatCSV, FormatYaml, FormatDotEnvExport, FormatDotEnvEval})
 	}
 }
 
@@ -323,6 +330,26 @@ func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
 		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
 	}
 	return dotenv
+}
+
+// Format environment variables for shell eval/source. Values are wrapped in
+// single quotes with POSIX escaping so the output is safe to evaluate via
+// `eval "$(infisical export --format=dotenv-eval)"` regardless of value
+// contents (newlines, single quotes, $, ", \, etc.).
+func formatAsDotEnvEval(envs []models.SingleEnvironmentVariable) string {
+	var dotenv string
+	for _, env := range envs {
+		dotenv += fmt.Sprintf("export %s=%s\n", env.Key, posixShellQuote(env.Value))
+	}
+	return dotenv
+}
+
+// posixShellQuote wraps a value in single quotes and escapes any embedded
+// single quotes using the standard `'\”` sequence. Single-quoted POSIX
+// strings preserve every other character verbatim (including newlines,
+// backslashes, $, and "), so this is sufficient for eval/source.
+func posixShellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func formatAsYaml(envs []models.SingleEnvironmentVariable) (string, error) {

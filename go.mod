@@ -24,6 +24,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/mattn/go-isatty v0.0.20
+	github.com/miekg/pkcs11 v1.1.1
 	github.com/muesli/ansi v0.0.0-20221106050444-61f0cd9a192a
 	github.com/muesli/mango-cobra v1.2.0
 	github.com/muesli/reflow v0.3.0
