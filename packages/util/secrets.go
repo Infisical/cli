@@ -30,7 +30,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
-		return nil, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
+		return nil, fmt.Errorf("unable to get client with custom headers [err=%w]", err)
 	}
 
 	httpClient.SetAuthToken(serviceToken).
@@ -38,7 +38,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 	serviceTokenDetails, err := api.CallGetServiceTokenDetailsV2(httpClient)
 	if err != nil {
-		return nil, fmt.Errorf("unable to get service token details. [err=%v]", err)
+		return nil, fmt.Errorf("unable to get service token details. [err=%w]", err)
 	}
 
 	// if multiple scopes are there then user needs to specify which environment and secret path
