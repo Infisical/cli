@@ -16,7 +16,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
-func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ string, _ int) {
+func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path, _ string, _ int) {
 	expiresAtStr := response.Metadata["expiresAt"]
 	accessKeyId := response.Metadata["accessKeyId"]
 	secretAccessKey := response.Metadata["secretAccessKey"]
@@ -78,6 +78,9 @@ func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ st
 	printAWSSessionInfo(folder, account, remaining, profileName, expiresAt)
 
 	cleanup := func() {
+		if err := api.CallPAMSessionTermination(httpClient, response.SessionId); err != nil {
+			log.Error().Err(err).Msg("Failed to end backend session")
+		}
 		removeAWSProfile(credFilePath, profileName, createdFile)
 	}
 
