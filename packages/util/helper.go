@@ -58,8 +58,7 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 	return SelectRelay(httpClient, forceRefetch)
 }
 
-// SelectRelay performs automatic relay selection without cobra.Command dependency.
-// It fetches available relays, filters for healthy ones, pings them, and returns the best one.
+// SelectRelay fetches available relays, filters for healthy ones, pings them, and returns the best one.
 func SelectRelay(httpClient *resty.Client, forceRefetch bool) (string, error) {
 	allRelays, err := api.CallGetRelays(httpClient)
 	if err != nil {
