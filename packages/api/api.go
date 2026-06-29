@@ -1271,23 +1271,6 @@ func CallPAMSessionTermination(httpClient *resty.Client, sessionId string) error
 	return nil
 }
 
-func CallPAMSessionEnd(httpClient *resty.Client, sessionId string) error {
-	response, err := httpClient.
-		R().
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/terminate", config.INFISICAL_URL, sessionId))
-
-	if err != nil {
-		return NewGenericRequestError(operationCallPAMSessionTermination, err)
-	}
-
-	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallPAMSessionTermination, response, nil)
-	}
-
-	return nil
-}
-
 func CallGetMFASessionStatus(httpClient *resty.Client, mfaSessionId string) (MFASessionStatusResponse, error) {
 	var mfaSessionStatusResponse MFASessionStatusResponse
 	response, err := httpClient.
