@@ -663,17 +663,18 @@ type GetLoginV3Response struct {
 	AccessToken string `json:"accessToken"`
 }
 
-type GetRawSecretsV3Request struct {
-	Environment            string `json:"environment"`
-	WorkspaceId            string `json:"workspaceId"`
-	SecretPath             string `json:"secretPath"`
-	IncludeImport          bool   `json:"include_imports"`
-	Recursive              bool   `json:"recursive"`
-	TagSlugs               string `json:"tagSlugs,omitempty"`
-	ExpandSecretReferences bool   `json:"expandSecretReferences,omitempty"`
+type GetSecretsV4Request struct {
+	Environment              string `json:"environment"`
+	WorkspaceId              string `json:"projectId"`
+	SecretPath               string `json:"secretPath"`
+	IncludeImport            bool   `json:"includeImports"`
+	Recursive                bool   `json:"recursive"`
+	TagSlugs                 string `json:"tagSlugs,omitempty"`
+	ExpandSecretReferences   bool   `json:"expandSecretReferences"`
+	IncludePersonalOverrides bool   `json:"includePersonalOverrides"`
 }
 
-type GetRawSecretsV3Response struct {
+type GetSecretsV4Response struct {
 	Secrets []struct {
 		ID                    string       `json:"_id"`
 		Version               int          `json:"version"`
@@ -691,7 +692,7 @@ type GetRawSecretsV3Response struct {
 	ETag    string
 }
 
-type GetRawSecretV3ByNameRequest struct {
+type GetSecretV4ByNameRequest struct {
 	SecretName  string `json:"secretName"`
 	WorkspaceID string `json:"workspaceId"`
 	Type        string `json:"type,omitempty"`
@@ -699,7 +700,7 @@ type GetRawSecretV3ByNameRequest struct {
 	SecretPath  string `json:"secretPath,omitempty"`
 }
 
-type GetRawSecretV3ByNameResponse struct {
+type GetSecretV4ByNameResponse struct {
 	Secret struct {
 		ID                    string `json:"_id"`
 		Version               int    `json:"version"`
@@ -1006,6 +1007,10 @@ type UploadPAMSessionLogsRequest struct {
 
 type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
+}
+
+type GatewayHeartbeatRequest struct {
+	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 
 type RelayLoginRequest struct {

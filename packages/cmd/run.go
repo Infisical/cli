@@ -444,13 +444,14 @@ func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir
 
 	for _, path := range request.SecretsPaths {
 		params := models.GetAllSecretsParameters{
-			Environment:            request.Environment,
-			WorkspaceId:            request.WorkspaceId,
-			TagSlugs:               request.TagSlugs,
-			SecretsPath:            path,
-			IncludeImport:          request.IncludeImport,
-			Recursive:              request.Recursive,
-			ExpandSecretReferences: request.ExpandSecretReferences,
+			Environment:              request.Environment,
+			WorkspaceId:              request.WorkspaceId,
+			TagSlugs:                 request.TagSlugs,
+			SecretsPath:              path,
+			IncludeImport:            request.IncludeImport,
+			Recursive:                request.Recursive,
+			ExpandSecretReferences:   request.ExpandSecretReferences,
+			IncludePersonalOverrides: secretOverriding,
 		}
 
 		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -465,12 +466,6 @@ func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir
 		}
 
 		allSecrets = append(allSecrets, secrets...)
-	}
-
-	if secretOverriding {
-		allSecrets = util.OverrideSecrets(allSecrets, util.SECRET_TYPE_PERSONAL)
-	} else {
-		allSecrets = util.OverrideSecrets(allSecrets, util.SECRET_TYPE_SHARED)
 	}
 
 	return allSecrets, nil

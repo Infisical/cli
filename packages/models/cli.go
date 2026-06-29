@@ -142,6 +142,7 @@ type GetAllSecretsParameters struct {
 	IncludeImport            bool
 	Recursive                bool
 	ExpandSecretReferences   bool
+	IncludePersonalOverrides bool
 }
 
 type InjectableEnvironmentResult struct {
