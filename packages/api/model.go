@@ -862,8 +862,9 @@ type PAMAccessRequest struct {
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
 
 	// Common fields
-	Duration string `json:"duration,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	Duration   string `json:"duration,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	TargetHost string `json:"targetHost,omitempty"`
 }
 
 type PAMAccessResponse struct {

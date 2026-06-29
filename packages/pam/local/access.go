@@ -17,17 +17,17 @@ import (
 
 // Account type constants (match API enum)
 const (
-	AccountTypePostgres        = "postgres"
-	AccountTypeSSH             = "ssh"
-	AccountTypeMySQL           = "mysql"
-	AccountTypeMsSQL           = "mssql"
-	AccountTypeMongoDB         = "mongodb"
-	AccountTypeOracleDB        = "oracledb"
-	AccountTypeRedis           = "redis"
-	AccountTypeKubernetes      = "kubernetes"
-	AccountTypeAwsIam          = "aws-iam"
-	AccountTypeWindows         = "windows"
-	AccountTypeActiveDirectory = "active-directory"
+	AccountTypePostgres   = "postgres"
+	AccountTypeSSH        = "ssh"
+	AccountTypeMySQL      = "mysql"
+	AccountTypeMsSQL      = "mssql"
+	AccountTypeMongoDB    = "mongodb"
+	AccountTypeOracleDB   = "oracledb"
+	AccountTypeRedis      = "redis"
+	AccountTypeKubernetes = "kubernetes"
+	AccountTypeAwsIam     = "aws-iam"
+	AccountTypeWindows    = "windows"
+	AccountTypeWindowsAd  = "windows-ad"
 )
 
 // normalizePath ensures the path has a leading slash for display purposes.
@@ -53,7 +53,7 @@ func parsePath(path string) (folder, account string) {
 
 // StartPAMAccess initiates a PAM session for the account at the given path.
 // The account type is determined from the API response and routed to the appropriate handler.
-func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
+func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, port int) {
 	// Normalize path for display (ensure leading slash)
 	displayPath := normalizePath(path)
 
@@ -65,9 +65,10 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
 	pamResponse, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
-		Path:     path,
-		Duration: durationStr,
-		Reason:   reason,
+		Path:       path,
+		Duration:   durationStr,
+		Reason:     reason,
+		TargetHost: targetHost,
 	}, true)
 	if err != nil {
 		util.HandleError(err, "Failed to create PAM session")
@@ -91,10 +92,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
 		startAWSAccess(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeWindows:
+	case AccountTypeWindows, AccountTypeWindowsAd:
 		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeActiveDirectory:
-		util.PrintErrorMessageAndExit("Active Directory access not yet supported in the new PAM model")
 	default:
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
 	}
@@ -276,10 +275,11 @@ func startRDPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 			gatewayServerCertChain: response.GatewayServerCertificateChain,
 			sessionExpiry:          time.Now().Add(duration),
 			sessionId:              response.SessionId,
-			resourceType:           response.AccountType,
-			ctx:                    ctx,
-			cancel:                 cancel,
-			shutdownCh:             make(chan struct{}),
+			// Windows AD is brokered through the Windows RDP gateway protocol
+			resourceType: AccountTypeWindows,
+			ctx:          ctx,
+			cancel:       cancel,
+			shutdownCh:   make(chan struct{}),
 		},
 	}
 
