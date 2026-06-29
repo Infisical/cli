@@ -78,7 +78,7 @@ func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, p
 	printAWSSessionInfo(folder, account, remaining, profileName, expiresAt)
 
 	cleanup := func() {
-		if err := api.CallPAMSessionTermination(httpClient, response.SessionId); err != nil {
+		if err := api.CallPAMSessionEnd(httpClient, response.SessionId); err != nil {
 			log.Error().Err(err).Msg("Failed to end backend session")
 		}
 		removeAWSProfile(credFilePath, profileName, createdFile)
