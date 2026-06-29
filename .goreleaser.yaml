@@ -297,7 +297,7 @@ winget:
 aurs:
   - name: infisical-bin
     ids:
-      - default    
+      - default
     homepage: "https://infisical.com"
     description: "The official Infisical CLI"
     maintainers:
