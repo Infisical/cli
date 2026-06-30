@@ -26,6 +26,7 @@ const (
 	AccountTypeRedis           = "redis"
 	AccountTypeKubernetes      = "kubernetes"
 	AccountTypeAwsIam          = "aws-iam"
+	AccountTypeGcpIam          = "gcp-iam"
 	AccountTypeWindows         = "windows"
 	AccountTypeActiveDirectory = "active-directory"
 )
@@ -91,6 +92,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
 		util.PrintErrorMessageAndExit("AWS IAM access not yet supported in the new PAM model")
+	case AccountTypeGcpIam:
+		startGCPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeWindows:
 		util.PrintErrorMessageAndExit("Windows/RDP access not yet supported in the new PAM model")
 	case AccountTypeActiveDirectory:

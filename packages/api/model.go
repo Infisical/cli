@@ -968,6 +968,8 @@ type PAMSessionCredentials struct {
 	Realm                 string `json:"realm,omitempty"`
 	KDCAddress            string `json:"kdcAddress,omitempty"`
 	SPN                   string `json:"spn,omitempty"`
+	Token                 string `json:"token,omitempty"`
+	ServiceAccountEmail   string `json:"serviceAccountEmail,omitempty"`
 }
 
 type MFASessionStatus string
