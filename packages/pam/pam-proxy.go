@@ -174,7 +174,15 @@ func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ru
 // the browser RDP flow (RDCleanPath over the inbound stream) when the
 // resource is Windows; ignored for other resource types.
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
-	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
+	credentialExpiryTime := pamConfig.ExpiryTime
+	if pamConfig.ResourceType == session.ResourceTypeGcpIam {
+		gcpTokenMaxLifetime := time.Now().Add(1 * time.Hour)
+		if gcpTokenMaxLifetime.Before(credentialExpiryTime) {
+			credentialExpiryTime = gcpTokenMaxLifetime
+		}
+	}
+
+	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, credentialExpiryTime)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to retrieve PAM session credentials")
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
