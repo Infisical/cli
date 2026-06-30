@@ -267,6 +267,11 @@ func (p *GCPProxy) handleRequest(_ context.Context, writer io.Writer, req *http.
 	host := req.Host
 	path := req.URL.RequestURI()
 	if req.URL.Scheme != "" && req.URL.Host != "" {
+		if !isGCPHost(req.URL.Host) {
+			l.Warn().Str("urlHost", req.URL.Host).Msg("Rejected non-GCP request URL host")
+			writeErrorResponseTo(writer, fmt.Sprintf("host %q is not a Google Cloud API endpoint", req.URL.Host))
+			return nil
+		}
 		host = req.URL.Host
 		path = req.URL.Path
 		if req.URL.RawQuery != "" {
@@ -367,6 +372,9 @@ func (p *GCPProxy) generateSignedCert(hostname string) (tls.Certificate, error) 
 }
 
 func isGCPHost(host string) bool {
+	if strings.Contains(host, "@") {
+		return false
+	}
 	h := strings.Split(host, ":")[0]
 	return h == "googleapis.com" || strings.HasSuffix(h, ".googleapis.com")
 }
