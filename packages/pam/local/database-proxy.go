@@ -28,9 +28,9 @@ const (
 func (p *DatabaseProxyServer) Start(port int) error {
 	var err error
 	if port == 0 {
-		p.server, err = net.Listen("tcp", ":0")
+		p.server, err = net.Listen("tcp", "127.0.0.1:0") // Bind to 127.0.0.1 only
 	} else {
-		p.server, err = net.Listen("tcp", fmt.Sprintf(":%d", port))
+		p.server, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	}
 
 	if err != nil {

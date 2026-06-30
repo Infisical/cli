@@ -77,3 +77,79 @@ func TestFormatAsYaml(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatAsDotEnvEval(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []models.SingleEnvironmentVariable
+		expected string
+	}{
+		{
+			name:     "Empty input",
+			input:    []models.SingleEnvironmentVariable{},
+			expected: "",
+		},
+		{
+			name: "Simple value",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "simple"},
+			},
+			expected: "export KEY1='simple'\n",
+		},
+		{
+			name: "Value containing single quote",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "it's a value"},
+			},
+			expected: "export KEY1='it'\\''s a value'\n",
+		},
+		{
+			name: "Multiline value is preserved verbatim",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "line1\nline2"},
+			},
+			expected: "export KEY1='line1\nline2'\n",
+		},
+		{
+			name: "Multiline value with skipMultilineEncoding set still emits real newlines",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "line1\nline2", SkipMultilineEncoding: true},
+			},
+			expected: "export KEY1='line1\nline2'\n",
+		},
+		{
+			name: "Shell metacharacters are preserved literally inside single quotes",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: `$(rm -rf /) "quotes" \backslash`},
+			},
+			expected: "export KEY1='$(rm -rf /) \"quotes\" \\backslash'\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, formatAsDotEnvEval(tt.input))
+		})
+	}
+}
+
+func TestPosixShellQuote(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{input: "", expected: "''"},
+		{input: "plain", expected: "'plain'"},
+		{input: "it's", expected: `'it'\''s'`},
+		{input: "'leading", expected: `''\''leading'`},
+		{input: "trailing'", expected: `'trailing'\'''`},
+		{input: "a'b'c", expected: `'a'\''b'\''c'`},
+		{input: "with\nnewline", expected: "'with\nnewline'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.expected, posixShellQuote(tt.input))
+		})
+	}
+}

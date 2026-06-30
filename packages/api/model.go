@@ -862,8 +862,9 @@ type PAMAccessRequest struct {
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
 
 	// Common fields
-	Duration string `json:"duration,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	Duration   string `json:"duration,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	TargetHost string `json:"targetHost,omitempty"`
 }
 
 type PAMAccessResponse struct {
@@ -1015,6 +1016,10 @@ type UploadPAMSessionLogsRequest struct {
 
 type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
+}
+
+type GatewayHeartbeatRequest struct {
+	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 
 type RelayLoginRequest struct {

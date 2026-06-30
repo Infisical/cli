@@ -17,18 +17,18 @@ import (
 
 // Account type constants (match API enum)
 const (
-	AccountTypePostgres        = "postgres"
-	AccountTypeSSH             = "ssh"
-	AccountTypeMySQL           = "mysql"
-	AccountTypeMsSQL           = "mssql"
-	AccountTypeMongoDB         = "mongodb"
-	AccountTypeOracleDB        = "oracledb"
-	AccountTypeRedis           = "redis"
-	AccountTypeKubernetes      = "kubernetes"
-	AccountTypeAwsIam          = "aws-iam"
-	AccountTypeGcpIam          = "gcp-iam"
-	AccountTypeWindows         = "windows"
-	AccountTypeActiveDirectory = "active-directory"
+	AccountTypePostgres   = "postgres"
+	AccountTypeSSH        = "ssh"
+	AccountTypeMySQL      = "mysql"
+	AccountTypeMsSQL      = "mssql"
+	AccountTypeMongoDB    = "mongodb"
+	AccountTypeOracleDB   = "oracledb"
+	AccountTypeRedis      = "redis"
+	AccountTypeKubernetes = "kubernetes"
+	AccountTypeAwsIam     = "aws-iam"
+	AccountTypeGcpIam     = "gcp-iam"
+	AccountTypeWindows    = "windows"
+	AccountTypeWindowsAd  = "windows-ad"
 )
 
 // normalizePath ensures the path has a leading slash for display purposes.
@@ -54,7 +54,7 @@ func parsePath(path string) (folder, account string) {
 
 // StartPAMAccess initiates a PAM session for the account at the given path.
 // The account type is determined from the API response and routed to the appropriate handler.
-func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
+func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, port int) {
 	// Normalize path for display (ensure leading slash)
 	displayPath := normalizePath(path)
 
@@ -66,9 +66,10 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
 	pamResponse, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
-		Path:     path,
-		Duration: durationStr,
-		Reason:   reason,
+		Path:       path,
+		Duration:   durationStr,
+		Reason:     reason,
+		TargetHost: targetHost,
 	}, true)
 	if err != nil {
 		util.HandleError(err, "Failed to create PAM session")
@@ -94,10 +95,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr string, port int) {
 		util.PrintErrorMessageAndExit("AWS IAM access not yet supported in the new PAM model")
 	case AccountTypeGcpIam:
 		startGCPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeWindows:
-		util.PrintErrorMessageAndExit("Windows/RDP access not yet supported in the new PAM model")
-	case AccountTypeActiveDirectory:
-		util.PrintErrorMessageAndExit("Active Directory access not yet supported in the new PAM model")
+	case AccountTypeWindows, AccountTypeWindowsAd:
+		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	default:
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
 	}
@@ -117,11 +116,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "PostgreSQL",
 		DefaultPort: 5432,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("postgres://%s@localhost:%d/%s", username, port, database)
+			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("psql -h localhost -p %d -U %s -d %s", port, username, database),
+				fmt.Sprintf("psql -h 127.0.0.1 -p %d -U %s -d %s", port, username, database),
 			}
 		},
 	},
@@ -129,7 +128,7 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "MySQL",
 		DefaultPort: 3306,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mysql://%s@localhost:%d/%s", username, port, database)
+			return fmt.Sprintf("mysql://%s@127.0.0.1:%d/%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -141,11 +140,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "SQL Server",
 		DefaultPort: 1433,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("sqlserver://%s@localhost:%d?database=%s", username, port, database)
+			return fmt.Sprintf("sqlserver://%s@127.0.0.1:%d?database=%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("sqlcmd -S localhost,%d -U %s -d %s", port, username, database),
+				fmt.Sprintf("sqlcmd -S 127.0.0.1,%d -U %s -d %s", port, username, database),
 			}
 		},
 	},
@@ -153,11 +152,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "MongoDB",
 		DefaultPort: 27017,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mongodb://localhost:%d/%s", port, database)
+			return fmt.Sprintf("mongodb://127.0.0.1:%d/%s", port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("mongosh --host localhost --port %d %s", port, database),
+				fmt.Sprintf("mongosh --host 127.0.0.1 --port %d %s", port, database),
 			}
 		},
 	},
@@ -165,11 +164,11 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "Oracle",
 		DefaultPort: 1521,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("%s@localhost:%d/%s", username, port, database)
+			return fmt.Sprintf("%s@127.0.0.1:%d/%s", username, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("sqlplus %s@localhost:%d/%s", username, port, database),
+				fmt.Sprintf("sqlplus %s@127.0.0.1:%d/%s", username, port, database),
 			}
 		},
 	},
@@ -243,6 +242,100 @@ func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	go func() {
+		sig := <-sigChan
+		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
+		proxy.gracefulShutdown()
+	}()
+
+	proxy.Run()
+}
+
+func startRDPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Failed to parse duration")
+		return
+	}
+
+	username, ok := response.Metadata["username"]
+	if !ok {
+		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start RDP proxy")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &RDPProxyServer{
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			relayHost:              response.RelayHost,
+			relayClientCert:        response.RelayClientCertificate,
+			relayClientKey:         response.RelayClientPrivateKey,
+			relayServerCertChain:   response.RelayServerCertificateChain,
+			gatewayClientCert:      response.GatewayClientCertificate,
+			gatewayClientKey:       response.GatewayClientPrivateKey,
+			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			sessionExpiry:          time.Now().Add(duration),
+			sessionId:              response.SessionId,
+			// Windows AD is brokered through the Windows RDP gateway protocol
+			resourceType: AccountTypeWindows,
+			ctx:          ctx,
+			cancel:       cancel,
+			shutdownCh:   make(chan struct{}),
+		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
+	}
+
+	if err := proxy.Start(port); err != nil {
+		util.HandleError(err, "Failed to start RDP proxy server")
+		return
+	}
+
+	rdpFilePath, err := writeRDPFile(proxy.port, response.SessionId, username)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to write .rdp file; proxy still running")
+	} else {
+		proxy.rdpFilePath = rdpFilePath
+	}
+
+	folder, account := parsePath(path)
+
+	log.Info().Msgf("RDP proxy server listening on port %d", proxy.port)
+	util.PrintfStderr("\n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("                      RDP Proxy Session Started!                      \n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("\n")
+	if folder != "" {
+		util.PrintfStderr("  Folder:    %s\n", folder)
+	}
+	util.PrintfStderr("  Account:   %s\n", account)
+	util.PrintfStderr("  Duration:  %s\n", duration.String())
+	util.PrintfStderr("\n")
+	util.PrintfStderr("----------------------------------------------------------------------\n")
+	util.PrintfStderr("                        Connection Details                            \n")
+	util.PrintfStderr("----------------------------------------------------------------------\n")
+	util.PrintfStderr("\n")
+	util.PrintfStderr("  Host:      127.0.0.1\n")
+	util.PrintfStderr("  Port:      %d\n", proxy.port)
+	util.PrintfStderr("  Username:  %s\n", username)
+	util.PrintfStderr("  Password:  (leave blank)\n")
+	if proxy.rdpFilePath != "" {
+		util.PrintfStderr("\n")
+		util.PrintfStderr("  .rdp file: %s\n", proxy.rdpFilePath)
+	}
+	util.PrintfStderr("\n")
+	util.PrintfStderr("  Press Ctrl+C to terminate the session.\n")
+	util.PrintfStderr("**********************************************************************\n")
+	util.PrintfStderr("\n")
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigChan
 		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
@@ -370,7 +463,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("                        Connection Details                            \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
-	fmt.Printf("  Host:      localhost\n")
+	fmt.Printf("  Host:      127.0.0.1\n")
 	fmt.Printf("  Port:      %d\n", port)
 	if username != "" {
 		fmt.Printf("  Username:  %s\n", username)
@@ -385,7 +478,7 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
-	fmt.Printf("  to localhost:%d. No password is needed.\n", port)
+	fmt.Printf("  to 127.0.0.1:%d. No password is needed.\n", port)
 	fmt.Printf("\n")
 	if config.UsageExamples != nil {
 		examples := config.UsageExamples(username, database, port)

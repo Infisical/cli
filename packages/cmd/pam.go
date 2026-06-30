@@ -49,6 +49,11 @@ The path format is: /folder/account-name (leading slash optional)`,
 			util.HandleError(err, "Unable to parse port flag")
 		}
 
+		targetHost, err := cmd.Flags().GetString("target")
+		if err != nil {
+			util.HandleError(err, "Unable to parse target flag")
+		}
+
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
 		if err != nil {
 			util.HandleError(err, "Unable to get logged in user details")
@@ -59,7 +64,7 @@ The path format is: /folder/account-name (leading slash optional)`,
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartPAMAccess(loggedInUserDetails.UserCredentials.JTWToken, path, reason, durationStr, port)
+		pam.StartPAMAccess(loggedInUserDetails.UserCredentials.JTWToken, path, reason, durationStr, targetHost, port)
 	},
 }
 
@@ -67,6 +72,7 @@ func init() {
 	pamAccessCmd.Flags().String("reason", "", "Reason for accessing the account (stored for audit purposes)")
 	pamAccessCmd.Flags().String("duration", "1h", "Duration for access session (e.g., '1h', '30m', '2h30m')")
 	pamAccessCmd.Flags().Int("port", 0, "Port for the local proxy server (0 for auto-assign)")
+	pamAccessCmd.Flags().String("target", "", "Target host to connect to (for accounts that allow multiple hosts, e.g. Windows AD)")
 
 	pamCmd.AddCommand(pamAccessCmd)
 	RootCmd.AddCommand(pamCmd)

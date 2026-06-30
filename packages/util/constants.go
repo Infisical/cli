@@ -69,7 +69,8 @@ const (
 	KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 	KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH   = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
-	UPDATE_CHECK_CACHE_FILE_NAME = "update-check.json"
+	UPDATE_CHECK_CACHE_FILE_NAME     = "update-check.json"
+	MIGRATION_NOTICE_CACHE_FILE_NAME = "migration-notice.json"
 )
 
 var (

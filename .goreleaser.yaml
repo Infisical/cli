@@ -117,6 +117,42 @@ builds:
     goarm:
       - "7"
 
+  # PKCS#11-enabled HSM companion. Loads the vendor's PKCS#11 driver via dlopen
+  # at runtime, so it MUST be dynamically linked (no -extldflags "-static") and
+  # built with a glibc toolchain. Shipped as a separate artifact and fetched by
+  # the launcher in packages/gateway-v2/pkcs11_launcher.go.
+  - id: linux-amd64-pkcs11
+    binary: infisical-pkcs11
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=pkcs11
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-linux-gnu-gcc
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+  - id: linux-arm64-pkcs11
+    binary: infisical-pkcs11
+    ldflags:
+      - -X github.com/Infisical/infisical-merge/packages/util.CLI_VERSION={{ .Version }}
+      - -X github.com/Infisical/infisical-merge/packages/telemetry.POSTHOG_API_KEY_FOR_CLI={{ .Env.POSTHOG_API_KEY_FOR_CLI }}
+    flags:
+      - -trimpath
+      - -tags=pkcs11
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos:
+      - linux
+    goarch:
+      - arm64
+
   # BSDs and windows/arm64 stay on CGO=0 stub; see build-rdp-bridge.yml.
   - id: all-other-builds
     env:
@@ -151,7 +187,18 @@ builds:
         goarch: arm
 
 archives:
-  - format_overrides:
+  - id: default
+    builds_info:
+      group: default
+    builds:
+      - linux-amd64-rdp
+      - linux-arm64-rdp
+      - linux-386-rdp
+      - linux-armv6-rdp
+      - linux-armv7-rdp
+      - windows-amd64-rdp
+      - all-other-builds
+    format_overrides:
       - goos: windows
         format: zip
     files:
@@ -159,6 +206,15 @@ archives:
       - LICENSE*
       - manpages/*
       - completions/*
+
+  - id: pkcs11
+    builds:
+      - linux-amd64-pkcs11
+      - linux-arm64-pkcs11
+    name_template: "infisical-pkcs11_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README*
+      - LICENSE*
 
 release:
   mode: append
