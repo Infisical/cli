@@ -90,6 +90,9 @@ type GatewayConfig struct {
 	ReconnectDelay   time.Duration
 	UseV3Connect     bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
 	Pkcs11ModulePath string
+	// RelaySelector, when non-nil, is called to re-select a relay during failover.
+	// nil means relay was explicitly selected and failover is disabled.
+	RelaySelector func(httpClient *resty.Client) (string, error)
 }
 
 type pamSessionEntry struct {
@@ -105,6 +108,7 @@ type Gateway struct {
 	httpClient *resty.Client
 	config     *GatewayConfig
 	sshClient  *ssh.Client
+	relayName  string // active relay name, protected by mu
 
 	// Certificate storage
 	certificates *api.RegisterGatewayResponse
@@ -172,6 +176,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 	return &Gateway{
 		httpClient:            httpClient,
 		config:                config,
+		relayName:             config.RelayName,
 		ctx:                   ctx,
 		cancel:                cancel,
 		pamCredentialsManager: pamCredentialsManager,
@@ -465,6 +470,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		default:
 			if err := g.connectAndServe(ctx, errCh); err != nil {
 				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				g.tryRelayFailover()
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -526,6 +532,36 @@ func (g *Gateway) Stop() {
 	}
 }
 
+func (g *Gateway) getRelayName() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.relayName
+}
+
+func (g *Gateway) setRelayName(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.relayName = name
+}
+
+func (g *Gateway) tryRelayFailover() {
+	if g.config.RelaySelector == nil {
+		return
+	}
+	oldRelay := g.getRelayName()
+	newRelay, err := g.config.RelaySelector(g.httpClient)
+	if err != nil {
+		log.Warn().Err(err).Str("currentRelay", oldRelay).Msg("Relay re-selection failed, will retry current relay")
+		return
+	}
+	if newRelay == oldRelay {
+		log.Info().Str("relay", oldRelay).Msg("Re-selection returned same relay")
+		return
+	}
+	log.Info().Str("oldRelay", oldRelay).Str("newRelay", newRelay).Msg("Failing over to new relay")
+	g.setRelayName(newRelay)
+}
+
 func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	g.heartbeatMu.Lock()
 	defer g.heartbeatMu.Unlock()
@@ -544,9 +580,15 @@ func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
 }
 
 func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
-	for attempt := 1; attempt <= 6; attempt++ {
-		// Re-register after 5 failed attempts to handle potential relay IP change
-		if attempt == 6 {
+	// With auto-failover enabled, try once then let Start() pick a new relay.
+	// With an explicit relay, retry 6 times since there's no fallback.
+	maxAttempts := 6
+	if g.config.RelaySelector != nil {
+		maxAttempts = 1
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt == maxAttempts && maxAttempts > 1 {
 			log.Info().Msg("Re-registering gateway to handle potential relay IP change...")
 			if err := g.registerGateway(); err != nil {
 				return fmt.Errorf("failed to re-register gateway: %v", err)
@@ -560,17 +602,17 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 		}
 
 		// Connect to Relay server
-		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/6)", g.config.RelayName, g.certificates.RelayHost, g.config.SSHPort, attempt)
+		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), g.certificates.RelayHost, g.config.SSHPort, attempt, maxAttempts)
 		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
 		if err != nil {
-			log.Warn().Msgf("SSH connection attempt %d/6 failed: %v", attempt, err)
-			if attempt < 6 {
+			log.Warn().Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
+			if attempt < maxAttempts {
 				retryDelay := time.Duration(attempt) * 2 * time.Second
 				log.Info().Msgf("Retrying in %v...", retryDelay)
 				time.Sleep(retryDelay)
 				continue
 			}
-			return fmt.Errorf("failed to connect to SSH server after 6 attempts: %v", err)
+			return fmt.Errorf("failed to connect to SSH server after %d attempts: %v", maxAttempts, err)
 		}
 
 		g.startHeartbeatOnce(ctx, errCh)
@@ -652,13 +694,14 @@ func (g *Gateway) registerGateway() error {
 	var certResp api.RegisterGatewayResponse
 	var err error
 
+	relayName := g.getRelayName()
 	if g.config.UseV3Connect {
 		certResp, err = api.CallConnectGateway(g.httpClient, api.ConnectGatewayRequest{
-			RelayName: g.config.RelayName,
+			RelayName: relayName,
 		})
 	} else {
 		certResp, err = api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
-			RelayName: g.config.RelayName,
+			RelayName: relayName,
 			Name:      g.config.Name,
 		})
 	}

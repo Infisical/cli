@@ -18,6 +18,7 @@ import (
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/go-resty/resty/v2"
 	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/pkg/errors"
 	"github.com/posthog/posthog-go"
@@ -406,17 +407,25 @@ var gatewayStartCmd = &cobra.Command{
 			util.HandleError(errors.New("no access token found"))
 		}
 
-		var relayName string
-		if runningWithStoredToken {
-			relayName, err = util.GetRelayName(cmd, false, accessToken.Load().(string))
-			if err != nil {
-				util.HandleError(err, "unable to get relay name")
+		relayName, err := util.GetRelayName(cmd, false, accessToken.Load().(string))
+		if err != nil {
+			util.HandleError(err, "unable to get relay name")
+		}
+
+		// Determine if relay was explicitly selected (flag or env var).
+		// If not, enable automatic failover to a different relay on connection failure.
+		explicitRelay, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
+		if explicitRelay == "" {
+			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+		}
+
+		var relaySelector func(httpClient *resty.Client) (string, error)
+		if explicitRelay == "" {
+			relaySelector = func(httpClient *resty.Client) (string, error) {
+				return util.SelectRelay(httpClient, true)
 			}
 		} else {
-			relayName, err = util.GetRelayName(cmd, false, accessToken.Load().(string))
-			if err != nil {
-				util.HandleError(err, "unable to get relay name")
-			}
+			log.Info().Msg("Relay explicitly selected; automatic failover is disabled")
 		}
 
 		pkcs11ModulePath, _ := util.GetCmdFlagOrEnv(cmd, "pkcs11-module", []string{gatewayv2.INFISICAL_PKCS11_MODULE_ENV_NAME})
@@ -427,6 +436,7 @@ var gatewayStartCmd = &cobra.Command{
 			ReconnectDelay:   10 * time.Second,
 			UseV3Connect:     runningWithStoredToken,
 			Pkcs11ModulePath: pkcs11ModulePath,
+			RelaySelector:    relaySelector,
 		})
 
 		if err != nil {
