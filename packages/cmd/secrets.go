@@ -84,13 +84,14 @@ var secretsCmd = &cobra.Command{
 		}
 
 		request := models.GetAllSecretsParameters{
-			Environment:            environmentName,
-			WorkspaceId:            projectId,
-			TagSlugs:               tagSlugs,
-			SecretsPath:            secretsPath,
-			IncludeImport:          includeImports,
-			Recursive:              recursive,
-			ExpandSecretReferences: shouldExpandSecrets,
+			Environment:              environmentName,
+			WorkspaceId:              projectId,
+			TagSlugs:                 tagSlugs,
+			SecretsPath:              secretsPath,
+			IncludeImport:            includeImports,
+			Recursive:                recursive,
+			ExpandSecretReferences:   shouldExpandSecrets,
+			IncludePersonalOverrides: secretOverriding,
 		}
 
 		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -102,12 +103,6 @@ var secretsCmd = &cobra.Command{
 		secrets, err := util.GetAllEnvironmentVariables(request, "")
 		if err != nil {
 			util.HandleError(err)
-		}
-
-		if secretOverriding {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-		} else {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 		}
 
 		// Sort the secrets by key so we can create a consistent output
@@ -505,13 +500,14 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 	}
 
 	request := models.GetAllSecretsParameters{
-		Environment:            environmentName,
-		WorkspaceId:            projectId,
-		TagSlugs:               tagSlugs,
-		SecretsPath:            secretsPath,
-		IncludeImport:          includeImports,
-		Recursive:              recursive,
-		ExpandSecretReferences: shouldExpand,
+		Environment:              environmentName,
+		WorkspaceId:              projectId,
+		TagSlugs:                 tagSlugs,
+		SecretsPath:              secretsPath,
+		IncludeImport:            includeImports,
+		Recursive:                recursive,
+		ExpandSecretReferences:   shouldExpand,
+		IncludePersonalOverrides: secretOverriding,
 	}
 
 	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -523,12 +519,6 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 	secrets, err := util.GetAllEnvironmentVariables(request, "")
 	if err != nil {
 		util.HandleError(err, "To fetch all secrets")
-	}
-
-	if secretOverriding {
-		secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-	} else {
-		secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 	}
 
 	requestedSecrets := []models.SingleEnvironmentVariable{}
