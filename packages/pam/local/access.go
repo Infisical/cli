@@ -69,14 +69,23 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
+	// The API parses durations with npm ms, which can't read Go compound formats like "2h30m",
+	// so send plain milliseconds and keep the Go format for local parsing/display
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+		return
+	}
+	apiDurationStr := fmt.Sprintf("%dms", duration.Milliseconds())
+
 	pamResponse, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
 		Path:       path,
-		Duration:   durationStr,
+		Duration:   apiDurationStr,
 		Reason:     reason,
 		TargetHost: targetHost,
 	}, true)
 	if err != nil {
-		if handleApprovalRequired(httpClient, err, path, reason, durationStr) {
+		if handleApprovalRequired(httpClient, err, path, reason, apiDurationStr) {
 			return
 		}
 		util.HandleError(err, "Failed to create PAM session")
@@ -118,11 +127,12 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 
 	expired := strings.Contains(strings.ToLower(apiErr.ErrorMessage), "expired")
 
+	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		if expired {
-			log.Error().Msg("Your access grant for this account has expired. Request access again from the Infisical dashboard (PAM > My Access).")
+			util.PrintErrorMessageAndExit("Your access grant for this account has expired. Request access again from the Infisical dashboard (PAM > My Access).")
 		} else {
-			log.Error().Msg("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
+			util.PrintErrorMessageAndExit("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
 		}
 		return true
 	}
@@ -141,7 +151,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 
 	if _, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
-		Note:     reason,
+		Reason:   reason,
 		Duration: durationStr,
 	}); reqErr != nil {
 		util.HandleError(reqErr, "Failed to submit access request")

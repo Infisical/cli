@@ -902,7 +902,7 @@ type PAMAccessApprovalRequestResponse struct {
 
 type PAMCreateAccessRequestBody struct {
 	Path     string `json:"path"`
-	Note     string `json:"note,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 	Duration string `json:"duration"`
 }
 
