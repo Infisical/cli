@@ -2,6 +2,7 @@ package pam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +13,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 )
 
@@ -29,6 +32,8 @@ const (
 	AccountTypeWindows    = "windows"
 	AccountTypeWindowsAd  = "windows-ad"
 )
+
+const approvalRequiredErrorName = "PAM_APPROVAL_REQUIRED"
 
 // normalizePath ensures the path has a leading slash for display purposes.
 // Both "/folder/account" and "folder/account" are accepted as input.
@@ -71,6 +76,9 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 		TargetHost: targetHost,
 	}, true)
 	if err != nil {
+		if handleApprovalRequired(httpClient, err, path, reason, durationStr) {
+			return
+		}
 		util.HandleError(err, "Failed to create PAM session")
 		return
 	}
@@ -97,6 +105,51 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	default:
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
 	}
+}
+
+// handleApprovalRequired intercepts the PAM_APPROVAL_REQUIRED gate. In an interactive terminal it
+// offers to submit an access request for the account; otherwise it prints guidance. Returns true when
+// the error was an approval-required error (handled here), false to let normal error handling proceed.
+func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.Name != approvalRequiredErrorName {
+		return false
+	}
+
+	expired := strings.Contains(strings.ToLower(apiErr.ErrorMessage), "expired")
+
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		if expired {
+			log.Error().Msg("Your access grant for this account has expired. Request access again from the Infisical dashboard (PAM > My Access).")
+		} else {
+			log.Error().Msg("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
+		}
+		return true
+	}
+
+	if expired {
+		log.Info().Msg("Your previous access grant has expired.")
+	} else {
+		log.Info().Msg("This account requires approval before you can launch a session.")
+	}
+
+	prompt := promptui.Prompt{Label: "Request access now?", IsConfirm: true}
+	if _, promptErr := prompt.Run(); promptErr != nil {
+		log.Info().Msg("No access request created.")
+		return true
+	}
+
+	if _, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
+		Path:     path,
+		Note:     reason,
+		Duration: durationStr,
+	}); reqErr != nil {
+		util.HandleError(reqErr, "Failed to submit access request")
+		return true
+	}
+
+	log.Info().Msg("Access request submitted. You'll be able to launch a session once it's approved.")
+	return true
 }
 
 // DatabaseDisplayConfig holds the display configuration for a database type

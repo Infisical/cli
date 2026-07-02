@@ -900,6 +900,20 @@ type PAMAccessApprovalRequestResponse struct {
 	} `json:"request"`
 }
 
+type PAMCreateAccessRequestBody struct {
+	Path     string `json:"path"`
+	Note     string `json:"note,omitempty"`
+	Duration string `json:"duration"`
+}
+
+type PAMCreateAccessRequestResponse struct {
+	Request struct {
+		ID        string `json:"id"`
+		ProjectId string `json:"projectId"`
+		OrgId     string `json:"organizationId"`
+	} `json:"request"`
+}
+
 type PAMPolicyRuleConfig struct {
 	Patterns []string `json:"patterns"`
 }

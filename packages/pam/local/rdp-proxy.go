@@ -7,15 +7,11 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,124 +21,6 @@ type RDPProxyServer struct {
 	server      net.Listener
 	port        int
 	rdpFilePath string
-}
-
-// CLI entry point for `infisical pam rdp access`.
-func StartRDPLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string, port int, noLaunch bool) {
-	log.Info().Msgf("Starting RDP proxy for account: %s", accessParams.GetDisplayName())
-	log.Info().Msgf("Session duration: %s", durationStr)
-
-	httpClient := resty.New()
-	httpClient.SetAuthToken(accessToken)
-	httpClient.SetHeader("User-Agent", "infisical-cli")
-
-	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
-
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
-	if err != nil {
-		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
-			return
-		}
-		util.HandleError(err, "Failed to access PAM account")
-		return
-	}
-
-	// Verify this is a Windows resource
-	if pamResponse.ResourceType != session.ResourceTypeWindows {
-		util.HandleError(fmt.Errorf("account is not a Windows resource, got: %s", pamResponse.ResourceType), "Invalid resource type")
-		return
-	}
-
-	log.Info().Msgf("RDP session created with ID: %s", pamResponse.SessionId)
-
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		util.HandleError(err, "Failed to parse duration")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	proxy := &RDPProxyServer{
-		BaseProxyServer: BaseProxyServer{
-			httpClient:             httpClient,
-			relayHost:              pamResponse.RelayHost,
-			relayClientCert:        pamResponse.RelayClientCertificate,
-			relayClientKey:         pamResponse.RelayClientPrivateKey,
-			relayServerCertChain:   pamResponse.RelayServerCertificateChain,
-			gatewayClientCert:      pamResponse.GatewayClientCertificate,
-			gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
-			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
-			sessionExpiry:          time.Now().Add(duration),
-			sessionId:              pamResponse.SessionId,
-			resourceType:           pamResponse.ResourceType,
-			ctx:                    ctx,
-			cancel:                 cancel,
-			shutdownCh:             make(chan struct{}),
-		},
-	}
-
-	if err := proxy.ValidateResourceTypeSupported(); err != nil {
-		util.HandleError(err, "Gateway version outdated")
-		return
-	}
-
-	if err := proxy.Start(port); err != nil {
-		util.HandleError(err, "Failed to start proxy server")
-		return
-	}
-
-	username, ok := pamResponse.Metadata["username"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
-		return
-	}
-
-	rdpFilePath, err := writeRDPFile(proxy.port, pamResponse.SessionId, username)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to write .rdp file; proxy still running")
-	} else {
-		proxy.rdpFilePath = rdpFilePath
-	}
-
-	log.Info().Msgf("RDP proxy server listening on port %d", proxy.port)
-	util.PrintfStderr("\n")
-	util.PrintfStderr("**********************************************************************\n")
-	util.PrintfStderr("                      RDP Proxy Session Started!                      \n")
-	util.PrintfStderr("----------------------------------------------------------------------\n")
-	util.PrintfStderr("Resource: %s\n", accessParams.ResourceName)
-	util.PrintfStderr("Account:  %s\n", accessParams.AccountName)
-	util.PrintfStderr("\n")
-	util.PrintfStderr("Connect your RDP client to:\n")
-	util.PrintfStderr("  127.0.0.1:%d\n", proxy.port)
-	util.PrintfStderr("With credentials:\n")
-	util.PrintfStderr("  username: %s\n", username)
-	util.PrintfStderr("  password: (leave blank)\n")
-	if proxy.rdpFilePath != "" {
-		util.PrintfStderr("\n")
-		util.PrintfStderr("Generated .rdp file:\n")
-		util.PrintfStderr("  %s\n", proxy.rdpFilePath)
-	}
-	util.PrintfStderr("\n")
-	util.PrintfStderr("Press Ctrl+C to terminate the session.\n")
-	util.PrintfStderr("**********************************************************************\n")
-	util.PrintfStderr("\n")
-
-	if !noLaunch && proxy.rdpFilePath != "" {
-		if err := launchRDPClient(proxy.rdpFilePath); err != nil {
-			log.Warn().Err(err).Msg("Failed to auto-launch RDP client; connect manually using the details above")
-		}
-	}
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigChan
-		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
-		proxy.gracefulShutdown()
-	}()
-
-	proxy.Run()
 }
 
 // Start binds the loopback listener. Port 0 picks a random free port.

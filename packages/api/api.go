@@ -54,6 +54,7 @@ const (
 	operationCallAwsAuthLoginGateway               = "CallAwsAuthLoginGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
+	operationCallPAMCreateAccessRequest            = "CallPAMCreateAccessRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
@@ -1139,6 +1140,26 @@ func CallPAMAccessApprovalRequest(httpClient *resty.Client, request PAMAccessApp
 	}
 
 	return pamAccessApprovalRequestResponse, nil
+}
+
+func CallPAMCreateAccessRequest(httpClient *resty.Client, request PAMCreateAccessRequestBody) (PAMCreateAccessRequestResponse, error) {
+	var pamCreateAccessRequestResponse PAMCreateAccessRequestResponse
+	response, err := httpClient.
+		R().
+		SetResult(&pamCreateAccessRequestResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/pam/access-requests", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMCreateAccessRequestResponse{}, NewGenericRequestError(operationCallPAMCreateAccessRequest, err)
+	}
+
+	if response.IsError() {
+		return PAMCreateAccessRequestResponse{}, NewAPIErrorWithResponse(operationCallPAMCreateAccessRequest, response, nil)
+	}
+
+	return pamCreateAccessRequestResponse, nil
 }
 
 func CallPAMSessionCredentials(httpClient *resty.Client, sessionId string) (PAMSessionCredentialsResponse, error) {
