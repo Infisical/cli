@@ -34,6 +34,7 @@ const (
 )
 
 const approvalRequiredErrorName = "PAM_APPROVAL_REQUIRED"
+const grantExpiredErrorName = "PAM_GRANT_EXPIRED"
 
 // normalizePath ensures the path has a leading slash for display purposes.
 // Both "/folder/account" and "folder/account" are accepted as input.
@@ -121,11 +122,11 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 // the error was an approval-required error (handled here), false to let normal error handling proceed.
 func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) bool {
 	var apiErr *api.APIError
-	if !errors.As(err, &apiErr) || apiErr.Name != approvalRequiredErrorName {
+	if !errors.As(err, &apiErr) || (apiErr.Name != approvalRequiredErrorName && apiErr.Name != grantExpiredErrorName) {
 		return false
 	}
 
-	expired := strings.Contains(strings.ToLower(apiErr.ErrorMessage), "expired")
+	expired := apiErr.Name == grantExpiredErrorName
 
 	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
@@ -145,6 +146,11 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 
 	prompt := promptui.Prompt{Label: "Request access now?", IsConfirm: true}
 	if _, promptErr := prompt.Run(); promptErr != nil {
+		// Ctrl+C (interrupt) must exit non-zero so scripts don't read it as success; declining with 'n'
+		// (ErrAbort) is a graceful choice and exits 0.
+		if errors.Is(promptErr, promptui.ErrInterrupt) {
+			util.PrintErrorMessageAndExit("Access request cancelled")
+		}
 		log.Info().Msg("No access request created.")
 		return true
 	}
