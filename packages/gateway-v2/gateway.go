@@ -41,6 +41,7 @@ const (
 	ForwardModePing            ForwardMode = "PING"
 	ForwardModeHealth          ForwardMode = "HEALTH"
 	ForwardModePkcs11          ForwardMode = "PKCS11"
+	ForwardModeADCS            ForwardMode = "ADCS"
 )
 
 type ActorType string
@@ -994,6 +995,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("PKCS#11 handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeADCS {
+		log.Info().Msg("Starting ADCS/MS-WCCE handler")
+		if err := serveAdcsOverTLS(g.ctx, tlsConn, reader); err != nil {
+			log.Error().Err(err).Msg("ADCS handler ended with error")
+		} else {
+			log.Info().Msg("ADCS handler completed")
+		}
+		return
 	}
 }
 
@@ -1050,6 +1059,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pkcs11":
 		config.Mode = ForwardModePkcs11
+		return config, nil
+
+	case "infisical-adcs":
+		config.Mode = ForwardModeADCS
 		return config, nil
 
 	default:
@@ -1225,6 +1238,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-pam-rdp-browser",
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
+		"infisical-adcs",
 	}
 	if pkcs11Loaded {
 		base = append(base, "infisical-pkcs11")
