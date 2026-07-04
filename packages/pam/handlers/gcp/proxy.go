@@ -380,6 +380,7 @@ func isGCPHost(host string) bool {
 }
 
 func writeErrorResponseTo(w io.Writer, message string) {
-	resp := fmt.Sprintf("HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\n\r\n{\"message\": \"gateway: %s\"}", message)
+	body := fmt.Sprintf("{\"message\": \"gateway: %s\"}", message)
+	resp := fmt.Sprintf("HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	w.Write([]byte(resp))
 }

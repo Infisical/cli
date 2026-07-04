@@ -94,12 +94,13 @@ var exportCmd = &cobra.Command{
 		}
 
 		request := models.GetAllSecretsParameters{
-			Environment:            environmentName,
-			TagSlugs:               tagSlugs,
-			WorkspaceId:            projectId,
-			SecretsPath:            secretsPath,
-			IncludeImport:          includeImports,
-			ExpandSecretReferences: shouldExpandSecrets,
+			Environment:              environmentName,
+			TagSlugs:                 tagSlugs,
+			WorkspaceId:              projectId,
+			SecretsPath:              secretsPath,
+			IncludeImport:            includeImports,
+			ExpandSecretReferences:   shouldExpandSecrets,
+			IncludePersonalOverrides: secretOverriding,
 		}
 
 		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -135,12 +136,6 @@ var exportCmd = &cobra.Command{
 		secrets, err := util.GetAllEnvironmentVariables(request, "")
 		if err != nil {
 			util.HandleError(err, "Unable to fetch secrets")
-		}
-
-		if secretOverriding {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-		} else {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 		}
 
 		var output string
