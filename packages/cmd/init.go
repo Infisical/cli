@@ -77,7 +77,7 @@ infisical init --project-id <project-id>`,
 			if userCreds.OrganizationID != "" {
 				rejectTransientOrgOverride(userCreds)
 			}
-			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
+			if err := writeWorkspaceFile(models.Workspace{ID: projectID}, ""); err != nil {
 				util.HandleError(err)
 			}
 			hintDirectoryProfileBinding(userCreds)
@@ -167,7 +167,7 @@ infisical init --project-id <project-id>`,
 			util.HandleError(err)
 		}
 
-		err = writeWorkspaceFile(filteredWorkspaces[index])
+		err = writeWorkspaceFile(filteredWorkspaces[index], selectedOrgID)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -335,11 +335,12 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	return subItems[subIndex].ID, &selectedSubOrgName, nil
 }
 
-func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
+func writeWorkspaceFile(selectedWorkspace models.Workspace, organizationId string) error {
 	workspaceFileToSave := models.WorkspaceConfigFileYaml{
 		Version: util.INFISICAL_WORKSPACE_CONFIG_YAML_VERSION,
 		SecretsManagement: models.SecretsManagementConfigSection{
-			ProjectID: selectedWorkspace.ID,
+			ProjectID:      selectedWorkspace.ID,
+			OrganizationID: organizationId,
 		},
 	}
 

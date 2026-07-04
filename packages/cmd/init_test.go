@@ -23,7 +23,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 	t.Run("fresh directory gets only a yaml config", func(t *testing.T) {
 		dir := isolateWorkspaceDir(t)
 
-		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}); err != nil {
+		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}, ""); err != nil {
 			t.Fatalf("writeWorkspaceFile: %v", err)
 		}
 
@@ -76,7 +76,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 			t.Fatalf("write json: %v", err)
 		}
 
-		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}); err != nil {
+		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}, ""); err != nil {
 			t.Fatalf("writeWorkspaceFile: %v", err)
 		}
 

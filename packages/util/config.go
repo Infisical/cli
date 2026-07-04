@@ -189,6 +189,7 @@ func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.Wo
 	workspaceConfigYaml.Version = INFISICAL_WORKSPACE_CONFIG_YAML_VERSION
 	workspaceConfigYaml.General.Domain = workspaceConfig.Domain
 	workspaceConfigYaml.SecretsManagement.ProjectID = workspaceConfig.WorkspaceId
+	workspaceConfigYaml.SecretsManagement.OrganizationID = workspaceConfig.OrganizationId
 	workspaceConfigYaml.SecretsManagement.DefaultEnvironment = workspaceConfig.DefaultEnvironment
 	workspaceConfigYaml.SecretsManagement.DefaultSecretPath = workspaceConfig.DefaultSecretPath
 	workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment = workspaceConfig.GitBranchToEnvironmentMapping
@@ -198,6 +199,7 @@ func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.Wo
 func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {
 	return models.WorkspaceConfigFile{
 		WorkspaceId:                   workspaceConfigYaml.SecretsManagement.ProjectID,
+		OrganizationId:                workspaceConfigYaml.SecretsManagement.OrganizationID,
 		DefaultEnvironment:            workspaceConfigYaml.SecretsManagement.DefaultEnvironment,
 		GitBranchToEnvironmentMapping: workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment,
 		DefaultSecretPath:             workspaceConfigYaml.SecretsManagement.DefaultSecretPath,
