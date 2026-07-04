@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/gateway-v2/adcs"
@@ -93,7 +94,7 @@ func serveAdcsOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader)
 	return nil
 }
 
-func serveAdcsMux() *http.ServeMux {
+var serveAdcsMux = sync.OnceValue(func() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/test", wrapAdcs(handleAdcsTest, true))
 	// discover-ca reads the CA name over winreg (SMB) and never touches WCCE, so it must
@@ -102,7 +103,7 @@ func serveAdcsMux() *http.ServeMux {
 	mux.HandleFunc("/v1/templates", wrapAdcs(handleAdcsTemplates, true))
 	mux.HandleFunc("/v1/enroll", wrapAdcs(handleAdcsEnroll, true))
 	return mux
-}
+})
 
 type adcsHandler func(ctx context.Context, client *adcs.Client, env *adcsRequestEnvelope) (any, error)
 
@@ -148,7 +149,7 @@ func wrapAdcs(fn adcsHandler, needsWcce bool) http.HandlerFunc {
 			dialed, err := adcs.Dial(ctx, adcs.Credentials{Host: env.Host, Username: env.Username, Password: env.Password})
 			if err != nil {
 				log.Warn().Err(err).Msg("adcs: dial failed")
-				writeAdcsError(w, http.StatusBadGateway, err.Error())
+				writeAdcsError(w, http.StatusBadGateway, "Failed to connect to the ADCS host")
 				return
 			}
 			defer dialed.Close(ctx)

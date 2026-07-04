@@ -241,6 +241,10 @@ func (c *Client) Templates(ctx context.Context, caName string) ([]Template, erro
 // Enroll submits a DER-encoded PKCS#10 CSR against the named template and
 // returns the issued certificate and CA chain.
 func (c *Client) Enroll(ctx context.Context, caName, template string, csrDER []byte) (*EnrollResult, error) {
+	if strings.ContainsAny(template, "\r\n") {
+		return nil, fmt.Errorf("template name contains invalid characters")
+	}
+
 	resp, err := c.d2.Request2(ctx, &icertrequestd2.Request2Request{
 		This:       c.this,
 		Authority:  caName,

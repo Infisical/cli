@@ -215,6 +215,14 @@ func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 	return zerolog.ConsoleWriter{
 		Out:        w,
 		TimeFormat: time.RFC3339,
+		// zerolog >= 1.35 bolds info/warn/error messages by default. Keep the message
+		// rendered as-is so CLI output stays consistent with prior releases.
+		FormatMessage: func(i interface{}) string {
+			if i == nil {
+				return ""
+			}
+			return fmt.Sprintf("%s", i)
+		},
 		FormatLevel: func(i interface{}) string {
 			level := fmt.Sprintf("%s", i)
 			color := levelColors[level]
