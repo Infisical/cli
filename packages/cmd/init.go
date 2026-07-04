@@ -135,7 +135,7 @@ var initCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
-		err = writeWorkspaceFile(filteredWorkspaces[index])
+		err = writeWorkspaceFile(filteredWorkspaces[index], selectedOrgID)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -211,9 +211,10 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	return subItems[subIndex].ID, &selectedSubOrgName, nil
 }
 
-func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
+func writeWorkspaceFile(selectedWorkspace models.Workspace, organizationId string) error {
 	workspaceFileToSave := models.WorkspaceConfigFile{
-		WorkspaceId: selectedWorkspace.ID,
+		WorkspaceId:    selectedWorkspace.ID,
+		OrganizationId: organizationId,
 	}
 
 	marshalledWorkspaceFile, err := json.MarshalIndent(workspaceFileToSave, "", "    ")
