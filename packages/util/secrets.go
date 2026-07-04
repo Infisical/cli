@@ -15,6 +15,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/crypto"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/go-resty/resty/v2"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 	"gopkg.in/yaml.v3"
@@ -280,6 +281,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	var secretsToReturn []models.SingleEnvironmentVariable
 	// var serviceTokenDetails api.GetServiceTokenDetailsResponse
 	var errorToReturn error
+	var workspaceConfigFile models.WorkspaceConfigFile
 
 	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
 		if params.WorkspaceId == "" {
@@ -313,27 +315,40 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		}
 
 		if params.WorkspaceId == "" {
-			var infisicalDotJson models.WorkspaceConfigFile
-
 			if projectConfigFilePath == "" {
 				projectConfig, err := GetWorkSpaceFromFile()
 				if err != nil {
 					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 				}
 
-				infisicalDotJson = projectConfig
+				workspaceConfigFile = projectConfig
 			} else {
 				projectConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
 				if err != nil {
 					return nil, err
 				}
 
-				infisicalDotJson = projectConfig
+				workspaceConfigFile = projectConfig
 			}
-			params.WorkspaceId = infisicalDotJson.WorkspaceId
+			params.WorkspaceId = workspaceConfigFile.WorkspaceId
+		} else if projectConfigFilePath == "" {
+			projectConfig, err := GetWorkSpaceFromFile()
+			if err == nil {
+				workspaceConfigFile = projectConfig
+			}
+		} else {
+			projectConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
+			if err == nil {
+				workspaceConfigFile = projectConfig
+			}
 		}
 
-		res, err := GetPlainTextSecretsV4(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
+		resolvedToken, err := resolveOrgScopedToken(loggedInUserDetails, params.OrganizationId, workspaceConfigFile.OrganizationId)
+		if err != nil {
+			return nil, err
+		}
+
+		res, err := GetPlainTextSecretsV4(resolvedToken, params.WorkspaceId,
 			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true, params.IncludePersonalOverrides)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
@@ -379,6 +394,55 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	}
 
 	return secretsToReturn, errorToReturn
+}
+
+type tokenOrganizationClaims struct {
+	OrganizationId string `json:"organizationId"`
+	jwt.RegisteredClaims
+}
+
+func getTokenOrganizationId(token string) (string, error) {
+	var claims tokenOrganizationClaims
+	parser := jwt.NewParser()
+	if _, _, err := parser.ParseUnverified(token, &claims); err != nil {
+		return "", err
+	}
+
+	return claims.OrganizationId, nil
+}
+
+func resolveOrgScopedToken(loggedInUserDetails LoggedInUserDetails, flagOrganizationId string, configOrganizationId string) (string, error) {
+	targetOrgId := flagOrganizationId
+	if targetOrgId == "" {
+		targetOrgId = os.Getenv("INFISICAL_ORGANIZATION_ID")
+	}
+	if targetOrgId == "" {
+		targetOrgId = configOrganizationId
+	}
+	if targetOrgId == "" {
+		return loggedInUserDetails.UserCredentials.JTWToken, nil
+	}
+
+	currentTokenOrgId, err := getTokenOrganizationId(loggedInUserDetails.UserCredentials.JTWToken)
+	if err != nil {
+		return "", fmt.Errorf("unable to determine the organization scope for the current login token [err=%v]", err)
+	}
+	if currentTokenOrgId == targetOrgId {
+		return loggedInUserDetails.UserCredentials.JTWToken, nil
+	}
+
+	httpClient, err := GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return "", fmt.Errorf("unable to get resty client with custom headers [err=%v]", err)
+	}
+	httpClient.SetAuthToken(loggedInUserDetails.UserCredentials.JTWToken)
+
+	selectOrganizationResponse, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: targetOrgId})
+	if err != nil {
+		return "", fmt.Errorf("unable to scope the current session to organization %s; ensure your account can access that organization or log in again [err=%v]", targetOrgId, err)
+	}
+
+	return selectOrganizationResponse.Token, nil
 }
 
 func GetBackupEncryptionKey() ([]byte, error) {
