@@ -197,6 +197,20 @@ func GetWorkspaceConfigByPath(path string) (workspaceConfig models.WorkspaceConf
 	return workspaceConfigFile, nil
 }
 
+func WriteWorkspaceConfigToPath(config models.WorkspaceConfigFile, path string) error {
+	marshalledWorkspaceFile, err := json.MarshalIndent(config, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	err = WriteToFile(path, marshalledWorkspaceFile, 0600)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Get the infisical config file and if it doesn't exist, return empty config model, otherwise raise error
 func GetConfigFile() (models.ConfigFile, error) {
 	fullConfigFilePath, _, err := GetFullConfigFilePath()

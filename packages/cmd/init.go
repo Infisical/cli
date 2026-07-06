@@ -4,7 +4,6 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -217,12 +216,7 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace, organizationId strin
 		OrganizationId: organizationId,
 	}
 
-	marshalledWorkspaceFile, err := json.MarshalIndent(workspaceFileToSave, "", "    ")
-	if err != nil {
-		return err
-	}
-
-	err = util.WriteToFile(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
+	err := util.WriteWorkspaceConfigToPath(workspaceFileToSave, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	if err != nil {
 		return err
 	}
