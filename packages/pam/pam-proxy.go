@@ -58,7 +58,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeRedis,
 		session.ResourceTypeMongodb,
 		session.ResourceTypeOracledb,
-		session.ResourceTypeGcpIam,
+		session.ResourceTypeGcpServiceAccount,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -175,7 +175,7 @@ func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ru
 // resource is Windows; ignored for other resource types.
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
 	credentialExpiryTime := pamConfig.ExpiryTime
-	if pamConfig.ResourceType == session.ResourceTypeGcpIam {
+	if pamConfig.ResourceType == session.ResourceTypeGcpServiceAccount {
 		gcpTokenMaxLifetime := time.Now().Add(1 * time.Hour)
 		if gcpTokenMaxLifetime.Before(credentialExpiryTime) {
 			credentialExpiryTime = gcpTokenMaxLifetime
@@ -502,7 +502,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			return proxy.HandleConnectionRDCleanPath(ctx, handlerConn)
 		}
 		return proxy.HandleConnection(ctx, handlerConn)
-	case session.ResourceTypeGcpIam:
+	case session.ResourceTypeGcpServiceAccount:
 		gcpConfig := gcp.GCPProxyConfig{
 			Token:         credentials.Token,
 			SessionID:     pamConfig.SessionId,
