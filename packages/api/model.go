@@ -853,24 +853,32 @@ type RegisterGatewayResponse struct {
 }
 
 type PAMAccessRequest struct {
-	Duration     string `json:"duration,omitempty"`
+	// New path-based fields (PAM revamp)
+	Path string `json:"path,omitempty"`
+
+	// Legacy resource-based fields (kept so we can temporarily keep the other proxy files for furtherr revamp)
 	ResourceName string `json:"resourceName,omitempty"`
 	AccountName  string `json:"accountName,omitempty"`
 	ProjectId    string `json:"projectId,omitempty"`
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+
+	// Common fields
+	Duration   string `json:"duration,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	TargetHost string `json:"targetHost,omitempty"`
 }
 
 type PAMAccessResponse struct {
 	SessionId                     string            `json:"sessionId"`
+	AccountType                   string            `json:"accountType"`
 	ResourceType                  string            `json:"resourceType"`
+	RelayHost                     string            `json:"relayHost"`
 	RelayClientCertificate        string            `json:"relayClientCertificate"`
 	RelayClientPrivateKey         string            `json:"relayClientPrivateKey"`
 	RelayServerCertificateChain   string            `json:"relayServerCertificateChain"`
 	GatewayClientCertificate      string            `json:"gatewayClientCertificate"`
 	GatewayClientPrivateKey       string            `json:"gatewayClientPrivateKey"`
 	GatewayServerCertificateChain string            `json:"gatewayServerCertificateChain"`
-	RelayHost                     string            `json:"relayHost"`
 	Metadata                      map[string]string `json:"metadata,omitempty"`
 }
 
