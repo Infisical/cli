@@ -111,16 +111,26 @@ func TestIsOrganizationScopeError(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "403 api error",
+			name: "403 org scoping error",
 			err: &api.APIError{
-				StatusCode: 403,
+				StatusCode:   403,
+				ErrorMessage: "This project does not belong to your selected organization",
 			},
 			want: true,
 		},
 		{
+			name: "403 generic permission error",
+			err: &api.APIError{
+				StatusCode:   403,
+				ErrorMessage: "You don't have access to this project",
+			},
+			want: false,
+		},
+		{
 			name: "404 api error",
 			err: &api.APIError{
-				StatusCode: 404,
+				StatusCode:   404,
+				ErrorMessage: "This project does not belong to your selected organization",
 			},
 			want: false,
 		},
