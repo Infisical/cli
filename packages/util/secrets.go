@@ -458,7 +458,13 @@ func resolveOrgScopedToken(loggedInUserDetails LoggedInUserDetails, flagOrganiza
 
 func isOrganizationScopeError(err error) bool {
 	var apiErr *api.APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == 403
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 403 {
+		return false
+	}
+
+	// Only the org-scoping rejection should trigger discovery; a generic
+	// permission 403 must not enumerate every organization.
+	return strings.Contains(apiErr.ErrorMessage, "does not belong to your selected organization")
 }
 
 func fetchSecretsWithOrgDiscovery(loggedInUserDetails LoggedInUserDetails, resolvedToken string, params models.GetAllSecretsParameters, workspaceConfigFile models.WorkspaceConfigFile, workspaceConfigFilePath string) (models.PlaintextSecretResult, error) {
