@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf16"
@@ -29,7 +30,9 @@ import (
 	iactivation "github.com/oiweiwei/go-msrpc/msrpc/dcom/iactivation/v0"
 	iobjectexporter "github.com/oiweiwei/go-msrpc/msrpc/dcom/iobjectexporter/v0"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
+	"github.com/oiweiwei/go-msrpc/msrpc/dtyp/filetime"
 
+	icertadmind "github.com/oiweiwei/go-msrpc/msrpc/dcom/csra/icertadmind/v0"
 	"github.com/oiweiwei/go-msrpc/msrpc/dcom/wcce"
 	icertrequestd2 "github.com/oiweiwei/go-msrpc/msrpc/dcom/wcce/icertrequestd2/v0"
 	winreg "github.com/oiweiwei/go-msrpc/msrpc/rrp/winreg/v1"
@@ -41,9 +44,20 @@ import (
 	"go.mozilla.org/pkcs7"
 )
 
-// clsidCertRequestD is the CLSID of the CertSrv Request DCOM class
-// (CCertRequestD), MS-WCCE section 1.9.
+// clsidCertRequestD and clsidCertAdminD are the DCOM coclass CLSIDs that
+// IActivation::RemoteActivation needs. go-msrpc ships the interface IIDs but not these, so
+// they are the fixed GUIDs from the specs.
+
+// CCertRequestD (MS-WCCE section 1.9): enrollment via ICertRequestD/D2.
 var clsidCertRequestD = uuid.MustParse("d99e6e74-fc88-11d0-b498-00a0c90312f3")
+
+// CCertAdminD (MS-CSRA section 2.1): administration via ICertAdminD/D2, used here for revocation.
+var clsidCertAdminD = uuid.MustParse("d99e6e73-fc88-11d0-b498-00a0c90312f3")
+
+// ErrConnect marks a failure to reach or authenticate to the CA host (as opposed to a CA-level
+// rejection of the operation). Handlers collapse it to a generic message so the internal CA
+// host/port is never echoed back to the control plane.
+var ErrConnect = errors.New("failed to connect to the ADCS host")
 
 const (
 	crPropCASigCertChain = 0x0000000D
@@ -90,8 +104,31 @@ type Client struct {
 	dyn  dcerpc.Conn
 }
 
-// Dial establishes an authenticated MS-WCCE session over DCOM.
-func Dial(ctx context.Context, creds Credentials) (*Client, error) {
+// dcomSession holds the connections and identity from activating a CertSrv coclass and
+// binding one of its interfaces. The caller builds its typed client from bound/bindCtx
+// and applies ipid.
+type dcomSession struct {
+	top     dcerpc.Conn
+	dyn     dcerpc.Conn
+	bound   dcerpc.Conn
+	bindCtx context.Context
+	ipid    *dcom.IPID
+	comVer  *dcom.COMVersion
+}
+
+func (s *dcomSession) close(ctx context.Context) {
+	if s.dyn != nil {
+		_ = s.dyn.Close(ctx)
+	}
+	if s.top != nil {
+		_ = s.top.Close(ctx)
+	}
+}
+
+// dialAndActivate opens an authenticated DCOM channel to the CA host, activates the given
+// coclass, and binds the requested interface syntax, returning a session the caller turns
+// into a typed interface client.
+func dialAndActivate(ctx context.Context, creds Credentials, clsid *uuid.UUID, iid *dcom.IID, syntax *dcerpc.SyntaxID) (*dcomSession, error) {
 	cfg := config.New()
 	cfg.Server = "ncacn_ip_tcp:" + creds.Host // ServerAddr() returns this when Protocol is empty
 	cfg.Auth.Level = "privacy"                // RPC packet privacy: seals and integrity-protects the channel
@@ -123,8 +160,8 @@ func Dial(ctx context.Context, creds Credentials) (*Client, error) {
 	}
 	act, err := iact.RemoteActivation(sctx, &iactivation.RemoteActivationRequest{
 		ORPCThis:                   &dcom.ORPCThis{Version: srv.COMVersion},
-		ClassID:                    dtyp.GUIDFromUUID(clsidCertRequestD),
-		IIDs:                       []*dcom.IID{icertrequestd2.CertRequestD2IID},
+		ClassID:                    dtyp.GUIDFromUUID(clsid),
+		IIDs:                       []*dcom.IID{iid},
 		RequestedProtocolSequences: []uint16{7}, // ncacn_ip_tcp
 	})
 	if err != nil {
@@ -134,6 +171,10 @@ func Dial(ctx context.Context, creds Credentials) (*Client, error) {
 	if act.HResult != 0 {
 		_ = top.Close(sctx)
 		return nil, fmt.Errorf("activate certificate service: %s", hresult.FromCode(uint32(act.HResult)))
+	}
+	if len(act.InterfaceData) == 0 {
+		_ = top.Close(sctx)
+		return nil, fmt.Errorf("activation returned no interface data")
 	}
 
 	dyn, err := dcerpc.Dial(sctx, cfg.ServerAddr(),
@@ -146,28 +187,75 @@ func Dial(ctx context.Context, creds Credentials) (*Client, error) {
 	// Fresh GSSAPI security context for the second physical connection (the dynamic
 	// endpoint): the activation connection's context can't be reused across the new dial.
 	bctx := gssapi.NewSecurityContext(sctx)
-	// Bind ONLY the ICertRequestD2 syntax so the default presentation context is D2.
-	d2conn, err := dyn.Bind(bctx, append(cfg.ClientOptions(bctx),
-		dcerpc.WithAbstractSyntax(icertrequestd2.CertRequestD2SyntaxV0_0))...)
+	// Bind ONLY the requested syntax so it is the default presentation context.
+	bound, err := dyn.Bind(bctx, append(cfg.ClientOptions(bctx), dcerpc.WithAbstractSyntax(syntax))...)
 	if err != nil {
 		_ = dyn.Close(sctx)
 		_ = top.Close(sctx)
-		return nil, fmt.Errorf("bind ICertRequestD2: %w", err)
+		return nil, fmt.Errorf("bind interface: %w", err)
 	}
-	d2, err := icertrequestd2.NewCertRequestD2Client(bctx, d2conn, dcerpc.WithNoBind(d2conn))
+
+	return &dcomSession{
+		top:     top,
+		dyn:     dyn,
+		bound:   bound,
+		bindCtx: bctx,
+		ipid:    act.InterfaceData[0].IPID(),
+		comVer:  srv.COMVersion,
+	}, nil
+}
+
+// Dial establishes an authenticated MS-WCCE (ICertRequestD2) session over DCOM.
+func Dial(ctx context.Context, creds Credentials) (*Client, error) {
+	sess, err := dialAndActivate(ctx, creds, clsidCertRequestD, icertrequestd2.CertRequestD2IID, icertrequestd2.CertRequestD2SyntaxV0_0)
 	if err != nil {
-		_ = dyn.Close(sctx)
-		_ = top.Close(sctx)
+		return nil, err
+	}
+
+	d2, err := icertrequestd2.NewCertRequestD2Client(sess.bindCtx, sess.bound, dcerpc.WithNoBind(sess.bound))
+	if err != nil {
+		sess.close(ctx)
 		return nil, fmt.Errorf("create ICertRequestD2 client: %w", err)
 	}
-	if len(act.InterfaceData) == 0 {
-		_ = dyn.Close(sctx)
-		_ = top.Close(sctx)
-		return nil, fmt.Errorf("activation returned no interface data")
-	}
-	d2 = d2.IPID(bctx, act.InterfaceData[0].IPID())
+	d2 = d2.IPID(sess.bindCtx, sess.ipid)
 
-	return &Client{d2: d2, this: &dcom.ORPCThis{Version: srv.COMVersion}, top: top, dyn: dyn}, nil
+	return &Client{d2: d2, this: &dcom.ORPCThis{Version: sess.comVer}, top: sess.top, dyn: sess.dyn}, nil
+}
+
+// Revoke revokes the certificate with the given serial number on the named CA via MS-CSRA
+// (ICertAdminD::RevokeCertificate). serialHex is plain hex digits with no leading "0x" and
+// reason is an RFC 5280 CRLReason code. Requires Manage CA / Certificate Manager rights.
+func Revoke(ctx context.Context, creds Credentials, caName, serialHex string, reason uint32) error {
+	sess, err := dialAndActivate(ctx, creds, clsidCertAdminD, icertadmind.CertAdminDIID, icertadmind.CertAdminDSyntaxV0_0)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConnect, err)
+	}
+	defer sess.close(ctx)
+
+	admin, err := icertadmind.NewCertAdminDClient(sess.bindCtx, sess.bound, dcerpc.WithNoBind(sess.bound))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConnect, err)
+	}
+	admin = admin.IPID(sess.bindCtx, sess.ipid)
+
+	// FileTime is the revocation date recorded in the CRL entry. If left nil the marshaler
+	// sends a zero FILETIME (a 1601 date), so stamp it with the current time.
+	resp, err := admin.RevokeCertificate(ctx, &icertadmind.RevokeCertificateRequest{
+		This:         &dcom.ORPCThis{Version: sess.comVer},
+		Authority:    caName,
+		SerialNumber: serialHex,
+		Reason:       reason,
+		FileTime:     filetime.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("revoke certificate: %w", err)
+	}
+	// The CA reports a rejected revocation (e.g. unknown serial, insufficient rights) via a
+	// non-zero Return HRESULT rather than a transport error.
+	if resp.Return != 0 {
+		return fmt.Errorf("revoke certificate: %s", hresult.FromCode(uint32(resp.Return)))
+	}
+	return nil
 }
 
 // Close releases the underlying connections.

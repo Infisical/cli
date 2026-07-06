@@ -997,7 +997,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	} else if forwardConfig.Mode == ForwardModeADCS {
 		log.Info().Msg("Starting ADCS/MS-WCCE handler")
-		if err := serveAdcsOverTLS(g.ctx, tlsConn, reader); err != nil {
+		if err := serveAdcsOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost); err != nil {
 			log.Error().Err(err).Msg("ADCS handler ended with error")
 		} else {
 			log.Info().Msg("ADCS handler completed")
