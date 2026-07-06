@@ -1,9 +1,14 @@
 package util
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/models"
 	jwt "github.com/golang-jwt/jwt/v5"
 )
@@ -99,6 +104,111 @@ func TestResolveOrgScopedToken(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsOrganizationScopeError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "403 api error",
+			err: &api.APIError{
+				StatusCode: 403,
+			},
+			want: true,
+		},
+		{
+			name: "404 api error",
+			err: &api.APIError{
+				StatusCode: 404,
+			},
+			want: false,
+		},
+		{
+			name: "plain error",
+			err:  errors.New("boom"),
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isOrganizationScopeError(tc.err)
+			if got != tc.want {
+				t.Errorf("isOrganizationScopeError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteWorkspaceConfigToPath(t *testing.T) {
+	workspaceConfig := models.WorkspaceConfigFile{
+		WorkspaceId:        "workspace-123",
+		OrganizationId:     "org-123",
+		DefaultEnvironment: "dev",
+		GitBranchToEnvironmentMapping: map[string]string{
+			"main": "prod",
+		},
+		Domain: "https://example.infisical.com",
+	}
+
+	assertStoredConfig := func(t *testing.T, path string) {
+		t.Helper()
+
+		rawConfig, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): unexpected error: %v", path, err)
+		}
+		if !strings.Contains(string(rawConfig), "organization-id: org-123") {
+			t.Errorf("expected yaml to contain organization-id, got:\n%s", rawConfig)
+		}
+
+		storedConfig, err := GetWorkSpaceFromFilePath(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("GetWorkSpaceFromFilePath: unexpected error: %v", err)
+		}
+		if storedConfig.WorkspaceId != workspaceConfig.WorkspaceId {
+			t.Errorf("WorkspaceId = %q, want %q", storedConfig.WorkspaceId, workspaceConfig.WorkspaceId)
+		}
+		if storedConfig.OrganizationId != workspaceConfig.OrganizationId {
+			t.Errorf("OrganizationId = %q, want %q", storedConfig.OrganizationId, workspaceConfig.OrganizationId)
+		}
+		if storedConfig.DefaultEnvironment != workspaceConfig.DefaultEnvironment {
+			t.Errorf("DefaultEnvironment = %q, want %q", storedConfig.DefaultEnvironment, workspaceConfig.DefaultEnvironment)
+		}
+		if storedConfig.Domain != workspaceConfig.Domain {
+			t.Errorf("Domain = %q, want %q", storedConfig.Domain, workspaceConfig.Domain)
+		}
+		if storedConfig.GitBranchToEnvironmentMapping["main"] != workspaceConfig.GitBranchToEnvironmentMapping["main"] {
+			t.Errorf("GitBranchToEnvironmentMapping[main] = %q, want %q", storedConfig.GitBranchToEnvironmentMapping["main"], workspaceConfig.GitBranchToEnvironmentMapping["main"])
+		}
+	}
+
+	t.Run("yaml path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), ".infisical.yaml")
+
+		if err := WriteWorkspaceConfigToPath(workspaceConfig, path); err != nil {
+			t.Fatalf("WriteWorkspaceConfigToPath: unexpected error: %v", err)
+		}
+
+		assertStoredConfig(t, path)
+	})
+
+	t.Run("legacy json path writes yaml alongside", func(t *testing.T) {
+		dir := t.TempDir()
+		legacyPath := filepath.Join(dir, ".infisical.json")
+
+		if err := WriteWorkspaceConfigToPath(workspaceConfig, legacyPath); err != nil {
+			t.Fatalf("WriteWorkspaceConfigToPath: unexpected error: %v", err)
+		}
+
+		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+			t.Errorf("expected no .infisical.json to be written, stat err = %v", err)
+		}
+		assertStoredConfig(t, filepath.Join(dir, ".infisical.yaml"))
+	})
 }
 
 func makeUnsignedJWT(t *testing.T, claims map[string]any) string {

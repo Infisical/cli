@@ -293,6 +293,21 @@ func GetWorkspaceConfigByPath(path string) (workspaceConfig models.WorkspaceConf
 	return workspaceConfigFile, nil
 }
 
+// WriteWorkspaceConfigToPath persists the config as YAML. A legacy .infisical.json path is
+// redirected to a .infisical.yaml in the same directory, which then takes precedence over it.
+func WriteWorkspaceConfigToPath(config models.WorkspaceConfigFile, path string) error {
+	if filepath.Base(path) == INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
+		path = filepath.Join(filepath.Dir(path), INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+	}
+
+	marshalledWorkspaceFile, err := yaml.Marshal(workspaceConfigToYaml(config))
+	if err != nil {
+		return err
+	}
+
+	return WriteFileAtomic(path, marshalledWorkspaceFile, 0o600)
+}
+
 // Get the infisical config file and if it doesn't exist, return empty config model, otherwise raise error
 func GetConfigFile() (models.ConfigFile, error) {
 	fullConfigFilePath, _, err := GetFullConfigFilePath()

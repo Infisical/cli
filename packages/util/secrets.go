@@ -305,6 +305,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	// var serviceTokenDetails api.GetServiceTokenDetailsResponse
 	var errorToReturn error
 	var workspaceConfigFile models.WorkspaceConfigFile
+	var workspaceConfigFilePath string
 
 	if params.InfisicalToken == "" && params.UniversalAuthAccessToken == "" {
 		if params.WorkspaceId == "" {
@@ -339,6 +340,10 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 
 		if params.WorkspaceId == "" {
 			if projectConfigFilePath == "" {
+				workspaceConfigFilePath, err = FindWorkspaceConfigFile()
+				if err != nil {
+					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
+				}
 				projectConfig, err := GetWorkSpaceFromFile()
 				if err != nil {
 					PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
@@ -346,6 +351,10 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 
 				workspaceConfigFile = projectConfig
 			} else {
+				workspaceConfigFilePath, err = ResolveWorkspaceConfigFile(projectConfigFilePath)
+				if err != nil {
+					return nil, err
+				}
 				projectConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
 				if err != nil {
 					return nil, err
@@ -355,11 +364,19 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			}
 			params.WorkspaceId = workspaceConfigFile.WorkspaceId
 		} else if projectConfigFilePath == "" {
+			workspaceConfigFilePath, err = FindWorkspaceConfigFile()
+			if err != nil {
+				workspaceConfigFilePath = ""
+			}
 			projectConfig, err := GetWorkSpaceFromFile()
 			if err == nil {
 				workspaceConfigFile = projectConfig
 			}
 		} else {
+			workspaceConfigFilePath, err = ResolveWorkspaceConfigFile(projectConfigFilePath)
+			if err != nil {
+				workspaceConfigFilePath = ""
+			}
 			projectConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
 			if err == nil {
 				workspaceConfigFile = projectConfig
@@ -371,18 +388,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			return nil, err
 		}
 
-		res, err := GetPlainTextSecretsV4(
-			resolvedToken,
-			params.WorkspaceId,
-			params.Environment,
-			params.SecretsPath,
-			params.IncludeImport,
-			params.Recursive,
-			params.TagSlugs,
-			params.ExpandSecretReferences,
-			params.IncludePersonalOverrides,
-			params.ViewSecretValue,
-		)
+		res, err := fetchSecretsWithOrgDiscovery(loggedInUserDetails, resolvedToken, params, workspaceConfigFile, workspaceConfigFilePath)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
 		if err == nil && (params.ViewSecretValue == nil || *params.ViewSecretValue) {
@@ -476,6 +482,87 @@ func resolveOrgScopedToken(loggedInUserDetails LoggedInUserDetails, flagOrganiza
 	}
 
 	return selectOrganizationResponse.Token, nil
+}
+
+func isOrganizationScopeError(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == 403
+}
+
+func fetchSecretsWithOrgDiscovery(loggedInUserDetails LoggedInUserDetails, resolvedToken string, params models.GetAllSecretsParameters, workspaceConfigFile models.WorkspaceConfigFile, workspaceConfigFilePath string) (models.PlaintextSecretResult, error) {
+	fetch := func(token string) (models.PlaintextSecretResult, error) {
+		return GetPlainTextSecretsV4(
+			token,
+			params.WorkspaceId,
+			params.Environment,
+			params.SecretsPath,
+			params.IncludeImport,
+			params.Recursive,
+			params.TagSlugs,
+			params.ExpandSecretReferences,
+			params.IncludePersonalOverrides,
+			params.ViewSecretValue,
+		)
+	}
+
+	res, err := fetch(resolvedToken)
+	if err == nil {
+		return res, nil
+	}
+	if !isOrganizationScopeError(err) {
+		return models.PlaintextSecretResult{}, err
+	}
+
+	originalError := err
+	httpClient, err := GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return models.PlaintextSecretResult{}, originalError
+	}
+	httpClient.SetAuthToken(loggedInUserDetails.UserCredentials.JTWToken)
+
+	orgsResponse, err := api.CallGetAllOrganizations(httpClient)
+	if err != nil {
+		return models.PlaintextSecretResult{}, originalError
+	}
+
+	currentTokenOrgId, err := getTokenOrganizationId(loggedInUserDetails.UserCredentials.JTWToken)
+	if err != nil {
+		return models.PlaintextSecretResult{}, originalError
+	}
+
+	for _, organization := range orgsResponse.Organizations {
+		if organization.ID == currentTokenOrgId {
+			continue
+		}
+
+		httpClient.SetAuthToken(loggedInUserDetails.UserCredentials.JTWToken)
+		selectOrganizationResponse, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: organization.ID})
+		if err != nil {
+			continue
+		}
+
+		res, err := fetch(selectOrganizationResponse.Token)
+		if err != nil {
+			continue
+		}
+
+		persistDiscoveredOrganizationId(workspaceConfigFile, workspaceConfigFilePath, organization.ID)
+		return res, nil
+	}
+
+	return models.PlaintextSecretResult{}, originalError
+}
+
+func persistDiscoveredOrganizationId(workspaceConfigFile models.WorkspaceConfigFile, workspaceConfigFilePath string, organizationId string) {
+	if workspaceConfigFilePath == "" {
+		return
+	}
+
+	workspaceConfigFile.OrganizationId = organizationId
+	err := WriteWorkspaceConfigToPath(workspaceConfigFile, workspaceConfigFilePath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", workspaceConfigFilePath).Msg("Failed to persist discovered organization ID to workspace config")
+	}
 }
 
 func GetBackupEncryptionKey() ([]byte, error) {
