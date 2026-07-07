@@ -155,9 +155,35 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		return true
 	}
 
+	requestReason := reason
+	if requestReason == "" {
+		// The dashboard requires a reason on every access request; keep the CLI consistent
+		reasonPrompt := promptui.Prompt{
+			Label: "Reason (visible to approvers)",
+			Validate: func(input string) error {
+				if strings.TrimSpace(input) == "" {
+					return errors.New("a reason is required")
+				}
+				if len(input) > 500 {
+					return errors.New("reason must be at most 500 characters")
+				}
+				return nil
+			},
+		}
+		reasonInput, reasonErr := reasonPrompt.Run()
+		if reasonErr != nil {
+			if errors.Is(reasonErr, promptui.ErrInterrupt) {
+				util.PrintErrorMessageAndExit("Access request cancelled")
+			}
+			log.Info().Msg("No access request created.")
+			return true
+		}
+		requestReason = strings.TrimSpace(reasonInput)
+	}
+
 	if _, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
-		Reason:   reason,
+		Reason:   requestReason,
 		Duration: durationStr,
 	}); reqErr != nil {
 		util.HandleError(reqErr, "Failed to submit access request")
