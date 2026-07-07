@@ -155,14 +155,26 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		return true
 	}
 
+	// Reason requiredness follows the account template's Require Reason policy, surfaced in the
+	// approval-gate error details; the dashboard and API enforce the same rule.
+	requireReason := false
+	if details, ok := apiErr.Details.(map[string]any); ok {
+		if v, ok := details["requireReason"].(bool); ok {
+			requireReason = v
+		}
+	}
+
 	requestReason := reason
 	if requestReason == "" {
-		// The dashboard requires a reason on every access request; keep the CLI consistent
+		label := "Reason (visible to approvers, optional)"
+		if requireReason {
+			label = "Reason (visible to approvers)"
+		}
 		reasonPrompt := promptui.Prompt{
-			Label: "Reason (visible to approvers)",
+			Label: label,
 			Validate: func(input string) error {
-				if strings.TrimSpace(input) == "" {
-					return errors.New("a reason is required")
+				if requireReason && strings.TrimSpace(input) == "" {
+					return errors.New("a reason is required for this account")
 				}
 				if len(input) > 500 {
 					return errors.New("reason must be at most 500 characters")
