@@ -29,6 +29,7 @@ const (
 	AccountTypeRedis      = "redis"
 	AccountTypeKubernetes = "kubernetes"
 	AccountTypeAwsIam     = "aws-iam"
+	AccountTypeGcpServiceAccount     = "gcp-service-account"
 	AccountTypeWindows    = "windows"
 	AccountTypeWindowsAd  = "windows-ad"
 )
@@ -110,6 +111,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
 		startAWSAccess(httpClient, &pamResponse, displayPath, durationStr, port)
+	case AccountTypeGcpServiceAccount:
+		startGCPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeWindows, AccountTypeWindowsAd:
 		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	default:

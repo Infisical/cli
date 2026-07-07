@@ -14,6 +14,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/gcp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
@@ -57,6 +58,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeRedis,
 		session.ResourceTypeMongodb,
 		session.ResourceTypeOracledb,
+		session.ResourceTypeGcpServiceAccount,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -172,7 +174,15 @@ func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ru
 // the browser RDP flow (RDCleanPath over the inbound stream) when the
 // resource is Windows; ignored for other resource types.
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
-	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
+	credentialExpiryTime := pamConfig.ExpiryTime
+	if pamConfig.ResourceType == session.ResourceTypeGcpServiceAccount {
+		gcpTokenMaxLifetime := time.Now().Add(1 * time.Hour)
+		if gcpTokenMaxLifetime.Before(credentialExpiryTime) {
+			credentialExpiryTime = gcpTokenMaxLifetime
+		}
+	}
+
+	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, credentialExpiryTime)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to retrieve PAM session credentials")
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
@@ -491,6 +501,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		if browserRDP {
 			return proxy.HandleConnectionRDCleanPath(ctx, handlerConn)
 		}
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeGcpServiceAccount:
+		gcpConfig := gcp.GCPProxyConfig{
+			Token:         credentials.Token,
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+		}
+		proxy := gcp.NewGCPProxy(gcpConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("serviceAccountEmail", credentials.ServiceAccountEmail).
+			Msg("Starting GCP Service Account PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
