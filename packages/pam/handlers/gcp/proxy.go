@@ -398,7 +398,11 @@ func isGCPHost(host string) bool {
 	if strings.Contains(host, "@") {
 		return false
 	}
-	h := strings.Split(host, ":")[0]
+	u, err := url.Parse("https://" + host)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
 	return h == "googleapis.com" || strings.HasSuffix(h, ".googleapis.com")
 }
 
