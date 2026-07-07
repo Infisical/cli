@@ -132,6 +132,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 	// approval-gate error details; the dashboard and API enforce the same rule.
 	requireReason := false
 	hasPendingRequest := false
+	hasApprovalPolicy := true
 	if details, ok := apiErr.Details.(map[string]any); ok {
 		if v, ok := details["requireReason"].(bool); ok {
 			requireReason = v
@@ -139,6 +140,15 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		if v, ok := details["hasPendingRequest"].(bool); ok {
 			hasPendingRequest = v
 		}
+		if v, ok := details["hasApprovalPolicy"].(bool); ok {
+			hasApprovalPolicy = v
+		}
+	}
+
+	// Requesting would only hit a no-approvers error, so explain the misconfiguration instead
+	if !hasApprovalPolicy {
+		util.PrintErrorMessageAndExit("This account requires approval, but its folder has no approvers configured yet. Ask a folder admin to add approvers under the folder's Approvals tab.")
+		return true
 	}
 
 	// Submitting again would only hit the duplicate-request error, so point at the existing one
