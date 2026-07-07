@@ -128,6 +128,25 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 
 	expired := apiErr.Name == grantExpiredErrorName
 
+	// Reason requiredness follows the account template's Require Reason policy, surfaced in the
+	// approval-gate error details; the dashboard and API enforce the same rule.
+	requireReason := false
+	hasPendingRequest := false
+	if details, ok := apiErr.Details.(map[string]any); ok {
+		if v, ok := details["requireReason"].(bool); ok {
+			requireReason = v
+		}
+		if v, ok := details["hasPendingRequest"].(bool); ok {
+			hasPendingRequest = v
+		}
+	}
+
+	// Submitting again would only hit the duplicate-request error, so point at the existing one
+	if hasPendingRequest {
+		util.PrintErrorMessageAndExit("Your access request for this account is awaiting approval. You'll be able to launch a session once it's approved.")
+		return true
+	}
+
 	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		if expired {
@@ -153,15 +172,6 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		}
 		log.Info().Msg("No access request created.")
 		return true
-	}
-
-	// Reason requiredness follows the account template's Require Reason policy, surfaced in the
-	// approval-gate error details; the dashboard and API enforce the same rule.
-	requireReason := false
-	if details, ok := apiErr.Details.(map[string]any); ok {
-		if v, ok := details["requireReason"].(bool); ok {
-			requireReason = v
-		}
 	}
 
 	requestReason := reason
