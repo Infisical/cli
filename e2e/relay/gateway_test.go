@@ -208,10 +208,6 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	projectId := projectResp.JSON200.Project.Id
 
 	t.Run("kubernetes", func(t *testing.T) {
-		// TODO: re-enable once the e2e client is regenerated for the revamped PAM account model.
-		// The backend moved PAM creation from POST /api/v1/pam/resources/{type} to POST /api/v1/pam/accounts/{type},
-		// which requires a folderId, templateId and credentials rather than a bare URL. Tracked as a follow-up.
-		t.Skip("skipping: kubernetes PAM subtest needs migration to the /pam/accounts/{type} model (client regen + folder/template/credentials setup)")
 		t.Parallel()
 		ctx := t.Context()
 		// Create a mock HTTP server running on a random port in a goroutine
@@ -263,23 +259,48 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
 		slog.Info("Mock HTTP server started", "url", serverURL)
 
-		k8sPamResResp, err := c.CreateKubernetesPamResourceWithResponse(
-			ctx,
-			client.CreateKubernetesPamResourceJSONRequestBody{
-				ProjectId: uuid.MustParse(projectId),
-				GatewayId: &gatewayId,
-				Name:      "k8s-resource",
-				ConnectionDetails: struct {
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-					Url                   string  `json:"url"`
-				}{
-					Url:                   serverURL,
-					SslRejectUnauthorized: false,
-				},
-			})
+		// The revamped PAM model creates a kubernetes account via
+		// folder -> account template (type=kubernetes) -> account.
+		folderResp, err := c.CreatePamFolderWithResponse(ctx, client.CreatePamFolderJSONRequestBody{
+			Name: "k8s-folder",
+		})
 		require.NoError(t, err)
-		require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
+		require.Equal(t, http.StatusOK, folderResp.StatusCode())
+		require.NotNil(t, folderResp.JSON200)
+		folderId := folderResp.JSON200.Folder.Id
+
+		templateResp, err := c.CreatePamAccountTemplateWithResponse(ctx, client.CreatePamAccountTemplateJSONRequestBody{
+			Name: "k8s-template",
+			Type: "kubernetes",
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, templateResp.StatusCode())
+		require.NotNil(t, templateResp.JSON200)
+		templateId := templateResp.JSON200.Template.Id
+
+		acctResp, err := c.CreateKubernetesPamAccountWithResponse(ctx, client.CreateKubernetesPamAccountJSONRequestBody{
+			Name:       "k8s-account",
+			FolderId:   folderId,
+			TemplateId: templateId,
+			GatewayId:  &gatewayId,
+			ConnectionDetails: struct {
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				Url                   string  `json:"url"`
+			}{
+				Url:                   serverURL,
+				SslRejectUnauthorized: false,
+			},
+			Credentials: struct {
+				AuthMethod          string `json:"authMethod"`
+				ServiceAccountToken string `json:"serviceAccountToken"`
+			}{
+				AuthMethod:          "service-account-token",
+				ServiceAccountToken: "e2e-dummy-token",
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, acctResp.StatusCode())
 		require.True(t, versionEndpointHit)
 	})
 
