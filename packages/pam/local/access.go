@@ -2,6 +2,7 @@ package pam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +13,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 )
 
@@ -29,6 +32,9 @@ const (
 	AccountTypeWindows    = "windows"
 	AccountTypeWindowsAd  = "windows-ad"
 )
+
+const approvalRequiredErrorName = "PAM_APPROVAL_REQUIRED"
+const grantExpiredErrorName = "PAM_GRANT_EXPIRED"
 
 // normalizePath ensures the path has a leading slash for display purposes.
 // Both "/folder/account" and "folder/account" are accepted as input.
@@ -64,13 +70,25 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
+	// The API parses durations with npm ms, which can't read Go compound formats like "2h30m",
+	// so send plain milliseconds and keep the Go format for local parsing/display
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
+		return
+	}
+	apiDurationStr := fmt.Sprintf("%dms", duration.Milliseconds())
+
 	pamResponse, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
 		Path:       path,
-		Duration:   durationStr,
+		Duration:   apiDurationStr,
 		Reason:     reason,
 		TargetHost: targetHost,
 	}, true)
 	if err != nil {
+		if handleApprovalRequired(httpClient, err, path, reason, apiDurationStr) {
+			return
+		}
 		util.HandleError(err, "Failed to create PAM session")
 		return
 	}
@@ -97,6 +115,115 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	default:
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
 	}
+}
+
+// handleApprovalRequired intercepts the PAM_APPROVAL_REQUIRED gate. In an interactive terminal it
+// offers to submit an access request for the account; otherwise it prints guidance. Returns true when
+// the error was an approval-required error (handled here), false to let normal error handling proceed.
+func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || (apiErr.Name != approvalRequiredErrorName && apiErr.Name != grantExpiredErrorName) {
+		return false
+	}
+
+	expired := apiErr.Name == grantExpiredErrorName
+
+	// Reason requiredness follows the account template's Require Reason policy, surfaced in the
+	// approval-gate error details; the dashboard and API enforce the same rule.
+	requireReason := false
+	hasPendingRequest := false
+	hasApprovalPolicy := true
+	if details, ok := apiErr.Details.(map[string]any); ok {
+		if v, ok := details["requireReason"].(bool); ok {
+			requireReason = v
+		}
+		if v, ok := details["hasPendingRequest"].(bool); ok {
+			hasPendingRequest = v
+		}
+		if v, ok := details["hasApprovalPolicy"].(bool); ok {
+			hasApprovalPolicy = v
+		}
+	}
+
+	// Requesting would only hit a no-approvers error, so explain the misconfiguration instead
+	if !hasApprovalPolicy {
+		util.PrintErrorMessageAndExit("This account requires approval, but its folder has no approvers configured yet. Ask a folder admin to add approvers under the folder's Approvals tab.")
+		return true
+	}
+
+	// Submitting again would only hit the duplicate-request error, so point at the existing one
+	if hasPendingRequest {
+		util.PrintErrorMessageAndExit("Your access request for this account is awaiting approval. You'll be able to launch a session once it's approved.")
+		return true
+	}
+
+	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		if expired {
+			util.PrintErrorMessageAndExit("Your access grant for this account has expired. Request access again from the Infisical dashboard (PAM > My Access).")
+		} else {
+			util.PrintErrorMessageAndExit("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
+		}
+		return true
+	}
+
+	if expired {
+		log.Info().Msg("Your previous access grant has expired.")
+	} else {
+		log.Info().Msg("This account requires approval before you can launch a session.")
+	}
+
+	prompt := promptui.Prompt{Label: "Request access now?", IsConfirm: true}
+	if _, promptErr := prompt.Run(); promptErr != nil {
+		// Ctrl+C (interrupt) must exit non-zero so scripts don't read it as success; declining with 'n'
+		// (ErrAbort) is a graceful choice and exits 0.
+		if errors.Is(promptErr, promptui.ErrInterrupt) {
+			util.PrintErrorMessageAndExit("Access request cancelled")
+		}
+		log.Info().Msg("No access request created.")
+		return true
+	}
+
+	requestReason := reason
+	if requestReason == "" {
+		label := "Reason (visible to approvers, optional)"
+		if requireReason {
+			label = "Reason (visible to approvers)"
+		}
+		reasonPrompt := promptui.Prompt{
+			Label: label,
+			Validate: func(input string) error {
+				if requireReason && strings.TrimSpace(input) == "" {
+					return errors.New("a reason is required for this account")
+				}
+				if len(input) > 500 {
+					return errors.New("reason must be at most 500 characters")
+				}
+				return nil
+			},
+		}
+		reasonInput, reasonErr := reasonPrompt.Run()
+		if reasonErr != nil {
+			if errors.Is(reasonErr, promptui.ErrInterrupt) {
+				util.PrintErrorMessageAndExit("Access request cancelled")
+			}
+			log.Info().Msg("No access request created.")
+			return true
+		}
+		requestReason = strings.TrimSpace(reasonInput)
+	}
+
+	if _, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
+		Path:     path,
+		Reason:   requestReason,
+		Duration: durationStr,
+	}); reqErr != nil {
+		util.HandleError(reqErr, "Failed to submit access request")
+		return true
+	}
+
+	log.Info().Msg("Access request submitted. You'll be able to launch a session once it's approved.")
+	return true
 }
 
 // DatabaseDisplayConfig holds the display configuration for a database type
