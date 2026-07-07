@@ -68,7 +68,7 @@ func (p *GCPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 
 	l := log.With().Str("sessionID", p.config.SessionID).Logger()
 
-	l.Info().Msg("New GCP IAM connection, reading CA from client")
+	l.Info().Msg("New GCP Service Account connection, reading CA from client")
 
 	caCertPEM, err := readLengthPrefixed(clientConn)
 	if err != nil {

@@ -512,7 +512,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("serviceAccountEmail", credentials.ServiceAccountEmail).
-			Msg("Starting GCP IAM PAM proxy")
+			Msg("Starting GCP Service Account PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)

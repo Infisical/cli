@@ -271,7 +271,7 @@ func (p *GCPProxyServer) handleConnection(clientConn net.Conn) {
 		return
 	}
 
-	log.Info().Msg("Established connection to GCP IAM resource")
+	log.Info().Msg("Established connection to GCP Service Account resource")
 
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
@@ -365,7 +365,7 @@ func startGCPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 	folder, account := parsePath(path)
 	serviceAccountEmail := response.Metadata["serviceAccountEmail"]
 
-	log.Info().Msgf("GCP IAM proxy server listening on port %d", proxy.port)
+	log.Info().Msgf("GCP Service Account proxy server listening on port %d", proxy.port)
 	printGCPSessionInfo(folder, account, duration, serviceAccountEmail, proxy.port)
 
 	sigChan := make(chan os.Signal, 1)
@@ -388,7 +388,7 @@ func startGCPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 func printGCPSessionInfo(folder, account string, duration time.Duration, serviceAccountEmail string, port int) {
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
-	fmt.Printf("              GCP IAM Proxy Session Started!                          \n")
+	fmt.Printf("              GCP Service Account Proxy Session Started!                          \n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
 	if folder != "" {
