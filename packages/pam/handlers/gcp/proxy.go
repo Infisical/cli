@@ -41,6 +41,23 @@ type GCPProxy struct {
 	caKey  crypto.Signer
 }
 
+type limitedWriter struct {
+	w io.Writer
+	n int
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	if lw.n <= 0 {
+		return len(p), nil
+	}
+	if len(p) > lw.n {
+		p = p[:lw.n]
+	}
+	n, err := lw.w.Write(p)
+	lw.n -= n
+	return n, err
+}
+
 func NewGCPProxy(config GCPProxyConfig) *GCPProxy {
 	return &GCPProxy{config: config}
 }
@@ -245,6 +262,8 @@ func (p *GCPProxy) handleRequest(_ context.Context, writer io.Writer, req *http.
 		return nil
 	}
 
+	const maxLogBodySize = 1 << 20 // 1 MiB cap for audit-logged bodies
+
 	reqBody, err := io.ReadAll(req.Body)
 	if err != nil {
 		l.Error().Err(err).Msg("Failed to read request body")
@@ -252,6 +271,10 @@ func (p *GCPProxy) handleRequest(_ context.Context, writer io.Writer, req *http.
 		return err
 	}
 
+	loggedReqBody := reqBody
+	if len(loggedReqBody) > maxLogBodySize {
+		loggedReqBody = loggedReqBody[:maxLogBodySize]
+	}
 	if err := p.config.SessionLogger.LogHttpEvent(session.HttpEvent{
 		Timestamp: time.Now(),
 		RequestId: requestId.String(),
@@ -259,7 +282,7 @@ func (p *GCPProxy) handleRequest(_ context.Context, writer io.Writer, req *http.
 		URL:       req.URL.String(),
 		Method:    req.Method,
 		Headers:   req.Header,
-		Body:      reqBody,
+		Body:      loggedReqBody,
 	}); err != nil {
 		l.Error().Err(err).Msg("Failed to log HTTP request event")
 	}
@@ -310,7 +333,7 @@ func (p *GCPProxy) handleRequest(_ context.Context, writer io.Writer, req *http.
 	resp.Body = struct {
 		io.ReadCloser
 	}{
-		ReadCloser: io.NopCloser(io.TeeReader(resp.Body, &bodyCopy)),
+		ReadCloser: io.NopCloser(io.TeeReader(resp.Body, &limitedWriter{w: &bodyCopy, n: maxLogBodySize})),
 	}
 
 	if err := resp.Write(writer); err != nil {
