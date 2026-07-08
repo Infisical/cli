@@ -25,16 +25,17 @@ var ErrSessionFileNotFound = errors.New("session file not found")
 
 // Resource type constants
 const (
-	ResourceTypePostgres   = "postgres"
-	ResourceTypeMysql      = "mysql"
-	ResourceTypeMssql      = "mssql"
-	ResourceTypeRedis      = "redis"
-	ResourceTypeSSH        = "ssh"
-	ResourceTypeKubernetes = "kubernetes"
-	ResourceTypeMongodb    = "mongodb"
-	ResourceTypeOracledb = "oracledb"
-	ResourceTypeWindows  = "windows"
-	ResourceTypeGcpServiceAccount   = "gcp-service-account"
+	ResourceTypePostgres          = "postgres"
+	ResourceTypeMysql             = "mysql"
+	ResourceTypeMssql             = "mssql"
+	ResourceTypeRedis             = "redis"
+	ResourceTypeSSH               = "ssh"
+	ResourceTypeKubernetes        = "kubernetes"
+	ResourceTypeMongodb           = "mongodb"
+	ResourceTypeOracledb          = "oracledb"
+	ResourceTypeWindows           = "windows"
+	ResourceTypeGcpServiceAccount = "gcp-service-account"
+	ResourceTypeWebApp            = "webapp"
 )
 
 type SessionFileInfo struct {
@@ -81,7 +82,7 @@ func NewSessionUploader(httpClient *resty.Client, credentialsManager *Credential
 func ParseSessionFilename(filename string) (*SessionFileInfo, error) {
 	// Try new format first: pam_session_{sessionID}_{resourceType}_expires_{timestamp}.enc
 	// Build regex pattern using constants
-	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows, ResourceTypeGcpServiceAccount)
+	resourceTypePattern := fmt.Sprintf("(%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s)", ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql, ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows, ResourceTypeGcpServiceAccount, ResourceTypeWebApp)
 	newFormatRegex := regexp.MustCompile(fmt.Sprintf(`^pam_session_(.+)_%s_expires_(\d+)\.enc$`, resourceTypePattern))
 	matches := newFormatRegex.FindStringSubmatch(filename)
 
@@ -663,11 +664,12 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
-	// SSH and Windows both write SessionEvent records (SSH uses input/output/
-	// resize/error; Windows uses ChannelType=rdp). Bulk-uploading either via
-	// the Database fallback would silently zero-fill input/output, dropping
-	// the entire recording.
-	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows {
+	// SSH, Windows, and WebApp all write SessionEvent records (SSH uses
+	// input/output/resize/error; Windows uses ChannelType=rdp; WebApp uses
+	// ChannelType=webapp for screencast frames + input). Bulk-uploading any
+	// of these via the Database fallback would silently zero-fill input/output,
+	// dropping the entire recording.
+	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows || fileInfo.ResourceType == ResourceTypeWebApp {
 		sessionEvents, err := ReadEncryptedSessionEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to read session event file: %w", err)

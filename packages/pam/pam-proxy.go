@@ -23,6 +23,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/rdp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
@@ -59,6 +60,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeMongodb,
 		session.ResourceTypeOracledb,
 		session.ResourceTypeGcpServiceAccount,
+		session.ResourceTypeWebApp,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -513,6 +515,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("serviceAccountEmail", credentials.ServiceAccountEmail).
 			Msg("Starting GCP Service Account PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeWebApp:
+		webAppConfig := webapp.WebAppProxyConfig{
+			TargetURL:     credentials.Url,
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+		}
+		proxy := webapp.NewWebAppProxy(webAppConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", credentials.Url).
+			Msg("Starting WebApp PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
