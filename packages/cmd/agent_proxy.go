@@ -1,0 +1,340 @@
+package cmd
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/fatih/color"
+	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+)
+
+var agentProxyCmd = &cobra.Command{
+	Use:                   "agent-proxy",
+	Short:                 "Secrets brokering: run an agent proxy and connect agents to it",
+	DisableFlagsInUseLine: true,
+}
+
+var agentProxyConnectCmd = &cobra.Command{
+	Use:                   "connect [flags] -- [agent start command]",
+	Short:                 "Set up the environment and launch an agent behind the agent proxy",
+	Example:               "infisical secrets agent-proxy connect --proxy=proxy:14322 --env=prod --path=/myapp -- claude",
+	DisableFlagsInUseLine: true,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return fmt.Errorf("provide the agent command to run after '--', e.g. -- claude")
+		}
+		return nil
+	},
+	Run: runAgentProxyConnect,
+}
+
+var agentProxyStartCmd = &cobra.Command{
+	Use:                   "start",
+	Short:                 "Start the agent proxy (MITM proxy that brokers credentials on the wire)",
+	Example:               "infisical secrets agent-proxy start --port 14322",
+	DisableFlagsInUseLine: true,
+	Run:                   runAgentProxyStart,
+}
+
+const mitmCaRelativePath = ".infisical/agent-proxy/mitm-ca.pem"
+
+// CA-trust env vars set on the agent so it trusts the proxy's forged certs for upstream hosts.
+var caTrustEnvVars = []string{
+	"SSL_CERT_FILE",
+	"NODE_EXTRA_CA_CERTS",
+	"REQUESTS_CA_BUNDLE",
+	"CURL_CA_BUNDLE",
+	"GIT_SSL_CAINFO",
+	"DENO_CERT",
+}
+
+// proxy env vars (set + stripped) — POSIX getenv returns the first match, so stale copies must be removed.
+var proxyEnvKeys = []string{
+	"HTTPS_PROXY",
+	"https_proxy",
+	"HTTP_PROXY",
+	"http_proxy",
+	"NO_PROXY",
+	"no_proxy",
+	"NODE_USE_ENV_PROXY",
+	"OPENCLAW_PROXY_URL",
+}
+
+func runAgentProxyConnect(cmd *cobra.Command, args []string) {
+	proxyAddr, err := cmd.Flags().GetString("proxy")
+	if err != nil || proxyAddr == "" {
+		util.HandleError(fmt.Errorf("the --proxy flag is required (e.g. --proxy=proxy:14322)"))
+	}
+
+	environment, err := cmd.Flags().GetString("env")
+	if err != nil {
+		util.HandleError(err, "Unable to parse --env")
+	}
+	if !cmd.Flags().Changed("env") {
+		if envFromWorkspace := util.GetEnvFromWorkspaceFile(); envFromWorkspace != "" {
+			environment = envFromWorkspace
+		}
+	}
+	if environment == "" {
+		util.HandleError(fmt.Errorf("the --env flag is required"))
+	}
+
+	secretPath, err := cmd.Flags().GetString("path")
+	if err != nil {
+		util.HandleError(err, "Unable to parse --path")
+	}
+
+	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse --projectId")
+	}
+	if projectID == "" {
+		if workspaceFile, wsErr := util.GetWorkSpaceFromFile(); wsErr == nil {
+			projectID = workspaceFile.WorkspaceId
+		}
+	}
+	if projectID == "" {
+		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
+	}
+
+	token := resolveAgentToken(cmd)
+
+	httpClient := resty.New().SetAuthToken(token.Token)
+
+	// 1. Fetch the org root CA and write it to disk for the agent to trust.
+	caResp, err := api.CallGetAgentProxyCa(httpClient)
+	if err != nil {
+		util.HandleError(err, "Failed to fetch the agent proxy root CA")
+	}
+	caPath, err := writeMitmCa(caResp.Certificate)
+	if err != nil {
+		util.HandleError(err, "Failed to write the agent proxy CA to disk")
+	}
+
+	// 2. Fetch proxied services the agent MI can proxy → placeholder env vars.
+	placeholderEnvs := fetchProxiedServicePlaceholders(httpClient, projectID, environment, secretPath)
+
+	// 3. Fetch regular secrets the agent MI can read (real values injected directly).
+	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
+
+	// 4. Build the environment and launch the agent.
+	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, placeholderEnvs, realSecrets)
+
+	if err := runAgentProcess(args, env); err != nil {
+		util.HandleError(err, "Agent process failed")
+	}
+}
+
+// resolveAgentToken authenticates the agent machine identity: it prefers universal-auth
+// client id/secret (flags or env vars) and falls back to an already-issued token.
+func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
+	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
+	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
+
+	if clientID != "" && clientSecret != "" {
+		loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
+		if err != nil {
+			util.HandleError(err, "Failed to authenticate the agent machine identity")
+		}
+		return &models.TokenDetails{
+			Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
+			Token: loginResp.AccessToken,
+		}
+	}
+
+	token, err := util.GetInfisicalToken(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to resolve authentication")
+	}
+	if token == nil {
+		util.HandleError(fmt.Errorf("authentication required; provide --client-id/--client-secret, env vars, or a token"))
+	}
+	return token
+}
+
+// proxyURL builds http://<projectId>:<env>/<path>:<jwt>@host:port.
+// projectId is the username; the password is "<env>/<path>:<jwt>" (JWT last, per RFC 3986 §3.2.1).
+// url.URL handles percent-encoding of the password, including slashes in the path.
+func proxyURL(proxyAddr, projectID, environment, secretPath, jwt string) string {
+	password := fmt.Sprintf("%s/%s:%s", environment, strings.TrimPrefix(secretPath, "/"), jwt)
+	u := url.URL{
+		Scheme: "http",
+		User:   url.UserPassword(projectID, password),
+		Host:   proxyAddr,
+	}
+	return u.String()
+}
+
+func writeMitmCa(certificatePem string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	caPath := filepath.Join(home, mitmCaRelativePath)
+	if err := os.MkdirAll(filepath.Dir(caPath), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(caPath, []byte(certificatePem), 0o600); err != nil {
+		return "", err
+	}
+	return caPath, nil
+}
+
+func fetchProxiedServicePlaceholders(httpClient *resty.Client, projectID, environment, secretPath string) map[string]string {
+	resp, err := api.CallListProxiedServices(httpClient, api.ListProxiedServicesRequest{
+		ProjectID:   projectID,
+		Environment: environment,
+		SecretPath:  secretPath,
+	})
+	if err != nil {
+		util.HandleError(err, "Failed to list proxied services")
+	}
+
+	placeholders := map[string]string{}
+	for _, svc := range resp.Services {
+		if !svc.CanProxy {
+			continue
+		}
+		for _, cred := range svc.Credentials {
+			if cred.Role == "credential-substitution" && cred.PlaceholderKey != "" {
+				placeholders[cred.PlaceholderKey] = cred.PlaceholderValue
+			}
+		}
+	}
+	return placeholders
+}
+
+func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, secretPath string) []models.SingleEnvironmentVariable {
+	params := models.GetAllSecretsParameters{
+		Environment: environment,
+		WorkspaceId: projectID,
+		SecretsPath: secretPath,
+	}
+	if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+		params.InfisicalToken = token.Token
+	} else if token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
+		params.UniversalAuthAccessToken = token.Token
+	}
+
+	secrets, err := util.GetAllEnvironmentVariables(params, "")
+	if err != nil {
+		// A Proxy-only agent legitimately has no ReadValue permission on secrets in this path.
+		// This is expected, not fatal — the agent still gets proxy config + placeholders.
+		log.Warn().Msgf("Could not fetch regular secrets (agent may lack read access): %v", err)
+		return nil
+	}
+	return secrets
+}
+
+func buildAgentEnv(proxy, caPath, jwt string, placeholders map[string]string, realSecrets []models.SingleEnvironmentVariable) []string {
+	// start from the current environment, stripping any stale proxy keys
+	stale := map[string]bool{}
+	for _, k := range proxyEnvKeys {
+		stale[k] = true
+	}
+	env := map[string]string{}
+	for _, kv := range os.Environ() {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) == 2 && !stale[parts[0]] {
+			env[parts[0]] = parts[1]
+		}
+	}
+
+	// proxy routing
+	env["HTTPS_PROXY"] = proxy
+	env["HTTP_PROXY"] = proxy
+	env["NO_PROXY"] = "localhost,127.0.0.1"
+	env["NODE_USE_ENV_PROXY"] = "1"
+	env["OPENCLAW_PROXY_URL"] = proxy
+
+	// CA trust
+	for _, k := range caTrustEnvVars {
+		env[k] = caPath
+	}
+
+	// Infisical CLI access from within the agent
+	env["INFISICAL_TOKEN"] = jwt
+
+	// placeholders (credential-substitution services)
+	for k, v := range placeholders {
+		env[k] = v
+	}
+
+	// real secrets win over placeholder collisions
+	for _, s := range realSecrets {
+		if _, collides := placeholders[s.Key]; collides {
+			log.Warn().Msgf("Secret %q shadows a proxied-service placeholder; using the real secret value", s.Key)
+		}
+		env[s.Key] = s.Value
+	}
+
+	result := make([]string, 0, len(env))
+	for k, v := range env {
+		result = append(result, fmt.Sprintf("%s=%s", k, v))
+	}
+	return result
+}
+
+func runAgentProcess(args, env []string) error {
+	log.Info().Msg(color.GreenString("Starting agent behind the Infisical agent proxy"))
+
+	// #nosec G204 -- the command is provided directly by the operator running the CLI
+	proc := exec.Command(args[0], args[1:]...)
+	proc.Stdin = os.Stdin
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
+	proc.Env = env
+
+	sigChannel := make(chan os.Signal, 1)
+	signal.Notify(sigChannel)
+
+	if err := proc.Start(); err != nil {
+		return err
+	}
+
+	go func() {
+		for sig := range sigChannel {
+			_ = proc.Process.Signal(sig)
+		}
+	}()
+
+	if err := proc.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				os.Exit(ws.ExitStatus())
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+func init() {
+	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy (host:port)")
+	agentProxyConnectCmd.Flags().StringP("env", "e", "dev", "environment slug to fetch proxied services and secrets from")
+	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope")
+	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
+	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
+	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
+
+	agentProxyStartCmd.Flags().Int("port", 14322, "port for the agent proxy to listen on")
+	agentProxyStartCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
+	agentProxyStartCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes for active agents")
+	agentProxyStartCmd.Flags().String("client-id", "", "universal auth client id for the agent proxy machine identity")
+	agentProxyStartCmd.Flags().String("client-secret", "", "universal auth client secret for the agent proxy machine identity")
+
+	agentProxyCmd.AddCommand(agentProxyConnectCmd)
+	agentProxyCmd.AddCommand(agentProxyStartCmd)
+	secretsCmd.AddCommand(agentProxyCmd)
+}
