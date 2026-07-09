@@ -1,17 +1,24 @@
 package pam
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,10 +35,11 @@ import (
 
 type AzureProxyServer struct {
 	BaseProxyServer
-	server    net.Listener
-	port      int
-	caCertPEM []byte
-	caKeyPEM  []byte
+	server          net.Listener
+	port            int
+	caCertPEM       []byte
+	caKeyPEM        []byte
+	proxyAuthHeader string
 }
 
 func (p *AzureProxyServer) generateCA() error {
@@ -147,6 +155,22 @@ func (p *AzureProxyServer) handleConnection(clientConn net.Conn) {
 	default:
 	}
 
+	// authenticate the local client before brokering anything
+	var captured bytes.Buffer
+	clientReader := bufio.NewReader(io.TeeReader(clientConn, &captured))
+	req, err := http.ReadRequest(clientReader)
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			log.Debug().Err(err).Msg("Failed to read initial proxy request")
+		}
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(req.Header.Get("Proxy-Authorization")), []byte(p.proxyAuthHeader)) != 1 {
+		log.Warn().Msg("Rejected local proxy client with missing or invalid Proxy-Authorization")
+		_, _ = clientConn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"infisical-pam\"\r\nContent-Length: 0\r\n\r\n"))
+		return
+	}
+
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
@@ -167,6 +191,11 @@ func (p *AzureProxyServer) handleConnection(clientConn net.Conn) {
 	}
 	if err := writeLengthPrefixed(gatewayConn, p.caKeyPEM); err != nil {
 		log.Error().Err(err).Msg("Failed to send CA key to gateway")
+		return
+	}
+
+	if _, err := gatewayConn.Write(captured.Bytes()); err != nil {
+		log.Error().Err(err).Msg("Failed to forward initial request to gateway")
 		return
 	}
 
@@ -248,6 +277,16 @@ func startAzureAccess(httpClient *resty.Client, response *api.PAMAccessResponse,
 		return
 	}
 
+	// per-session credential the local client must present
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		proxy.Shutdown()
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to generate proxy credential: %v", err))
+		return
+	}
+	proxySecret := hex.EncodeToString(secretBytes)
+	proxy.proxyAuthHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte("infisical:"+proxySecret))
+
 	go proxy.Run()
 
 	configDir, err := os.MkdirTemp("", "infisical-pam-azure-")
@@ -285,7 +324,7 @@ func startAzureAccess(httpClient *resty.Client, response *api.PAMAccessResponse,
 		}
 	}()
 
-	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", proxy.port)
+	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
 	azureEnv := append(os.Environ(),
 		"AZURE_CONFIG_DIR="+configDir,
 		"HTTPS_PROXY="+proxyURL,
