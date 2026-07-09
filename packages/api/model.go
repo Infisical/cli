@@ -964,28 +964,29 @@ type ChunkMetadataRequest struct {
 }
 
 type PAMSessionCredentials struct {
-	Host                  string `json:"host"`
-	Port                  int    `json:"port"`
-	Database              string `json:"database"`
-	ConnectionString      string `json:"connectionString,omitempty"` // MongoDB: full URI (mongodb[+srv]://...)
-	SSLEnabled            bool   `json:"sslEnabled"`
-	SSLRejectUnauthorized bool   `json:"sslRejectUnauthorized"`
-	SSLCertificate        string `json:"sslCertificate,omitempty"`
-	Username              string `json:"username"`
-	Password              string `json:"password"`
-	AuthMethod            string `json:"authMethod,omitempty"`
-	PrivateKey            string `json:"privateKey,omitempty"`
-	Certificate           string `json:"certificate,omitempty"`
-	Url                   string `json:"url,omitempty"`
-	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
-	ServiceAccountName    string `json:"serviceAccountName,omitempty"`
-	Namespace             string `json:"namespace,omitempty"`
-	Domain                string `json:"domain,omitempty"`
-	Realm                 string `json:"realm,omitempty"`
-	KDCAddress            string `json:"kdcAddress,omitempty"`
-	SPN                   string `json:"spn,omitempty"`
-	Token                 string `json:"token,omitempty"`
-	ServiceAccountEmail   string `json:"serviceAccountEmail,omitempty"`
+	Host                  string            `json:"host"`
+	Port                  int               `json:"port"`
+	Database              string            `json:"database"`
+	ConnectionString      string            `json:"connectionString,omitempty"` // MongoDB: full URI (mongodb[+srv]://...)
+	SSLEnabled            bool              `json:"sslEnabled"`
+	SSLRejectUnauthorized bool              `json:"sslRejectUnauthorized"`
+	SSLCertificate        string            `json:"sslCertificate,omitempty"`
+	Username              string            `json:"username"`
+	Password              string            `json:"password"`
+	AuthMethod            string            `json:"authMethod,omitempty"`
+	PrivateKey            string            `json:"privateKey,omitempty"`
+	Certificate           string            `json:"certificate,omitempty"`
+	Url                   string            `json:"url,omitempty"`
+	ServiceAccountToken   string            `json:"serviceAccountToken,omitempty"`
+	ServiceAccountName    string            `json:"serviceAccountName,omitempty"`
+	Namespace             string            `json:"namespace,omitempty"`
+	Domain                string            `json:"domain,omitempty"`
+	Realm                 string            `json:"realm,omitempty"`
+	KDCAddress            string            `json:"kdcAddress,omitempty"`
+	SPN                   string            `json:"spn,omitempty"`
+	Token                 string            `json:"token,omitempty"`
+	Tokens                map[string]string `json:"tokens,omitempty"`
+	ServiceAccountEmail   string            `json:"serviceAccountEmail,omitempty"`
 }
 
 type MFASessionStatus string

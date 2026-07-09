@@ -14,6 +14,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/azure"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/gcp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
@@ -59,6 +60,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeMongodb,
 		session.ResourceTypeOracledb,
 		session.ResourceTypeGcpServiceAccount,
+		session.ResourceTypeAzureCli,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -175,10 +177,11 @@ func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ru
 // resource is Windows; ignored for other resource types.
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
 	credentialExpiryTime := pamConfig.ExpiryTime
-	if pamConfig.ResourceType == session.ResourceTypeGcpServiceAccount {
-		gcpTokenMaxLifetime := time.Now().Add(1 * time.Hour)
-		if gcpTokenMaxLifetime.Before(credentialExpiryTime) {
-			credentialExpiryTime = gcpTokenMaxLifetime
+	if pamConfig.ResourceType == session.ResourceTypeGcpServiceAccount ||
+		pamConfig.ResourceType == session.ResourceTypeAzureCli {
+		cloudTokenMaxLifetime := time.Now().Add(1 * time.Hour)
+		if cloudTokenMaxLifetime.Before(credentialExpiryTime) {
+			credentialExpiryTime = cloudTokenMaxLifetime
 		}
 	}
 
@@ -513,6 +516,17 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("serviceAccountEmail", credentials.ServiceAccountEmail).
 			Msg("Starting GCP Service Account PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeAzureCli:
+		azureConfig := azure.AzureProxyConfig{
+			Tokens:        credentials.Tokens,
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+		}
+		proxy := azure.NewAzureProxy(azureConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Msg("Starting Azure CLI PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
