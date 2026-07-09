@@ -453,6 +453,7 @@ func isLoginHost(host string) bool {
 	return strings.EqualFold(host, "login.microsoftonline.com")
 }
 
+// key vault operations redact request bodies from logs since they often contain secrets
 func isVaultHost(host string) bool {
 	return strings.HasSuffix(strings.ToLower(host), ".vault.azure.net")
 }
