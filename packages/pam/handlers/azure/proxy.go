@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -255,18 +256,10 @@ func isTokenEndpoint(path string) bool {
 func (p *AzureProxy) handleRequest(_ context.Context, writer io.Writer, req *http.Request, client *http.Client, l zerolog.Logger) error {
 	requestId := uuid.New()
 
-	host := req.Host
-	if req.URL.Scheme != "" && req.URL.Host != "" {
-		host = req.URL.Host
-	}
-	hostname := host
-	if strings.Contains(hostname, ":") {
-		hostname = strings.Split(hostname, ":")[0]
-	}
-
-	if !isAzureHost(hostname) {
-		l.Warn().Str("host", host).Msg("Rejected non-Azure request")
-		writeErrorResponseTo(writer, fmt.Sprintf("host %q is not an allowed Azure endpoint", host))
+	hostname, ok := dialHostname(req)
+	if !ok || !isAzureHost(hostname) {
+		l.Warn().Str("host", req.Host).Msg("Rejected non-Azure request")
+		writeErrorResponseTo(writer, fmt.Sprintf("host %q is not an allowed Azure endpoint", req.Host))
 		return nil
 	}
 
@@ -283,8 +276,8 @@ func (p *AzureProxy) handleRequest(_ context.Context, writer io.Writer, req *htt
 	audience, _ := azureHostAudience(hostname)
 	token := p.config.Tokens[audience]
 	if token == "" {
-		l.Warn().Str("host", host).Str("audience", audience).Msg("No brokered token for Azure plane")
-		writeErrorResponseTo(writer, fmt.Sprintf("no brokered access for %q; the service principal may lack permissions for this Azure service", host))
+		l.Warn().Str("host", hostname).Str("audience", audience).Msg("No brokered token for Azure plane")
+		writeErrorResponseTo(writer, fmt.Sprintf("no brokered access for %q; the service principal may lack permissions for this Azure service", hostname))
 		return nil
 	}
 	return p.forward(writer, req, client, l, token, isVaultHost(hostname), requestId)
@@ -483,6 +476,21 @@ func azureHostAudience(host string) (string, bool) {
 	return "", false
 }
 
+func dialHostname(req *http.Request) (string, bool) {
+	host := req.Host
+	if req.URL.Scheme != "" && req.URL.Host != "" {
+		host = req.URL.Host
+	}
+	if host == "" || strings.Contains(host, "@") {
+		return "", false
+	}
+	u, err := url.Parse("https://" + host)
+	if err != nil || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	return u.Hostname(), true
+}
+
 func isAzureHost(host string) bool {
 	if strings.Contains(host, "@") {
 		return false
@@ -500,7 +508,7 @@ func isAzureHost(host string) bool {
 }
 
 func writeErrorResponseTo(w io.Writer, message string) {
-	body := fmt.Sprintf("{\"message\": \"gateway: %s\"}", message)
+	body, _ := json.Marshal(map[string]string{"message": "gateway: " + message})
 	resp := fmt.Sprintf("HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	w.Write([]byte(resp))
 }
