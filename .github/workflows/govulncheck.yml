@@ -21,14 +21,45 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4.3.0
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
           cache: true
           cache-dependency-path: go.sum
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
       # Fails on ANY vulnerable module version (deps + stdlib for the CI toolchain),
       # regardless of reachability — matches external (Trivy-style) scanners.
+      #
+      # ALLOWLIST holds advisories we knowingly accept: each must have no fixed
+      # version available AND not be present in our build graph (unreachable).
+      # Everything else — including any future fixable advisory — still fails.
+      #   - GO-2026-5932: golang.org/x/crypto/openpgp is unmaintained (Fixed in: N/A).
+      #     We do not import openpgp anywhere; verify with:
+      #       go list -deps ./... | grep openpgp   # (expect no output)
       - name: Run govulncheck (module versions)
         env:
           CGO_ENABLED: "0"
-        run: govulncheck -scan module
+        run: |
+          ALLOWLIST="GO-2026-5932"
+
+          # Human-readable report (informational; govulncheck exits 3 when it
+          # finds anything, so don't let that fail the step on its own).
+          govulncheck -scan module || true
+
+          # Machine-readable gate: fail only on advisories not in the allowlist.
+          govulncheck -scan module -format json > govulncheck.json || true
+          findings="$(jq -r 'select(.finding != null) | .finding.osv' govulncheck.json | sort -u)"
+
+          unexpected=""
+          for id in $findings; do
+            if ! grep -qxF "$id" <<< "$(tr ' ' '\n' <<< "$ALLOWLIST")"; then
+              unexpected="$unexpected $id"
+            fi
+          done
+
+          echo "=== Allowlisted (no fix available, not in build graph): $ALLOWLIST ==="
+
+          if [ -n "${unexpected// /}" ]; then
+            echo "::error::Non-allowlisted vulnerabilities found:$unexpected"
+            exit 1
+          fi
+          echo "No non-allowlisted vulnerabilities found."

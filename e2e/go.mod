@@ -1,6 +1,6 @@
 module github.com/infisical/cli/e2e-tests
 
-go 1.25.11
+go 1.25.12
 
 require (
 	github.com/Infisical/infisical-merge v0.0.0
@@ -250,7 +250,7 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/quic-go/quic-go v0.57.0 // indirect
+	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rs/cors v1.11.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1 // indirect
