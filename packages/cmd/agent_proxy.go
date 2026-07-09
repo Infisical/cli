@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
@@ -263,8 +264,10 @@ func buildAgentEnv(proxy, caPath, jwt string, placeholders map[string]string, re
 		env[k] = caPath
 	}
 
-	// Infisical CLI access from within the agent
+	// Infisical CLI access from within the agent. Pass the domain (without the /api suffix the child
+	// re-appends) so infisical commands run inside the agent target the same instance.
 	env["INFISICAL_TOKEN"] = jwt
+	env[util.INFISICAL_DOMAIN_ENV_NAME] = strings.TrimSuffix(config.INFISICAL_URL, "/api")
 
 	// placeholders (credential-substitution services)
 	for k, v := range placeholders {
@@ -322,7 +325,7 @@ func runAgentProcess(args, env []string) error {
 
 func init() {
 	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy (host:port)")
-	agentProxyConnectCmd.Flags().StringP("env", "e", "dev", "environment slug to fetch proxied services and secrets from")
+	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from")
 	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope")
 	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
 	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")

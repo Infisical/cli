@@ -41,8 +41,12 @@ func parseHostPatterns(raw string) []hostPattern {
 func (p hostPattern) matchScore(host, port, path string) (bool, int) {
 	score := 0
 
-	if strings.HasPrefix(p.host, "*.") {
-		suffix := p.host[1:] // ".github.com"
+	// Hostnames are case-insensitive; fold both sides so wildcard matching agrees with exact matching.
+	host = strings.ToLower(host)
+	patternHost := strings.ToLower(p.host)
+
+	if strings.HasPrefix(patternHost, "*.") {
+		suffix := patternHost[1:] // ".github.com"
 		// wildcard matches exactly one extra label: api.github.com yes, a.b.github.com no
 		if !strings.HasSuffix(host, suffix) {
 			return false, 0
@@ -53,7 +57,7 @@ func (p hostPattern) matchScore(host, port, path string) (bool, int) {
 		}
 		score += 1
 	} else {
-		if !strings.EqualFold(p.host, host) {
+		if patternHost != host {
 			return false, 0
 		}
 		score += 2

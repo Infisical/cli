@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"sync"
 	"time"
 
@@ -20,7 +21,8 @@ import (
 // caManager holds the intermediate CA (signed by the org root CA in Infisical) and mints
 // short-lived leaf certificates per upstream hostname, presenting the leaf+intermediate chain.
 type caManager struct {
-	httpClient *resty.Client
+	// token returns the proxy MI's current access token, refreshed by the caller.
+	token func() string
 
 	mu               sync.Mutex
 	intermediateKey  *ecdsa.PrivateKey
@@ -36,10 +38,10 @@ type leafEntry struct {
 	expiration time.Time
 }
 
-func newCaManager(httpClient *resty.Client) *caManager {
+func newCaManager(token func() string) *caManager {
 	return &caManager{
-		httpClient: httpClient,
-		leafCache:  make(map[string]*leafEntry),
+		token:     token,
+		leafCache: make(map[string]*leafEntry),
 	}
 }
 
@@ -64,7 +66,8 @@ func (c *caManager) ensureIntermediate() error {
 	}
 	pubPem := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDer})
 
-	resp, err := api.CallSignAgentProxyIntermediateCa(c.httpClient, api.SignAgentProxyIntermediateCaRequest{
+	client := resty.New().SetAuthToken(c.token())
+	resp, err := api.CallSignAgentProxyIntermediateCa(client, api.SignAgentProxyIntermediateCaRequest{
 		PublicKey: string(pubPem),
 	})
 	if err != nil {
@@ -128,7 +131,12 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{hostname},
+	}
+	// TLS clients validate an IP-literal target against the IP SAN, not DNS names.
+	if ip := net.ParseIP(hostname); ip != nil {
+		template.IPAddresses = []net.IP{ip}
+	} else {
+		template.DNSNames = []string{hostname}
 	}
 
 	leafDer, err := x509.CreateCertificate(rand.Reader, template, interCert, &key.PublicKey, interKey)

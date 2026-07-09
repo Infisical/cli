@@ -58,6 +58,17 @@ func TestLongestPathPrefixWins(t *testing.T) {
 	}
 }
 
+func TestHostMatchingIsCaseInsensitive(t *testing.T) {
+	exact := svc("exact", "API.Stripe.com")
+	if got := bestMatch([]*resolvedService{exact}, "api.stripe.com", "443", "/"); got == nil {
+		t.Fatal("exact host match should be case-insensitive")
+	}
+	wildcard := svc("wildcard", "*.GitHub.com")
+	if got := bestMatch([]*resolvedService{wildcard}, "API.github.com", "443", "/"); got == nil {
+		t.Fatal("wildcard host match should be case-insensitive")
+	}
+}
+
 func TestNoMatch(t *testing.T) {
 	s := svc("stripe", "api.stripe.com")
 	if got := bestMatch([]*resolvedService{s}, "api.github.com", "443", "/"); got != nil {

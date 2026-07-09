@@ -1,6 +1,7 @@
 package agentproxy
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,16 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 )
+
+// isAuthError reports whether an error from an Infisical call is a hard auth failure (401/403),
+// as opposed to a transient/network error. A revoked or expired agent JWT surfaces here.
+func isAuthError(err error) bool {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == 401 || apiErr.StatusCode == 403
+	}
+	return false
+}
 
 const agentInactiveTTL = 10 * time.Minute
 
@@ -54,13 +65,15 @@ func cacheKey(jwt string, scope agentScope) string {
 // agentCache resolves and caches, per agent JWT, the proxied services the agent may use
 // along with the real credential values (fetched with the proxy's own token).
 type agentCache struct {
-	proxyToken string
+	// proxyToken returns the proxy MI's current access token; it is refreshed by the caller,
+	// so it is a getter rather than a fixed string (a fixed token would expire and break fetches).
+	proxyToken func() string
 
 	mu      sync.Mutex
 	entries map[string]*agentEntry
 }
 
-func newAgentCache(proxyToken string) *agentCache {
+func newAgentCache(proxyToken func() string) *agentCache {
 	return &agentCache{
 		proxyToken: proxyToken,
 		entries:    make(map[string]*agentEntry),
@@ -156,7 +169,7 @@ func (a *agentCache) fetchSecretValues(scope agentScope) (map[string]string, err
 		Environment:              scope.environment,
 		WorkspaceId:              scope.projectID,
 		SecretsPath:              scope.secretPath,
-		UniversalAuthAccessToken: a.proxyToken,
+		UniversalAuthAccessToken: a.proxyToken(),
 	}
 	secrets, err := util.GetAllEnvironmentVariables(params, "")
 	if err != nil {
@@ -191,6 +204,15 @@ func (a *agentCache) refreshActive() {
 	for _, t := range targets {
 		resolved, err := a.resolve(t.jwt, t.scope)
 		if err != nil {
+			// A hard auth failure means the agent's JWT was revoked or expired: evict so we stop
+			// serving its cached credentials (fail closed). Transient errors keep the existing cache.
+			if isAuthError(err) {
+				util.PrintWarning(fmt.Sprintf("agent authorization no longer valid; dropping cached credentials: %v", err))
+				a.mu.Lock()
+				delete(a.entries, t.key)
+				a.mu.Unlock()
+				continue
+			}
 			util.PrintWarning(fmt.Sprintf("failed to refresh agent cache: %v", err))
 			continue
 		}

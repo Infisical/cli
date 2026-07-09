@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,12 +20,20 @@ const (
 	UnmatchedBlock = "block"
 )
 
+const (
+	connectReadTimeout  = 30 * time.Second // time allowed to send the CONNECT request
+	tlsHandshakeTimeout = 10 * time.Second // time allowed to complete the MITM TLS handshake
+	idleTunnelTimeout   = 5 * time.Minute  // max idle time waiting for the next request on a tunnel
+)
+
+// errHostBlocked marks a request rejected by the unmatched-host=block policy so it maps to 403.
+var errHostBlocked = errors.New("host blocked by policy")
+
 type Options struct {
 	Port          int
 	UnmatchedHost string        // allow | block
 	PollInterval  time.Duration // cache refresh cadence
-	ProxyToken    string        // the agent proxy MI's own access token
-	CaHTTPClient  *resty.Client // authenticated as the proxy MI, for CA signing
+	ProxyToken    func() string // returns the agent proxy MI's current access token (refreshed by the caller)
 }
 
 type proxyServer struct {
@@ -40,7 +47,7 @@ type proxyServer struct {
 func Start(opts Options) error {
 	ps := &proxyServer{
 		opts:  opts,
-		ca:    newCaManager(opts.CaHTTPClient),
+		ca:    newCaManager(opts.ProxyToken),
 		cache: newAgentCache(opts.ProxyToken),
 		transport: &http.Transport{
 			Proxy:                 nil,
@@ -90,11 +97,14 @@ func (ps *proxyServer) pollLoop() {
 func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	defer clientConn.Close()
 
+	// Bound the time a client may take to send its CONNECT so a stalled connection can't pin a goroutine.
+	_ = clientConn.SetReadDeadline(time.Now().Add(connectReadTimeout))
 	reader := bufio.NewReader(clientConn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
 		return
 	}
+	_ = clientConn.SetReadDeadline(time.Time{})
 
 	if req.Method != http.MethodConnect {
 		writeProxyResponse(clientConn, http.StatusMethodNotAllowed, "only CONNECT is supported")
@@ -132,9 +142,11 @@ func (ps *proxyServer) handleConn(clientConn net.Conn) {
 		Certificates: []tls.Certificate{leaf},
 		MinVersion:   tls.VersionTLS12,
 	})
+	_ = tlsConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		return
 	}
+	_ = tlsConn.SetDeadline(time.Time{})
 	defer tlsConn.Close()
 
 	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
@@ -145,6 +157,8 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 	tlsReader := bufio.NewReader(tlsConn)
 
 	for {
+		// Reap a tunnel that sits idle (or dribbles headers) between requests.
+		_ = tlsConn.SetReadDeadline(time.Now().Add(idleTunnelTimeout))
 		req, err := http.ReadRequest(tlsReader)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -152,10 +166,16 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 			}
 			return
 		}
+		// Clear the deadline for the forward: the upstream response may legitimately stream for a while.
+		_ = tlsConn.SetReadDeadline(time.Time{})
 
 		resp, err := ps.forward(req, hostname, port, jwt, scope)
 		if err != nil {
-			writeHTTPError(tlsConn, http.StatusBadGateway, err.Error())
+			if errors.Is(err, errHostBlocked) {
+				writeHTTPError(tlsConn, http.StatusForbidden, err.Error())
+			} else {
+				writeHTTPError(tlsConn, http.StatusBadGateway, err.Error())
+			}
 			return
 		}
 
@@ -176,7 +196,7 @@ func (ps *proxyServer) forward(req *http.Request, hostname, port, jwt string, sc
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
 	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock {
-		return nil, fmt.Errorf("host %q has no matching proxied service (blocked by policy)", hostname)
+		return nil, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
 	}
 
 	// rebuild the outbound request targeting the real upstream
