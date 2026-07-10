@@ -17,14 +17,22 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 )
 
 const (
 	// The backend signs the intermediate with a 7-day TTL; renewing below this threshold keeps
 	// the intermediate (and every leaf capped to it) comfortably inside that window.
 	intermediateRenewThreshold = 12 * time.Hour
-	leafTTL                    = 24 * time.Hour // lifetime of a minted leaf certificate
-	leafReuseMargin            = 1 * time.Hour  // minimum remaining lifetime to reuse a cached leaf
+	// Below the renew threshold, a failed re-sign falls back to the current intermediate as long
+	// as it stays valid past this margin, so a transient Infisical outage inside the renewal
+	// window degrades gracefully instead of failing every mint (including cached-leaf hostnames).
+	intermediateFallbackMargin = 5 * time.Minute
+	// Minimum time between re-sign attempts while falling back; mints are serialized on c.mu,
+	// so retrying on every request would both hammer the sign endpoint and block all minting.
+	intermediateRetryInterval = 30 * time.Second
+	leafTTL                   = 24 * time.Hour // lifetime of a minted leaf certificate
+	leafReuseMargin           = 1 * time.Hour  // minimum remaining lifetime to reuse a cached leaf
 )
 
 // caManager holds the intermediate CA (signed by the org root CA in Infisical) and mints
@@ -33,10 +41,11 @@ type caManager struct {
 	// token returns the proxy MI's current access token, refreshed by the caller.
 	token func() string
 
-	mu               sync.Mutex
-	intermediateKey  *ecdsa.PrivateKey
-	intermediateCert *x509.Certificate
-	intermediateExp  time.Time
+	mu                sync.Mutex
+	intermediateKey   *ecdsa.PrivateKey
+	intermediateCert  *x509.Certificate
+	intermediateExp   time.Time
+	lastResignAttempt time.Time // throttles re-sign retries while falling back
 	// resignGen increments (under mu) every time a new intermediate is installed. Leaf minters
 	// snapshot it alongside the intermediate and only cache a leaf if it is unchanged, so a leaf
 	// signed by an outgoing intermediate can never land in leafCache after a re-sign cleared it.
@@ -59,15 +68,36 @@ func newCaManager(token func() string) *caManager {
 }
 
 // ensureIntermediate lazily generates an intermediate keypair and has Infisical sign it,
-// re-signing when it is near expiry.
+// re-signing when it is near expiry. A failed re-sign is not fatal while the current
+// intermediate remains usable: minting continues on it and the re-sign is retried later.
 func (c *caManager) ensureIntermediate() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.intermediateCert != nil && time.Until(c.intermediateExp) > intermediateRenewThreshold {
+	remaining := time.Until(c.intermediateExp)
+	if c.intermediateCert != nil && remaining > intermediateRenewThreshold {
 		return nil
 	}
 
+	canFallBack := c.intermediateCert != nil && remaining > intermediateFallbackMargin
+	if canFallBack && time.Since(c.lastResignAttempt) < intermediateRetryInterval {
+		return nil
+	}
+	c.lastResignAttempt = time.Now()
+
+	if err := c.resignIntermediateLocked(); err != nil {
+		if canFallBack {
+			log.Warn().Err(err).Msg("failed to renew the intermediate CA; continuing with the current one until it nears expiry")
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// resignIntermediateLocked generates a fresh keypair, has Infisical sign it with the org root
+// CA, and installs it. Caller must hold c.mu.
+func (c *caManager) resignIntermediateLocked() error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("failed to generate intermediate CA key: %w", err)
