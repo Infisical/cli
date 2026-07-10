@@ -171,6 +171,18 @@ func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 		return
 	}
 
+	// Authenticate BEFORE minting: resolving the agent's services validates its token against
+	// Infisical. Minting first would let anyone with a syntactically valid Proxy-Authorization
+	// header force unbounded key generation (and leaf-cache growth) without a real credential.
+	if _, err := ps.cache.get(jwt, scope); err != nil {
+		if isAuthError(err) {
+			writeProxyResponse(clientConn, http.StatusForbidden, "proxy authorization failed")
+		} else {
+			writeProxyResponse(clientConn, http.StatusBadGateway, "failed to resolve agent permissions")
+		}
+		return
+	}
+
 	// leaf is minted for the exact CONNECT hostname (design: CONNECT host is source of truth)
 	leaf, err := ps.ca.mintLeaf(hostname)
 	if err != nil {

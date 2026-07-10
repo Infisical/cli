@@ -33,6 +33,10 @@ const (
 	intermediateRetryInterval = 30 * time.Second
 	leafTTL                   = 24 * time.Hour // lifetime of a minted leaf certificate
 	leafReuseMargin           = 1 * time.Hour  // minimum remaining lifetime to reuse a cached leaf
+	// Upper bound on cached leaves so an agent (even an authenticated but misbehaving one) cannot
+	// grow the cache without limit by requesting endless unique hostnames. Generous enough for many
+	// agents talking to many upstreams through one proxy; a miss just re-mints on the next request.
+	maxLeafCacheEntries = 8192
 )
 
 // caManager holds the intermediate CA (signed by the org root CA in Infisical) and mints
@@ -203,9 +207,36 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 	// state. Serving this leaf directly is still fine; it is valid until the old chain expires.
 	c.leafMu.Lock()
 	if c.resignGen.Load() == gen {
+		c.evictLeavesIfFullLocked(hostname)
 		c.leafCache[hostname] = &leafEntry{cert: cert, expiration: notAfter}
 	}
 	c.leafMu.Unlock()
 
 	return cert, nil
+}
+
+// evictLeavesIfFullLocked keeps leafCache bounded before inserting a new hostname. It first drops
+// expired entries, then, if still at capacity, evicts entries until there is room for one more.
+// Refreshing an already-cached hostname does not grow the map, so it is exempt. Caller holds c.leafMu.
+func (c *caManager) evictLeavesIfFullLocked(incoming string) {
+	if len(c.leafCache) < maxLeafCacheEntries {
+		return
+	}
+	if _, replacing := c.leafCache[incoming]; replacing {
+		return
+	}
+	now := time.Now()
+	for host, entry := range c.leafCache {
+		if now.After(entry.expiration) {
+			delete(c.leafCache, host)
+		}
+	}
+	// Expired sweep may not have freed enough; evict arbitrary entries to make room. Evicting a
+	// live leaf only costs a re-mint the next time that hostname is requested.
+	for host := range c.leafCache {
+		if len(c.leafCache) < maxLeafCacheEntries {
+			break
+		}
+		delete(c.leafCache, host)
+	}
 }
