@@ -461,14 +461,21 @@ func printAzureSessionInfo(folder, account string, duration time.Duration, subsc
 		util.PrintfStderr("    $ az account show\n")
 		util.PrintfStderr("    $ az group list\n")
 		fmt.Printf("\n")
-		fmt.Printf("  Type 'exit' to end the session.\n")
+		fmt.Printf("  To use another terminal or your own tooling against this session,\n")
+		fmt.Printf("  export the same settings there:\n")
 	} else {
 		fmt.Printf("  Point the Azure CLI at this session, then run az commands:\n")
-		util.PrintfStderr("    $ export AZURE_CONFIG_DIR=\"%s\"\n", configDir)
-		util.PrintfStderr("    $ export HTTPS_PROXY=\"%s\"\n", proxyURL)
-		util.PrintfStderr("    $ export REQUESTS_CA_BUNDLE=\"%s\"\n", caPath)
+	}
+	util.PrintfStderr("    $ export AZURE_CONFIG_DIR=\"%s\"\n", configDir)
+	util.PrintfStderr("    $ export HTTPS_PROXY=\"%s\"\n", proxyURL)
+	util.PrintfStderr("    $ export REQUESTS_CA_BUNDLE=\"%s\"\n", caPath)
+	if !interactive {
 		util.PrintfStderr("    $ az group list\n")
-		fmt.Printf("\n")
+	}
+	fmt.Printf("\n")
+	if interactive {
+		fmt.Printf("  Type 'exit' to end the session.\n")
+	} else {
 		fmt.Printf("  Press Ctrl+C to end the session.\n")
 	}
 	fmt.Printf("\n")
