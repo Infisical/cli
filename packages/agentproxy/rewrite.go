@@ -72,7 +72,10 @@ func hasSurface(surfaces []string, target string) bool {
 }
 
 // applySubstitution replaces the placeholder value with the real credential across the
-// configured surfaces (header/path/query/body).
+// configured surfaces (header/path/query/body). Replacement is a plain substring ReplaceAll, so
+// every occurrence is swapped, including where the placeholder is a prefix/substring of a longer
+// token. This is safe in practice because placeholders are distinctive random strings
+// (see genPlaceholder), but callers must not use short/common placeholder values.
 func applySubstitution(req *http.Request, cred resolvedCredential) error {
 	placeholder := cred.placeholder
 	if placeholder == "" {
