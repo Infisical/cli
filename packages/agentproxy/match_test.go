@@ -87,6 +87,20 @@ func TestHostMatchingIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestTieBrokenByServiceNameRegardlessOfInputOrder(t *testing.T) {
+	// two services claiming the same host tie on every specificity tier; the lexicographically
+	// smaller name must win in BOTH input orders so the result never depends on fetch/slice order.
+	alpha := svc("alpha", "api.stripe.com")
+	bravo := svc("bravo", "api.stripe.com")
+
+	if got := bestMatch([]*resolvedService{alpha, bravo}, "api.stripe.com", "443", "/"); got == nil || got.name != "alpha" {
+		t.Fatalf("expected 'alpha' to win the tie, got %v", got)
+	}
+	if got := bestMatch([]*resolvedService{bravo, alpha}, "api.stripe.com", "443", "/"); got == nil || got.name != "alpha" {
+		t.Fatalf("tie winner must not depend on input order, got %v", got)
+	}
+}
+
 func TestNoMatch(t *testing.T) {
 	s := svc("stripe", "api.stripe.com")
 	if got := bestMatch([]*resolvedService{s}, "api.github.com", "443", "/"); got != nil {

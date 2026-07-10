@@ -56,6 +56,12 @@ func (m matchDetail) betterThan(o matchDetail) bool {
 	return m.pathLen > o.pathLen
 }
 
+// equalTo reports whether two matches are equally specific across every tier, meaning neither is
+// betterThan the other and the caller must fall back to a stable tiebreaker.
+func (m matchDetail) equalTo(o matchDetail) bool {
+	return m.exactHost == o.exactHost && m.specificPort == o.specificPort && m.pathLen == o.pathLen
+}
+
 // match reports whether the pattern matches the target and, if so, how specifically.
 func (p hostPattern) match(host, port, path string) (bool, matchDetail) {
 	detail := matchDetail{}
@@ -100,7 +106,11 @@ func (p hostPattern) match(host, port, path string) (bool, matchDetail) {
 }
 
 // bestMatch picks the most specific matching service per the tiered precedence in betterThan.
-// On full ties, the first service (definition order) wins because betterThan is strict.
+// A full tie (equal specificity across all tiers) is broken by the lexicographically-smallest
+// service name. Names are unique within a folder, so this is a total order that makes the result
+// deterministic regardless of the order services were fetched in -- the Infisical list endpoint
+// does not guarantee an order, and the proxy re-fetches on every poll, so relying on slice order
+// would let the winner differ across HA instances or flip between polls.
 func bestMatch(services []*resolvedService, host, port, path string) *resolvedService {
 	var best *resolvedService
 	var bestDetail matchDetail
@@ -114,7 +124,11 @@ func bestMatch(services []*resolvedService, host, port, path string) *resolvedSe
 			if !matched {
 				continue
 			}
-			if best == nil || detail.betterThan(bestDetail) {
+			switch {
+			case best == nil, detail.betterThan(bestDetail):
+				best = svc
+				bestDetail = detail
+			case detail.equalTo(bestDetail) && svc.name < best.name:
 				best = svc
 				bestDetail = detail
 			}
