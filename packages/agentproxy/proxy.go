@@ -21,19 +21,18 @@ const (
 )
 
 const (
-	connectReadTimeout  = 30 * time.Second // time allowed to send the CONNECT request
-	tlsHandshakeTimeout = 10 * time.Second // time allowed to complete the MITM TLS handshake
-	idleTunnelTimeout   = 5 * time.Minute  // max idle time waiting for the next request on a tunnel
+	connectReadTimeout  = 30 * time.Second
+	tlsHandshakeTimeout = 10 * time.Second
+	idleTunnelTimeout   = 5 * time.Minute
 )
 
-// errHostBlocked marks a request rejected by the unmatched-host=block policy so it maps to 403.
 var errHostBlocked = errors.New("host blocked by policy")
 
 type Options struct {
 	Port          int
-	UnmatchedHost string        // allow | block
-	PollInterval  time.Duration // cache refresh cadence
-	ProxyToken    func() string // returns the agent proxy MI's current access token (refreshed by the caller)
+	UnmatchedHost string
+	PollInterval  time.Duration
+	ProxyToken    func() string
 }
 
 type proxyServer struct {
@@ -43,11 +42,7 @@ type proxyServer struct {
 	transport *http.Transport
 }
 
-// newUpstreamTransport builds the transport used to forward requests to upstream services.
-// It forces HTTP/1.1: every upstream response is re-serialized over the HTTP/1.1 MITM tunnel, so an
-// HTTP/2 response has no HTTP/1.1 length framing and would hang the client. A non-nil (empty)
-// TLSNextProto disables HTTP/2 -- ForceAttemptHTTP2:false alone is ignored when no custom
-// TLSClientConfig/dialer is set, and Go otherwise auto-enables h2.
+// Forces HTTP/1.1: h2 responses have no HTTP/1.1 length framing and would hang the re-serialized MITM tunnel; a non-nil empty TLSNextProto is what actually disables h2.
 func newUpstreamTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:                 nil,
@@ -60,7 +55,6 @@ func newUpstreamTransport() *http.Transport {
 	}
 }
 
-// Start runs the agent proxy until the process is terminated.
 func Start(opts Options) error {
 	ps := &proxyServer{
 		opts:      opts,
@@ -69,16 +63,12 @@ func Start(opts Options) error {
 		transport: newUpstreamTransport(),
 	}
 
-	// warm up the intermediate CA so the first agent request isn't blocked on signing
 	if err := ps.ca.ensureIntermediate(); err != nil {
 		return fmt.Errorf("failed to initialize agent proxy CA: %w", err)
 	}
 
 	go ps.pollLoop()
 
-	// Pre-flight: fail fast if something already listens on this port. A plain net.Listen(":port")
-	// can bind one address family (e.g. IPv6) while another process holds the other (e.g. a process
-	// on IPv4 127.0.0.1), which would silently split traffic, so probe both loopback families first.
 	if addr := portInUse(opts.Port); addr != "" {
 		return fmt.Errorf("port %d is already in use (%s); another process is listening. Choose a free port with --port", opts.Port, addr)
 	}
@@ -97,7 +87,6 @@ func Start(opts Options) error {
 				return nil
 			}
 			log.Warn().Err(err).Msg("failed to accept connection")
-			// back off briefly so a persistent accept error doesn't hot-spin the loop
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
@@ -105,8 +94,6 @@ func Start(opts Options) error {
 	}
 }
 
-// portInUse reports the first loopback address that already has a listener on the port, or "".
-// Probing both families catches the dual-stack split that a bare net.Listen would miss.
 func portInUse(port int) string {
 	for _, addr := range []string{fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("[::1]:%d", port)} {
 		conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
@@ -134,8 +121,6 @@ func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	defer clientConn.Close()
 
 	reader := bufio.NewReader(clientConn)
-	// Bound the time a client may take to send its first request so a stalled connection can't
-	// pin a goroutine; subsequent keep-alive requests on the plain-HTTP path get the idle timeout.
 	readTimeout := connectReadTimeout
 	for {
 		_ = clientConn.SetReadDeadline(time.Now().Add(readTimeout))
@@ -156,8 +141,6 @@ func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	}
 }
 
-// handleConnect serves a CONNECT request: authenticate, mint a leaf for the target hostname,
-// complete the MITM TLS handshake, and serve tunnelled requests until the connection ends.
 func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 	scope, jwt, ok := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
 	if !ok {
@@ -171,9 +154,7 @@ func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 		return
 	}
 
-	// Authenticate BEFORE minting: resolving the agent's services validates its token against
-	// Infisical. Minting first would let anyone with a syntactically valid Proxy-Authorization
-	// header force unbounded key generation (and leaf-cache growth) without a real credential.
+	// Authenticate before minting: otherwise any syntactically valid Proxy-Authorization header forces unbounded key generation and leaf-cache growth.
 	if _, err := ps.cache.get(jwt, scope); err != nil {
 		if isAuthError(err) {
 			writeProxyResponse(clientConn, http.StatusForbidden, "proxy authorization failed")
@@ -183,7 +164,6 @@ func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 		return
 	}
 
-	// leaf is minted for the exact CONNECT hostname (design: CONNECT host is source of truth)
 	leaf, err := ps.ca.mintLeaf(hostname)
 	if err != nil {
 		writeProxyResponse(clientConn, http.StatusInternalServerError, "failed to mint certificate")
@@ -208,13 +188,7 @@ func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
 }
 
-// handlePlainForward serves an absolute-form forward-proxy request (RFC 7230 §5.3.2) for a
-// plain-HTTP upstream, applying the same auth, matching, and credential pipeline as the CONNECT
-// path — there is just no TLS layer to intercept, and the agent JWT arrives on every request
-// rather than once per tunnel. Only http:// is served: https:// absolute-form is rejected so
-// the proxy can never be used to silently TLS-strip (HTTPS upstreams must arrive as CONNECT),
-// and origin-form is rejected so the proxy ingress cannot be used as an origin server.
-// It reports whether the connection may serve another keep-alive request.
+// Only http:// absolute-form is served; https:// is rejected so the proxy can never be used to silently TLS-strip (HTTPS must arrive as CONNECT).
 func (ps *proxyServer) handlePlainForward(clientConn net.Conn, req *http.Request) bool {
 	if !strings.EqualFold(req.URL.Scheme, "http") || req.URL.Host == "" {
 		writeHTTPError(clientConn, http.StatusBadRequest, "non-CONNECT requests must be absolute-form http:// (use CONNECT for https:// upstreams)")
@@ -227,9 +201,6 @@ func (ps *proxyServer) handlePlainForward(clientConn net.Conn, req *http.Request
 		return false
 	}
 
-	// URL.Hostname/Port handle bracketed IPv6 literals; default the port for the http scheme.
-	// Per RFC 7230 §5.4 the absolute-form URL is authoritative for routing (the Host header is
-	// not consulted; Go's ReadRequest already promotes the URL host into req.Host).
 	hostname := req.URL.Hostname()
 	port := req.URL.Port()
 	if port == "" {
@@ -259,9 +230,6 @@ func (ps *proxyServer) handlePlainForward(clientConn net.Conn, req *http.Request
 	return !req.Close && !resp.Close
 }
 
-// parseConnectTarget splits a CONNECT authority-form target into hostname and port, defaulting
-// the port to 443. Bracketed IPv6 literals ("[::1]", "[::1]:8443") are handled by SplitHostPort;
-// anything it cannot parse even with the default port appended is rejected.
 func parseConnectTarget(target string) (hostname, port string, err error) {
 	hostname, port, err = net.SplitHostPort(target)
 	if err == nil {
@@ -274,12 +242,10 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 	return "", "", err
 }
 
-// serveTunnel reads requests off the terminated TLS connection, applies credentials, and forwards them.
 func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) {
 	tlsReader := bufio.NewReader(tlsConn)
 
 	for {
-		// Reap a tunnel that sits idle (or dribbles headers) between requests.
 		_ = tlsConn.SetReadDeadline(time.Now().Add(idleTunnelTimeout))
 		req, err := http.ReadRequest(tlsReader)
 		if err != nil {
@@ -288,7 +254,6 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 			}
 			return
 		}
-		// Clear the deadline for the forward: the upstream response may legitimately stream for a while.
 		_ = tlsConn.SetReadDeadline(time.Time{})
 
 		resp, err := ps.forward(req, "https", hostname, port, jwt, scope)
@@ -322,21 +287,13 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 		return nil, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
 	}
 
-	// rebuild the outbound request targeting the real upstream
 	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)
-	// Pin the Host header to the matched authority. The Host header on the inner tunnel request is
-	// agent-controlled, and Go would otherwise send it verbatim (it dials req.URL.Host but writes
-	// req.Host), letting an agent CONNECT to a matched host yet deliver the injected credential to a
-	// different vhost on the same upstream. Ignoring it keeps matched host == forwarded host.
+	// Pin Host to the matched authority: the inner tunnel Host is agent-controlled and Go forwards it verbatim, which would let a matched CONNECT deliver the credential to a different vhost.
 	req.Host = hostHeaderForScheme(scheme, req.URL.Host)
 	req.RequestURI = ""
 
-	// Strip hop-by-hop headers BEFORE applying credentials, not after: stripHopByHopHeaders
-	// removes any header the client named in its Connection field, so applying credentials first
-	// would let a client (e.g. "Connection: Authorization") delete the header we just injected.
-	// Injecting last keeps "injected always wins" true regardless of client headers (matches
-	// Agent Vault's ApplyInjection, which treats this as a security invariant).
+	// Strip hop-by-hop before injecting so a client's Connection header cannot delete the injected credential (injected always wins).
 	stripHopByHopHeaders(req.Header)
 
 	if svc != nil {
@@ -348,9 +305,6 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	return ps.transport.RoundTrip(req)
 }
 
-// hostHeaderForScheme returns the Host header value for the matched target, stripping the port when
-// it is the scheme default (443 for https, 80 for http) so exact vhost matches and signed-Host
-// schemes work, while preserving non-default ports for internal vhost routing.
 func hostHeaderForScheme(scheme, target string) string {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
@@ -374,8 +328,6 @@ func hostHeaderForScheme(scheme, target string) string {
 	return host
 }
 
-// hopByHopHeaders are the standard hop-by-hop headers removed before forwarding,
-// mirroring net/http/httputil.ReverseProxy.
 var hopByHopHeaders = []string{
 	"Connection",
 	"Proxy-Connection",
@@ -388,8 +340,6 @@ var hopByHopHeaders = []string{
 	"Upgrade",
 }
 
-// stripHopByHopHeaders removes the headers named in the Connection header plus the standard
-// hop-by-hop set; they describe this hop's connection and must not be forwarded upstream.
 func stripHopByHopHeaders(h http.Header) {
 	for _, name := range strings.Split(h.Get("Connection"), ",") {
 		if name = strings.TrimSpace(name); name != "" {
@@ -401,8 +351,6 @@ func stripHopByHopHeaders(h http.Header) {
 	}
 }
 
-// parseProxyAuth decodes the Proxy-Authorization Basic header into scope + agent JWT.
-// userinfo layout: username = projectId, password = "<env>/<path>:<jwt>" (jwt last).
 func parseProxyAuth(header string) (agentScope, string, bool) {
 	const prefix = "Basic "
 	if !strings.HasPrefix(header, prefix) {
@@ -421,7 +369,6 @@ func parseProxyAuth(header string) (agentScope, string, bool) {
 	projectID := userinfo[:firstColon]
 	password := userinfo[firstColon+1:]
 
-	// jwt is after the LAST colon (env/path contain no colons; JWT charset has none)
 	lastColon := strings.LastIndex(password, ":")
 	if lastColon == -1 {
 		return agentScope{}, "", false
@@ -429,7 +376,6 @@ func parseProxyAuth(header string) (agentScope, string, bool) {
 	scopeStr := password[:lastColon]
 	jwt := password[lastColon+1:]
 
-	// scopeStr = "<env>/<path...>"
 	slash := strings.Index(scopeStr, "/")
 	var environment, secretPath string
 	if slash == -1 {
@@ -437,7 +383,7 @@ func parseProxyAuth(header string) (agentScope, string, bool) {
 		secretPath = "/"
 	} else {
 		environment = scopeStr[:slash]
-		secretPath = scopeStr[slash:] // includes leading slash
+		secretPath = scopeStr[slash:]
 	}
 
 	if projectID == "" || environment == "" || jwt == "" {
@@ -447,8 +393,6 @@ func parseProxyAuth(header string) (agentScope, string, bool) {
 	return agentScope{projectID: projectID, environment: environment, secretPath: secretPath}, jwt, true
 }
 
-// drainRequestBody consumes whatever the transport did not read of the request body so leftover
-// bytes cannot desync the next http.ReadRequest on a keep-alive connection.
 func drainRequestBody(req *http.Request) {
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)

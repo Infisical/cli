@@ -167,7 +167,6 @@ func TestSubstitutionAcrossAllSurfacesInOneCredential(t *testing.T) {
 }
 
 func TestHeaderRewriteAndSubstitutionCombined(t *testing.T) {
-	// newReq's URL carries ?token=placeholder_x
 	req := newReq(t, "")
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "sk_live_real"},

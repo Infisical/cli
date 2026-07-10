@@ -19,8 +19,6 @@ func proxyAuthHeader(projectID, environment, secretPath, jwt string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(projectID+":"+password))
 }
 
-// newTestProxy returns a proxyServer whose cache is pre-populated for jwt+scope, so no
-// Infisical calls happen, plus the client side of a pipe with handleConn running on the other end.
 func newTestProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, services []*resolvedService) net.Conn {
 	t.Helper()
 	cache := newAgentCache(func() string { return "" })
@@ -68,7 +66,6 @@ func TestPlainForwardInjectsCredentialsAndKeepsAlive(t *testing.T) {
 	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
 	reader := bufio.NewReader(client)
 
-	// two sequential requests exercise plain-path keep-alive
 	for i := 0; i < 2; i++ {
 		_, err := fmt.Fprintf(client, "GET http://%s/hello HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\n\r\n",
 			u.Host, u.Host, proxyAuthHeader("proj", "prod", "/", jwt))
@@ -97,8 +94,6 @@ func TestPlainForwardInjectsCredentialsAndKeepsAlive(t *testing.T) {
 }
 
 func TestPlainForwardInjectedHeaderSurvivesHostileConnectionHeader(t *testing.T) {
-	// A client that names the injected header in its Connection field must not be able to strip
-	// the injected credential: "injected always wins". Hop-by-hop stripping runs before injection.
 	var gotAuth string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -123,7 +118,6 @@ func TestPlainForwardInjectedHeaderSurvivesHostileConnectionHeader(t *testing.T)
 	}}
 	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
 
-	// hostile request: Connection lists Authorization (would delete it if stripping ran after inject)
 	fmt.Fprintf(client, "GET http://%s/hello HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nConnection: Authorization\r\nAuthorization: Bearer client_fake\r\n\r\n",
 		u.Host, u.Host, proxyAuthHeader("proj", "prod", "/", jwt))
 	resp, err := http.ReadResponse(bufio.NewReader(client), nil)

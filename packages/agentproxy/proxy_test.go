@@ -2,9 +2,6 @@ package agentproxy
 
 import "testing"
 
-// The proxy re-serializes every upstream response over an HTTP/1.1 MITM tunnel, so it must speak
-// HTTP/1.1 upstream. If HTTP/2 sneaks back in (e.g. TLSNextProto reset to nil so Go auto-enables h2),
-// h2 responses come back with no HTTP/1.1 length framing and hang the client on every real API.
 func TestUpstreamTransportDisablesHTTP2(t *testing.T) {
 	tr := newUpstreamTransport()
 	if tr.TLSNextProto == nil {

@@ -50,7 +50,6 @@ var agentProxyStartCmd = &cobra.Command{
 
 const mitmCaRelativePath = ".infisical/agent-proxy/mitm-ca.pem"
 
-// CA-trust env vars set on the agent so it trusts the proxy's forged certs for upstream hosts.
 var caTrustEnvVars = []string{
 	"SSL_CERT_FILE",
 	"NODE_EXTRA_CA_CERTS",
@@ -60,7 +59,7 @@ var caTrustEnvVars = []string{
 	"DENO_CERT",
 }
 
-// proxy env vars (set + stripped) — POSIX getenv returns the first match, so stale copies must be removed.
+// Stripped as well as set: getenv returns the first match, so stale copies must be removed.
 var proxyEnvKeys = []string{
 	"HTTPS_PROXY",
 	"https_proxy",
@@ -72,21 +71,15 @@ var proxyEnvKeys = []string{
 	"OPENCLAW_PROXY_URL",
 }
 
-// machine identity credential env vars stripped from the agent environment so the agent
-// never sees the long-lived credentials, only the scoped short-lived JWT set below.
+// Stripped so the agent never sees the long-lived MI credentials, only the scoped short-lived JWT set below.
 var credentialEnvKeys = []string{
 	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
 	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME,
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
 }
 
-// requiredNoProxy entries always bypass the proxy: loopback is machine-local and must never be
-// routed to a (possibly remote) proxy, regardless of operator overrides.
 var requiredNoProxy = []string{"localhost", "127.0.0.1"}
 
-// mergeNoProxy unions the required loopback defaults with operator-supplied entries (the inherited
-// NO_PROXY/no_proxy env vars and the --no-proxy flag), de-duplicated, defaults first. Operators can
-// add bypass hosts but cannot drop loopback.
 func mergeNoProxy(operatorEntries ...string) string {
 	seen := make(map[string]bool)
 	var merged []string
@@ -148,7 +141,6 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	httpClient := resty.New().SetAuthToken(token.Token)
 
-	// 1. Fetch the org root CA and write it to disk for the agent to trust.
 	caResp, err := api.CallGetAgentProxyCa(httpClient)
 	if err != nil {
 		util.HandleError(err, "Failed to fetch the agent proxy root CA")
@@ -158,13 +150,10 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to write the agent proxy CA to disk")
 	}
 
-	// 2. Fetch proxied services the agent MI can proxy → placeholder env vars.
 	placeholderEnvs := fetchProxiedServicePlaceholders(httpClient, projectID, environment, secretPath)
 
-	// 3. Fetch regular secrets the agent MI can read (real values injected directly).
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
-	// 4. Build the environment and launch the agent.
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
 
@@ -173,8 +162,6 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	}
 }
 
-// resolveAgentToken authenticates the agent machine identity: it prefers universal-auth
-// client id/secret (flags or env vars) and falls back to an already-issued token.
 func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
@@ -200,9 +187,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 	return token
 }
 
-// proxyURL builds http://<projectId>:<env>/<path>:<jwt>@host:port.
-// projectId is the username; the password is "<env>/<path>:<jwt>" (JWT last, per RFC 3986 §3.2.1).
-// url.URL handles percent-encoding of the password, including slashes in the path.
+// Builds http://<projectId>:<env>/<path>:<jwt>@host:port (username=projectId, password="<env>/<path>:<jwt>", jwt last).
 func proxyURL(proxyAddr, projectID, environment, secretPath, jwt string) string {
 	password := fmt.Sprintf("%s/%s:%s", environment, strings.TrimPrefix(secretPath, "/"), jwt)
 	u := url.URL{
@@ -240,8 +225,7 @@ func fetchProxiedServicePlaceholders(httpClient *resty.Client, projectID, enviro
 
 	placeholders := map[string]string{}
 	for _, svc := range resp.Services {
-		// the proxy applies nothing for disabled services, so their placeholders would go
-		// upstream verbatim; don't inject them
+		// Disabled services aren't proxied, so their placeholders would reach upstream verbatim; don't inject them.
 		if !svc.CanProxy || !svc.IsEnabled {
 			continue
 		}
@@ -268,8 +252,6 @@ func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, s
 
 	secrets, err := util.GetAllEnvironmentVariables(params, "")
 	if err != nil {
-		// A Proxy-only agent legitimately has no ReadValue permission on secrets in this path.
-		// This is expected, not fatal — the agent still gets proxy config + placeholders.
 		log.Warn().Msgf("Could not fetch regular secrets (agent may lack read access): %v", err)
 		return nil
 	}
@@ -277,7 +259,6 @@ func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, s
 }
 
 func buildAgentEnv(proxy, caPath, jwt, extraNoProxy string, placeholders map[string]string, realSecrets []models.SingleEnvironmentVariable) []string {
-	// start from the current environment, stripping stale proxy keys and machine identity credentials
 	stale := map[string]bool{}
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
@@ -285,8 +266,6 @@ func buildAgentEnv(proxy, caPath, jwt, extraNoProxy string, placeholders map[str
 	for _, k := range credentialEnvKeys {
 		stale[k] = true
 	}
-	// The operator's own NO_PROXY is merged (not discarded) so they can add bypass hosts; capture the
-	// inherited values here, before the strip loop drops the raw copies, and fold them in below.
 	var operatorNoProxy []string
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -303,29 +282,23 @@ func buildAgentEnv(proxy, caPath, jwt, extraNoProxy string, placeholders map[str
 		}
 	}
 
-	// proxy routing
 	env["HTTPS_PROXY"] = proxy
 	env["HTTP_PROXY"] = proxy
 	env["NO_PROXY"] = mergeNoProxy(append(operatorNoProxy, extraNoProxy)...)
 	env["NODE_USE_ENV_PROXY"] = "1"
 	env["OPENCLAW_PROXY_URL"] = proxy
 
-	// CA trust
 	for _, k := range caTrustEnvVars {
 		env[k] = caPath
 	}
 
-	// Infisical CLI access from within the agent. Pass the domain (without the /api suffix the child
-	// re-appends) so infisical commands run inside the agent target the same instance.
 	env["INFISICAL_TOKEN"] = jwt
 	env[util.INFISICAL_DOMAIN_ENV_NAME] = strings.TrimSuffix(config.INFISICAL_URL, "/api")
 
-	// placeholders (credential-substitution services)
 	for k, v := range placeholders {
 		env[k] = v
 	}
 
-	// real secrets win over placeholder collisions
 	for _, s := range realSecrets {
 		if _, collides := placeholders[s.Key]; collides {
 			log.Warn().Msgf("Secret %q shadows a proxied-service placeholder; using the real secret value", s.Key)

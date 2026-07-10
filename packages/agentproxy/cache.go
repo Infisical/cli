@@ -14,8 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// isAuthError reports whether an error from an Infisical call is a hard auth failure (401/403),
-// as opposed to a transient/network error. A revoked or expired agent JWT surfaces here.
 func isAuthError(err error) bool {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
@@ -33,7 +31,7 @@ type resolvedCredential struct {
 	headerPurpose string
 	placeholder   string
 	surfaces      []string
-	value         string // real secret value resolved via the proxy's own MI
+	value         string
 }
 
 type resolvedService struct {
@@ -56,17 +54,11 @@ type agentEntry struct {
 	lastSeen time.Time
 }
 
-// cacheKey scopes cached entries by both the agent JWT and the requested scope, so an agent
-// connecting with a different environment/path does not reuse another scope's resolved credentials.
 func cacheKey(jwt string, scope agentScope) string {
 	return strings.Join([]string{jwt, scope.projectID, scope.environment, scope.secretPath}, "\x00")
 }
 
-// agentCache resolves and caches, per agent JWT, the proxied services the agent may use
-// along with the real credential values (fetched with the proxy's own token).
 type agentCache struct {
-	// proxyToken returns the proxy MI's current access token; it is refreshed by the caller,
-	// so it is a getter rather than a fixed string (a fixed token would expire and break fetches).
 	proxyToken func() string
 
 	mu      sync.Mutex
@@ -80,9 +72,6 @@ func newAgentCache(proxyToken func() string) *agentCache {
 	}
 }
 
-// get returns a snapshot of the resolved services for the agent JWT + scope, resolving on first use.
-// The returned slice is read by the caller without the cache lock, so it is snapshotted here
-// under the lock to avoid a data race with refreshActive reassigning entry.services.
 func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, error) {
 	key := cacheKey(jwt, scope)
 
@@ -113,8 +102,6 @@ func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, erro
 	return resolved, nil
 }
 
-// resolve discovers the agent's proxied services (using the agent JWT) and fills in the real
-// secret values (using the proxy's own token).
 func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, error) {
 	agentClient := resty.New().SetAuthToken(jwt)
 	listResp, err := api.CallListProxiedServices(agentClient, api.ListProxiedServicesRequest{
@@ -144,7 +131,6 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 		for _, cred := range svc.Credentials {
 			value, ok := secretValues[cred.SecretKey]
 			if !ok {
-				// stale reference: secret renamed/deleted after the service was created
 				log.Warn().Msgf("proxied service %q references missing secret %q; skipping", svc.Name, cred.SecretKey)
 				continue
 			}
@@ -181,7 +167,6 @@ func (a *agentCache) fetchSecretValues(scope agentScope) (map[string]string, err
 	return values, nil
 }
 
-// refreshActive re-resolves cached agents that were seen recently and drops inactive ones.
 func (a *agentCache) refreshActive() {
 	type refreshTarget struct {
 		key   string
@@ -203,8 +188,7 @@ func (a *agentCache) refreshActive() {
 	for _, t := range targets {
 		resolved, err := a.resolve(t.jwt, t.scope)
 		if err != nil {
-			// A hard auth failure means the agent's JWT was revoked or expired: evict so we stop
-			// serving its cached credentials (fail closed). Transient errors keep the existing cache.
+			// Hard auth failure means the JWT was revoked/expired: evict to stop serving cached credentials (fail closed).
 			if isAuthError(err) {
 				log.Warn().Err(err).Msg("agent authorization no longer valid; dropping cached credentials")
 				a.mu.Lock()

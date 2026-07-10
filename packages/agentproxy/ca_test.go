@@ -15,8 +15,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
-// installTestIntermediate puts a self-signed CA cert into the manager as if Infisical had
-// signed it, expiring at the given time.
 func installTestIntermediate(t *testing.T, c *caManager, notAfter time.Time) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -45,8 +43,6 @@ func installTestIntermediate(t *testing.T, c *caManager, notAfter time.Time) {
 	c.intermediateExp = cert.NotAfter
 }
 
-// A failed re-sign inside the renewal window must fall back to the still-valid intermediate
-// instead of failing every mint (a transient Infisical outage must not take the proxy down).
 func TestEnsureIntermediateFallsBackWhenResignFails(t *testing.T) {
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -57,7 +53,6 @@ func TestEnsureIntermediateFallsBackWhenResignFails(t *testing.T) {
 	defer func() { config.INFISICAL_URL = origURL }()
 
 	c := newCaManager(func() string { return "test-token" })
-	// 1h remaining: below the 12h renew threshold (re-sign attempted), above the fallback margin
 	installTestIntermediate(t, c, time.Now().Add(1*time.Hour))
 
 	if err := c.ensureIntermediate(); err != nil {
@@ -72,7 +67,6 @@ func TestEnsureIntermediateFallsBackWhenResignFails(t *testing.T) {
 	}
 }
 
-// With no usable intermediate at all, a failed sign is still a hard error.
 func TestEnsureIntermediateFailsWithoutFallback(t *testing.T) {
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

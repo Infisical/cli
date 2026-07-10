@@ -7,8 +7,6 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-// ─── Agent Proxy CA ──────────────────────────────────────────────────
-
 type GetAgentProxyCaResponse struct {
 	Certificate  string `json:"certificate"`
 	KeyAlgorithm string `json:"keyAlgorithm"`
@@ -62,8 +60,6 @@ func CallSignAgentProxyIntermediateCa(httpClient *resty.Client, request SignAgen
 	}
 	return res, nil
 }
-
-// ─── Proxied Services ────────────────────────────────────────────────
 
 type ProxiedServiceCredential struct {
 	ID                   string   `json:"id"`

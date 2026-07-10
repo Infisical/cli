@@ -21,39 +21,23 @@ import (
 )
 
 const (
-	// The backend signs the intermediate with a 7-day TTL; renewing below this threshold keeps
-	// the intermediate (and every leaf capped to it) comfortably inside that window.
 	intermediateRenewThreshold = 12 * time.Hour
-	// Below the renew threshold, a failed re-sign falls back to the current intermediate as long
-	// as it stays valid past this margin, so a transient Infisical outage inside the renewal
-	// window degrades gracefully instead of failing every mint (including cached-leaf hostnames).
 	intermediateFallbackMargin = 5 * time.Minute
-	// Minimum time between re-sign attempts while falling back; mints are serialized on c.mu,
-	// so retrying on every request would both hammer the sign endpoint and block all minting.
-	intermediateRetryInterval = 30 * time.Second
-	leafTTL                   = 24 * time.Hour // lifetime of a minted leaf certificate
-	leafReuseMargin           = 1 * time.Hour  // minimum remaining lifetime to reuse a cached leaf
-	// Upper bound on cached leaves so an agent (even an authenticated but misbehaving one) cannot
-	// grow the cache without limit by requesting endless unique hostnames. Generous enough for many
-	// agents talking to many upstreams through one proxy; a miss just re-mints on the next request.
-	maxLeafCacheEntries = 8192
+	intermediateRetryInterval  = 30 * time.Second
+	leafTTL                    = 24 * time.Hour
+	leafReuseMargin            = 1 * time.Hour
+	maxLeafCacheEntries        = 8192
 )
 
-// caManager holds the intermediate CA (signed by the org root CA in Infisical) and mints
-// short-lived leaf certificates per upstream hostname, presenting the leaf+intermediate chain.
 type caManager struct {
-	// token returns the proxy MI's current access token, refreshed by the caller.
 	token func() string
 
 	mu                sync.Mutex
 	intermediateKey   *ecdsa.PrivateKey
 	intermediateCert  *x509.Certificate
 	intermediateExp   time.Time
-	lastResignAttempt time.Time // throttles re-sign retries while falling back
-	// resignGen increments (under mu) every time a new intermediate is installed. Leaf minters
-	// snapshot it alongside the intermediate and only cache a leaf if it is unchanged, so a leaf
-	// signed by an outgoing intermediate can never land in leafCache after a re-sign cleared it.
-	resignGen atomic.Uint64
+	lastResignAttempt time.Time
+	resignGen         atomic.Uint64
 
 	leafMu    sync.Mutex
 	leafCache map[string]*leafEntry
@@ -71,9 +55,6 @@ func newCaManager(token func() string) *caManager {
 	}
 }
 
-// ensureIntermediate lazily generates an intermediate keypair and has Infisical sign it,
-// re-signing when it is near expiry. A failed re-sign is not fatal while the current
-// intermediate remains usable: minting continues on it and the re-sign is retried later.
 func (c *caManager) ensureIntermediate() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -99,8 +80,6 @@ func (c *caManager) ensureIntermediate() error {
 	return nil
 }
 
-// resignIntermediateLocked generates a fresh keypair, has Infisical sign it with the org root
-// CA, and installs it. Caller must hold c.mu.
 func (c *caManager) resignIntermediateLocked() error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -134,7 +113,6 @@ func (c *caManager) resignIntermediateLocked() error {
 	c.intermediateCert = cert
 	c.intermediateExp = cert.NotAfter
 	c.resignGen.Add(1)
-	// new intermediate invalidates cached leaves (they chain to the old one)
 	c.leafMu.Lock()
 	c.leafCache = make(map[string]*leafEntry)
 	c.leafMu.Unlock()
@@ -142,8 +120,6 @@ func (c *caManager) resignIntermediateLocked() error {
 	return nil
 }
 
-// mintLeaf returns a TLS certificate for the hostname, signed by the intermediate CA,
-// with the intermediate appended so the agent can build the chain to the trusted root.
 func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 	if err := c.ensureIntermediate(); err != nil {
 		return tls.Certificate{}, err
@@ -185,7 +161,6 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	// TLS clients validate an IP-literal target against the IP SAN, not DNS names.
 	if ip := net.ParseIP(hostname); ip != nil {
 		template.IPAddresses = []net.IP{ip}
 	} else {
@@ -202,9 +177,7 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 		PrivateKey:  key,
 	}
 
-	// Only cache if no re-sign happened since the intermediate was snapshotted: a re-sign clears
-	// leafCache, and caching a leaf chained to the outgoing intermediate would resurrect stale
-	// state. Serving this leaf directly is still fine; it is valid until the old chain expires.
+	// Skip caching if a re-sign happened since snapshotting: it cleared leafCache and this leaf chains to the outgoing intermediate.
 	c.leafMu.Lock()
 	if c.resignGen.Load() == gen {
 		c.evictLeavesIfFullLocked(hostname)
@@ -215,9 +188,6 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-// evictLeavesIfFullLocked keeps leafCache bounded before inserting a new hostname. It first drops
-// expired entries, then, if still at capacity, evicts entries until there is room for one more.
-// Refreshing an already-cached hostname does not grow the map, so it is exempt. Caller holds c.leafMu.
 func (c *caManager) evictLeavesIfFullLocked(incoming string) {
 	if len(c.leafCache) < maxLeafCacheEntries {
 		return
@@ -231,8 +201,6 @@ func (c *caManager) evictLeavesIfFullLocked(incoming string) {
 			delete(c.leafCache, host)
 		}
 	}
-	// Expired sweep may not have freed enough; evict arbitrary entries to make room. Evicting a
-	// live leaf only costs a re-mint the next time that hostname is requested.
 	for host := range c.leafCache {
 		if len(c.leafCache) < maxLeafCacheEntries {
 			break

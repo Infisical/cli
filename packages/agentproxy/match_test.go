@@ -88,8 +88,6 @@ func TestHostMatchingIsCaseInsensitive(t *testing.T) {
 }
 
 func TestTieBrokenByServiceNameRegardlessOfInputOrder(t *testing.T) {
-	// two services claiming the same host tie on every specificity tier; the lexicographically
-	// smaller name must win in BOTH input orders so the result never depends on fetch/slice order.
 	alpha := svc("alpha", "api.stripe.com")
 	bravo := svc("bravo", "api.stripe.com")
 

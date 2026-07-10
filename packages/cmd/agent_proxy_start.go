@@ -20,7 +20,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 	pollInterval, _ := cmd.Flags().GetInt("poll-interval")
 
-	// Authenticate as the agent proxy machine identity.
 	clientID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	if err != nil || clientID == "" {
 		util.HandleError(fmt.Errorf("agent proxy credentials required; set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _SECRET or pass --client-id / --client-secret"))
@@ -37,8 +36,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))
 
-	// The proxy MI's access token has a TTL. Re-authenticate before it expires and publish the new
-	// token atomically, otherwise every secret fetch and CA signing call would start failing with 401.
 	var proxyToken atomic.Value
 	proxyToken.Store(loginResp.AccessToken)
 	go refreshProxyToken(&proxyToken, clientID, clientSecret, loginResp.AccessTokenTTL)
@@ -54,10 +51,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 }
 
-// refreshProxyToken re-authenticates the agent proxy MI before its token expires, storing the new
-// token for the proxy to pick up. Re-login is idempotent and always yields a fresh, valid token.
-// A failed refresh is retried on a short fixed interval so a transient outage cannot leave the
-// proxy holding an expired token for another half TTL.
 func refreshProxyToken(token *atomic.Value, clientID, clientSecret string, ttlSeconds int) {
 	const retryInterval = 30 * time.Second
 
