@@ -123,23 +123,35 @@ func (ps *proxyServer) pollLoop() {
 func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// Bound the time a client may take to send its CONNECT so a stalled connection can't pin a goroutine.
-	_ = clientConn.SetReadDeadline(time.Now().Add(connectReadTimeout))
 	reader := bufio.NewReader(clientConn)
-	req, err := http.ReadRequest(reader)
-	if err != nil {
-		return
-	}
-	_ = clientConn.SetReadDeadline(time.Time{})
+	// Bound the time a client may take to send its first request so a stalled connection can't
+	// pin a goroutine; subsequent keep-alive requests on the plain-HTTP path get the idle timeout.
+	readTimeout := connectReadTimeout
+	for {
+		_ = clientConn.SetReadDeadline(time.Now().Add(readTimeout))
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		_ = clientConn.SetReadDeadline(time.Time{})
 
-	if req.Method != http.MethodConnect {
-		writeProxyResponse(clientConn, http.StatusMethodNotAllowed, "only CONNECT is supported")
-		return
+		if req.Method == http.MethodConnect {
+			ps.handleConnect(clientConn, req)
+			return
+		}
+		if !ps.handlePlainForward(clientConn, req) {
+			return
+		}
+		readTimeout = idleTunnelTimeout
 	}
+}
 
+// handleConnect serves a CONNECT request: authenticate, mint a leaf for the target hostname,
+// complete the MITM TLS handshake, and serve tunnelled requests until the connection ends.
+func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 	scope, jwt, ok := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
 	if !ok {
-		clientConn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\n\r\n")) // #nosec G104
+		writeProxyAuthRequired(clientConn)
 		return
 	}
 
@@ -174,6 +186,57 @@ func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
 }
 
+// handlePlainForward serves an absolute-form forward-proxy request (RFC 7230 §5.3.2) for a
+// plain-HTTP upstream, applying the same auth, matching, and credential pipeline as the CONNECT
+// path — there is just no TLS layer to intercept, and the agent JWT arrives on every request
+// rather than once per tunnel. Only http:// is served: https:// absolute-form is rejected so
+// the proxy can never be used to silently TLS-strip (HTTPS upstreams must arrive as CONNECT),
+// and origin-form is rejected so the proxy ingress cannot be used as an origin server.
+// It reports whether the connection may serve another keep-alive request.
+func (ps *proxyServer) handlePlainForward(clientConn net.Conn, req *http.Request) bool {
+	if !strings.EqualFold(req.URL.Scheme, "http") || req.URL.Host == "" {
+		writeHTTPError(clientConn, http.StatusBadRequest, "non-CONNECT requests must be absolute-form http:// (use CONNECT for https:// upstreams)")
+		return false
+	}
+
+	scope, jwt, ok := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
+	if !ok {
+		writeProxyAuthRequired(clientConn)
+		return false
+	}
+
+	// URL.Hostname/Port handle bracketed IPv6 literals; default the port for the http scheme.
+	// Per RFC 7230 §5.4 the absolute-form URL is authoritative for routing (the Host header is
+	// not consulted; Go's ReadRequest already promotes the URL host into req.Host).
+	hostname := req.URL.Hostname()
+	port := req.URL.Port()
+	if port == "" {
+		port = "80"
+	}
+	if req.URL.Path == "" {
+		req.URL.Path = "/"
+	}
+
+	resp, err := ps.forward(req, "http", hostname, port, jwt, scope)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, errHostBlocked) {
+			status = http.StatusForbidden
+		}
+		writeHTTPError(clientConn, status, err.Error())
+		return false
+	}
+
+	if err := resp.Write(clientConn); err != nil {
+		resp.Body.Close()
+		return false
+	}
+	resp.Body.Close()
+	drainRequestBody(req)
+
+	return !req.Close && !resp.Close
+}
+
 // parseConnectTarget splits a CONNECT authority-form target into hostname and port, defaulting
 // the port to 443. Bracketed IPv6 literals ("[::1]", "[::1]:8443") are handled by SplitHostPort;
 // anything it cannot parse even with the default port appended is rejected.
@@ -206,7 +269,7 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 		// Clear the deadline for the forward: the upstream response may legitimately stream for a while.
 		_ = tlsConn.SetReadDeadline(time.Time{})
 
-		resp, err := ps.forward(req, hostname, port, jwt, scope)
+		resp, err := ps.forward(req, "https", hostname, port, jwt, scope)
 		if err != nil {
 			if errors.Is(err, errHostBlocked) {
 				writeHTTPError(tlsConn, http.StatusForbidden, err.Error())
@@ -221,17 +284,11 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 			return
 		}
 		resp.Body.Close()
-
-		// Drain whatever the transport did not consume of the request body so leftover bytes
-		// cannot desync the next http.ReadRequest on this keep-alive tunnel.
-		if req.Body != nil {
-			_, _ = io.Copy(io.Discard, req.Body)
-			_ = req.Body.Close()
-		}
+		drainRequestBody(req)
 	}
 }
 
-func (ps *proxyServer) forward(req *http.Request, hostname, port, jwt string, scope agentScope) (*http.Response, error) {
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, error) {
 	services, err := ps.cache.get(jwt, scope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve agent permissions: %w", err)
@@ -244,7 +301,7 @@ func (ps *proxyServer) forward(req *http.Request, hostname, port, jwt string, sc
 	}
 
 	// rebuild the outbound request targeting the real upstream
-	req.URL.Scheme = "https"
+	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)
 	req.RequestURI = ""
 
@@ -330,6 +387,19 @@ func parseProxyAuth(header string) (agentScope, string, bool) {
 	}
 
 	return agentScope{projectID: projectID, environment: environment, secretPath: secretPath}, jwt, true
+}
+
+// drainRequestBody consumes whatever the transport did not read of the request body so leftover
+// bytes cannot desync the next http.ReadRequest on a keep-alive connection.
+func drainRequestBody(req *http.Request) {
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+		_ = req.Body.Close()
+	}
+}
+
+func writeProxyAuthRequired(conn net.Conn) {
+	conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\n\r\n")) // #nosec G104
 }
 
 func writeProxyResponse(conn net.Conn, status int, msg string) {
