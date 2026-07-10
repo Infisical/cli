@@ -305,13 +305,18 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	req.URL.Host = net.JoinHostPort(hostname, port)
 	req.RequestURI = ""
 
+	// Strip hop-by-hop headers BEFORE applying credentials, not after: stripHopByHopHeaders
+	// removes any header the client named in its Connection field, so applying credentials first
+	// would let a client (e.g. "Connection: Authorization") delete the header we just injected.
+	// Injecting last keeps "injected always wins" true regardless of client headers (matches
+	// Agent Vault's ApplyInjection, which treats this as a security invariant).
+	stripHopByHopHeaders(req.Header)
+
 	if svc != nil {
 		if err := applyCredentials(req, svc); err != nil {
 			return nil, fmt.Errorf("failed to apply credentials: %w", err)
 		}
 	}
-
-	stripHopByHopHeaders(req.Header)
 
 	return ps.transport.RoundTrip(req)
 }

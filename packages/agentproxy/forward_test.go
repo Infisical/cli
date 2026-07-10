@@ -96,6 +96,51 @@ func TestPlainForwardInjectsCredentialsAndKeepsAlive(t *testing.T) {
 	}
 }
 
+func TestPlainForwardInjectedHeaderSurvivesHostileConnectionHeader(t *testing.T) {
+	// A client that names the injected header in its Connection field must not be able to strip
+	// the injected credential: "injected always wins". Hop-by-hop stripping runs before injection.
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jwt := "test.jwt.token"
+	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
+	services := []*resolvedService{{
+		name:         "internal",
+		hostPatterns: parseHostPatterns(u.Hostname()),
+		isEnabled:    true,
+		credentials: []resolvedCredential{
+			{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
+		},
+	}}
+	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
+
+	// hostile request: Connection lists Authorization (would delete it if stripping ran after inject)
+	fmt.Fprintf(client, "GET http://%s/hello HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nConnection: Authorization\r\nAuthorization: Bearer client_fake\r\n\r\n",
+		u.Host, u.Host, proxyAuthHeader("proj", "prod", "/", jwt))
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	if gotAuth != "Bearer real_secret" {
+		t.Fatalf("injected credential must survive a hostile Connection header; upstream saw Authorization = %q", gotAuth)
+	}
+}
+
 func TestPlainForwardRejectsHTTPSAbsoluteForm(t *testing.T) {
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	client := newTestProxy(t, UnmatchedAllow, "jwt", scope, nil)
