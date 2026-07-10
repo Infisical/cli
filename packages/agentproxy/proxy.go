@@ -43,20 +43,30 @@ type proxyServer struct {
 	transport *http.Transport
 }
 
+// newUpstreamTransport builds the transport used to forward requests to upstream services.
+// It forces HTTP/1.1: every upstream response is re-serialized over the HTTP/1.1 MITM tunnel, so an
+// HTTP/2 response has no HTTP/1.1 length framing and would hang the client. A non-nil (empty)
+// TLSNextProto disables HTTP/2 -- ForceAttemptHTTP2:false alone is ignored when no custom
+// TLSClientConfig/dialer is set, and Go otherwise auto-enables h2.
+func newUpstreamTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     false,
+		TLSNextProto:          map[string]func(authority string, c *tls.Conn) http.RoundTripper{},
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 // Start runs the agent proxy until the process is terminated.
 func Start(opts Options) error {
 	ps := &proxyServer{
-		opts:  opts,
-		ca:    newCaManager(opts.ProxyToken),
-		cache: newAgentCache(opts.ProxyToken),
-		transport: &http.Transport{
-			Proxy:                 nil,
-			ForceAttemptHTTP2:     false,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
+		opts:      opts,
+		ca:        newCaManager(opts.ProxyToken),
+		cache:     newAgentCache(opts.ProxyToken),
+		transport: newUpstreamTransport(),
 	}
 
 	// warm up the intermediate CA so the first agent request isn't blocked on signing
