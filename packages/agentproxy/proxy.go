@@ -325,6 +325,11 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	// rebuild the outbound request targeting the real upstream
 	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)
+	// Pin the Host header to the matched authority. The Host header on the inner tunnel request is
+	// agent-controlled, and Go would otherwise send it verbatim (it dials req.URL.Host but writes
+	// req.Host), letting an agent CONNECT to a matched host yet deliver the injected credential to a
+	// different vhost on the same upstream. Ignoring it keeps matched host == forwarded host.
+	req.Host = hostHeaderForScheme(scheme, req.URL.Host)
 	req.RequestURI = ""
 
 	// Strip hop-by-hop headers BEFORE applying credentials, not after: stripHopByHopHeaders
@@ -341,6 +346,32 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	}
 
 	return ps.transport.RoundTrip(req)
+}
+
+// hostHeaderForScheme returns the Host header value for the matched target, stripping the port when
+// it is the scheme default (443 for https, 80 for http) so exact vhost matches and signed-Host
+// schemes work, while preserving non-default ports for internal vhost routing.
+func hostHeaderForScheme(scheme, target string) string {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return target
+	}
+	var defaultPort string
+	switch strings.ToLower(scheme) {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	default:
+		return target
+	}
+	if port != defaultPort {
+		return target
+	}
+	if strings.ContainsRune(host, ':') {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // hopByHopHeaders are the standard hop-by-hop headers removed before forwarding,
