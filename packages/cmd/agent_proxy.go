@@ -80,6 +80,33 @@ var credentialEnvKeys = []string{
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
 }
 
+// requiredNoProxy entries always bypass the proxy: loopback is machine-local and must never be
+// routed to a (possibly remote) proxy, regardless of operator overrides.
+var requiredNoProxy = []string{"localhost", "127.0.0.1"}
+
+// mergeNoProxy unions the required loopback defaults with operator-supplied entries (the inherited
+// NO_PROXY/no_proxy env vars and the --no-proxy flag), de-duplicated, defaults first. Operators can
+// add bypass hosts but cannot drop loopback.
+func mergeNoProxy(operatorEntries ...string) string {
+	seen := make(map[string]bool)
+	var merged []string
+	add := func(raw string) {
+		for _, entry := range strings.Split(raw, ",") {
+			if entry = strings.TrimSpace(entry); entry != "" && !seen[entry] {
+				seen[entry] = true
+				merged = append(merged, entry)
+			}
+		}
+	}
+	for _, d := range requiredNoProxy {
+		add(d)
+	}
+	for _, o := range operatorEntries {
+		add(o)
+	}
+	return strings.Join(merged, ",")
+}
+
 func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	proxyAddr, err := cmd.Flags().GetString("proxy")
 	if err != nil || proxyAddr == "" {
@@ -138,7 +165,8 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
 	// 4. Build the environment and launch the agent.
-	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, placeholderEnvs, realSecrets)
+	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
+	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
 
 	if err := runAgentProcess(args, env); err != nil {
 		util.HandleError(err, "Agent process failed")
@@ -248,7 +276,7 @@ func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, s
 	return secrets
 }
 
-func buildAgentEnv(proxy, caPath, jwt string, placeholders map[string]string, realSecrets []models.SingleEnvironmentVariable) []string {
+func buildAgentEnv(proxy, caPath, jwt, extraNoProxy string, placeholders map[string]string, realSecrets []models.SingleEnvironmentVariable) []string {
 	// start from the current environment, stripping stale proxy keys and machine identity credentials
 	stale := map[string]bool{}
 	for _, k := range proxyEnvKeys {
@@ -257,10 +285,20 @@ func buildAgentEnv(proxy, caPath, jwt string, placeholders map[string]string, re
 	for _, k := range credentialEnvKeys {
 		stale[k] = true
 	}
+	// The operator's own NO_PROXY is merged (not discarded) so they can add bypass hosts; capture the
+	// inherited values here, before the strip loop drops the raw copies, and fold them in below.
+	var operatorNoProxy []string
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
 		parts := strings.SplitN(kv, "=", 2)
-		if len(parts) == 2 && !stale[parts[0]] {
+		if len(parts) != 2 {
+			continue
+		}
+		if parts[0] == "NO_PROXY" || parts[0] == "no_proxy" {
+			operatorNoProxy = append(operatorNoProxy, parts[1])
+			continue
+		}
+		if !stale[parts[0]] {
 			env[parts[0]] = parts[1]
 		}
 	}
@@ -268,7 +306,7 @@ func buildAgentEnv(proxy, caPath, jwt string, placeholders map[string]string, re
 	// proxy routing
 	env["HTTPS_PROXY"] = proxy
 	env["HTTP_PROXY"] = proxy
-	env["NO_PROXY"] = "localhost,127.0.0.1"
+	env["NO_PROXY"] = mergeNoProxy(append(operatorNoProxy, extraNoProxy)...)
 	env["NODE_USE_ENV_PROXY"] = "1"
 	env["OPENCLAW_PROXY_URL"] = proxy
 
@@ -344,6 +382,7 @@ func init() {
 	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
+	agentProxyConnectCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 
 	agentProxyStartCmd.Flags().Int("port", 17322, "port for the agent proxy to listen on")
 	agentProxyStartCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
