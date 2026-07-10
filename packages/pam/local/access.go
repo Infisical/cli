@@ -20,18 +20,19 @@ import (
 
 // Account type constants (match API enum)
 const (
-	AccountTypePostgres   = "postgres"
-	AccountTypeSSH        = "ssh"
-	AccountTypeMySQL      = "mysql"
-	AccountTypeMsSQL      = "mssql"
-	AccountTypeMongoDB    = "mongodb"
-	AccountTypeOracleDB   = "oracledb"
-	AccountTypeRedis      = "redis"
-	AccountTypeKubernetes = "kubernetes"
-	AccountTypeAwsIam     = "aws-iam"
-	AccountTypeGcpServiceAccount     = "gcp-service-account"
-	AccountTypeWindows    = "windows"
-	AccountTypeWindowsAd  = "windows-ad"
+	AccountTypePostgres          = "postgres"
+	AccountTypeSSH               = "ssh"
+	AccountTypeMySQL             = "mysql"
+	AccountTypeMsSQL             = "mssql"
+	AccountTypeMongoDB           = "mongodb"
+	AccountTypeOracleDB          = "oracledb"
+	AccountTypeRedis             = "redis"
+	AccountTypeKubernetes        = "kubernetes"
+	AccountTypeAwsIam            = "aws-iam"
+	AccountTypeGcpServiceAccount = "gcp-service-account"
+	AccountTypeAzureCli          = "azure-cli"
+	AccountTypeWindows           = "windows"
+	AccountTypeWindowsAd         = "windows-ad"
 )
 
 const approvalRequiredErrorName = "PAM_APPROVAL_REQUIRED"
@@ -113,6 +114,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 		startAWSAccess(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeGcpServiceAccount:
 		startGCPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
+	case AccountTypeAzureCli:
+		startAzureAccess(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeWindows, AccountTypeWindowsAd:
 		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	default:
