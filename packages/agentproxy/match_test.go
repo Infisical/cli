@@ -39,6 +39,24 @@ func TestWildcardSingleLabelOnly(t *testing.T) {
 	}
 }
 
+func TestExactHostBeatsWildcardWithMatchingPort(t *testing.T) {
+	exact := svc("exact", "api.github.com")
+	wildcardWithPort := svc("wildcardWithPort", "*.github.com:443")
+	got := bestMatch([]*resolvedService{wildcardWithPort, exact}, "api.github.com", "443", "/")
+	if got == nil || got.name != "exact" {
+		t.Fatalf("expected exact host to beat wildcard host with matching port, got %v", got)
+	}
+}
+
+func TestExactHostBeatsWildcardWithLongerPath(t *testing.T) {
+	exact := svc("exact", "api.github.com")
+	wildcardWithPath := svc("wildcardWithPath", "*.github.com/v1/*")
+	got := bestMatch([]*resolvedService{wildcardWithPath, exact}, "api.github.com", "443", "/v1/repos")
+	if got == nil || got.name != "exact" {
+		t.Fatalf("expected exact host to beat wildcard host with longer path, got %v", got)
+	}
+}
+
 func TestPortMatching(t *testing.T) {
 	withPort := svc("withPort", "internal.corp.com:3000")
 	if got := bestMatch([]*resolvedService{withPort}, "internal.corp.com", "3000", "/"); got == nil {

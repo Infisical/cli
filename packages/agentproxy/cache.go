@@ -11,6 +11,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 )
 
 // isAuthError reports whether an error from an Infisical call is a hard auth failure (401/403),
@@ -53,7 +54,6 @@ type agentEntry struct {
 	scope    agentScope
 	services []*resolvedService
 	lastSeen time.Time
-	cachedAt time.Time
 }
 
 // cacheKey scopes cached entries by both the agent JWT and the requested scope, so an agent
@@ -106,7 +106,6 @@ func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, erro
 		scope:    scope,
 		services: resolved,
 		lastSeen: time.Now(),
-		cachedAt: time.Now(),
 	}
 	a.mu.Lock()
 	a.entries[key] = entry
@@ -146,7 +145,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 			value, ok := secretValues[cred.SecretKey]
 			if !ok {
 				// stale reference: secret renamed/deleted after the service was created
-				util.PrintWarning(fmt.Sprintf("proxied service %q references missing secret %q; skipping", svc.Name, cred.SecretKey))
+				log.Warn().Msgf("proxied service %q references missing secret %q; skipping", svc.Name, cred.SecretKey)
 				continue
 			}
 			rs.credentials = append(rs.credentials, resolvedCredential{
@@ -207,19 +206,18 @@ func (a *agentCache) refreshActive() {
 			// A hard auth failure means the agent's JWT was revoked or expired: evict so we stop
 			// serving its cached credentials (fail closed). Transient errors keep the existing cache.
 			if isAuthError(err) {
-				util.PrintWarning(fmt.Sprintf("agent authorization no longer valid; dropping cached credentials: %v", err))
+				log.Warn().Err(err).Msg("agent authorization no longer valid; dropping cached credentials")
 				a.mu.Lock()
 				delete(a.entries, t.key)
 				a.mu.Unlock()
 				continue
 			}
-			util.PrintWarning(fmt.Sprintf("failed to refresh agent cache: %v", err))
+			log.Warn().Err(err).Msg("failed to refresh agent cache")
 			continue
 		}
 		a.mu.Lock()
 		if entry, ok := a.entries[t.key]; ok {
 			entry.services = resolved
-			entry.cachedAt = time.Now()
 		}
 		a.mu.Unlock()
 	}

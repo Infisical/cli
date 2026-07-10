@@ -56,22 +56,33 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 
 // refreshProxyToken re-authenticates the agent proxy MI before its token expires, storing the new
 // token for the proxy to pick up. Re-login is idempotent and always yields a fresh, valid token.
+// A failed refresh is retried on a short fixed interval so a transient outage cannot leave the
+// proxy holding an expired token for another half TTL.
 func refreshProxyToken(token *atomic.Value, clientID, clientSecret string, ttlSeconds int) {
-	for {
+	const retryInterval = 30 * time.Second
+
+	halfTTL := func() time.Duration {
 		wait := time.Duration(ttlSeconds) * time.Second / 2
-		if wait < 30*time.Second {
-			wait = 30 * time.Second
+		if wait < retryInterval {
+			wait = retryInterval
 		}
+		return wait
+	}
+
+	wait := halfTTL()
+	for {
 		time.Sleep(wait)
 
 		loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
 		if err != nil {
-			log.Warn().Msgf("Failed to refresh agent proxy token, will retry: %v", err)
+			log.Warn().Err(err).Msgf("Failed to refresh agent proxy token, retrying in %s", retryInterval)
+			wait = retryInterval
 			continue
 		}
 		token.Store(loginResp.AccessToken)
 		if loginResp.AccessTokenTTL > 0 {
 			ttlSeconds = loginResp.AccessTokenTTL
 		}
+		wait = halfTTL()
 	}
 }

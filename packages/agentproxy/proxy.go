@@ -66,6 +66,13 @@ func Start(opts Options) error {
 
 	go ps.pollLoop()
 
+	// Pre-flight: fail fast if something already listens on this port. A plain net.Listen(":port")
+	// can bind one address family (e.g. IPv6) while another process holds the other (e.g. a process
+	// on IPv4 127.0.0.1), which would silently split traffic, so probe both loopback families first.
+	if addr := portInUse(opts.Port); addr != "" {
+		return fmt.Errorf("port %d is already in use (%s); another process is listening. Choose a free port with --port", opts.Port, addr)
+	}
+
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", opts.Port))
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %d: %w", opts.Port, err)
@@ -75,11 +82,30 @@ func Start(opts Options) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				log.Info().Msg("agent proxy listener closed; shutting down")
+				return nil
+			}
 			log.Warn().Err(err).Msg("failed to accept connection")
+			// back off briefly so a persistent accept error doesn't hot-spin the loop
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		go ps.handleConn(conn)
 	}
+}
+
+// portInUse reports the first loopback address that already has a listener on the port, or "".
+// Probing both families catches the dual-stack split that a bare net.Listen would miss.
+func portInUse(port int) string {
+	for _, addr := range []string{fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("[::1]:%d", port)} {
+		conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return addr
+		}
+	}
+	return ""
 }
 
 func (ps *proxyServer) pollLoop() {
@@ -117,14 +143,10 @@ func (ps *proxyServer) handleConn(clientConn net.Conn) {
 		return
 	}
 
-	targetHost := req.Host
-	if !strings.Contains(targetHost, ":") {
-		targetHost += ":443"
-	}
-	hostname, port, err := net.SplitHostPort(targetHost)
+	hostname, port, err := parseConnectTarget(req.Host)
 	if err != nil {
-		hostname = strings.Split(targetHost, ":")[0]
-		port = "443"
+		writeProxyResponse(clientConn, http.StatusBadRequest, fmt.Sprintf("invalid CONNECT target %q", req.Host))
+		return
 	}
 
 	// leaf is minted for the exact CONNECT hostname (design: CONNECT host is source of truth)
@@ -150,6 +172,21 @@ func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	defer tlsConn.Close()
 
 	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
+}
+
+// parseConnectTarget splits a CONNECT authority-form target into hostname and port, defaulting
+// the port to 443. Bracketed IPv6 literals ("[::1]", "[::1]:8443") are handled by SplitHostPort;
+// anything it cannot parse even with the default port appended is rejected.
+func parseConnectTarget(target string) (hostname, port string, err error) {
+	hostname, port, err = net.SplitHostPort(target)
+	if err == nil {
+		return hostname, port, nil
+	}
+	var addrErr *net.AddrError
+	if errors.As(err, &addrErr) && strings.Contains(addrErr.Err, "missing port") {
+		return net.SplitHostPort(target + ":443")
+	}
+	return "", "", err
 }
 
 // serveTunnel reads requests off the terminated TLS connection, applies credentials, and forwards them.
@@ -184,6 +221,13 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 			return
 		}
 		resp.Body.Close()
+
+		// Drain whatever the transport did not consume of the request body so leftover bytes
+		// cannot desync the next http.ReadRequest on this keep-alive tunnel.
+		if req.Body != nil {
+			_, _ = io.Copy(io.Discard, req.Body)
+			_ = req.Body.Close()
+		}
 	}
 }
 
@@ -210,10 +254,36 @@ func (ps *proxyServer) forward(req *http.Request, hostname, port, jwt string, sc
 		}
 	}
 
-	req.Header.Del("Proxy-Authorization")
-	req.Header.Del("Proxy-Connection")
+	stripHopByHopHeaders(req.Header)
 
 	return ps.transport.RoundTrip(req)
+}
+
+// hopByHopHeaders are the standard hop-by-hop headers removed before forwarding,
+// mirroring net/http/httputil.ReverseProxy.
+var hopByHopHeaders = []string{
+	"Connection",
+	"Proxy-Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization",
+	"TE",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+}
+
+// stripHopByHopHeaders removes the headers named in the Connection header plus the standard
+// hop-by-hop set; they describe this hop's connection and must not be forwarded upstream.
+func stripHopByHopHeaders(h http.Header) {
+	for _, name := range strings.Split(h.Get("Connection"), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			h.Del(name)
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		h.Del(name)
+	}
 }
 
 // parseProxyAuth decodes the Proxy-Authorization Basic header into scope + agent JWT.

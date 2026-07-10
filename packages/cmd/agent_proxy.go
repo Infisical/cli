@@ -29,7 +29,7 @@ var agentProxyCmd = &cobra.Command{
 var agentProxyConnectCmd = &cobra.Command{
 	Use:                   "connect [flags] -- [agent start command]",
 	Short:                 "Set up the environment and launch an agent behind the agent proxy",
-	Example:               "infisical secrets agent-proxy connect --proxy=proxy:14322 --env=prod --path=/myapp -- claude",
+	Example:               "infisical secrets agent-proxy connect --proxy=proxy:17322 --env=prod --path=/myapp -- claude",
 	DisableFlagsInUseLine: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -43,7 +43,7 @@ var agentProxyConnectCmd = &cobra.Command{
 var agentProxyStartCmd = &cobra.Command{
 	Use:                   "start",
 	Short:                 "Start the agent proxy (MITM proxy that brokers credentials on the wire)",
-	Example:               "infisical secrets agent-proxy start --port 14322",
+	Example:               "infisical secrets agent-proxy start --port 17322",
 	DisableFlagsInUseLine: true,
 	Run:                   runAgentProxyStart,
 }
@@ -72,10 +72,18 @@ var proxyEnvKeys = []string{
 	"OPENCLAW_PROXY_URL",
 }
 
+// machine identity credential env vars stripped from the agent environment so the agent
+// never sees the long-lived credentials, only the scoped short-lived JWT set below.
+var credentialEnvKeys = []string{
+	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
+	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME,
+	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
+}
+
 func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	proxyAddr, err := cmd.Flags().GetString("proxy")
 	if err != nil || proxyAddr == "" {
-		util.HandleError(fmt.Errorf("the --proxy flag is required (e.g. --proxy=proxy:14322)"))
+		util.HandleError(fmt.Errorf("the --proxy flag is required (e.g. --proxy=proxy:17322)"))
 	}
 
 	environment, err := cmd.Flags().GetString("env")
@@ -239,9 +247,12 @@ func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, s
 }
 
 func buildAgentEnv(proxy, caPath, jwt string, placeholders map[string]string, realSecrets []models.SingleEnvironmentVariable) []string {
-	// start from the current environment, stripping any stale proxy keys
+	// start from the current environment, stripping stale proxy keys and machine identity credentials
 	stale := map[string]bool{}
 	for _, k := range proxyEnvKeys {
+		stale[k] = true
+	}
+	for _, k := range credentialEnvKeys {
 		stale[k] = true
 	}
 	env := map[string]string{}
@@ -330,8 +341,9 @@ func init() {
 	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
 	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
+	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 
-	agentProxyStartCmd.Flags().Int("port", 14322, "port for the agent proxy to listen on")
+	agentProxyStartCmd.Flags().Int("port", 17322, "port for the agent proxy to listen on")
 	agentProxyStartCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
 	agentProxyStartCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes for active agents")
 	agentProxyStartCmd.Flags().String("client-id", "", "universal auth client id for the agent proxy machine identity")

@@ -85,6 +85,9 @@ func applySubstitution(req *http.Request, cred resolvedCredential) error {
 
 	if hasSurface(cred.surfaces, surfacePath) {
 		req.URL.Path = strings.ReplaceAll(req.URL.Path, placeholder, real)
+		// Clearing RawPath makes Go re-encode the path from Path on the wire, which can change
+		// the byte representation of other escaped segments. Placeholders are distinctive random
+		// strings, so a placeholder cross-matching an escaped segment is not a concern.
 		req.URL.RawPath = ""
 	}
 
