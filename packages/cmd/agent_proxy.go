@@ -212,7 +212,9 @@ func fetchProxiedServicePlaceholders(httpClient *resty.Client, projectID, enviro
 
 	placeholders := map[string]string{}
 	for _, svc := range resp.Services {
-		if !svc.CanProxy {
+		// the proxy applies nothing for disabled services, so their placeholders would go
+		// upstream verbatim; don't inject them
+		if !svc.CanProxy || !svc.IsEnabled {
 			continue
 		}
 		for _, cred := range svc.Credentials {
