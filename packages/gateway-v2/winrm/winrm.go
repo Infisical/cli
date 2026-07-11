@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,8 +30,10 @@ type Credentials struct {
 	Port     int
 	Username string
 	Password string
-	UseHTTPS bool
-	// Insecure skips TLS verification (HTTPS only); ignored for plain HTTP.
+	// CACert, when set, is a PEM bundle used to verify the listener's certificate, so a self-signed
+	// HTTPS listener can be authenticated without disabling verification.
+	CACert []byte
+	// Insecure skips TLS verification (confidentiality only, no MITM protection); use only when no CA can be pinned.
 	Insecure bool
 }
 
@@ -37,36 +42,85 @@ type FileDelivery struct {
 	Content []byte
 }
 
-// transportDecorator selects the WinRM transport: NTLM message encryption over plain HTTP so the
-// payload is never sent in cleartext, or plain NTLM auth over HTTPS where TLS handles confidentiality.
-func transportDecorator(useHTTPS bool) (func() winrm.Transporter, error) {
-	if useHTTPS {
-		return func() winrm.Transporter { return &winrm.ClientNTLM{} }, nil
-	}
-	enc, err := winrm.NewEncryption("ntlm")
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to initialize NTLM message encryption: %v", ErrConnect, err)
-	}
-	return func() winrm.Transporter { return enc }, nil
+// maxWinRMReadBytes caps bytes read from a host, bounding one that streams an endless body; command
+// responses are tiny, so this never limits real use.
+const maxWinRMReadBytes = 32 * 1024 * 1024
+
+// limitedConn fails the read once maxWinRMReadBytes are consumed; the winrm library reads bodies unbounded.
+type limitedConn struct {
+	net.Conn
+	remaining int64
 }
 
-func newClient(creds Credentials) (*winrm.Client, error) {
-	params := *winrm.DefaultParameters
-
-	decorator, err := transportDecorator(creds.UseHTTPS)
-	if err != nil {
-		return nil, err
+func (c *limitedConn) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, fmt.Errorf("winrm response exceeded %d bytes", maxWinRMReadBytes)
 	}
-	params.TransportDecorator = decorator
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.Conn.Read(p)
+	c.remaining -= int64(n)
+	return n, err
+}
+
+// boundedDial returns a dialer whose connection carries the operation deadline and read cap, since the
+// library issues its HTTP request without a context.
+func boundedDial(ctx context.Context) func(network, addr string) (net.Conn, error) {
+	return func(network, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			_ = conn.SetDeadline(deadline)
+		}
+		return &limitedConn{Conn: conn, remaining: maxWinRMReadBytes}, nil
+	}
+}
+
+// pinnedServerName returns the name to verify a pinned cert against: its first DNS SAN, else its
+// Common Name. Empty when no CA is pinned or the PEM cannot be parsed.
+func pinnedServerName(caCert []byte) string {
+	if len(caCert) == 0 {
+		return ""
+	}
+	block, _ := pem.Decode(caCert)
+	if block == nil {
+		return ""
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	if len(cert.DNSNames) > 0 {
+		return cert.DNSNames[0]
+	}
+	return cert.Subject.CommonName
+}
+
+// newClient builds a WinRM client over HTTPS only: the library's HTTP transport can fall back to
+// cleartext, whereas TLS guarantees confidentiality regardless of the NTLM layer.
+func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
+	params := *winrm.DefaultParameters
+	params.TransportDecorator = func() winrm.Transporter { return winrm.NewClientNTLMWithDial(boundedDial(ctx)) }
 
 	endpoint := winrm.NewEndpoint(
 		creds.Host,
 		creds.Port,
-		creds.UseHTTPS,
+		true, // HTTPS only
 		creds.Insecure,
-		nil, nil, nil,
+		creds.CACert, // verify the listener against this CA when provided
+		nil, nil,
 		commandDeadline,
 	)
+
+	// Verify a pinned cert against its own name, not the connection host: WinRM hosts are often reached
+	// by IP while the listener cert is issued for the machine name. Chain validation still stops a MITM.
+	if name := pinnedServerName(creds.CACert); name != "" {
+		endpoint.TLSServerName = name
+	}
+
 	client, err := winrm.NewClientWithParameters(endpoint, creds.Username, creds.Password, &params)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConnect, err)
@@ -91,6 +145,7 @@ func run(ctx context.Context, client *winrm.Client, script string) (string, erro
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// runSensitive is run for scripts whose text carries file content, returning a generic error that never echoes output.
 func runSensitive(ctx context.Context, client *winrm.Client, script string) error {
 	var stdout, stderr bytes.Buffer
 	code, err := client.RunWithContext(ctx, winrm.Powershell(script), &stdout, &stderr)
@@ -105,7 +160,7 @@ func runSensitive(ctx context.Context, client *winrm.Client, script string) erro
 
 // Ping proves reachability and authentication without touching the filesystem.
 func Ping(ctx context.Context, creds Credentials) error {
-	client, err := newClient(creds)
+	client, err := newClient(ctx, creds)
 	if err != nil {
 		return err
 	}
@@ -119,7 +174,7 @@ const b64ChunkSize = 2000
 
 // DeliverFiles writes each file atomically (temp file + Move-Item), creating the parent dir if missing.
 func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery) error {
-	client, err := newClient(creds)
+	client, err := newClient(ctx, creds)
 	if err != nil {
 		return err
 	}
@@ -216,7 +271,7 @@ func deliverOne(ctx context.Context, client *winrm.Client, f FileDelivery) error
 
 // RemoveFiles deletes each path if it exists. A missing file is not an error.
 func RemoveFiles(ctx context.Context, creds Credentials, paths []string) error {
-	client, err := newClient(creds)
+	client, err := newClient(ctx, creds)
 	if err != nil {
 		return err
 	}
