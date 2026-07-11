@@ -203,7 +203,9 @@ func credsFromEnv(ctx context.Context, env *winrmRequestEnvelope, tp winrmTransp
 func handleWinrmTest(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
 	var tp winrmTransportParams
 	if len(env.Params) > 0 {
-		_ = json.Unmarshal(env.Params, &tp)
+		if err := json.Unmarshal(env.Params, &tp); err != nil {
+			return nil, fmt.Errorf("malformed test params")
+		}
 	}
 	if err := winrm.Ping(ctx, credsFromEnv(ctx, env, tp)); err != nil {
 		return nil, err

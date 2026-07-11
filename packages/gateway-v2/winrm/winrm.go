@@ -91,6 +91,18 @@ func run(ctx context.Context, client *winrm.Client, script string) (string, erro
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+func runSensitive(ctx context.Context, client *winrm.Client, script string) error {
+	var stdout, stderr bytes.Buffer
+	code, err := client.RunWithContext(ctx, winrm.Powershell(script), &stdout, &stderr)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrConnect, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("failed to stage file content (exit %d)", code)
+	}
+	return nil
+}
+
 // Ping proves reachability and authentication without touching the filesystem.
 func Ping(ctx context.Context, creds Credentials) error {
 	client, err := newClient(creds)
@@ -182,7 +194,7 @@ func deliverOne(ctx context.Context, client *winrm.Client, f FileDelivery) error
 				`[IO.File]::AppendAllText($b64,'%s')`,
 			pathLit, b64Ext, b64[i:end],
 		)
-		if _, err := run(ctx, client, appendCmd); err != nil {
+		if err := runSensitive(ctx, client, appendCmd); err != nil {
 			return err
 		}
 	}
