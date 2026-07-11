@@ -155,6 +155,8 @@ func (a *agentCache) fetchSecretValues(scope agentScope) (map[string]string, err
 		WorkspaceId:              scope.projectID,
 		SecretsPath:              scope.secretPath,
 		UniversalAuthAccessToken: a.proxyToken(),
+		ExpandSecretReferences:   true,
+		IncludeImport:            true,
 	}
 	secrets, err := util.GetAllEnvironmentVariables(params, "")
 	if err != nil {

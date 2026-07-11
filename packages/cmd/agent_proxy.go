@@ -240,9 +240,11 @@ func fetchProxiedServicePlaceholders(httpClient *resty.Client, projectID, enviro
 
 func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, secretPath string) []models.SingleEnvironmentVariable {
 	params := models.GetAllSecretsParameters{
-		Environment: environment,
-		WorkspaceId: projectID,
-		SecretsPath: secretPath,
+		Environment:            environment,
+		WorkspaceId:            projectID,
+		SecretsPath:            secretPath,
+		ExpandSecretReferences: true,
+		IncludeImport:          true,
 	}
 	if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
 		params.InfisicalToken = token.Token
