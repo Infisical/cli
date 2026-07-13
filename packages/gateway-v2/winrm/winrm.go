@@ -162,8 +162,9 @@ func run(ctx context.Context, client *winrm.Client, script string) (string, erro
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// runSensitive is run for scripts whose text carries file content, returning a generic error that never echoes output.
-func runSensitive(ctx context.Context, client *winrm.Client, script string) error {
+// runSuppressingOutput runs a script whose text carries file content, returning a generic error on
+// failure that never echoes the remote stdout/stderr (which could contain that content).
+func runSuppressingOutput(ctx context.Context, client *winrm.Client, script string) error {
 	var stdout, stderr bytes.Buffer
 	code, err := client.RunWithContext(ctx, winrm.Powershell(script), &stdout, &stderr)
 	if err != nil {
@@ -185,9 +186,9 @@ func Ping(ctx context.Context, creds Credentials) error {
 	return err
 }
 
-// b64ChunkSize keeps each PowerShell command under the Windows command-line limit (~8191 chars),
+// base64ChunkSize keeps each PowerShell command under the Windows command-line limit (~8191 chars),
 // so a file's base64 is appended to a staging file in chunks rather than inlined in one command.
-const b64ChunkSize = 2000
+const base64ChunkSize = 2000
 
 // DeliverFiles writes each file atomically (temp file + Move-Item), creating the parent dir if missing.
 func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery) error {
@@ -198,14 +199,14 @@ func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery) 
 	// Clear staging files left by a previously interrupted delivery, once per directory.
 	swept := map[string]bool{}
 	for _, f := range files {
-		dir := winParentDir(f.Path)
+		dir := windowsParentDir(f.Path)
 		if dir != "" && !swept[dir] {
 			swept[dir] = true
-			sweepStaleStaging(ctx, client, dir)
+			removeStaleStagingFiles(ctx, client, dir)
 		}
 	}
 	for _, f := range files {
-		if err := deliverOne(ctx, client, f); err != nil {
+		if err := deliverFile(ctx, client, f); err != nil {
 			return fmt.Errorf("failed to write %q: %w", f.Path, err)
 		}
 	}
@@ -215,7 +216,7 @@ func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery) 
 // stagingMarker suffixes staging files so a sweep can find leftovers; the random token avoids collisions.
 const stagingMarker = ".infisical."
 
-func winParentDir(p string) string {
+func windowsParentDir(p string) string {
 	i := strings.LastIndexAny(p, "\\/")
 	if i <= 0 {
 		return ""
@@ -223,19 +224,19 @@ func winParentDir(p string) string {
 	return p[:i]
 }
 
-// sweepStaleStaging best-effort removes stagingMarker files older than 60s; failures never block a delivery.
-func sweepStaleStaging(ctx context.Context, client *winrm.Client, dir string) {
+// removeStaleStagingFiles best-effort removes stagingMarker files older than 60s; failures never block a delivery.
+func removeStaleStagingFiles(ctx context.Context, client *winrm.Client, dir string) {
 	script := fmt.Sprintf(
 		`$ErrorActionPreference='SilentlyContinue'; $d='%s'; `+
 			`if (Test-Path -LiteralPath $d) { $cut=(Get-Date).AddSeconds(-60); `+
 			`Get-ChildItem -LiteralPath $d -File -Filter '*%s*' | Where-Object { $_.LastWriteTime -lt $cut } | Remove-Item -Force }`,
-		psSingleQuote(dir), stagingMarker,
+		escapePowerShellSingleQuotes(dir), stagingMarker,
 	)
 	_, _ = run(ctx, client, script)
 }
 
-func deliverOne(ctx context.Context, client *winrm.Client, f FileDelivery) error {
-	pathLit := psSingleQuote(f.Path)
+func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery) error {
+	pathLit := escapePowerShellSingleQuotes(f.Path)
 	b64 := base64.StdEncoding.EncodeToString(f.Content)
 	token := make([]byte, 6)
 	if _, err := rand.Read(token); err != nil {
@@ -255,8 +256,8 @@ func deliverOne(ctx context.Context, client *winrm.Client, f FileDelivery) error
 		return err
 	}
 
-	for i := 0; i < len(b64); i += b64ChunkSize {
-		end := i + b64ChunkSize
+	for i := 0; i < len(b64); i += base64ChunkSize {
+		end := i + base64ChunkSize
 		if end > len(b64) {
 			end = len(b64)
 		}
@@ -266,7 +267,7 @@ func deliverOne(ctx context.Context, client *winrm.Client, f FileDelivery) error
 				`[IO.File]::AppendAllText($b64,'%s')`,
 			pathLit, b64Ext, b64[i:end],
 		)
-		if err := runSensitive(ctx, client, appendCmd); err != nil {
+		if err := runSuppressingOutput(ctx, client, appendCmd); err != nil {
 			return err
 		}
 	}
@@ -296,7 +297,7 @@ func RemoveFiles(ctx context.Context, creds Credentials, paths []string) error {
 		script := fmt.Sprintf(
 			`$ErrorActionPreference='Stop'; $p='%s'; `+
 				`if (Test-Path -LiteralPath $p) { Remove-Item -Force -LiteralPath $p }; Write-Output ('REMOVED='+$p)`,
-			psSingleQuote(p),
+			escapePowerShellSingleQuotes(p),
 		)
 		if _, err := run(ctx, client, script); err != nil {
 			return fmt.Errorf("failed to remove %q: %w", p, err)
@@ -305,8 +306,8 @@ func RemoveFiles(ctx context.Context, creds Credentials, paths []string) error {
 	return nil
 }
 
-// psSingleQuote escapes a value for a PowerShell single-quoted string by doubling the single quote.
-func psSingleQuote(s string) string {
+// escapePowerShellSingleQuotes escapes a value for a PowerShell single-quoted string by doubling the single quote.
+func escapePowerShellSingleQuotes(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 

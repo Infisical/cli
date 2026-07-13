@@ -383,7 +383,6 @@ func init() {
 	relayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method)")
 	relayStartCmd.Flags().String("client-id", "", "client id for universal auth")
 	relayStartCmd.Flags().String("client-secret", "", "client secret for universal auth")
-	relayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	relayStartCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
 	relayStartCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
 	relayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
