@@ -113,3 +113,40 @@ func TestDisabledServiceNotMatched(t *testing.T) {
 		t.Fatal("disabled service should not match")
 	}
 }
+
+func TestParseHostPatternsIPv6(t *testing.T) {
+	patterns := parseHostPatterns("[2001:db8::1]:8443/api/*, [::1]")
+	if len(patterns) != 2 {
+		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+	// host is stored unbracketed to match the incoming (bracket-stripped) hostname
+	if patterns[0].host != "2001:db8::1" || patterns[0].port != "8443" || patterns[0].path != "/api/*" {
+		t.Fatalf("unexpected IPv6 parse: %+v", patterns[0])
+	}
+	if patterns[1].host != "::1" || patterns[1].port != "" {
+		t.Fatalf("unexpected IPv6 parse: %+v", patterns[1])
+	}
+}
+
+func TestIPv6HostMatching(t *testing.T) {
+	// incoming host is bracket-stripped (as parseConnectTarget returns it)
+	loopback := svc("loopback", "[::1]")
+	if got := bestMatch([]*resolvedService{loopback}, "::1", "443", "/"); got == nil {
+		t.Fatal("expected [::1] pattern to match incoming ::1")
+	}
+	// a non-canonical written form must still match by IP value
+	expanded := svc("expanded", "[0:0:0:0:0:0:0:1]")
+	if got := bestMatch([]*resolvedService{expanded}, "::1", "443", "/"); got == nil {
+		t.Fatal("expected expanded IPv6 form to match ::1")
+	}
+}
+
+func TestIPv6PortMatching(t *testing.T) {
+	s := svc("withPort", "[2001:db8::1]:8443")
+	if got := bestMatch([]*resolvedService{s}, "2001:db8::1", "8443", "/"); got == nil {
+		t.Fatal("expected match on IPv6 host + port")
+	}
+	if got := bestMatch([]*resolvedService{s}, "2001:db8::1", "443", "/"); got != nil {
+		t.Fatal("should not match a different port")
+	}
+}

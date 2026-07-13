@@ -1,6 +1,7 @@
 package agentproxy
 
 import (
+	"net"
 	"strings"
 )
 
@@ -22,6 +23,18 @@ func parseHostPatterns(raw string) []hostPattern {
 		if idx := strings.Index(part, "/"); idx != -1 {
 			p.path = part[idx:]
 			part = part[:idx]
+		}
+		// bracketed IPv6 ([::1] or [2001:db8::1]:8443): brackets disambiguate the port colon, and the
+		// host is stored unbracketed to match the incoming hostname (parseConnectTarget strips brackets)
+		if strings.HasPrefix(part, "[") {
+			if end := strings.Index(part, "]"); end != -1 {
+				p.host = part[1:end]
+				if rest := part[end+1:]; strings.HasPrefix(rest, ":") {
+					p.port = rest[1:]
+				}
+				patterns = append(patterns, p)
+				continue
+			}
 		}
 		if idx := strings.LastIndex(part, ":"); idx != -1 {
 			p.port = part[idx+1:]
@@ -70,7 +83,7 @@ func (p hostPattern) match(host, port, path string) (bool, matchDetail) {
 			return false, detail
 		}
 	} else {
-		if patternHost != host {
+		if !hostsEqual(patternHost, host) {
 			return false, detail
 		}
 		detail.exactHost = true
@@ -92,6 +105,16 @@ func (p hostPattern) match(host, port, path string) (bool, matchDetail) {
 	}
 
 	return true, detail
+}
+
+// hostsEqual compares hosts by value when both are IP literals, so IPv6 forms like ::1 and
+// 0:0:0:0:0:0:0:1 match regardless of how the pattern was written; otherwise it is a plain compare.
+func hostsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ipA, ipB := net.ParseIP(a), net.ParseIP(b)
+	return ipA != nil && ipB != nil && ipA.Equal(ipB)
 }
 
 // Full ties are broken by lexicographically-smallest service name so the winner is deterministic regardless of the unordered list-endpoint result.
