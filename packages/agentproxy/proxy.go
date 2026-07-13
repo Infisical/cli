@@ -1,7 +1,6 @@
 package agentproxy
 
 import (
-	"bufio"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -21,47 +21,32 @@ const (
 )
 
 const (
-	connectReadTimeout  = 30 * time.Second
 	tlsHandshakeTimeout = 10 * time.Second
-	idleTunnelTimeout   = 5 * time.Minute
-	// maxRequestHeaderBytes bounds a single request's header block. http.ReadRequest, unlike
-	// http.Server, applies no MaxHeaderBytes, so without this an unauthenticated client could send
-	// unbounded headers and exhaust proxy memory. Matches Go's http.DefaultMaxHeaderBytes (1 MB).
+
+	// Outer ingress server. Only header/idle timeouts: no ReadTimeout/WriteTimeout so a CONNECT hijack and
+	// long streaming responses aren't cut off. Plaintext (http://) relay is therefore not time-bounded here;
+	// the concurrent-connection cap (maxConcurrentConns) bounds how many connections can pin at once.
+	frontReadHeaderTimeout = 30 * time.Second
+	frontIdleTimeout       = 5 * time.Minute
+
+	// Inner per-tunnel server. WriteTimeout is roomy for streaming (e.g. large downloads); the read/idle
+	// timeouts bound slow-loris and pinned connections now that deadlines aren't hand-managed.
+	tunnelReadHeaderTimeout = 10 * time.Second
+	tunnelReadTimeout       = 60 * time.Second
+	tunnelWriteTimeout      = 30 * time.Minute
+	tunnelIdleTimeout       = 2 * time.Minute
+
+	// maxRequestHeaderBytes bounds a single request's header block via http.Server.MaxHeaderBytes, so an
+	// unauthenticated client can't send unbounded headers and exhaust proxy memory. Matches Go's
+	// http.DefaultMaxHeaderBytes (1 MB).
 	maxRequestHeaderBytes = 1 << 20
+
+	// maxConcurrentConns caps simultaneous client connections so a flood of sockets can't exhaust file
+	// descriptors or goroutines. A live tunnel holds its slot for the tunnel's lifetime.
+	maxConcurrentConns = 512
 )
 
-var (
-	errHostBlocked    = errors.New("host blocked by policy")
-	errHeaderTooLarge = errors.New("request header exceeds limit")
-)
-
-// headerLimitedReader caps bytes read while an HTTP request's headers are parsed, then switches to
-// unlimited for the body. Reused across keep-alive requests on the same connection by re-arming the
-// limit before each http.ReadRequest.
-type headerLimitedReader struct {
-	r         io.Reader
-	remaining int64
-	limited   bool
-}
-
-func (h *headerLimitedReader) Read(p []byte) (int, error) {
-	if h.limited {
-		if h.remaining <= 0 {
-			return 0, errHeaderTooLarge
-		}
-		if int64(len(p)) > h.remaining {
-			p = p[:h.remaining]
-		}
-	}
-	n, err := h.r.Read(p)
-	if h.limited {
-		h.remaining -= int64(n)
-	}
-	return n, err
-}
-
-func (h *headerLimitedReader) armHeaderLimit() { h.remaining = maxRequestHeaderBytes; h.limited = true }
-func (h *headerLimitedReader) releaseLimit()   { h.limited = false }
+var errHostBlocked = errors.New("host blocked by policy")
 
 type Options struct {
 	Port          int
@@ -74,7 +59,16 @@ type proxyServer struct {
 	opts      Options
 	ca        *caManager
 	cache     *agentCache
-	transport *http.Transport
+	transport http.RoundTripper
+}
+
+func newProxyServer(opts Options) *proxyServer {
+	return &proxyServer{
+		opts:      opts,
+		ca:        newCaManager(opts.ProxyToken),
+		cache:     newAgentCache(opts.ProxyToken),
+		transport: newUpstreamTransport(),
+	}
 }
 
 // Forces HTTP/1.1: h2 responses have no HTTP/1.1 length framing and would hang the re-serialized MITM tunnel; a non-nil empty TLSNextProto is what actually disables h2.
@@ -90,13 +84,19 @@ func newUpstreamTransport() *http.Transport {
 	}
 }
 
-func Start(opts Options) error {
-	ps := &proxyServer{
-		opts:      opts,
-		ca:        newCaManager(opts.ProxyToken),
-		cache:     newAgentCache(opts.ProxyToken),
-		transport: newUpstreamTransport(),
+// newFrontServer builds the ingress http.Server. Shared by Start and the test harness so timeout and
+// MaxHeaderBytes settings can't drift between them.
+func (ps *proxyServer) newFrontServer() *http.Server {
+	return &http.Server{
+		Handler:           http.HandlerFunc(ps.dispatch),
+		ReadHeaderTimeout: frontReadHeaderTimeout,
+		IdleTimeout:       frontIdleTimeout,
+		MaxHeaderBytes:    maxRequestHeaderBytes,
 	}
+}
+
+func Start(opts Options) error {
+	ps := newProxyServer(opts)
 
 	if err := ps.ca.ensureIntermediate(); err != nil {
 		return fmt.Errorf("failed to initialize agent proxy CA: %w", err)
@@ -114,19 +114,7 @@ func Start(opts Options) error {
 	}
 	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				log.Info().Msg("agent proxy listener closed; shutting down")
-				return nil
-			}
-			log.Warn().Err(err).Msg("failed to accept connection")
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		go ps.handleConn(conn)
-	}
+	return ps.newFrontServer().Serve(newLimitListener(listener, maxConcurrentConns))
 }
 
 func portInUse(port int) string {
@@ -152,64 +140,54 @@ func (ps *proxyServer) pollLoop() {
 	}
 }
 
-func (ps *proxyServer) handleConn(clientConn net.Conn) {
-	defer clientConn.Close()
-
-	limited := &headerLimitedReader{r: clientConn}
-	reader := bufio.NewReader(limited)
-	readTimeout := connectReadTimeout
-	for {
-		_ = clientConn.SetReadDeadline(time.Now().Add(readTimeout))
-		limited.armHeaderLimit()
-		req, err := http.ReadRequest(reader)
-		if err != nil {
-			if errors.Is(err, errHeaderTooLarge) {
-				writeHTTPError(clientConn, http.StatusRequestHeaderFieldsTooLarge, errHeaderTooLarge.Error())
-			}
-			return
-		}
-		limited.releaseLimit()
-		_ = clientConn.SetReadDeadline(time.Time{})
-
-		if req.Method == http.MethodConnect {
-			ps.handleConnect(clientConn, req)
-			return
-		}
-		if !ps.handlePlainForward(clientConn, req) {
-			return
-		}
-		readTimeout = idleTunnelTimeout
+func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		ps.handleConnect(w, r)
+		return
 	}
+	ps.handlePlainForward(w, r)
 }
 
-func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
-	scope, jwt, ok := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
+func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
+	// All authentication and HTTP error responses happen before Hijack: once hijacked, no HTTP status can be sent.
+	scope, jwt, ok := parseProxyAuth(r.Header.Get("Proxy-Authorization"))
 	if !ok {
-		writeProxyAuthRequired(clientConn)
+		writeProxyAuthChallenge(w)
 		return
 	}
 
-	hostname, port, err := parseConnectTarget(req.Host)
+	hostname, port, err := parseConnectTarget(r.Host)
 	if err != nil {
-		writeProxyResponse(clientConn, http.StatusBadRequest, fmt.Sprintf("invalid CONNECT target %q", req.Host))
+		http.Error(w, fmt.Sprintf("invalid CONNECT target %q", r.Host), http.StatusBadRequest)
 		return
 	}
 
 	// Authenticate before minting: otherwise any syntactically valid Proxy-Authorization header forces unbounded key generation and leaf-cache growth.
 	if _, err := ps.cache.get(jwt, scope); err != nil {
 		if isAuthError(err) {
-			writeProxyResponse(clientConn, http.StatusForbidden, "proxy authorization failed")
+			http.Error(w, "proxy authorization failed", http.StatusForbidden)
 		} else {
-			writeProxyResponse(clientConn, http.StatusBadGateway, "failed to resolve agent permissions")
+			http.Error(w, "failed to resolve agent permissions", http.StatusBadGateway)
 		}
 		return
 	}
 
 	leaf, err := ps.ca.mintLeaf(hostname)
 	if err != nil {
-		writeProxyResponse(clientConn, http.StatusInternalServerError, "failed to mint certificate")
+		http.Error(w, "failed to mint certificate", http.StatusInternalServerError)
 		return
 	}
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "connection hijacking unsupported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		return
+	}
+	defer clientConn.Close()
 
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
@@ -218,57 +196,106 @@ func (ps *proxyServer) handleConnect(clientConn net.Conn, req *http.Request) {
 	tlsConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{leaf},
 		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"http/1.1"},
 	})
+	// The handshake runs on the hijacked conn before the inner server, so no server timeout covers it.
 	_ = tlsConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		return
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
-	defer tlsConn.Close()
 
 	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
 }
 
+// serveTunnel serves HTTP/1.1 requests off the decrypted MITM connection using a fresh http.Server over a
+// one-shot listener, so the tunnel gets the same header/timeout enforcement as the ingress.
+func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) {
+	listener := newOneShotListener(tlsConn)
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ps.forwardHTTP(w, r, "https", hostname, port, jwt, scope)
+		}),
+		ReadHeaderTimeout: tunnelReadHeaderTimeout,
+		ReadTimeout:       tunnelReadTimeout,
+		WriteTimeout:      tunnelWriteTimeout,
+		IdleTimeout:       tunnelIdleTimeout,
+		MaxHeaderBytes:    maxRequestHeaderBytes,
+		// The one-shot listener yields the single conn once, then blocks; closing it on terminal conn state
+		// makes Serve return. The conn is owned by http.Server (Closed) or the hijack handler, not closed here.
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateHijacked || state == http.StateClosed {
+				_ = listener.Close()
+			}
+		},
+	}
+	_ = srv.Serve(listener)
+}
+
 // Only http:// absolute-form is served; https:// is rejected so the proxy can never be used to silently TLS-strip (HTTPS must arrive as CONNECT).
-func (ps *proxyServer) handlePlainForward(clientConn net.Conn, req *http.Request) bool {
-	if !strings.EqualFold(req.URL.Scheme, "http") || req.URL.Host == "" {
-		writeHTTPError(clientConn, http.StatusBadRequest, "non-CONNECT requests must be absolute-form http:// (use CONNECT for https:// upstreams)")
-		return false
+func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request) {
+	if !strings.EqualFold(r.URL.Scheme, "http") || r.URL.Host == "" {
+		http.Error(w, "non-CONNECT requests must be absolute-form http:// (use CONNECT for https:// upstreams)", http.StatusBadRequest)
+		return
 	}
 
-	scope, jwt, ok := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
+	scope, jwt, ok := parseProxyAuth(r.Header.Get("Proxy-Authorization"))
 	if !ok {
-		writeProxyAuthRequired(clientConn)
-		return false
+		writeProxyAuthChallenge(w)
+		return
 	}
 
-	hostname := req.URL.Hostname()
-	port := req.URL.Port()
+	hostname := r.URL.Hostname()
+	port := r.URL.Port()
 	if port == "" {
 		port = "80"
 	}
-	if req.URL.Path == "" {
-		req.URL.Path = "/"
+	if r.URL.Path == "" {
+		r.URL.Path = "/"
 	}
 
-	resp, err := ps.forward(req, "http", hostname, port, jwt, scope)
+	ps.forwardHTTP(w, r, "http", hostname, port, jwt, scope)
+}
+
+// forwardHTTP resolves the upstream response and relays it to the client via the ResponseWriter.
+func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, jwt string, scope agentScope) {
+	resp, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, errHostBlocked) {
 			status = http.StatusForbidden
 		}
-		writeHTTPError(clientConn, status, err.Error())
-		return false
+		http.Error(w, err.Error(), status)
+		return
 	}
+	defer resp.Body.Close()
 
-	if err := resp.Write(clientConn); err != nil {
-		resp.Body.Close()
-		return false
+	// Strip hop-by-hop response headers (Connection, Transfer-Encoding, etc.) before copying: resp.Write
+	// used to frame these itself, but the ResponseWriter owns framing now and would double-frame otherwise.
+	// Set-Cookie and Content-Length are deliberately preserved.
+	stripHopByHopHeaders(resp.Header)
+	dst := w.Header()
+	for name, values := range resp.Header {
+		for _, v := range values {
+			dst.Add(name, v)
+		}
 	}
-	resp.Body.Close()
-	drainRequestBody(req)
+	// Relaying via ResponseWriter (rather than the old byte-transparent resp.Write) means Go adds a Date
+	// header and, when the upstream omitted Content-Type, sniffs one. Accepted as standard proxy behavior.
+	w.WriteHeader(resp.StatusCode)
+	// Flush per chunk so streamed responses (e.g. SSE) reach the client instead of buffering.
+	_, _ = io.Copy(flushingWriter{w}, resp.Body)
+}
 
-	return !req.Close && !resp.Close
+// flushingWriter flushes the underlying ResponseWriter after every write so streamed bodies aren't buffered.
+type flushingWriter struct{ w http.ResponseWriter }
+
+func (fw flushingWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if f, ok := fw.w.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
 }
 
 func parseConnectTarget(target string) (hostname, port string, err error) {
@@ -281,44 +308,6 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 		return net.SplitHostPort(target + ":443")
 	}
 	return "", "", err
-}
-
-func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) {
-	limited := &headerLimitedReader{r: tlsConn}
-	tlsReader := bufio.NewReader(limited)
-
-	for {
-		_ = tlsConn.SetReadDeadline(time.Now().Add(idleTunnelTimeout))
-		limited.armHeaderLimit()
-		req, err := http.ReadRequest(tlsReader)
-		if err != nil {
-			if errors.Is(err, errHeaderTooLarge) {
-				writeHTTPError(tlsConn, http.StatusRequestHeaderFieldsTooLarge, errHeaderTooLarge.Error())
-			} else if !errors.Is(err, io.EOF) {
-				log.Debug().Err(err).Msg("tunnel read ended")
-			}
-			return
-		}
-		limited.releaseLimit()
-		_ = tlsConn.SetReadDeadline(time.Time{})
-
-		resp, err := ps.forward(req, "https", hostname, port, jwt, scope)
-		if err != nil {
-			if errors.Is(err, errHostBlocked) {
-				writeHTTPError(tlsConn, http.StatusForbidden, err.Error())
-			} else {
-				writeHTTPError(tlsConn, http.StatusBadGateway, err.Error())
-			}
-			return
-		}
-
-		if err := resp.Write(tlsConn); err != nil {
-			resp.Body.Close()
-			return
-		}
-		resp.Body.Close()
-		drainRequestBody(req)
-	}
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, error) {
@@ -439,21 +428,73 @@ func parseProxyAuth(header string) (agentScope, string, bool) {
 	return agentScope{projectID: projectID, environment: environment, secretPath: secretPath}, jwt, true
 }
 
-func drainRequestBody(req *http.Request) {
-	if req.Body != nil {
-		_, _ = io.Copy(io.Discard, req.Body)
-		_ = req.Body.Close()
+func writeProxyAuthChallenge(w http.ResponseWriter) {
+	w.Header().Set("Proxy-Authenticate", "Basic")
+	http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
+}
+
+// oneShotListener adapts a single already-accepted connection into a net.Listener so http.Server can serve
+// HTTP/1.1 (incl. keep-alive) off it. The first Accept yields the conn; later Accepts block until Close.
+type oneShotListener struct {
+	conn      net.Conn
+	yield     chan net.Conn
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+var errListenerClosed = errors.New("agentproxy: one-shot listener closed")
+
+func newOneShotListener(c net.Conn) *oneShotListener {
+	l := &oneShotListener{conn: c, yield: make(chan net.Conn, 1), closed: make(chan struct{})}
+	l.yield <- c
+	return l
+}
+
+func (l *oneShotListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.yield:
+		return c, nil
+	case <-l.closed:
+		return nil, errListenerClosed
 	}
 }
 
-func writeProxyAuthRequired(conn net.Conn) {
-	conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\n\r\n")) // #nosec G104
+func (l *oneShotListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
 }
 
-func writeProxyResponse(conn net.Conn, status int, msg string) {
-	fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Length: %d\r\n\r\n%s", status, http.StatusText(status), len(msg), msg) // #nosec G104
+func (l *oneShotListener) Addr() net.Addr { return l.conn.LocalAddr() }
+
+// limitListener caps the number of concurrent connections. Accept blocks once the limit is reached and a
+// slot frees only when a served connection is closed, so a burst of sockets can't exhaust fds/goroutines.
+type limitListener struct {
+	net.Listener
+	sem chan struct{}
 }
 
-func writeHTTPError(conn io.Writer, status int, msg string) {
-	fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, http.StatusText(status), len(msg), msg) // #nosec G104
+func newLimitListener(l net.Listener, n int) net.Listener {
+	return &limitListener{Listener: l, sem: make(chan struct{}, n)}
+}
+
+func (l *limitListener) Accept() (net.Conn, error) {
+	l.sem <- struct{}{}
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		<-l.sem
+		return nil, err
+	}
+	return &limitConn{Conn: conn, release: func() { <-l.sem }}, nil
+}
+
+type limitConn struct {
+	net.Conn
+	releaseOnce sync.Once
+	release     func()
+}
+
+func (c *limitConn) Close() error {
+	err := c.Conn.Close()
+	c.releaseOnce.Do(c.release)
+	return err
 }

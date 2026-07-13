@@ -34,7 +34,14 @@ func newTestProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, ser
 		transport: &http.Transport{},
 	}
 	client, server := net.Pipe()
-	go ps.handleConn(server)
+	l := newOneShotListener(server)
+	srv := ps.newFrontServer()
+	srv.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateClosed || s == http.StateHijacked {
+			_ = l.Close()
+		}
+	}
+	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
