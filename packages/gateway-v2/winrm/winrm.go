@@ -30,11 +30,14 @@ type Credentials struct {
 	Port     int
 	Username string
 	Password string
-	// CACert, when set, is a PEM bundle used to verify the listener's certificate, so a self-signed
-	// HTTPS listener can be authenticated without disabling verification.
-	CACert []byte
-	// Insecure skips TLS verification (confidentiality only, no MITM protection); use only when no CA can be pinned.
+	// UseHTTPS selects the transport: false (default) uses HTTP with NTLM message encryption, which
+	// needs no server certificate; true uses HTTPS.
+	UseHTTPS bool
+	// Insecure skips TLS certificate verification (HTTPS only), for when the operator opts out of it.
 	Insecure bool
+	// CACert, when set (HTTPS only), is a PEM bundle used to verify a self-signed listener's certificate
+	// so it can be authenticated without a publicly trusted CA.
+	CACert []byte
 }
 
 type FileDelivery struct {
@@ -99,26 +102,40 @@ func pinnedServerName(caCert []byte) string {
 	return cert.Subject.CommonName
 }
 
-// newClient builds a WinRM client over HTTPS only: the library's HTTP transport can fall back to
-// cleartext, whereas TLS guarantees confidentiality regardless of the NTLM layer.
+// newClient builds a WinRM client. HTTP (the default) uses NTLM message encryption to keep the SOAP
+// body confidential without a server certificate; HTTPS uses TLS, verifying the listener against the
+// system trust store, an optional pinned CA (for a self-signed listener), or skipping verification
+// when Insecure is set.
 func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
 	params := *winrm.DefaultParameters
-	params.TransportDecorator = func() winrm.Transporter { return winrm.NewClientNTLMWithDial(boundedDial(ctx)) }
+	if creds.UseHTTPS {
+		// The bounded dial caps the response read; the library otherwise reads the body unbounded.
+		params.TransportDecorator = func() winrm.Transporter { return winrm.NewClientNTLMWithDial(boundedDial(ctx)) }
+	} else {
+		enc, err := winrm.NewEncryption("ntlm")
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to initialize NTLM message encryption: %v", ErrConnect, err)
+		}
+		params.TransportDecorator = func() winrm.Transporter { return enc }
+	}
 
 	endpoint := winrm.NewEndpoint(
 		creds.Host,
 		creds.Port,
-		true, // HTTPS only
+		creds.UseHTTPS,
 		creds.Insecure,
-		creds.CACert, // verify the listener against this CA when provided
+		creds.CACert,
 		nil, nil,
 		commandDeadline,
 	)
 
-	// Verify a pinned cert against its own name, not the connection host: WinRM hosts are often reached
-	// by IP while the listener cert is issued for the machine name. Chain validation still stops a MITM.
-	if name := pinnedServerName(creds.CACert); name != "" {
-		endpoint.TLSServerName = name
+	// When verifying against a pinned CA, verify the presented cert against the pinned cert's own name
+	// rather than the connection host: WinRM hosts are often reached by IP while the listener cert is
+	// issued for the machine name. Chain validation against the pinned CA still stops a MITM.
+	if creds.UseHTTPS && !creds.Insecure {
+		if name := pinnedServerName(creds.CACert); name != "" {
+			endpoint.TLSServerName = name
+		}
 	}
 
 	client, err := winrm.NewClientWithParameters(endpoint, creds.Username, creds.Password, &params)

@@ -38,9 +38,10 @@ func winrmTargetFromContext(ctx context.Context) winrmTarget {
 }
 
 // winrmTransportParams are the per-request transport settings; host/port are excluded (see envelope).
-// WinRM always runs over HTTPS, so only TLS verification is configurable here: pin a CA certificate
-// (PEM) to authenticate a self-signed listener, or skip verification entirely.
+// useHttps selects HTTPS over the default HTTP-with-NTLM-message-encryption transport; for HTTPS,
+// insecure skips certificate verification and caCertificate pins a CA to authenticate a self-signed listener.
 type winrmTransportParams struct {
+	UseHTTPS      bool   `json:"useHttps"`
 	Insecure      bool   `json:"insecure"`
 	CACertificate string `json:"caCertificate"`
 }
@@ -197,6 +198,7 @@ func credsFromEnv(ctx context.Context, env *winrmRequestEnvelope, tp winrmTransp
 		Port:     target.Port,
 		Username: env.Username,
 		Password: env.Password,
+		UseHTTPS: tp.UseHTTPS,
 		Insecure: tp.Insecure,
 		CACert:   []byte(tp.CACertificate),
 	}
