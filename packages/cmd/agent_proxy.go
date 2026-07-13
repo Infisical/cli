@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -294,7 +295,15 @@ func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, s
 
 	secrets, err := util.GetAllEnvironmentVariables(params, "")
 	if err != nil {
-		log.Warn().Msgf("Could not fetch regular secrets (agent may lack read access): %v", err)
+		// A 401/403 just means the agent can't read any secret in this scope (normal when it only holds
+		// Proxy access): there's nothing to deliver and nothing is wrong, so say nothing. Only a genuine
+		// failure (network, server error) is worth surfacing.
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403) {
+			log.Debug().Msg("Agent has no readable secrets in this scope; skipping real-secret delivery")
+		} else {
+			log.Warn().Msgf("Could not fetch the agent's readable secrets: %v", err)
+		}
 		return nil
 	}
 	return secrets
