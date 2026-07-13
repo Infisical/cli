@@ -24,6 +24,12 @@ func isAuthError(err error) bool {
 
 const agentInactiveTTL = 10 * time.Minute
 
+// maxAgentCacheEntries bounds the resolution cache. Its key includes the client-supplied scope
+// (project/env/path), so without a cap an authenticated agent could vary the scope indefinitely and
+// grow the map until the proxy runs out of memory. When full, the least-recently-seen entry is evicted,
+// so actively-used agents keep their cache and only idle scopes are dropped.
+const maxAgentCacheEntries = 4096
+
 type resolvedCredential struct {
 	role          string
 	headerName    string
@@ -97,9 +103,38 @@ func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, erro
 		lastSeen: time.Now(),
 	}
 	a.mu.Lock()
+	a.evictIfFullLocked(key)
 	a.entries[key] = entry
 	a.mu.Unlock()
 	return resolved, nil
+}
+
+// evictIfFullLocked makes room for a new entry when the cache is at capacity. Callers must hold a.mu.
+// It first drops inactive entries (the same threshold refreshActive uses), then, if still full, evicts
+// the least-recently-seen entry so active agents keep their cached credentials.
+func (a *agentCache) evictIfFullLocked(incoming string) {
+	if len(a.entries) < maxAgentCacheEntries {
+		return
+	}
+	if _, replacing := a.entries[incoming]; replacing {
+		return
+	}
+	now := time.Now()
+	for key, entry := range a.entries {
+		if now.Sub(entry.lastSeen) > agentInactiveTTL {
+			delete(a.entries, key)
+		}
+	}
+	for len(a.entries) >= maxAgentCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		for key, entry := range a.entries {
+			if oldestKey == "" || entry.lastSeen.Before(oldest) {
+				oldestKey, oldest = key, entry.lastSeen
+			}
+		}
+		delete(a.entries, oldestKey)
+	}
 }
 
 func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, error) {
