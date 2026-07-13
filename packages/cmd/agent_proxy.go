@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -150,9 +151,14 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to write the agent proxy CA to disk")
 	}
 
-	placeholderEnvs := fetchProxiedServicePlaceholders(httpClient, projectID, environment, secretPath)
+	placeholderEnvs, brokeredKeys := fetchProxiedServiceConfig(httpClient, projectID, environment, secretPath)
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
+
+	allowReadableBrokered, _ := cmd.Flags().GetBool("allow-readable-brokered-secrets")
+	if !allowReadableBrokered {
+		assertNoBrokeredSecretsReadable(brokeredKeys, realSecrets)
+	}
 
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
@@ -213,7 +219,10 @@ func writeMitmCa(certificatePem string) (string, error) {
 	return caPath, nil
 }
 
-func fetchProxiedServicePlaceholders(httpClient *resty.Client, projectID, environment, secretPath string) map[string]string {
+// fetchProxiedServiceConfig lists the proxied services the agent can reach and returns both the
+// credential-substitution placeholders to inject and the set of secret keys those services broker. The
+// brokered keys are what the agent is meant to receive only through the proxy, never as real values.
+func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) (map[string]string, map[string]struct{}) {
 	resp, err := api.CallListProxiedServices(httpClient, api.ListProxiedServicesRequest{
 		ProjectID:   projectID,
 		Environment: environment,
@@ -224,18 +233,49 @@ func fetchProxiedServicePlaceholders(httpClient *resty.Client, projectID, enviro
 	}
 
 	placeholders := map[string]string{}
+	brokeredKeys := map[string]struct{}{}
 	for _, svc := range resp.Services {
 		// Disabled services aren't proxied, so their placeholders would reach upstream verbatim; don't inject them.
 		if !svc.CanProxy || !svc.IsEnabled {
 			continue
 		}
 		for _, cred := range svc.Credentials {
+			brokeredKeys[cred.SecretKey] = struct{}{}
 			if cred.Role == "credential-substitution" && cred.PlaceholderKey != "" {
 				placeholders[cred.PlaceholderKey] = cred.PlaceholderValue
 			}
 		}
 	}
-	return placeholders
+	return placeholders, brokeredKeys
+}
+
+// assertNoBrokeredSecretsReadable fails fast when the agent can read a secret that a proxied service
+// brokers to it. Brokering is meant to keep the real value out of the agent's hands, but if the agent
+// also holds ReadValue on that secret it gets the value directly (delivered here as a real secret, and
+// readable straight from the API), so the protection is silently bypassed. This is a misconfiguration
+// guardrail, not a security boundary: the real fix is to not grant the agent ReadValue on brokered secrets.
+func readableBrokeredSecrets(brokeredKeys map[string]struct{}, realSecrets []models.SingleEnvironmentVariable) []string {
+	var overlap []string
+	for _, s := range realSecrets {
+		if _, ok := brokeredKeys[s.Key]; ok {
+			overlap = append(overlap, s.Key)
+		}
+	}
+	sort.Strings(overlap)
+	return overlap
+}
+
+func assertNoBrokeredSecretsReadable(brokeredKeys map[string]struct{}, realSecrets []models.SingleEnvironmentVariable) {
+	overlap := readableBrokeredSecrets(brokeredKeys, realSecrets)
+	if len(overlap) == 0 {
+		return
+	}
+	util.HandleError(fmt.Errorf(
+		"the agent can read secret(s) that are brokered by a proxied service: %s\n"+
+			"brokering hides these values from the agent, but it has ReadValue on them and would receive them directly, bypassing the proxy.\n"+
+			"fix: remove the agent's ReadValue permission on these secrets, or stop referencing them from proxied services.\n"+
+			"to start anyway, pass --allow-readable-brokered-secrets",
+		strings.Join(overlap, ", ")))
 }
 
 func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, secretPath string) []models.SingleEnvironmentVariable {
@@ -358,6 +398,7 @@ func init() {
 	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	agentProxyConnectCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
+	agentProxyConnectCmd.Flags().Bool("allow-readable-brokered-secrets", false, "start even if the agent can read secrets that proxied services broker to it (bypasses a misconfiguration guardrail)")
 
 	agentProxyStartCmd.Flags().Int("port", 17322, "port for the agent proxy to listen on")
 	agentProxyStartCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
