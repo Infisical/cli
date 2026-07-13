@@ -46,11 +46,11 @@ const (
 
 // SessionEvent represents a single event in a recorded session (SSH or RDP).
 type SessionEvent struct {
-	Timestamp   time.Time            `json:"timestamp"`
-	EventType   SessionEventType    `json:"eventType"`
-	ChannelType SessionChannelType  `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
-	Data        []byte               `json:"data"`                  // SSH: raw terminal bytes; RDP: JSON envelope (base64-marshaled)
-	ElapsedTime float64              `json:"elapsedTime"`           // Seconds since session start (for replay)
+	Timestamp   time.Time          `json:"timestamp"`
+	EventType   SessionEventType   `json:"eventType"`
+	ChannelType SessionChannelType `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
+	Data        []byte             `json:"data"`                  // SSH: raw terminal bytes; RDP: JSON envelope (base64-marshaled)
+	ElapsedTime float64            `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
 type HttpEventType string
@@ -80,14 +80,23 @@ type SessionLogger interface {
 	Close() error
 }
 
+type NoOpSessionLogger struct{}
+
+func NewNoOpSessionLogger() SessionLogger { return &NoOpSessionLogger{} }
+
+func (l *NoOpSessionLogger) LogEntry(SessionLogEntry) error     { return nil }
+func (l *NoOpSessionLogger) LogSessionEvent(SessionEvent) error { return nil }
+func (l *NoOpSessionLogger) LogHttpEvent(HttpEvent) error       { return nil }
+func (l *NoOpSessionLogger) Close() error                       { return nil }
+
 type EncryptedSessionLogger struct {
 	sessionID       string
 	encryptionKey   string
 	expiresAt       time.Time
 	file            *os.File
 	mutex           sync.Mutex
-	sessionStart    time.Time          // Track session start time for elapsed time calculation
-	maskingPatterns []*regexp.Regexp   // Patterns for masking sensitive data in session logs
+	sessionStart    time.Time        // Track session start time for elapsed time calculation
+	maskingPatterns []*regexp.Regexp // Patterns for masking sensitive data in session logs
 }
 
 type RequestResponsePair struct {

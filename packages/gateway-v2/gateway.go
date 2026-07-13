@@ -77,6 +77,7 @@ type RoutingInfo struct {
 type PAMInfo struct {
 	SessionId    string `json:"sessionId"`
 	ResourceType string `json:"resourceType"`
+	IsDiscovery  bool   `json:"isDiscovery,omitempty"`
 }
 
 type ActorDetails struct {
@@ -1148,6 +1149,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 			config.PAMConfig = pam.GatewayPAMConfig{
 				SessionId:          pamInfo.SessionId,
 				ResourceType:       pamInfo.ResourceType,
+				IsDiscovery:        pamInfo.IsDiscovery,
 				ExpiryTime:         clientCert.NotAfter,
 				CredentialsManager: g.pamCredentialsManager,
 				SessionUploader:    g.pamSessionUploader,

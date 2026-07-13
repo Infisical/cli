@@ -37,6 +37,7 @@ type MongoProxyGetter func(ctx context.Context, sessionID string, config mongodb
 type GatewayPAMConfig struct {
 	SessionId          string
 	ResourceType       string
+	IsDiscovery        bool
 	ExpiryTime         time.Time
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
@@ -185,7 +186,15 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 	}
 
-	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, credentialExpiryTime)
+	var (
+		credentials *session.PAMCredentials
+		err         error
+	)
+	if pamConfig.IsDiscovery {
+		credentials, err = pamConfig.CredentialsManager.GetPAMScanCredentials(pamConfig.SessionId)
+	} else {
+		credentials, err = pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, credentialExpiryTime)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to retrieve PAM session credentials")
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
@@ -222,27 +231,33 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 	}()
 
-	encryptionKey, err := pamConfig.CredentialsManager.GetPAMSessionEncryptionKey()
-	if err != nil {
-		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
-	}
+	// discovery scans must not produce session logs
+	var sessionLogger session.SessionLogger
+	if pamConfig.IsDiscovery {
+		sessionLogger = session.NewNoOpSessionLogger()
+	} else {
+		encryptionKey, keyErr := pamConfig.CredentialsManager.GetPAMSessionEncryptionKey()
+		if keyErr != nil {
+			return fmt.Errorf("failed to get PAM session encryption key: %w", keyErr)
+		}
 
-	// Compile session log masking patterns from policy rules
-	var maskingPatterns []*regexp.Regexp
-	if credentials.PolicyRules != nil {
-		maskingPatterns = compilePolicyPatterns(credentials.PolicyRules.SessionLogMasking, pamConfig.SessionId, "session-log-masking")
-	}
+		// Compile session log masking patterns from policy rules
+		var maskingPatterns []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			maskingPatterns = compilePolicyPatterns(credentials.PolicyRules.SessionLogMasking, pamConfig.SessionId, "session-log-masking")
+		}
 
-	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, maskingPatterns)
-	if err != nil {
-		return fmt.Errorf("failed to create session logger: %w", err)
+		sessionLogger, err = session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, maskingPatterns)
+		if err != nil {
+			return fmt.Errorf("failed to create session logger: %w", err)
+		}
+		pamConfig.SessionUploader.RegisterSession(pamConfig.SessionId)
 	}
 	defer func() {
 		if err := sessionLogger.Close(); err != nil {
 			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to close session logger")
 		}
 	}()
-	pamConfig.SessionUploader.RegisterSession(pamConfig.SessionId)
 
 	serverName := credentials.Host
 	switch pamConfig.ResourceType {
