@@ -24,9 +24,44 @@ const (
 	connectReadTimeout  = 30 * time.Second
 	tlsHandshakeTimeout = 10 * time.Second
 	idleTunnelTimeout   = 5 * time.Minute
+	// maxRequestHeaderBytes bounds a single request's header block. http.ReadRequest, unlike
+	// http.Server, applies no MaxHeaderBytes, so without this an unauthenticated client could send
+	// unbounded headers and exhaust proxy memory. Matches Go's http.DefaultMaxHeaderBytes (1 MB).
+	maxRequestHeaderBytes = 1 << 20
 )
 
-var errHostBlocked = errors.New("host blocked by policy")
+var (
+	errHostBlocked    = errors.New("host blocked by policy")
+	errHeaderTooLarge = errors.New("request header exceeds limit")
+)
+
+// headerLimitedReader caps bytes read while an HTTP request's headers are parsed, then switches to
+// unlimited for the body. Reused across keep-alive requests on the same connection by re-arming the
+// limit before each http.ReadRequest.
+type headerLimitedReader struct {
+	r         io.Reader
+	remaining int64
+	limited   bool
+}
+
+func (h *headerLimitedReader) Read(p []byte) (int, error) {
+	if h.limited {
+		if h.remaining <= 0 {
+			return 0, errHeaderTooLarge
+		}
+		if int64(len(p)) > h.remaining {
+			p = p[:h.remaining]
+		}
+	}
+	n, err := h.r.Read(p)
+	if h.limited {
+		h.remaining -= int64(n)
+	}
+	return n, err
+}
+
+func (h *headerLimitedReader) armHeaderLimit() { h.remaining = maxRequestHeaderBytes; h.limited = true }
+func (h *headerLimitedReader) releaseLimit()   { h.limited = false }
 
 type Options struct {
 	Port          int
@@ -120,14 +155,20 @@ func (ps *proxyServer) pollLoop() {
 func (ps *proxyServer) handleConn(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	reader := bufio.NewReader(clientConn)
+	limited := &headerLimitedReader{r: clientConn}
+	reader := bufio.NewReader(limited)
 	readTimeout := connectReadTimeout
 	for {
 		_ = clientConn.SetReadDeadline(time.Now().Add(readTimeout))
+		limited.armHeaderLimit()
 		req, err := http.ReadRequest(reader)
 		if err != nil {
+			if errors.Is(err, errHeaderTooLarge) {
+				writeHTTPError(clientConn, http.StatusRequestHeaderFieldsTooLarge, errHeaderTooLarge.Error())
+			}
 			return
 		}
+		limited.releaseLimit()
 		_ = clientConn.SetReadDeadline(time.Time{})
 
 		if req.Method == http.MethodConnect {
@@ -243,17 +284,22 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 }
 
 func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) {
-	tlsReader := bufio.NewReader(tlsConn)
+	limited := &headerLimitedReader{r: tlsConn}
+	tlsReader := bufio.NewReader(limited)
 
 	for {
 		_ = tlsConn.SetReadDeadline(time.Now().Add(idleTunnelTimeout))
+		limited.armHeaderLimit()
 		req, err := http.ReadRequest(tlsReader)
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			if errors.Is(err, errHeaderTooLarge) {
+				writeHTTPError(tlsConn, http.StatusRequestHeaderFieldsTooLarge, errHeaderTooLarge.Error())
+			} else if !errors.Is(err, io.EOF) {
 				log.Debug().Err(err).Msg("tunnel read ended")
 			}
 			return
 		}
+		limited.releaseLimit()
 		_ = tlsConn.SetReadDeadline(time.Time{})
 
 		resp, err := ps.forward(req, "https", hostname, port, jwt, scope)
