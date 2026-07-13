@@ -235,7 +235,7 @@ func removeStaleStagingFiles(ctx context.Context, client *winrm.Client, dir stri
 	_, _ = run(ctx, client, script)
 }
 
-func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery) error {
+func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery) (err error) {
 	pathLit := escapePowerShellSingleQuotes(f.Path)
 	b64 := base64.StdEncoding.EncodeToString(f.Content)
 	token := make([]byte, 6)
@@ -245,11 +245,24 @@ func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery) erro
 	b64Ext := fmt.Sprintf("%s%s.b64", stagingMarker, hex.EncodeToString(token))
 	tmpExt := fmt.Sprintf("%s%s.tmp", stagingMarker, hex.EncodeToString(token))
 
+	// Best-effort cleanup so a failed delivery leaves no staging files behind (the sweep is the backstop).
+	defer func() {
+		if err != nil {
+			cleanup := fmt.Sprintf(
+				`$ErrorActionPreference='SilentlyContinue'; $p='%s'; Remove-Item -Force -LiteralPath ($p+'%s'),($p+'%s')`,
+				pathLit, b64Ext, tmpExt,
+			)
+			_ = runSuppressingOutput(ctx, client, cleanup)
+		}
+	}()
+
 	init := fmt.Sprintf(
 		`$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; `+
 			`$p='%s'; New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null; `+
 			`$b64=$p+'%s'; if (Test-Path -LiteralPath $b64) { Remove-Item -Force -LiteralPath $b64 }; `+
-			`New-Item -ItemType File -Force -Path $b64 | Out-Null`,
+			`New-Item -ItemType File -Force -Path $b64 | Out-Null; `+
+			`$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; `+
+			`icacls $b64 /inheritance:r /grant:r "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" ('*'+$sid+':(F)') *>$null`,
 		pathLit, b64Ext,
 	)
 	if _, err := run(ctx, client, init); err != nil {
