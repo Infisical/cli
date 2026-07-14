@@ -297,9 +297,12 @@ func handlePortSweep(ctx context.Context, conn *tls.Conn, reader *bufio.Reader) 
 		return fmt.Errorf("failed to parse port sweep request: %w", err)
 	}
 
+	const maxSweepTimeout = 30 * time.Second
 	timeout := time.Duration(req.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 3 * time.Second
+	} else if timeout > maxSweepTimeout {
+		timeout = maxSweepTimeout
 	}
 
 	const sweepConcurrency = 512

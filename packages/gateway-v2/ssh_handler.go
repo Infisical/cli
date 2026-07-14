@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -148,11 +149,7 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 }
 
 func asExitError(err error, target **ssh.ExitError) bool {
-	if e, ok := err.(*ssh.ExitError); ok {
-		*target = e
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }
 
 // serveSSHExecOverTLS reads one HTTP request off the TLS relay connection, runs the SSH command against the
