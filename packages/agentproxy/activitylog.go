@@ -197,10 +197,19 @@ func (l *activityLogger) prettyLine(rec activityRecord) string {
 		service = *rec.ServiceName
 	}
 
-	line := fmt.Sprintf("%s  %-11s  %-16s  %-16s  %-5s %s%s  %d  %s",
+	// Scope column: a shared proxy serves many projects/envs/paths, so surface which one. The project UUID is
+	// truncated since the human just needs to tell projects apart, and the full value is in the json output.
+	proj := rec.ProjectID
+	if len(proj) > 8 {
+		proj = proj[:8] + ".."
+	}
+	scope := fmt.Sprintf("%s/%s:%s", proj, rec.Environment, rec.SecretPath)
+
+	line := fmt.Sprintf("%s  %-11s  %-16s  %-32s  %-16s  %-5s %s%s  %d  %s",
 		rec.OccurredAt.Format("15:04:05"),
 		rec.Decision,
 		agent,
+		scope,
 		service,
 		rec.Method,
 		rec.Host,

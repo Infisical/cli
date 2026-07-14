@@ -251,6 +251,28 @@ func TestActivityLoggerReopenStdoutIsNoop(t *testing.T) {
 	}
 }
 
+func TestPrettyLineIncludesScope(t *testing.T) {
+	l := &activityLogger{enabled: true, format: formatPretty, filter: filterAll}
+	name := "acme-api"
+	line := l.prettyLine(activityRecord{
+		Decision:    decisionBrokered,
+		ProjectID:   "53c8b330-f5d4-40f2-be55-e7d1fb56674b",
+		Environment: "dev",
+		SecretPath:  "/agent-proxy-test",
+		ServiceName: &name,
+		Method:      "GET",
+		Host:        "httpbingo.org",
+		Path:        "/headers",
+		Status:      200,
+	})
+	// Scope column shows truncated project, env, and path.
+	for _, want := range []string{"53c8b330..", "dev", "/agent-proxy-test"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("pretty line missing %q: %q", want, line)
+		}
+	}
+}
+
 func TestActivityLoggerDisabledWritesNothing(t *testing.T) {
 	var buf bytes.Buffer
 	l := &activityLogger{enabled: false, format: formatJSON, filter: filterAll, w: &buf}
