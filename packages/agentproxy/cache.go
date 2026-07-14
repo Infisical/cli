@@ -1,6 +1,8 @@
 package agentproxy
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,6 +33,7 @@ const agentInactiveTTL = 10 * time.Minute
 const maxAgentCacheEntries = 4096
 
 type resolvedCredential struct {
+	secretKey     string
 	role          string
 	headerName    string
 	headerPrefix  string
@@ -41,6 +44,7 @@ type resolvedCredential struct {
 }
 
 type resolvedService struct {
+	id           string
 	name         string
 	hostPatterns []hostPattern
 	isEnabled    bool
@@ -54,10 +58,12 @@ type agentScope struct {
 }
 
 type agentEntry struct {
-	jwt      string
-	scope    agentScope
-	services []*resolvedService
-	lastSeen time.Time
+	jwt       string
+	scope     agentScope
+	agentID   string
+	agentName string
+	services  []*resolvedService
+	lastSeen  time.Time
 }
 
 func cacheKey(jwt string, scope agentScope) string {
@@ -96,17 +102,59 @@ func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, erro
 		return nil, err
 	}
 
+	agentID, agentName := decodeAgentIdentity(jwt)
+
 	entry = &agentEntry{
-		jwt:      jwt,
-		scope:    scope,
-		services: resolved,
-		lastSeen: time.Now(),
+		jwt:       jwt,
+		scope:     scope,
+		agentID:   agentID,
+		agentName: agentName,
+		services:  resolved,
+		lastSeen:  time.Now(),
 	}
 	a.mu.Lock()
 	a.evictIfFullLocked(key)
 	a.entries[key] = entry
 	a.mu.Unlock()
 	return resolved, nil
+}
+
+// identity returns the agent identity cached for the given jwt+scope. ok is false when no entry exists
+// (the agent was never resolved), which is the boundary the activity log uses to decide whether to emit.
+func (a *agentCache) identity(jwt string, scope agentScope) (id, name string, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry := a.entries[cacheKey(jwt, scope)]
+	if entry == nil {
+		return "", "", false
+	}
+	return entry.agentID, entry.agentName, true
+}
+
+// decodeAgentIdentity reads identityId/identityName from the agent's JWT payload without verifying the
+// signature. The proxy holds no auth secret and does not need to: an entry is only created after Infisical
+// accepted this exact token on discovery, so the identity is backend-validated, just not re-verified here.
+// A decode failure is not fatal; it yields empty identity (agentName serializes to null) and warns.
+func decodeAgentIdentity(jwt string) (id, name string) {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		log.Warn().Msg("agent JWT is not a well-formed token; activity records will have empty identity")
+		return "", ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to decode agent JWT payload; activity records will have empty identity")
+		return "", ""
+	}
+	var claims struct {
+		IdentityID   string `json:"identityId"`
+		IdentityName string `json:"identityName"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		log.Warn().Err(err).Msg("failed to parse agent JWT payload; activity records will have empty identity")
+		return "", ""
+	}
+	return claims.IdentityID, claims.IdentityName
 }
 
 // evictIfFullLocked makes room for a new entry when the cache is at capacity. Callers must hold a.mu.
@@ -159,6 +207,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 			continue
 		}
 		rs := &resolvedService{
+			id:           svc.ID,
 			name:         svc.Name,
 			hostPatterns: parseHostPatterns(svc.HostPattern),
 			isEnabled:    svc.IsEnabled,
@@ -170,6 +219,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 				continue
 			}
 			rs.credentials = append(rs.credentials, resolvedCredential{
+				secretKey:     cred.SecretKey,
 				role:          cred.Role,
 				headerName:    cred.HeaderName,
 				headerPrefix:  cred.HeaderPrefix,

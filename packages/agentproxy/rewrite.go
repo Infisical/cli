@@ -21,9 +21,22 @@ const (
 	maxBodyRewriteSize = 10 * 1024 * 1024
 )
 
-func applyCredentials(req *http.Request, svc *resolvedService) error {
+// AppliedCredential records what applyCredentials actually injected, for the activity log. It reflects the
+// outcome (header rewrites always apply; a substitution lists only the surfaces its placeholder was found in)
+// rather than the service config. It never carries a secret value, only the key and where it landed.
+type AppliedCredential struct {
+	Key      string   `json:"key"`
+	Role     string   `json:"role"`
+	Header   string   `json:"header,omitempty"`
+	Purpose  string   `json:"purpose,omitempty"`
+	Surfaces []string `json:"surfaces,omitempty"`
+}
+
+func applyCredentials(req *http.Request, svc *resolvedService) ([]AppliedCredential, error) {
+	var applied []AppliedCredential
 	var basicUser, basicPass string
-	haveBasic := false
+	var basicUserKey, basicPassKey string
+	haveUser, havePass := false, false
 
 	for _, cred := range svc.credentials {
 		switch cred.role {
@@ -31,10 +44,12 @@ func applyCredentials(req *http.Request, svc *resolvedService) error {
 			switch cred.headerPurpose {
 			case purposeUsername:
 				basicUser = cred.value
-				haveBasic = true
+				basicUserKey = cred.secretKey
+				haveUser = true
 			case purposePassword:
 				basicPass = cred.value
-				haveBasic = true
+				basicPassKey = cred.secretKey
+				havePass = true
 			default:
 				headerName := cred.headerName
 				if headerName == "" {
@@ -45,20 +60,40 @@ func applyCredentials(req *http.Request, svc *resolvedService) error {
 					value = cred.headerPrefix + " " + value
 				}
 				req.Header.Set(headerName, value)
+				applied = append(applied, AppliedCredential{
+					Key:    cred.secretKey,
+					Role:   roleHeaderRewrite,
+					Header: headerName,
+				})
 			}
 		case roleCredentialSub:
-			if err := applySubstitution(req, cred); err != nil {
-				return err
+			surfaces, err := applySubstitution(req, cred)
+			if err != nil {
+				return nil, err
+			}
+			// A substitution that matched no surface injected nothing; omit it from the record.
+			if len(surfaces) > 0 {
+				applied = append(applied, AppliedCredential{
+					Key:      cred.secretKey,
+					Role:     roleCredentialSub,
+					Surfaces: surfaces,
+				})
 			}
 		}
 	}
 
-	if haveBasic {
+	if haveUser || havePass {
 		token := base64.StdEncoding.EncodeToString([]byte(basicUser + ":" + basicPass))
 		req.Header.Set("Authorization", "Basic "+token)
+		if haveUser {
+			applied = append(applied, AppliedCredential{Key: basicUserKey, Role: roleHeaderRewrite, Header: "Authorization", Purpose: purposeUsername})
+		}
+		if havePass {
+			applied = append(applied, AppliedCredential{Key: basicPassKey, Role: roleHeaderRewrite, Header: "Authorization", Purpose: purposePassword})
+		}
 	}
 
-	return nil
+	return applied, nil
 }
 
 // redactCredentialsFromHeaders replaces any brokered secret value that appears in a response header with a
@@ -105,62 +140,79 @@ func replaceWithinLimit(s, old, replacement string, limit int) (string, bool) {
 }
 
 // Plain substring ReplaceAll on distinctive random placeholders; short or common placeholder values would over-match.
-func applySubstitution(req *http.Request, cred resolvedCredential) error {
+// Returns the surfaces where the placeholder was actually found and replaced (in path, query, header, body order),
+// so the activity log can report only what was truly injected rather than what the service config allows.
+func applySubstitution(req *http.Request, cred resolvedCredential) ([]string, error) {
 	placeholder := cred.placeholder
 	if placeholder == "" {
-		return nil
+		return nil, nil
 	}
 	real := cred.value
 
-	if hasSurface(cred.surfaces, surfacePath) {
+	var changed []string
+
+	if hasSurface(cred.surfaces, surfacePath) && strings.Contains(req.URL.Path, placeholder) {
 		if v, ok := replaceWithinLimit(req.URL.Path, placeholder, real, maxBodyRewriteSize); ok {
 			req.URL.Path = v
 			// Clearing RawPath makes Go re-encode the path from Path, which can change the byte form of other escaped segments.
 			req.URL.RawPath = ""
+			changed = append(changed, surfacePath)
 		}
 	}
 
-	if hasSurface(cred.surfaces, surfaceQuery) {
+	if hasSurface(cred.surfaces, surfaceQuery) && strings.Contains(req.URL.RawQuery, placeholder) {
 		if v, ok := replaceWithinLimit(req.URL.RawQuery, placeholder, real, maxBodyRewriteSize); ok {
 			req.URL.RawQuery = v
+			changed = append(changed, surfaceQuery)
 		}
 	}
 
 	if hasSurface(cred.surfaces, surfaceHeader) {
+		headerChanged := false
 		for name, values := range req.Header {
 			for i, v := range values {
+				if !strings.Contains(v, placeholder) {
+					continue
+				}
 				if replaced, ok := replaceWithinLimit(v, placeholder, real, maxBodyRewriteSize); ok {
 					req.Header[name][i] = replaced
+					headerChanged = true
 				}
 			}
+		}
+		if headerChanged {
+			changed = append(changed, surfaceHeader)
 		}
 	}
 
 	if hasSurface(cred.surfaces, surfaceBody) && req.Body != nil {
 		if req.Header.Get("Content-Encoding") != "" {
-			return nil
+			return changed, nil
 		}
 		body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
 		if err != nil {
 			_ = req.Body.Close()
-			return fmt.Errorf("failed to read request body for substitution: %w", err)
+			return changed, fmt.Errorf("failed to read request body for substitution: %w", err)
 		}
 		if len(body) > maxBodyRewriteSize {
 			req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), req.Body))
-			return nil
+			return changed, nil
 		}
 		_ = req.Body.Close()
-		// Forward unchanged when expanding the placeholder would push the body past the cap.
 		count := bytes.Count(body, []byte(placeholder))
+		// Forward unchanged when expanding the placeholder would push the body past the cap.
 		if count > 0 && len(body)+count*(len(real)-len(placeholder)) > maxBodyRewriteSize {
 			req.Body = io.NopCloser(bytes.NewReader(body))
-			return nil
+			return changed, nil
 		}
 		rewritten := bytes.ReplaceAll(body, []byte(placeholder), []byte(real))
 		req.Body = io.NopCloser(bytes.NewReader(rewritten))
 		req.ContentLength = int64(len(rewritten))
 		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+		if count > 0 {
+			changed = append(changed, surfaceBody)
+		}
 	}
 
-	return nil
+	return changed, nil
 }

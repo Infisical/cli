@@ -20,6 +20,17 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 	pollInterval, _ := cmd.Flags().GetInt("poll-interval")
 
+	activityLog, _ := cmd.Flags().GetBool("activity-log")
+	activityLogFile, _ := cmd.Flags().GetString("activity-log-file")
+	activityLogFormat, _ := cmd.Flags().GetString("activity-log-format")
+	if activityLogFormat != "" && activityLogFormat != "pretty" && activityLogFormat != "json" {
+		util.HandleError(fmt.Errorf("--activity-log-format must be 'pretty' or 'json', got %q", activityLogFormat))
+	}
+	activityLogFilter, _ := cmd.Flags().GetString("activity-log-filter")
+	if activityLogFilter != "all" && activityLogFilter != "brokered" && activityLogFilter != "errors" {
+		util.HandleError(fmt.Errorf("--activity-log-filter must be 'all', 'brokered', or 'errors', got %q", activityLogFilter))
+	}
+
 	clientID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	if err != nil || clientID == "" {
 		util.HandleError(fmt.Errorf("agent proxy credentials required; set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _SECRET or pass --client-id / --client-secret"))
@@ -41,10 +52,14 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	go refreshProxyToken(&proxyToken, clientID, clientSecret, loginResp.AccessTokenTTL)
 
 	err = agentproxy.Start(agentproxy.Options{
-		Port:          port,
-		UnmatchedHost: unmatchedHost,
-		PollInterval:  time.Duration(pollInterval) * time.Second,
-		ProxyToken:    func() string { return proxyToken.Load().(string) },
+		Port:              port,
+		UnmatchedHost:     unmatchedHost,
+		PollInterval:      time.Duration(pollInterval) * time.Second,
+		ProxyToken:        func() string { return proxyToken.Load().(string) },
+		ActivityLog:       activityLog,
+		ActivityLogFile:   activityLogFile,
+		ActivityLogFormat: activityLogFormat,
+		ActivityLogFilter: activityLogFilter,
 	})
 	if err != nil {
 		util.HandleError(err, "Agent proxy failed")

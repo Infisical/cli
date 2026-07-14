@@ -20,7 +20,7 @@ func TestBearerHeaderRewrite(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "sk_live_real"},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if got := req.Header.Get("Authorization"); got != "Bearer sk_live_real" {
@@ -33,7 +33,7 @@ func TestApiKeyHeaderNoPrefix(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleHeaderRewrite, headerName: "x-api-key", value: "abc123"},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if got := req.Header.Get("x-api-key"); got != "abc123" {
@@ -47,7 +47,7 @@ func TestBasicAuthFromTwoCredentials(t *testing.T) {
 		{role: roleHeaderRewrite, headerPurpose: purposeUsername, value: "user"},
 		{role: roleHeaderRewrite, headerPurpose: purposePassword, value: "pass"},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	// base64("user:pass") == "dXNlcjpwYXNz"
@@ -61,7 +61,7 @@ func TestSubstitutionInQuery(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "placeholder_x", value: "real_secret", surfaces: []string{surfaceQuery}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(req.URL.RawQuery, "real_secret") || strings.Contains(req.URL.RawQuery, "placeholder_x") {
@@ -75,7 +75,7 @@ func TestSubstitutionInPath(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "placeholder_tg", value: "12345:realtoken", surfaces: []string{surfacePath}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(req.URL.Path, "12345:realtoken") {
@@ -88,7 +88,7 @@ func TestSubstitutionInBody(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "placeholder_x", value: "real_secret", surfaces: []string{surfaceBody}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(req.Body)
@@ -113,7 +113,7 @@ func TestHeaderRewritePrefixVariations(t *testing.T) {
 			svc := &resolvedService{credentials: []resolvedCredential{
 				{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: tc.prefix, value: tc.value},
 			}}
-			if err := applyCredentials(req, svc); err != nil {
+			if _, err := applyCredentials(req, svc); err != nil {
 				t.Fatal(err)
 			}
 			if got := req.Header.Get("Authorization"); got != tc.want {
@@ -129,7 +129,7 @@ func TestSubstitutionInHeader(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "PLACEHOLDER", value: "REALSECRET", surfaces: []string{surfaceHeader}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if got := req.Header.Get("X-Custom"); got != "prefix-REALSECRET-suffix" {
@@ -148,7 +148,7 @@ func TestSubstitutionAcrossAllSurfacesInOneCredential(t *testing.T) {
 			surfaces:    []string{surfacePath, surfaceQuery, surfaceBody, surfaceHeader},
 		},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(req.URL.Path, "PLACEHOLDER") || !strings.Contains(req.URL.Path, "REALSECRET") {
@@ -172,7 +172,7 @@ func TestHeaderRewriteAndSubstitutionCombined(t *testing.T) {
 		{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "sk_live_real"},
 		{role: roleCredentialSub, placeholder: "placeholder_x", value: "real_secret", surfaces: []string{surfaceQuery}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	if got := req.Header.Get("Authorization"); got != "Bearer sk_live_real" {
@@ -189,7 +189,7 @@ func TestMultipleSubstitutionsDistinctPlaceholders(t *testing.T) {
 		{role: roleCredentialSub, placeholder: "PH_ONE", value: "real_one", surfaces: []string{surfaceBody}},
 		{role: roleCredentialSub, placeholder: "PH_TWO", value: "real_two", surfaces: []string{surfaceBody}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(req.Body)
@@ -204,7 +204,7 @@ func TestBodySubstitutionUpdatesContentLength(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "placeholder_x", value: "a_substantially_longer_real_secret", surfaces: []string{surfaceBody}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(req.Body)
@@ -222,7 +222,7 @@ func TestBodySubstitutionSkippedWhenContentEncoded(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "placeholder_x", value: "real_secret", surfaces: []string{surfaceBody}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(req.Body)
@@ -237,7 +237,7 @@ func TestBodyOversizedForwardedUnchanged(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{role: roleCredentialSub, placeholder: "placeholder_x", value: "real_secret", surfaces: []string{surfaceBody}},
 	}}
-	if err := applyCredentials(req, svc); err != nil {
+	if _, err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(req.Body)

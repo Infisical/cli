@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,13 +58,19 @@ type Options struct {
 	UnmatchedHost string
 	PollInterval  time.Duration
 	ProxyToken    func() string
+
+	ActivityLog       bool
+	ActivityLogFile   string
+	ActivityLogFormat string
+	ActivityLogFilter string
 }
 
 type proxyServer struct {
-	opts      Options
-	ca        *caManager
-	cache     *agentCache
-	transport http.RoundTripper
+	opts        Options
+	ca          *caManager
+	cache       *agentCache
+	transport   http.RoundTripper
+	activityLog *activityLogger
 }
 
 func newProxyServer(opts Options) *proxyServer {
@@ -101,6 +108,13 @@ func (ps *proxyServer) newFrontServer() *http.Server {
 
 func Start(opts Options) error {
 	ps := newProxyServer(opts)
+
+	activityLog, err := newActivityLogger(opts)
+	if err != nil {
+		return err
+	}
+	ps.activityLog = activityLog
+	log.Info().Msgf("activity logging: %s", activityLog.describe())
 
 	if err := ps.ca.ensureIntermediate(); err != nil {
 		return fmt.Errorf("failed to initialize agent proxy CA: %w", err)
@@ -276,12 +290,31 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		return
 	}
 
-	resp, err := ps.forward(r, scheme, hostname, port, jwt, scope)
+	// Snapshot before forward: substitution rewrites r.URL.Path in place, so capture the path (with the
+	// placeholder) and the request line now for the activity record.
+	occurredAt := time.Now()
+	method := r.Method
+	reqPath := r.URL.Path
+
+	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
+
+	status := http.StatusOK
+	decision := decisionPassthrough
+	switch {
+	case errors.Is(err, errHostBlocked):
+		decision, status = decisionBlocked, http.StatusForbidden
+		log.Warn().Str("host", hostname).Str("decision", decision).Err(err).Msg("agent request blocked")
+	case err != nil:
+		decision, status = decisionError, http.StatusBadGateway
+		log.Warn().Str("host", hostname).Str("decision", decision).Err(err).Msg("agent request failed")
+	case outcome.service != nil:
+		decision, status = decisionBrokered, resp.StatusCode
+	default:
+		decision, status = decisionPassthrough, resp.StatusCode
+	}
+	ps.recordActivity(occurredAt, method, reqPath, hostname, port, decision, status, jwt, scope, outcome)
+
 	if err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(err, errHostBlocked) {
-			status = http.StatusForbidden
-		}
 		http.Error(w, err.Error(), status)
 		return
 	}
@@ -302,6 +335,50 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	w.WriteHeader(resp.StatusCode)
 	// Flush per chunk so streamed responses (e.g. SSE) reach the client instead of buffering.
 	_, _ = io.Copy(flushingWriter{w}, resp.Body)
+}
+
+// recordActivity emits one activity record for a forwarded request. It skips entirely when the agent was never
+// resolved (no cache entry), since without a backend-validated identity there is nothing trustworthy to log.
+// It never touches the response and never fails the request.
+func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hostname, port, decision string, status int, jwt string, scope agentScope, outcome forwardOutcome) {
+	if ps.activityLog == nil || !ps.activityLog.enabled {
+		return
+	}
+
+	agentID, agentName, resolved := ps.cache.identity(jwt, scope)
+	if !resolved {
+		return
+	}
+
+	portNum, _ := strconv.Atoi(port)
+
+	rec := activityRecord{
+		SchemaVersion: activitySchemaVersion,
+		EventType:     activityEventType,
+		OccurredAt:    occurredAt.UTC(),
+		AgentID:       agentID,
+		ProjectID:     scope.projectID,
+		Environment:   scope.environment,
+		SecretPath:    scope.secretPath,
+		Decision:      decision,
+		Method:        method,
+		Host:          hostname,
+		Port:          portNum,
+		Path:          reqPath,
+		Status:        status,
+		Credentials:   outcome.applied,
+	}
+	if agentName != "" {
+		rec.AgentName = &agentName
+	}
+	if outcome.service != nil {
+		id := outcome.service.id
+		name := outcome.service.name
+		rec.ServiceID = &id
+		rec.ServiceName = &name
+	}
+
+	ps.activityLog.Record(rec)
 }
 
 // flushingWriter flushes the underlying ResponseWriter after every write so streamed bodies aren't buffered.
@@ -327,17 +404,26 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 	return "", "", err
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, error) {
+// forwardOutcome carries what forward decided so forwardHTTP can build an activity record. service is nil for
+// unmatched/passthrough/blocked requests; applied lists the credentials actually injected.
+type forwardOutcome struct {
+	service *resolvedService
+	applied []AppliedCredential
+}
+
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
 	services, err := ps.cache.get(jwt, scope)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve agent permissions: %w", err)
+		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
 	}
 
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
 	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock {
-		return nil, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
+		return nil, forwardOutcome{}, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
 	}
+
+	outcome := forwardOutcome{service: svc}
 
 	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)
@@ -349,14 +435,16 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	stripHopByHopHeaders(req.Header)
 
 	if svc != nil {
-		if err := applyCredentials(req, svc); err != nil {
-			return nil, fmt.Errorf("failed to apply credentials: %w", err)
+		applied, err := applyCredentials(req, svc)
+		if err != nil {
+			return nil, outcome, fmt.Errorf("failed to apply credentials: %w", err)
 		}
+		outcome.applied = applied
 	}
 
 	resp, err := ps.transport.RoundTrip(req)
 	if err != nil {
-		return nil, err
+		return nil, outcome, err
 	}
 
 	// Redact any brokered secret reflected back in a response header (e.g. a substituted value echoed in a
@@ -365,7 +453,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	if svc != nil {
 		redactCredentialsFromHeaders(resp.Header, svc)
 	}
-	return resp, nil
+	return resp, outcome, nil
 }
 
 func hostHeaderForScheme(scheme, target string) string {
