@@ -8,9 +8,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -115,6 +118,10 @@ func Start(opts Options) error {
 	}
 	ps.activityLog = activityLog
 	log.Info().Msgf("activity logging: %s", activityLog.describe())
+	// Only claim SIGHUP when we own a log file to rotate; otherwise leave the signal's default behavior alone.
+	if activityLog.enabled && activityLog.file != nil {
+		go ps.watchLogReopen()
+	}
 
 	if err := ps.ca.ensureIntermediate(); err != nil {
 		return fmt.Errorf("failed to initialize agent proxy CA: %w", err)
@@ -335,6 +342,20 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	w.WriteHeader(resp.StatusCode)
 	// Flush per chunk so streamed responses (e.g. SSE) reach the client instead of buffering.
 	_, _ = io.Copy(flushingWriter{w}, resp.Body)
+}
+
+// watchLogReopen reopens the activity log file on SIGHUP, the standard hook for logrotate's postrotate. Runs
+// for the lifetime of the proxy; only started when the sink is a file.
+func (ps *proxyServer) watchLogReopen() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	for range ch {
+		if err := ps.activityLog.reopen(); err != nil {
+			log.Warn().Err(err).Msg("failed to reopen activity log file on SIGHUP")
+		} else {
+			log.Info().Msg("reopened activity log file after SIGHUP")
+		}
+	}
 }
 
 // recordActivity emits one activity record for a forwarded request. It skips entirely when the agent was never

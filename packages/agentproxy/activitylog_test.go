@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -196,6 +198,56 @@ func TestActivityLoggerFilters(t *testing.T) {
 				t.Fatalf("filter %q: got %v, want %v", tc.filter, got, tc.want)
 			}
 		})
+	}
+}
+
+func decodeFile(t *testing.T, path string) []ecsProbe {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %q: %v", path, err)
+	}
+	var buf bytes.Buffer
+	buf.Write(data)
+	return decodeRecords(t, &buf)
+}
+
+func TestActivityLoggerReopenAfterRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "activity.log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &activityLogger{enabled: true, format: formatJSON, filter: filterAll, sink: path, w: f, file: f}
+
+	l.Record(activityRecord{Decision: decisionBrokered})
+
+	// Simulate logrotate's rename+create: move the current file aside, then signal a reopen.
+	rotated := path + ".1"
+	if err := os.Rename(path, rotated); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.reopen(); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+
+	l.Record(activityRecord{Decision: decisionError})
+
+	// The pre-rotation record stayed with the rotated file; the post-reopen record went to the fresh file.
+	if old := decodeFile(t, rotated); len(old) != 1 || old[0].Infisical.Decision != decisionBrokered {
+		t.Fatalf("rotated file should hold the pre-rotation record, got %+v", old)
+	}
+	if cur := decodeFile(t, path); len(cur) != 1 || cur[0].Infisical.Decision != decisionError {
+		t.Fatalf("new file should hold only the post-reopen record, got %+v", cur)
+	}
+}
+
+func TestActivityLoggerReopenStdoutIsNoop(t *testing.T) {
+	var buf bytes.Buffer
+	l := &activityLogger{enabled: true, format: formatJSON, filter: filterAll, sink: "stdout", w: &buf}
+	if err := l.reopen(); err != nil {
+		t.Fatalf("reopen on non-file sink should be a no-op, got %v", err)
 	}
 }
 

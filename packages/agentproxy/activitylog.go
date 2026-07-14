@@ -70,6 +70,7 @@ type activityLogger struct {
 	filter  string
 	sink    string // "stdout" or the file path, for the startup summary
 	w       io.Writer
+	file    *os.File // non-nil only for a file sink; used to reopen on SIGHUP for log rotation
 	colored bool
 	mu      sync.Mutex
 }
@@ -80,6 +81,7 @@ func newActivityLogger(opts Options) (*activityLogger, error) {
 	}
 
 	var w io.Writer
+	var file *os.File
 	isTTY := false
 	sink := "stdout"
 	if opts.ActivityLogFile != "" {
@@ -88,6 +90,7 @@ func newActivityLogger(opts Options) (*activityLogger, error) {
 			return nil, fmt.Errorf("failed to open activity log file %q: %w", opts.ActivityLogFile, err)
 		}
 		w = f
+		file = f
 		sink = opts.ActivityLogFile
 	} else {
 		w = os.Stdout
@@ -114,8 +117,30 @@ func newActivityLogger(opts Options) (*activityLogger, error) {
 		filter:  filter,
 		sink:    sink,
 		w:       w,
+		file:    file,
 		colored: isTTY && format == formatPretty,
 	}, nil
+}
+
+// reopen closes and reopens the file sink so an operator can rotate the log the standard way: logrotate
+// renames the file, then its postrotate hook sends SIGHUP and the proxy starts writing to the fresh file.
+// A no-op for the stdout sink (containers rely on the platform to rotate). The new file is opened before the
+// writer is swapped under the mutex, so a concurrent Record either fully lands in the old file or the new one.
+func (l *activityLogger) reopen() error {
+	if l == nil || !l.enabled || l.file == nil {
+		return nil
+	}
+	f, err := os.OpenFile(l.sink, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to reopen activity log file %q: %w", l.sink, err)
+	}
+	l.mu.Lock()
+	old := l.file
+	l.file = f
+	l.w = f
+	l.mu.Unlock()
+	_ = old.Close()
+	return nil
 }
 
 // shouldLog applies the decision filter: all logs everything; brokered drops passthrough noise; errors keeps
