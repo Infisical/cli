@@ -80,15 +80,6 @@ type SessionLogger interface {
 	Close() error
 }
 
-type NoOpSessionLogger struct{}
-
-func NewNoOpSessionLogger() SessionLogger { return &NoOpSessionLogger{} }
-
-func (l *NoOpSessionLogger) LogEntry(SessionLogEntry) error     { return nil }
-func (l *NoOpSessionLogger) LogSessionEvent(SessionEvent) error { return nil }
-func (l *NoOpSessionLogger) LogHttpEvent(HttpEvent) error       { return nil }
-func (l *NoOpSessionLogger) Close() error                       { return nil }
-
 type EncryptedSessionLogger struct {
 	sessionID       string
 	encryptionKey   string

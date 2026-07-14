@@ -57,7 +57,6 @@ const (
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMCreateAccessRequest            = "CallPAMCreateAccessRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
-	operationCallPAMScanCredentials                = "CallPAMScanCredentials"
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
@@ -1176,25 +1175,6 @@ func CallPAMSessionCredentials(httpClient *resty.Client, sessionId string) (PAMS
 	}
 
 	return pamSessionCredentialsResponse, nil
-}
-
-func CallPAMScanCredentials(httpClient *resty.Client, contextId string) (PAMSessionCredentialsResponse, error) {
-	var pamScanCredentialsResponse PAMSessionCredentialsResponse
-	response, err := httpClient.
-		R().
-		SetResult(&pamScanCredentialsResponse).
-		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/pam/discovery-sources/scan-credentials/%s", config.INFISICAL_URL, contextId))
-
-	if err != nil {
-		return PAMSessionCredentialsResponse{}, NewGenericRequestError(operationCallPAMScanCredentials, err)
-	}
-
-	if response.IsError() {
-		return PAMSessionCredentialsResponse{}, NewAPIErrorWithResponse(operationCallPAMScanCredentials, response, nil)
-	}
-
-	return pamScanCredentialsResponse, nil
 }
 
 func CallGetPamSessionKey(httpClient *resty.Client) (string, error) {

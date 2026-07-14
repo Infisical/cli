@@ -42,6 +42,8 @@ const (
 	ForwardModeHealth          ForwardMode = "HEALTH"
 	ForwardModePkcs11          ForwardMode = "PKCS11"
 	ForwardModeADCS            ForwardMode = "ADCS"
+	ForwardModePortSweep       ForwardMode = "PORT_SWEEP"
+	ForwardModeSshExec         ForwardMode = "SSH_EXEC"
 )
 
 type ActorType string
@@ -77,7 +79,6 @@ type RoutingInfo struct {
 type PAMInfo struct {
 	SessionId    string `json:"sessionId"`
 	ResourceType string `json:"resourceType"`
-	IsDiscovery  bool   `json:"isDiscovery,omitempty"`
 }
 
 type ActorDetails struct {
@@ -1004,6 +1005,16 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("ADCS handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePortSweep {
+		if err := handlePortSweep(g.ctx, tlsConn, reader); err != nil {
+			log.Debug().Err(err).Msg("Port sweep handler ended with error")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeSshExec {
+		if err := serveSSHExecOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
+			log.Debug().Err(err).Msg("SSH exec handler ended with error")
+		}
+		return
 	}
 }
 
@@ -1060,6 +1071,14 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pkcs11":
 		config.Mode = ForwardModePkcs11
+		return config, nil
+
+	case "infisical-port-sweep":
+		config.Mode = ForwardModePortSweep
+		return config, nil
+
+	case "infisical-ssh-exec":
+		config.Mode = ForwardModeSshExec
 		return config, nil
 
 	case "infisical-adcs":
@@ -1149,7 +1168,6 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 			config.PAMConfig = pam.GatewayPAMConfig{
 				SessionId:          pamInfo.SessionId,
 				ResourceType:       pamInfo.ResourceType,
-				IsDiscovery:        pamInfo.IsDiscovery,
 				ExpiryTime:         clientCert.NotAfter,
 				CredentialsManager: g.pamCredentialsManager,
 				SessionUploader:    g.pamSessionUploader,

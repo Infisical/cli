@@ -245,27 +245,6 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 	return credentials, nil
 }
 
-func (cm *CredentialsManager) GetPAMScanCredentials(contextId string) (*PAMCredentials, error) {
-	response, err := api.CallPAMScanCredentials(cm.httpClient, contextId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call PAM scan credentials API: %w", err)
-	}
-
-	return &PAMCredentials{
-		AuthMethod:            response.Credentials.AuthMethod,
-		Username:              response.Credentials.Username,
-		Password:              response.Credentials.Password,
-		PrivateKey:            response.Credentials.PrivateKey,
-		Certificate:           response.Credentials.Certificate,
-		Host:                  response.Credentials.Host,
-		Port:                  response.Credentials.Port,
-		SSLEnabled:            response.Credentials.SSLEnabled,
-		SSLRejectUnauthorized: response.Credentials.SSLRejectUnauthorized,
-		SSLCertificate:        response.Credentials.SSLCertificate,
-		PolicyRules:           response.PolicyRules,
-	}, nil
-}
-
 func (cm *CredentialsManager) cleanupExpiredCredentials() {
 	cm.cacheMutex.Lock()
 	defer cm.cacheMutex.Unlock()
