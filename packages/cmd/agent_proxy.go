@@ -31,7 +31,7 @@ var agentProxyCmd = &cobra.Command{
 var agentProxyConnectCmd = &cobra.Command{
 	Use:                   "connect [flags] -- [agent start command]",
 	Short:                 "Set up the environment and launch an agent behind the agent proxy",
-	Example:               "infisical secrets agent-proxy connect --proxy=<proxy-host>:17322 --env=prod --path=/myapp -- claude",
+	Example:               "infisical secrets agent-proxy connect --proxy=<proxy-host>:17322 --projectId=<project-id> --env=prod --path=/myapp -- claude",
 	DisableFlagsInUseLine: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
