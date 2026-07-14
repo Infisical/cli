@@ -12,8 +12,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -134,6 +137,48 @@ func boundedDial(ctx context.Context) func(network, addr string) (net.Conn, erro
 		}
 		return &limitedConn{Conn: conn, remaining: maxWinRMReadBytes}, nil
 	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// cappedBody fails the read once maxWinRMReadBytes have been consumed.
+type cappedBody struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (c *cappedBody) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, fmt.Errorf("winrm response exceeded %d bytes", maxWinRMReadBytes)
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.ReadCloser.Read(p)
+	c.remaining -= int64(n)
+	return n, err
+}
+
+var installHTTPResponseCapOnce sync.Once
+
+// InstallHTTPResponseCap bounds the HTTP (NTLM message-sealing) transport's response reads. That transport
+// (masterzen's Encryption) uses a bare *http.Client with no hook for a custom transport, so wrapping the
+// global http.DefaultTransport is the only way to cap it without forking the library; nothing else in the
+// process uses the default transport. Call once at startup, before serving.
+func InstallHTTPResponseCap() {
+	installHTTPResponseCapOnce.Do(func() {
+		base := http.DefaultTransport
+		http.DefaultTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			resp, err := base.RoundTrip(req)
+			if err != nil || resp == nil || resp.Body == nil {
+				return resp, err
+			}
+			resp.Body = &cappedBody{ReadCloser: resp.Body, remaining: maxWinRMReadBytes}
+			return resp, nil
+		})
+	})
 }
 
 // pinnedServerName returns the name to verify a pinned cert against: its first DNS SAN, else its

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -442,6 +443,9 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 
 func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
+
+	// Cap WinRM HTTP-transport response bodies.
+	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)
 
