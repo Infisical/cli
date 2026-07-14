@@ -51,9 +51,15 @@ type winrmDeliverFile struct {
 	ContentBase64 string `json:"contentBase64"`
 }
 
+type winrmAccessRule struct {
+	Identity string `json:"identity"`
+	Access   string `json:"access"`
+}
+
 type winrmDeliverParams struct {
 	winrmTransportParams
-	Files []winrmDeliverFile `json:"files"`
+	Files       []winrmDeliverFile `json:"files"`
+	AccessRules []winrmAccessRule  `json:"accessRules"`
 }
 
 type winrmRemoveParams struct {
@@ -123,9 +129,9 @@ func serveWinrmOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader
 
 var serveWinrmMux = sync.OnceValue(func() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/test", wrapWinrm(handleWinrmTest))
-	mux.HandleFunc("/v1/deliver", wrapWinrm(handleWinrmDeliver))
-	mux.HandleFunc("/v1/remove", wrapWinrm(handleWinrmRemove))
+	mux.HandleFunc("/v1/test", wrapWinrm(handleWinrmConnectionTest))
+	mux.HandleFunc("/v1/deliver", wrapWinrm(handleWinrmDeliverFiles))
+	mux.HandleFunc("/v1/remove", wrapWinrm(handleWinrmRemoveFiles))
 	return mux
 })
 
@@ -204,7 +210,7 @@ func credsFromEnv(ctx context.Context, env *winrmRequestEnvelope, tp winrmTransp
 	}
 }
 
-func handleWinrmTest(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+func handleWinrmConnectionTest(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
 	var tp winrmTransportParams
 	if len(env.Params) > 0 {
 		if err := json.Unmarshal(env.Params, &tp); err != nil {
@@ -217,7 +223,7 @@ func handleWinrmTest(ctx context.Context, env *winrmRequestEnvelope) (any, error
 	return map[string]any{"ok": true}, nil
 }
 
-func handleWinrmDeliver(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+func handleWinrmDeliverFiles(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
 	var p winrmDeliverParams
 	if err := json.Unmarshal(env.Params, &p); err != nil {
 		return nil, fmt.Errorf("malformed deliver params")
@@ -236,13 +242,17 @@ func handleWinrmDeliver(ctx context.Context, env *winrmRequestEnvelope) (any, er
 		}
 		files = append(files, winrm.FileDelivery{Path: f.Path, Content: content})
 	}
-	if err := winrm.DeliverFiles(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), files); err != nil {
+	accessRules := make([]winrm.AccessRule, 0, len(p.AccessRules))
+	for _, r := range p.AccessRules {
+		accessRules = append(accessRules, winrm.AccessRule{Identity: r.Identity, Access: r.Access})
+	}
+	if err := winrm.DeliverFiles(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), files, accessRules); err != nil {
 		return nil, err
 	}
 	return map[string]any{"delivered": len(files)}, nil
 }
 
-func handleWinrmRemove(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+func handleWinrmRemoveFiles(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
 	var p winrmRemoveParams
 	if err := json.Unmarshal(env.Params, &p); err != nil {
 		return nil, fmt.Errorf("malformed remove params")

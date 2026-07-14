@@ -20,8 +20,24 @@ import (
 	"github.com/masterzen/winrm"
 )
 
-// ErrConnect marks a failure to reach or authenticate to the Windows host.
+// ErrConnect marks a failure to reach the Windows host.
 var ErrConnect = errors.New("failed to connect to the Windows host over WinRM")
+
+// ErrAuth marks the listener rejecting the credentials, as opposed to being unreachable.
+var ErrAuth = errors.New("WinRM authentication failed")
+
+// wrapTransportError maps a rejected login (which the library surfaces as an HTTP 401) to ErrAuth and
+// any other transport failure to ErrConnect, so an auth problem is not reported as an unreachable host.
+func wrapTransportError(err error) error {
+	if strings.Contains(err.Error(), "401") {
+		return fmt.Errorf(
+			"%w: the WinRM listener rejected the credentials (HTTP 401). Verify the username and password, "+
+				"and that the listener allows Negotiate/NTLM authentication",
+			ErrAuth,
+		)
+	}
+	return fmt.Errorf("%w: %v", ErrConnect, err)
+}
 
 const commandDeadline = 60 * time.Second
 
@@ -33,7 +49,7 @@ type Credentials struct {
 	// UseHTTPS selects the transport: false (default) uses HTTP with NTLM message encryption, which
 	// needs no server certificate; true uses HTTPS.
 	UseHTTPS bool
-	// Insecure skips TLS certificate verification (HTTPS only), for when the operator opts out of it.
+	// Insecure skips TLS certificate verification (HTTPS only): confidentiality without server authentication.
 	Insecure bool
 	// CACert, when set (HTTPS only), is a PEM bundle used to verify a self-signed listener's certificate
 	// so it can be authenticated without a publicly trusted CA.
@@ -43,6 +59,44 @@ type Credentials struct {
 type FileDelivery struct {
 	Path    string
 	Content []byte
+}
+
+// AccessRule grants a Windows principal a level of access on the delivered files, applied additively
+// with icacls (inherited permissions are kept). Access is one of "read", "modify", "full-control".
+type AccessRule struct {
+	Identity string
+	Access   string
+}
+
+// icaclsRights maps a control-plane access level to the icacls simple-rights code.
+func icaclsRights(access string) (string, error) {
+	switch access {
+	case "read":
+		return "R", nil
+	case "modify":
+		return "M", nil
+	case "full-control":
+		return "F", nil
+	default:
+		return "", fmt.Errorf("unsupported access level %q", access)
+	}
+}
+
+// aclGrantArgs builds the ` /grant '<identity>:(<rights>)'` fragment for each rule, escaping the
+// identity for a PowerShell single-quoted literal so it cannot break out of the command.
+func aclGrantArgs(rules []AccessRule) (string, error) {
+	var sb strings.Builder
+	for _, r := range rules {
+		if r.Identity == "" {
+			return "", fmt.Errorf("access rule identity is required")
+		}
+		rights, err := icaclsRights(r.Access)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(fmt.Sprintf(" /grant '%s:(%s)'", escapePowerShellSingleQuotes(r.Identity), rights))
+	}
+	return sb.String(), nil
 }
 
 // maxWinRMReadBytes caps bytes read from a host, bounding one that streams an endless body; command
@@ -102,14 +156,15 @@ func pinnedServerName(caCert []byte) string {
 	return cert.Subject.CommonName
 }
 
-// newClient builds a WinRM client. HTTP (the default) uses NTLM message encryption to keep the SOAP
-// body confidential without a server certificate; HTTPS uses TLS, verifying the listener against the
-// system trust store, an optional pinned CA (for a self-signed listener), or skipping verification
-// when Insecure is set.
+// newClient builds a WinRM client. Both modes authenticate with NTLM; they differ in how the SOAP body
+// is kept confidential. HTTP (default) uses NTLM message sealing, so the body is confidential without a
+// server certificate (default listeners require this). HTTPS relies on TLS, verifying the listener against
+// the system trust store, an optional pinned CA (self-signed listener), or skipping verification if Insecure.
 func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
 	params := *winrm.DefaultParameters
 	if creds.UseHTTPS {
-		// The bounded dial caps the response read; the library otherwise reads the body unbounded.
+		// NTLM authentication over TLS. The bounded dial caps the response read and carries the operation
+		// deadline; the library otherwise reads the body unbounded and issues its request without a context.
 		params.TransportDecorator = func() winrm.Transporter { return winrm.NewClientNTLMWithDial(boundedDial(ctx)) }
 	} else {
 		enc, err := winrm.NewEncryption("ntlm")
@@ -150,7 +205,7 @@ func run(ctx context.Context, client *winrm.Client, script string) (string, erro
 	var stdout, stderr bytes.Buffer
 	code, err := client.RunWithContext(ctx, winrm.Powershell(script), &stdout, &stderr)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrConnect, err)
+		return "", wrapTransportError(err)
 	}
 	if code != 0 {
 		msg := strings.TrimSpace(stderr.String())
@@ -168,7 +223,7 @@ func runSuppressingOutput(ctx context.Context, client *winrm.Client, script stri
 	var stdout, stderr bytes.Buffer
 	code, err := client.RunWithContext(ctx, winrm.Powershell(script), &stdout, &stderr)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrConnect, err)
+		return wrapTransportError(err)
 	}
 	if code != 0 {
 		return fmt.Errorf("failed to stage file content (exit %d)", code)
@@ -191,8 +246,14 @@ func Ping(ctx context.Context, creds Credentials) error {
 const base64ChunkSize = 2000
 
 // DeliverFiles writes each file atomically (temp file + Move-Item), creating the parent dir if missing.
-func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery) error {
+// Any accessRules are applied to each delivered file so, for example, only a chosen service account can
+// read the private key.
+func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery, accessRules []AccessRule) error {
 	client, err := newClient(ctx, creds)
+	if err != nil {
+		return err
+	}
+	grantArgs, err := aclGrantArgs(accessRules)
 	if err != nil {
 		return err
 	}
@@ -206,7 +267,7 @@ func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery) 
 		}
 	}
 	for _, f := range files {
-		if err := deliverFile(ctx, client, f); err != nil {
+		if err := deliverFile(ctx, client, f, grantArgs); err != nil {
 			return fmt.Errorf("failed to write %q: %w", f.Path, err)
 		}
 	}
@@ -235,7 +296,7 @@ func removeStaleStagingFiles(ctx context.Context, client *winrm.Client, dir stri
 	_, _ = run(ctx, client, script)
 }
 
-func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery) (err error) {
+func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery, grantArgs string) (err error) {
 	pathLit := escapePowerShellSingleQuotes(f.Path)
 	b64 := base64.StdEncoding.EncodeToString(f.Content)
 	token := make([]byte, 6)
@@ -296,6 +357,18 @@ func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery) (err
 	)
 	if _, err := run(ctx, client, finalize); err != nil {
 		return err
+	}
+
+	// Apply the requested ACL grants to the delivered file (additive: inherited permissions are kept).
+	if grantArgs != "" {
+		acl := fmt.Sprintf(
+			`$ErrorActionPreference='Stop'; $p='%s'; icacls $p%s *>$null; `+
+				`if ($LASTEXITCODE -ne 0) { throw ('failed to set permissions (icacls exit '+$LASTEXITCODE+')') }`,
+			pathLit, grantArgs,
+		)
+		if _, err := run(ctx, client, acl); err != nil {
+			return err
+		}
 	}
 	return nil
 }
