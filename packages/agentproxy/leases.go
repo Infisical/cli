@@ -19,8 +19,6 @@ import (
 const (
 	// serve a cached lease only while this much validity remains, so a value isn't injected right as it expires
 	leaseExpirySkew = 5 * time.Second
-	// keep at most this many superseded value-sets per credential for response redaction across a re-mint
-	maxRetiredValueSets = 2
 	// re-mint backoff bounds while the old lease is still valid
 	minMintBackoff = 5 * time.Second
 	maxMintBackoff = 60 * time.Second
@@ -58,11 +56,6 @@ type leaseSpec struct {
 	config      map[string]interface{}
 }
 
-type retiredValues struct {
-	values   []string
-	expireAt time.Time
-}
-
 type leaseEntry struct {
 	key             leaseKey
 	spec            leaseSpec
@@ -70,7 +63,6 @@ type leaseEntry struct {
 	expireAt        time.Time
 	ttl             time.Duration
 	data            map[string]string
-	retired         []retiredValues
 	lastUsed        time.Time
 	mintFailures    int
 	nextMintAttempt time.Time
@@ -217,8 +209,8 @@ func (s *leaseStore) value(key leaseKey, field string) (string, bool) {
 }
 
 // mintLease mints (or re-mints) a fresh lease for the key, singleflighted so concurrent callers share one
-// network mint. Make-before-break: the old value-set is retired for redaction and the old lease is left for
-// the server's scheduled revocation to reap (never proactively revoked here).
+// network mint. Make-before-break: the new lease swaps in atomically and the old lease is left for the
+// server's scheduled revocation to reap (never proactively revoked here).
 func (s *leaseStore) mintLease(key leaseKey) (*leaseEntry, error) {
 	v, err, _ := s.group.Do(key.string(), func() (interface{}, error) {
 		s.mu.Lock()
@@ -233,8 +225,6 @@ func (s *leaseStore) mintLease(key leaseKey) (*leaseEntry, error) {
 			return e, nil
 		}
 		spec := e.spec
-		oldValues := valuesOf(e.data)
-		oldExpireAt := e.expireAt
 		s.mu.Unlock()
 
 		res, mintErr := s.mint(leaseMintArgs{
@@ -259,12 +249,6 @@ func (s *leaseStore) mintLease(key leaseKey) (*leaseEntry, error) {
 		}
 
 		now := time.Now()
-		if len(oldValues) > 0 && oldExpireAt.After(now) {
-			e.retired = append(e.retired, retiredValues{values: oldValues, expireAt: oldExpireAt})
-			if len(e.retired) > maxRetiredValueSets {
-				e.retired = e.retired[len(e.retired)-maxRetiredValueSets:]
-			}
-		}
 		e.leaseID = res.leaseID
 		e.expireAt = res.expireAt
 		e.ttl = res.expireAt.Sub(now)
@@ -294,54 +278,6 @@ func mintBackoff(failures int) time.Duration {
 	return d
 }
 
-func valuesOf(data map[string]string) []string {
-	if len(data) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(data))
-	for _, v := range data {
-		if v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-func pruneRetired(retired []retiredValues, now time.Time) []retiredValues {
-	kept := retired[:0]
-	for _, r := range retired {
-		if r.expireAt.After(now) {
-			kept = append(kept, r)
-		}
-	}
-	return kept
-}
-
-// redactionValues returns every value (current + not-yet-expired retired) for the given lease keys, so a
-// value reflected back in a response header is scrubbed even briefly after a re-mint swap.
-func (s *leaseStore) redactionValues(keys []leaseKey) []string {
-	if len(keys) == 0 {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []string
-	now := time.Now()
-	for _, k := range keys {
-		e, ok := s.entries[k]
-		if !ok {
-			continue
-		}
-		out = append(out, valuesOf(e.data)...)
-		for _, r := range e.retired {
-			if r.expireAt.After(now) {
-				out = append(out, r.values...)
-			}
-		}
-	}
-	return out
-}
-
 // refreshPass re-mints leases nearing expiry and prunes dead ones. liveKeys is the set of agent-cache keys
 // (cacheKey(jwt, scope)) for still-active sessions; leases whose session is gone are left to expire (no
 // revoke). Returns the earliest future deadline the loop should wake for, or the zero time if none.
@@ -351,13 +287,12 @@ func (s *leaseStore) refreshPass(liveKeys map[string]struct{}) time.Time {
 	s.mu.Lock()
 	var due []leaseKey
 	for k, e := range s.entries {
-		e.retired = pruneRetired(e.retired, now)
 		agentKey := cacheKey(k.jwt, k.scope)
 		_, live := liveKeys[agentKey]
 
 		if !live {
-			// session gone: drop once the lease and all retired values have expired; otherwise let it lapse
-			if (e.leaseID == "" || !e.expireAt.After(now)) && len(e.retired) == 0 {
+			// session gone: drop once the lease has expired; otherwise let it lapse
+			if e.leaseID == "" || !e.expireAt.After(now) {
 				delete(s.entries, k)
 			}
 			continue
@@ -367,7 +302,7 @@ func (s *leaseStore) refreshPass(liveKeys map[string]struct{}) time.Time {
 		}
 		// unused for a full TTL: drop after it expires so the next use re-mints on demand
 		if e.ttl > 0 && now.Sub(e.lastUsed) > e.ttl {
-			if !e.expireAt.After(now) && len(e.retired) == 0 {
+			if !e.expireAt.After(now) {
 				delete(s.entries, k)
 			}
 			continue
@@ -392,9 +327,18 @@ func (s *leaseStore) refreshPass(liveKeys map[string]struct{}) time.Time {
 }
 
 func (s *leaseStore) nextDeadline(liveKeys map[string]struct{}) time.Time {
+	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var next time.Time
+	consider := func(t time.Time) {
+		if t.IsZero() {
+			return
+		}
+		if next.IsZero() || t.Before(next) {
+			next = t
+		}
+	}
 	for k, e := range s.entries {
 		if _, live := liveKeys[cacheKey(k.jwt, k.scope)]; !live {
 			continue
@@ -404,15 +348,15 @@ func (s *leaseStore) nextDeadline(liveKeys map[string]struct{}) time.Time {
 		if e.leaseID == "" {
 			continue
 		}
-		deadline := e.expireAt.Add(-refreshBuffer(e.ttl))
-		if !e.nextMintAttempt.IsZero() && e.nextMintAttempt.Before(deadline) {
-			deadline = e.nextMintAttempt
-		}
-		if deadline.IsZero() {
+		// unused for a full TTL: refreshPass won't re-mint it, only delete it once expired. Schedule the
+		// wake for expiry, not the (already-past) re-mint deadline, else the loop spins at its 1s floor.
+		if e.ttl > 0 && now.Sub(e.lastUsed) > e.ttl {
+			consider(e.expireAt)
 			continue
 		}
-		if next.IsZero() || deadline.Before(next) {
-			next = deadline
+		consider(e.expireAt.Add(-refreshBuffer(e.ttl)))
+		if !e.nextMintAttempt.IsZero() {
+			consider(e.nextMintAttempt)
 		}
 	}
 	return next

@@ -381,41 +381,26 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	// Strip hop-by-hop before injecting so a client's Connection header cannot delete the injected credential (injected always wins).
 	stripHopByHopHeaders(req.Header)
 
-	var dynamicKeys []leaseKey
 	if svc != nil {
-		creds, keys := ps.materializeCredentials(svc)
-		dynamicKeys = keys
+		creds := ps.materializeCredentials(svc)
 		if err := applyCredentials(req, creds); err != nil {
 			return nil, fmt.Errorf("failed to apply credentials: %w", err)
 		}
 	}
 
-	resp, err := ps.transport.RoundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-
-	// Redact any brokered secret reflected back in a response header (e.g. a substituted value echoed in a
-	// redirect Location) so the agent can't read a credential it was never allowed to retrieve. Bodies are
-	// streamed and intentionally not scanned; TRACE/TRACK (the main body-echo vector) is rejected upstream.
-	if svc != nil {
-		redactValuesFromHeaders(resp.Header, ps.redactionValues(svc, dynamicKeys))
-	}
-	return resp, nil
+	return ps.transport.RoundTrip(req)
 }
 
 // materializeCredentials returns a per-request copy of the service's credentials with dynamic-secret values
 // resolved from the lease store (minting lazily). A dynamic credential with no available lease value is
-// dropped (fail-open, like a missing static secret). Returns the lease keys used, for response redaction.
-func (ps *proxyServer) materializeCredentials(svc *resolvedService) ([]resolvedCredential, []leaseKey) {
+// dropped (fail-open, like a missing static secret).
+func (ps *proxyServer) materializeCredentials(svc *resolvedService) []resolvedCredential {
 	creds := make([]resolvedCredential, 0, len(svc.credentials))
-	var dynamicKeys []leaseKey
 	for _, cred := range svc.credentials {
 		if cred.dynamic == nil {
 			creds = append(creds, cred)
 			continue
 		}
-		dynamicKeys = append(dynamicKeys, cred.dynamic.key)
 		value, ok := ps.leases.value(cred.dynamic.key, cred.dynamic.field)
 		if !ok {
 			log.Warn().Msgf("proxied service %q: no valid lease value for dynamic secret %q field %q; skipping credential", svc.name, cred.dynamic.key.secretName, cred.dynamic.field)
@@ -424,19 +409,7 @@ func (ps *proxyServer) materializeCredentials(svc *resolvedService) ([]resolvedC
 		cred.value = value
 		creds = append(creds, cred)
 	}
-	return creds, dynamicKeys
-}
-
-// redactionValues gathers static credential values plus current/retired dynamic lease values for redaction.
-func (ps *proxyServer) redactionValues(svc *resolvedService, dynamicKeys []leaseKey) []string {
-	var values []string
-	for _, cred := range svc.credentials {
-		if cred.dynamic == nil && cred.value != "" {
-			values = append(values, cred.value)
-		}
-	}
-	values = append(values, ps.leases.redactionValues(dynamicKeys)...)
-	return values
+	return creds
 }
 
 func hostHeaderForScheme(scheme, target string) string {

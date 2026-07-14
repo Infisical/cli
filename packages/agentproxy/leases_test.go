@@ -123,10 +123,10 @@ func TestValueMissingField(t *testing.T) {
 	}
 }
 
-func TestRefreshPassReMintsNearExpiryAndRetiresOldValue(t *testing.T) {
+func TestRefreshPassReMintsNearExpiry(t *testing.T) {
 	var mints int64
-	// short TTL so the entry is immediately within the refresh buffer
-	s := newTestLeaseStore(2*time.Second, &mints)
+	// long TTL so a re-minted lease is served from cache (not re-minted again by the skew guard)
+	s := newTestLeaseStore(time.Hour, &mints)
 	var revokes int64
 	s.revoke = func(_, _, _, _ string) error { atomic.AddInt64(&revokes, 1); return nil }
 	key := testKey("db")
@@ -136,7 +136,7 @@ func TestRefreshPassReMintsNearExpiryAndRetiresOldValue(t *testing.T) {
 	if _, ok := s.value(key, "TOKEN"); !ok {
 		t.Fatal("initial mint failed")
 	}
-	// force the lease within its refresh buffer (still valid, so the old value is retained on re-mint)
+	// force the lease within its refresh buffer so refreshPass re-mints it
 	s.mu.Lock()
 	s.entries[key].expireAt = time.Now().Add(100 * time.Millisecond)
 	s.mu.Unlock()
@@ -150,16 +150,9 @@ func TestRefreshPassReMintsNearExpiryAndRetiresOldValue(t *testing.T) {
 	if atomic.LoadInt64(&revokes) != 0 {
 		t.Fatal("re-mint must never proactively revoke the old lease")
 	}
-	// the old value must be retained for redaction
-	redaction := s.redactionValues([]leaseKey{key})
-	found := false
-	for _, v := range redaction {
-		if v == "value-1" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("old lease value should be retained for redaction after re-mint")
+	// the fresh lease value is now what gets served
+	if v, ok := s.value(key, "TOKEN"); !ok || v != "value-2" {
+		t.Fatalf("expected the re-minted value-2 to be served, got %q ok=%v", v, ok)
 	}
 }
 
@@ -175,29 +168,6 @@ func TestRefreshPassSkipsNonLiveSessions(t *testing.T) {
 	s.refreshPass(map[string]struct{}{})
 	if atomic.LoadInt64(&mints) != before {
 		t.Fatal("leases for non-live sessions must not be re-minted")
-	}
-}
-
-func TestRetiredValuesCappedAndPruned(t *testing.T) {
-	e := &leaseEntry{}
-	now := time.Now()
-	for i := 0; i < 5; i++ {
-		e.retired = append(e.retired, retiredValues{values: []string{fmt.Sprintf("v%d", i)}, expireAt: now.Add(time.Hour)})
-		if len(e.retired) > maxRetiredValueSets {
-			e.retired = e.retired[len(e.retired)-maxRetiredValueSets:]
-		}
-	}
-	if len(e.retired) != maxRetiredValueSets {
-		t.Fatalf("retired should cap at %d, got %d", maxRetiredValueSets, len(e.retired))
-	}
-	e.retired = append(e.retired, retiredValues{values: []string{"expired"}, expireAt: now.Add(-time.Hour)})
-	e.retired = pruneRetired(e.retired, now)
-	for _, r := range e.retired {
-		for _, v := range r.values {
-			if v == "expired" {
-				t.Fatal("expired retired values should be pruned")
-			}
-		}
 	}
 }
 
