@@ -61,6 +61,25 @@ func applyCredentials(req *http.Request, svc *resolvedService) error {
 	return nil
 }
 
+// redactCredentialsFromHeaders replaces any brokered secret value that appears in a response header with a
+// placeholder. Upstreams occasionally reflect request data (redirect Location, error echoes); without this an
+// agent could read a real credential it was never allowed to retrieve. A real high-entropy secret won't
+// collide with legitimate header content, so this only fires when a value is genuinely reflected.
+func redactCredentialsFromHeaders(h http.Header, svc *resolvedService) {
+	for _, cred := range svc.credentials {
+		if cred.value == "" {
+			continue
+		}
+		for name, values := range h {
+			for i, v := range values {
+				if strings.Contains(v, cred.value) {
+					h[name][i] = strings.ReplaceAll(v, cred.value, "[redacted]")
+				}
+			}
+		}
+	}
+}
+
 func hasSurface(surfaces []string, target string) bool {
 	for _, s := range surfaces {
 		if s == target {

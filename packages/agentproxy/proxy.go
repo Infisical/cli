@@ -269,6 +269,13 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 
 // forwardHTTP resolves the upstream response and relays it to the client via the ResponseWriter.
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, jwt string, scope agentScope) {
+	// Reject request-echo methods: TRACE/TRACK make the upstream reflect the request (including the injected
+	// credential) back in the response body, which would let the agent read a secret it can't fetch directly.
+	if r.Method == http.MethodTrace || r.Method == "TRACK" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	resp, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 	if err != nil {
 		status := http.StatusBadGateway
@@ -347,7 +354,18 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 		}
 	}
 
-	return ps.transport.RoundTrip(req)
+	resp, err := ps.transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Redact any brokered secret reflected back in a response header (e.g. a substituted value echoed in a
+	// redirect Location) so the agent can't read a credential it was never allowed to retrieve. Bodies are
+	// streamed and intentionally not scanned; TRACE/TRACK (the main body-echo vector) is rejected upstream.
+	if svc != nil {
+		redactCredentialsFromHeaders(resp.Header, svc)
+	}
+	return resp, nil
 }
 
 func hostHeaderForScheme(scheme, target string) string {
