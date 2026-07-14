@@ -23,9 +23,8 @@ const (
 const (
 	tlsHandshakeTimeout = 10 * time.Second
 
-	// Outer ingress server. Only header/idle timeouts: no ReadTimeout/WriteTimeout so a CONNECT hijack and
-	// long streaming responses aren't cut off. Plaintext (http://) relay is therefore not time-bounded here;
-	// the concurrent-connection cap (maxConcurrentConns) bounds how many connections can pin at once.
+	// Outer ingress server. No server-level ReadTimeout/WriteTimeout (they'd cut CONNECT hijacks and long
+	// streaming responses); plaintext forward requests are bounded per-request instead (handlePlainForward).
 	frontReadHeaderTimeout = 30 * time.Second
 	frontIdleTimeout       = 5 * time.Minute
 
@@ -35,6 +34,11 @@ const (
 	tunnelReadTimeout       = 60 * time.Second
 	tunnelWriteTimeout      = 30 * time.Minute
 	tunnelIdleTimeout       = 2 * time.Minute
+
+	// Plaintext (non-CONNECT) forward requests are bounded per-request via ResponseController deadlines,
+	// since the front server sets no ReadTimeout/WriteTimeout.
+	plainReadTimeout  = 60 * time.Second
+	plainWriteTimeout = 30 * time.Minute
 
 	// maxRequestHeaderBytes bounds a single request's header block via http.Server.MaxHeaderBytes, so an
 	// unauthenticated client can't send unbounded headers and exhaust proxy memory. Matches Go's
@@ -234,6 +238,12 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 
 // Only http:// absolute-form is served; https:// is rejected so the proxy can never be used to silently TLS-strip (HTTPS must arrive as CONNECT).
 func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request) {
+	// Bound this request's lifetime: the front server has no ReadTimeout/WriteTimeout (those would cut
+	// CONNECT tunnels), so without this a slow body or slow-reading client could pin a connection slot.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(plainReadTimeout))
+	_ = rc.SetWriteDeadline(time.Now().Add(plainWriteTimeout))
+
 	if !strings.EqualFold(r.URL.Scheme, "http") || r.URL.Host == "" {
 		http.Error(w, "non-CONNECT requests must be absolute-form http:// (use CONNECT for https:// upstreams)", http.StatusBadRequest)
 		return

@@ -263,3 +263,28 @@ func TestProxyAuthParsing(t *testing.T) {
 		t.Fatalf("unexpected jwt: %q", jwt)
 	}
 }
+
+func TestReplaceWithinLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		s           string
+		old         string
+		replacement string
+		limit       int
+		want        string
+		wantOK      bool
+	}{
+		{name: "no occurrence is unchanged", s: "hello world", old: "X", replacement: "YYYY", limit: 100, want: "hello world", wantOK: true},
+		{name: "within limit is replaced", s: "a-X-b", old: "X", replacement: "SECRET", limit: 100, want: "a-SECRET-b", wantOK: true},
+		{name: "expansion over limit is skipped", s: "XXXX", old: "X", replacement: "0123456789", limit: 20, want: "XXXX", wantOK: false},
+		{name: "shrinking replacement always fits", s: "LONGPLACEHOLDER", old: "LONGPLACEHOLDER", replacement: "s", limit: 5, want: "s", wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := replaceWithinLimit(tt.s, tt.old, tt.replacement, tt.limit)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("replaceWithinLimit = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

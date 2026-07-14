@@ -70,6 +70,21 @@ func hasSurface(surfaces []string, target string) bool {
 	return false
 }
 
+// replaceWithinLimit substitutes every occurrence of old in s, but only when the expanded result stays
+// within limit bytes; otherwise it returns the input unchanged (ok=false). This stops a short placeholder
+// mapped to a long secret (or a request stuffed with placeholders) from ballooning proxy memory, since
+// ReplaceAll otherwise allocates by the expansion ratio rather than the input size.
+func replaceWithinLimit(s, old, replacement string, limit int) (string, bool) {
+	count := strings.Count(s, old)
+	if count == 0 {
+		return s, true
+	}
+	if len(s)+count*(len(replacement)-len(old)) > limit {
+		return s, false
+	}
+	return strings.ReplaceAll(s, old, replacement), true
+}
+
 // Plain substring ReplaceAll on distinctive random placeholders; short or common placeholder values would over-match.
 func applySubstitution(req *http.Request, cred resolvedCredential) error {
 	placeholder := cred.placeholder
@@ -79,20 +94,24 @@ func applySubstitution(req *http.Request, cred resolvedCredential) error {
 	real := cred.value
 
 	if hasSurface(cred.surfaces, surfacePath) {
-		req.URL.Path = strings.ReplaceAll(req.URL.Path, placeholder, real)
-		// Clearing RawPath makes Go re-encode the path from Path, which can change the byte form of other escaped segments.
-		req.URL.RawPath = ""
+		if v, ok := replaceWithinLimit(req.URL.Path, placeholder, real, maxBodyRewriteSize); ok {
+			req.URL.Path = v
+			// Clearing RawPath makes Go re-encode the path from Path, which can change the byte form of other escaped segments.
+			req.URL.RawPath = ""
+		}
 	}
 
 	if hasSurface(cred.surfaces, surfaceQuery) {
-		req.URL.RawQuery = strings.ReplaceAll(req.URL.RawQuery, placeholder, real)
+		if v, ok := replaceWithinLimit(req.URL.RawQuery, placeholder, real, maxBodyRewriteSize); ok {
+			req.URL.RawQuery = v
+		}
 	}
 
 	if hasSurface(cred.surfaces, surfaceHeader) {
 		for name, values := range req.Header {
 			for i, v := range values {
-				if strings.Contains(v, placeholder) {
-					req.Header[name][i] = strings.ReplaceAll(v, placeholder, real)
+				if replaced, ok := replaceWithinLimit(v, placeholder, real, maxBodyRewriteSize); ok {
+					req.Header[name][i] = replaced
 				}
 			}
 		}
@@ -112,6 +131,12 @@ func applySubstitution(req *http.Request, cred resolvedCredential) error {
 			return nil
 		}
 		_ = req.Body.Close()
+		// Forward unchanged when expanding the placeholder would push the body past the cap.
+		count := bytes.Count(body, []byte(placeholder))
+		if count > 0 && len(body)+count*(len(real)-len(placeholder)) > maxBodyRewriteSize {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			return nil
+		}
 		rewritten := bytes.ReplaceAll(body, []byte(placeholder), []byte(real))
 		req.Body = io.NopCloser(bytes.NewReader(rewritten))
 		req.ContentLength = int64(len(rewritten))
