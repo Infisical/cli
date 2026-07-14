@@ -1259,6 +1259,8 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
 		"infisical-adcs",
+		"infisical-port-sweep",
+		"infisical-ssh-exec",
 	}
 	if pkcs11Loaded {
 		base = append(base, "infisical-pkcs11")
