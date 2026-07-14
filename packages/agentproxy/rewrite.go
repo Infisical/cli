@@ -21,11 +21,11 @@ const (
 	maxBodyRewriteSize = 10 * 1024 * 1024
 )
 
-func applyCredentials(req *http.Request, svc *resolvedService) error {
+func applyCredentials(req *http.Request, creds []resolvedCredential) error {
 	var basicUser, basicPass string
 	haveBasic := false
 
-	for _, cred := range svc.credentials {
+	for _, cred := range creds {
 		switch cred.role {
 		case roleHeaderRewrite:
 			switch cred.headerPurpose {
@@ -65,15 +65,15 @@ func applyCredentials(req *http.Request, svc *resolvedService) error {
 // placeholder. Upstreams occasionally reflect request data (redirect Location, error echoes); without this an
 // agent could read a real credential it was never allowed to retrieve. A real high-entropy secret won't
 // collide with legitimate header content, so this only fires when a value is genuinely reflected.
-func redactCredentialsFromHeaders(h http.Header, svc *resolvedService) {
-	for _, cred := range svc.credentials {
-		if cred.value == "" {
+func redactValuesFromHeaders(h http.Header, values []string) {
+	for _, value := range values {
+		if value == "" {
 			continue
 		}
-		for name, values := range h {
-			for i, v := range values {
-				if strings.Contains(v, cred.value) {
-					h[name][i] = strings.ReplaceAll(v, cred.value, "[redacted]")
+		for name, headerValues := range h {
+			for i, v := range headerValues {
+				if strings.Contains(v, value) {
+					h[name][i] = strings.ReplaceAll(v, value, "[redacted]")
 				}
 			}
 		}

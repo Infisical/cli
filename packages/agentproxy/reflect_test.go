@@ -58,7 +58,7 @@ func TestForwardRedactsReflectedSecretInResponseHeader(t *testing.T) {
 			{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
 		},
 	}}
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{jwt: jwt, scope: scope, services: services, lastSeen: time.Now()}
 
 	respHeader := make(http.Header)

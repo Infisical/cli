@@ -152,7 +152,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to write the agent proxy CA to disk")
 	}
 
-	placeholderEnvs, brokeredKeys := fetchProxiedServiceConfig(httpClient, projectID, environment, secretPath)
+	placeholderEnvs, brokeredKeys, leasableDynamicCreds := fetchProxiedServiceConfig(httpClient, projectID, environment, secretPath)
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
@@ -160,6 +160,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	if !allowReadableBrokered {
 		assertNoBrokeredSecretsReadable(brokeredKeys, realSecrets)
 	}
+	warnAgentCanLeaseDynamicSecrets(leasableDynamicCreds)
 
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
@@ -223,7 +224,12 @@ func writeMitmCa(certificatePem string) (string, error) {
 // fetchProxiedServiceConfig lists the proxied services the agent can reach and returns both the
 // credential-substitution placeholders to inject and the set of secret keys those services broker. The
 // brokered keys are what the agent is meant to receive only through the proxy, never as real values.
-func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) (map[string]string, map[string]struct{}) {
+type leasableDynamicCred struct {
+	serviceName       string
+	dynamicSecretName string
+}
+
+func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) (map[string]string, map[string]struct{}, []leasableDynamicCred) {
 	resp, err := api.CallListProxiedServices(httpClient, api.ListProxiedServicesRequest{
 		ProjectID:   projectID,
 		Environment: environment,
@@ -235,19 +241,50 @@ func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment,
 
 	placeholders := map[string]string{}
 	brokeredKeys := map[string]struct{}{}
+	var leasable []leasableDynamicCred
 	for _, svc := range resp.Services {
 		// Disabled services aren't proxied, so their placeholders would reach upstream verbatim; don't inject them.
 		if !svc.CanProxy || !svc.IsEnabled {
 			continue
 		}
 		for _, cred := range svc.Credentials {
-			brokeredKeys[cred.SecretKey] = struct{}{}
+			// The agent identity holding Lease on a brokered dynamic secret defeats brokering: warn on it.
+			if cred.DynamicSecretName != "" && cred.CallerCanLease {
+				leasable = append(leasable, leasableDynamicCred{serviceName: svc.Name, dynamicSecretName: cred.DynamicSecretName})
+			}
+			if cred.SecretKey != "" {
+				brokeredKeys[cred.SecretKey] = struct{}{}
+			}
 			if cred.Role == "credential-substitution" && cred.PlaceholderKey != "" {
 				placeholders[cred.PlaceholderKey] = cred.PlaceholderValue
 			}
 		}
 	}
-	return placeholders, brokeredKeys
+	return placeholders, brokeredKeys, leasable
+}
+
+// warnAgentCanLeaseDynamicSecrets warns (does not block) when the agent identity itself holds Lease on a
+// dynamic secret that a proxied service brokers. Brokering hides the leased value from the agent, but with
+// Lease the agent could mint the credential directly and bypass the proxy.
+func warnAgentCanLeaseDynamicSecrets(leasable []leasableDynamicCred) {
+	if len(leasable) == 0 {
+		return
+	}
+	seen := map[string]struct{}{}
+	var names []string
+	for _, l := range leasable {
+		if _, ok := seen[l.dynamicSecretName]; ok {
+			continue
+		}
+		seen[l.dynamicSecretName] = struct{}{}
+		names = append(names, l.dynamicSecretName)
+	}
+	log.Warn().Msgf(
+		"the agent identity can itself mint leases for dynamic secret(s) brokered by proxied services: %s\n"+
+			"brokering hides leased credentials from the agent, but it holds the Lease permission and can obtain them directly, bypassing the proxy.\n"+
+			"consider removing the agent's Lease permission on these dynamic secrets.",
+		strings.Join(names, ", "),
+	)
 }
 
 // assertNoBrokeredSecretsReadable fails fast when the agent can read a secret that a proxied service

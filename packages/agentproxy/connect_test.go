@@ -93,7 +93,7 @@ func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
 
 	ca, interCert := newTestCA(t)
 	stub := &stubRoundTripper{respBody: "ok"}
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{jwt: jwt, scope: scope, services: services, lastSeen: time.Now()}
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
@@ -171,7 +171,7 @@ func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
 // hijack — exercising the pre-hijack error path through the ResponseWriter.
 func TestConnectRequiresProxyAuth(t *testing.T) {
 	ca, _ := newTestCA(t)
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
 		ca:        ca,

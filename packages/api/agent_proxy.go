@@ -63,7 +63,7 @@ func CallSignAgentProxyIntermediateCa(httpClient *resty.Client, request SignAgen
 
 type ProxiedServiceCredential struct {
 	ID                   string   `json:"id"`
-	SecretKey            string   `json:"secretKey"`
+	SecretKey            string   `json:"secretKey,omitempty"`
 	Role                 string   `json:"role"`
 	HeaderName           string   `json:"headerName,omitempty"`
 	HeaderPrefix         string   `json:"headerPrefix,omitempty"`
@@ -71,6 +71,12 @@ type ProxiedServiceCredential struct {
 	PlaceholderKey       string   `json:"placeholderKey,omitempty"`
 	PlaceholderValue     string   `json:"placeholderValue,omitempty"`
 	SubstitutionSurfaces []string `json:"substitutionSurfaces,omitempty"`
+	// dynamic-secret-backed credential: the proxy mints a lease and injects DynamicSecretField from its output
+	DynamicSecretName   string                 `json:"dynamicSecretName,omitempty"`
+	DynamicSecretField  string                 `json:"dynamicSecretField,omitempty"`
+	DynamicSecretConfig map[string]interface{} `json:"dynamicSecretConfig,omitempty"`
+	// true when the calling identity could itself mint this dynamic secret's lease (connect-wrapper guardrail)
+	CallerCanLease bool `json:"callerCanLease,omitempty"`
 }
 
 type ProxiedService struct {
@@ -83,7 +89,9 @@ type ProxiedService struct {
 }
 
 type ListProxiedServicesResponse struct {
-	Services []ProxiedService `json:"services"`
+	// the project's slug, resolved server-side; the proxy needs it to call the projectSlug-based lease API
+	ProjectSlug string           `json:"projectSlug"`
+	Services    []ProxiedService `json:"services"`
 }
 
 type ListProxiedServicesRequest struct {

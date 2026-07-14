@@ -1,6 +1,7 @@
 package agentproxy
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -8,8 +9,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -48,6 +52,9 @@ const (
 	// maxConcurrentConns caps simultaneous client connections so a flood of sockets can't exhaust file
 	// descriptors or goroutines. A live tunnel holds its slot for the tunnel's lifetime.
 	maxConcurrentConns = 512
+
+	// bound for best-effort lease revocation on shutdown before falling back to server-side expiry
+	leaseRevokeShutdownTimeout = 5 * time.Second
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
@@ -63,14 +70,17 @@ type proxyServer struct {
 	opts      Options
 	ca        *caManager
 	cache     *agentCache
+	leases    *leaseStore
 	transport http.RoundTripper
 }
 
 func newProxyServer(opts Options) *proxyServer {
+	leases := newLeaseStore(opts.ProxyToken)
 	return &proxyServer{
 		opts:      opts,
 		ca:        newCaManager(opts.ProxyToken),
-		cache:     newAgentCache(opts.ProxyToken),
+		cache:     newAgentCache(opts.ProxyToken, leases),
+		leases:    leases,
 		transport: newUpstreamTransport(),
 	}
 }
@@ -108,6 +118,9 @@ func Start(opts Options) error {
 
 	go ps.pollLoop()
 
+	leaseStop := make(chan struct{})
+	go ps.leases.refreshLoop(leaseStop, opts.PollInterval, ps.cache.activeJWTs)
+
 	if addr := portInUse(opts.Port); addr != "" {
 		return fmt.Errorf("port %d is already in use (%s); another process is listening. Choose a free port with --port", opts.Port, addr)
 	}
@@ -118,7 +131,27 @@ func Start(opts Options) error {
 	}
 	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
 
-	return ps.newFrontServer().Serve(newLimitListener(listener, maxConcurrentConns))
+	srv := ps.newFrontServer()
+
+	// Best-effort lease cleanup on shutdown. The server's per-lease scheduled revocation is the backstop,
+	// so a missed revoke here just means the lease lives out its TTL.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Info().Msg("shutting down agent proxy; revoking active leases")
+		close(leaseStop)
+		ctx, cancel := context.WithTimeout(context.Background(), leaseRevokeShutdownTimeout)
+		defer cancel()
+		ps.leases.revokeAll(ctx)
+		_ = srv.Shutdown(ctx)
+	}()
+
+	err = srv.Serve(newLimitListener(listener, maxConcurrentConns))
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 func portInUse(port int) string {
@@ -348,8 +381,11 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	// Strip hop-by-hop before injecting so a client's Connection header cannot delete the injected credential (injected always wins).
 	stripHopByHopHeaders(req.Header)
 
+	var dynamicKeys []leaseKey
 	if svc != nil {
-		if err := applyCredentials(req, svc); err != nil {
+		creds, keys := ps.materializeCredentials(svc)
+		dynamicKeys = keys
+		if err := applyCredentials(req, creds); err != nil {
 			return nil, fmt.Errorf("failed to apply credentials: %w", err)
 		}
 	}
@@ -363,9 +399,44 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	// redirect Location) so the agent can't read a credential it was never allowed to retrieve. Bodies are
 	// streamed and intentionally not scanned; TRACE/TRACK (the main body-echo vector) is rejected upstream.
 	if svc != nil {
-		redactCredentialsFromHeaders(resp.Header, svc)
+		redactValuesFromHeaders(resp.Header, ps.redactionValues(svc, dynamicKeys))
 	}
 	return resp, nil
+}
+
+// materializeCredentials returns a per-request copy of the service's credentials with dynamic-secret values
+// resolved from the lease store (minting lazily). A dynamic credential with no available lease value is
+// dropped (fail-open, like a missing static secret). Returns the lease keys used, for response redaction.
+func (ps *proxyServer) materializeCredentials(svc *resolvedService) ([]resolvedCredential, []leaseKey) {
+	creds := make([]resolvedCredential, 0, len(svc.credentials))
+	var dynamicKeys []leaseKey
+	for _, cred := range svc.credentials {
+		if cred.dynamic == nil {
+			creds = append(creds, cred)
+			continue
+		}
+		dynamicKeys = append(dynamicKeys, cred.dynamic.key)
+		value, ok := ps.leases.value(cred.dynamic.key, cred.dynamic.field)
+		if !ok {
+			log.Warn().Msgf("proxied service %q: no valid lease value for dynamic secret %q field %q; skipping credential", svc.name, cred.dynamic.key.secretName, cred.dynamic.field)
+			continue
+		}
+		cred.value = value
+		creds = append(creds, cred)
+	}
+	return creds, dynamicKeys
+}
+
+// redactionValues gathers static credential values plus current/retired dynamic lease values for redaction.
+func (ps *proxyServer) redactionValues(svc *resolvedService, dynamicKeys []leaseKey) []string {
+	var values []string
+	for _, cred := range svc.credentials {
+		if cred.dynamic == nil && cred.value != "" {
+			values = append(values, cred.value)
+		}
+	}
+	values = append(values, ps.leases.redactionValues(dynamicKeys)...)
+	return values
 }
 
 func hostHeaderForScheme(scheme, target string) string {

@@ -30,6 +30,13 @@ const agentInactiveTTL = 10 * time.Minute
 // so actively-used agents keep their cache and only idle scopes are dropped.
 const maxAgentCacheEntries = 4096
 
+// dynamicCredentialRef points a credential at a lease in the lease store. The value is resolved per-request
+// (materialized) rather than stored here, so poll re-resolves and agent eviction never touch live leases.
+type dynamicCredentialRef struct {
+	key   leaseKey
+	field string
+}
+
 type resolvedCredential struct {
 	role          string
 	headerName    string
@@ -38,6 +45,7 @@ type resolvedCredential struct {
 	placeholder   string
 	surfaces      []string
 	value         string
+	dynamic       *dynamicCredentialRef
 }
 
 type resolvedService struct {
@@ -66,16 +74,33 @@ func cacheKey(jwt string, scope agentScope) string {
 
 type agentCache struct {
 	proxyToken func() string
+	leases     *leaseStore
 
 	mu      sync.Mutex
 	entries map[string]*agentEntry
 }
 
-func newAgentCache(proxyToken func() string) *agentCache {
+func newAgentCache(proxyToken func() string, leases *leaseStore) *agentCache {
 	return &agentCache{
 		proxyToken: proxyToken,
+		leases:     leases,
 		entries:    make(map[string]*agentEntry),
 	}
+}
+
+// activeJWTs returns the cache keys (cacheKey(jwt, scope)) of non-evicted sessions, so the lease store can
+// stop refreshing leases whose agent session is gone.
+func (a *agentCache) activeJWTs() map[string]struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	live := make(map[string]struct{}, len(a.entries))
+	now := time.Now()
+	for key, entry := range a.entries {
+		if now.Sub(entry.lastSeen) <= agentInactiveTTL {
+			live[key] = struct{}{}
+		}
+	}
+	return live
 }
 
 func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, error) {
@@ -164,6 +189,30 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 			isEnabled:    svc.IsEnabled,
 		}
 		for _, cred := range svc.Credentials {
+			// dynamic-secret-backed credential: register a lease and defer value resolution to request time
+			if cred.DynamicSecretName != "" {
+				key := leaseKey{
+					jwt:        jwt,
+					scope:      scope,
+					secretName: cred.DynamicSecretName,
+					configHash: canonicalConfigHash(cred.DynamicSecretConfig),
+				}
+				a.leases.register(key, leaseSpec{projectSlug: listResp.ProjectSlug, config: cred.DynamicSecretConfig})
+				rs.credentials = append(rs.credentials, resolvedCredential{
+					role:          cred.Role,
+					headerName:    cred.HeaderName,
+					headerPrefix:  cred.HeaderPrefix,
+					headerPurpose: cred.HeaderPurpose,
+					placeholder:   cred.PlaceholderValue,
+					surfaces:      cred.SubstitutionSurfaces,
+					dynamic:       &dynamicCredentialRef{key: key, field: cred.DynamicSecretField},
+				})
+				continue
+			}
+
+			if cred.SecretKey == "" {
+				continue
+			}
 			value, ok := secretValues[cred.SecretKey]
 			if !ok {
 				log.Warn().Msgf("proxied service %q references missing secret %q; skipping", svc.Name, cred.SecretKey)

@@ -620,9 +620,25 @@ type UniversalAuthRefreshResponse struct {
 type CreateDynamicSecretLeaseV1Request struct {
 	Environment       string `json:"environmentSlug"`
 	ProjectSlug       string `json:"projectSlug"`
-	SecretPath        string `json:"secretPath,omitempty"`
-	DynamicSecretName string `json:"dynamicSecretName"`
-	TTL               string `json:"ttl,omitempty"`
+	// the server route reads the path from "path" (not "secretPath"); a mismatched key silently defaults to "/"
+	SecretPath        string                 `json:"path,omitempty"`
+	DynamicSecretName string                 `json:"dynamicSecretName"`
+	TTL               string                 `json:"ttl,omitempty"`
+	Config            map[string]interface{} `json:"config,omitempty"`
+}
+
+type RevokeDynamicSecretLeaseV1Request struct {
+	LeaseID     string `json:"-"`
+	Environment string `json:"environmentSlug"`
+	ProjectSlug string `json:"projectSlug"`
+	SecretPath  string `json:"path,omitempty"`
+	IsForced    bool   `json:"isForced,omitempty"`
+}
+
+type RevokeDynamicSecretLeaseV1Response struct {
+	Lease struct {
+		Id string `json:"id"`
+	} `json:"lease"`
 }
 
 type CreateDynamicSecretLeaseV1Response struct {
