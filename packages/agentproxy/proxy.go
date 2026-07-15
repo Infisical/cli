@@ -118,7 +118,7 @@ func Start(opts Options) error {
 	}
 	ps.activityLog = activityLog
 	log.Info().Msgf("activity logging: %s", activityLog.describe())
-	// Only claim SIGHUP when we own a log file to rotate; otherwise leave the signal's default behavior alone.
+	// Only claim SIGHUP when there is a log file to rotate.
 	if activityLog.enabled && activityLog.file != nil {
 		go ps.watchLogReopen()
 	}
@@ -297,9 +297,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		return
 	}
 
-	// Snapshot before forward: substitution rewrites the path in place, so capture the path (with the
-	// placeholder) and the request line now for the activity record. EscapedPath keeps the path percent-encoded
-	// so an agent can't smuggle newlines or terminal escapes (from %0a, %1b, ...) into the pretty/text log.
+	// Capture before forward mutates the path via substitution; EscapedPath stays encoded so an agent can't
+	// inject newlines or terminal escapes into the text log.
 	occurredAt := time.Now()
 	method := r.Method
 	reqPath := r.URL.EscapedPath()
@@ -345,8 +344,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	_, _ = io.Copy(flushingWriter{w}, resp.Body)
 }
 
-// watchLogReopen reopens the activity log file on SIGHUP, the standard hook for logrotate's postrotate. Runs
-// for the lifetime of the proxy; only started when the sink is a file.
+// watchLogReopen reopens the log file on SIGHUP so logrotate can rotate it via a postrotate hook.
 func (ps *proxyServer) watchLogReopen() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
@@ -359,16 +357,12 @@ func (ps *proxyServer) watchLogReopen() {
 	}
 }
 
-// recordActivity emits one activity record for a forwarded request. It skips entirely when the agent was never
-// resolved (no cache entry), since without a backend-validated identity there is nothing trustworthy to log.
-// It never touches the response and never fails the request.
 func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome) {
 	if ps.activityLog == nil || !ps.activityLog.enabled {
 		return
 	}
 
-	// identityResolved is false only when the agent was never resolved against Infisical (no cache entry), the
-	// boundary from the design: those requests have no trustworthy identity, so they aren't recorded here.
+	// Skip requests from agents never resolved against Infisical; they have no trustworthy identity.
 	if !outcome.identityResolved {
 		return
 	}
@@ -427,10 +421,6 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 	return "", "", err
 }
 
-// forwardOutcome carries what forward decided so forwardHTTP can build an activity record. service is nil for
-// unmatched/passthrough/blocked requests; applied lists the credentials actually injected. The agent identity
-// is captured here (not re-read after forwarding) so a cache eviction during the upstream call can't drop the
-// record for a request whose credentials were already applied.
 type forwardOutcome struct {
 	service          *resolvedService
 	applied          []AppliedCredential
@@ -445,9 +435,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
 	}
 
-	// Capture identity now, while the cache entry is known-present. Reading it after the round trip would race
-	// refreshActive evicting the entry (token revoked/expired, or inactivity), which would silently drop the
-	// record even though the request was forwarded and credentials applied.
+	// Capture identity now; reading it after the round trip would race a cache eviction and drop the record.
 	agentID, agentName, resolved := ps.cache.identity(jwt, scope)
 	outcome := forwardOutcome{agentID: agentID, agentName: agentName, identityResolved: resolved}
 

@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// makeJWT builds an unsigned-payload JWT (header.payload.signature) whose payload is the given claims JSON.
-// The proxy only base64url-decodes the payload; header and signature are opaque here.
 func makeJWT(t *testing.T, payloadJSON string) string {
 	t.Helper()
 	seg := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
@@ -83,7 +81,6 @@ func TestApplyCredentialsReportsBasicAuthPair(t *testing.T) {
 }
 
 func TestApplyCredentialsReportsOnlyMatchedSurfaces(t *testing.T) {
-	// Placeholder is present in the query only, though the service allows path+query.
 	req := httptest.NewRequest("GET", "https://api.example.com/orders?id=placeholder_x", nil)
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{secretKey: "ACME_ACCOUNT", role: roleCredentialSub, placeholder: "placeholder_x", value: "real", surfaces: []string{surfacePath, surfaceQuery}},
@@ -101,7 +98,6 @@ func TestApplyCredentialsReportsOnlyMatchedSurfaces(t *testing.T) {
 }
 
 func TestApplyCredentialsOmitsSubstitutionThatMatchedNothing(t *testing.T) {
-	// Placeholder appears nowhere in the request, so the substitution injects nothing and is omitted.
 	req := httptest.NewRequest("GET", "https://api.example.com/orders", nil)
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{secretKey: "ACME_ACCOUNT", role: roleCredentialSub, placeholder: "placeholder_x", value: "real", surfaces: []string{surfacePath, surfaceQuery}},
@@ -119,7 +115,6 @@ func newTestLogger(w *bytes.Buffer, filter string) *activityLogger {
 	return &activityLogger{enabled: true, format: formatJSON, filter: filter, w: w}
 }
 
-// ecsProbe decodes the ECS-shaped json output so tests can assert on the emitted fields.
 type ecsProbe struct {
 	Timestamp string `json:"@timestamp"`
 	Event     struct {
@@ -223,7 +218,6 @@ func TestActivityLoggerReopenAfterRotation(t *testing.T) {
 
 	l.Record(activityRecord{Decision: decisionBrokered})
 
-	// Simulate logrotate's rename+create: move the current file aside, then signal a reopen.
 	rotated := path + ".1"
 	if err := os.Rename(path, rotated); err != nil {
 		t.Fatal(err)
@@ -234,7 +228,6 @@ func TestActivityLoggerReopenAfterRotation(t *testing.T) {
 
 	l.Record(activityRecord{Decision: decisionError})
 
-	// The pre-rotation record stayed with the rotated file; the post-reopen record went to the fresh file.
 	if old := decodeFile(t, rotated); len(old) != 1 || old[0].Infisical.Decision != decisionBrokered {
 		t.Fatalf("rotated file should hold the pre-rotation record, got %+v", old)
 	}
@@ -265,7 +258,6 @@ func TestPrettyLineIncludesScope(t *testing.T) {
 		Path:        "/headers",
 		Status:      200,
 	})
-	// Scope column shows truncated project, env, and path.
 	for _, want := range []string{"53c8b330..", "dev", "/agent-proxy-test"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("pretty line missing %q: %q", want, line)
@@ -275,7 +267,6 @@ func TestPrettyLineIncludesScope(t *testing.T) {
 
 func TestPrettyLineStripsControlBytes(t *testing.T) {
 	l := &activityLogger{enabled: true, format: formatPretty, filter: filterAll}
-	// An agent-controlled path with a newline and an ANSI escape must not break the line or emit escapes.
 	line := l.prettyLine(activityRecord{
 		Decision: decisionBrokered,
 		Method:   "GET",
@@ -302,7 +293,7 @@ func TestActivityLoggerDisabledWritesNothing(t *testing.T) {
 
 func TestActivityLoggerNilSafe(t *testing.T) {
 	var l *activityLogger
-	l.Record(activityRecord{Decision: decisionBrokered}) // must not panic
+	l.Record(activityRecord{Decision: decisionBrokered})
 }
 
 func TestActivityRecordJSONShape(t *testing.T) {
@@ -329,7 +320,6 @@ func TestActivityRecordJSONShape(t *testing.T) {
 		t.Fatalf("want 1 record, got %d", len(recs))
 	}
 	r := recs[0]
-	// The path retains the placeholder and never a real secret.
 	if !strings.Contains(r.URL.Path, "placeholder_acme") {
 		t.Fatalf("path lost its placeholder: %q", r.URL.Path)
 	}

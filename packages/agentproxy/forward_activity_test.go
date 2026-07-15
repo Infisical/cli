@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// newRecordingProxy is like newTestProxy but attaches a buffer-backed activity logger and a resolved agent
-// identity, so tests can assert on the emitted records. recordActivity runs before any response byte is
-// written, so reading buf after the client has the full response is safe.
 func newRecordingProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, services []*resolvedService) (net.Conn, *bytes.Buffer) {
 	t.Helper()
 	cache := newAgentCache(func() string { return "" })
@@ -77,8 +74,6 @@ func doPlainRequest(t *testing.T, client net.Conn, method, target, hostPort, jwt
 }
 
 func TestForwardCapturesIdentityForRecord(t *testing.T) {
-	// The identity must be captured in the outcome at forward time. If it were re-read from the cache after the
-	// round trip, an eviction in between (revoked/expired token, or inactivity) would silently drop the record.
 	jwt := "a.b.c"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	cache := newAgentCache(func() string { return "" })
@@ -95,7 +90,6 @@ func TestForwardCapturesIdentityForRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
-	// Simulate the entry being evicted during a slow round trip; the record must still have the identity.
 	delete(cache.entries, cacheKey(jwt, scope))
 	if !outcome.identityResolved || outcome.agentID != "id-9" || outcome.agentName != "agent-9" {
 		t.Fatalf("identity not captured in outcome: %+v", outcome)
@@ -148,7 +142,7 @@ func TestActivityRecordPassthrough(t *testing.T) {
 
 	jwt := "a.b.c"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	client, buf := newRecordingProxy(t, UnmatchedAllow, jwt, scope, nil) // no services => unmatched
+	client, buf := newRecordingProxy(t, UnmatchedAllow, jwt, scope, nil)
 
 	doPlainRequest(t, client, "GET", "/", u.Host, jwt)
 
@@ -179,7 +173,6 @@ func TestActivityRecordBlocked(t *testing.T) {
 func TestActivityRecordError(t *testing.T) {
 	jwt := "a.b.c"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	// Point at a host that resolves nowhere useful so the upstream round-trip fails.
 	services := []*resolvedService{{
 		id:           "svc-err",
 		name:         "unreachable",
@@ -188,7 +181,6 @@ func TestActivityRecordError(t *testing.T) {
 	}}
 	client, buf := newRecordingProxy(t, UnmatchedAllow, jwt, scope, services)
 
-	// 127.0.0.1:1 is a closed port; the round-trip fails => error/502.
 	resp := doPlainRequest(t, client, "GET", "/", "127.0.0.1:1", jwt)
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("want 502 response, got %d", resp.StatusCode)

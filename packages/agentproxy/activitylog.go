@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Decisions recorded per request. See the design doc's decision table.
 const (
 	decisionBrokered    = "brokered"
 	decisionPassthrough = "passthrough"
@@ -22,7 +21,6 @@ const (
 	decisionError       = "error"
 )
 
-// Activity-log formats and filters. Values are validated at the CLI layer before reaching Options.
 const (
 	formatPretty = "pretty"
 	formatJSON   = "json"
@@ -32,16 +30,11 @@ const (
 	filterErrors   = "errors"
 )
 
-// Record envelope. schemaVersion lets consumers' parsers survive additive changes to the record shape;
-// eventType makes a record self-identifying when it lands in a stream mixed with other event types.
-// Bump activitySchemaVersion whenever the record's field set changes.
 const (
 	activitySchemaVersion = 1
 	activityEventType     = "agent-proxy.request"
 )
 
-// activityRecord is one line of the activity log: what the proxy did for a single request. It never carries
-// a secret value; path is snapshotted before substitution so it only ever shows the placeholder.
 type activityRecord struct {
 	SchemaVersion int                 `json:"schemaVersion"`
 	EventType     string              `json:"eventType"`
@@ -62,15 +55,13 @@ type activityRecord struct {
 	Credentials   []AppliedCredential `json:"credentials"`
 }
 
-// activityLogger serializes activity records to a sink (stdout or a file). Records are emitted from concurrent
-// tunnel goroutines, so every write is serialized under the mutex to keep one JSON object per line.
 type activityLogger struct {
 	enabled bool
 	format  string
 	filter  string
-	sink    string // "stdout" or the file path, for the startup summary
+	sink    string
 	w       io.Writer
-	file    *os.File // non-nil only for a file sink; used to reopen on SIGHUP for log rotation
+	file    *os.File
 	colored bool
 	mu      sync.Mutex
 }
@@ -122,10 +113,7 @@ func newActivityLogger(opts Options) (*activityLogger, error) {
 	}, nil
 }
 
-// reopen closes and reopens the file sink so an operator can rotate the log the standard way: logrotate
-// renames the file, then its postrotate hook sends SIGHUP and the proxy starts writing to the fresh file.
-// A no-op for the stdout sink (containers rely on the platform to rotate). The new file is opened before the
-// writer is swapped under the mutex, so a concurrent Record either fully lands in the old file or the new one.
+// reopen swaps in a freshly opened file so logrotate can rotate via a SIGHUP postrotate hook. No-op for stdout.
 func (l *activityLogger) reopen() error {
 	if l == nil || !l.enabled || l.file == nil {
 		return nil
@@ -143,8 +131,6 @@ func (l *activityLogger) reopen() error {
 	return nil
 }
 
-// shouldLog applies the decision filter: all logs everything; brokered drops passthrough noise; errors keeps
-// only blocked and error.
 func (l *activityLogger) shouldLog(decision string) bool {
 	switch l.filter {
 	case filterErrors:
@@ -156,8 +142,6 @@ func (l *activityLogger) shouldLog(decision string) bool {
 	}
 }
 
-// Record writes one record, honoring enabled state and the filter. A write error is logged and swallowed: it
-// must never block or fail a proxied request.
 func (l *activityLogger) Record(rec activityRecord) {
 	if l == nil || !l.enabled || !l.shouldLog(rec.Decision) {
 		return
@@ -167,8 +151,6 @@ func (l *activityLogger) Record(rec activityRecord) {
 	if l.format == formatPretty {
 		line = []byte(l.prettyLine(rec))
 	} else {
-		// json output follows ECS with OTel semantic-convention field names, so it drops into an OTel/Elastic
-		// pipeline (or the OTel Collector's filelog receiver) with no field mapping.
 		b, err := json.Marshal(toECS(rec))
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to encode activity record")
@@ -197,8 +179,6 @@ func (l *activityLogger) prettyLine(rec activityRecord) string {
 		service = *rec.ServiceName
 	}
 
-	// Scope column: a shared proxy serves many projects/envs/paths, so surface which one. The project UUID is
-	// truncated since the human just needs to tell projects apart, and the full value is in the json output.
 	proj := rec.ProjectID
 	if len(proj) > 8 {
 		proj = proj[:8] + ".."
@@ -218,8 +198,6 @@ func (l *activityLogger) prettyLine(rec activityRecord) string {
 		credShorthand(rec.Credentials),
 	)
 	line = strings.TrimRight(line, " ")
-	// Strip control bytes before we add our own color codes and newline, so no field (chiefly the
-	// agent-influenced path) can inject line breaks or terminal escapes into the human/text log.
 	line = stripControl(line)
 	if l.colored {
 		line = colorForDecision(rec.Decision).Sprint(line)
@@ -227,8 +205,7 @@ func (l *activityLogger) prettyLine(rec activityRecord) string {
 	return line + "\n"
 }
 
-// stripControl removes ASCII control characters (including newlines, CR, and ESC) from a string. Applied to
-// the pretty line so untrusted request data can't forge records or emit terminal escape sequences.
+// stripControl drops control bytes so untrusted request data can't inject newlines or terminal escapes.
 func stripControl(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -238,7 +215,6 @@ func stripControl(s string) string {
 	}, s)
 }
 
-// describe is the startup-summary string, e.g. "file(/var/log/activity.log, json) · filter: all" or "off".
 func (l *activityLogger) describe() string {
 	if l == nil || !l.enabled {
 		return "off"
@@ -258,8 +234,6 @@ func credShorthand(creds []AppliedCredential) string {
 	return strings.Join(parts, " ")
 }
 
-// ecsDoc is the ECS / OTel-semantic-convention shape of a record. Standard fields use their conventional
-// names; everything domain-specific lives under the namespaced "infisical" object, which ECS permits.
 type ecsDoc struct {
 	Timestamp string       `json:"@timestamp"`
 	Event     ecsEvent     `json:"event"`
@@ -324,7 +298,6 @@ type ecsInfisical struct {
 	Credentials   []AppliedCredential `json:"credentials,omitempty"`
 }
 
-// ecsOutcome maps our decision to ECS event.outcome. The precise decision is preserved in infisical.decision.
 func ecsOutcome(decision string) string {
 	switch decision {
 	case decisionBrokered, decisionPassthrough:

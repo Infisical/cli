@@ -21,9 +21,6 @@ const (
 	maxBodyRewriteSize = 10 * 1024 * 1024
 )
 
-// AppliedCredential records what applyCredentials actually injected, for the activity log. It reflects the
-// outcome (header rewrites always apply; a substitution lists only the surfaces its placeholder was found in)
-// rather than the service config. It never carries a secret value, only the key and where it landed.
 type AppliedCredential struct {
 	Key      string   `json:"key"`
 	Role     string   `json:"role"`
@@ -71,7 +68,6 @@ func applyCredentials(req *http.Request, svc *resolvedService) ([]AppliedCredent
 			if err != nil {
 				return nil, err
 			}
-			// A substitution that matched no surface injected nothing; omit it from the record.
 			if len(surfaces) > 0 {
 				applied = append(applied, AppliedCredential{
 					Key:      cred.secretKey,
@@ -140,8 +136,6 @@ func replaceWithinLimit(s, old, replacement string, limit int) (string, bool) {
 }
 
 // Plain substring ReplaceAll on distinctive random placeholders; short or common placeholder values would over-match.
-// Returns the surfaces where the placeholder was actually found and replaced (in path, query, header, body order),
-// so the activity log can report only what was truly injected rather than what the service config allows.
 func applySubstitution(req *http.Request, cred resolvedCredential) ([]string, error) {
 	placeholder := cred.placeholder
 	if placeholder == "" {

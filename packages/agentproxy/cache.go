@@ -119,8 +119,6 @@ func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, erro
 	return resolved, nil
 }
 
-// identity returns the agent identity cached for the given jwt+scope. ok is false when no entry exists
-// (the agent was never resolved), which is the boundary the activity log uses to decide whether to emit.
 func (a *agentCache) identity(jwt string, scope agentScope) (id, name string, ok bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -131,10 +129,8 @@ func (a *agentCache) identity(jwt string, scope agentScope) (id, name string, ok
 	return entry.agentID, entry.agentName, true
 }
 
-// decodeAgentIdentity reads identityId/identityName from the agent's JWT payload without verifying the
-// signature. The proxy holds no auth secret and does not need to: an entry is only created after Infisical
-// accepted this exact token on discovery, so the identity is backend-validated, just not re-verified here.
-// A decode failure is not fatal; it yields empty identity (agentName serializes to null) and warns.
+// decodeAgentIdentity reads the identity claims without verifying the signature; the token was already
+// validated by Infisical when the cache entry was created.
 func decodeAgentIdentity(jwt string) (id, name string) {
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 {
