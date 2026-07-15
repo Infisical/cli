@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -279,67 +277,5 @@ func handlePing(ctx context.Context, conn *tls.Conn, reader *bufio.Reader) error
 func handleHealth(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, heartbeatTTL int) error {
 	response := fmt.Sprintf(`{"status":"ok","heartbeatTTL":%d}`, heartbeatTTL)
 	conn.Write([]byte(response + "\n"))
-	return nil
-}
-
-// handlePortSweep reads a list of host:port targets and returns which are reachable, dialing concurrently in-network
-func handlePortSweep(ctx context.Context, conn *tls.Conn, reader *bufio.Reader) error {
-	const (
-		maxSweepRequestBytes = 1 * 1024 * 1024
-		maxSweepTargets      = 65536
-	)
-
-	var req struct {
-		Targets   []string `json:"targets"`
-		TimeoutMs int      `json:"timeoutMs"`
-	}
-	if err := json.NewDecoder(io.LimitReader(reader, maxSweepRequestBytes)).Decode(&req); err != nil {
-		return fmt.Errorf("failed to parse port sweep request: %w", err)
-	}
-	if len(req.Targets) > maxSweepTargets {
-		return fmt.Errorf("port sweep target count %d exceeds limit %d", len(req.Targets), maxSweepTargets)
-	}
-
-	const maxSweepTimeout = 30 * time.Second
-	timeout := time.Duration(req.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = 3 * time.Second
-	} else if timeout > maxSweepTimeout {
-		timeout = maxSweepTimeout
-	}
-
-	const sweepConcurrency = 512
-	sem := make(chan struct{}, sweepConcurrency)
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		open []string
-	)
-	for _, target := range req.Targets {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(t string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			dialer := net.Dialer{Timeout: timeout}
-			c, dialErr := dialer.DialContext(ctx, "tcp", t)
-			if dialErr != nil {
-				return
-			}
-			_ = c.Close()
-			mu.Lock()
-			open = append(open, t)
-			mu.Unlock()
-		}(target)
-	}
-	wg.Wait()
-
-	resp, err := json.Marshal(map[string][]string{"open": open})
-	if err != nil {
-		return fmt.Errorf("failed to marshal port sweep response: %w", err)
-	}
-	if _, err := conn.Write(append(resp, '\n')); err != nil {
-		return fmt.Errorf("failed to write port sweep response: %w", err)
-	}
 	return nil
 }

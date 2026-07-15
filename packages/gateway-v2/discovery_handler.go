@@ -1,0 +1,170 @@
+package gatewayv2
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
+)
+
+const (
+	discoveryRequestDeadline = 15 * time.Minute
+	maxSweepRequestBytes     = 1 * 1024 * 1024
+	maxSweepTargets          = 65536
+	sweepConcurrency         = 512
+	maxSweepTimeout          = 30 * time.Second
+)
+
+type discoveryTarget struct {
+	host string
+	port int
+}
+
+type discoveryTargetContextKey struct{}
+
+// serveDiscoveryOverTLS serves the platform discovery RPCs (ssh-exec + port sweep) over one HTTP mux,
+// mirroring the ADCS/PKCS11 handlers. The exec target host/port come from the signed gateway certificate.
+func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
+	reqCh := make(chan *http.Request, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		reqCh <- req
+	}()
+
+	var req *http.Request
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return fmt.Errorf("failed to read HTTP request: %w", err)
+	case req = <-reqCh:
+	}
+
+	opCtx, cancel := context.WithTimeout(ctx, discoveryRequestDeadline)
+	defer cancel()
+	opCtx = context.WithValue(opCtx, discoveryTargetContextKey{}, discoveryTarget{forwardConfig.TargetHost, forwardConfig.TargetPort})
+	req = req.WithContext(opCtx)
+
+	rw := newBufferedResponseWriter()
+	discoveryMux().ServeHTTP(rw, req)
+	if err := rw.writeTo(conn); err != nil {
+		return fmt.Errorf("failed to write response: %w", err)
+	}
+	log.Debug().Str("path", req.URL.Path).Int("status", rw.status).Msg("discovery: response written")
+	return nil
+}
+
+var discoveryMux = sync.OnceValue(func() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/exec", handleDiscoveryExec)
+	mux.HandleFunc("/v1/sweep", handleDiscoverySweep)
+	return mux
+})
+
+func handleDiscoveryExec(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeDiscoveryError(w, http.StatusMethodNotAllowed, "Only POST is supported")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSshExecRequestBytes))
+	if err != nil {
+		writeDiscoveryError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+	var env sshExecEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		writeDiscoveryError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	target, _ := r.Context().Value(discoveryTargetContextKey{}).(discoveryTarget)
+	result, execErr := doSSHExec(target.host, target.port, env)
+	if execErr != nil {
+		writeDiscoveryError(w, http.StatusBadGateway, execErr.Error())
+		return
+	}
+	writeDiscoveryJSON(w, http.StatusOK, sshExecResponse{Result: result})
+}
+
+func handleDiscoverySweep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeDiscoveryError(w, http.StatusMethodNotAllowed, "Only POST is supported")
+		return
+	}
+	var req struct {
+		Targets   []string `json:"targets"`
+		TimeoutMs int      `json:"timeoutMs"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxSweepRequestBytes)).Decode(&req); err != nil {
+		writeDiscoveryError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(req.Targets) > maxSweepTargets {
+		writeDiscoveryError(w, http.StatusBadRequest, fmt.Sprintf("target count %d exceeds limit %d", len(req.Targets), maxSweepTargets))
+		return
+	}
+	writeDiscoveryJSON(w, http.StatusOK, map[string][]string{"open": sweepReachable(r.Context(), req.Targets, req.TimeoutMs)})
+}
+
+// sweepReachable TCP-probes each host:port concurrently in-network and returns the reachable ones
+func sweepReachable(ctx context.Context, targets []string, timeoutMs int) []string {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	} else if timeout > maxSweepTimeout {
+		timeout = maxSweepTimeout
+	}
+
+	sem := make(chan struct{}, sweepConcurrency)
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		open []string
+	)
+	for _, target := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			dialer := net.Dialer{Timeout: timeout}
+			c, dialErr := dialer.DialContext(ctx, "tcp", t)
+			if dialErr != nil {
+				return
+			}
+			_ = c.Close()
+			mu.Lock()
+			open = append(open, t)
+			mu.Unlock()
+		}(target)
+	}
+	wg.Wait()
+	return open
+}
+
+func writeDiscoveryJSON(w http.ResponseWriter, status int, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func writeDiscoveryError(w http.ResponseWriter, status int, message string) {
+	writeDiscoveryJSON(w, status, sshExecErrorResponse{Error: sshExecErrorBody{Message: message}})
+}

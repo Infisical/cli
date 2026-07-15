@@ -42,8 +42,7 @@ const (
 	ForwardModeHealth          ForwardMode = "HEALTH"
 	ForwardModePkcs11          ForwardMode = "PKCS11"
 	ForwardModeADCS            ForwardMode = "ADCS"
-	ForwardModePortSweep       ForwardMode = "PORT_SWEEP"
-	ForwardModeSshExec         ForwardMode = "SSH_EXEC"
+	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
 )
 
 type ActorType string
@@ -1005,23 +1004,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("ADCS handler completed")
 		}
 		return
-	} else if forwardConfig.Mode == ForwardModePortSweep {
-		// discovery (sweep + ssh-exec) is platform-initiated only; reject user certs so they can't scan the network
+	} else if forwardConfig.Mode == ForwardModeDiscovery {
+		// discovery (ssh-exec + port sweep) is platform-initiated only; reject user certs so they can't scan the network
 		if forwardConfig.ActorType != ActorTypePlatform {
-			log.Warn().Msg("Rejecting port sweep from non-platform actor")
+			log.Warn().Msg("Rejecting discovery request from non-platform actor")
 			return
 		}
-		if err := handlePortSweep(g.ctx, tlsConn, reader); err != nil {
-			log.Debug().Err(err).Msg("Port sweep handler ended with error")
-		}
-		return
-	} else if forwardConfig.Mode == ForwardModeSshExec {
-		if forwardConfig.ActorType != ActorTypePlatform {
-			log.Warn().Msg("Rejecting ssh-exec from non-platform actor")
-			return
-		}
-		if err := serveSSHExecOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
-			log.Debug().Err(err).Msg("SSH exec handler ended with error")
+		if err := serveDiscoveryOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Discovery handler ended with error")
 		}
 		return
 	}
@@ -1082,12 +1072,8 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 		config.Mode = ForwardModePkcs11
 		return config, nil
 
-	case "infisical-port-sweep":
-		config.Mode = ForwardModePortSweep
-		return config, nil
-
-	case "infisical-ssh-exec":
-		config.Mode = ForwardModeSshExec
+	case "infisical-discovery":
+		config.Mode = ForwardModeDiscovery
 		return config, nil
 
 	case "infisical-adcs":
@@ -1268,8 +1254,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
 		"infisical-adcs",
-		"infisical-port-sweep",
-		"infisical-ssh-exec",
+		"infisical-discovery",
 	}
 	if pkcs11Loaded {
 		base = append(base, "infisical-pkcs11")

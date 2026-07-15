@@ -1,24 +1,15 @@
 package gatewayv2
 
 import (
-	"bufio"
 	"bytes"
-	"context"
-	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
-	sshExecConnDeadline    = 90 * time.Second
 	sshExecDefaultTimeout  = 20 * time.Second
 	maxSshExecRequestBytes = 1 * 1024 * 1024
 	maxSshExecOutputBytes  = 4 * 1024 * 1024
@@ -172,57 +163,4 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 
 func asExitError(err error, target **ssh.ExitError) bool {
 	return errors.As(err, target)
-}
-
-// serveSSHExecOverTLS reads one HTTP request off the TLS relay connection, runs the SSH command against the
-// cert-configured target, and writes back a JSON response
-func serveSSHExecOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, targetHost string, targetPort int) error {
-	_ = conn.SetDeadline(time.Now().Add(sshExecConnDeadline))
-
-	req, err := http.ReadRequest(reader)
-	if err != nil {
-		return fmt.Errorf("failed to read HTTP request: %w", err)
-	}
-
-	if req.Method != http.MethodPost || req.URL.Path != "/v1/exec" {
-		return writeSSHExecJSON(conn, http.StatusNotFound, sshExecErrorResponse{Error: sshExecErrorBody{Message: "Unsupported endpoint"}})
-	}
-
-	body, err := io.ReadAll(io.LimitReader(req.Body, maxSshExecRequestBytes))
-	if err != nil {
-		return fmt.Errorf("failed to read request body: %w", err)
-	}
-
-	var env sshExecEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return writeSSHExecJSON(conn, http.StatusBadRequest, sshExecErrorResponse{Error: sshExecErrorBody{Message: "Invalid request body"}})
-	}
-
-	result, execErr := doSSHExec(targetHost, targetPort, env)
-	if execErr != nil {
-		return writeSSHExecJSON(conn, http.StatusBadGateway, sshExecErrorResponse{Error: sshExecErrorBody{Message: execErr.Error()}})
-	}
-
-	return writeSSHExecJSON(conn, http.StatusOK, sshExecResponse{Result: result})
-}
-
-func writeSSHExecJSON(conn net.Conn, status int, payload any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal response: %w", err)
-	}
-	resp := &http.Response{
-		StatusCode:    status,
-		Proto:         "HTTP/1.1",
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		Header:        http.Header{"Content-Type": {"application/json"}, "Connection": {"close"}},
-		Body:          io.NopCloser(bytes.NewReader(body)),
-		ContentLength: int64(len(body)),
-	}
-	if err := resp.Write(conn); err != nil {
-		return fmt.Errorf("failed to write response: %w", err)
-	}
-	log.Debug().Int("status", status).Msg("ssh-exec: response written")
-	return nil
 }
