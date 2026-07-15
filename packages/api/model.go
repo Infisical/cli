@@ -618,9 +618,8 @@ type UniversalAuthRefreshResponse struct {
 }
 
 type CreateDynamicSecretLeaseV1Request struct {
-	Environment       string `json:"environmentSlug"`
-	ProjectSlug       string `json:"projectSlug"`
-	// the server route reads the path from "path" (not "secretPath"); a mismatched key silently defaults to "/"
+	Environment       string                 `json:"environmentSlug"`
+	ProjectSlug       string                 `json:"projectSlug"`
 	SecretPath        string                 `json:"path,omitempty"`
 	DynamicSecretName string                 `json:"dynamicSecretName"`
 	TTL               string                 `json:"ttl,omitempty"`
