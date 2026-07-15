@@ -159,8 +159,8 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	allowReadableBrokered, _ := cmd.Flags().GetBool("allow-readable-brokered-secrets")
 	if !allowReadableBrokered {
 		assertNoBrokeredSecretsReadable(brokeredKeys, realSecrets)
+		assertNoBrokeredDynamicSecretsLeasable(leasableDynamicCreds)
 	}
-	warnAgentCanLeaseDynamicSecrets(leasableDynamicCreds)
 
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
@@ -262,7 +262,9 @@ func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment,
 	return placeholders, brokeredKeys, leasable
 }
 
-func warnAgentCanLeaseDynamicSecrets(leasable []leasableDynamicCred) {
+// assertNoBrokeredDynamicSecretsLeasable is the dynamic-secret counterpart of assertNoBrokeredSecretsReadable:
+// the agent holding Lease on a brokered dynamic secret can mint it directly, bypassing the proxy, so fail fast.
+func assertNoBrokeredDynamicSecretsLeasable(leasable []leasableDynamicCred) {
 	if len(leasable) == 0 {
 		return
 	}
@@ -275,12 +277,13 @@ func warnAgentCanLeaseDynamicSecrets(leasable []leasableDynamicCred) {
 		seen[l.dynamicSecretName] = struct{}{}
 		names = append(names, l.dynamicSecretName)
 	}
-	log.Warn().Msgf(
-		"the agent identity can itself mint leases for dynamic secret(s) brokered by proxied services: %s\n"+
-			"brokering hides leased credentials from the agent, but it holds the Lease permission and can obtain them directly, bypassing the proxy.\n"+
-			"consider removing the agent's Lease permission on these dynamic secrets.",
-		strings.Join(names, ", "),
-	)
+	sort.Strings(names)
+	util.HandleError(fmt.Errorf(
+		"the agent can lease dynamic secret(s) that are brokered by a proxied service: %s\n"+
+			"brokering hides these values from the agent, but it has Lease on them and would mint them directly, bypassing the proxy.\n"+
+			"fix: remove the agent's Lease permission on these dynamic secrets, or stop referencing them from proxied services.\n"+
+			"to start anyway, pass --allow-readable-brokered-secrets",
+		strings.Join(names, ", ")))
 }
 
 // assertNoBrokeredSecretsReadable fails fast when the agent can read a secret that a proxied service
