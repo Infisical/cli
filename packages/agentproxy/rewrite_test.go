@@ -64,7 +64,6 @@ func TestBasicAuthUsernameOnly(t *testing.T) {
 	if err := applyCredentials(req, svc); err != nil {
 		t.Fatal(err)
 	}
-	// base64("user:") == "dXNlcjo=" — an omitted password yields an empty password segment.
 	if got := req.Header.Get("Authorization"); got != "Basic dXNlcjo=" {
 		t.Fatalf("unexpected basic auth header: %q", got)
 	}
