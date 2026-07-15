@@ -1006,11 +1006,20 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePortSweep {
+		// discovery (sweep + ssh-exec) is platform-initiated only; reject user certs so they can't scan the network
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting port sweep from non-platform actor")
+			return
+		}
 		if err := handlePortSweep(g.ctx, tlsConn, reader); err != nil {
 			log.Debug().Err(err).Msg("Port sweep handler ended with error")
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModeSshExec {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting ssh-exec from non-platform actor")
+			return
+		}
 		if err := serveSSHExecOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
 			log.Debug().Err(err).Msg("SSH exec handler ended with error")
 		}

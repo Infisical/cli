@@ -36,9 +36,10 @@ type sshExecEnvelope struct {
 }
 
 type sshExecResult struct {
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exitCode"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exitCode"`
+	Truncated bool   `json:"truncated"`
 }
 
 type sshExecResponse struct {
@@ -115,11 +116,23 @@ func doSSHExec(targetHost string, targetPort int, env sshExecEnvelope) (sshExecR
 	defer sess.Close()
 
 	var stdout, stderr bytes.Buffer
-	sess.Stdout = &limitedWriter{buf: &stdout, limit: maxSshExecOutputBytes}
-	sess.Stderr = &limitedWriter{buf: &stderr, limit: maxSshExecOutputBytes}
+	stdoutW := &limitedWriter{buf: &stdout, limit: maxSshExecOutputBytes}
+	stderrW := &limitedWriter{buf: &stderr, limit: maxSshExecOutputBytes}
+	sess.Stdout = stdoutW
+	sess.Stderr = stderrW
+
+	// sess.Run has no deadline of its own and the TLS connection deadline is a no-op, so bound the command here
+	done := make(chan error, 1)
+	go func() { done <- sess.Run(env.Command) }()
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(timeout):
+		return sshExecResult{}, fmt.Errorf("command timed out after %s", timeout)
+	}
 
 	exitCode := 0
-	if runErr := sess.Run(env.Command); runErr != nil {
+	if runErr != nil {
 		var exitErr *ssh.ExitError
 		if ok := asExitError(runErr, &exitErr); ok {
 			exitCode = exitErr.ExitStatus()
@@ -128,22 +141,31 @@ func doSSHExec(targetHost string, targetPort int, env sshExecEnvelope) (sshExecR
 		}
 	}
 
-	return sshExecResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode}, nil
+	return sshExecResult{
+		Stdout:    stdout.String(),
+		Stderr:    stderr.String(),
+		ExitCode:  exitCode,
+		Truncated: stdoutW.truncated || stderrW.truncated,
+	}, nil
 }
 
 // limitedWriter caps captured output so a hostile or misbehaving target can't exhaust gateway memory
 type limitedWriter struct {
-	buf   *bytes.Buffer
-	limit int
+	buf       *bytes.Buffer
+	limit     int
+	truncated bool
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
 	if remaining := w.limit - w.buf.Len(); remaining > 0 {
 		if len(p) > remaining {
 			w.buf.Write(p[:remaining])
+			w.truncated = true
 		} else {
 			w.buf.Write(p)
 		}
+	} else if len(p) > 0 {
+		w.truncated = true
 	}
 	return len(p), nil
 }
