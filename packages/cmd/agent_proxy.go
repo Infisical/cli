@@ -227,7 +227,6 @@ func writeMitmCa(certificatePem string) (string, error) {
 // credential-substitution placeholders to inject and the set of secret keys those services broker. The
 // brokered keys are what the agent is meant to receive only through the proxy, never as real values.
 type leasableDynamicCred struct {
-	serviceName       string
 	dynamicSecretName string
 }
 
@@ -251,7 +250,7 @@ func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment,
 		}
 		for _, cred := range svc.Credentials {
 			if cred.DynamicSecretName != "" && cred.CallerCanLease {
-				leasable = append(leasable, leasableDynamicCred{serviceName: svc.Name, dynamicSecretName: cred.DynamicSecretName})
+				leasable = append(leasable, leasableDynamicCred{dynamicSecretName: cred.DynamicSecretName})
 			}
 			if cred.SecretKey != "" {
 				brokeredKeys[cred.SecretKey] = struct{}{}

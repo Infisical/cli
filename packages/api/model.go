@@ -631,7 +631,6 @@ type RevokeDynamicSecretLeaseV1Request struct {
 	Environment string `json:"environmentSlug"`
 	ProjectSlug string `json:"projectSlug"`
 	SecretPath  string `json:"path,omitempty"`
-	IsForced    bool   `json:"isForced,omitempty"`
 }
 
 type RevokeDynamicSecretLeaseV1Response struct {
