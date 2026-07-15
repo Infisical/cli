@@ -33,6 +33,8 @@ const (
 const (
 	activitySchemaVersion = 1
 	activityEventType     = "agent-proxy.request"
+
+	maxLoggedPathLen = 2048
 )
 
 type activityRecord struct {

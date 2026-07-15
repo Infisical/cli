@@ -96,6 +96,23 @@ func TestForwardCapturesIdentityForRecord(t *testing.T) {
 	}
 }
 
+func TestActivityRecordPathTruncated(t *testing.T) {
+	jwt := "a.b.c"
+	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
+	client, buf := newRecordingProxy(t, UnmatchedAllow, jwt, scope, nil)
+
+	longPath := "/" + strings.Repeat("a", maxLoggedPathLen+500)
+	doPlainRequest(t, client, "GET", longPath, "127.0.0.1:1", jwt)
+
+	rec := lastRecord(t, buf)
+	if len(rec.URL.Path) > maxLoggedPathLen+len("...[truncated]") {
+		t.Fatalf("path not capped: len=%d", len(rec.URL.Path))
+	}
+	if !strings.HasSuffix(rec.URL.Path, "...[truncated]") {
+		t.Fatalf("expected truncation marker, got %q", rec.URL.Path)
+	}
+}
+
 func TestActivityRecordBrokered(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok")

@@ -298,10 +298,13 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	}
 
 	// Capture before forward mutates the path via substitution; EscapedPath stays encoded so an agent can't
-	// inject newlines or terminal escapes into the text log.
+	// inject newlines or terminal escapes into the text log. Cap the length so a huge path can't bloat records.
 	occurredAt := time.Now()
 	method := r.Method
 	reqPath := r.URL.EscapedPath()
+	if len(reqPath) > maxLoggedPathLen {
+		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
+	}
 
 	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 
