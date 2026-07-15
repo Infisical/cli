@@ -444,7 +444,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
 
-	// Cap WinRM HTTP-transport response bodies.
+	// Bound WinRM HTTP response bodies before serving.
 	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)

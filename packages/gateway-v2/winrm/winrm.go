@@ -219,6 +219,12 @@ func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
 		// deadline; the library otherwise reads the body unbounded and issues its request without a context.
 		params.TransportDecorator = func() winrm.Transporter { return winrm.NewClientNTLMWithDial(boundedDial(ctx)) }
 	} else {
+		// HTTP transport: NTLM message sealing provides confidentiality without a server certificate.
+		// Confidentiality here depends on the encrypted session being established: masterzen's Encryption
+		// falls back to unencrypted NTLM if sealing setup fails, and that fallback uses its own transport
+		// (not http.DefaultTransport), so it cannot be intercepted without forking the library. An active
+		// MITM that forces the setup to fail could therefore read a delivery in cleartext. Use HTTPS when
+		// the gateway-to-host segment is not trusted.
 		enc, err := winrm.NewEncryption("ntlm")
 		if err != nil {
 			return nil, fmt.Errorf("%w: failed to initialize NTLM message encryption: %v", ErrConnect, err)
@@ -398,11 +404,20 @@ func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery, gran
 		}
 	}
 
+	// Lock the decoded staging file to SYSTEM/Administrators/current-user before writing the cleartext
+	// bytes, matching the .b64 lockdown, so the plaintext key is never briefly readable via inherited
+	// directory permissions. After the move, icacls /reset restores the destination to inherited-only,
+	// leaving the delivered file's resting ACL unchanged (additive grants are applied separately below).
 	// Verify the file exists after the move so a silently-normalized destination isn't reported as success.
 	finalize := fmt.Sprintf(
 		`$ErrorActionPreference='Stop'; $p='%s'; $b64=$p+'%s'; $tmp=$p+'%s'; `+
+			`if (Test-Path -LiteralPath $tmp) { Remove-Item -Force -LiteralPath $tmp }; `+
+			`New-Item -ItemType File -Force -Path $tmp | Out-Null; `+
+			`$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; `+
+			`icacls $tmp /inheritance:r /grant:r "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" ('*'+$sid+':(F)') *>$null; `+
 			`[IO.File]::WriteAllBytes($tmp,[Convert]::FromBase64String([IO.File]::ReadAllText($b64))); `+
-			`Move-Item -Force -LiteralPath $tmp -Destination $p; Remove-Item -Force -LiteralPath $b64; `+
+			`Move-Item -Force -LiteralPath $tmp -Destination $p; `+
+			`icacls $p /reset *>$null; Remove-Item -Force -LiteralPath $b64; `+
 			`if (-not (Test-Path -LiteralPath $p)) { throw ('file not found after write: '+$p) }; `+
 			`Write-Output ('WROTE='+$p)`,
 		pathLit, b64Ext, tmpExt,
