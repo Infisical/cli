@@ -161,12 +161,17 @@ func (c *cappedBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// winrmSOAPPath is the WS-Management endpoint every WinRM request targets; the response cap keys off it
+// so only WinRM traffic is bounded.
+const winrmSOAPPath = "/wsman"
+
 var installHTTPResponseCapOnce sync.Once
 
-// InstallHTTPResponseCap bounds the HTTP (NTLM message-sealing) transport's response reads. That transport
-// (masterzen's Encryption) uses a bare *http.Client with no hook for a custom transport, so wrapping the
-// global http.DefaultTransport is the only way to cap it without forking the library; nothing else in the
-// process uses the default transport. Call once at startup, before serving.
+// InstallHTTPResponseCap bounds response reads on the HTTP (NTLM message-sealing) transport, which uses
+// masterzen's Encryption. That transport uses a bare *http.Client with no hook for a custom transport, so
+// wrapping http.DefaultTransport is the only way to cap it without forking the library. The wrapper only
+// caps requests to the WinRM WS-Management path ("/wsman") and passes every other request through unchanged,
+// so it does not affect any other use of the default transport. Call once at startup, before serving.
 func InstallHTTPResponseCap() {
 	installHTTPResponseCapOnce.Do(func() {
 		base := http.DefaultTransport
@@ -175,7 +180,9 @@ func InstallHTTPResponseCap() {
 			if err != nil || resp == nil || resp.Body == nil {
 				return resp, err
 			}
-			resp.Body = &cappedBody{ReadCloser: resp.Body, remaining: maxWinRMReadBytes}
+			if req.URL != nil && req.URL.Path == winrmSOAPPath {
+				resp.Body = &cappedBody{ReadCloser: resp.Body, remaining: maxWinRMReadBytes}
+			}
 			return resp, nil
 		})
 	})

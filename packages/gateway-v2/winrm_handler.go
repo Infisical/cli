@@ -129,9 +129,9 @@ func serveWinrmOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader
 
 var serveWinrmMux = sync.OnceValue(func() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/test", wrapWinrm(handleWinrmConnectionTest))
-	mux.HandleFunc("/v1/deliver", wrapWinrm(handleWinrmDeliverFiles))
-	mux.HandleFunc("/v1/remove", wrapWinrm(handleWinrmRemoveFiles))
+	mux.HandleFunc("/v1/test-connection", wrapWinrm(handleWinrmConnectionTest))
+	mux.HandleFunc("/v1/deliver-files", wrapWinrm(handleWinrmDeliverFiles))
+	mux.HandleFunc("/v1/remove-files", wrapWinrm(handleWinrmRemoveFiles))
 	return mux
 })
 
