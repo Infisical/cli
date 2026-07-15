@@ -30,8 +30,6 @@ const agentInactiveTTL = 10 * time.Minute
 // so actively-used agents keep their cache and only idle scopes are dropped.
 const maxAgentCacheEntries = 4096
 
-// dynamicCredentialRef points a credential at a lease in the lease store. The value is resolved per-request
-// (materialized) rather than stored here, so poll re-resolves and agent eviction never touch live leases.
 type dynamicCredentialRef struct {
 	key   leaseKey
 	field string
@@ -88,8 +86,6 @@ func newAgentCache(proxyToken func() string, leases *leaseStore) *agentCache {
 	}
 }
 
-// activeJWTs returns the cache keys (cacheKey(jwt, scope)) of non-evicted sessions, so the lease store can
-// stop refreshing leases whose agent session is gone.
 func (a *agentCache) activeJWTs() map[string]struct{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -189,7 +185,6 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 			isEnabled:    svc.IsEnabled,
 		}
 		for _, cred := range svc.Credentials {
-			// dynamic-secret-backed credential: register a lease and defer value resolution to request time
 			if cred.DynamicSecretName != "" {
 				key := leaseKey{
 					jwt:        jwt,

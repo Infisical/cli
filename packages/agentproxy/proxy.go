@@ -53,7 +53,6 @@ const (
 	// descriptors or goroutines. A live tunnel holds its slot for the tunnel's lifetime.
 	maxConcurrentConns = 512
 
-	// bound for best-effort lease revocation on shutdown before falling back to server-side expiry
 	leaseRevokeShutdownTimeout = 5 * time.Second
 )
 
@@ -133,8 +132,6 @@ func Start(opts Options) error {
 
 	srv := ps.newFrontServer()
 
-	// Best-effort lease cleanup on shutdown. The server's per-lease scheduled revocation is the backstop,
-	// so a missed revoke here just means the lease lives out its TTL.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -391,9 +388,6 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	return ps.transport.RoundTrip(req)
 }
 
-// materializeCredentials returns a per-request copy of the service's credentials with dynamic-secret values
-// resolved from the lease store (minting lazily). A dynamic credential with no available lease value is
-// dropped (fail-open, like a missing static secret).
 func (ps *proxyServer) materializeCredentials(svc *resolvedService) []resolvedCredential {
 	creds := make([]resolvedCredential, 0, len(svc.credentials))
 	for _, cred := range svc.credentials {

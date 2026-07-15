@@ -692,8 +692,6 @@ func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDyna
 	return createDynamicSecretLeaseResponse, nil
 }
 
-// CallRevokeDynamicSecretLeaseV1 revokes a lease by ID. Used by the agent proxy for shutdown hygiene;
-// uses the APIError convention so callers can distinguish permanent 4xx from transient errors.
 func CallRevokeDynamicSecretLeaseV1(httpClient *resty.Client, request RevokeDynamicSecretLeaseV1Request) (RevokeDynamicSecretLeaseV1Response, error) {
 	var res RevokeDynamicSecretLeaseV1Response
 	response, err := httpClient.
