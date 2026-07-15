@@ -248,7 +248,6 @@ func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment,
 			continue
 		}
 		for _, cred := range svc.Credentials {
-			// The agent identity holding Lease on a brokered dynamic secret defeats brokering: warn on it.
 			if cred.DynamicSecretName != "" && cred.CallerCanLease {
 				leasable = append(leasable, leasableDynamicCred{serviceName: svc.Name, dynamicSecretName: cred.DynamicSecretName})
 			}
@@ -263,9 +262,6 @@ func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment,
 	return placeholders, brokeredKeys, leasable
 }
 
-// warnAgentCanLeaseDynamicSecrets warns (does not block) when the agent identity itself holds Lease on a
-// dynamic secret that a proxied service brokers. Brokering hides the leased value from the agent, but with
-// Lease the agent could mint the credential directly and bypass the proxy.
 func warnAgentCanLeaseDynamicSecrets(leasable []leasableDynamicCred) {
 	if len(leasable) == 0 {
 		return
