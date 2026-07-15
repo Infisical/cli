@@ -158,6 +158,8 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	allowReadableBrokered, _ := cmd.Flags().GetBool("allow-readable-brokered-secrets")
 	if !allowReadableBrokered {
+		// static readability is derived from realSecrets we already fetch; dynamic lease-ability comes from
+		// the server (callerCanLease) since we don't fetch dynamic secrets here.
 		assertNoBrokeredSecretsReadable(brokeredKeys, realSecrets)
 		assertNoBrokeredDynamicSecretsLeasable(leasableDynamicCreds)
 	}

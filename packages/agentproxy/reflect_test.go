@@ -45,8 +45,7 @@ func (rt reflectingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// The proxy injects credentials one-way and relays the upstream response untouched: it does not scan or
-// rewrite response headers. Reflected request data therefore passes through as-is (by design).
+// The proxy injects one-way and relays the response untouched; reflected request data passes through by design.
 func TestForwardPassesResponseHeadersThrough(t *testing.T) {
 	jwt := "test.jwt.token"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
