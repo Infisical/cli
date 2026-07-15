@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -43,6 +44,7 @@ const (
 	ForwardModePkcs11          ForwardMode = "PKCS11"
 	ForwardModeADCS            ForwardMode = "ADCS"
 	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
+	ForwardModeWinRM           ForwardMode = "WINRM"
 )
 
 type ActorType string
@@ -442,6 +444,9 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 
 func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
+
+	// Bound WinRM HTTP response bodies before serving.
+	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)
 
@@ -1014,6 +1019,14 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Debug().Err(err).Msg("Discovery handler ended with error")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeWinRM {
+		log.Info().Msg("Starting WinRM handler")
+		if err := serveWinrmOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
+			log.Error().Err(err).Msg("WinRM handler ended with error")
+		} else {
+			log.Info().Msg("WinRM handler completed")
+		}
+		return
 	}
 }
 
@@ -1078,6 +1091,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-adcs":
 		config.Mode = ForwardModeADCS
+		return config, nil
+
+	case "infisical-winrm":
+		config.Mode = ForwardModeWinRM
 		return config, nil
 
 	default:
@@ -1255,6 +1272,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-pam-capabilities",
 		"infisical-adcs",
 		"infisical-discovery",
+		"infisical-winrm",
 	}
 	if pkcs11Loaded {
 		base = append(base, "infisical-pkcs11")
