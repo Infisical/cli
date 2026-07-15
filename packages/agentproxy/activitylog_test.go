@@ -273,6 +273,24 @@ func TestPrettyLineIncludesScope(t *testing.T) {
 	}
 }
 
+func TestPrettyLineStripsControlBytes(t *testing.T) {
+	l := &activityLogger{enabled: true, format: formatPretty, filter: filterAll}
+	// An agent-controlled path with a newline and an ANSI escape must not break the line or emit escapes.
+	line := l.prettyLine(activityRecord{
+		Decision: decisionBrokered,
+		Method:   "GET",
+		Host:     "evil.example.com",
+		Path:     "/x\nbrokered forged\x1b[31m",
+		Status:   200,
+	})
+	if strings.Count(line, "\n") != 1 || !strings.HasSuffix(line, "\n") {
+		t.Fatalf("output must be exactly one line: %q", line)
+	}
+	if strings.ContainsRune(line, '\x1b') {
+		t.Fatalf("terminal escape leaked into pretty output: %q", line)
+	}
+}
+
 func TestActivityLoggerDisabledWritesNothing(t *testing.T) {
 	var buf bytes.Buffer
 	l := &activityLogger{enabled: false, format: formatJSON, filter: filterAll, w: &buf}

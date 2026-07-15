@@ -297,11 +297,12 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		return
 	}
 
-	// Snapshot before forward: substitution rewrites r.URL.Path in place, so capture the path (with the
-	// placeholder) and the request line now for the activity record.
+	// Snapshot before forward: substitution rewrites the path in place, so capture the path (with the
+	// placeholder) and the request line now for the activity record. EscapedPath keeps the path percent-encoded
+	// so an agent can't smuggle newlines or terminal escapes (from %0a, %1b, ...) into the pretty/text log.
 	occurredAt := time.Now()
 	method := r.Method
-	reqPath := r.URL.Path
+	reqPath := r.URL.EscapedPath()
 
 	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 
@@ -319,7 +320,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	default:
 		decision, status = decisionPassthrough, resp.StatusCode
 	}
-	ps.recordActivity(occurredAt, method, reqPath, hostname, port, decision, status, jwt, scope, outcome)
+	ps.recordActivity(occurredAt, method, reqPath, hostname, port, decision, status, scope, outcome)
 
 	if err != nil {
 		http.Error(w, err.Error(), status)
@@ -361,13 +362,14 @@ func (ps *proxyServer) watchLogReopen() {
 // recordActivity emits one activity record for a forwarded request. It skips entirely when the agent was never
 // resolved (no cache entry), since without a backend-validated identity there is nothing trustworthy to log.
 // It never touches the response and never fails the request.
-func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hostname, port, decision string, status int, jwt string, scope agentScope, outcome forwardOutcome) {
+func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome) {
 	if ps.activityLog == nil || !ps.activityLog.enabled {
 		return
 	}
 
-	agentID, agentName, resolved := ps.cache.identity(jwt, scope)
-	if !resolved {
+	// identityResolved is false only when the agent was never resolved against Infisical (no cache entry), the
+	// boundary from the design: those requests have no trustworthy identity, so they aren't recorded here.
+	if !outcome.identityResolved {
 		return
 	}
 
@@ -377,7 +379,7 @@ func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hos
 		SchemaVersion: activitySchemaVersion,
 		EventType:     activityEventType,
 		OccurredAt:    occurredAt.UTC(),
-		AgentID:       agentID,
+		AgentID:       outcome.agentID,
 		ProjectID:     scope.projectID,
 		Environment:   scope.environment,
 		SecretPath:    scope.secretPath,
@@ -389,8 +391,8 @@ func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hos
 		Status:        status,
 		Credentials:   outcome.applied,
 	}
-	if agentName != "" {
-		rec.AgentName = &agentName
+	if outcome.agentName != "" {
+		rec.AgentName = &outcome.agentName
 	}
 	if outcome.service != nil {
 		id := outcome.service.id
@@ -426,10 +428,15 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 }
 
 // forwardOutcome carries what forward decided so forwardHTTP can build an activity record. service is nil for
-// unmatched/passthrough/blocked requests; applied lists the credentials actually injected.
+// unmatched/passthrough/blocked requests; applied lists the credentials actually injected. The agent identity
+// is captured here (not re-read after forwarding) so a cache eviction during the upstream call can't drop the
+// record for a request whose credentials were already applied.
 type forwardOutcome struct {
-	service *resolvedService
-	applied []AppliedCredential
+	service          *resolvedService
+	applied          []AppliedCredential
+	agentID          string
+	agentName        string
+	identityResolved bool
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
@@ -438,13 +445,19 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
 	}
 
+	// Capture identity now, while the cache entry is known-present. Reading it after the round trip would race
+	// refreshActive evicting the entry (token revoked/expired, or inactivity), which would silently drop the
+	// record even though the request was forwarded and credentials applied.
+	agentID, agentName, resolved := ps.cache.identity(jwt, scope)
+	outcome := forwardOutcome{agentID: agentID, agentName: agentName, identityResolved: resolved}
+
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
 	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock {
-		return nil, forwardOutcome{}, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
+		return nil, outcome, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
 	}
 
-	outcome := forwardOutcome{service: svc}
+	outcome.service = svc
 
 	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)

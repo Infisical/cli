@@ -76,6 +76,32 @@ func doPlainRequest(t *testing.T, client net.Conn, method, target, hostPort, jwt
 	return resp
 }
 
+func TestForwardCapturesIdentityForRecord(t *testing.T) {
+	// The identity must be captured in the outcome at forward time. If it were re-read from the cache after the
+	// round trip, an eviction in between (revoked/expired token, or inactivity) would silently drop the record.
+	jwt := "a.b.c"
+	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
+	cache := newAgentCache(func() string { return "" })
+	cache.entries[cacheKey(jwt, scope)] = &agentEntry{
+		jwt: jwt, scope: scope, agentID: "id-9", agentName: "agent-9", lastSeen: time.Now(),
+	}
+	ps := &proxyServer{
+		opts:      Options{UnmatchedHost: UnmatchedAllow},
+		cache:     cache,
+		transport: reflectingTransport{header: make(http.Header)},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	_, outcome, err := ps.forward(req, "http", "example.com", "80", jwt, scope)
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	// Simulate the entry being evicted during a slow round trip; the record must still have the identity.
+	delete(cache.entries, cacheKey(jwt, scope))
+	if !outcome.identityResolved || outcome.agentID != "id-9" || outcome.agentName != "agent-9" {
+		t.Fatalf("identity not captured in outcome: %+v", outcome)
+	}
+}
+
 func TestActivityRecordBrokered(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok")

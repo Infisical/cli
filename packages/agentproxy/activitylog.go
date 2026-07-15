@@ -218,10 +218,24 @@ func (l *activityLogger) prettyLine(rec activityRecord) string {
 		credShorthand(rec.Credentials),
 	)
 	line = strings.TrimRight(line, " ")
+	// Strip control bytes before we add our own color codes and newline, so no field (chiefly the
+	// agent-influenced path) can inject line breaks or terminal escapes into the human/text log.
+	line = stripControl(line)
 	if l.colored {
 		line = colorForDecision(rec.Decision).Sprint(line)
 	}
 	return line + "\n"
+}
+
+// stripControl removes ASCII control characters (including newlines, CR, and ESC) from a string. Applied to
+// the pretty line so untrusted request data can't forge records or emit terminal escape sequences.
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // describe is the startup-summary string, e.g. "file(/var/log/activity.log, json) · filter: all" or "off".
