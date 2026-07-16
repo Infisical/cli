@@ -152,13 +152,16 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to write the agent proxy CA to disk")
 	}
 
-	placeholderEnvs, brokeredKeys := fetchProxiedServiceConfig(httpClient, projectID, environment, secretPath)
+	placeholderEnvs, brokeredKeys, leasableDynamicCreds := fetchProxiedServiceConfig(httpClient, projectID, environment, secretPath)
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
 	allowReadableBrokered, _ := cmd.Flags().GetBool("allow-readable-brokered-secrets")
 	if !allowReadableBrokered {
+		// static readability is derived from realSecrets we already fetch; dynamic lease-ability comes from
+		// the server (callerCanLease) since we don't fetch dynamic secrets here.
 		assertNoBrokeredSecretsReadable(brokeredKeys, realSecrets)
+		assertNoBrokeredDynamicSecretsLeasable(leasableDynamicCreds)
 	}
 
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
@@ -223,7 +226,11 @@ func writeMitmCa(certificatePem string) (string, error) {
 // fetchProxiedServiceConfig lists the proxied services the agent can reach and returns both the
 // credential-substitution placeholders to inject and the set of secret keys those services broker. The
 // brokered keys are what the agent is meant to receive only through the proxy, never as real values.
-func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) (map[string]string, map[string]struct{}) {
+type leasableDynamicCred struct {
+	dynamicSecretName string
+}
+
+func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) (map[string]string, map[string]struct{}, []leasableDynamicCred) {
 	resp, err := api.CallListProxiedServices(httpClient, api.ListProxiedServicesRequest{
 		ProjectID:   projectID,
 		Environment: environment,
@@ -235,19 +242,49 @@ func fetchProxiedServiceConfig(httpClient *resty.Client, projectID, environment,
 
 	placeholders := map[string]string{}
 	brokeredKeys := map[string]struct{}{}
+	var leasable []leasableDynamicCred
 	for _, svc := range resp.Services {
 		// Disabled services aren't proxied, so their placeholders would reach upstream verbatim; don't inject them.
 		if !svc.CanProxy || !svc.IsEnabled {
 			continue
 		}
 		for _, cred := range svc.Credentials {
-			brokeredKeys[cred.SecretKey] = struct{}{}
+			if cred.DynamicSecretName != "" && cred.CallerCanLease {
+				leasable = append(leasable, leasableDynamicCred{dynamicSecretName: cred.DynamicSecretName})
+			}
+			if cred.SecretKey != "" {
+				brokeredKeys[cred.SecretKey] = struct{}{}
+			}
 			if cred.Role == "credential-substitution" && cred.PlaceholderKey != "" {
 				placeholders[cred.PlaceholderKey] = cred.PlaceholderValue
 			}
 		}
 	}
-	return placeholders, brokeredKeys
+	return placeholders, brokeredKeys, leasable
+}
+
+// assertNoBrokeredDynamicSecretsLeasable is the dynamic-secret counterpart of assertNoBrokeredSecretsReadable:
+// the agent holding Lease on a brokered dynamic secret can mint it directly, bypassing the proxy, so fail fast.
+func assertNoBrokeredDynamicSecretsLeasable(leasable []leasableDynamicCred) {
+	if len(leasable) == 0 {
+		return
+	}
+	seen := map[string]struct{}{}
+	var names []string
+	for _, l := range leasable {
+		if _, ok := seen[l.dynamicSecretName]; ok {
+			continue
+		}
+		seen[l.dynamicSecretName] = struct{}{}
+		names = append(names, l.dynamicSecretName)
+	}
+	sort.Strings(names)
+	util.HandleError(fmt.Errorf(
+		"the agent can lease dynamic secret(s) that are brokered by a proxied service: %s\n"+
+			"brokering hides these values from the agent, but it has Lease on them and would mint them directly, bypassing the proxy.\n"+
+			"fix: remove the agent's Lease permission on these dynamic secrets, or stop referencing them from proxied services.\n"+
+			"to start anyway, pass --allow-readable-brokered-secrets",
+		strings.Join(names, ", ")))
 }
 
 // assertNoBrokeredSecretsReadable fails fast when the agent can read a secret that a proxied service

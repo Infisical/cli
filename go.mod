@@ -49,6 +49,7 @@ require (
 	go.mozilla.org/pkcs7 v0.9.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/exp v0.0.0-20250228200357-dead58393ab7
+	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
 	gopkg.in/ini.v1 v1.62.0
@@ -206,7 +207,6 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/api v0.267.0 // indirect

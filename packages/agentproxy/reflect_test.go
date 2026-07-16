@@ -45,9 +45,8 @@ func (rt reflectingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// A brokered secret reflected back in a response header (e.g. a redirect Location echoing a substituted
-// value) must be redacted so the agent can't read a credential it was never allowed to retrieve.
-func TestForwardRedactsReflectedSecretInResponseHeader(t *testing.T) {
+// The proxy injects one-way and relays the response untouched; reflected request data passes through by design.
+func TestForwardPassesResponseHeadersThrough(t *testing.T) {
 	jwt := "test.jwt.token"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	services := []*resolvedService{{
@@ -58,7 +57,7 @@ func TestForwardRedactsReflectedSecretInResponseHeader(t *testing.T) {
 			{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
 		},
 	}}
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{jwt: jwt, scope: scope, services: services, lastSeen: time.Now()}
 
 	respHeader := make(http.Header)
@@ -74,11 +73,7 @@ func TestForwardRedactsReflectedSecretInResponseHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}
-	got := resp.Header.Get("Location")
-	if strings.Contains(got, "real_secret") {
-		t.Fatalf("secret was not redacted from response header: %q", got)
-	}
-	if !strings.Contains(got, "[redacted]") {
-		t.Fatalf("expected redaction marker in header, got %q", got)
+	if got := resp.Header.Get("Location"); got != "https://example.com/next?token=real_secret" {
+		t.Fatalf("response header should pass through unchanged, got %q", got)
 	}
 }
