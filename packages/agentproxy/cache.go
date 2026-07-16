@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -169,10 +168,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 		return nil, fmt.Errorf("failed to discover proxied services: %w", err)
 	}
 
-	secretValues, err := a.fetchSecretValues(scope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch secret values: %w", err)
-	}
+	secretValues := a.fetchSecretValues(scope, referencedStaticKeys(listResp.Services))
 
 	var services []*resolvedService
 	for _, svc := range listResp.Services {
@@ -228,24 +224,40 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 	return services, nil
 }
 
-func (a *agentCache) fetchSecretValues(scope agentScope) (map[string]string, error) {
-	params := models.GetAllSecretsParameters{
-		Environment:              scope.environment,
-		WorkspaceId:              scope.projectID,
-		SecretsPath:              scope.secretPath,
-		UniversalAuthAccessToken: a.proxyToken(),
-		ExpandSecretReferences:   true,
-		IncludeImport:            true,
+func referencedStaticKeys(services []api.ProxiedService) []string {
+	seen := make(map[string]struct{})
+	var keys []string
+	for _, svc := range services {
+		if !svc.CanProxy {
+			continue
+		}
+		for _, cred := range svc.Credentials {
+			if cred.DynamicSecretName != "" || cred.SecretKey == "" {
+				continue
+			}
+			if _, ok := seen[cred.SecretKey]; ok {
+				continue
+			}
+			seen[cred.SecretKey] = struct{}{}
+			keys = append(keys, cred.SecretKey)
+		}
 	}
-	secrets, err := util.GetAllEnvironmentVariables(params, "")
-	if err != nil {
-		return nil, err
+	return keys
+}
+
+// fetchSecretValues resolves referenced static secrets individually so a key the proxy can't read is
+// skipped rather than failing the whole agent.
+func (a *agentCache) fetchSecretValues(scope agentScope, keys []string) map[string]string {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		secret, _, err := util.GetSinglePlainTextSecretByNameV3(a.proxyToken(), scope.projectID, scope.environment, scope.secretPath, key)
+		if err != nil {
+			log.Warn().Err(err).Msgf("agent proxy: skipping static secret %q; proxy identity cannot read it", key)
+			continue
+		}
+		values[key] = secret.Value
 	}
-	values := make(map[string]string, len(secrets))
-	for _, s := range secrets {
-		values[s.Key] = s.Value
-	}
-	return values, nil
+	return values
 }
 
 func (a *agentCache) refreshActive() {
