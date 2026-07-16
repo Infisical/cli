@@ -43,6 +43,7 @@ const (
 	ForwardModeHealth          ForwardMode = "HEALTH"
 	ForwardModePkcs11          ForwardMode = "PKCS11"
 	ForwardModeADCS            ForwardMode = "ADCS"
+	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
 	ForwardModeWinRM           ForwardMode = "WINRM"
 )
 
@@ -1008,6 +1009,16 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("ADCS handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeDiscovery {
+		// discovery (ssh-exec + port sweep) is platform-initiated only; reject user certs so they can't scan the network
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting discovery request from non-platform actor")
+			return
+		}
+		if err := serveDiscoveryOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Discovery handler ended with error")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModeWinRM {
 		log.Info().Msg("Starting WinRM handler")
 		if err := serveWinrmOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
@@ -1072,6 +1083,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pkcs11":
 		config.Mode = ForwardModePkcs11
+		return config, nil
+
+	case "infisical-discovery":
+		config.Mode = ForwardModeDiscovery
 		return config, nil
 
 	case "infisical-adcs":
@@ -1256,6 +1271,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
 		"infisical-adcs",
+		"infisical-discovery",
 		"infisical-winrm",
 	}
 	if pkcs11Loaded {
