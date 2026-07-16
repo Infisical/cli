@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -135,6 +136,7 @@ var userGetTokenCmd = &cobra.Command{
 
 		var tokenPayload struct {
 			TokenVersionId string `json:"tokenVersionId"`
+			Exp            int64  `json:"exp"`
 		}
 		if err := json.Unmarshal(payload, &tokenPayload); err != nil {
 			util.HandleError(err, "[infisical user get token]: Unable to parse token payload")
@@ -145,6 +147,18 @@ var userGetTokenCmd = &cobra.Command{
 		} else {
 			util.PrintlnStdout("Session ID:", tokenPayload.TokenVersionId)
 			util.PrintlnStdout("Token:", loggedInUserDetails.UserCredentials.JTWToken)
+
+			if tokenPayload.Exp != 0 {
+				expiresAt := time.Unix(tokenPayload.Exp, 0)
+				ttl := time.Until(expiresAt)
+				if ttl > 0 {
+					util.PrintlnStdout("Expires At:", expiresAt.Format(time.RFC1123))
+					util.PrintlnStdout("TTL:", ttl.Round(time.Second).String())
+				} else {
+					util.PrintlnStdout("Expires At:", expiresAt.Format(time.RFC1123), "(expired)")
+					util.PrintlnStdout("TTL: expired")
+				}
+			}
 		}
 	},
 }
