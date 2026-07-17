@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -186,8 +187,25 @@ func initLog() {
 	}
 }
 
-// GetLoggerConfig returns the logger configuration with the provided writer.
-func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
+func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
+	var stream io.Writer = os.Stderr
+	if format != "json" {
+		stream = GetLoggerConfig(os.Stderr, !isatty.IsTerminal(os.Stderr.Fd()))
+	}
+
+	if filePath == "" {
+		return stream, nil
+	}
+
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %q: %w", filePath, err)
+	}
+	return zerolog.MultiLevelWriter(stream, f), nil
+}
+
+// GetLoggerConfig returns the logger configuration with the provided writer. noColor drops ANSI codes.
+func GetLoggerConfig(w io.Writer, noColor bool) zerolog.ConsoleWriter {
 	// very annoying but zerolog doesn't allow us to change one color without changing all of them
 	// these are the default colors for each level, except for warn
 	levelColors := map[string]string{
@@ -214,6 +232,7 @@ func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 
 	return zerolog.ConsoleWriter{
 		Out:        w,
+		NoColor:    noColor,
 		TimeFormat: time.RFC3339,
 		// zerolog >= 1.35 bolds info/warn/error messages by default. Keep the message
 		// rendered as-is so CLI output stays consistent with prior releases.
@@ -225,13 +244,16 @@ func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 		},
 		FormatLevel: func(i interface{}) string {
 			level := fmt.Sprintf("%s", i)
-			color := levelColors[level]
-			if color == "" {
-				color = "\033[0m" // no color for unknown levels
-			}
 			abbrev := levelAbbrev[level]
 			if abbrev == "" {
 				abbrev = strings.ToUpper(level) // fallback to uppercase if unknown
+			}
+			if noColor {
+				return abbrev
+			}
+			color := levelColors[level]
+			if color == "" {
+				color = "\033[0m" // no color for unknown levels
 			}
 			return color + abbrev + "\033[0m"
 		},

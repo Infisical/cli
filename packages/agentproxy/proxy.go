@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,6 +59,17 @@ const (
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
+
+const (
+	decisionBrokered    = "brokered"
+	decisionPassthrough = "passthrough"
+	decisionBlocked     = "blocked"
+	decisionError       = "error"
+
+	activityEventName = "agent-proxy.request"
+
+	maxLoggedPathLen = 2048
+)
 
 type Options struct {
 	Port          int
@@ -129,6 +142,7 @@ func Start(opts Options) error {
 		return fmt.Errorf("failed to listen on port %d: %w", opts.Port, err)
 	}
 	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
+	log.Info().Msg("per-request activity logging on: brokered=info, blocked=warn, error=error, passthrough=debug (use --log-level to filter)")
 
 	srv := ps.newFrontServer()
 
@@ -306,12 +320,30 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		return
 	}
 
-	resp, err := ps.forward(r, scheme, hostname, port, jwt, scope)
+	// EscapedPath keeps the path encoded (no log injection); the cap bounds record size.
+	method := r.Method
+	reqPath := r.URL.EscapedPath()
+	if len(reqPath) > maxLoggedPathLen {
+		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
+	}
+
+	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
+
+	status := http.StatusOK
+	decision := decisionPassthrough
+	switch {
+	case errors.Is(err, errHostBlocked):
+		decision, status = decisionBlocked, http.StatusForbidden
+	case err != nil:
+		decision, status = decisionError, http.StatusBadGateway
+	case outcome.service != nil:
+		decision, status = decisionBrokered, resp.StatusCode
+	default:
+		decision, status = decisionPassthrough, resp.StatusCode
+	}
+	ps.emitActivity(method, reqPath, hostname, port, decision, status, scope, outcome, err)
+
 	if err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(err, errHostBlocked) {
-			status = http.StatusForbidden
-		}
 		http.Error(w, err.Error(), status)
 		return
 	}
@@ -332,6 +364,49 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	w.WriteHeader(resp.StatusCode)
 	// Flush per chunk so streamed responses (e.g. SSE) reach the client instead of buffering.
 	_, _ = io.Copy(flushingWriter{w}, resp.Body)
+}
+
+func levelFor(decision string) zerolog.Level {
+	switch decision {
+	case decisionBlocked:
+		return zerolog.WarnLevel
+	case decisionError:
+		return zerolog.ErrorLevel
+	case decisionPassthrough:
+		return zerolog.DebugLevel
+	default:
+		return zerolog.InfoLevel
+	}
+}
+
+func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome, cause error) {
+	portNum, _ := strconv.Atoi(port)
+
+	ev := log.WithLevel(levelFor(decision)).
+		Str("event", activityEventName).
+		Str("decision", decision).
+		Str("agentId", outcome.agentID).
+		Str("projectId", scope.projectID).
+		Str("environment", scope.environment).
+		Str("secretPath", scope.secretPath).
+		Str("method", method).
+		Str("host", hostname).
+		Int("port", portNum).
+		Str("path", reqPath).
+		Int("status", status)
+	if outcome.agentName != "" {
+		ev = ev.Str("agentName", outcome.agentName)
+	}
+	if outcome.service != nil {
+		ev = ev.Str("serviceId", outcome.service.id).Str("serviceName", outcome.service.name)
+	}
+	if len(outcome.applied) > 0 {
+		ev = ev.Interface("credentials", outcome.applied)
+	}
+	if cause != nil {
+		ev = ev.Err(cause)
+	}
+	ev.Msg("agent request")
 }
 
 // flushingWriter flushes the underlying ResponseWriter after every write so streamed bodies aren't buffered.
@@ -357,17 +432,31 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 	return "", "", err
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, error) {
+type forwardOutcome struct {
+	service          *resolvedService
+	applied          []AppliedCredential
+	agentID          string
+	agentName        string
+	identityResolved bool
+}
+
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
 	services, err := ps.cache.get(jwt, scope)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve agent permissions: %w", err)
+		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
 	}
+
+	// Capture identity now; reading it after the round trip would race a cache eviction and drop the record.
+	agentID, agentName, resolved := ps.cache.identity(jwt, scope)
+	outcome := forwardOutcome{agentID: agentID, agentName: agentName, identityResolved: resolved}
 
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
 	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock {
-		return nil, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
+		return nil, outcome, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
 	}
+
+	outcome.service = svc
 
 	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)
@@ -380,12 +469,18 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 
 	if svc != nil {
 		creds := ps.materializeCredentials(svc)
-		if err := applyCredentials(req, creds); err != nil {
-			return nil, fmt.Errorf("failed to apply credentials: %w", err)
+		applied, err := applyCredentials(req, creds)
+		if err != nil {
+			return nil, outcome, fmt.Errorf("failed to apply credentials: %w", err)
 		}
+		outcome.applied = applied
 	}
 
-	return ps.transport.RoundTrip(req)
+	resp, err := ps.transport.RoundTrip(req)
+	if err != nil {
+		return nil, outcome, err
+	}
+	return resp, outcome, nil
 }
 
 func (ps *proxyServer) materializeCredentials(svc *resolvedService) []resolvedCredential {

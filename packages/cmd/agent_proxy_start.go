@@ -20,6 +20,17 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 	pollInterval, _ := cmd.Flags().GetInt("poll-interval")
 
+	logFormat, _ := cmd.Flags().GetString("log-format")
+	if logFormat != "" && logFormat != "console" && logFormat != "json" {
+		util.HandleError(fmt.Errorf("--log-format must be 'console' or 'json', got %q", logFormat))
+	}
+	logFile, _ := cmd.Flags().GetString("log-file")
+	logWriter, err := BuildAgentProxyLogWriter(logFormat, logFile)
+	if err != nil {
+		util.HandleError(err)
+	}
+	log.Logger = log.Output(logWriter)
+
 	clientID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	if err != nil || clientID == "" {
 		util.HandleError(fmt.Errorf("agent proxy credentials required; set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _SECRET or pass --client-id / --client-secret"))

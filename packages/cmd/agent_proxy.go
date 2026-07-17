@@ -451,6 +451,8 @@ func init() {
 	agentProxyStartCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes for active agents")
 	agentProxyStartCmd.Flags().String("client-id", "", "universal auth client id for the agent proxy machine identity")
 	agentProxyStartCmd.Flags().String("client-secret", "", "universal auth client secret for the agent proxy machine identity")
+	agentProxyStartCmd.Flags().String("log-format", "console", "log output format: console | json")
+	agentProxyStartCmd.Flags().String("log-file", "", "also write json logs to this file (in addition to the console/json stream)")
 
 	agentProxyCmd.AddCommand(agentProxyConnectCmd)
 	agentProxyCmd.AddCommand(agentProxyStartCmd)

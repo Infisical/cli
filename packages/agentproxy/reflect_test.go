@@ -69,7 +69,7 @@ func TestForwardPassesResponseHeadersThrough(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
-	resp, err := ps.forward(req, "http", "example.com", "80", jwt, scope)
+	resp, _, err := ps.forward(req, "http", "example.com", "80", jwt, scope)
 	if err != nil {
 		t.Fatalf("forward: %v", err)
 	}

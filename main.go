@@ -11,6 +11,6 @@ import (
 )
 
 func main() {
-	log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
+	log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr, false))
 	cmd.Execute()
 }

@@ -512,7 +512,7 @@ func (c *Command) Start(ctx context.Context) {
 		cmd.RootCmd.SetErr(c.stderrFile)
 
 		// Update log.Logger to use the testing stderr before executing
-		log.Logger = log.Output(cmd.GetLoggerConfig(c.stderrFile))
+		log.Logger = log.Output(cmd.GetLoggerConfig(c.stderrFile, false))
 
 		os.Args = make([]string, 0, len(c.Args)+1)
 		os.Args = append(os.Args, "infisical")
@@ -555,7 +555,7 @@ func (c *Command) Stop() {
 		}
 
 		// Reset logger to use os.Stderr before closing the file
-		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr))
+		log.Logger = log.Output(cmd.GetLoggerConfig(os.Stderr, false))
 		// Reset RootCmd outputs to default
 		cmd.RootCmd.SetOut(os.Stdout)
 		cmd.RootCmd.SetErr(os.Stderr)

@@ -21,9 +21,30 @@ const (
 	maxBodyRewriteSize = 10 * 1024 * 1024
 )
 
-func applyCredentials(req *http.Request, creds []resolvedCredential) error {
+type AppliedCredential struct {
+	Key                string   `json:"key,omitempty"`
+	DynamicSecretName  string   `json:"dynamicSecretName,omitempty"`
+	DynamicSecretField string   `json:"dynamicSecretField,omitempty"`
+	Role               string   `json:"role"`
+	Header             string   `json:"header,omitempty"`
+	Purpose            string   `json:"purpose,omitempty"`
+	Surfaces           []string `json:"surfaces,omitempty"`
+}
+
+// credLabel identifies the secret behind a credential for the activity log: a static key, or a dynamic
+// secret name and output field. It never carries the value.
+func credLabel(cred resolvedCredential) AppliedCredential {
+	if cred.dynamic != nil {
+		return AppliedCredential{DynamicSecretName: cred.dynamic.key.secretName, DynamicSecretField: cred.dynamic.field}
+	}
+	return AppliedCredential{Key: cred.secretKey}
+}
+
+func applyCredentials(req *http.Request, creds []resolvedCredential) ([]AppliedCredential, error) {
+	var applied []AppliedCredential
 	var basicUser, basicPass string
-	haveBasic := false
+	var basicUserCred, basicPassCred resolvedCredential
+	haveUser, havePass := false, false
 
 	for _, cred := range creds {
 		switch cred.role {
@@ -31,10 +52,12 @@ func applyCredentials(req *http.Request, creds []resolvedCredential) error {
 			switch cred.headerPurpose {
 			case purposeUsername:
 				basicUser = cred.value
-				haveBasic = true
+				basicUserCred = cred
+				haveUser = true
 			case purposePassword:
 				basicPass = cred.value
-				haveBasic = true
+				basicPassCred = cred
+				havePass = true
 			default:
 				headerName := cred.headerName
 				if headerName == "" {
@@ -45,20 +68,45 @@ func applyCredentials(req *http.Request, creds []resolvedCredential) error {
 					value = cred.headerPrefix + " " + value
 				}
 				req.Header.Set(headerName, value)
+				ac := credLabel(cred)
+				ac.Role = roleHeaderRewrite
+				ac.Header = headerName
+				applied = append(applied, ac)
 			}
 		case roleCredentialSub:
-			if err := applySubstitution(req, cred); err != nil {
-				return err
+			surfaces, err := applySubstitution(req, cred)
+			if err != nil {
+				return nil, err
+			}
+			if len(surfaces) > 0 {
+				ac := credLabel(cred)
+				ac.Role = roleCredentialSub
+				ac.Surfaces = surfaces
+				applied = append(applied, ac)
 			}
 		}
 	}
 
-	if haveBasic {
+	if haveUser || havePass {
 		token := base64.StdEncoding.EncodeToString([]byte(basicUser + ":" + basicPass))
 		req.Header.Set("Authorization", "Basic "+token)
+		if haveUser {
+			ac := credLabel(basicUserCred)
+			ac.Role = roleHeaderRewrite
+			ac.Header = "Authorization"
+			ac.Purpose = purposeUsername
+			applied = append(applied, ac)
+		}
+		if havePass {
+			ac := credLabel(basicPassCred)
+			ac.Role = roleHeaderRewrite
+			ac.Header = "Authorization"
+			ac.Purpose = purposePassword
+			applied = append(applied, ac)
+		}
 	}
 
-	return nil
+	return applied, nil
 }
 
 func hasSurface(surfaces []string, target string) bool {
@@ -86,62 +134,77 @@ func replaceWithinLimit(s, old, replacement string, limit int) (string, bool) {
 }
 
 // Plain substring ReplaceAll on distinctive random placeholders; short or common placeholder values would over-match.
-func applySubstitution(req *http.Request, cred resolvedCredential) error {
+func applySubstitution(req *http.Request, cred resolvedCredential) ([]string, error) {
 	placeholder := cred.placeholder
 	if placeholder == "" {
-		return nil
+		return nil, nil
 	}
 	real := cred.value
 
-	if hasSurface(cred.surfaces, surfacePath) {
+	var changed []string
+
+	if hasSurface(cred.surfaces, surfacePath) && strings.Contains(req.URL.Path, placeholder) {
 		if v, ok := replaceWithinLimit(req.URL.Path, placeholder, real, maxBodyRewriteSize); ok {
 			req.URL.Path = v
 			// Clearing RawPath makes Go re-encode the path from Path, which can change the byte form of other escaped segments.
 			req.URL.RawPath = ""
+			changed = append(changed, surfacePath)
 		}
 	}
 
-	if hasSurface(cred.surfaces, surfaceQuery) {
+	if hasSurface(cred.surfaces, surfaceQuery) && strings.Contains(req.URL.RawQuery, placeholder) {
 		if v, ok := replaceWithinLimit(req.URL.RawQuery, placeholder, real, maxBodyRewriteSize); ok {
 			req.URL.RawQuery = v
+			changed = append(changed, surfaceQuery)
 		}
 	}
 
 	if hasSurface(cred.surfaces, surfaceHeader) {
+		headerChanged := false
 		for name, values := range req.Header {
 			for i, v := range values {
+				if !strings.Contains(v, placeholder) {
+					continue
+				}
 				if replaced, ok := replaceWithinLimit(v, placeholder, real, maxBodyRewriteSize); ok {
 					req.Header[name][i] = replaced
+					headerChanged = true
 				}
 			}
+		}
+		if headerChanged {
+			changed = append(changed, surfaceHeader)
 		}
 	}
 
 	if hasSurface(cred.surfaces, surfaceBody) && req.Body != nil {
 		if req.Header.Get("Content-Encoding") != "" {
-			return nil
+			return changed, nil
 		}
 		body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
 		if err != nil {
 			_ = req.Body.Close()
-			return fmt.Errorf("failed to read request body for substitution: %w", err)
+			return changed, fmt.Errorf("failed to read request body for substitution: %w", err)
 		}
 		if len(body) > maxBodyRewriteSize {
 			req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), req.Body))
-			return nil
+			return changed, nil
 		}
 		_ = req.Body.Close()
-		// Forward unchanged when expanding the placeholder would push the body past the cap.
 		count := bytes.Count(body, []byte(placeholder))
+		// Forward unchanged when expanding the placeholder would push the body past the cap.
 		if count > 0 && len(body)+count*(len(real)-len(placeholder)) > maxBodyRewriteSize {
 			req.Body = io.NopCloser(bytes.NewReader(body))
-			return nil
+			return changed, nil
 		}
 		rewritten := bytes.ReplaceAll(body, []byte(placeholder), []byte(real))
 		req.Body = io.NopCloser(bytes.NewReader(rewritten))
 		req.ContentLength = int64(len(rewritten))
 		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+		if count > 0 {
+			changed = append(changed, surfaceBody)
+		}
 	}
 
-	return nil
+	return changed, nil
 }
