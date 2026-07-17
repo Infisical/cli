@@ -187,14 +187,10 @@ func initLog() {
 	}
 }
 
-// BuildAgentProxyLogWriter builds the agent proxy's log sink: a console or json stream (auto-detected from the
-// terminal when format is empty), plus an optional json file written in parallel from the same events.
 func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
-	useConsole := format == "console" || (format == "" && isatty.IsTerminal(os.Stderr.Fd()))
-
-	var stream io.Writer = os.Stderr // raw json
-	if useConsole {
-		stream = GetLoggerConfig(os.Stderr)
+	var stream io.Writer = os.Stderr
+	if format != "json" {
+		stream = GetLoggerConfig(os.Stderr, !isatty.IsTerminal(os.Stderr.Fd()))
 	}
 
 	if filePath == "" {
@@ -208,8 +204,8 @@ func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
 	return zerolog.MultiLevelWriter(stream, f), nil
 }
 
-// GetLoggerConfig returns the logger configuration with the provided writer.
-func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
+// GetLoggerConfig returns the logger configuration with the provided writer. noColor drops ANSI codes.
+func GetLoggerConfig(w io.Writer, noColor bool) zerolog.ConsoleWriter {
 	// very annoying but zerolog doesn't allow us to change one color without changing all of them
 	// these are the default colors for each level, except for warn
 	levelColors := map[string]string{
@@ -236,6 +232,7 @@ func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 
 	return zerolog.ConsoleWriter{
 		Out:        w,
+		NoColor:    noColor,
 		TimeFormat: time.RFC3339,
 		// zerolog >= 1.35 bolds info/warn/error messages by default. Keep the message
 		// rendered as-is so CLI output stays consistent with prior releases.
@@ -247,13 +244,16 @@ func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 		},
 		FormatLevel: func(i interface{}) string {
 			level := fmt.Sprintf("%s", i)
-			color := levelColors[level]
-			if color == "" {
-				color = "\033[0m" // no color for unknown levels
-			}
 			abbrev := levelAbbrev[level]
 			if abbrev == "" {
 				abbrev = strings.ToUpper(level) // fallback to uppercase if unknown
+			}
+			if noColor {
+				return abbrev
+			}
+			color := levelColors[level]
+			if color == "" {
+				color = "\033[0m" // no color for unknown levels
 			}
 			return color + abbrev + "\033[0m"
 		},

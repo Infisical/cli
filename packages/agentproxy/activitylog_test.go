@@ -88,7 +88,6 @@ func TestApplyCredentialsReportsDynamicSecret(t *testing.T) {
 		t.Fatalf("want 1 applied credential, got %d", len(applied))
 	}
 	got := applied[0]
-	// A dynamic credential logs its secret name + output field, and never a static key.
 	if got.Key != "" || got.DynamicSecretName != "my-postgres-creds" || got.DynamicSecretField != "DB_PASSWORD" {
 		t.Fatalf("dynamic credential not recorded correctly: %+v", got)
 	}

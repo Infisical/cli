@@ -31,7 +31,6 @@ type activityLine struct {
 	Credentials []AppliedCredential `json:"credentials"`
 }
 
-// captureLogs swaps the shared logger for a json buffer at the given level and restores it after the test.
 func captureLogs(t *testing.T, level zerolog.Level) *bytes.Buffer {
 	t.Helper()
 	prevLogger := log.Logger
@@ -125,7 +124,6 @@ func TestForwardCapturesIdentityForRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the entry being evicted during a slow round trip; the record must still have the identity.
 	delete(cache.entries, cacheKey(jwt, scope))
 	if !outcome.identityResolved || outcome.agentID != "id-9" || outcome.agentName != "agent-9" {
 		t.Fatalf("identity not captured in outcome: %+v", outcome)
@@ -250,7 +248,6 @@ func TestActivityRecordPathTruncated(t *testing.T) {
 }
 
 func TestActivityRespectsLogLevel(t *testing.T) {
-	// At warn level, brokered (info) is suppressed but blocked (warn) is kept.
 	jwt := "a.b.c"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	buf := captureLogs(t, zerolog.WarnLevel)
@@ -293,7 +290,6 @@ func TestEmitActivityLogsDynamicSecret(t *testing.T) {
 }
 
 func TestEmitActivityLogsResolutionError(t *testing.T) {
-	// A resolution failure has no agent identity, but must still be logged as an error for operators.
 	buf := captureLogs(t, zerolog.DebugLevel)
 	ps := &proxyServer{}
 	ps.emitActivity("GET", "/x", "example.com", "443", decisionError, 502,

@@ -60,8 +60,6 @@ const (
 
 var errHostBlocked = errors.New("host blocked by policy")
 
-// Per-request activity is logged through the shared logger. The decision sets the level, so --log-level filters:
-// passthrough=debug, brokered=info, blocked=warn, error=error.
 const (
 	decisionBrokered    = "brokered"
 	decisionPassthrough = "passthrough"
@@ -322,8 +320,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		return
 	}
 
-	// Capture before forward mutates the path via substitution; EscapedPath stays encoded so an agent can't
-	// inject newlines or terminal escapes into the log. Cap the length so a huge path can't bloat records.
+	// EscapedPath keeps the path encoded (no log injection); the cap bounds record size.
 	method := r.Method
 	reqPath := r.URL.EscapedPath()
 	if len(reqPath) > maxLoggedPathLen {
@@ -382,9 +379,6 @@ func levelFor(decision string) zerolog.Level {
 	}
 }
 
-// emitActivity logs one record per forwarded request through the shared logger, at a level matching the
-// decision (so --log-level filters). A resolution failure carries no agent identity (agentId is empty) but is
-// still logged as an error so operators see it.
 func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome, cause error) {
 	portNum, _ := strconv.Atoi(port)
 
