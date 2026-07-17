@@ -451,10 +451,8 @@ func init() {
 	agentProxyStartCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes for active agents")
 	agentProxyStartCmd.Flags().String("client-id", "", "universal auth client id for the agent proxy machine identity")
 	agentProxyStartCmd.Flags().String("client-secret", "", "universal auth client secret for the agent proxy machine identity")
-	agentProxyStartCmd.Flags().Bool("activity-log", true, "write an activity record per brokered request")
-	agentProxyStartCmd.Flags().String("activity-log-file", "", "file to append activity records to (default: stdout)")
-	agentProxyStartCmd.Flags().String("activity-log-format", "", "pretty | json (default: pretty on a terminal, json otherwise)")
-	agentProxyStartCmd.Flags().String("activity-log-filter", "all", "which decisions to log: all | brokered | errors")
+	agentProxyStartCmd.Flags().String("log-format", "", "log output format: console | json (default: console on a terminal, json otherwise)")
+	agentProxyStartCmd.Flags().String("log-file", "", "also write json logs to this file (in addition to the console/json stream)")
 
 	agentProxyCmd.AddCommand(agentProxyConnectCmd)
 	agentProxyCmd.AddCommand(agentProxyStartCmd)

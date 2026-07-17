@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -184,6 +185,27 @@ func initLog() {
 	default:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
+}
+
+// BuildAgentProxyLogWriter builds the agent proxy's log sink: a console or json stream (auto-detected from the
+// terminal when format is empty), plus an optional json file written in parallel from the same events.
+func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
+	useConsole := format == "console" || (format == "" && isatty.IsTerminal(os.Stderr.Fd()))
+
+	var stream io.Writer = os.Stderr // raw json
+	if useConsole {
+		stream = GetLoggerConfig(os.Stderr)
+	}
+
+	if filePath == "" {
+		return stream, nil
+	}
+
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %q: %w", filePath, err)
+	}
+	return zerolog.MultiLevelWriter(stream, f), nil
 }
 
 // GetLoggerConfig returns the logger configuration with the provided writer.

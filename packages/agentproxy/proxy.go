@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -59,25 +60,32 @@ const (
 
 var errHostBlocked = errors.New("host blocked by policy")
 
+// Per-request activity is logged through the shared logger. The decision sets the level, so --log-level filters:
+// passthrough=debug, brokered=info, blocked=warn, error=error.
+const (
+	decisionBrokered    = "brokered"
+	decisionPassthrough = "passthrough"
+	decisionBlocked     = "blocked"
+	decisionError       = "error"
+
+	activityEventName = "agent-proxy.request"
+
+	maxLoggedPathLen = 2048
+)
+
 type Options struct {
 	Port          int
 	UnmatchedHost string
 	PollInterval  time.Duration
 	ProxyToken    func() string
-
-	ActivityLog       bool
-	ActivityLogFile   string
-	ActivityLogFormat string
-	ActivityLogFilter string
 }
 
 type proxyServer struct {
-	opts        Options
-	ca          *caManager
-	cache       *agentCache
-	leases      *leaseStore
-	transport   http.RoundTripper
-	activityLog *activityLogger
+	opts      Options
+	ca        *caManager
+	cache     *agentCache
+	leases    *leaseStore
+	transport http.RoundTripper
 }
 
 func newProxyServer(opts Options) *proxyServer {
@@ -118,17 +126,6 @@ func (ps *proxyServer) newFrontServer() *http.Server {
 func Start(opts Options) error {
 	ps := newProxyServer(opts)
 
-	activityLog, err := newActivityLogger(opts)
-	if err != nil {
-		return err
-	}
-	ps.activityLog = activityLog
-	log.Info().Msgf("activity logging: %s", activityLog.describe())
-	// Only claim SIGHUP when there is a log file to rotate.
-	if activityLog.enabled && activityLog.file != nil {
-		go ps.watchLogReopen()
-	}
-
 	if err := ps.ca.ensureIntermediate(); err != nil {
 		return fmt.Errorf("failed to initialize agent proxy CA: %w", err)
 	}
@@ -147,6 +144,7 @@ func Start(opts Options) error {
 		return fmt.Errorf("failed to listen on port %d: %w", opts.Port, err)
 	}
 	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
+	log.Info().Msg("per-request activity logging on: brokered=info, blocked=warn, error=error, passthrough=debug (use --log-level to filter)")
 
 	srv := ps.newFrontServer()
 
@@ -325,8 +323,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	}
 
 	// Capture before forward mutates the path via substitution; EscapedPath stays encoded so an agent can't
-	// inject newlines or terminal escapes into the text log. Cap the length so a huge path can't bloat records.
-	occurredAt := time.Now()
+	// inject newlines or terminal escapes into the log. Cap the length so a huge path can't bloat records.
 	method := r.Method
 	reqPath := r.URL.EscapedPath()
 	if len(reqPath) > maxLoggedPathLen {
@@ -340,16 +337,14 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	switch {
 	case errors.Is(err, errHostBlocked):
 		decision, status = decisionBlocked, http.StatusForbidden
-		log.Warn().Str("host", hostname).Str("decision", decision).Err(err).Msg("agent request blocked")
 	case err != nil:
 		decision, status = decisionError, http.StatusBadGateway
-		log.Warn().Str("host", hostname).Str("decision", decision).Err(err).Msg("agent request failed")
 	case outcome.service != nil:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
 		decision, status = decisionPassthrough, resp.StatusCode
 	}
-	ps.recordActivity(occurredAt, method, reqPath, hostname, port, decision, status, scope, outcome)
+	ps.emitActivity(method, reqPath, hostname, port, decision, status, scope, outcome, err)
 
 	if err != nil {
 		http.Error(w, err.Error(), status)
@@ -374,58 +369,50 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	_, _ = io.Copy(flushingWriter{w}, resp.Body)
 }
 
-// watchLogReopen reopens the log file on SIGHUP so logrotate can rotate it via a postrotate hook.
-func (ps *proxyServer) watchLogReopen() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGHUP)
-	for range ch {
-		if err := ps.activityLog.reopen(); err != nil {
-			log.Warn().Err(err).Msg("failed to reopen activity log file on SIGHUP")
-		} else {
-			log.Info().Msg("reopened activity log file after SIGHUP")
-		}
+func levelFor(decision string) zerolog.Level {
+	switch decision {
+	case decisionBlocked:
+		return zerolog.WarnLevel
+	case decisionError:
+		return zerolog.ErrorLevel
+	case decisionPassthrough:
+		return zerolog.DebugLevel
+	default:
+		return zerolog.InfoLevel
 	}
 }
 
-func (ps *proxyServer) recordActivity(occurredAt time.Time, method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome) {
-	if ps.activityLog == nil || !ps.activityLog.enabled {
-		return
-	}
-
-	// Skip requests from agents never resolved against Infisical; they have no trustworthy identity.
-	if !outcome.identityResolved {
-		return
-	}
-
+// emitActivity logs one record per forwarded request through the shared logger, at a level matching the
+// decision (so --log-level filters). A resolution failure carries no agent identity (agentId is empty) but is
+// still logged as an error so operators see it.
+func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome, cause error) {
 	portNum, _ := strconv.Atoi(port)
 
-	rec := activityRecord{
-		SchemaVersion: activitySchemaVersion,
-		EventType:     activityEventType,
-		OccurredAt:    occurredAt.UTC(),
-		AgentID:       outcome.agentID,
-		ProjectID:     scope.projectID,
-		Environment:   scope.environment,
-		SecretPath:    scope.secretPath,
-		Decision:      decision,
-		Method:        method,
-		Host:          hostname,
-		Port:          portNum,
-		Path:          reqPath,
-		Status:        status,
-		Credentials:   outcome.applied,
-	}
+	ev := log.WithLevel(levelFor(decision)).
+		Str("event", activityEventName).
+		Str("decision", decision).
+		Str("agentId", outcome.agentID).
+		Str("projectId", scope.projectID).
+		Str("environment", scope.environment).
+		Str("secretPath", scope.secretPath).
+		Str("method", method).
+		Str("host", hostname).
+		Int("port", portNum).
+		Str("path", reqPath).
+		Int("status", status)
 	if outcome.agentName != "" {
-		rec.AgentName = &outcome.agentName
+		ev = ev.Str("agentName", outcome.agentName)
 	}
 	if outcome.service != nil {
-		id := outcome.service.id
-		name := outcome.service.name
-		rec.ServiceID = &id
-		rec.ServiceName = &name
+		ev = ev.Str("serviceId", outcome.service.id).Str("serviceName", outcome.service.name)
 	}
-
-	ps.activityLog.Record(rec)
+	if len(outcome.applied) > 0 {
+		ev = ev.Interface("credentials", outcome.applied)
+	}
+	if cause != nil {
+		ev = ev.Err(cause)
+	}
+	ev.Msg("agent request")
 }
 
 // flushingWriter flushes the underlying ResponseWriter after every write so streamed bodies aren't buffered.
