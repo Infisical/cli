@@ -44,7 +44,7 @@ func TestApplyCredentialsReportsHeaderRewrite(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{secretKey: "ACME_API_KEY", role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "sk_real"},
 	}}
-	applied, err := applyCredentials(req, svc)
+	applied, err := applyCredentials(req, svc.credentials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,13 +57,41 @@ func TestApplyCredentialsReportsHeaderRewrite(t *testing.T) {
 	}
 }
 
+func TestApplyCredentialsReportsDynamicSecret(t *testing.T) {
+	req := newReq(t, "")
+	svc := &resolvedService{credentials: []resolvedCredential{
+		{
+			role:         roleHeaderRewrite,
+			headerName:   "Authorization",
+			headerPrefix: "Bearer",
+			value:        "minted-lease-value",
+			dynamic:      &dynamicCredentialRef{key: leaseKey{secretName: "my-postgres-creds"}, field: "DB_PASSWORD"},
+		},
+	}}
+	applied, err := applyCredentials(req, svc.credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 1 {
+		t.Fatalf("want 1 applied credential, got %d", len(applied))
+	}
+	got := applied[0]
+	// A dynamic credential logs its secret name + output field, and never a static key.
+	if got.Key != "" || got.DynamicSecretName != "my-postgres-creds" || got.DynamicSecretField != "DB_PASSWORD" {
+		t.Fatalf("dynamic credential not recorded correctly: %+v", got)
+	}
+	if sh := credShorthand(applied); sh != "header:my-postgres-creds/DB_PASSWORD" {
+		t.Fatalf("unexpected pretty shorthand: %q", sh)
+	}
+}
+
 func TestApplyCredentialsReportsBasicAuthPair(t *testing.T) {
 	req := newReq(t, "")
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{secretKey: "JIRA_USER", role: roleHeaderRewrite, headerPurpose: purposeUsername, value: "user"},
 		{secretKey: "JIRA_PASS", role: roleHeaderRewrite, headerPurpose: purposePassword, value: "pass"},
 	}}
-	applied, err := applyCredentials(req, svc)
+	applied, err := applyCredentials(req, svc.credentials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +113,7 @@ func TestApplyCredentialsReportsOnlyMatchedSurfaces(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{secretKey: "ACME_ACCOUNT", role: roleCredentialSub, placeholder: "placeholder_x", value: "real", surfaces: []string{surfacePath, surfaceQuery}},
 	}}
-	applied, err := applyCredentials(req, svc)
+	applied, err := applyCredentials(req, svc.credentials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +130,7 @@ func TestApplyCredentialsOmitsSubstitutionThatMatchedNothing(t *testing.T) {
 	svc := &resolvedService{credentials: []resolvedCredential{
 		{secretKey: "ACME_ACCOUNT", role: roleCredentialSub, placeholder: "placeholder_x", value: "real", surfaces: []string{surfacePath, surfaceQuery}},
 	}}
-	applied, err := applyCredentials(req, svc)
+	applied, err := applyCredentials(req, svc.credentials)
 	if err != nil {
 		t.Fatal(err)
 	}

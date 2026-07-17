@@ -1,6 +1,7 @@
 package agentproxy
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -52,6 +53,8 @@ const (
 	// maxConcurrentConns caps simultaneous client connections so a flood of sockets can't exhaust file
 	// descriptors or goroutines. A live tunnel holds its slot for the tunnel's lifetime.
 	maxConcurrentConns = 512
+
+	leaseRevokeShutdownTimeout = 5 * time.Second
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
@@ -72,15 +75,18 @@ type proxyServer struct {
 	opts        Options
 	ca          *caManager
 	cache       *agentCache
+	leases      *leaseStore
 	transport   http.RoundTripper
 	activityLog *activityLogger
 }
 
 func newProxyServer(opts Options) *proxyServer {
+	leases := newLeaseStore(opts.ProxyToken)
 	return &proxyServer{
 		opts:      opts,
 		ca:        newCaManager(opts.ProxyToken),
-		cache:     newAgentCache(opts.ProxyToken),
+		cache:     newAgentCache(opts.ProxyToken, leases),
+		leases:    leases,
 		transport: newUpstreamTransport(),
 	}
 }
@@ -129,6 +135,9 @@ func Start(opts Options) error {
 
 	go ps.pollLoop()
 
+	leaseStop := make(chan struct{})
+	go ps.leases.refreshLoop(leaseStop, opts.PollInterval, ps.cache.activeJWTs)
+
 	if addr := portInUse(opts.Port); addr != "" {
 		return fmt.Errorf("port %d is already in use (%s); another process is listening. Choose a free port with --port", opts.Port, addr)
 	}
@@ -139,7 +148,25 @@ func Start(opts Options) error {
 	}
 	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
 
-	return ps.newFrontServer().Serve(newLimitListener(listener, maxConcurrentConns))
+	srv := ps.newFrontServer()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Info().Msg("shutting down agent proxy; revoking active leases")
+		close(leaseStop)
+		ctx, cancel := context.WithTimeout(context.Background(), leaseRevokeShutdownTimeout)
+		defer cancel()
+		ps.leases.revokeAll(ctx)
+		_ = srv.Shutdown(ctx)
+	}()
+
+	err = srv.Serve(newLimitListener(listener, maxConcurrentConns))
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 func portInUse(port int) string {
@@ -460,7 +487,8 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	stripHopByHopHeaders(req.Header)
 
 	if svc != nil {
-		applied, err := applyCredentials(req, svc)
+		creds := ps.materializeCredentials(svc)
+		applied, err := applyCredentials(req, creds)
 		if err != nil {
 			return nil, outcome, fmt.Errorf("failed to apply credentials: %w", err)
 		}
@@ -471,14 +499,25 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	if err != nil {
 		return nil, outcome, err
 	}
-
-	// Redact any brokered secret reflected back in a response header (e.g. a substituted value echoed in a
-	// redirect Location) so the agent can't read a credential it was never allowed to retrieve. Bodies are
-	// streamed and intentionally not scanned; TRACE/TRACK (the main body-echo vector) is rejected upstream.
-	if svc != nil {
-		redactCredentialsFromHeaders(resp.Header, svc)
-	}
 	return resp, outcome, nil
+}
+
+func (ps *proxyServer) materializeCredentials(svc *resolvedService) []resolvedCredential {
+	creds := make([]resolvedCredential, 0, len(svc.credentials))
+	for _, cred := range svc.credentials {
+		if cred.dynamic == nil {
+			creds = append(creds, cred)
+			continue
+		}
+		value, ok := ps.leases.value(cred.dynamic.key, cred.dynamic.field)
+		if !ok {
+			log.Warn().Msgf("proxied service %q: no valid lease value for dynamic secret %q field %q; skipping credential", svc.name, cred.dynamic.key.secretName, cred.dynamic.field)
+			continue
+		}
+		cred.value = value
+		creds = append(creds, cred)
+	}
+	return creds
 }
 
 func hostHeaderForScheme(scheme, target string) string {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -32,6 +31,11 @@ const agentInactiveTTL = 10 * time.Minute
 // so actively-used agents keep their cache and only idle scopes are dropped.
 const maxAgentCacheEntries = 4096
 
+type dynamicCredentialRef struct {
+	key   leaseKey
+	field string
+}
+
 type resolvedCredential struct {
 	secretKey     string
 	role          string
@@ -41,6 +45,7 @@ type resolvedCredential struct {
 	placeholder   string
 	surfaces      []string
 	value         string
+	dynamic       *dynamicCredentialRef
 }
 
 type resolvedService struct {
@@ -72,16 +77,31 @@ func cacheKey(jwt string, scope agentScope) string {
 
 type agentCache struct {
 	proxyToken func() string
+	leases     *leaseStore
 
 	mu      sync.Mutex
 	entries map[string]*agentEntry
 }
 
-func newAgentCache(proxyToken func() string) *agentCache {
+func newAgentCache(proxyToken func() string, leases *leaseStore) *agentCache {
 	return &agentCache{
 		proxyToken: proxyToken,
+		leases:     leases,
 		entries:    make(map[string]*agentEntry),
 	}
+}
+
+func (a *agentCache) activeJWTs() map[string]struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	live := make(map[string]struct{}, len(a.entries))
+	now := time.Now()
+	for key, entry := range a.entries {
+		if now.Sub(entry.lastSeen) <= agentInactiveTTL {
+			live[key] = struct{}{}
+		}
+	}
+	return live
 }
 
 func (a *agentCache) get(jwt string, scope agentScope) ([]*resolvedService, error) {
@@ -192,10 +212,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 		return nil, fmt.Errorf("failed to discover proxied services: %w", err)
 	}
 
-	secretValues, err := a.fetchSecretValues(scope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch secret values: %w", err)
-	}
+	secretValues := a.fetchSecretValues(scope, referencedStaticKeys(listResp.Services))
 
 	var services []*resolvedService
 	for _, svc := range listResp.Services {
@@ -209,6 +226,29 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 			isEnabled:    svc.IsEnabled,
 		}
 		for _, cred := range svc.Credentials {
+			if cred.DynamicSecretName != "" {
+				key := leaseKey{
+					jwt:        jwt,
+					scope:      scope,
+					secretName: cred.DynamicSecretName,
+					configHash: canonicalConfigHash(cred.DynamicSecretConfig),
+				}
+				a.leases.register(key, leaseSpec{projectSlug: listResp.ProjectSlug, config: cred.DynamicSecretConfig})
+				rs.credentials = append(rs.credentials, resolvedCredential{
+					role:          cred.Role,
+					headerName:    cred.HeaderName,
+					headerPrefix:  cred.HeaderPrefix,
+					headerPurpose: cred.HeaderPurpose,
+					placeholder:   cred.PlaceholderValue,
+					surfaces:      cred.SubstitutionSurfaces,
+					dynamic:       &dynamicCredentialRef{key: key, field: cred.DynamicSecretField},
+				})
+				continue
+			}
+
+			if cred.SecretKey == "" {
+				continue
+			}
 			value, ok := secretValues[cred.SecretKey]
 			if !ok {
 				log.Warn().Msgf("proxied service %q references missing secret %q; skipping", svc.Name, cred.SecretKey)
@@ -230,24 +270,40 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 	return services, nil
 }
 
-func (a *agentCache) fetchSecretValues(scope agentScope) (map[string]string, error) {
-	params := models.GetAllSecretsParameters{
-		Environment:              scope.environment,
-		WorkspaceId:              scope.projectID,
-		SecretsPath:              scope.secretPath,
-		UniversalAuthAccessToken: a.proxyToken(),
-		ExpandSecretReferences:   true,
-		IncludeImport:            true,
+func referencedStaticKeys(services []api.ProxiedService) []string {
+	seen := make(map[string]struct{})
+	var keys []string
+	for _, svc := range services {
+		if !svc.CanProxy {
+			continue
+		}
+		for _, cred := range svc.Credentials {
+			if cred.DynamicSecretName != "" || cred.SecretKey == "" {
+				continue
+			}
+			if _, ok := seen[cred.SecretKey]; ok {
+				continue
+			}
+			seen[cred.SecretKey] = struct{}{}
+			keys = append(keys, cred.SecretKey)
+		}
 	}
-	secrets, err := util.GetAllEnvironmentVariables(params, "")
-	if err != nil {
-		return nil, err
+	return keys
+}
+
+// fetchSecretValues resolves referenced static secrets individually so a key the proxy can't read is
+// skipped rather than failing the whole agent.
+func (a *agentCache) fetchSecretValues(scope agentScope, keys []string) map[string]string {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		secret, _, err := util.GetSinglePlainTextSecretByNameV3(a.proxyToken(), scope.projectID, scope.environment, scope.secretPath, key)
+		if err != nil {
+			log.Warn().Err(err).Msgf("agent proxy: skipping static secret %q; proxy identity cannot read it", key)
+			continue
+		}
+		values[key] = secret.Value
 	}
-	values := make(map[string]string, len(secrets))
-	for _, s := range secrets {
-		values[s.Key] = s.Value
-	}
-	return values, nil
+	return values
 }
 
 func (a *agentCache) refreshActive() {

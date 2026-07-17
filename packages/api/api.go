@@ -692,6 +692,24 @@ func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDyna
 	return createDynamicSecretLeaseResponse, nil
 }
 
+func CallRevokeDynamicSecretLeaseV1(httpClient *resty.Client, request RevokeDynamicSecretLeaseV1Request) (RevokeDynamicSecretLeaseV1Response, error) {
+	var res RevokeDynamicSecretLeaseV1Response
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Delete(fmt.Sprintf("%v/v1/dynamic-secrets/leases/%s", config.INFISICAL_URL, request.LeaseID))
+
+	if err != nil {
+		return RevokeDynamicSecretLeaseV1Response{}, NewGenericRequestError("CallRevokeDynamicSecretLeaseV1", err)
+	}
+	if response.IsError() {
+		return RevokeDynamicSecretLeaseV1Response{}, NewAPIErrorWithResponse("CallRevokeDynamicSecretLeaseV1", response, nil)
+	}
+	return res, nil
+}
+
 func CallGetDynamicSecretLeaseV1(httpClient *resty.Client, request GetDynamicSecretLeaseV1Request) (GetDynamicSecretLeaseV1Response, error) {
 	var getDynamicSecretLeaseResponse GetDynamicSecretLeaseV1Response
 	response, err := httpClient.

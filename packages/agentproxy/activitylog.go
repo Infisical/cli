@@ -227,10 +227,14 @@ func (l *activityLogger) describe() string {
 func credShorthand(creds []AppliedCredential) string {
 	parts := make([]string, 0, len(creds))
 	for _, c := range creds {
+		label := c.Key
+		if c.DynamicSecretName != "" {
+			label = c.DynamicSecretName + "/" + c.DynamicSecretField
+		}
 		if c.Role == roleCredentialSub {
-			parts = append(parts, strings.Join(c.Surfaces, ",")+":"+c.Key)
+			parts = append(parts, strings.Join(c.Surfaces, ",")+":"+label)
 		} else {
-			parts = append(parts, "header:"+c.Key)
+			parts = append(parts, "header:"+label)
 		}
 	}
 	return strings.Join(parts, " ")

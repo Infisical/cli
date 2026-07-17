@@ -9,7 +9,7 @@ import (
 // When the cache is full, inserting a new scope must evict the least-recently-seen entry (keeping
 // actively-used agents cached) rather than reject the new one or grow the map without bound.
 func TestAgentCacheEvictsLeastRecentlySeenWhenFull(t *testing.T) {
-	a := newAgentCache(func() string { return "" })
+	a := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 
 	base := time.Now()
 	for i := 0; i < maxAgentCacheEntries; i++ {
@@ -36,7 +36,7 @@ func TestAgentCacheEvictsLeastRecentlySeenWhenFull(t *testing.T) {
 
 // A key already present must not trigger eviction — updating an existing scope isn't growth.
 func TestAgentCacheNoEvictionWhenReplacing(t *testing.T) {
-	a := newAgentCache(func() string { return "" })
+	a := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 
 	base := time.Now()
 	for i := 0; i < maxAgentCacheEntries; i++ {

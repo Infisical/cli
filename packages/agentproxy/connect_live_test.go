@@ -39,7 +39,7 @@ func TestConnectTunnelLiveOverTCP(t *testing.T) {
 	}}
 
 	ca, interCert := newTestCA(t)
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{jwt: jwt, scope: scope, services: services, lastSeen: time.Now()}
 
 	// Upstream transport must trust the httptest upstream's real cert (the proxy does a real TLS leg to it).

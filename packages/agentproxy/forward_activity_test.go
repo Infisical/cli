@@ -17,7 +17,7 @@ import (
 
 func newRecordingProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, services []*resolvedService) (net.Conn, *bytes.Buffer) {
 	t.Helper()
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{
 		jwt:       jwt,
 		scope:     scope,
@@ -30,6 +30,7 @@ func newRecordingProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope
 	ps := &proxyServer{
 		opts:        Options{UnmatchedHost: unmatchedHost},
 		cache:       cache,
+		leases:      newLeaseStore(func() string { return "" }),
 		transport:   &http.Transport{},
 		activityLog: &activityLogger{enabled: true, format: formatJSON, filter: filterAll, w: buf},
 	}
@@ -76,13 +77,14 @@ func doPlainRequest(t *testing.T, client net.Conn, method, target, hostPort, jwt
 func TestForwardCapturesIdentityForRecord(t *testing.T) {
 	jwt := "a.b.c"
 	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{
 		jwt: jwt, scope: scope, agentID: "id-9", agentName: "agent-9", lastSeen: time.Now(),
 	}
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
 		cache:     cache,
+		leases:    newLeaseStore(func() string { return "" }),
 		transport: reflectingTransport{header: make(http.Header)},
 	}
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)

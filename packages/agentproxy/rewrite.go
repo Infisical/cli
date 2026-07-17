@@ -22,30 +22,41 @@ const (
 )
 
 type AppliedCredential struct {
-	Key      string   `json:"key"`
-	Role     string   `json:"role"`
-	Header   string   `json:"header,omitempty"`
-	Purpose  string   `json:"purpose,omitempty"`
-	Surfaces []string `json:"surfaces,omitempty"`
+	Key                string   `json:"key,omitempty"`
+	DynamicSecretName  string   `json:"dynamicSecretName,omitempty"`
+	DynamicSecretField string   `json:"dynamicSecretField,omitempty"`
+	Role               string   `json:"role"`
+	Header             string   `json:"header,omitempty"`
+	Purpose            string   `json:"purpose,omitempty"`
+	Surfaces           []string `json:"surfaces,omitempty"`
 }
 
-func applyCredentials(req *http.Request, svc *resolvedService) ([]AppliedCredential, error) {
+// credLabel identifies the secret behind a credential for the activity log: a static key, or a dynamic
+// secret name and output field. It never carries the value.
+func credLabel(cred resolvedCredential) AppliedCredential {
+	if cred.dynamic != nil {
+		return AppliedCredential{DynamicSecretName: cred.dynamic.key.secretName, DynamicSecretField: cred.dynamic.field}
+	}
+	return AppliedCredential{Key: cred.secretKey}
+}
+
+func applyCredentials(req *http.Request, creds []resolvedCredential) ([]AppliedCredential, error) {
 	var applied []AppliedCredential
 	var basicUser, basicPass string
-	var basicUserKey, basicPassKey string
+	var basicUserCred, basicPassCred resolvedCredential
 	haveUser, havePass := false, false
 
-	for _, cred := range svc.credentials {
+	for _, cred := range creds {
 		switch cred.role {
 		case roleHeaderRewrite:
 			switch cred.headerPurpose {
 			case purposeUsername:
 				basicUser = cred.value
-				basicUserKey = cred.secretKey
+				basicUserCred = cred
 				haveUser = true
 			case purposePassword:
 				basicPass = cred.value
-				basicPassKey = cred.secretKey
+				basicPassCred = cred
 				havePass = true
 			default:
 				headerName := cred.headerName
@@ -57,11 +68,10 @@ func applyCredentials(req *http.Request, svc *resolvedService) ([]AppliedCredent
 					value = cred.headerPrefix + " " + value
 				}
 				req.Header.Set(headerName, value)
-				applied = append(applied, AppliedCredential{
-					Key:    cred.secretKey,
-					Role:   roleHeaderRewrite,
-					Header: headerName,
-				})
+				ac := credLabel(cred)
+				ac.Role = roleHeaderRewrite
+				ac.Header = headerName
+				applied = append(applied, ac)
 			}
 		case roleCredentialSub:
 			surfaces, err := applySubstitution(req, cred)
@@ -69,11 +79,10 @@ func applyCredentials(req *http.Request, svc *resolvedService) ([]AppliedCredent
 				return nil, err
 			}
 			if len(surfaces) > 0 {
-				applied = append(applied, AppliedCredential{
-					Key:      cred.secretKey,
-					Role:     roleCredentialSub,
-					Surfaces: surfaces,
-				})
+				ac := credLabel(cred)
+				ac.Role = roleCredentialSub
+				ac.Surfaces = surfaces
+				applied = append(applied, ac)
 			}
 		}
 	}
@@ -82,33 +91,22 @@ func applyCredentials(req *http.Request, svc *resolvedService) ([]AppliedCredent
 		token := base64.StdEncoding.EncodeToString([]byte(basicUser + ":" + basicPass))
 		req.Header.Set("Authorization", "Basic "+token)
 		if haveUser {
-			applied = append(applied, AppliedCredential{Key: basicUserKey, Role: roleHeaderRewrite, Header: "Authorization", Purpose: purposeUsername})
+			ac := credLabel(basicUserCred)
+			ac.Role = roleHeaderRewrite
+			ac.Header = "Authorization"
+			ac.Purpose = purposeUsername
+			applied = append(applied, ac)
 		}
 		if havePass {
-			applied = append(applied, AppliedCredential{Key: basicPassKey, Role: roleHeaderRewrite, Header: "Authorization", Purpose: purposePassword})
+			ac := credLabel(basicPassCred)
+			ac.Role = roleHeaderRewrite
+			ac.Header = "Authorization"
+			ac.Purpose = purposePassword
+			applied = append(applied, ac)
 		}
 	}
 
 	return applied, nil
-}
-
-// redactCredentialsFromHeaders replaces any brokered secret value that appears in a response header with a
-// placeholder. Upstreams occasionally reflect request data (redirect Location, error echoes); without this an
-// agent could read a real credential it was never allowed to retrieve. A real high-entropy secret won't
-// collide with legitimate header content, so this only fires when a value is genuinely reflected.
-func redactCredentialsFromHeaders(h http.Header, svc *resolvedService) {
-	for _, cred := range svc.credentials {
-		if cred.value == "" {
-			continue
-		}
-		for name, values := range h {
-			for i, v := range values {
-				if strings.Contains(v, cred.value) {
-					h[name][i] = strings.ReplaceAll(v, cred.value, "[redacted]")
-				}
-			}
-		}
-	}
 }
 
 func hasSurface(surfaces []string, target string) bool {

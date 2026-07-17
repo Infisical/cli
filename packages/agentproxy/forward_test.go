@@ -21,7 +21,7 @@ func proxyAuthHeader(projectID, environment, secretPath, jwt string) string {
 
 func newTestProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, services []*resolvedService) net.Conn {
 	t.Helper()
-	cache := newAgentCache(func() string { return "" })
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	cache.entries[cacheKey(jwt, scope)] = &agentEntry{
 		jwt:      jwt,
 		scope:    scope,
