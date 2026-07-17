@@ -23,15 +23,15 @@ const (
 	maxSweepTimeout          = 30 * time.Second
 )
 
-type discoveryTarget struct {
+type rpcTarget struct {
 	host string
 	port int
 }
 
-type discoveryTargetContextKey struct{}
+type rpcTargetContextKey struct{}
 
-// serveDiscoveryOverTLS serves the platform discovery RPCs (ssh-exec + port sweep) over one HTTP mux,
-// mirroring the ADCS/PKCS11 handlers. The exec target host/port come from the signed gateway certificate.
+// serveDiscoveryOverTLS serves the platform RPCs (ssh-exec, port sweep, connection test) over one HTTP mux,
+// mirroring the ADCS/PKCS11 handlers. The target host/port come from the signed gateway certificate.
 func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
 	reqCh := make(chan *http.Request, 1)
 	errCh := make(chan error, 1)
@@ -55,7 +55,7 @@ func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Re
 
 	opCtx, cancel := context.WithTimeout(ctx, discoveryRequestDeadline)
 	defer cancel()
-	opCtx = context.WithValue(opCtx, discoveryTargetContextKey{}, discoveryTarget{forwardConfig.TargetHost, forwardConfig.TargetPort})
+	opCtx = context.WithValue(opCtx, rpcTargetContextKey{}, rpcTarget{forwardConfig.TargetHost, forwardConfig.TargetPort})
 	req = req.WithContext(opCtx)
 
 	rw := newBufferedResponseWriter()
@@ -71,36 +71,37 @@ var discoveryMux = sync.OnceValue(func() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/exec", handleDiscoveryExec)
 	mux.HandleFunc("/v1/sweep", handleDiscoverySweep)
+	mux.HandleFunc("/v1/test-connection", handleTestConnection)
 	return mux
 })
 
 func handleDiscoveryExec(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeDiscoveryError(w, http.StatusMethodNotAllowed, "Only POST is supported")
+		writeRPCError(w, http.StatusMethodNotAllowed, "Only POST is supported")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxSshExecRequestBytes))
 	if err != nil {
-		writeDiscoveryError(w, http.StatusBadRequest, "failed to read request body")
+		writeRPCError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 	var env sshExecEnvelope
 	if err := json.Unmarshal(body, &env); err != nil {
-		writeDiscoveryError(w, http.StatusBadRequest, "Invalid request body")
+		writeRPCError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	target, _ := r.Context().Value(discoveryTargetContextKey{}).(discoveryTarget)
+	target, _ := r.Context().Value(rpcTargetContextKey{}).(rpcTarget)
 	result, execErr := doSSHExec(target.host, target.port, env)
 	if execErr != nil {
-		writeDiscoveryError(w, http.StatusBadGateway, execErr.Error())
+		writeRPCError(w, http.StatusBadGateway, execErr.Error())
 		return
 	}
-	writeDiscoveryJSON(w, http.StatusOK, sshExecResponse{Result: result})
+	writeRPCJSON(w, http.StatusOK, sshExecResponse{Result: result})
 }
 
 func handleDiscoverySweep(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeDiscoveryError(w, http.StatusMethodNotAllowed, "Only POST is supported")
+		writeRPCError(w, http.StatusMethodNotAllowed, "Only POST is supported")
 		return
 	}
 	var req struct {
@@ -108,14 +109,14 @@ func handleDiscoverySweep(w http.ResponseWriter, r *http.Request) {
 		TimeoutMs int      `json:"timeoutMs"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxSweepRequestBytes)).Decode(&req); err != nil {
-		writeDiscoveryError(w, http.StatusBadRequest, "Invalid request body")
+		writeRPCError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if len(req.Targets) > maxSweepTargets {
-		writeDiscoveryError(w, http.StatusBadRequest, fmt.Sprintf("target count %d exceeds limit %d", len(req.Targets), maxSweepTargets))
+		writeRPCError(w, http.StatusBadRequest, fmt.Sprintf("target count %d exceeds limit %d", len(req.Targets), maxSweepTargets))
 		return
 	}
-	writeDiscoveryJSON(w, http.StatusOK, map[string][]string{"open": sweepReachable(r.Context(), req.Targets, req.TimeoutMs)})
+	writeRPCJSON(w, http.StatusOK, map[string][]string{"open": sweepReachable(r.Context(), req.Targets, req.TimeoutMs)})
 }
 
 // sweepReachable TCP-probes each host:port concurrently in-network and returns the reachable ones
@@ -154,7 +155,7 @@ func sweepReachable(ctx context.Context, targets []string, timeoutMs int) []stri
 	return open
 }
 
-func writeDiscoveryJSON(w http.ResponseWriter, status int, payload any) {
+func writeRPCJSON(w http.ResponseWriter, status int, payload any) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		http.Error(w, "failed to marshal response", http.StatusInternalServerError)
@@ -165,6 +166,6 @@ func writeDiscoveryJSON(w http.ResponseWriter, status int, payload any) {
 	_, _ = w.Write(body)
 }
 
-func writeDiscoveryError(w http.ResponseWriter, status int, message string) {
-	writeDiscoveryJSON(w, status, sshExecErrorResponse{Error: sshExecErrorBody{Message: message}})
+func writeRPCError(w http.ResponseWriter, status int, message string) {
+	writeRPCJSON(w, status, sshExecErrorResponse{Error: sshExecErrorBody{Message: message}})
 }
