@@ -29,9 +29,13 @@ var agentProxyCmd = &cobra.Command{
 }
 
 var agentProxyConnectCmd = &cobra.Command{
-	Use:                   "connect [flags] -- [agent start command]",
-	Short:                 "Set up the environment and launch an agent behind the agent proxy",
-	Example:               "infisical secrets agent-proxy connect --proxy=<proxy-host>:17322 --projectId=<project-id> --env=prod --path=/myapp -- claude",
+	Use:   "connect [flags] -- [agent start command]",
+	Short: "Set up the environment and launch an agent behind the agent proxy",
+	Example: `# With flags
+infisical secrets agent-proxy connect --proxy=<proxy-host>:17322 --projectId=<project-id> --env=prod --path=/myapp -- claude
+
+# With environment variables (INFISICAL_PROJECT_ID, INFISICAL_ENVIRONMENT, INFISICAL_SECRET_PATH, INFISICAL_AGENT_PROXY_ADDRESS)
+infisical secrets agent-proxy connect -- claude`,
 	DisableFlagsInUseLine: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -103,28 +107,17 @@ func mergeNoProxy(operatorEntries ...string) string {
 }
 
 func runAgentProxyConnect(cmd *cobra.Command, args []string) {
-	proxyAddr, err := cmd.Flags().GetString("proxy")
-	if err != nil || proxyAddr == "" {
-		util.HandleError(fmt.Errorf("the --proxy flag is required (e.g. --proxy=<proxy-host>:17322)"))
+	proxyAddr := util.ResolveAgentProxyAddress(cmd)
+	if proxyAddr == "" {
+		util.HandleError(fmt.Errorf("the agent proxy address is required; pass --proxy, set INFISICAL_AGENT_PROXY_ADDRESS, or set agentProxyAddress in .infisical.json (e.g. <proxy-host>:17322)"))
 	}
 
-	environment, err := cmd.Flags().GetString("env")
-	if err != nil {
-		util.HandleError(err, "Unable to parse --env")
-	}
-	if !cmd.Flags().Changed("env") {
-		if envFromWorkspace := util.GetEnvFromWorkspaceFile(); envFromWorkspace != "" {
-			environment = envFromWorkspace
-		}
-	}
+	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the --env flag is required"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
 	}
 
-	secretPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse --path")
-	}
+	secretPath := util.ResolveSecretPath(cmd)
 
 	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
@@ -156,7 +149,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
-	allowReadableBrokered, _ := cmd.Flags().GetBool("allow-readable-brokered-secrets")
+	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 	if !allowReadableBrokered {
 		// static readability is derived from realSecrets we already fetch; dynamic lease-ability comes from
 		// the server (callerCanLease) since we don't fetch dynamic secrets here.
@@ -436,15 +429,15 @@ func runAgentProcess(args, env []string) error {
 }
 
 func init() {
-	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy (host:port)")
-	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from")
-	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope")
+	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy as host:port (falls back to INFISICAL_AGENT_PROXY_ADDRESS or agentProxyAddress in .infisical.json)")
+	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
+	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
 	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
 	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	agentProxyConnectCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
-	agentProxyConnectCmd.Flags().Bool("allow-readable-brokered-secrets", false, "start even if the agent can read secrets that proxied services broker to it (bypasses a misconfiguration guardrail)")
+	agentProxyConnectCmd.Flags().Bool("allow-readable-brokered-secrets", false, "start even if the agent can read secrets that proxied services broker to it (bypasses a misconfiguration guardrail; falls back to INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS)")
 
 	agentProxyStartCmd.Flags().Int("port", 17322, "port for the agent proxy to listen on")
 	agentProxyStartCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
