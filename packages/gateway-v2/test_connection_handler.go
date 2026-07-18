@@ -20,6 +20,12 @@ const (
 	testConnMaxTimeout      = 60 * time.Second
 )
 
+const (
+	testConnModePostgres = "postgres"
+	testConnModeSSH      = "ssh"
+	testConnModeTCP      = "tcp"
+)
+
 // testConnectionEnvelope is the request body for a connection test. The target host/port come from the signed
 // gateway certificate; mode selects which client validates it, and the remaining fields are read per mode.
 type testConnectionEnvelope struct {
@@ -126,9 +132,9 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 	var testErr error
 	switch env.Mode {
-	case "postgres":
+	case testConnModePostgres:
 		testErr = doPostgresConnectionTest(ctx, target.host, target.port, env)
-	case "ssh":
+	case testConnModeSSH:
 		_, testErr = doSSHExec(target.host, target.port, sshExecEnvelope{
 			Command:     "true",
 			AuthMethod:  env.AuthMethod,
@@ -138,7 +144,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			Certificate: env.Certificate,
 			TimeoutMs:   env.TimeoutMs,
 		})
-	case "tcp":
+	case testConnModeTCP:
 		testErr = doTCPReachabilityTest(ctx, target.host, target.port)
 	default:
 		writeRPCError(w, http.StatusBadRequest, fmt.Sprintf("unsupported test-connection mode: %q", env.Mode))
