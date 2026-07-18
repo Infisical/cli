@@ -44,7 +44,7 @@ type testConnectionEnvelope struct {
 	// postgres
 	Database              string `json:"database"`
 	SslEnabled            bool   `json:"sslEnabled"`
-	SslRejectUnauthorized bool   `json:"sslRejectUnauthorized"`
+	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
 }
 
@@ -69,7 +69,8 @@ func doPostgresConnectionTest(ctx context.Context, host string, port int, env te
 	config.Database = env.Database
 
 	if env.SslEnabled {
-		tlsConfig := &tls.Config{ServerName: host, InsecureSkipVerify: !env.SslRejectUnauthorized}
+		rejectUnauthorized := env.SslRejectUnauthorized == nil || *env.SslRejectUnauthorized
+		tlsConfig := &tls.Config{ServerName: host, InsecureSkipVerify: !rejectUnauthorized}
 		if env.SslCertificate != "" {
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM([]byte(env.SslCertificate)) {
