@@ -14,7 +14,7 @@ func newResolveTestCmd(t *testing.T) *cobra.Command {
 	t.Helper()
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("proxy", "", "")
-	cmd.Flags().StringP("env", "e", "dev", "")
+	cmd.Flags().StringP("env", "e", "", "")
 	cmd.Flags().String("path", "/", "")
 	cmd.Flags().Bool("allow", false, "")
 	return cmd
@@ -60,8 +60,8 @@ func TestResolveEnvironmentName(t *testing.T) {
 	t.Run("flag default is the final fallback", func(t *testing.T) {
 		t.Chdir(t.TempDir()) // no workspace file
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
-		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "dev" {
-			t.Fatalf("got %q, want dev", got)
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "" {
+			t.Fatalf("got %q, want empty", got)
 		}
 	})
 }

@@ -557,11 +557,11 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 	return value, nil
 }
 
-// ResolveEnvironmentName resolves the environment slug for a command, in order:
+// ResolveEnvironmentName resolves the environment slug for `agent-proxy connect`, in order:
 // the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.json
 // (git-branch mapping, then defaultEnvironment) > the flag's own default value.
-// These flags carry non-empty defaults (e.g. "dev"), so GetCmdFlagOrEnvWithDefaultValue
-// cannot be used here: its empty-string check would never consult env/workspace.
+// It keys off cmd.Flags().Changed rather than an empty-value check so env and workspace
+// are still consulted when --env is left at its default.
 func ResolveEnvironmentName(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("env") {
 		value, _ := cmd.Flags().GetString("env")
