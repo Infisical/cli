@@ -113,7 +113,6 @@ type WorkspaceConfigFile struct {
 	DefaultEnvironment            string            `json:"defaultEnvironment"`
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 	DefaultSecretPath             string            `json:"defaultSecretPath,omitempty"`
-	AgentProxyAddress             string            `json:"agentProxyAddress,omitempty"`
 	Domain                        string            `json:"domain,omitempty"`
 }
 

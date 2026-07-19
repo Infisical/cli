@@ -511,15 +511,6 @@ func GetSecretPathFromWorkspaceFile() string {
 	return workspaceFile.DefaultSecretPath
 }
 
-func GetAgentProxyAddressFromWorkspaceFile() string {
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		log.Debug().Msgf("GetAgentProxyAddressFromWorkspaceFile: [err=%s]", err)
-		return ""
-	}
-	return workspaceFile.AgentProxyAddress
-}
-
 func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
 	branch, err := getCurrentBranch()
 	if err != nil {

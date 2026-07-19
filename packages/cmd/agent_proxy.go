@@ -109,7 +109,7 @@ func mergeNoProxy(operatorEntries ...string) string {
 func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	proxyAddr := util.ResolveAgentProxyAddress(cmd)
 	if proxyAddr == "" {
-		util.HandleError(fmt.Errorf("the agent proxy address is required; pass --proxy, set INFISICAL_AGENT_PROXY_ADDRESS, or set agentProxyAddress in .infisical.json (e.g. <proxy-host>:17322)"))
+		util.HandleError(fmt.Errorf("the agent proxy address is required; pass --proxy or set INFISICAL_AGENT_PROXY_ADDRESS (e.g. <proxy-host>:17322)"))
 	}
 
 	environment := util.ResolveEnvironmentName(cmd)
@@ -429,7 +429,7 @@ func runAgentProcess(args, env []string) error {
 }
 
 func init() {
-	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy as host:port (falls back to INFISICAL_AGENT_PROXY_ADDRESS or agentProxyAddress in .infisical.json)")
+	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy as host:port (falls back to INFISICAL_AGENT_PROXY_ADDRESS)")
 	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
 	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
 	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")

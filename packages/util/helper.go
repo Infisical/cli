@@ -596,17 +596,16 @@ func ResolveSecretPath(cmd *cobra.Command) string {
 }
 
 // ResolveAgentProxyAddress resolves the agent proxy address for `agent-proxy connect`, in order:
-// the --proxy flag (if explicitly set) > INFISICAL_AGENT_PROXY_ADDRESS > .infisical.json
-// agentProxyAddress > empty (the caller requires a non-empty result).
+// the --proxy flag (if explicitly set) > INFISICAL_AGENT_PROXY_ADDRESS > empty (the caller
+// requires a non-empty result). It is deliberately NOT sourced from .infisical.json: that file
+// is usually committed to a repo, so a poisoned proxy address would silently route all agent
+// traffic and its auth token through an attacker-controlled host.
 func ResolveAgentProxyAddress(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("proxy") {
 		value, _ := cmd.Flags().GetString("proxy")
 		return value
 	}
-	if value := strings.TrimSpace(os.Getenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME)); value != "" {
-		return value
-	}
-	return GetAgentProxyAddressFromWorkspaceFile()
+	return strings.TrimSpace(os.Getenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME))
 }
 
 // GetBoolFlagOrEnv resolves a boolean flag from the flag (if explicitly set), then the given

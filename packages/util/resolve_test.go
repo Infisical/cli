@@ -103,8 +103,7 @@ func TestResolveSecretPath(t *testing.T) {
 }
 
 func TestResolveAgentProxyAddress(t *testing.T) {
-	t.Run("flag wins", func(t *testing.T) {
-		writeWorkspace(t, `{"agentProxyAddress":"file:1"}`)
+	t.Run("flag wins over env", func(t *testing.T) {
 		t.Setenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME, "env:1")
 		cmd := newResolveTestCmd(t)
 		_ = cmd.Flags().Set("proxy", "flag:1")
@@ -113,19 +112,20 @@ func TestResolveAgentProxyAddress(t *testing.T) {
 		}
 	})
 
-	t.Run("env over file", func(t *testing.T) {
-		writeWorkspace(t, `{"agentProxyAddress":"file:1"}`)
+	t.Run("env when flag unset", func(t *testing.T) {
 		t.Setenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME, "env:1")
 		if got := ResolveAgentProxyAddress(newResolveTestCmd(t)); got != "env:1" {
 			t.Fatalf("got %q, want env:1", got)
 		}
 	})
 
-	t.Run("file when flag and env unset", func(t *testing.T) {
+	// The proxy address must never come from .infisical.json (a committed file), or a poisoned
+	// value could silently redirect all agent traffic. Prove the file is ignored.
+	t.Run("workspace file is not a source", func(t *testing.T) {
 		writeWorkspace(t, `{"agentProxyAddress":"file:1"}`)
 		t.Setenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME, "")
-		if got := ResolveAgentProxyAddress(newResolveTestCmd(t)); got != "file:1" {
-			t.Fatalf("got %q, want file:1", got)
+		if got := ResolveAgentProxyAddress(newResolveTestCmd(t)); got != "" {
+			t.Fatalf("got %q, want empty (.infisical.json must not set the proxy address)", got)
 		}
 	})
 
