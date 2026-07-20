@@ -416,6 +416,9 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, keyLabel, mechanis
 func resolveMechanism(name string, isDigest bool) (uint, []byte, error) {
 	switch name {
 	case "CKM_RSA_PKCS":
+		if !isDigest {
+			return 0, nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "CKM_RSA_PKCS requires a pre-hashed DigestInfo input (isDigest=true)"}
+		}
 		return pkcs11.CKM_RSA_PKCS, nil, nil
 	case "CKM_SHA256_RSA_PKCS":
 		return pkcs11.CKM_SHA256_RSA_PKCS, nil, nil
