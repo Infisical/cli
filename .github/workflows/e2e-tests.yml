@@ -1,0 +1,74 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "e2e/**"
+      - "packages/**"
+      - "main.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/e2e-tests.yml"
+
+  workflow_dispatch:
+
+  workflow_call:
+
+jobs:
+  e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          docker system prune -af
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkout infisical repository
+        uses: actions/checkout@v4
+        with:
+          repository: infisical/infisical
+          path: deps/infisical/
+          ref: main
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.25.2"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          # Docker and Docker Compose are already available in GitHub Actions runners
+
+      - name: Build CLI executable
+        working-directory: ${{ github.workspace }}
+        run: |
+          go build -o infisical-merge ./main.go
+          chmod +x infisical-merge
+
+      - name: Install e2e dependencies
+        working-directory: ${{ github.workspace }}/e2e
+        run: |
+          go mod download
+
+      - name: Run e2e tests
+        working-directory: ${{ github.workspace }}/e2e
+        env:
+          INFISICAL_BACKEND_DIR: ${{ github.workspace }}/deps/infisical/backend
+          INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-merge
+          CLI_E2E_DEFAULT_RUN_METHOD: subprocess
+        run: |
+          go test -v -count=1 -timeout=30m ./relay/...
