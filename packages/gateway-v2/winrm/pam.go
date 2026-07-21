@@ -20,7 +20,9 @@ func normalizeJSONArray(s string) json.RawMessage {
 	return json.RawMessage("[" + s + "]")
 }
 
-const enumerateAccountsScript = `$ProgressPreference='SilentlyContinue'; ` +
+// ErrorActionPreference=Stop so a Get-LocalUser failure is a hard error (matching the dependencies script)
+// rather than a silent short list that reads as "this machine has fewer local accounts".
+const enumerateAccountsScript = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ` +
 	`Get-LocalUser | Select-Object Name, Enabled, @{Name='SID';Expression={$_.SID.Value}} | ConvertTo-Json -Compress`
 
 // EnumerateLocalAccounts lists the host's local user accounts as a JSON array.
@@ -71,8 +73,10 @@ try {
   }
 } catch { throw "scheduled task enumeration failed: $($_.Exception.Message)" }
 
-try {
-  Import-Module WebAdministration -ErrorAction Stop
+if (Get-Module -ListAvailable -Name WebAdministration) {
+  # Module present means IIS is installed, so enumerate it; an error here now propagates (hard fail) instead of
+  # being swallowed, which would leave a "scanned" machine missing its app-pool deps and prune real rows.
+  Import-Module WebAdministration
   foreach ($p in (Get-ChildItem 'IIS:\AppPools')) {
     if ($p.processModel.identityType -ne 'SpecificUser') { continue }
     if (-not $p.processModel.userName) { continue }
@@ -83,7 +87,7 @@ try {
                 state = [string]$p.state; runAsAccount = $p.processModel.userName }
     }
   }
-} catch {}
+}
 
 $deps | ConvertTo-Json -Depth 5 -Compress
 `
@@ -131,6 +135,29 @@ func RotateCredential(ctx context.Context, creds Credentials, kind, username, ne
 	// the real host error; the control plane redacts secrets from it before storing.
 	_, err = run(ctx, client, script)
 	return err
+}
+
+// ValidateLocalCredential checks whether a local account's password is correct, run by the connecting
+// (administrator) identity via PrincipalContext.ValidateCredentials. This lets rotation verify a local
+// credential without logging in AS the account, which an ordinary local account cannot do over WinRM.
+func ValidateLocalCredential(ctx context.Context, creds Credentials, username, password string) (bool, error) {
+	client, err := newClient(ctx, creds)
+	if err != nil {
+		return false, err
+	}
+	u := escapePowerShellSingleQuotes(username)
+	p := escapePowerShellSingleQuotes(password)
+	script := fmt.Sprintf(
+		`$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.DirectoryServices.AccountManagement; `+
+			`$ctx = New-Object System.DirectoryServices.AccountManagement.PrincipalContext('Machine'); `+
+			`if ($ctx.ValidateCredentials('%s','%s')) { 'VALID' } else { 'INVALID' }`,
+		u, p,
+	)
+	out, err := run(ctx, client, script)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "VALID", nil
 }
 
 // SyncDependency writes a new password into a service / scheduled task / IIS app pool that runs as the

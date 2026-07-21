@@ -82,6 +82,12 @@ type winrmSyncDependencyParams struct {
 	NewPassword string `json:"newPassword"`
 }
 
+type winrmValidateCredentialParams struct {
+	winrmTransportParams
+	TargetUsername string `json:"targetUsername"`
+	Password       string `json:"password"`
+}
+
 type winrmResponse struct {
 	Result json.RawMessage `json:"result"`
 }
@@ -151,6 +157,7 @@ var serveWinrmMux = sync.OnceValue(func() *http.ServeMux {
 	mux.HandleFunc("/v1/enumerate-dependencies", wrapWinrm(handleWinrmEnumerateDependencies))
 	mux.HandleFunc("/v1/rotate-credential", wrapWinrm(handleWinrmRotateCredential))
 	mux.HandleFunc("/v1/sync-dependency", wrapWinrm(handleWinrmSyncDependency))
+	mux.HandleFunc("/v1/validate-credential", wrapWinrm(handleWinrmValidateCredential))
 	return mux
 })
 
@@ -339,6 +346,21 @@ func handleWinrmSyncDependency(ctx context.Context, env *winrmRequestEnvelope) (
 		return nil, err
 	}
 	return map[string]any{"ok": true}, nil
+}
+
+func handleWinrmValidateCredential(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var p winrmValidateCredentialParams
+	if err := json.Unmarshal(env.Params, &p); err != nil {
+		return nil, fmt.Errorf("malformed validate-credential params")
+	}
+	if p.TargetUsername == "" {
+		return nil, fmt.Errorf("targetUsername is required")
+	}
+	valid, err := winrm.ValidateLocalCredential(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.TargetUsername, p.Password)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"valid": valid}, nil
 }
 
 func writeWinrmError(w http.ResponseWriter, status int, message string) {
