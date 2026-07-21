@@ -57,7 +57,7 @@ try {
 } catch { throw "service enumeration failed: $($_.Exception.Message)" }
 
 try {
-  foreach ($t in (Get-ScheduledTask | Where-Object { $_.Principal.LogonType -eq 'Password' -and $_.Principal.UserId })) {
+  foreach ($t in (Get-ScheduledTask | Where-Object { ($_.Principal.LogonType -eq 'Password' -or $_.Principal.LogonType -eq 'InteractiveOrPassword') -and $_.Principal.UserId })) {
     $info = $null
     try { $info = Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath } catch {}
     $deps += [pscustomobject]@{
@@ -149,14 +149,16 @@ func SyncDependency(ctx context.Context, creds Credentials, depType, name, runAs
 	case "windows-service":
 		// Use the CIM Change() method, not sc.exe: PowerShell 5.1 does not escape embedded quotes when
 		// quoting arguments to a native executable, so a password containing " would reach sc.exe mangled.
-		// Passing it as a method argument keeps it entirely within PowerShell.
+		// Passing it as a method argument keeps it entirely within PowerShell. Only restart a service that
+		// was already running, so a deliberately-stopped service is not started as a side effect.
 		script = fmt.Sprintf(
 			`$ErrorActionPreference='Stop'; `+
 				`$svc = Get-CimInstance Win32_Service | Where-Object { $_.Name -eq '%s' }; `+
 				`if (-not $svc) { throw 'service not found' }; `+
+				`$wasRunning = $svc.State -eq 'Running'; `+
 				`$r = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments @{ StartName = '%s'; StartPassword = '%s' }; `+
 				`if ($r.ReturnValue -ne 0) { throw "service credential update failed (return $($r.ReturnValue))" }; `+
-				`Restart-Service -Name '%s' -Force`,
+				`if ($wasRunning) { Restart-Service -Name '%s' -Force }`,
 			n, u, p, n,
 		)
 	case "scheduled-task":
@@ -169,12 +171,14 @@ func SyncDependency(ctx context.Context, creds Credentials, depType, name, runAs
 			n, u, p,
 		)
 	case "iis-app-pool":
-		// Pure PowerShell already: the password is a cmdlet value, never a native-exe argument.
+		// Pure PowerShell already: the password is a cmdlet value, never a native-exe argument. Only restart a
+		// pool that was already started (Restart-WebAppPool throws on a stopped pool).
 		script = fmt.Sprintf(
 			`$ErrorActionPreference='Stop'; Import-Module WebAdministration; `+
 				`Set-ItemProperty 'IIS:\AppPools\%s' -Name processModel.userName -Value '%s'; `+
-				`Set-ItemProperty 'IIS:\AppPools\%s' -Name processModel.password -Value '%s'; Restart-WebAppPool '%s'`,
-			n, u, n, p, n,
+				`Set-ItemProperty 'IIS:\AppPools\%s' -Name processModel.password -Value '%s'; `+
+				`if ((Get-WebAppPoolState -Name '%s').Value -eq 'Started') { Restart-WebAppPool '%s' }`,
+			n, u, n, p, n, n,
 		)
 	default:
 		return fmt.Errorf("unsupported dependency type %q", depType)
