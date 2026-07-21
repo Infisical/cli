@@ -252,16 +252,6 @@ func shouldDisableColor(w io.Writer) bool {
 		return true
 	}
 
-	// TERM=dumb indicates a dumb terminal without color support
-	if os.Getenv("TERM") == "dumb" {
-		return true
-	}
-
-	// Check if output is a TTY - disable colors for non-TTY output
-	if f, ok := w.(*os.File); ok {
-		return !isatty.IsTerminal(f.Fd())
-	}
-
 	// For non-file writers (e.g., custom writers), keep colors enabled
 	return false
 }
