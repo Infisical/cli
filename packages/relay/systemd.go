@@ -81,6 +81,113 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 	return nil
 }
 
+// InstallEnrolledRelaySystemdService installs the systemd service for a relay that was
+// enrolled via the enrollment token flow. It writes the long-lived relay access token
+// (not a machine identity token) into the environment file.
+func InstallEnrolledRelaySystemdService(accessToken string, domain string, name string, serviceLogFile string) error {
+	if runtime.GOOS != "linux" {
+		log.Info().Msg("Skipping systemd service installation - not on Linux")
+		return nil
+	}
+
+	if os.Geteuid() != 0 {
+		log.Info().Msg("Skipping systemd service installation - not running as root/sudo")
+		return nil
+	}
+
+	configDir := "/etc/infisical"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
+	}
+
+	configContent := fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ACCESS_TOKEN_KEY, accessToken)
+	if domain != "" {
+		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
+	}
+	configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_NAME_ENV_NAME, name)
+
+	environmentFilePath := filepath.Join(configDir, "relay.conf")
+	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write environment file: %v", err)
+	}
+
+	serviceName := "infisical-relay"
+
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, serviceName, "relay", "Infisical Relay Service"); err != nil {
+		return fmt.Errorf("failed to write systemd service file: %v", err)
+	}
+
+	if err := util.WriteLogrotateFile(serviceLogFile, serviceName); err != nil {
+		return fmt.Errorf("failed to write logrotate file: %v", err)
+	}
+
+	reloadCmd := exec.Command("systemctl", "daemon-reload")
+	if err := reloadCmd.Run(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %v", err)
+	}
+
+	log.Info().Msg("Successfully installed systemd service for Infisical Relay")
+	log.Info().Msg("To start the service, run: sudo systemctl start infisical-relay")
+	log.Info().Msg("To enable the service on boot, run: sudo systemctl enable infisical-relay")
+
+	return nil
+}
+
+// InstallAwsAuthRelaySystemdService installs the systemd service for a relay using AWS Auth.
+// Unlike the token-auth flow, no JWT is written into the env file — the relay performs a
+// fresh STS-signed login on each service start using whatever AWS credentials it can resolve
+// (instance role, env vars, shared profile). We just persist the relay id, domain, and name
+// so `relay start` can re-authenticate.
+func InstallAwsAuthRelaySystemdService(relayID string, domain string, name string, serviceLogFile string) error {
+	if runtime.GOOS != "linux" {
+		log.Info().Msg("Skipping systemd service installation - not on Linux")
+		return nil
+	}
+
+	if os.Geteuid() != 0 {
+		log.Info().Msg("Skipping systemd service installation - not running as root/sudo")
+		return nil
+	}
+
+	configDir := "/etc/infisical"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
+	}
+
+	configContent := fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ID_KEY, relayID)
+	configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLL_METHOD_KEY, EnrollMethodAws)
+	if domain != "" {
+		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
+	}
+	configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_NAME_ENV_NAME, name)
+
+	environmentFilePath := filepath.Join(configDir, "relay.conf")
+	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write environment file: %v", err)
+	}
+
+	serviceName := "infisical-relay"
+
+	if err := util.WriteSystemdServiceFile(serviceLogFile, environmentFilePath, serviceName, "relay", "Infisical Relay Service"); err != nil {
+		return fmt.Errorf("failed to write systemd service file: %v", err)
+	}
+
+	if err := util.WriteLogrotateFile(serviceLogFile, serviceName); err != nil {
+		return fmt.Errorf("failed to write logrotate file: %v", err)
+	}
+
+	reloadCmd := exec.Command("systemctl", "daemon-reload")
+	if err := reloadCmd.Run(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %v", err)
+	}
+
+	log.Info().Msg("Successfully installed systemd service for Infisical Relay")
+	log.Info().Msg("To start the service, run: sudo systemctl start infisical-relay")
+	log.Info().Msg("To enable the service on boot, run: sudo systemctl enable infisical-relay")
+
+	return nil
+}
+
 func UninstallRelaySystemdService() error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service uninstallation - not on Linux")
