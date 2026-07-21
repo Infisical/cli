@@ -22,6 +22,12 @@ import (
 
 var Telemetry *telemetry.Telemetry
 
+// Log configuration variables set via flags
+var (
+	logFormat      string
+	logDestination string
+)
+
 var RootCmd = &cobra.Command{
 	Use:               "infisical",
 	Short:             "Infisical CLI is used to inject environment variables into any process",
@@ -120,8 +126,10 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
-	cobra.OnInitialize(initLog)
+	cobra.OnInitialize(initLog, initLogOutput)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
+	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default), plain, json. Console mode auto-disables colors in non-TTY environments or when NO_COLOR is set. Can also set via LOG_FORMAT env var.")
+	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
 	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'domain' field in .infisical.json. Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
@@ -185,6 +193,77 @@ func initLog() {
 	default:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
+}
+
+// initLogOutput configures the logger output format and destination based on
+// flags and environment variables. Called via cobra.OnInitialize after flags
+// are parsed.
+func initLogOutput() {
+	// Determine format: flag > env > default
+	format := logFormat
+	if format == "" {
+		format = os.Getenv("LOG_FORMAT")
+	}
+	if format == "" {
+		format = "console"
+	}
+
+	// Determine destination: flag > env > default
+	dest := logDestination
+	if dest == "" {
+		dest = os.Getenv("LOG_DESTINATION")
+	}
+	if dest == "" {
+		dest = "stderr"
+	}
+
+	// Select output writer based on destination
+	var w io.Writer
+	switch strings.ToLower(dest) {
+	case "stdout":
+		w = os.Stdout
+	default:
+		w = os.Stderr
+	}
+
+	// Configure logger based on format
+	switch strings.ToLower(format) {
+	case "json":
+		// Raw JSON output - zerolog default without ConsoleWriter
+		log.Logger = zerolog.New(w).With().Timestamp().Logger()
+	case "plain":
+		// Plain text without colors
+		log.Logger = log.Output(GetLoggerConfig(w, true))
+	default: // "console"
+		// Colored console output, but auto-disable colors when appropriate
+		noColor := shouldDisableColor(w)
+		log.Logger = log.Output(GetLoggerConfig(w, noColor))
+	}
+}
+
+// shouldDisableColor returns true if ANSI color codes should be disabled.
+// Colors are disabled when:
+// - NO_COLOR env var is set to a non-empty value (https://no-color.org/)
+// - TERM=dumb
+// - Output is not a terminal (e.g., piped or redirected)
+func shouldDisableColor(w io.Writer) bool {
+	// NO_COLOR env var (https://no-color.org/) - disables color when present and non-empty
+	if val, ok := os.LookupEnv("NO_COLOR"); ok && val != "" {
+		return true
+	}
+
+	// TERM=dumb indicates a dumb terminal without color support
+	if os.Getenv("TERM") == "dumb" {
+		return true
+	}
+
+	// Check if output is a TTY - disable colors for non-TTY output
+	if f, ok := w.(*os.File); ok {
+		return !isatty.IsTerminal(f.Fd())
+	}
+
+	// For non-file writers (e.g., custom writers), keep colors enabled
+	return false
 }
 
 func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
