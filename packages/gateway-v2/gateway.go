@@ -966,20 +966,11 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAMWebApp {
-		log.Info().Msg("Starting web-app tunnel stub handler")
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for i := 1; ; i++ {
-			select {
-			case <-g.ctx.Done():
-				return
-			case <-ticker.C:
-				if _, err := fmt.Fprintf(tlsConn, "web-app tunnel stub: frame %d\r\n", i); err != nil {
-					log.Debug().Err(err).Msg("web-app stub write ended")
-					return
-				}
-			}
+		log.Info().Msg("Starting web-app handler")
+		if err := handleWebAppProxy(g.ctx, tlsConn, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
+			log.Error().Err(err).Msg("web-app handler ended with error")
 		}
+		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
 		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
