@@ -14,9 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -56,6 +59,9 @@ const (
 	maxConcurrentConns = 512
 
 	leaseRevokeShutdownTimeout = 5 * time.Second
+
+	// usageReportTimeout bounds each best-effort "last used" report to the backend.
+	usageReportTimeout = 5 * time.Second
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
@@ -84,6 +90,11 @@ type proxyServer struct {
 	cache     *agentCache
 	leases    *leaseStore
 	transport http.RoundTripper
+
+	// usage holds the set of proxied-service IDs brokered since the last flush (deduped per tick).
+	usageMu       sync.Mutex
+	usage         map[string]struct{}
+	usageFlushing atomic.Bool
 }
 
 func newProxyServer(opts Options) *proxyServer {
@@ -94,6 +105,37 @@ func newProxyServer(opts Options) *proxyServer {
 		cache:     newAgentCache(opts.ProxyToken, leases),
 		leases:    leases,
 		transport: newUpstreamTransport(),
+		usage:     make(map[string]struct{}),
+	}
+}
+
+func (ps *proxyServer) recordUsage(serviceID string) {
+	ps.usageMu.Lock()
+	ps.usage[serviceID] = struct{}{}
+	ps.usageMu.Unlock()
+}
+
+func (ps *proxyServer) flushUsage() {
+	if !ps.usageFlushing.CompareAndSwap(false, true) {
+		return
+	}
+	defer ps.usageFlushing.Store(false)
+
+	ps.usageMu.Lock()
+	if len(ps.usage) == 0 {
+		ps.usageMu.Unlock()
+		return
+	}
+	snapshot := ps.usage
+	ps.usage = make(map[string]struct{})
+	ps.usageMu.Unlock()
+
+	client := resty.New().SetAuthToken(ps.opts.ProxyToken()).SetTimeout(usageReportTimeout)
+	for serviceID := range snapshot {
+		if err := api.CallReportProxiedServiceUsage(client, serviceID); err != nil {
+			log.Debug().Err(err).Msg("failed to report proxied service usage; dropping batch")
+			return
+		}
 	}
 }
 
@@ -185,6 +227,7 @@ func (ps *proxyServer) pollLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		ps.cache.refreshActive()
+		go ps.flushUsage()
 	}
 }
 
@@ -338,6 +381,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status = decisionError, http.StatusBadGateway
 	case outcome.service != nil:
 		decision, status = decisionBrokered, resp.StatusCode
+		ps.recordUsage(outcome.service.id)
 	default:
 		decision, status = decisionPassthrough, resp.StatusCode
 	}
