@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/chromedp/cdproto/input"
@@ -133,6 +134,23 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 		loopCancel()
 	}()
 
+	// Recording runs on its own buffered channel + goroutine so capturing every
+	// frame isn't limited by (and can't stall on) how fast the live client reads.
+	var recordCh chan recFrame
+	if recorder != nil {
+		recordCh = make(chan recFrame, 256)
+		go func() {
+			for {
+				select {
+				case <-loopCtx.Done():
+					return
+				case rf := <-recordCh:
+					recorder.record(rf.data, rf.at)
+				}
+			}
+		}()
+	}
+
 	frameCh := make(chan []byte, 8)
 
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
@@ -146,9 +164,19 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 		if err != nil {
 			return
 		}
+		at := time.Now()
+		// To the live client: skip a frame if the client is behind (backpressure).
 		select {
 		case frameCh <- data:
-		default: // drop the frame if the writer is behind (backpressure)
+		default:
+		}
+		// To the recorder, stamped at capture time. Its own buffer keeps recording
+		// fidelity independent of client speed; drop only if truly overwhelmed.
+		if recordCh != nil {
+			select {
+			case recordCh <- recFrame{data: data, at: at}:
+			default:
+			}
 		}
 	})
 
@@ -178,9 +206,6 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 			}
 			if _, err := conn.Write(frame); err != nil {
 				return nil
-			}
-			if recorder != nil {
-				recorder.record(frame)
 			}
 			frameCount++
 			if frameCount == 1 || frameCount%30 == 0 {

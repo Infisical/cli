@@ -3,17 +3,12 @@ package gatewayv2
 import (
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
 )
-
-// recordingSampleInterval caps recorded frames to ~2 fps. The live stream to the
-// client stays full-rate; only the recording is sampled to keep it small.
-const recordingSampleInterval = 500 * time.Millisecond
 
 // webAppFrameEnvelope is the JSON envelope stored in SessionEvent.Data for a
 // recorded web-app frame (mirrors the RDP frame envelope). json.Marshal
@@ -23,16 +18,22 @@ type webAppFrameEnvelope struct {
 	ElapsedNs uint64 `json:"elapsedNs"` // ns since session start, for replay ordering
 }
 
-// webAppRecorder tees sampled screencast frames into the same tamper-proof,
-// encrypted, chunked recording pipeline that RDP/SSH use.
+// recFrame is one captured frame queued for recording, stamped at capture time so
+// replay timing stays accurate regardless of how far behind the recorder runs.
+type recFrame struct {
+	data []byte
+	at   time.Time
+}
+
+// webAppRecorder tees screencast frames into the same tamper-proof, encrypted,
+// chunked recording pipeline that RDP/SSH use. Every emitted frame is recorded:
+// the screencast is event-driven, so that's one frame per visual change.
 type webAppRecorder struct {
 	sessionID      string
 	logger         *session.EncryptedSessionLogger
 	uploader       *session.SessionUploader
 	sessionStart   time.Time
 	priorElapsedNs uint64
-	lastRecorded   time.Time
-	mu             sync.Mutex
 }
 
 // newWebAppRecorder wires up the recorder for a session. Fetching credentials is
@@ -65,24 +66,16 @@ func newWebAppRecorder(pamConfig *pam.GatewayPAMConfig) (*webAppRecorder, error)
 	}, nil
 }
 
-// record persists a frame, sampled to ~2 fps. Safe to call from the stream loop.
-func (r *webAppRecorder) record(frame []byte) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	if !r.lastRecorded.IsZero() && now.Sub(r.lastRecorded) < recordingSampleInterval {
-		return
-	}
-	r.lastRecorded = now
-
-	elapsedNs := r.priorElapsedNs + uint64(now.Sub(r.sessionStart).Nanoseconds())
+// record persists a single captured frame. `at` is when the frame was captured,
+// used to compute the replay timestamp. Called from a single recording goroutine.
+func (r *webAppRecorder) record(frame []byte, at time.Time) {
+	elapsedNs := r.priorElapsedNs + uint64(at.Sub(r.sessionStart).Nanoseconds())
 	envelope, err := json.Marshal(webAppFrameEnvelope{Payload: frame, ElapsedNs: elapsedNs})
 	if err != nil {
 		return
 	}
 	if err := r.logger.LogSessionEvent(session.SessionEvent{
-		Timestamp:   now,
+		Timestamp:   at,
 		EventType:   session.SessionEventWebApp,
 		ChannelType: session.SessionChannelWebApp,
 		Data:        envelope,
