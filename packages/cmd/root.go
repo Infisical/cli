@@ -244,8 +244,6 @@ func initLogOutput() {
 // shouldDisableColor returns true if ANSI color codes should be disabled.
 // Colors are disabled when:
 // - NO_COLOR env var is set to a non-empty value (https://no-color.org/)
-// - TERM=dumb
-// - Output is not a terminal (e.g., piped or redirected)
 func shouldDisableColor(w io.Writer) bool {
 	// NO_COLOR env var (https://no-color.org/) - disables color when present and non-empty
 	if val, ok := os.LookupEnv("NO_COLOR"); ok && val != "" {
