@@ -37,6 +37,7 @@ const (
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
 	ForwardModePAMRDPBrowser   ForwardMode = "PAM_RDP_BROWSER"
+	ForwardModePAMWebApp       ForwardMode = "PAM_WEBAPP"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
@@ -964,6 +965,21 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			}
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePAMWebApp {
+		log.Info().Msg("Starting web-app tunnel stub handler")
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for i := 1; ; i++ {
+			select {
+			case <-g.ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := fmt.Fprintf(tlsConn, "web-app tunnel stub: frame %d\r\n", i); err != nil {
+					log.Debug().Err(err).Msg("web-app stub write ended")
+					return
+				}
+			}
+		}
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
 		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
@@ -1063,6 +1079,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pam-rdp-browser":
 		config.Mode = ForwardModePAMRDPBrowser
+		return config, nil
+
+	case "infisical-pam-webapp":
+		config.Mode = ForwardModePAMWebApp
 		return config, nil
 
 	case "infisical-pam-session-cancellation":
@@ -1268,6 +1288,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-ping",
 		"infisical-pam-proxy",
 		"infisical-pam-rdp-browser",
+		"infisical-pam-webapp",
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
 		"infisical-adcs",
