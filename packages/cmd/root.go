@@ -128,7 +128,7 @@ func init() {
 	util.GetStdoutWriter = RootCmdStdoutWriter
 	cobra.OnInitialize(initLog, initLogOutput)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
-	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default), plain, json. Console mode auto-disables colors in non-TTY environments or when NO_COLOR is set. Can also set via LOG_FORMAT env var.")
+	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default, colored), plain (no color), json (structured). Set NO_COLOR=1 to disable colors in console mode. Can also set via LOG_FORMAT env var.")
 	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
 	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'domain' field in .infisical.json. Required for non-US Cloud users.")
@@ -235,22 +235,19 @@ func initLogOutput() {
 		// Plain text without colors
 		log.Logger = log.Output(GetLoggerConfig(w, true))
 	default: // "console"
-		// Colored console output, but auto-disable colors when appropriate
-		noColor := shouldDisableColor(w)
+		// Colored console output, disable only if explicitly requested via NO_COLOR
+		noColor := shouldDisableColor()
 		log.Logger = log.Output(GetLoggerConfig(w, noColor))
 	}
 }
 
 // shouldDisableColor returns true if ANSI color codes should be disabled.
-// Colors are disabled when:
-// - NO_COLOR env var is set to a non-empty value (https://no-color.org/)
-func shouldDisableColor(w io.Writer) bool {
+// Colors are only disabled when explicitly requested via NO_COLOR env var.
+func shouldDisableColor() bool {
 	// NO_COLOR env var (https://no-color.org/) - disables color when present and non-empty
 	if val, ok := os.LookupEnv("NO_COLOR"); ok && val != "" {
 		return true
 	}
-
-	// For non-file writers (e.g., custom writers), keep colors enabled
 	return false
 }
 
