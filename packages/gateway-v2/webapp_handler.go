@@ -1,28 +1,112 @@
 package gatewayv2
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog/log"
 )
 
+// inputMessage is one client -> gateway input event, sent as newline-delimited JSON
+// over the tunnel. WebSocket message boundaries are not preserved across the raw
+// byte tunnel, so the newline is our framing.
+type inputMessage struct {
+	T  string  `json:"t"`  // "m" = mouse (keyboard added later)
+	E  string  `json:"e"`  // "down" | "up" | "move" | "wheel"
+	X  float64 `json:"x"`  // CSS-pixel coords in the streamed frame's space
+	Y  float64 `json:"y"`
+	B  int     `json:"b"`  // mouse button: 0 left, 1 middle, 2 right
+	DX float64 `json:"dx"` // wheel delta
+	DY float64 `json:"dy"`
+}
+
+// dispatchInput replays a single client input event into the headless Chromium via CDP.
+func dispatchInput(ctx context.Context, msg inputMessage) {
+	if msg.T != "m" {
+		return
+	}
+	var typ input.MouseType
+	switch msg.E {
+	case "down":
+		typ = input.MousePressed
+	case "up":
+		typ = input.MouseReleased
+	case "move":
+		typ = input.MouseMoved
+	case "wheel":
+		typ = input.MouseWheel
+	default:
+		return
+	}
+
+	p := input.DispatchMouseEvent(typ, msg.X, msg.Y)
+	if msg.E == "wheel" {
+		p = p.WithButton(input.None).WithDeltaX(msg.DX).WithDeltaY(msg.DY)
+	} else {
+		btn := input.Left
+		switch msg.B {
+		case 1:
+			btn = input.Middle
+		case 2:
+			btn = input.Right
+		}
+		if msg.E == "move" {
+			btn = input.None
+		}
+		p = p.WithButton(btn)
+		if msg.E == "down" || msg.E == "up" {
+			p = p.WithClickCount(1)
+		}
+	}
+	// Best-effort: input is fire-and-forget; a dropped event shouldn't tear down the session.
+	_ = chromedp.Run(ctx, p)
+}
+
 // handleWebAppProxy launches a headless Chromium, navigates it to the target web
 // application, and streams the page as JPEG frames over conn. Each frame is
 // length-prefixed (4-byte big-endian length + JPEG bytes) so the client can
-// reassemble frame boundaries from the raw byte tunnel.
+// reassemble frame boundaries from the raw byte tunnel. Client input flows the
+// other way as newline-delimited JSON and is replayed into Chromium via CDP.
 func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, targetPort int) error {
 	url := fmt.Sprintf("http://%s:%d", targetHost, targetPort)
 	log.Info().Str("url", url).Msg("web-app: launching headless Chromium")
 
 	ctx, cancel := chromedp.NewContext(gctx)
 	defer cancel()
+
+	// loopCtx lets the client-disconnect watcher below tear the whole handler
+	// down. Without it, a static page (one frame then silence) would block the
+	// stream loop on <-frameCh forever after the client leaves, and defer
+	// cancel() would never fire — leaking a headless Chrome per connect.
+	loopCtx, loopCancel := context.WithCancel(gctx)
+	defer loopCancel()
+
+	// Read client input (and detect disconnect). A static page produces no new
+	// frames, so the read hitting EOF is the only reliable disconnect signal.
+	go func() {
+		reader := bufio.NewReader(conn)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if len(line) > 1 {
+				var msg inputMessage
+				if json.Unmarshal(line, &msg) == nil {
+					dispatchInput(ctx, msg)
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		loopCancel()
+	}()
 
 	frameCh := make(chan []byte, 8)
 
@@ -58,7 +142,8 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 	frameCount := 0
 	for {
 		select {
-		case <-gctx.Done():
+		case <-loopCtx.Done():
+			log.Info().Int("frames", frameCount).Msg("web-app: client disconnected, closing")
 			return nil
 		case frame := <-frameCh:
 			var hdr [4]byte
@@ -70,9 +155,6 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 				return nil
 			}
 			frameCount++
-			if frameCount <= 2 {
-				_ = os.WriteFile(fmt.Sprintf("/tmp/webapp_frame_%d.jpg", frameCount), frame, 0o644)
-			}
 			if frameCount == 1 || frameCount%30 == 0 {
 				log.Info().Int("frames", frameCount).Int("bytes", len(frame)).Msg("web-app: streaming")
 			}
