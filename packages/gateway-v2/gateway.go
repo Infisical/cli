@@ -385,7 +385,9 @@ func (g *Gateway) reapIdleSessions() {
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
-		capabilities := map[string]any{}
+		capabilities := map[string]any{
+			CapabilityConnectionTest: true,
+		}
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
 		}
