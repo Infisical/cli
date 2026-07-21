@@ -235,18 +235,17 @@ func initLogOutput() {
 		// Plain text without colors
 		log.Logger = log.Output(GetLoggerConfig(w, true))
 	default: // "console"
-		// Colored console output, but auto-disable colors when appropriate
-		noColor := shouldDisableColor(w)
+		// Colored console output, disable only if explicitly requested
+		noColor := shouldDisableColor()
 		log.Logger = log.Output(GetLoggerConfig(w, noColor))
 	}
 }
 
 // shouldDisableColor returns true if ANSI color codes should be disabled.
-// Colors are disabled when:
-// - NO_COLOR env var is set to a non-empty value (https://no-color.org/)
+// Colors are only disabled when explicitly requested via:
+// - NO_COLOR env var set to a non-empty value (https://no-color.org/)
 // - TERM=dumb
-// - Output is not a terminal (e.g., piped or redirected)
-func shouldDisableColor(w io.Writer) bool {
+func shouldDisableColor() bool {
 	// NO_COLOR env var (https://no-color.org/) - disables color when present and non-empty
 	if val, ok := os.LookupEnv("NO_COLOR"); ok && val != "" {
 		return true
@@ -257,12 +256,6 @@ func shouldDisableColor(w io.Writer) bool {
 		return true
 	}
 
-	// Check if output is a TTY - disable colors for non-TTY output
-	if f, ok := w.(*os.File); ok {
-		return !isatty.IsTerminal(f.Fd())
-	}
-
-	// For non-file writers (e.g., custom writers), keep colors enabled
 	return false
 }
 
