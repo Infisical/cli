@@ -26,6 +26,8 @@ const (
 	testConnModeTCP      = "tcp"
 )
 
+const CapabilityConnectionTest = "connectionTest"
+
 // testConnectionEnvelope carries the fields common to every connection test; mode selects which client validates
 // it and which per-mode params struct the body is decoded into. The target host/port come from the signed cert.
 type testConnectionEnvelope struct {
