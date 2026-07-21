@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -19,9 +20,9 @@ import (
 // over the tunnel. WebSocket message boundaries are not preserved across the raw
 // byte tunnel, so the newline is our framing.
 type inputMessage struct {
-	T  string  `json:"t"`  // "m" = mouse (keyboard added later)
-	E  string  `json:"e"`  // "down" | "up" | "move" | "wheel"
-	X  float64 `json:"x"`  // CSS-pixel coords in the streamed frame's space
+	T  string  `json:"t"` // "m" = mouse (keyboard added later)
+	E  string  `json:"e"` // "down" | "up" | "move" | "wheel"
+	X  float64 `json:"x"` // CSS-pixel coords in the streamed frame's space
 	Y  float64 `json:"y"`
 	B  int     `json:"b"`  // mouse button: 0 left, 1 middle, 2 right
 	DX float64 `json:"dx"` // wheel delta
@@ -85,9 +86,23 @@ func dispatchInput(ctx context.Context, msg inputMessage) {
 // length-prefixed (4-byte big-endian length + JPEG bytes) so the client can
 // reassemble frame boundaries from the raw byte tunnel. Client input flows the
 // other way as newline-delimited JSON and is replayed into Chromium via CDP.
-func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, targetPort int) error {
+func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, targetPort int, pamConfig *pam.GatewayPAMConfig) error {
 	url := fmt.Sprintf("http://%s:%d", targetHost, targetPort)
 	log.Info().Str("url", url).Msg("web-app: launching headless Chromium")
+
+	// Tamper-proof recording is best-effort: a recording failure must never break
+	// the live session.
+	var recorder *webAppRecorder
+	if pamConfig != nil && pamConfig.SessionId != "" {
+		r, err := newWebAppRecorder(pamConfig)
+		if err != nil {
+			log.Warn().Err(err).Str("sessionId", pamConfig.SessionId).Msg("web-app: recording disabled")
+		} else {
+			recorder = r
+			defer recorder.close()
+			log.Info().Str("sessionId", pamConfig.SessionId).Msg("web-app: recording enabled")
+		}
+	}
 
 	ctx, cancel := chromedp.NewContext(gctx)
 	defer cancel()
@@ -163,6 +178,9 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 			}
 			if _, err := conn.Write(frame); err != nil {
 				return nil
+			}
+			if recorder != nil {
+				recorder.record(frame)
 			}
 			frameCount++
 			if frameCount == 1 || frameCount%30 == 0 {

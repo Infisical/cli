@@ -966,8 +966,8 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAMWebApp {
-		log.Info().Msg("Starting web-app handler")
-		if err := handleWebAppProxy(g.ctx, tlsConn, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
+		log.Info().Str("sessionId", forwardConfig.PAMConfig.SessionId).Msg("Starting web-app handler")
+		if err := handleWebAppProxy(g.ctx, tlsConn, forwardConfig.TargetHost, forwardConfig.TargetPort, &forwardConfig.PAMConfig); err != nil {
 			log.Error().Err(err).Msg("web-app handler ended with error")
 		}
 		return
