@@ -33,6 +33,16 @@ func dispatchInput(ctx context.Context, msg inputMessage) {
 	if msg.T != "m" {
 		return
 	}
+	// Log discrete actions (clicks/scroll); skip high-frequency moves to avoid spam.
+	if msg.E != "move" {
+		log.Info().
+			Str("event", msg.E).
+			Int("button", msg.B).
+			Float64("x", msg.X).
+			Float64("y", msg.Y).
+			Msg("web-app: client input")
+	}
+
 	var typ input.MouseType
 	switch msg.E {
 	case "down":
