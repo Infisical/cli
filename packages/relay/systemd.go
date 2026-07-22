@@ -101,6 +101,7 @@ func InstallEnrolledRelaySystemdService(accessToken string, domain string, name 
 	}
 
 	configContent := fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ACCESS_TOKEN_KEY, accessToken)
+	configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLL_METHOD_KEY, EnrollMethodToken)
 	if domain != "" {
 		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
 	}
