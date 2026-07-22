@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -112,7 +113,7 @@ func doPostgresConnectionTest(ctx context.Context, host string, port int, params
 // can't authenticate at rest (RDP, SSH certificate auth), so at least a bad host/port is rejected.
 func doTCPReachabilityTest(ctx context.Context, host string, port int) error {
 	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host, port))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return err
 	}
