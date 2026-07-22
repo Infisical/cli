@@ -202,14 +202,16 @@ func SyncDependency(ctx context.Context, creds Credentials, depType, name, runAs
 			n, u, p,
 		)
 	case "iis-app-pool":
-		// Pure PowerShell already: the password is a cmdlet value, never a native-exe argument. Only restart a
-		// pool that was already started (Restart-WebAppPool throws on a stopped pool).
+		// -LiteralPath so an app-pool name containing PowerShell wildcard characters ([, ], *, ?) is matched
+		// literally rather than expanded as a pattern (which could update the wrong pool, several, or none).
+		// Only the password is written: the run-as identity does not change during a rotation, and dropping the
+		// separate userName write means a single write that can't leave the pool on a new identity with the old
+		// password. Only restart a pool that was already started (Restart-WebAppPool throws on a stopped pool).
 		script = fmt.Sprintf(
 			`$ErrorActionPreference='Stop'; Import-Module WebAdministration; `+
-				`Set-ItemProperty 'IIS:\AppPools\%s' -Name processModel.userName -Value '%s'; `+
-				`Set-ItemProperty 'IIS:\AppPools\%s' -Name processModel.password -Value '%s'; `+
-				`if ((Get-WebAppPoolState -Name '%s').Value -eq 'Started') { Restart-WebAppPool '%s' }`,
-			n, u, n, p, n, n,
+				`Set-ItemProperty -LiteralPath 'IIS:\AppPools\%s' -Name processModel.password -Value '%s'; `+
+				`if ((Get-WebAppPoolState -Name '%s').Value -eq 'Started') { Restart-WebAppPool -Name '%s' }`,
+			n, p, n, n,
 		)
 	default:
 		return fmt.Errorf("unsupported dependency type %q", depType)
