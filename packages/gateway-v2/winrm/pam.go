@@ -62,10 +62,14 @@ try {
   foreach ($t in (Get-ScheduledTask | Where-Object { ($_.Principal.LogonType -eq 'Password' -or $_.Principal.LogonType -eq 'InteractiveOrPassword') -and $_.Principal.UserId })) {
     $info = $null
     try { $info = Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath } catch {}
+    # Principal.UserId is unqualified (e.g. 'Administrator'), so qualify it via the machine's own LSA: a bare
+    # name is the local account on a member (DOMAIN\user only on a DC), and must not anchor to the domain account.
+    $q = $t.Principal.UserId
+    try { $q = (New-Object System.Security.Principal.NTAccount($q)).Translate([System.Security.Principal.SecurityIdentifier]).Translate([System.Security.Principal.NTAccount]).Value } catch {}
     $deps += [pscustomobject]@{
-      type = 'scheduled-task'; runAs = $t.Principal.UserId; name = ($t.TaskPath + $t.TaskName)
+      type = 'scheduled-task'; runAs = $q; name = ($t.TaskPath + $t.TaskName)
       data = @{ taskPath = $t.TaskPath; taskName = $t.TaskName; logonType = [string]$t.Principal.LogonType;
-                runLevel = [string]$t.Principal.RunLevel; state = [string]$t.State; runAsAccount = $t.Principal.UserId;
+                runLevel = [string]$t.Principal.RunLevel; state = [string]$t.State; runAsAccount = $q;
                 lastRunTime = if ($info) { [string]$info.LastRunTime } else { $null };
                 nextRunTime = if ($info) { [string]$info.NextRunTime } else { $null };
                 lastTaskResult = if ($info) { $info.LastTaskResult } else { $null } }

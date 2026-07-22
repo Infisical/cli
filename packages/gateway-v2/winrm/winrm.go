@@ -15,6 +15,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -270,9 +272,44 @@ func run(ctx context.Context, client *winrm.Client, script string) (string, erro
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
-		return "", fmt.Errorf("command failed (exit %d): %s", code, truncate(msg, 500))
+		return "", fmt.Errorf("command failed (exit %d): %s", code, truncate(cleanPowerShellError(msg), 500))
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+var (
+	clixmlErrSegment = regexp.MustCompile(`(?s)<S[^>]*>(.*?)</S>`)
+	clixmlHexEscape  = regexp.MustCompile(`_x([0-9A-Fa-f]{4})_`)
+)
+
+// PowerShell writes error output as CLIXML (an XML envelope with _xXXXX_ hex escapes), which is unreadable in a
+// UI. Decode it to the plain error text: concatenate the error-stream segments, unescape, and drop the "At line"
+// positional trailer (meaningless for our one-line scripts). Non-CLIXML output is returned untouched.
+func cleanPowerShellError(msg string) string {
+	if !strings.Contains(msg, "CLIXML") {
+		return msg
+	}
+	var b strings.Builder
+	for _, m := range clixmlErrSegment.FindAllStringSubmatch(msg, -1) {
+		b.WriteString(m[1])
+	}
+	text := b.String()
+	if text == "" {
+		return msg
+	}
+	text = clixmlHexEscape.ReplaceAllStringFunc(text, func(tok string) string {
+		code, err := strconv.ParseInt(tok[2:6], 16, 32)
+		if err != nil {
+			return tok
+		}
+		return string(rune(code))
+	})
+	text = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`, "&apos;", "'", "&amp;", "&").Replace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	if i := strings.Index(text, "At line:"); i > 0 {
+		text = strings.TrimSpace(text[:i])
+	}
+	return text
 }
 
 // runSuppressingOutput runs a script whose text carries file content, returning a generic error on
