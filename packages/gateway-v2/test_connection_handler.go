@@ -79,6 +79,7 @@ func doPostgresConnectionTest(ctx context.Context, host string, port int, params
 		return fmt.Errorf("failed to build connection config: %w", err)
 	}
 	config.Host = host
+	config.Fallbacks = nil
 	config.Port = uint16(port)
 	config.User = params.Username
 	config.Password = params.Password
