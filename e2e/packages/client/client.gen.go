@@ -1739,6 +1739,21 @@ type ClientInterface interface {
 
 	CreateWindowsPamAccount(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreatePamFolderWithBody request with any body
+	CreatePamFolderWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreatePamFolder(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreatePamAccountTemplateWithBody request with any body
+	CreatePamAccountTemplateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreatePamAccountTemplate(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateKubernetesPamAccountWithBody request with any body
+	CreateKubernetesPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateKubernetesPamAccount(ctx context.Context, body CreateKubernetesPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateKubernetesPamResourceWithBody request with any body
 	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -4214,6 +4229,21 @@ type ClientWithResponsesInterface interface {
 	CreateWindowsPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error)
 
 	CreateWindowsPamAccountWithResponse(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error)
+
+	// CreatePamFolderWithBodyWithResponse request with any body
+	CreatePamFolderWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error)
+
+	CreatePamFolderWithResponse(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error)
+
+	// CreatePamAccountTemplateWithBodyWithResponse request with any body
+	CreatePamAccountTemplateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error)
+
+	CreatePamAccountTemplateWithResponse(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error)
+
+	// CreateKubernetesPamAccountWithBodyWithResponse request with any body
+	CreateKubernetesPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamAccountResponse, error)
+
+	CreateKubernetesPamAccountWithResponse(ctx context.Context, body CreateKubernetesPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamAccountResponse, error)
 
 	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
 	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
@@ -12173,6 +12203,467 @@ func ParseCreateSecretV4Response(rsp *http.Response) (*CreateSecretV4Response, e
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// NOTE: hand-added to match e2e/openapi-cfg.yaml. Regenerate via 'make generate-code' against a current backend and remove this note.
+
+// CreatePamFolderJSONBody defines parameters for CreatePamFolder.
+type CreatePamFolderJSONBody struct {
+	Description *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+}
+
+// CreatePamFolderJSONRequestBody defines body for CreatePamFolder for application/json ContentType.
+type CreatePamFolderJSONRequestBody CreatePamFolderJSONBody
+
+// CreatePamAccountTemplateJSONBody defines parameters for CreatePamAccountTemplate.
+type CreatePamAccountTemplateJSONBody struct {
+	Description *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+	Type        string  `json:"type"`
+}
+
+// CreatePamAccountTemplateJSONRequestBody defines body for CreatePamAccountTemplate for application/json ContentType.
+type CreatePamAccountTemplateJSONRequestBody CreatePamAccountTemplateJSONBody
+
+// CreateKubernetesPamAccountJSONBody defines parameters for CreateKubernetesPamAccount.
+type CreateKubernetesPamAccountJSONBody struct {
+	ConnectionDetails struct {
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+		Url                   string  `json:"url"`
+	} `json:"connectionDetails"`
+	// Credentials models only the service-account-token arm of the backend's discriminated union.
+	Credentials struct {
+		AuthMethod          string `json:"authMethod"`
+		ServiceAccountToken string `json:"serviceAccountToken"`
+	} `json:"credentials"`
+	Description *string             `json:"description,omitempty"`
+	FolderId    openapi_types.UUID  `json:"folderId"`
+	GatewayId   *openapi_types.UUID `json:"gatewayId,omitempty"`
+	Name        string              `json:"name"`
+	TemplateId  openapi_types.UUID  `json:"templateId"`
+}
+
+// CreateKubernetesPamAccountJSONRequestBody defines body for CreateKubernetesPamAccount for application/json ContentType.
+type CreateKubernetesPamAccountJSONRequestBody CreateKubernetesPamAccountJSONBody
+
+// CreatePamFolderResponse hand-added.
+type CreatePamFolderResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Folder struct {
+			Id   openapi_types.UUID `json:"id"`
+			Name string             `json:"name"`
+		} `json:"folder"`
+	}
+}
+
+// Status returns HTTPResponse.Status
+func (r CreatePamFolderResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePamFolderResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// CreatePamAccountTemplateResponse hand-added.
+type CreatePamAccountTemplateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Template struct {
+			Id openapi_types.UUID `json:"id"`
+		} `json:"template"`
+	}
+}
+
+// Status returns HTTPResponse.Status
+func (r CreatePamAccountTemplateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePamAccountTemplateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// CreateKubernetesPamAccountResponse hand-added.
+type CreateKubernetesPamAccountResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Account struct {
+			Id   openapi_types.UUID `json:"id"`
+			Name string             `json:"name"`
+		} `json:"account"`
+	}
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateKubernetesPamAccountResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateKubernetesPamAccountResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// NewCreatePamFolderRequest calls the generic CreatePamFolder builder with application/json body
+func NewCreatePamFolderRequest(server string, body CreatePamFolderJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreatePamFolderRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreatePamFolderRequestWithBody generates requests for CreatePamFolder with any type of body
+func NewCreatePamFolderRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/folders")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreatePamAccountTemplateRequest calls the generic CreatePamAccountTemplate builder with application/json body
+func NewCreatePamAccountTemplateRequest(server string, body CreatePamAccountTemplateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreatePamAccountTemplateRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreatePamAccountTemplateRequestWithBody generates requests for CreatePamAccountTemplate with any type of body
+func NewCreatePamAccountTemplateRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/account-templates")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCreateKubernetesPamAccountRequest calls the generic CreateKubernetesPamAccount builder with application/json body
+func NewCreateKubernetesPamAccountRequest(server string, body CreateKubernetesPamAccountJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateKubernetesPamAccountRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateKubernetesPamAccountRequestWithBody generates requests for CreateKubernetesPamAccount with any type of body
+func NewCreateKubernetesPamAccountRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/accounts/kubernetes")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+func (c *Client) CreatePamFolderWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamFolderRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePamFolder(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamFolderRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePamAccountTemplateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamAccountTemplateRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePamAccountTemplate(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamAccountTemplateRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateKubernetesPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateKubernetesPamAccountRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateKubernetesPamAccount(ctx context.Context, body CreateKubernetesPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateKubernetesPamAccountRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreatePamFolderWithBodyWithResponse request with arbitrary body returning *CreatePamFolderResponse
+func (c *ClientWithResponses) CreatePamFolderWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error) {
+	rsp, err := c.CreatePamFolderWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePamFolderResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreatePamFolderWithResponse(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error) {
+	rsp, err := c.CreatePamFolder(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePamFolderResponse(rsp)
+}
+
+// CreatePamAccountTemplateWithBodyWithResponse request with arbitrary body returning *CreatePamAccountTemplateResponse
+func (c *ClientWithResponses) CreatePamAccountTemplateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error) {
+	rsp, err := c.CreatePamAccountTemplateWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePamAccountTemplateResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreatePamAccountTemplateWithResponse(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error) {
+	rsp, err := c.CreatePamAccountTemplate(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePamAccountTemplateResponse(rsp)
+}
+
+// CreateKubernetesPamAccountWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamAccountResponse
+func (c *ClientWithResponses) CreateKubernetesPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamAccountResponse, error) {
+	rsp, err := c.CreateKubernetesPamAccountWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateKubernetesPamAccountResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateKubernetesPamAccountWithResponse(ctx context.Context, body CreateKubernetesPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamAccountResponse, error) {
+	rsp, err := c.CreateKubernetesPamAccount(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateKubernetesPamAccountResponse(rsp)
+}
+
+// ParseCreatePamFolderResponse parses an HTTP response from a CreatePamFolderWithResponse call
+func ParseCreatePamFolderResponse(rsp *http.Response) (*CreatePamFolderResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePamFolderResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Folder struct {
+				Id   openapi_types.UUID `json:"id"`
+				Name string             `json:"name"`
+			} `json:"folder"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreatePamAccountTemplateResponse parses an HTTP response from a CreatePamAccountTemplateWithResponse call
+func ParseCreatePamAccountTemplateResponse(rsp *http.Response) (*CreatePamAccountTemplateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePamAccountTemplateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Template struct {
+				Id openapi_types.UUID `json:"id"`
+			} `json:"template"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateKubernetesPamAccountResponse parses an HTTP response from a CreateKubernetesPamAccountWithResponse call
+func ParseCreateKubernetesPamAccountResponse(rsp *http.Response) (*CreateKubernetesPamAccountResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateKubernetesPamAccountResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Account struct {
+				Id   openapi_types.UUID `json:"id"`
+				Name string             `json:"name"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	}
 
