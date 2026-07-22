@@ -27,10 +27,19 @@ const (
 	leafTTL                    = 24 * time.Hour
 	leafReuseMargin            = 1 * time.Hour
 	maxLeafCacheEntries        = 8192
+
+	// localRootTTL bounds the self-signed local root used by `agent-proxy run`. The root lives only in
+	// memory for the lifetime of one wrapped command; the TTL just needs to comfortably outlast any
+	// single agent session.
+	localRootTTL = 7 * 24 * time.Hour
 )
 
 type caManager struct {
 	token func() string
+
+	// local marks the self-signed local-root mode used by `agent-proxy run`: the "intermediate" fields
+	// hold a self-signed root minted at construction, never re-signed via Infisical, never persisted.
+	local bool
 
 	mu                sync.Mutex
 	intermediateKey   *ecdsa.PrivateKey
@@ -55,7 +64,65 @@ func newCaManager(token func() string) *caManager {
 	}
 }
 
+// newLocalCaManager builds the CA for local coupled mode: a self-signed ECDSA P-256 root generated in
+// memory, from which mintLeaf signs per-host leaves directly. P-256 is deliberate (rustls-based agents
+// reject exotic curves). The private key never leaves process memory; only RootPEM (public) may be
+// written out for the child's trust bundle.
+func newLocalCaManager() (*caManager, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate local root CA key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "Infisical Agent Proxy Local Root CA"},
+		NotBefore:             time.Now().Add(-1 * time.Minute),
+		NotAfter:              time.Now().Add(localRootTTL),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to self-sign local root CA: %w", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse local root CA certificate: %w", err)
+	}
+	return &caManager{
+		local:            true,
+		intermediateKey:  key,
+		intermediateCert: cert,
+		intermediateExp:  cert.NotAfter,
+		leafCache:        make(map[string]*leafEntry),
+	}, nil
+}
+
+// RootPEM returns the public certificate of the local root (nil outside local mode). Public only:
+// safe to write to the per-run tempdir for SSL_CERT_FILE / NODE_EXTRA_CA_CERTS.
+func (c *caManager) RootPEM() []byte {
+	if !c.local {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.intermediateCert == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.intermediateCert.Raw})
+}
+
 func (c *caManager) ensureIntermediate() error {
+	// The local root is minted once at construction and is never re-signed.
+	if c.local {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

@@ -202,8 +202,40 @@ func (a *agentCache) evictIfFullLocked(incoming string) {
 }
 
 func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, error) {
-	agentClient := resty.New().SetAuthToken(jwt)
-	listResp, err := api.CallListProxiedServices(agentClient, api.ListProxiedServicesRequest{
+	return resolveServices(scope, resolveParams{
+		discoveryToken:      jwt,
+		valueToken:          a.proxyToken,
+		includeNonProxyable: false,
+		registerDynamic: func(cred api.ProxiedServiceCredential, projectSlug string) *dynamicCredentialRef {
+			key := leaseKey{
+				jwt:        jwt,
+				scope:      scope,
+				secretName: cred.DynamicSecretName,
+				configHash: canonicalConfigHash(cred.DynamicSecretConfig),
+			}
+			a.leases.register(key, leaseSpec{projectSlug: projectSlug, config: cred.DynamicSecretConfig})
+			return &dynamicCredentialRef{key: key, field: cred.DynamicSecretField}
+		},
+	})
+}
+
+// resolveParams parameterizes the pieces of service resolution that differ between the two resolver
+// implementations: remote (agentCache: discovery with the agent's wire JWT, values with the proxy MI,
+// Proxy permission required, dynamic secrets leased) and local (localResolver: one developer token for
+// both, Read Value is the only gate, dynamic secrets skipped).
+type resolveParams struct {
+	discoveryToken      string
+	valueToken          func() string
+	includeNonProxyable bool
+	// registerDynamic maps a dynamic-secret credential to its lease ref, or returns nil to skip it.
+	registerDynamic func(cred api.ProxiedServiceCredential, projectSlug string) *dynamicCredentialRef
+}
+
+// resolveServices turns the proxied-services list for a scope into resolvedServices with credential
+// values attached. Shared by both resolver implementations; behavior differences live in resolveParams.
+func resolveServices(scope agentScope, p resolveParams) ([]*resolvedService, error) {
+	client := resty.New().SetAuthToken(p.discoveryToken)
+	listResp, err := api.CallListProxiedServices(client, api.ListProxiedServicesRequest{
 		ProjectID:   scope.projectID,
 		Environment: scope.environment,
 		SecretPath:  scope.secretPath,
@@ -212,11 +244,11 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 		return nil, fmt.Errorf("failed to discover proxied services: %w", err)
 	}
 
-	secretValues := a.fetchSecretValues(scope, referencedStaticKeys(listResp.Services))
+	secretValues := fetchSecretValues(p.valueToken, scope, referencedStaticKeys(listResp.Services, p.includeNonProxyable))
 
 	var services []*resolvedService
 	for _, svc := range listResp.Services {
-		if !svc.CanProxy {
+		if !p.includeNonProxyable && !svc.CanProxy {
 			continue
 		}
 		rs := &resolvedService{
@@ -227,13 +259,10 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 		}
 		for _, cred := range svc.Credentials {
 			if cred.DynamicSecretName != "" {
-				key := leaseKey{
-					jwt:        jwt,
-					scope:      scope,
-					secretName: cred.DynamicSecretName,
-					configHash: canonicalConfigHash(cred.DynamicSecretConfig),
+				ref := p.registerDynamic(cred, listResp.ProjectSlug)
+				if ref == nil {
+					continue
 				}
-				a.leases.register(key, leaseSpec{projectSlug: listResp.ProjectSlug, config: cred.DynamicSecretConfig})
 				rs.credentials = append(rs.credentials, resolvedCredential{
 					role:          cred.Role,
 					headerName:    cred.HeaderName,
@@ -241,7 +270,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 					headerPurpose: cred.HeaderPurpose,
 					placeholder:   cred.PlaceholderValue,
 					surfaces:      cred.SubstitutionSurfaces,
-					dynamic:       &dynamicCredentialRef{key: key, field: cred.DynamicSecretField},
+					dynamic:       ref,
 				})
 				continue
 			}
@@ -270,11 +299,11 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 	return services, nil
 }
 
-func referencedStaticKeys(services []api.ProxiedService) []string {
+func referencedStaticKeys(services []api.ProxiedService, includeNonProxyable bool) []string {
 	seen := make(map[string]struct{})
 	var keys []string
 	for _, svc := range services {
-		if !svc.CanProxy {
+		if !includeNonProxyable && !svc.CanProxy {
 			continue
 		}
 		for _, cred := range svc.Credentials {
@@ -291,12 +320,12 @@ func referencedStaticKeys(services []api.ProxiedService) []string {
 	return keys
 }
 
-// fetchSecretValues resolves referenced static secrets individually so a key the proxy can't read is
-// skipped rather than failing the whole agent.
-func (a *agentCache) fetchSecretValues(scope agentScope, keys []string) map[string]string {
+// fetchSecretValues resolves referenced static secrets individually so a key the value identity can't
+// read is skipped rather than failing the whole agent.
+func fetchSecretValues(token func() string, scope agentScope, keys []string) map[string]string {
 	values := make(map[string]string, len(keys))
 	for _, key := range keys {
-		secret, _, err := util.GetSinglePlainTextSecretByNameV3(a.proxyToken(), scope.projectID, scope.environment, scope.secretPath, key)
+		secret, _, err := util.GetSinglePlainTextSecretByNameV3(token(), scope.projectID, scope.environment, scope.secretPath, key)
 		if err != nil {
 			log.Warn().Err(err).Msgf("agent proxy: skipping static secret %q; proxy identity cannot read it", key)
 			continue
@@ -304,6 +333,13 @@ func (a *agentCache) fetchSecretValues(scope agentScope, keys []string) map[stri
 		values[key] = secret.Value
 	}
 	return values
+}
+
+// close drops every cached entry so credential values become unreachable. Called at proxy shutdown.
+func (a *agentCache) close() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.entries = make(map[string]*agentEntry)
 }
 
 func (a *agentCache) refreshActive() {
