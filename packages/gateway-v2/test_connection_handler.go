@@ -72,7 +72,7 @@ type sqlTestParams struct {
 type mongoTestParams struct {
 	Username              string `json:"username"`
 	Password              string `json:"password"`
-	Database              string `json:"database"`
+	AuthSource            string `json:"authSource"`
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
@@ -201,12 +201,12 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 
 // doMongoConnectionTest authenticates against the target MongoDB and pings it
 func doMongoConnectionTest(ctx context.Context, host string, port int, params mongoTestParams) error {
-	opts := options.Client().SetHosts([]string{net.JoinHostPort(host, strconv.Itoa(port))})
+	opts := options.Client().SetHosts([]string{net.JoinHostPort(host, strconv.Itoa(port))}).SetDirect(true)
 	if params.Username != "" {
 		opts.SetAuth(options.Credential{
 			Username:   params.Username,
 			Password:   params.Password,
-			AuthSource: params.Database,
+			AuthSource: params.AuthSource,
 		})
 	}
 	if params.SslEnabled {
@@ -284,7 +284,7 @@ func doKubernetesConnectionTest(ctx context.Context, host string, port int, para
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode)
 	}
-	if resp.StatusCode >= 500 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
 	}
 	return nil
