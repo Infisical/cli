@@ -30,9 +30,17 @@ type rpcTarget struct {
 
 type rpcTargetContextKey struct{}
 
-// serveDiscoveryOverTLS serves the platform RPCs (ssh-exec, port sweep, connection test) over one HTTP mux,
-// mirroring the ADCS/PKCS11 handlers. The target host/port come from the signed gateway certificate.
-func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
+// serveRPCOverTLS reads one HTTP request off the relay connection, dispatches it to mux with the cert-bound
+// target in context, and writes the response back. The target host/port come from the signed gateway certificate.
+func serveRPCOverTLS(
+	ctx context.Context,
+	conn *tls.Conn,
+	reader *bufio.Reader,
+	forwardConfig *ForwardConfig,
+	mux *http.ServeMux,
+	requestDeadline time.Duration,
+	logLabel string,
+) error {
 	reqCh := make(chan *http.Request, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -53,25 +61,28 @@ func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Re
 	case req = <-reqCh:
 	}
 
-	opCtx, cancel := context.WithTimeout(ctx, discoveryRequestDeadline)
+	opCtx, cancel := context.WithTimeout(ctx, requestDeadline)
 	defer cancel()
 	opCtx = context.WithValue(opCtx, rpcTargetContextKey{}, rpcTarget{forwardConfig.TargetHost, forwardConfig.TargetPort})
 	req = req.WithContext(opCtx)
 
 	rw := newBufferedResponseWriter()
-	discoveryMux().ServeHTTP(rw, req)
+	mux.ServeHTTP(rw, req)
 	if err := rw.writeTo(conn); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
 	}
-	log.Debug().Str("path", req.URL.Path).Int("status", rw.status).Msg("discovery: response written")
+	log.Debug().Str("path", req.URL.Path).Int("status", rw.status).Msg(logLabel + ": response written")
 	return nil
+}
+
+func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
+	return serveRPCOverTLS(ctx, conn, reader, forwardConfig, discoveryMux(), discoveryRequestDeadline, "discovery")
 }
 
 var discoveryMux = sync.OnceValue(func() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/exec", handleDiscoveryExec)
 	mux.HandleFunc("/v1/sweep", handleDiscoverySweep)
-	mux.HandleFunc("/v1/test-connection", handleTestConnection)
 	return mux
 })
 
