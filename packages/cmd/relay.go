@@ -276,7 +276,7 @@ var relaySystemdCmd = &cobra.Command{
   sudo infisical relay systemd install my-relay --enroll-method=aws --relay-id=<relay-id> --domain=<domain>
 
   # Instance relay
-  sudo infisical relay systemd install my-relay --type=instance --relay-auth-secret=<secret>
+  sudo infisical relay systemd install my-relay --type=instance --host=<host> --relay-auth-secret=<secret>
 
   sudo infisical relay systemd uninstall`,
 	DisableFlagsInUseLine: true,
@@ -294,7 +294,7 @@ var relaySystemdInstallCmd = &cobra.Command{
   sudo infisical relay systemd install my-relay --enroll-method=aws --relay-id=<relay-id> --domain=<domain>
 
   # Instance relay
-  sudo infisical relay systemd install my-relay --type=instance --relay-auth-secret=<secret>`,
+  sudo infisical relay systemd install my-relay --type=instance --host=<host> --relay-auth-secret=<secret>`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -388,6 +388,14 @@ var relaySystemdInstallCmd = &cobra.Command{
 					util.HandleError(errors.New("relay name is required (provide as positional argument or --name flag)"))
 				}
 
+				host, hostErr := cmd.Flags().GetString("host")
+				if hostErr != nil {
+					util.HandleError(hostErr, "Unable to parse host flag")
+				}
+				if host == "" {
+					util.HandleError(fmt.Errorf("--host flag is required for instance relays"))
+				}
+
 				relayAuthSecret, secretErr := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay-auth-secret", []string{gatewayv2.RELAY_AUTH_SECRET_ENV_NAME}, "")
 				if secretErr != nil {
 					util.HandleError(secretErr, "Unable to parse relay-auth-secret flag")
@@ -396,7 +404,7 @@ var relaySystemdInstallCmd = &cobra.Command{
 					util.HandleError(fmt.Errorf("--relay-auth-secret flag or %s env must be set for instance relays", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
 				}
 
-				if err := relay.InstallRelaySystemdService("", domain, relayName, "", instanceType, relayAuthSecret, serviceLogFile); err != nil {
+				if err := relay.InstallRelaySystemdService("", domain, relayName, host, instanceType, relayAuthSecret, serviceLogFile); err != nil {
 					util.HandleError(err, "Failed to install relay systemd service")
 				}
 			} else {
@@ -482,12 +490,11 @@ func init() {
 	relaySystemdInstallCmd.Flags().String("log-file", "", "path to write service logs (e.g. /var/log/infisical/relay.log)")
 	relaySystemdInstallCmd.Flags().String("domain", "", "domain of your Infisical instance")
 	relaySystemdInstallCmd.Flags().String("type", "org", "type of relay [org, instance]")
+	relaySystemdInstallCmd.Flags().String("host", "", "IP or hostname for the relay (required for --type=instance)")
 	relaySystemdInstallCmd.Flags().String("relay-auth-secret", "", "relay auth secret (required for --type=instance)")
-	// Hidden flags for backward compatibility with legacy org-level machine identity flow
+	// Hidden flag for backward compatibility with legacy org-level machine identity flow
 	relaySystemdInstallCmd.Flags().String("name", "", "")
-	relaySystemdInstallCmd.Flags().String("host", "", "")
 	_ = relaySystemdInstallCmd.Flags().MarkHidden("name")
-	_ = relaySystemdInstallCmd.Flags().MarkHidden("host")
 
 	relaySystemdCmd.AddCommand(relaySystemdInstallCmd)
 	relaySystemdCmd.AddCommand(relaySystemdUninstallCmd)
