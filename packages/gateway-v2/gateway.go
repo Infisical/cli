@@ -44,6 +44,7 @@ const (
 	ForwardModePkcs11          ForwardMode = "PKCS11"
 	ForwardModeADCS            ForwardMode = "ADCS"
 	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
+	ForwardModeConnectionTest  ForwardMode = "CONNECTION_TEST"
 	ForwardModeWinRM           ForwardMode = "WINRM"
 )
 
@@ -385,9 +386,7 @@ func (g *Gateway) reapIdleSessions() {
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
-		capabilities := map[string]any{
-			CapabilityConnectionTest: true,
-		}
+		capabilities := map[string]any{}
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
 		}
@@ -1021,6 +1020,15 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Debug().Err(err).Msg("Discovery handler ended with error")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeConnectionTest {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting connection-test request from non-platform actor")
+			return
+		}
+		if err := serveConnectionTestOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Connection-test handler ended with error")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModeWinRM {
 		log.Info().Msg("Starting WinRM handler")
 		if err := serveWinrmOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
@@ -1089,6 +1097,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-discovery":
 		config.Mode = ForwardModeDiscovery
+		return config, nil
+
+	case "infisical-connection-test":
+		config.Mode = ForwardModeConnectionTest
 		return config, nil
 
 	case "infisical-adcs":
@@ -1274,6 +1286,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-pam-capabilities",
 		"infisical-adcs",
 		"infisical-discovery",
+		"infisical-connection-test",
 		"infisical-winrm",
 	}
 	if pkcs11Loaded {
