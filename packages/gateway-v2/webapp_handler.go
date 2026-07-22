@@ -91,29 +91,51 @@ func handleWebAppProxy(gctx context.Context, conn net.Conn, targetHost string, t
 	url := fmt.Sprintf("http://%s:%d", targetHost, targetPort)
 	log.Info().Str("url", url).Msg("web-app: launching headless Chromium")
 
+	sessionID := ""
+	if pamConfig != nil {
+		sessionID = pamConfig.SessionId
+	}
+
 	// Tamper-proof recording is best-effort: a recording failure must never break
 	// the live session.
 	var recorder *webAppRecorder
-	if pamConfig != nil && pamConfig.SessionId != "" {
+	if sessionID != "" {
 		r, err := newWebAppRecorder(pamConfig)
 		if err != nil {
-			log.Warn().Err(err).Str("sessionId", pamConfig.SessionId).Msg("web-app: recording disabled")
+			log.Warn().Err(err).Str("sessionId", sessionID).Msg("web-app: recording disabled")
 		} else {
 			recorder = r
 			defer recorder.close()
-			log.Info().Str("sessionId", pamConfig.SessionId).Msg("web-app: recording enabled")
+			log.Info().Str("sessionId", sessionID).Msg("web-app: recording enabled")
 		}
 	}
 
-	ctx, cancel := chromedp.NewContext(gctx)
-	defer cancel()
-
-	// loopCtx lets the client-disconnect watcher below tear the whole handler
-	// down. Without it, a static page (one frame then silence) would block the
-	// stream loop on <-frameCh forever after the client leaves, and defer
-	// cancel() would never fire — leaking a headless Chrome per connect.
+	// loopCtx tears the whole handler down on client disconnect. Without it, a
+	// static page (one frame then silence) would block the stream loop on
+	// <-frameCh forever after the client leaves, leaking a headless Chrome per
+	// connect. The egress proxy and Chromium both stop when it is cancelled.
 	loopCtx, loopCancel := context.WithCancel(gctx)
 	defer loopCancel()
+
+	// Egress wall (Wall #2): route the browser through a per-session proxy that
+	// only permits the one authorized target host:port. Fail closed — a headless
+	// browser with no egress containment must never launch.
+	proxyAddr, err := startEgressProxy(loopCtx, sessionID, targetHost, targetPort)
+	if err != nil {
+		return fmt.Errorf("start egress wall: %w", err)
+	}
+
+	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ProxyServer(proxyAddr),
+		// Override Chromium's implicit loopback bypass so even localhost/127.0.0.1
+		// requests go through (and are filtered by) the wall.
+		chromedp.Flag("proxy-bypass-list", "<-loopback>"),
+	)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(gctx, allocOpts...)
+	defer allocCancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
 
 	// Read client input (and detect disconnect). A static page produces no new
 	// frames, so the read hitting EOF is the only reliable disconnect signal.
