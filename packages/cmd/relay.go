@@ -111,44 +111,53 @@ var relayStartCmd = &cobra.Command{
 
 		// --- Enrollment token path ---
 		if enrollMethod == relay.EnrollMethodToken {
-			enrollToken, _ := cmd.Flags().GetString("token")
-			if enrollToken == "" {
-				util.HandleError(errors.New("--token is required when --enroll-method=token"))
-			}
-
-			storedEnrollToken, _ := relay.LoadStoredEnrollmentToken(relayName)
-			alreadyEnrolled := storedEnrollToken != "" && storedEnrollToken == enrollToken
-
-			if alreadyEnrolled {
-				log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
+			// Check if we already have a stored access token (e.g., from systemd install)
+			storedAccessToken, _ := relay.LoadStoredAccessToken(relayName)
+			if storedAccessToken != "" {
+				// Already have a valid access token, use it directly
+				enrolledAccessToken = storedAccessToken
+				log.Info().Msg("Using stored access token...")
 			} else {
-				httpClient, err := util.GetRestyClientWithCustomHeaders()
-				if err != nil {
-					util.HandleError(err, "unable to create HTTP client")
+				// No stored token, require enrollment token to enroll
+				enrollToken, _ := cmd.Flags().GetString("token")
+				if enrollToken == "" {
+					util.HandleError(errors.New("--token is required when --enroll-method=token"))
 				}
 
-				log.Info().Msg("Enrolling relay with enrollment token...")
-				enrollResp, err := api.CallRelayLogin(httpClient, api.RelayLoginRequest{
-					Method: "token",
-					Token:  enrollToken,
-				})
-				if err != nil {
-					util.HandleError(err, "enrollment failed")
-				}
+				storedEnrollToken, _ := relay.LoadStoredEnrollmentToken(relayName)
+				alreadyEnrolled := storedEnrollToken != "" && storedEnrollToken == enrollToken
 
-				enrolledAccessToken = enrollResp.AccessToken
-				if err := relay.SaveAccessToken(relayName, enrollResp.AccessToken); err != nil {
-					util.HandleError(err, "failed to save relay access token")
-				}
-				if err := relay.SaveEnrollmentToken(relayName, enrollToken); err != nil {
-					util.HandleError(err, "failed to save enrollment token to config")
-				}
+				if alreadyEnrolled {
+					log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
+				} else {
+					httpClient, err := util.GetRestyClientWithCustomHeaders()
+					if err != nil {
+						util.HandleError(err, "unable to create HTTP client")
+					}
 
-				if err := relay.SaveDomain(relayName, config.INFISICAL_URL); err != nil {
-					util.HandleError(err, "failed to save domain to config")
-				}
+					log.Info().Msg("Enrolling relay with enrollment token...")
+					enrollResp, err := api.CallRelayLogin(httpClient, api.RelayLoginRequest{
+						Method: "token",
+						Token:  enrollToken,
+					})
+					if err != nil {
+						util.HandleError(err, "enrollment failed")
+					}
 
-				log.Info().Msgf("Relay enrolled successfully. Access token saved to %s", relay.GetConfPathDisplay(relayName))
+					enrolledAccessToken = enrollResp.AccessToken
+					if err := relay.SaveAccessToken(relayName, enrollResp.AccessToken); err != nil {
+						util.HandleError(err, "failed to save relay access token")
+					}
+					if err := relay.SaveEnrollmentToken(relayName, enrollToken); err != nil {
+						util.HandleError(err, "failed to save enrollment token to config")
+					}
+
+					if err := relay.SaveDomain(relayName, config.INFISICAL_URL); err != nil {
+						util.HandleError(err, "failed to save domain to config")
+					}
+
+					log.Info().Msgf("Relay enrolled successfully. Access token saved to %s", relay.GetConfPathDisplay(relayName))
+				}
 			}
 
 			log.Info().Msg("Starting relay...")

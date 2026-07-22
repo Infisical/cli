@@ -82,8 +82,9 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 }
 
 // InstallEnrolledRelaySystemdService installs the systemd service for a relay that was
-// enrolled via the enrollment token flow. It writes the long-lived relay access token
-// (not a machine identity token) into the environment file.
+// enrolled via the enrollment token flow. It saves the long-lived relay access token
+// to the per-relay config file (same location relay start uses) and writes minimal
+// env vars to the systemd environment file.
 func InstallEnrolledRelaySystemdService(accessToken string, domain string, name string, serviceLogFile string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
@@ -95,17 +96,29 @@ func InstallEnrolledRelaySystemdService(accessToken string, domain string, name 
 		return nil
 	}
 
+	// Save the access token to the per-relay config file (same as relay start does)
+	if err := SaveAccessToken(name, accessToken); err != nil {
+		return fmt.Errorf("failed to save access token: %v", err)
+	}
+
+	// Save domain if provided
+	if domain != "" {
+		if err := SaveDomain(name, domain); err != nil {
+			return fmt.Errorf("failed to save domain: %v", err)
+		}
+	}
+
+	// Write minimal env vars to systemd environment file
 	configDir := "/etc/infisical"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %v", err)
 	}
 
-	configContent := fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ACCESS_TOKEN_KEY, accessToken)
-	configContent += fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLL_METHOD_KEY, EnrollMethodToken)
+	configContent := fmt.Sprintf("%s=%s\n", INFISICAL_RELAY_ENROLL_METHOD_KEY, EnrollMethodToken)
+	configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_NAME_ENV_NAME, name)
 	if domain != "" {
 		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
 	}
-	configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_NAME_ENV_NAME, name)
 
 	environmentFilePath := filepath.Join(configDir, "relay.conf")
 	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
