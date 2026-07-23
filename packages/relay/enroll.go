@@ -32,13 +32,9 @@ func relayConfPath(name string) (string, error) {
 	return filepath.Join(homeDir, ".infisical", "relays", name+".conf"), nil
 }
 
-func loadConfKey(name, key string) (string, error) {
-	confPath, err := relayConfPath(name)
-	if err != nil {
-		return "", err
-	}
-
-	data, err := os.ReadFile(confPath)
+// readKeyFromConfFile reads a key=value pair from a config file at the given path.
+func readKeyFromConfFile(path, key string) (string, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -55,6 +51,14 @@ func loadConfKey(name, key string) (string, error) {
 	}
 
 	return "", nil
+}
+
+func loadConfKey(name, key string) (string, error) {
+	confPath, err := relayConfPath(name)
+	if err != nil {
+		return "", err
+	}
+	return readKeyFromConfFile(confPath, key)
 }
 
 func saveConfKey(name, key, value string) error {

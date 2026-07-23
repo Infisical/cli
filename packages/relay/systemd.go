@@ -31,6 +31,22 @@ func relayEnvFilePath(name string) string {
 	return filepath.Join(relaysConfigDir, name+".env.conf")
 }
 
+// ensureNoLegacyConflict fails the install when the relay name would collide with an existing legacy
+// service — either because it reuses the legacy relay's name (which would create a duplicate service
+// for the same relay) or because it matches the legacy unit name itself.
+func ensureNoLegacyConflict(name string) error {
+	if _, err := os.Stat(relayServiceFilePath(legacyRelayServiceName)); os.IsNotExist(err) {
+		return nil
+	}
+
+	legacyName, _ := readKeyFromConfFile(legacyRelayConfigPath, gatewayv2.RELAY_NAME_ENV_NAME)
+	if name == legacyName || name == legacyRelayServiceName {
+		return fmt.Errorf("cannot install relay '%s': it conflicts with the existing legacy relay service; uninstall it first with: sudo infisical relay systemd uninstall", name)
+	}
+
+	return nil
+}
+
 // InstallRelaySystemdService installs the systemd unit and writes configuration for the relay.
 // token is used for org-type relays (written as INFISICAL_TOKEN). For instance-type relays,
 // relayAuthSecret is written as INFISICAL_RELAY_AUTH_SECRET.
@@ -43,6 +59,10 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 	if os.Geteuid() != 0 {
 		log.Info().Msg("Skipping systemd service installation - not running as root/sudo")
 		return "", nil
+	}
+
+	if err := ensureNoLegacyConflict(name); err != nil {
+		return "", err
 	}
 
 	if err := os.MkdirAll(relaysConfigDir, 0755); err != nil {
@@ -72,12 +92,11 @@ func InstallRelaySystemdService(token string, domain string, name string, host s
 		}
 	}
 
-	environmentFilePath := relayEnvFilePath(name)
-	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+	if err := os.WriteFile(relayEnvFilePath(name), []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	return finalizeRelaySystemdInstall(name, environmentFilePath, serviceLogFile)
+	return finalizeRelaySystemdInstall(name, relayEnvFilePath(name), serviceLogFile)
 }
 
 // InstallEnrolledRelaySystemdService installs the systemd service for a relay that was
@@ -94,6 +113,10 @@ func InstallEnrolledRelaySystemdService(accessToken string, domain string, name 
 	if os.Geteuid() != 0 {
 		log.Info().Msg("Skipping systemd service installation - not running as root/sudo")
 		return "", nil
+	}
+
+	if err := ensureNoLegacyConflict(name); err != nil {
+		return "", err
 	}
 
 	// Save the access token to the per-relay config file (same as relay start does)
@@ -119,12 +142,11 @@ func InstallEnrolledRelaySystemdService(accessToken string, domain string, name 
 		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
 	}
 
-	environmentFilePath := relayEnvFilePath(name)
-	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+	if err := os.WriteFile(relayEnvFilePath(name), []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	return finalizeRelaySystemdInstall(name, environmentFilePath, serviceLogFile)
+	return finalizeRelaySystemdInstall(name, relayEnvFilePath(name), serviceLogFile)
 }
 
 // InstallAwsAuthRelaySystemdService installs the systemd service for a relay using AWS Auth.
@@ -144,6 +166,10 @@ func InstallAwsAuthRelaySystemdService(relayID string, domain string, name strin
 		return "", nil
 	}
 
+	if err := ensureNoLegacyConflict(name); err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(relaysConfigDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create config directory: %v", err)
 	}
@@ -155,16 +181,15 @@ func InstallAwsAuthRelaySystemdService(relayID string, domain string, name strin
 	}
 	configContent += fmt.Sprintf("%s=%s\n", gatewayv2.RELAY_NAME_ENV_NAME, name)
 
-	environmentFilePath := relayEnvFilePath(name)
-	if err := os.WriteFile(environmentFilePath, []byte(configContent), 0600); err != nil {
+	if err := os.WriteFile(relayEnvFilePath(name), []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	return finalizeRelaySystemdInstall(name, environmentFilePath, serviceLogFile)
+	return finalizeRelaySystemdInstall(name, relayEnvFilePath(name), serviceLogFile)
 }
 
-// finalizeRelaySystemdInstall writes the systemd unit + logrotate files for a relay named `name`,
-// reloads systemd, and returns the resolved service name.
+// finalizeRelaySystemdInstall writes the systemd unit + logrotate files, reloads systemd, and
+// returns the service name (the relay name).
 func finalizeRelaySystemdInstall(name string, environmentFilePath string, serviceLogFile string) (string, error) {
 	serviceName := name
 
@@ -199,8 +224,7 @@ func UninstallRelaySystemdService(name string) error {
 		return nil
 	}
 
-	// Resolve service name + paths. An empty name targets the legacy hardcoded service
-	// for backwards compatibility with older installs.
+	// An empty name targets the legacy hardcoded service for backwards compatibility.
 	serviceName := name
 	envFilePath := relayEnvFilePath(name)
 	perRelayConfPath := filepath.Join(relaysConfigDir, name+".conf")
@@ -212,10 +236,7 @@ func UninstallRelaySystemdService(name string) error {
 
 	servicePath := relayServiceFilePath(serviceName)
 	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
-		if name == "" {
-			return fmt.Errorf("no relay service found")
-		}
-		return fmt.Errorf("no relay service found for '%s'", name)
+		return fmt.Errorf("no relay service found for '%s'", serviceName)
 	}
 
 	// Stop the service if it's running
