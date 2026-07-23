@@ -115,6 +115,22 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 	fail := func(e error, messages ...string) { cleanup(); util.HandleError(e, messages...) }
 
+	// Unlike `start` (a daemon whose activity log IS its output), `run` wraps an interactive agent that
+	// owns the terminal. Route the proxy's per-request activity and poll logs to a file so they don't
+	// interleave with the agent's output. --log-file picks a stable path (survives teardown); the
+	// default lives in the per-run tempdir and is removed on exit (tail it live to watch brokering).
+	// HandleError/PrintWarning write to stderr independently, so errors and one-time notices still show.
+	logFile, _ := cmd.Flags().GetString("log-file")
+	logPath := logFile
+	if logPath == "" {
+		logPath = filepath.Join(tempDir, "agent-proxy.log")
+	}
+	logF, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fail(err, "Failed to open the proxy log file")
+	}
+	log.Logger = log.Output(GetLoggerConfig(logF, true))
+
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 	extraRead, _ := cmd.Flags().GetStringArray("allow-read")
@@ -194,8 +210,9 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	if !sandboxEnabled {
 		util.PrintWarning("running WITHOUT the OS sandbox (--no-sandbox): the agent is uncontained and can read your keyring, credential files, and reach the network directly. Secrets are still brokered on the wire, but the sandbox boundary is off.")
 	} else {
-		log.Info().Msg(color.HiBlackString("Local coupled mode: the proxy acts with your own access and the OS sandbox is the boundary that keeps the agent from reading your credentials directly."))
+		fmt.Fprintln(os.Stderr, color.HiBlackString("Local coupled mode: the proxy acts with your own access and the OS sandbox is the boundary that keeps the agent from reading your credentials directly."))
 	}
+	fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logPath))
 
 	child, err := backend.Wrap(spec, args)
 	if err != nil {
@@ -212,10 +229,10 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 // runSandboxedChild starts the child, forwards signals, and returns its exit code; if the proxy dies
 // first it kills the child.
 func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-chan error) int {
-	log.Info().Msg(color.GreenString("Starting agent behind the Infisical agent proxy (sandboxed)"))
+	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent behind the Infisical agent proxy (sandboxed)"))
 
 	if err := child.Start(); err != nil {
-		log.Error().Err(err).Msg("failed to start the agent process")
+		fmt.Fprintf(os.Stderr, "failed to start the agent process: %v\n", err)
 		return 1
 	}
 
@@ -234,7 +251,7 @@ func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-ch
 
 	select {
 	case err := <-proxyErrCh:
-		log.Error().Err(err).Msg("the ephemeral proxy stopped unexpectedly; terminating the agent")
+		fmt.Fprintf(os.Stderr, "%s\n", color.RedString("the ephemeral proxy stopped unexpectedly (%v); terminating the agent", err))
 		if child.Process != nil {
 			_ = child.Process.Kill()
 		}
@@ -255,7 +272,7 @@ func exitCodeFromWait(err error) int {
 			return ws.ExitStatus()
 		}
 	}
-	log.Error().Err(err).Msg("agent process error")
+	fmt.Fprintf(os.Stderr, "agent process error: %v\n", err)
 	return 1
 }
 
@@ -497,6 +514,7 @@ func init() {
 	agentProxyRunCmd.Flags().Bool("no-sandbox", false, "disable the OS sandbox (agent runs uncontained; prints a warning)")
 	agentProxyRunCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
 	agentProxyRunCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes")
+	agentProxyRunCmd.Flags().String("log-file", "", "write the proxy activity log to this path (default: a per-run temp file, kept off the terminal)")
 	agentProxyRunCmd.Flags().StringArray("allow-read", nil, "extra path the agent may read (repeatable)")
 	agentProxyRunCmd.Flags().StringArray("allow-write", nil, "extra path the agent may write (repeatable; implies read)")
 	agentProxyRunCmd.Flags().StringArray("allow-host", nil, "extra host the agent may reach through the proxy (repeatable)")
