@@ -38,11 +38,8 @@ func EnumerateLocalAccounts(ctx context.Context, creds Credentials) (json.RawMes
 	return normalizeJSONArray(out), nil
 }
 
-// enumerateDependenciesScript collects services, password-based scheduled tasks, and IIS app pools that
-// run as a named account, with their run-as identity, so the control plane can anchor each to an account.
-// Services and scheduled tasks are always present on a Windows Server, so a failure enumerating either is a
-// hard error: the control plane must treat the machine as not-scanned rather than silently prune the rows it
-// couldn't see this run. IIS is optional (an absent module just means no app pools), so it is best-effort.
+// enumerateDependenciesScript lists services / scheduled tasks / IIS pools running as a named account. A
+// service/task enumeration failure is a hard error (don't prune a machine we couldn't fully scan); IIS is best-effort.
 const enumerateDependenciesScript = `
 $ErrorActionPreference = 'Stop'
 $deps = @()
@@ -141,9 +138,8 @@ func RotateCredential(ctx context.Context, creds Credentials, kind, username, ne
 	return err
 }
 
-// ValidateLocalCredential checks whether a local account's password is correct, run by the connecting
-// (administrator) identity via PrincipalContext.ValidateCredentials. This lets rotation verify a local
-// credential without logging in AS the account, which an ordinary local account cannot do over WinRM.
+// ValidateLocalCredential checks a local account's password via the admin's PrincipalContext.ValidateCredentials,
+// so rotation can verify it without logging in as the account (which a plain local account can't do over WinRM).
 func ValidateLocalCredential(ctx context.Context, creds Credentials, username, password string) (bool, error) {
 	client, err := newClient(ctx, creds)
 	if err != nil {
@@ -178,10 +174,8 @@ func SyncDependency(ctx context.Context, creds Credentials, depType, name, runAs
 	var script string
 	switch depType {
 	case "windows-service":
-		// Use the CIM Change() method, not sc.exe: PowerShell 5.1 does not escape embedded quotes when
-		// quoting arguments to a native executable, so a password containing " would reach sc.exe mangled.
-		// Passing it as a method argument keeps it entirely within PowerShell. Only restart a service that
-		// was already running, so a deliberately-stopped service is not started as a side effect.
+		// CIM Change(), not sc.exe: PS 5.1 mangles a password containing " as a native-exe arg. Restart only
+		// a service that was already running.
 		script = fmt.Sprintf(
 			`$ErrorActionPreference='Stop'; `+
 				`$svc = Get-CimInstance Win32_Service | Where-Object { $_.Name -eq '%s' }; `+
@@ -202,11 +196,8 @@ func SyncDependency(ctx context.Context, creds Credentials, depType, name, runAs
 			n, u, p,
 		)
 	case "iis-app-pool":
-		// -LiteralPath so an app-pool name containing PowerShell wildcard characters ([, ], *, ?) is matched
-		// literally rather than expanded as a pattern (which could update the wrong pool, several, or none).
-		// Only the password is written: the run-as identity does not change during a rotation, and dropping the
-		// separate userName write means a single write that can't leave the pool on a new identity with the old
-		// password. Only restart a pool that was already started (Restart-WebAppPool throws on a stopped pool).
+		// -LiteralPath matches a wildcard-containing pool name literally, not as a pattern. Write only the
+		// password (the run-as identity is unchanged in a rotation, so one write can't half-commit).
 		script = fmt.Sprintf(
 			`$ErrorActionPreference='Stop'; Import-Module WebAdministration; `+
 				`Set-ItemProperty -LiteralPath 'IIS:\AppPools\%s' -Name processModel.password -Value '%s'; `+

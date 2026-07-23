@@ -282,9 +282,8 @@ var (
 	clixmlHexEscape  = regexp.MustCompile(`_x([0-9A-Fa-f]{4})_`)
 )
 
-// PowerShell writes error output as CLIXML (an XML envelope with _xXXXX_ hex escapes), which is unreadable in a
-// UI. Decode it to the plain error text: concatenate the error-stream segments, unescape, and drop the "At line"
-// positional trailer (meaningless for our one-line scripts). Non-CLIXML output is returned untouched.
+// cleanPowerShellError decodes PowerShell's CLIXML error envelope to plain text (unescapes the segments, drops
+// the positional "At line" trailer). Non-CLIXML output is returned untouched.
 func cleanPowerShellError(msg string) string {
 	if !strings.Contains(msg, "CLIXML") {
 		return msg
