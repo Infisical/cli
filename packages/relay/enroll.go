@@ -12,10 +12,11 @@ const (
 	EnrollMethodToken = "token"
 	EnrollMethodAws   = "aws"
 
-	INFISICAL_RELAY_ACCESS_TOKEN_KEY    = "INFISICAL_RELAY_ACCESS_TOKEN"
-	INFISICAL_RELAY_DOMAIN_KEY          = "INFISICAL_RELAY_DOMAIN"
+	INFISICAL_RELAY_ACCESS_TOKEN_KEY     = "INFISICAL_RELAY_ACCESS_TOKEN"
+	INFISICAL_RELAY_DOMAIN_KEY           = "INFISICAL_RELAY_DOMAIN"
 	INFISICAL_RELAY_ENROLLMENT_TOKEN_KEY = "INFISICAL_RELAY_ENROLLMENT_TOKEN"
-	INFISICAL_RELAY_ID_KEY              = "INFISICAL_RELAY_ID"
+	INFISICAL_RELAY_ID_KEY               = "INFISICAL_RELAY_ID"
+	INFISICAL_RELAY_ENROLL_METHOD_KEY    = "INFISICAL_RELAY_ENROLL_METHOD"
 )
 
 func relayConfPath(name string) (string, error) {
@@ -31,13 +32,9 @@ func relayConfPath(name string) (string, error) {
 	return filepath.Join(homeDir, ".infisical", "relays", name+".conf"), nil
 }
 
-func loadConfKey(name, key string) (string, error) {
-	confPath, err := relayConfPath(name)
-	if err != nil {
-		return "", err
-	}
-
-	data, err := os.ReadFile(confPath)
+// readKeyFromConfFile reads a key=value pair from a config file at the given path.
+func readKeyFromConfFile(path, key string) (string, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -54,6 +51,14 @@ func loadConfKey(name, key string) (string, error) {
 	}
 
 	return "", nil
+}
+
+func loadConfKey(name, key string) (string, error) {
+	confPath, err := relayConfPath(name)
+	if err != nil {
+		return "", err
+	}
+	return readKeyFromConfFile(confPath, key)
 }
 
 func saveConfKey(name, key, value string) error {
