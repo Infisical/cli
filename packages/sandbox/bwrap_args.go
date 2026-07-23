@@ -10,12 +10,19 @@ const BridgeLoopbackPort = 17321
 // cmd package registers a matching hidden cobra command.
 const SupervisorSubcommand = "__sandbox-supervisor"
 
-// buildBwrapArgv builds the full argv (starting with "bwrap") for a spec. Pure function, no OS calls,
-// so it is golden-testable on any platform.
+// buildBwrapArgv builds the full argv (starting with "bwrap") for a spec. Pure function (its only
+// filesystem dependency is injected via isFile), so it is golden-testable on any platform.
 //
 //   - selfExe is the path to this binary (/proc/self/exe at call time), re-executed as the supervisor
 //     on the hard-fence path.
 //   - argv is the agent command.
+//   - isFile reports whether a deny path currently exists as a regular file, which decides how it is
+//     masked (see below). Injected so tests can exercise both branches without touching disk.
+//
+// Deny paths are masked by their type: a directory (or a path that does not exist) is covered with an
+// empty --tmpfs; a regular file is covered by binding /dev/null over it. Using the wrong primitive is
+// not cosmetic: bwrap aborts at startup if asked to mount a tmpfs onto a file (ENOTDIR), so a user who
+// has e.g. ~/.docker/config.json would otherwise be unable to start the sandbox at all.
 //
 // Hard fence (NetMode == HardFence): --unshare-all gives an empty network namespace; the proxy's unix
 // socket (spec.ProxySocket) is bind-mounted in and the supervisor bridges LoopbackPort -> that socket.
@@ -23,7 +30,7 @@ const SupervisorSubcommand = "__sandbox-supervisor"
 // reaches the proxy on host loopback directly and no supervisor/bridge is inserted.
 //
 // Deliberately omits --new-session (it calls setsid() and breaks the interactive TTY / job control).
-func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string) []string {
+func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, isFile func(string) bool) []string {
 	args := []string{
 		"bwrap",
 		"--unshare-all",
@@ -40,10 +47,15 @@ func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string) []string {
 		args = append(args, "--share-net")
 	}
 
-	// Mask credential paths: an empty tmpfs on top of each hides the real contents (they were visible
-	// via --ro-bind / /). tmpfs creates the mountpoint, so a non-existent path is harmless.
+	// Mask credential paths (they were visible via --ro-bind / /). A regular file is masked by binding
+	// /dev/null over it; a directory (or a path that does not exist) is masked with an empty tmpfs.
+	// tmpfs onto an existing file makes bwrap abort at startup, so the file/dir split is load-bearing.
 	for _, p := range dedupeSorted(spec.DenyPaths) {
-		args = append(args, "--tmpfs", p)
+		if isFile(p) {
+			args = append(args, "--ro-bind", "/dev/null", p)
+		} else {
+			args = append(args, "--tmpfs", p)
+		}
 	}
 
 	// Writable workspace + tempdir, bound AFTER --tmpfs /tmp so a tempdir under /tmp is not shadowed.

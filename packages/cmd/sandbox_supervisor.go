@@ -19,6 +19,11 @@ var sandboxSupervisorCmd = &cobra.Command{
 	DisableFlagParsing:    false,
 	FParseErrWhitelist:    cobra.FParseErrWhitelist{UnknownFlags: true},
 	DisableFlagsInUseLine: true,
+	// Override the root PersistentPreRun so this internal re-exec does NOT run the human-facing
+	// preamble (update check, package-repo notice, keyring read). Those make a network call, and this
+	// runs inside an empty network namespace where that call would waste the timeout and print stray
+	// notices. The supervisor needs none of it; it only brings loopback up, bridges, and execs.
+	PersistentPreRun: func(_ *cobra.Command, _ []string) {},
 	Run: func(cmd *cobra.Command, args []string) {
 		probe, _ := cmd.Flags().GetBool("probe")
 		port, _ := cmd.Flags().GetInt("port")

@@ -10,6 +10,13 @@ import (
 
 func osBackend() Backend { return bwrapBackend{} }
 
+// regularFileExists reports whether path currently exists as a regular file (following symlinks).
+// Deny paths that are regular files must be masked with a /dev/null bind, not a tmpfs.
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 type bwrapBackend struct{}
 
 // Preflight checks bwrap is installed and decides hard fence vs shared-net fallback. The decision is
@@ -77,7 +84,7 @@ func (bwrapBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
 		return nil, fmt.Errorf("cannot resolve own executable for the sandbox supervisor: %w", err)
 	}
 
-	full := buildBwrapArgv(spec, self, argv)
+	full := buildBwrapArgv(spec, self, argv, regularFileExists)
 	// full[0] is the literal "bwrap"; exec with the resolved path but keep argv[0] as bwrap.
 	// #nosec G204 -- the wrapped command is provided directly by the operator running the CLI
 	cmd := exec.Command(bwrapPath, full[1:]...)

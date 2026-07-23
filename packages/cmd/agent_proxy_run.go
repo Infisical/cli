@@ -92,8 +92,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	sandboxEnabled := resolveSandboxEnabled(cmd)
 
 	// Resolve the developer's identity. This is the single identity for the whole run: it fetches the
-	// proxied-service config and the referenced secret values. The child gets none of it. A machine
-	// identity is kept refreshed for the session; other credential types fail closed at expiry.
+	// proxied-service config and the referenced secret values. The child gets none of it.
 	src := resolveDeveloperTokenSource(cmd)
 
 	httpClient := resty.New().SetAuthToken(src.token())
@@ -115,7 +114,11 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, "Failed to create the per-run temp directory")
 	}
-	defer os.RemoveAll(tempDir)
+	// os.Exit (at the end, and inside util.HandleError) does not run deferred funcs, so a `defer`
+	// here would never fire. Clean up explicitly at each exit path instead. fail() removes the temp
+	// dir before delegating to HandleError (which exits) so setup failures don't leak it either.
+	cleanup := func() { _ = os.RemoveAll(tempDir) }
+	fail := func(e error, messages ...string) { cleanup(); util.HandleError(e, messages...) }
 
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
@@ -150,10 +153,10 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	backend := sandbox.NewBackend(spec)
 	pre, err := backend.Preflight(spec)
 	if err != nil {
-		util.HandleError(err, "Sandbox preflight failed")
+		fail(err, "Sandbox preflight failed")
 	}
 	if !pre.Supported {
-		util.HandleError(fmt.Errorf("%s", pre.Reason))
+		fail(fmt.Errorf("%s", pre.Reason))
 	}
 	if pre.FallbackToSharedNet {
 		spec.NetMode = sandbox.SharedNet
@@ -167,7 +170,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		AllowedHosts:  allowHosts,
 	})
 	if err != nil {
-		util.HandleError(err, "Failed to initialize the ephemeral agent proxy")
+		fail(err, "Failed to initialize the ephemeral agent proxy")
 	}
 
 	// Choose the proxy transport. Hard fence: a pathname unix socket in the tempdir, bridged into the
@@ -179,14 +182,14 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		spec.ProxySocket = filepath.Join(tempDir, "proxy.sock")
 		listener, err = net.Listen("unix", spec.ProxySocket)
 		if err != nil {
-			util.HandleError(err, "Failed to bind the ephemeral proxy on its unix socket")
+			fail(err, "Failed to bind the ephemeral proxy on its unix socket")
 		}
 		spec.LoopbackPort = sandbox.BridgeLoopbackPort
 		childProxyURL = fmt.Sprintf("http://127.0.0.1:%d", sandbox.BridgeLoopbackPort)
 	} else {
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			util.HandleError(err, "Failed to bind the ephemeral proxy on loopback")
+			fail(err, "Failed to bind the ephemeral proxy on loopback")
 		}
 		spec.LoopbackPort = listener.Addr().(*net.TCPAddr).Port
 		childProxyURL = localProxyURL(listener.Addr().String())
@@ -194,7 +197,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 
 	caPath := filepath.Join(tempDir, "local-ca.pem")
 	if err := os.WriteFile(caPath, proxy.LocalRootPEM(), 0o600); err != nil {
-		util.HandleError(err, "Failed to write the local CA certificate")
+		fail(err, "Failed to write the local CA certificate")
 	}
 
 	proxyErrCh := make(chan error, 1)
@@ -211,11 +214,12 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	child, err := backend.Wrap(spec, args)
 	if err != nil {
 		shutdownProxy(proxy)
-		util.HandleError(err, "Failed to wrap the agent command in the sandbox")
+		fail(err, "Failed to wrap the agent command in the sandbox")
 	}
 
 	exitCode := runSandboxedChild(child, proxy, proxyErrCh)
 	shutdownProxy(proxy)
+	cleanup()
 	os.Exit(exitCode)
 }
 

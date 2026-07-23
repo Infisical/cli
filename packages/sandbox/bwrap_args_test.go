@@ -18,6 +18,10 @@ func bwrapSpec(net NetMode) SandboxSpec {
 	}
 }
 
+// allDirs classifies every deny path as a directory (never a file), so the default specs mask with
+// --tmpfs. Tests that care about the file branch pass their own classifier.
+func allDirs(string) bool { return false }
+
 // argIndex returns the index of the first occurrence of tok, or -1.
 func argIndex(args []string, tok string) int {
 	for i, a := range args {
@@ -29,7 +33,7 @@ func argIndex(args []string, tok string) int {
 }
 
 func TestBwrapArgvHardFence(t *testing.T) {
-	args := buildBwrapArgv(bwrapSpec(HardFence), "/proc/self/exe", []string{"claude", "--flag"})
+	args := buildBwrapArgv(bwrapSpec(HardFence), "/proc/self/exe", []string{"claude", "--flag"}, allDirs)
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -70,7 +74,7 @@ func TestBwrapArgvHardFence(t *testing.T) {
 }
 
 func TestBwrapArgvSharedNet(t *testing.T) {
-	args := buildBwrapArgv(bwrapSpec(SharedNet), "/proc/self/exe", []string{"claude"})
+	args := buildBwrapArgv(bwrapSpec(SharedNet), "/proc/self/exe", []string{"claude"}, allDirs)
 	joined := strings.Join(args, " ")
 
 	if !strings.Contains(joined, "--share-net") {
@@ -94,6 +98,31 @@ func lastArgPairIndex(args []string, flag, val string) int {
 		}
 	}
 	return idx
+}
+
+func TestBwrapArgvMasksFilesWithDevNull(t *testing.T) {
+	spec := bwrapSpec(HardFence)
+	spec.DenyPaths = []string{"/home/dev/.aws", "/home/dev/.docker/config.json", "/home/dev/.netrc"}
+	// Classify the two dotfiles as files; the .aws dir stays a directory.
+	isFile := func(p string) bool {
+		return p == "/home/dev/.docker/config.json" || p == "/home/dev/.netrc"
+	}
+	joined := strings.Join(buildBwrapArgv(spec, "/proc/self/exe", []string{"claude"}, isFile), " ")
+
+	// Files masked by binding /dev/null over them (tmpfs onto a file aborts bwrap).
+	for _, want := range []string{
+		"--ro-bind /dev/null /home/dev/.docker/config.json",
+		"--ro-bind /dev/null /home/dev/.netrc",
+		"--tmpfs /home/dev/.aws", // directory still uses tmpfs
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %q\n%s", want, joined)
+		}
+	}
+	// A file deny path must NOT be masked with tmpfs.
+	if strings.Contains(joined, "--tmpfs /home/dev/.netrc") || strings.Contains(joined, "--tmpfs /home/dev/.docker/config.json") {
+		t.Errorf("file deny paths must not be masked with tmpfs\n%s", joined)
+	}
 }
 
 func TestItoa(t *testing.T) {
