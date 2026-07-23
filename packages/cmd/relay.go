@@ -111,24 +111,15 @@ var relayStartCmd = &cobra.Command{
 
 		// --- Enrollment token path ---
 		if enrollMethod == relay.EnrollMethodToken {
-			// Check if we already have a stored access token (e.g., from systemd install)
-			storedAccessToken, _ := relay.LoadStoredAccessToken(relayName)
-			if storedAccessToken != "" {
-				// Already have a valid access token, use it directly
-				enrolledAccessToken = storedAccessToken
-				log.Info().Msg("Using stored access token...")
-			} else {
-				// No stored token, require enrollment token to enroll
-				enrollToken, _ := cmd.Flags().GetString("token")
-				if enrollToken == "" {
-					util.HandleError(errors.New("--token is required when --enroll-method=token"))
-				}
+			enrollToken, _ := cmd.Flags().GetString("token")
 
+			if enrollToken != "" {
+				// same one-time token already exchanged: reuse stored access token
 				storedEnrollToken, _ := relay.LoadStoredEnrollmentToken(relayName)
-				alreadyEnrolled := storedEnrollToken != "" && storedEnrollToken == enrollToken
-
-				if alreadyEnrolled {
-					log.Info().Msg("Enrollment token matches stored token. Skipping enrollment.")
+				storedAccessToken, _ := relay.LoadStoredAccessToken(relayName)
+				if storedEnrollToken != "" && storedEnrollToken == enrollToken && storedAccessToken != "" {
+					enrolledAccessToken = storedAccessToken
+					log.Info().Msg("Enrollment token matches stored token. Using stored access token...")
 				} else {
 					httpClient, err := util.GetRestyClientWithCustomHeaders()
 					if err != nil {
@@ -158,6 +149,13 @@ var relayStartCmd = &cobra.Command{
 
 					log.Info().Msgf("Relay enrolled successfully. Access token saved to %s", relay.GetConfPathDisplay(relayName))
 				}
+			} else {
+				storedAccessToken, _ := relay.LoadStoredAccessToken(relayName)
+				if storedAccessToken == "" {
+					util.HandleError(errors.New("--token is required when --enroll-method=token (no stored access token found)"))
+				}
+				enrolledAccessToken = storedAccessToken
+				log.Info().Msg("Using stored access token...")
 			}
 
 			log.Info().Msg("Starting relay...")
@@ -278,7 +276,7 @@ var relaySystemdCmd = &cobra.Command{
   # Instance relay
   sudo infisical relay systemd install my-relay --type=instance --host=<host> --relay-auth-secret=<secret>
 
-  sudo infisical relay systemd uninstall`,
+  sudo infisical relay systemd uninstall my-relay`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 }
@@ -330,6 +328,8 @@ var relaySystemdInstallCmd = &cobra.Command{
 
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 
+		var installedServiceName string
+
 		if enrollMethod == relay.EnrollMethodToken {
 			// --- Enrollment token path ---
 			if relayName == "" {
@@ -355,9 +355,11 @@ var relaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(enrollErr, "enrollment failed")
 			}
 
-			if err := relay.InstallEnrolledRelaySystemdService(enrollResp.AccessToken, domain, relayName, serviceLogFile); err != nil {
-				util.HandleError(err, "Failed to install relay systemd service")
+			svcName, installErr := relay.InstallEnrolledRelaySystemdService(enrollResp.AccessToken, domain, relayName, serviceLogFile)
+			if installErr != nil {
+				util.HandleError(installErr, "Failed to install relay systemd service")
 			}
+			installedServiceName = svcName
 		} else if enrollMethod == relay.EnrollMethodAws {
 			// --- AWS Auth path ---
 			if relayName == "" {
@@ -369,9 +371,11 @@ var relaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(errors.New("--relay-id is required when --enroll-method=aws"))
 			}
 
-			if err := relay.InstallAwsAuthRelaySystemdService(relayID, domain, relayName, serviceLogFile); err != nil {
-				util.HandleError(err, "Failed to install relay systemd service")
+			svcName, installErr := relay.InstallAwsAuthRelaySystemdService(relayID, domain, relayName, serviceLogFile)
+			if installErr != nil {
+				util.HandleError(installErr, "Failed to install relay systemd service")
 			}
+			installedServiceName = svcName
 		} else {
 			// Check relay type
 			instanceType, typeErr := cmd.Flags().GetString("type")
@@ -404,9 +408,11 @@ var relaySystemdInstallCmd = &cobra.Command{
 					util.HandleError(fmt.Errorf("--relay-auth-secret flag or %s env must be set for instance relays", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
 				}
 
-				if err := relay.InstallRelaySystemdService("", domain, relayName, host, instanceType, relayAuthSecret, serviceLogFile); err != nil {
-					util.HandleError(err, "Failed to install relay systemd service")
+				svcName, installErr := relay.InstallRelaySystemdService("", domain, relayName, host, instanceType, relayAuthSecret, serviceLogFile)
+				if installErr != nil {
+					util.HandleError(installErr, "Failed to install relay systemd service")
 				}
+				installedServiceName = svcName
 			} else {
 				// --- Legacy org-level machine identity token path (backward compatibility) ---
 				if relayName == "" {
@@ -429,29 +435,35 @@ var relaySystemdInstallCmd = &cobra.Command{
 					util.HandleError(fmt.Errorf("--token flag or %s env must be set", gatewayv2.INFISICAL_TOKEN_ENV_NAME))
 				}
 
-				if err := relay.InstallRelaySystemdService(token, domain, relayName, host, instanceType, "", serviceLogFile); err != nil {
-					util.HandleError(err, "Failed to install relay systemd service")
+				svcName, installErr := relay.InstallRelaySystemdService(token, domain, relayName, host, instanceType, "", serviceLogFile)
+				if installErr != nil {
+					util.HandleError(installErr, "Failed to install relay systemd service")
 				}
+				installedServiceName = svcName
 			}
 		}
 
-		enableCmd := exec.Command("systemctl", "enable", "infisical-relay")
+		if installedServiceName == "" {
+			return
+		}
+
+		enableCmd := exec.Command("systemctl", "enable", installedServiceName)
 		if err := enableCmd.Run(); err != nil {
 			util.HandleError(err, "Failed to enable relay systemd service")
 		}
 
-		log.Info().Msg("Successfully installed and enabled infisical-relay service")
-		log.Info().Msg("To start the service, run: sudo systemctl start infisical-relay")
+		log.Info().Msgf("Successfully installed and enabled %s service", installedServiceName)
+		log.Info().Msgf("To start the service, run: sudo systemctl start %s", installedServiceName)
 	},
 }
 
 var relaySystemdUninstallCmd = &cobra.Command{
-	Use:                   "uninstall",
+	Use:                   "uninstall [name]",
 	Short:                 "Uninstall and remove systemd service for the relay (requires sudo)",
 	Long:                  "Uninstall and remove systemd service for the relay. Must be run with sudo on Linux.",
-	Example:               "sudo infisical relay systemd uninstall",
+	Example:               "sudo infisical relay systemd uninstall my-relay",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
 			util.HandleError(fmt.Errorf("systemd service uninstallation is only supported on Linux"))
@@ -461,7 +473,13 @@ var relaySystemdUninstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("systemd service uninstallation requires root/sudo privileges"))
 		}
 
-		if err := relay.UninstallRelaySystemdService(); err != nil {
+		// No name falls back to the legacy hardcoded service for backwards compatibility
+		var relayName string
+		if len(args) > 0 {
+			relayName = args[0]
+		}
+
+		if err := relay.UninstallRelaySystemdService(relayName); err != nil {
 			util.HandleError(err, "Failed to uninstall relay systemd service")
 		}
 	},
