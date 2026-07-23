@@ -18,6 +18,11 @@ type LocalOptions struct {
 	// UserToken returns the developer's current access token; called per request so it can rotate.
 	UserToken func() string
 
+	// CADir, if set, persists the local root CA there (reused across runs and trustable in the OS
+	// trust store) instead of a fresh in-memory root. Must be a sandbox-denied path so the agent
+	// cannot read the key.
+	CADir string
+
 	// InfisicalHost (bare hostname) is always refused through the proxy, keeping the control plane
 	// unreachable from the sandbox as an invariant, not just because the child holds no token.
 	InfisicalHost string

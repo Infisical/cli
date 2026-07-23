@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -137,6 +138,13 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	extraWrite, _ := cmd.Flags().GetStringArray("allow-write")
 	allowHosts, _ := cmd.Flags().GetStringArray("allow-host")
 
+	// On macOS, persist the local root under ~/.infisical (already sandbox-denied, so the agent can't
+	// read the key) and trust it once in the keychain, so native-trust tools (Go CLIs like gh) can be
+	// brokered too. Elsewhere the injected CA env var is enough, so we keep an ephemeral in-memory root.
+	if runtime.GOOS == "darwin" && home != "" {
+		local.CADir = filepath.Join(home, ".infisical", "agent-proxy")
+	}
+
 	// Supported agents persist their own state under home; make those dirs writable so interactive
 	// sessions can save. It's the agent's own data, not the developer's secrets.
 	writePaths := append(defaultAgentStateWritePaths(home), extraWrite...)
@@ -175,6 +183,21 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	})
 	if err != nil {
 		fail(err, "Failed to initialize the ephemeral agent proxy")
+	}
+
+	// macOS: trust the persistent root once so native-trust tools (gh) accept the proxy's certs, and
+	// allow trustd in the profile for the sandbox. securityd stays blocked, so the token stays
+	// unreadable. Trust-install is non-fatal: env-CA tools (Claude Code, Codex, curl) work regardless.
+	if local.CADir != "" {
+		if sandboxEnabled {
+			spec.AllowTrustd = true
+		}
+		switch installed, terr := ensureCATrusted(agentproxy.LocalCACertPath(local.CADir)); {
+		case terr != nil:
+			util.PrintWarning(fmt.Sprintf("could not trust the local CA in your keychain (%v); Go-native tools like gh won't be brokered, but Claude Code, Codex, and curl still will", terr))
+		case installed:
+			util.PrintWarning("added the Infisical agent-proxy local CA to your login keychain (one-time) so native-trust tools can be brokered; it persists for future runs")
+		}
 	}
 
 	// Hard fence: proxy on a unix socket in the tempdir, reached via the bridge. Otherwise: TCP loopback.

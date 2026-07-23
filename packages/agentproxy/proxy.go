@@ -110,7 +110,13 @@ func newProxyServer(opts Options) (*proxyServer, error) {
 	var ca *caManager
 	var cache serviceResolver
 	if opts.Local != nil {
-		localCa, err := newLocalCaManager()
+		var localCa *caManager
+		var err error
+		if opts.Local.CADir != "" {
+			localCa, err = newPersistentLocalCaManager(opts.Local.CADir)
+		} else {
+			localCa, err = newLocalCaManager()
+		}
 		if err != nil {
 			return nil, err
 		}

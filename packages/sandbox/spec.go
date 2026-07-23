@@ -33,6 +33,11 @@ type SandboxSpec struct {
 
 	Env     []string // fully-prepared, scrubbed child environment
 	NetMode NetMode
+
+	// AllowTrustd allows the macOS cert-trust evaluation service so native-trust tools (Go CLIs like
+	// gh) can verify the proxy's leaves against a CA trusted in the keychain. securityd (keychain
+	// secret reads) stays blocked regardless, so the login token remains unreadable. macOS only.
+	AllowTrustd bool
 }
 
 // DefaultDenyPaths returns the credential paths denied by default, resolved against home.

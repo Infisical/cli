@@ -63,6 +63,27 @@ func TestSeatbeltProfileStructure(t *testing.T) {
 	}
 }
 
+func TestSeatbeltProfileTrustdToggle(t *testing.T) {
+	spec := testSpec()
+
+	// Default: trustd omitted so native-trust TLS falls back to the injected CA bundle.
+	if strings.Contains(generateSeatbeltProfile(spec), "com.apple.trustd") {
+		t.Error("trustd must be omitted when AllowTrustd is false")
+	}
+
+	// AllowTrustd: trustd allowed, but keychain secret services stay omitted (token stays unreadable).
+	spec.AllowTrustd = true
+	p := generateSeatbeltProfile(spec)
+	if !strings.Contains(p, `(global-name "com.apple.trustd")`) {
+		t.Errorf("expected trustd allowed when AllowTrustd is true\n%s", p)
+	}
+	for _, s := range []string{"com.apple.securityd.xpc", "com.apple.SecurityServer"} {
+		if strings.Contains(p, s) {
+			t.Errorf("keychain secret service %q must stay omitted even with AllowTrustd", s)
+		}
+	}
+}
+
 func TestSeatbeltProfileEscaping(t *testing.T) {
 	spec := testSpec()
 	spec.DenyPaths = []string{`/Users/dev/weird "dir"\path`}

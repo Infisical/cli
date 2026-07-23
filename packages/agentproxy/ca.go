@@ -61,16 +61,15 @@ func newCaManager(token func() string) *caManager {
 	}
 }
 
-// newLocalCaManager builds an in-memory self-signed ECDSA P-256 root (P-256 so rustls-based agents
-// accept it) that mintLeaf signs leaves from directly. The private key never leaves memory.
-func newLocalCaManager() (*caManager, error) {
+// generateLocalRoot mints a self-signed ECDSA P-256 root (P-256 so rustls-based agents accept it).
+func generateLocalRoot() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate local root CA key: %w", err)
+		return nil, nil, fmt.Errorf("failed to generate local root CA key: %w", err)
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	template := &x509.Certificate{
 		SerialNumber:          serial,
@@ -84,19 +83,33 @@ func newLocalCaManager() (*caManager, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to self-sign local root CA: %w", err)
+		return nil, nil, fmt.Errorf("failed to self-sign local root CA: %w", err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse local root CA certificate: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse local root CA certificate: %w", err)
 	}
+	return key, cert, nil
+}
+
+// caManagerFromRoot wraps an existing local root key/cert as a caManager.
+func caManagerFromRoot(key *ecdsa.PrivateKey, cert *x509.Certificate) *caManager {
 	return &caManager{
 		local:            true,
 		intermediateKey:  key,
 		intermediateCert: cert,
 		intermediateExp:  cert.NotAfter,
 		leafCache:        make(map[string]*leafEntry),
-	}, nil
+	}
+}
+
+// newLocalCaManager builds a fresh in-memory local root. The private key never leaves memory.
+func newLocalCaManager() (*caManager, error) {
+	key, cert, err := generateLocalRoot()
+	if err != nil {
+		return nil, err
+	}
+	return caManagerFromRoot(key, cert), nil
 }
 
 // RootPEM returns the local root's public certificate (nil outside local mode).

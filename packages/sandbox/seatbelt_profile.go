@@ -26,7 +26,7 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 		"",
 		"(allow user-preference-read)",
 		"",
-		"; Baseline mach services (keychain services and trustd deliberately omitted)",
+		"; Baseline mach services (keychain services deliberately omitted; trustd gated on AllowTrustd)",
 		"(allow mach-lookup",
 		`  (global-name "com.apple.audio.systemsoundserver")`,
 		`  (global-name "com.apple.distributed_notifications@Uv3")`,
@@ -67,6 +67,16 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 		`(allow file-read* file-write* (literal "/dev/ptmx") (regex #"^/dev/ttys"))`,
 		"",
 	)
+
+	if spec.AllowTrustd {
+		// Cert-trust evaluation only. securityd/SecurityServer (keychain secret reads) stay omitted, so
+		// the login token remains unreadable; this just lets native-trust clients verify certs.
+		add(
+			"; trustd: cert-trust evaluation (keychain secret access still denied)",
+			`(allow mach-lookup (global-name "com.apple.trustd") (global-name "com.apple.trustd.agent"))`,
+			"",
+		)
+	}
 
 	// Egress must be filtered on `remote ip`, not `local ip` (a local filter matches the any-address
 	// and would admit all egress). Bind/inbound are wildcarded so agents can run local dev servers.
