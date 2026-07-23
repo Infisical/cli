@@ -10,8 +10,6 @@ import (
 
 func osBackend() Backend { return bwrapBackend{} }
 
-// regularFileExists reports whether path currently exists as a regular file (following symlinks).
-// Deny paths that are regular files must be masked with a /dev/null bind, not a tmpfs.
 func regularFileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
@@ -19,10 +17,8 @@ func regularFileExists(path string) bool {
 
 type bwrapBackend struct{}
 
-// Preflight checks bwrap is installed and decides hard fence vs shared-net fallback. The decision is
-// made by actually attempting an empty-netns bwrap invocation (probe-by-execution), which is more
-// reliable across distros than parsing sysctls: on Ubuntu 24.04+ the AppArmor
-// kernel.apparmor_restrict_unprivileged_userns restriction makes the probe fail, and we fall back.
+// Preflight checks bwrap is present and probes (by executing an empty-netns bwrap) whether the hard
+// fence works here; if not (e.g. Ubuntu 24.04 userns restriction) it falls back to shared net.
 func (bwrapBackend) Preflight(spec SandboxSpec) (PreflightResult, error) {
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
@@ -51,8 +47,7 @@ func (bwrapBackend) Preflight(spec SandboxSpec) (PreflightResult, error) {
 	}, nil
 }
 
-// hardFenceWorks probes whether an empty-netns bwrap can start and bring loopback up, by running the
-// binary in the supervisor's probe mode inside the sandbox.
+// hardFenceWorks probes whether an empty-netns bwrap can start and bring loopback up.
 func hardFenceWorks(bwrapPath string) bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -68,9 +63,6 @@ func hardFenceWorks(bwrapPath string) bool {
 	return cmd.Run() == nil
 }
 
-// Wrap builds the bwrap argv and returns an exec.Cmd. Stdio is inherited so the interactive TUI works;
-// on the hard-fence path the child is the supervisor (which execs the agent), on shared net it is the
-// agent directly.
 func (bwrapBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("sandbox: empty command")
@@ -85,7 +77,6 @@ func (bwrapBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
 	}
 
 	full := buildBwrapArgv(spec, self, argv, regularFileExists)
-	// full[0] is the literal "bwrap"; exec with the resolved path but keep argv[0] as bwrap.
 	// #nosec G204 -- the wrapped command is provided directly by the operator running the CLI
 	cmd := exec.Command(bwrapPath, full[1:]...)
 	cmd.Stdin = os.Stdin

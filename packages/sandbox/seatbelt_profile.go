@@ -6,21 +6,9 @@ import (
 	"strings"
 )
 
-// generateSeatbeltProfile builds the SBPL (Seatbelt profile language) string for a spec. It is a pure
-// function (no OS calls) so it can be golden-tested on any platform.
-//
-// The profile grants the minimal baseline a process needs to run, with two deliberate deltas for our
-// credential boundary:
-//
-//  1. The keychain mach services (com.apple.securityd.xpc, com.apple.SecurityServer) are OMITTED from
-//     the allow-list, so (deny default) blocks them and the child cannot read the developer's login
-//     token from the keyring. We block by omission, never by an explicit deny against a broad allow.
-//  2. trustd.agent is likewise omitted; system-root TLS relies on the injected CA bundle instead.
-//     This is what makes the keychain block TLS-safe: keychain and TLS trust are separate services.
-//
-// Egress is filtered on (remote ip ...), never (local ip ...): a local filter is evaluated against
-// the source address, which for an unbound socket is the any-address, so it would silently admit all
-// egress.
+// generateSeatbeltProfile builds the SBPL profile for a spec. Pure (no OS calls), golden-testable.
+// The keychain services (securityd.xpc, SecurityServer) and trustd are deliberately omitted from the
+// allow-list, so (deny default) blocks keyring reads while injected-CA TLS still works.
 func generateSeatbeltProfile(spec SandboxSpec) string {
 	var b []string
 	add := func(lines ...string) { b = append(b, lines...) }
@@ -38,8 +26,7 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 		"",
 		"(allow user-preference-read)",
 		"",
-		"; Baseline mach services a process needs to boot, minus the keychain services so the login",
-		"; token is unreadable, and minus trustd so system-root TLS falls back to the injected CA bundle.",
+		"; Baseline mach services (keychain services and trustd deliberately omitted)",
 		"(allow mach-lookup",
 		`  (global-name "com.apple.audio.systemsoundserver")`,
 		`  (global-name "com.apple.distributed_notifications@Uv3")`,
@@ -81,8 +68,8 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 		"",
 	)
 
-	// Network. (deny default) already blocks external egress; we allow loopback to the proxy port and
-	// local binding (so agents can run dev servers). Outbound stays pinned to the proxy port only.
+	// Egress must be filtered on `remote ip`, not `local ip` (a local filter matches the any-address
+	// and would admit all egress). Bind/inbound are wildcarded so agents can run local dev servers.
 	add("; Network")
 	port := strconv.Itoa(spec.LoopbackPort)
 	add(
@@ -92,7 +79,7 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 	)
 	add("")
 
-	// File read: broad allow, then subtract the credential deny paths (last-match-wins in SBPL).
+	// Broad read, then subtract the credential deny paths (SBPL is last-match-wins).
 	add("; File read")
 	add("(allow file-read*)")
 	for _, p := range dedupeSorted(spec.DenyPaths) {
@@ -100,7 +87,6 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 	}
 	add("")
 
-	// File write: cwd, tmp, tempdir, and any operator-granted write paths.
 	add("; File write")
 	writePaths := dedupeSorted(append([]string{spec.Cwd, spec.TempDir, "/tmp", "/private/tmp", "/dev/null"}, spec.WritePaths...))
 	for _, p := range writePaths {
@@ -134,8 +120,7 @@ func dedupeSorted(in []string) []string {
 	return out
 }
 
-// escapeSBPL quotes a path as an SBPL string literal. SBPL uses C-style double-quoted strings, so
-// backslash and double-quote must be escaped.
+// escapeSBPL quotes a path as an SBPL (C-style) string literal.
 func escapeSBPL(p string) string {
 	var sb strings.Builder
 	sb.WriteByte('"')

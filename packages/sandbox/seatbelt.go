@@ -24,9 +24,7 @@ func (seatbeltBackend) Preflight(SandboxSpec) (PreflightResult, error) {
 	return PreflightResult{Supported: true}, nil
 }
 
-// Wrap builds: sandbox-exec -p <profile> <argv...>. sandbox-exec takes the command directly (no --
-// separator). The profile is passed inline via -p, never written to disk. Stdio is inherited so the
-// interactive TUI works.
+// Wrap builds `sandbox-exec -p <profile> <argv...>`; the profile is passed inline, never on disk.
 func (seatbeltBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("sandbox: empty command")

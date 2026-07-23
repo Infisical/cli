@@ -219,10 +219,7 @@ func (a *agentCache) resolve(jwt string, scope agentScope) ([]*resolvedService, 
 	})
 }
 
-// resolveParams parameterizes the pieces of service resolution that differ between the two resolver
-// implementations: remote (agentCache: discovery with the agent's wire JWT, values with the proxy MI,
-// Proxy permission required, dynamic secrets leased) and local (localResolver: one developer token for
-// both, Read Value is the only gate, dynamic secrets skipped).
+// resolveParams holds what differs between the remote (agentCache) and local (localResolver) resolvers.
 type resolveParams struct {
 	discoveryToken      string
 	valueToken          func() string
@@ -231,8 +228,8 @@ type resolveParams struct {
 	registerDynamic func(cred api.ProxiedServiceCredential, projectSlug string) *dynamicCredentialRef
 }
 
-// resolveServices turns the proxied-services list for a scope into resolvedServices with credential
-// values attached. Shared by both resolver implementations; behavior differences live in resolveParams.
+// resolveServices lists the proxied services for a scope and attaches credential values. Shared by
+// both resolvers; the differences live in resolveParams.
 func resolveServices(scope agentScope, p resolveParams) ([]*resolvedService, error) {
 	client := resty.New().SetAuthToken(p.discoveryToken)
 	listResp, err := api.CallListProxiedServices(client, api.ListProxiedServicesRequest{

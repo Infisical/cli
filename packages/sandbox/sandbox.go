@@ -9,35 +9,21 @@ import (
 
 var errUnsupportedPlatform = errors.New("sandbox: unsupported platform")
 
-// PreflightResult reports whether the OS sandbox can run here and, on Linux, whether the hard fence
-// must fall back to shared networking.
 type PreflightResult struct {
-	// Supported is false when no OS sandbox is available (e.g. Windows, or bwrap missing). The caller
-	// then either errors or, if the user passed --no-sandbox, runs uncontained.
-	Supported bool
-	// FallbackToSharedNet is set on Linux when the empty-netns hard fence cannot start (restricted
-	// unprivileged user namespaces). The caller downgrades NetMode to SharedNet and warns once.
-	FallbackToSharedNet bool
-	// UsesBridge is true only on the Linux hard-fence path: the child runs in an empty network
-	// namespace and reaches the proxy through the in-namespace bridge, so the proxy must listen on a
-	// pathname unix socket (not TCP) and the child's HTTP(S)_PROXY targets the bridge's loopback port.
-	// macOS, the Linux shared-net fallback, and --no-sandbox all leave this false (TCP loopback proxy).
-	UsesBridge bool
-	// Reason explains an unsupported result or a fallback, suitable for a user-facing message.
-	Reason string
+	Supported           bool   // false => no OS sandbox here (e.g. Windows, bwrap missing)
+	FallbackToSharedNet bool   // Linux: empty-netns hard fence unavailable, downgrade to shared net
+	UsesBridge          bool   // Linux hard fence only: proxy on a unix socket, reached via the bridge
+	Reason              string // user-facing explanation for an unsupported result or a fallback
 }
 
-// Backend applies an OS sandbox to a command.
+// Backend applies an OS sandbox to a command. Wrap returns an *exec.Cmd ready to Start (stdio
+// inherited, Env from the spec) but does not start it.
 type Backend interface {
-	// Preflight reports whether this backend can run the given spec here, and any required fallback.
 	Preflight(spec SandboxSpec) (PreflightResult, error)
-	// Wrap returns an *exec.Cmd ready to Start: the target command wrapped by the OS sandbox, with
-	// stdio inherited and Env set from the spec. It does not Start the process.
 	Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error)
 }
 
-// NewBackend returns the OS sandbox backend for the current platform. When spec.Sandbox is false it
-// returns the passthrough backend regardless of platform.
+// NewBackend returns the platform backend, or the uncontained passthrough backend for --no-sandbox.
 func NewBackend(spec SandboxSpec) Backend {
 	if !spec.Sandbox {
 		return passthroughBackend{}
@@ -45,8 +31,7 @@ func NewBackend(spec SandboxSpec) Backend {
 	return osBackend()
 }
 
-// passthroughBackend runs the command uncontained (the --no-sandbox path). The ephemeral proxy and
-// the scrubbed env still apply; only the OS controls are dropped.
+// passthroughBackend runs the command uncontained (--no-sandbox): proxy and scrubbed env still apply.
 type passthroughBackend struct{}
 
 func (passthroughBackend) Preflight(SandboxSpec) (PreflightResult, error) {

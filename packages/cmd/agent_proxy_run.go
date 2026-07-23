@@ -40,9 +40,8 @@ var agentProxyRunCmd = &cobra.Command{
 	Run: runAgentProxyRun,
 }
 
-// secretShapedEnvSubstrings drives the name-based env scrub: any parent env var whose name contains
-// one of these (case-insensitive) is removed from the child env unless explicitly re-added with
-// --pass-env. This is coarse on purpose (e.g. it scrubs ANTHROPIC_API_KEY); --pass-env is the escape.
+// secretShapedEnvSubstrings: env vars whose name contains any of these are scrubbed from the child
+// (coarse on purpose; --pass-env re-admits a specific one).
 var secretShapedEnvSubstrings = []string{
 	"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY",
 }
@@ -91,8 +90,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 
 	sandboxEnabled := resolveSandboxEnabled(cmd)
 
-	// Resolve the developer's identity. This is the single identity for the whole run: it fetches the
-	// proxied-service config and the referenced secret values. The child gets none of it.
+	// The single identity for the run: fetches config and secret values in the parent. The child gets none of it.
 	src := resolveDeveloperTokenSource(cmd)
 
 	httpClient := resty.New().SetAuthToken(src.token())
@@ -108,15 +106,12 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		IdentityName:  src.label,
 	}
 
-	// Per-run 0700 tempdir: only the public CA cert (and, on the Linux hard fence, the unix socket)
-	// ever touch disk. Removed on exit.
+	// Per-run 0700 tempdir: only the public CA cert (and the unix socket on the Linux hard fence) hit disk.
 	tempDir, err := os.MkdirTemp("", "infisical-agent-proxy-run-")
 	if err != nil {
 		util.HandleError(err, "Failed to create the per-run temp directory")
 	}
-	// os.Exit (at the end, and inside util.HandleError) does not run deferred funcs, so a `defer`
-	// here would never fire. Clean up explicitly at each exit path instead. fail() removes the temp
-	// dir before delegating to HandleError (which exits) so setup failures don't leak it either.
+	// os.Exit (and util.HandleError) skip deferred funcs, so clean up explicitly at every exit path.
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 	fail := func(e error, messages ...string) { cleanup(); util.HandleError(e, messages...) }
 
@@ -126,11 +121,8 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	extraWrite, _ := cmd.Flags().GetStringArray("allow-write")
 	allowHosts, _ := cmd.Flags().GetStringArray("allow-host")
 
-	// Supported interactive agents persist their own state under home (Claude Code: ~/.claude and
-	// ~/.claude.json; Codex: ~/.codex). These are the agent's own data, not the developer's foreign
-	// secrets, so making them writable is safe and is what a real interactive session needs (without
-	// it Claude Code runs but cannot save sessions: "transcript writes are failing"). Reads there are
-	// already allowed; only the write grant is missing by default.
+	// Supported agents persist their own state under home; make those dirs writable so interactive
+	// sessions can save. It's the agent's own data, not the developer's secrets.
 	writePaths := append(defaultAgentStateWritePaths(home), extraWrite...)
 
 	spec := sandbox.SandboxSpec{
@@ -140,16 +132,12 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		DenyPaths:  sandbox.DefaultDenyPaths(home),
 		Cwd:        cwd,
 		TempDir:    tempDir,
-		AllowHosts: allowHosts,
-		// HardFence is the default; the Linux backend downgrades to SharedNet via Preflight when
-		// unprivileged user namespaces are restricted. macOS always fences egress to loopback via SBPL
-		// regardless of this field.
+		// Linux downgrades to SharedNet via Preflight below; macOS always fences to loopback via SBPL.
 		NetMode: sandbox.HardFence,
 	}
 
-	// Preflight decides sandbox availability and, on Linux, hard fence vs shared-net and whether the
-	// in-namespace bridge is needed. It must run before we choose the proxy listener (unix socket vs
-	// TCP) and build the child env (the proxy URL host/port depends on the bridge).
+	// Preflight must run before choosing the listener and building the env (the proxy URL depends on
+	// whether the bridge is used).
 	backend := sandbox.NewBackend(spec)
 	pre, err := backend.Preflight(spec)
 	if err != nil {
@@ -173,9 +161,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		fail(err, "Failed to initialize the ephemeral agent proxy")
 	}
 
-	// Choose the proxy transport. Hard fence: a pathname unix socket in the tempdir, bridged into the
-	// empty netns; the child targets the bridge's fixed loopback port. Otherwise: TCP loopback the
-	// child reaches directly (macOS SBPL, Linux shared-net, or --no-sandbox).
+	// Hard fence: proxy on a unix socket in the tempdir, reached via the bridge. Otherwise: TCP loopback.
 	var listener net.Listener
 	var childProxyURL string
 	if pre.UsesBridge {
@@ -223,8 +209,8 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	os.Exit(exitCode)
 }
 
-// runSandboxedChild starts the child, forwards signals, and returns its exit code. If the proxy dies
-// first, it kills the child (never leave the agent running against a dead proxy).
+// runSandboxedChild starts the child, forwards signals, and returns its exit code; if the proxy dies
+// first it kills the child.
 func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-chan error) int {
 	log.Info().Msg(color.GreenString("Starting agent behind the Infisical agent proxy (sandboxed)"))
 
@@ -279,8 +265,8 @@ func shutdownProxy(proxy *agentproxy.Proxy) {
 	_ = proxy.Shutdown(ctx)
 }
 
-// resolveSandboxEnabled reads the sandbox toggle from the flag or the env var only, never
-// .infisical.json (a committed file must not be able to silently disable the boundary).
+// resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.json (a committed
+// file must not be able to silently disable the boundary).
 func resolveSandboxEnabled(cmd *cobra.Command) bool {
 	if cmd.Flags().Changed("sandbox") {
 		v, _ := cmd.Flags().GetBool("sandbox")
@@ -296,30 +282,16 @@ func resolveSandboxEnabled(cmd *cobra.Command) bool {
 	return true
 }
 
-// tokenSource is the parent-held identity for a run. token() returns the current access token (read
-// per API request, so a future user-session refresher can rotate it behind this accessor); label
-// names the identity in activity records.
+// tokenSource is the parent-held identity for a run. token() is read per request so a future
+// refresher can rotate it; label names the identity in activity records.
 type tokenSource struct {
 	token func() string
 	label string
 }
 
-// resolveDeveloperTokenSource resolves the single identity for the run. Local mode is a human
-// developer acting as themselves, so the only identities are the developer's keyring login or a token
-// they already hold. There is intentionally no machine-identity path here: an MI is a
-// service/automation identity (used by `agent-proxy start`, `gateway`, the agent daemon), not a
-// person running an agent on their laptop.
-//
-//   - --token / env token: used as-is (a raw access token has no renewal material). Fails closed at
-//     expiry, same as everywhere else in the CLI.
-//   - Keyring login: the developer's own session. The CLI does not persist a usable refresh token for
-//     user logins today (UserCredentials.RefreshToken is never populated at login), so this cannot be
-//     refreshed mid-session either. Fails closed at expiry.
-//
-// A human's interactive session almost always fits inside the token's lifetime, so both paths just
-// warn at startup how long brokering will last. Genuine long-session refresh would mean renewing the
-// developer's own session (persist + use the login refresh token) and belongs in the shared login
-// flow, not here.
+// resolveDeveloperTokenSource resolves the run's identity: an explicit --token/env, else the keyring
+// login. No machine-identity path (that's for services, not a person on a laptop). Neither can be
+// refreshed mid-session, so warnTokenExpiry flags when brokering will stop.
 func resolveDeveloperTokenSource(cmd *cobra.Command) tokenSource {
 	if token, err := util.GetInfisicalToken(cmd); err == nil && token != nil && token.Token != "" {
 		warnTokenExpiry(token.Token, "the provided token")
@@ -338,8 +310,7 @@ func resolveDeveloperTokenSource(cmd *cobra.Command) tokenSource {
 	return tokenSource{token: func() string { return jwt }, label: details.UserCredentials.Email}
 }
 
-// warnTokenExpiry prints how long brokering will last for a credential that cannot be refreshed, so a
-// session outliving it is a conscious choice. Silent when the expiry can't be read or is comfortably far.
+// warnTokenExpiry prints when brokering will stop; silent when the expiry can't be read.
 func warnTokenExpiry(jwtToken, subject string) {
 	exp, ok := jwtExpiry(jwtToken)
 	if !ok {
@@ -354,8 +325,7 @@ func warnTokenExpiry(jwtToken, subject string) {
 		subject, remaining.Round(time.Minute), exp.Local().Format("15:04")))
 }
 
-// jwtExpiry reads the exp claim from a JWT without verifying the signature (the token was already
-// minted by Infisical). Returns false when the token is not a readable JWT (e.g. a service token).
+// jwtExpiry reads the exp claim unverified; false if the token isn't a readable JWT (e.g. a service token).
 func jwtExpiry(token string) (time.Time, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -374,10 +344,8 @@ func jwtExpiry(token string) (time.Time, bool) {
 	return time.Unix(claims.Exp, 0), true
 }
 
-// fetchLocalProxiedServiceConfig lists the proxied services in scope and returns the placeholder env
-// to inject. Unlike the remote fetchProxiedServiceConfig it does NOT filter on CanProxy: locally the
-// gate is Read Value alone. Disabled services are still skipped (their placeholders would reach
-// upstream verbatim). Real secret values are never fetched here; brokering happens on the wire.
+// fetchLocalProxiedServiceConfig returns the placeholder env to inject. No CanProxy filter (locally
+// the gate is Read Value); disabled services are skipped. Real secret values are never fetched here.
 func fetchLocalProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) map[string]string {
 	resp, err := api.CallListProxiedServices(httpClient, api.ListProxiedServicesRequest{
 		ProjectID:   projectID,
@@ -402,10 +370,8 @@ func fetchLocalProxiedServiceConfig(httpClient *resty.Client, projectID, environ
 	return placeholders
 }
 
-// defaultAgentStateWritePaths returns the supported agents' own state locations under home that
-// currently exist, so an interactive agent can persist sessions/config. Only existing paths are
-// returned: bwrap --bind fails on a missing source, and there is no reason to grant writes to a
-// path the agent isn't using. These are the agent's own data, never the developer's other secrets.
+// defaultAgentStateWritePaths returns the supported agents' state paths under home that exist (only
+// existing ones: bwrap --bind fails on a missing source).
 func defaultAgentStateWritePaths(home string) []string {
 	if home == "" {
 		return nil
@@ -424,15 +390,13 @@ func defaultAgentStateWritePaths(home string) []string {
 	return out
 }
 
-// localProxyURL is the credential-free proxy URL for the child: no userinfo at all. The scope and the
-// developer token live only in the parent; the child just needs to know where the proxy is.
+// localProxyURL is the child's proxy URL: no userinfo, so no credential reaches the child.
 func localProxyURL(proxyAddr string) string {
 	u := url.URL{Scheme: "http", Host: proxyAddr}
 	return u.String()
 }
 
-// infisicalAPIHost extracts the bare hostname of the configured Infisical API, used by the proxy to
-// refuse egress to the control plane from inside the sandbox.
+// infisicalAPIHost is the bare hostname of the configured Infisical API (the proxy refuses egress to it).
 func infisicalAPIHost() string {
 	u, err := url.Parse(config.INFISICAL_URL)
 	if err != nil {
@@ -441,10 +405,8 @@ func infisicalAPIHost() string {
 	return u.Hostname()
 }
 
-// buildLocalAgentEnv builds the child environment for local mode: the credential-free proxy vars, the
-// CA trust vars, and the placeholders, on top of a scrubbed copy of the parent env. It deliberately
-// omits INFISICAL_TOKEN, INFISICAL_DOMAIN, and every secret-shaped var, so no credential and no real
-// secret ever reaches the agent through the environment. Brokered secrets reach it only on the wire.
+// buildLocalAgentEnv builds the child env: a scrubbed parent env (no INFISICAL_TOKEN/DOMAIN, no
+// secret-shaped vars) plus the credential-free proxy vars, CA trust vars, and placeholders.
 func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders map[string]string) []string {
 	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
 	setEnv, _ := cmd.Flags().GetStringArray("set-env")

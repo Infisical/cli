@@ -9,20 +9,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// sandboxSupervisorCmd is an internal, hidden entry point. It is NOT meant to be run by users: the
-// Linux hard-fence path re-execs the CLI binary as this subcommand inside the bwrap network namespace,
-// where it brings loopback up, bridges the child's loopback proxy port to the parent's proxy unix
-// socket, and then execs the agent. Everything after `--` is the agent command.
+// sandboxSupervisorCmd is an internal, hidden entry point: the Linux hard-fence path re-execs the CLI
+// as this subcommand inside the bwrap netns to run the in-namespace bridge. Not for users.
 var sandboxSupervisorCmd = &cobra.Command{
 	Use:                   sandbox.SupervisorSubcommand,
 	Hidden:                true,
 	DisableFlagParsing:    false,
 	FParseErrWhitelist:    cobra.FParseErrWhitelist{UnknownFlags: true},
 	DisableFlagsInUseLine: true,
-	// Override the root PersistentPreRun so this internal re-exec does NOT run the human-facing
-	// preamble (update check, package-repo notice, keyring read). Those make a network call, and this
-	// runs inside an empty network namespace where that call would waste the timeout and print stray
-	// notices. The supervisor needs none of it; it only brings loopback up, bridges, and execs.
+	// No-op override of root's PersistentPreRun: skip the update check / notices / keyring read (a
+	// network call) that would otherwise run inside the network-less namespace.
 	PersistentPreRun: func(_ *cobra.Command, _ []string) {},
 	Run: func(cmd *cobra.Command, args []string) {
 		probe, _ := cmd.Flags().GetBool("probe")

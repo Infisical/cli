@@ -28,17 +28,14 @@ const (
 	leafReuseMargin            = 1 * time.Hour
 	maxLeafCacheEntries        = 8192
 
-	// localRootTTL bounds the self-signed local root used by `agent-proxy run`. The root lives only in
-	// memory for the lifetime of one wrapped command; the TTL just needs to comfortably outlast any
-	// single agent session.
+	// localRootTTL bounds the in-memory self-signed local root; just needs to outlast one session.
 	localRootTTL = 7 * 24 * time.Hour
 )
 
 type caManager struct {
 	token func() string
 
-	// local marks the self-signed local-root mode used by `agent-proxy run`: the "intermediate" fields
-	// hold a self-signed root minted at construction, never re-signed via Infisical, never persisted.
+	// local: the intermediate fields hold a self-signed root minted at construction, never re-signed.
 	local bool
 
 	mu                sync.Mutex
@@ -64,10 +61,8 @@ func newCaManager(token func() string) *caManager {
 	}
 }
 
-// newLocalCaManager builds the CA for local coupled mode: a self-signed ECDSA P-256 root generated in
-// memory, from which mintLeaf signs per-host leaves directly. P-256 is deliberate (rustls-based agents
-// reject exotic curves). The private key never leaves process memory; only RootPEM (public) may be
-// written out for the child's trust bundle.
+// newLocalCaManager builds an in-memory self-signed ECDSA P-256 root (P-256 so rustls-based agents
+// accept it) that mintLeaf signs leaves from directly. The private key never leaves memory.
 func newLocalCaManager() (*caManager, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -104,8 +99,7 @@ func newLocalCaManager() (*caManager, error) {
 	}, nil
 }
 
-// RootPEM returns the public certificate of the local root (nil outside local mode). Public only:
-// safe to write to the per-run tempdir for SSL_CERT_FILE / NODE_EXTRA_CA_CERTS.
+// RootPEM returns the local root's public certificate (nil outside local mode).
 func (c *caManager) RootPEM() []byte {
 	if !c.local {
 		return nil

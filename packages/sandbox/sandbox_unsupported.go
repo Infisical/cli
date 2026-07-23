@@ -6,9 +6,7 @@ import "os/exec"
 
 func osBackend() Backend { return unsupportedBackend{} }
 
-// unsupportedBackend is the OS sandbox on platforms without one (e.g. Windows). Preflight reports
-// unsupported so the run command errors unless the user passed --no-sandbox (which selects the
-// passthrough backend instead and never reaches here).
+// unsupportedBackend is used on platforms without an OS sandbox (e.g. Windows).
 type unsupportedBackend struct{}
 
 func (unsupportedBackend) Preflight(SandboxSpec) (PreflightResult, error) {

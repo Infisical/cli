@@ -15,13 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// RunSupervisor is the entry point for the hidden `__sandbox-supervisor` subcommand. It runs INSIDE
-// the bwrap network namespace (re-exec'd by the bwrap argv on the hard-fence path). It brings loopback
-// up, starts a TCP->unix bridge so the child's HTTP(S)_PROXY (127.0.0.1:port) reaches the parent's
-// proxy unix socket, then execs the agent as its child and forwards signals / propagates exit code.
-//
-// probe=true is the capability check used by Preflight: bring loopback up and return the result
-// without starting a bridge or agent.
+// RunSupervisor runs inside the bwrap netns on the hard-fence path: it brings loopback up, bridges
+// 127.0.0.1:port to the parent's proxy unix socket, then execs the agent. probe=true is Preflight's
+// capability check: bring loopback up and return without bridging or exec'ing.
 func RunSupervisor(probe bool, port int, socket string, argv []string) int {
 	if err := bringLoopbackUp(); err != nil {
 		if probe {
@@ -39,8 +35,7 @@ func RunSupervisor(probe bool, port int, socket string, argv []string) int {
 		return 1
 	}
 
-	// Fail-loud bind: if we cannot own the loopback proxy port, abort rather than let the agent's
-	// traffic flow to whatever is already there (a same-namespace MITM risk).
+	// Fail loud: if the port is already taken, abort rather than route the agent's traffic to it.
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox supervisor: failed to bind loopback proxy port %d: %v\n", port, err)
@@ -85,9 +80,8 @@ func RunSupervisor(probe bool, port int, socket string, argv []string) int {
 	return 1
 }
 
-// runBridge accepts loopback TCP connections and forwards each to the parent's proxy unix socket,
-// copying bytes both directions. The socket must be a pathname socket (bind-mounted in); abstract
-// sockets are network-namespace-scoped and would be unreachable.
+// runBridge forwards each loopback TCP connection to the proxy's unix socket. The socket must be a
+// pathname socket (abstract sockets are netns-scoped and unreachable).
 func runBridge(ln net.Listener, socket string) {
 	defer ln.Close()
 	for {
@@ -113,8 +107,7 @@ func bridgeConn(client net.Conn, socket string) {
 	<-done
 }
 
-// bringLoopbackUp sets the loopback interface UP inside the current network namespace. An empty netns
-// starts with lo DOWN, so nothing (not even 127.0.0.1) works until this runs.
+// bringLoopbackUp brings lo UP; an empty netns starts with it DOWN, so 127.0.0.1 is dead until then.
 func bringLoopbackUp() error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {
@@ -129,7 +122,6 @@ func bringLoopbackUp() error {
 	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
 		return err
 	}
-	// Set IFF_UP | IFF_RUNNING on the interface flags.
 	flags := ifr.Uint16() | unix.IFF_UP | unix.IFF_RUNNING
 	ifr.SetUint16(flags)
 	return unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr)
