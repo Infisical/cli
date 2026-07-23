@@ -67,6 +67,27 @@ type winrmRemoveParams struct {
 	Paths []string `json:"paths"`
 }
 
+type winrmRotateParams struct {
+	winrmTransportParams
+	Kind        string `json:"kind"` // "local" or "domain"
+	Username    string `json:"targetUsername"`
+	NewPassword string `json:"newPassword"`
+}
+
+type winrmSyncDependencyParams struct {
+	winrmTransportParams
+	Type        string `json:"type"` // windows-service / scheduled-task / iis-app-pool
+	Name        string `json:"name"`
+	RunAs       string `json:"runAsUsername"`
+	NewPassword string `json:"newPassword"`
+}
+
+type winrmValidateCredentialParams struct {
+	winrmTransportParams
+	TargetUsername string `json:"targetUsername"`
+	Password       string `json:"password"`
+}
+
 type winrmResponse struct {
 	Result json.RawMessage `json:"result"`
 }
@@ -132,6 +153,11 @@ var serveWinrmMux = sync.OnceValue(func() *http.ServeMux {
 	mux.HandleFunc("/v1/test-connection", wrapWinrm(handleWinrmConnectionTest))
 	mux.HandleFunc("/v1/deliver-files", wrapWinrm(handleWinrmDeliverFiles))
 	mux.HandleFunc("/v1/remove-files", wrapWinrm(handleWinrmRemoveFiles))
+	mux.HandleFunc("/v1/enumerate-accounts", wrapWinrm(handleWinrmEnumerateAccounts))
+	mux.HandleFunc("/v1/enumerate-dependencies", wrapWinrm(handleWinrmEnumerateDependencies))
+	mux.HandleFunc("/v1/rotate-credential", wrapWinrm(handleWinrmRotateCredential))
+	mux.HandleFunc("/v1/sync-dependency", wrapWinrm(handleWinrmSyncDependency))
+	mux.HandleFunc("/v1/validate-credential", wrapWinrm(handleWinrmValidateCredential))
 	return mux
 })
 
@@ -264,6 +290,77 @@ func handleWinrmRemoveFiles(ctx context.Context, env *winrmRequestEnvelope) (any
 		return nil, err
 	}
 	return map[string]any{"removed": len(p.Paths)}, nil
+}
+
+func handleWinrmEnumerateAccounts(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var tp winrmTransportParams
+	if len(env.Params) > 0 {
+		if err := json.Unmarshal(env.Params, &tp); err != nil {
+			return nil, fmt.Errorf("malformed enumerate-accounts params")
+		}
+	}
+	accounts, err := winrm.EnumerateLocalAccounts(ctx, credsFromEnv(ctx, env, tp))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"accounts": accounts}, nil
+}
+
+func handleWinrmEnumerateDependencies(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var tp winrmTransportParams
+	if len(env.Params) > 0 {
+		if err := json.Unmarshal(env.Params, &tp); err != nil {
+			return nil, fmt.Errorf("malformed enumerate-dependencies params")
+		}
+	}
+	dependencies, err := winrm.EnumerateDependencies(ctx, credsFromEnv(ctx, env, tp))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"dependencies": dependencies}, nil
+}
+
+func handleWinrmRotateCredential(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var p winrmRotateParams
+	if err := json.Unmarshal(env.Params, &p); err != nil {
+		return nil, fmt.Errorf("malformed rotate-credential params")
+	}
+	if p.Username == "" || p.NewPassword == "" {
+		return nil, fmt.Errorf("targetUsername and newPassword are required")
+	}
+	if err := winrm.RotateCredential(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.Kind, p.Username, p.NewPassword); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func handleWinrmSyncDependency(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var p winrmSyncDependencyParams
+	if err := json.Unmarshal(env.Params, &p); err != nil {
+		return nil, fmt.Errorf("malformed sync-dependency params")
+	}
+	if p.Type == "" || p.Name == "" || p.RunAs == "" || p.NewPassword == "" {
+		return nil, fmt.Errorf("type, name, runAsUsername and newPassword are required")
+	}
+	if err := winrm.SyncDependency(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.Type, p.Name, p.RunAs, p.NewPassword); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func handleWinrmValidateCredential(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var p winrmValidateCredentialParams
+	if err := json.Unmarshal(env.Params, &p); err != nil {
+		return nil, fmt.Errorf("malformed validate-credential params")
+	}
+	if p.TargetUsername == "" || p.Password == "" {
+		return nil, fmt.Errorf("targetUsername and password are required")
+	}
+	valid, err := winrm.ValidateLocalCredential(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.TargetUsername, p.Password)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"valid": valid}, nil
 }
 
 func writeWinrmError(w http.ResponseWriter, status int, message string) {
