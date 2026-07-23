@@ -353,8 +353,8 @@ func handleWinrmValidateCredential(ctx context.Context, env *winrmRequestEnvelop
 	if err := json.Unmarshal(env.Params, &p); err != nil {
 		return nil, fmt.Errorf("malformed validate-credential params")
 	}
-	if p.TargetUsername == "" {
-		return nil, fmt.Errorf("targetUsername is required")
+	if p.TargetUsername == "" || p.Password == "" {
+		return nil, fmt.Errorf("targetUsername and password are required")
 	}
 	valid, err := winrm.ValidateLocalCredential(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.TargetUsername, p.Password)
 	if err != nil {
