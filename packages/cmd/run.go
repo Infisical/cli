@@ -82,6 +82,11 @@ var runCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		organizationId, err := cmd.Flags().GetString("organization-id")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
 		command, err := cmd.Flags().GetString("command")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
@@ -146,7 +151,7 @@ var runCmd = &cobra.Command{
 			ExpandSecretReferences: shouldExpandSecrets,
 		}
 
-		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token, organizationId)
 		if err != nil {
 			util.HandleError(err, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
 		}
@@ -154,7 +159,7 @@ var runCmd = &cobra.Command{
 		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
 
 		if watchMode {
-			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
+			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token, organizationId)
 		} else {
 			if cmd.Flags().Changed("command") {
 				command := cmd.Flag("command").Value.String()
@@ -211,6 +216,7 @@ func init() {
 	RootCmd.AddCommand(runCmd)
 	runCmd.Flags().String("token", "", "fetch secrets using service token or machine identity access token")
 	runCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	runCmd.Flags().String("organization-id", "", "manually set the organization ID to fetch secrets from")
 	runCmd.Flags().StringP("env", "e", "dev", "set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	runCmd.Flags().Bool("expand", true, "parse shell parameter expansions in your secrets")
 	runCmd.Flags().Bool("include-imports", true, "import linked secrets ")
@@ -307,7 +313,7 @@ func waitForExitCommand(cmd *exec.Cmd) (int, error) {
 	return waitStatus.ExitStatus(), nil
 }
 
-func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInterval int, request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) {
+func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInterval int, request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails, organizationId string) {
 
 	var cmd *exec.Cmd
 	var err error
@@ -423,7 +429,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 			watchMutex.Lock()
 			defer watchMutex.Unlock()
 
-			newEnvironmentVariables, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+			newEnvironmentVariables, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token, organizationId)
 			if err != nil {
 				log.Error().Err(err).Msg("[HOT RELOAD] Failed to fetch secrets")
 				return
@@ -439,12 +445,13 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 	}
 }
 
-func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) ([]models.SingleEnvironmentVariable, error) {
+func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails, organizationId string) ([]models.SingleEnvironmentVariable, error) {
 	var allSecrets []models.SingleEnvironmentVariable
 
 	for _, path := range request.SecretsPaths {
 		params := models.GetAllSecretsParameters{
 			Environment:              request.Environment,
+			OrganizationId:           organizationId,
 			WorkspaceId:              request.WorkspaceId,
 			TagSlugs:                 request.TagSlugs,
 			SecretsPath:              path,
@@ -503,8 +510,8 @@ func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.In
 	}
 }
 
-func fetchAndFormatSecretsForShell(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) (models.InjectableEnvironmentResult, error) {
-	secrets, err := fetchSecrets(request, projectConfigDir, secretOverriding, token)
+func fetchAndFormatSecretsForShell(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails, organizationId string) (models.InjectableEnvironmentResult, error) {
+	secrets, err := fetchSecrets(request, projectConfigDir, secretOverriding, token, organizationId)
 	if err != nil {
 		return models.InjectableEnvironmentResult{}, err
 	}
