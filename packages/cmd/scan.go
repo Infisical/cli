@@ -70,6 +70,7 @@ func init() {
 	scanCmd.Flags().Bool("no-git", false, "treat git repo as a regular directory and scan those files, --log-opts has no effect on the scan when --no-git is set")
 	scanCmd.Flags().Bool("pipe", false, "scan input from stdin, ex: `cat some_file | infisical scan --pipe`")
 	scanCmd.Flags().Bool("follow-symlinks", false, "scan files that are symlinks to other files")
+	scanCmd.Flags().String("platform", "", "SCM platform to use for generating finding links (github, gitlab, azuredevops, bitbucket)")
 
 	// global scan flags
 	scanCmd.PersistentFlags().StringP("config", "c", "", configDescription)
@@ -338,6 +339,13 @@ var scanCmd = &cobra.Command{
 				logging.Fatal().Err(err).Msg("could not create Git cmd")
 			}
 			scmPlatform = scm.UnknownPlatform
+			platformStr, _ := cmd.Flags().GetString("platform")
+			if platformStr != "" {
+				scmPlatform, err = scm.PlatformFromString(platformStr)
+				if err != nil {
+					log.Fatal().Err(err).Msg("invalid --platform value")
+				}
+			}
 			remote = detect.NewRemoteInfo(scmPlatform, source)
 
 			if findings, err = detector.DetectGit(gitCmd, remote); err != nil {

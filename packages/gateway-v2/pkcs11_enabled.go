@@ -392,6 +392,11 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, keyLabel, mechanis
 		if err != nil {
 			return err
 		}
+		if mechanism == "CKM_RSA_PKCS" {
+			if err := validateRsaPkcs1DigestInfo(data); err != nil {
+				return err
+			}
+		}
 		handle, found, err := findObject(m.ctx, session, keyLabel, pkcs11.CKO_PRIVATE_KEY)
 		if err != nil {
 			return err
@@ -413,8 +418,31 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, keyLabel, mechanis
 	return sig, err
 }
 
+var rsaPkcs1DigestInfos = []struct {
+	prefix    []byte
+	digestLen int
+}{
+	{[]byte{0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20}, 32},
+	{[]byte{0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30}, 48},
+	{[]byte{0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40}, 64},
+}
+
+func validateRsaPkcs1DigestInfo(data []byte) error {
+	for _, di := range rsaPkcs1DigestInfos {
+		if len(data) == len(di.prefix)+di.digestLen && bytes.Equal(data[:len(di.prefix)], di.prefix) {
+			return nil
+		}
+	}
+	return &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "CKM_RSA_PKCS input must be a SHA-256, SHA-384, or SHA-512 DigestInfo"}
+}
+
 func resolveMechanism(name string, isDigest bool) (uint, []byte, error) {
 	switch name {
+	case "CKM_RSA_PKCS":
+		if !isDigest {
+			return 0, nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "CKM_RSA_PKCS requires a pre-hashed DigestInfo input (isDigest=true)"}
+		}
+		return pkcs11.CKM_RSA_PKCS, nil, nil
 	case "CKM_SHA256_RSA_PKCS":
 		return pkcs11.CKM_SHA256_RSA_PKCS, nil, nil
 	case "CKM_SHA384_RSA_PKCS":
