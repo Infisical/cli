@@ -47,6 +47,7 @@ func DefaultDenyPaths(home string) []string {
 	}
 	rel := []string{
 		".infisical",
+		"infisical-keyring", // file-vault backend store (JWT + backup key); default on headless Linux
 		".aws",
 		".ssh",
 		".config/gcloud",

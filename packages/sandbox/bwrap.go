@@ -10,9 +10,15 @@ import (
 
 func osBackend() Backend { return bwrapBackend{} }
 
-func regularFileExists(path string) bool {
+// statDenyPath reports whether a deny path exists and, if so, whether it is a regular file. A missing
+// path is skipped by buildBwrapArgv (nothing to hide, and the mountpoint can't be created under the
+// read-only root bind).
+func statDenyPath(path string) (exists, isFile bool) {
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+	if err != nil {
+		return false, false
+	}
+	return true, info.Mode().IsRegular()
 }
 
 type bwrapBackend struct{}
@@ -37,14 +43,40 @@ func (bwrapBackend) Preflight(spec SandboxSpec) (PreflightResult, error) {
 		return PreflightResult{Supported: true, UsesBridge: true}, nil
 	}
 
-	// Empty-netns hard fence unavailable (most commonly the Ubuntu 24.04 userns restriction). Fall back
-	// to shared host networking. Credential controls are unaffected; only the network fence weakens.
+	// The hard fence probe failed. Before downgrading to shared net, check whether bwrap can create a
+	// user namespace at all: if it cannot (e.g. Ubuntu 24.04 with unprivileged userns fully restricted),
+	// the shared-net fallback would also die at "setting up uid map", so falling back would only trade a
+	// clear error for a raw bwrap crash. In that case report unsupported with actionable guidance.
+	if !sharedNetWorks(bwrapPath) {
+		return PreflightResult{
+			Supported: false,
+			Reason: "the OS sandbox cannot start: unprivileged user namespaces are restricted on this host " +
+				"(e.g. Ubuntu 24.04 AppArmor). Allow them with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` " +
+				"(or install an AppArmor profile permitting bwrap user namespaces), or re-run with --no-sandbox to skip the sandbox.",
+		}, nil
+	}
+
+	// User namespaces work but the empty-netns hard fence does not. Fall back to shared host networking.
+	// Credential controls are unaffected; only the network fence weakens.
 	return PreflightResult{
 		Supported:           true,
 		FallbackToSharedNet: true,
 		UsesBridge:          false,
-		Reason:              "unprivileged user namespaces appear restricted (e.g. Ubuntu 24.04 AppArmor). To restore the hard fence, install an AppArmor profile allowing bwrap userns or set kernel.apparmor_restrict_unprivileged_userns=0",
+		Reason:              "the empty-netns hard fence is unavailable on this host. To restore it, install an AppArmor profile allowing bwrap user namespaces or set kernel.apparmor_restrict_unprivileged_userns=0",
 	}, nil
+}
+
+// sharedNetWorks probes whether bwrap can start a user-namespaced sandbox that shares host networking.
+// It mirrors the shared-net fallback's own bwrap flags, so a success here means the fallback can run.
+func sharedNetWorks(bwrapPath string) bool {
+	// #nosec G204 -- fixed argv, no user input
+	cmd := exec.Command(bwrapPath,
+		"--unshare-all", "--share-net", "--die-with-parent",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+		"--", "true",
+	)
+	return cmd.Run() == nil
 }
 
 // hardFenceWorks probes whether an empty-netns bwrap can start and bring loopback up.
@@ -76,7 +108,7 @@ func (bwrapBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
 		return nil, fmt.Errorf("cannot resolve own executable for the sandbox supervisor: %w", err)
 	}
 
-	full := buildBwrapArgv(spec, self, argv, regularFileExists)
+	full := buildBwrapArgv(spec, self, argv, statDenyPath)
 	// #nosec G204 -- the wrapped command is provided directly by the operator running the CLI
 	cmd := exec.Command(bwrapPath, full[1:]...)
 	cmd.Stdin = os.Stdin

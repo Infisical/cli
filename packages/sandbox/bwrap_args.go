@@ -9,13 +9,19 @@ const BridgeLoopbackPort = 17321
 const SupervisorSubcommand = "__sandbox-supervisor"
 
 // buildBwrapArgv builds the bwrap argv for a spec. Pure (its filesystem dependency is injected via
-// isFile, which reports whether a deny path is a regular file), so it is golden-testable.
+// classify, which reports whether a deny path exists and, if so, whether it is a regular file), so it
+// is golden-testable.
 //
 // Deny paths are masked by type: /dev/null bind for files, empty tmpfs for directories. This is
 // load-bearing, not cosmetic: mounting a tmpfs onto an existing file aborts bwrap at startup (ENOTDIR).
+// A deny path that does not exist is skipped entirely: there is no credential there to hide, and bwrap
+// cannot create the mountpoint under the read-only root bind, so masking a missing path would abort the
+// whole sandbox at startup ("Can't mkdir ...: Read-only file system").
+// Deny mounts are emitted after the cwd/tempdir/write binds so they always win: otherwise a cwd bind
+// that is an ancestor of a deny path (running the agent from $HOME) would re-expose ~/.aws, ~/.ssh, etc.
 // Omits --new-session (setsid breaks the interactive TTY). On the hard fence the proxy's unix socket
 // is bind-mounted and the supervisor bridges to it; shared net reaches host loopback directly.
-func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, isFile func(string) bool) []string {
+func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, classify func(string) (exists, isFile bool)) []string {
 	args := []string{
 		"bwrap",
 		"--unshare-all",
@@ -30,15 +36,7 @@ func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, isFile func
 		args = append(args, "--share-net")
 	}
 
-	for _, p := range dedupeSorted(spec.DenyPaths) {
-		if isFile(p) {
-			args = append(args, "--ro-bind", "/dev/null", p)
-		} else {
-			args = append(args, "--tmpfs", p)
-		}
-	}
-
-	// Bound after --tmpfs /tmp so a tempdir under /tmp is not shadowed.
+	// Read/write binds first. Bound after --tmpfs /tmp so a tempdir under /tmp is not shadowed.
 	if spec.Cwd != "" {
 		args = append(args, "--bind", spec.Cwd, spec.Cwd)
 	}
@@ -47,6 +45,21 @@ func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, isFile func
 	}
 	for _, p := range dedupeSorted(spec.WritePaths) {
 		args = append(args, "--bind", p, p)
+	}
+
+	// Deny mounts LAST so they always win: a cwd or write bind that is an ancestor of a deny path
+	// (e.g. running the agent from $HOME, whose bind would otherwise re-expose ~/.aws, ~/.ssh, ...)
+	// must not be able to re-expose a credential path masked earlier.
+	for _, p := range dedupeSorted(spec.DenyPaths) {
+		exists, isFile := classify(p)
+		if !exists {
+			continue
+		}
+		if isFile {
+			args = append(args, "--ro-bind", "/dev/null", p)
+		} else {
+			args = append(args, "--tmpfs", p)
+		}
 	}
 
 	args = append(args, "--")
