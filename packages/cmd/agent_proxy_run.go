@@ -232,10 +232,12 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 
 	if !sandboxEnabled {
 		util.PrintWarning("running WITHOUT the OS sandbox (--no-sandbox): the agent is uncontained and can read your keyring, credential files, and reach the network directly. Secrets are still brokered on the wire, but the sandbox boundary is off.")
-	} else {
-		fmt.Fprintln(os.Stderr, color.HiBlackString("Local coupled mode: the proxy acts with your own access and the OS sandbox is the boundary that keeps the agent from reading your credentials directly."))
 	}
-	fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logPath))
+	// The default log lives in the per-run tempdir and is removed on exit, so its path is only worth
+	// surfacing when --log-file pins it to a stable location.
+	if logFile != "" {
+		fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logPath))
+	}
 
 	child, err := backend.Wrap(spec, args)
 	if err != nil {
@@ -336,10 +338,11 @@ type tokenSource struct {
 
 // resolveDeveloperTokenSource resolves the run's identity: an explicit --token/env, else the keyring
 // login. No machine-identity path (that's for services, not a person on a laptop). Neither can be
-// refreshed mid-session, so warnTokenExpiry flags when brokering will stop.
+// refreshed mid-session; we fail fast if the token is already expired but otherwise stay quiet, like
+// other auth-bearing CLIs (kubectl, cloud CLIs) that surface an error at use rather than pre-warning.
 func resolveDeveloperTokenSource(cmd *cobra.Command) tokenSource {
 	if token, err := util.GetInfisicalToken(cmd); err == nil && token != nil && token.Token != "" {
-		warnTokenExpiry(token.Token, "the provided token")
+		failIfTokenExpired(token.Token, "the provided token")
 		return tokenSource{token: func() string { return token.Token }, label: "token"}
 	}
 
@@ -351,23 +354,16 @@ func resolveDeveloperTokenSource(cmd *cobra.Command) tokenSource {
 		util.HandleError(fmt.Errorf("could not resolve your Infisical login; run 'infisical login' or pass --token"))
 	}
 	jwt := details.UserCredentials.JTWToken
-	warnTokenExpiry(jwt, "your login")
+	failIfTokenExpired(jwt, "your login")
 	return tokenSource{token: func() string { return jwt }, label: details.UserCredentials.Email}
 }
 
-// warnTokenExpiry prints when brokering will stop; silent when the expiry can't be read.
-func warnTokenExpiry(jwtToken, subject string) {
-	exp, ok := jwtExpiry(jwtToken)
-	if !ok {
-		return
+// failIfTokenExpired aborts with a clear error when the token is already expired; silent otherwise
+// (no routine "expires in Xh" banner). Tokens that aren't readable JWTs (e.g. service tokens) pass.
+func failIfTokenExpired(jwtToken, subject string) {
+	if exp, ok := jwtExpiry(jwtToken); ok && time.Until(exp) <= 0 {
+		util.HandleError(fmt.Errorf("%s has expired; brokering would fail. Run 'infisical login' or pass a valid --token", subject))
 	}
-	remaining := time.Until(exp)
-	if remaining <= 0 {
-		util.PrintWarning(fmt.Sprintf("%s has expired; brokering will fail. Run 'infisical login' or pass a valid --token.", subject))
-		return
-	}
-	util.PrintWarning(fmt.Sprintf("%s expires in %s (at %s); brokering stops then and cannot be refreshed mid-session. For a longer run, start fresh after 'infisical login'.",
-		subject, remaining.Round(time.Minute), exp.Local().Format("15:04")))
 }
 
 // jwtExpiry reads the exp claim unverified; false if the token isn't a readable JWT (e.g. a service token).
