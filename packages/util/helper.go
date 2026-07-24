@@ -557,6 +557,76 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 	return value, nil
 }
 
+// ResolveEnvironmentName resolves the environment slug for `agent-proxy connect`, in order:
+// the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.json
+// (git-branch mapping, then defaultEnvironment) > the flag's own default value.
+// It keys off cmd.Flags().Changed rather than an empty-value check so env and workspace
+// are still consulted when --env is left at its default.
+func ResolveEnvironmentName(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("env") {
+		value, _ := cmd.Flags().GetString("env")
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv(INFISICAL_ENVIRONMENT_NAME)); value != "" {
+		return value
+	}
+	if value := GetEnvFromWorkspaceFile(); value != "" {
+		return value
+	}
+	value, _ := cmd.Flags().GetString("env")
+	return value
+}
+
+// ResolveSecretPath resolves the secret path (folder) for a command, in order:
+// the --path flag (if explicitly set) > INFISICAL_SECRET_PATH > .infisical.json
+// defaultSecretPath > the flag's own default value ("/").
+func ResolveSecretPath(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("path") {
+		value, _ := cmd.Flags().GetString("path")
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv(INFISICAL_SECRET_PATH_NAME)); value != "" {
+		return value
+	}
+	if value := GetSecretPathFromWorkspaceFile(); value != "" {
+		return value
+	}
+	value, _ := cmd.Flags().GetString("path")
+	return value
+}
+
+// ResolveAgentProxyAddress resolves the agent proxy address for `agent-proxy connect`, in order:
+// the --proxy flag (if explicitly set) > INFISICAL_AGENT_PROXY_ADDRESS > empty (the caller
+// requires a non-empty result). It is deliberately NOT sourced from .infisical.json: that file
+// is usually committed to a repo, so a poisoned proxy address would silently route all agent
+// traffic and its auth token through an attacker-controlled host.
+func ResolveAgentProxyAddress(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("proxy") {
+		value, _ := cmd.Flags().GetString("proxy")
+		return value
+	}
+	return strings.TrimSpace(os.Getenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME))
+}
+
+// GetBoolFlagOrEnv resolves a boolean flag from the flag (if explicitly set), then the given
+// environment variable, then the flag's default. An unparseable env value fails closed to false.
+func GetBoolFlagOrEnv(cmd *cobra.Command, flag string, envName string) bool {
+	if cmd.Flags().Changed(flag) {
+		value, _ := cmd.Flags().GetBool(flag)
+		return value
+	}
+	if raw := strings.TrimSpace(os.Getenv(envName)); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			log.Warn().Msgf("Ignoring %s: %q is not a valid boolean", envName, raw)
+			return false
+		}
+		return parsed
+	}
+	value, _ := cmd.Flags().GetBool(flag)
+	return value
+}
+
 func GenerateRandomString(length int) string {
 	b := make([]byte, length)
 	for i := range b {
