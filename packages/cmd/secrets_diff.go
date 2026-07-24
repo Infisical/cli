@@ -67,9 +67,6 @@ func diffSecrets(cmd *cobra.Command, args []string) {
 	if env2 == "" {
 		util.PrintErrorMessageAndExit("The --env2 flag is required to specify the environment to compare against")
 	}
-	if env2 == env1 {
-		util.PrintErrorMessageAndExit("--env and --env2 must be different environments")
-	}
 
 	path1, err := cmd.Flags().GetString("path")
 	if err != nil {
@@ -80,8 +77,12 @@ func diffSecrets(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
-	if path2 == "" {
-		path2 = path1
+	path2 = resolveDiffPath2(path1, path2)
+
+	// Same environment is allowed when comparing different paths
+	// (e.g. --env=staging --env2=staging --path=/app --path2=/db).
+	if err := validateDiffTargets(env1, env2, path1, path2); err != nil {
+		util.PrintErrorMessageAndExit(err.Error())
 	}
 
 	includeImports, err := cmd.Flags().GetBool("include-imports")
@@ -225,13 +226,42 @@ func printSecretDiffTable(diff []secretDiffEntry, env1, env2 string, showValues 
 		leftValue := entry.LeftValue
 		rightValue := entry.RightValue
 		if !showValues {
-			leftValue = maskDiffValue(entry.Status, secretDiffStatusRemoved, leftValue)
-			rightValue = maskDiffValue(entry.Status, secretDiffStatusAdded, rightValue)
+			leftValue, rightValue = maskDiffColumns(entry.Status, leftValue, rightValue)
 		}
 		rows = append(rows, []string{entry.Key, entry.Status, leftValue, rightValue})
 	}
 
 	visualize.GenericTable(headers, rows)
+}
+
+// resolveDiffPath2 defaults --path2 to --path when --path2 is omitted.
+func resolveDiffPath2(path1, path2 string) string {
+	if path2 == "" {
+		return path1
+	}
+	return path2
+}
+
+// validateDiffTargets rejects comparisons where both environment and path are
+// identical (there would be nothing meaningful to compare).
+func validateDiffTargets(env1, env2, path1, path2 string) error {
+	if env1 == env2 && path1 == path2 {
+		return fmt.Errorf("--env/--env2 and --path/--path2 must not both be identical; use different environments or different paths")
+	}
+	return nil
+}
+
+// maskDiffColumns returns masked left/right display values for a table row.
+//
+// Semantics when masking:
+//   - removed: key exists only on the left → left masked, right empty
+//   - added:   key exists only on the right → left empty, right masked
+//   - changed: both sides exist → both masked
+func maskDiffColumns(status, leftValue, rightValue string) (string, string) {
+	// Left is empty when the key was added on the right (absent on the left).
+	// Right is empty when the key was removed from the left (absent on the right).
+	return maskDiffValue(status, secretDiffStatusAdded, leftValue),
+		maskDiffValue(status, secretDiffStatusRemoved, rightValue)
 }
 
 // maskDiffValue masks a value unless it's meant to be empty (i.e. the key
