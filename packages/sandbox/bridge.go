@@ -55,8 +55,12 @@ func RunSupervisor(probe bool, port int, socket string, argv []string) int {
 		return 1
 	}
 
+	// Forward only process-directed termination signals. Notifying on ALL signals also delivers SIGURG
+	// (the Go runtime's async-preemption signal) and SIGCHLD, which would be spammed at the agent and
+	// race its exit path, intermittently corrupting its exit status into 255. Terminal-generated
+	// signals reach the agent directly through the shared controlling-terminal foreground group.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	go func() {
 		for sig := range sigCh {
 			if agent.Process != nil {
@@ -107,7 +111,12 @@ func bridgeConn(client net.Conn, socket string) {
 	<-done
 }
 
-// bringLoopbackUp brings lo UP; an empty netns starts with it DOWN, so 127.0.0.1 is dead until then.
+// bringLoopbackUp ensures lo is UP so 127.0.0.1 is reachable inside the netns. bwrap already brings
+// loopback up when it creates the new network namespace, so in practice lo is UP by the time we get
+// here; we still check and, only if it is down, try to raise it. The SIOCSIFFLAGS write is refused
+// with EPERM in bwrap's user-namespaced netns even with CAP_NET_ADMIN, so treating that failure as
+// fatal would force every Linux run to fall back to the weaker shared-net path. We therefore return
+// success whenever lo is already UP, and surface the error only when it is genuinely still down.
 func bringLoopbackUp() error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {
@@ -122,7 +131,17 @@ func bringLoopbackUp() error {
 	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
 		return err
 	}
+	if ifr.Uint16()&unix.IFF_UP != 0 {
+		return nil
+	}
 	flags := ifr.Uint16() | unix.IFF_UP | unix.IFF_RUNNING
 	ifr.SetUint16(flags)
-	return unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr)
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr); err != nil {
+		// Re-read: some kernels refuse the write yet lo is up anyway. Trust the observed state.
+		if unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr) == nil && ifr.Uint16()&unix.IFF_UP != 0 {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

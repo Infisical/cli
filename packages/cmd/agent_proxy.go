@@ -411,8 +411,11 @@ func runAgentProcess(args, env []string) error {
 	proc.Stderr = os.Stderr
 	proc.Env = env
 
+	// Forward only process-directed termination signals; notifying on ALL signals also delivers SIGURG
+	// (Go's async-preemption signal) and SIGCHLD, which then get spammed at the child and can corrupt
+	// its exit status. Terminal-generated signals reach the child directly via the foreground pgroup.
 	sigChannel := make(chan os.Signal, 1)
-	signal.Notify(sigChannel)
+	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 
 	if err := proc.Start(); err != nil {
 		return err

@@ -259,8 +259,13 @@ func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-ch
 		return 1
 	}
 
+	// Forward only process-directed termination signals. Notifying on ALL signals (signal.Notify with
+	// no filter) also delivers SIGURG (the Go runtime's async-preemption signal, fired constantly) and
+	// SIGCHLD, which we would then spam at the child and race into its exit path, intermittently
+	// corrupting its exit status into 255. Terminal-generated signals (Ctrl-C, SIGWINCH, Ctrl-Z) reach
+	// the child directly: it shares the controlling terminal's foreground process group.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	go func() {
 		for sig := range sigCh {
 			if child.Process != nil {
