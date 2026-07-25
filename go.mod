@@ -16,6 +16,7 @@ require (
 	github.com/fatih/semgroup v1.2.0
 	github.com/gitleaks/go-gitdiff v0.9.1
 	github.com/go-mysql-org/go-mysql v1.13.0
+	github.com/gofrs/flock v0.8.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
@@ -111,7 +112,6 @@ require (
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gofrs/uuid v4.4.0+incompatible // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/glog v1.2.5 // indirect

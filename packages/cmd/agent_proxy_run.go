@@ -18,7 +18,6 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
@@ -88,21 +87,13 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	httpClient := resty.New().SetAuthToken(src.token())
 	placeholders := fetchLocalProxiedServiceConfig(httpClient, projectID, environment, secretPath)
 
-	// The control-plane fence keys off this host, so refuse to start if we can't derive it rather than
-	// silently running with the fence disabled.
-	apiHost := infisicalAPIHost()
-	if apiHost == "" {
-		util.HandleError(fmt.Errorf("could not determine the Infisical API host from domain %q; pass a full URL via --domain (e.g. https://app.infisical.com)", config.INFISICAL_URL))
-	}
-
 	local := &agentproxy.LocalOptions{
-		ProjectID:     projectID,
-		Environment:   environment,
-		SecretPath:    secretPath,
-		UserToken:     src.token,
-		InfisicalHost: apiHost,
-		IdentityID:    src.label,
-		IdentityName:  src.label,
+		ProjectID:    projectID,
+		Environment:  environment,
+		SecretPath:   secretPath,
+		UserToken:    src.token,
+		IdentityID:   src.label,
+		IdentityName: src.label,
 	}
 
 	// Per-run 0700 tempdir: only the public CA cert (and the unix socket on the Linux hard fence) hit disk.
@@ -435,17 +426,6 @@ func localProxyURL(proxyAddr string) string {
 	return u.String()
 }
 
-// infisicalAPIHost is the bare hostname of the configured Infisical API (the proxy refuses egress to
-// it). ParseRequestURI (not the lenient url.Parse) so a scheme-less domain yields "" and the caller
-// fails closed instead of running with the control-plane fence silently disabled.
-func infisicalAPIHost() string {
-	u, err := url.ParseRequestURI(config.INFISICAL_URL)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
-}
-
 // buildLocalAgentEnv builds the child env: a scrubbed parent env (no INFISICAL_TOKEN/DOMAIN, no
 // secret-shaped vars) plus the credential-free proxy vars, CA trust vars, and placeholders.
 func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders map[string]string) []string {
@@ -462,6 +442,9 @@ func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders m
 		stale[k] = true
 	}
 	for _, k := range credentialEnvKeys {
+		stale[k] = true
+	}
+	for _, k := range authAgentEnvKeys {
 		stale[k] = true
 	}
 	stale[util.INFISICAL_TOKEN_NAME] = true

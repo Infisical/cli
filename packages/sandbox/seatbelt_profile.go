@@ -109,6 +109,15 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 		}
 		add(`(allow file-write* (subpath ` + escapeSBPL(p) + `))`)
 	}
+	add("")
+
+	// Re-deny writes to credential paths after the write allows (SBPL is last-match-wins), so a writable
+	// cwd or write path that contains a denied path (e.g. running the agent from $HOME) can't write into
+	// it, for example appending to ~/.ssh/authorized_keys.
+	add("; Credential paths: deny writes too (not just reads)")
+	for _, p := range dedupeSorted(spec.DenyPaths) {
+		add(`(deny file-write* (subpath ` + escapeSBPL(p) + `))`)
+	}
 
 	return strings.Join(b, "\n") + "\n"
 }

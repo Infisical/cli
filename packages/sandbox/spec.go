@@ -56,6 +56,10 @@ func DefaultDenyPaths(home string) []string {
 		".netrc",
 		".docker/config.json",
 		".config/infisical",
+		".config/gh",        // GitHub CLI token
+		".git-credentials",  // git stored credentials
+		".npmrc",            // npm auth token
+		".gnupg",            // GPG private keys
 	}
 	paths := make([]string, 0, len(rel))
 	for _, r := range rel {

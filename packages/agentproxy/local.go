@@ -23,10 +23,6 @@ type LocalOptions struct {
 	// cannot read the key.
 	CADir string
 
-	// InfisicalHost (bare hostname) is always refused through the proxy, keeping the control plane
-	// unreachable from the sandbox as an invariant, not just because the child holds no token.
-	InfisicalHost string
-
 	// IdentityID/IdentityName label activity records (no wire JWT to decode them from).
 	IdentityID   string
 	IdentityName string

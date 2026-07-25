@@ -587,11 +587,6 @@ type forwardOutcome struct {
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
-	// Local mode: the Infisical control plane is never reachable from the sandbox, even under allow.
-	if l := ps.opts.Local; l != nil && l.InfisicalHost != "" && strings.EqualFold(hostname, l.InfisicalHost) {
-		return nil, forwardOutcome{}, fmt.Errorf("host %q is the Infisical API and is not reachable from the sandboxed agent: %w", hostname, errHostBlocked)
-	}
-
 	services, err := ps.cache.get(jwt, scope)
 	if err != nil {
 		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)

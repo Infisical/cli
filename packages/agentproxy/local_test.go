@@ -196,29 +196,6 @@ func TestRemoteModeChallengesWithoutProxyAuth(t *testing.T) {
 	}
 }
 
-func TestLocalModeBlocksInfisicalHost(t *testing.T) {
-	local := &LocalOptions{
-		ProjectID: "proj", Environment: "prod", SecretPath: "/",
-		UserToken:     func() string { return "dev-token" },
-		InfisicalHost: "app.infisical.com",
-	}
-	client := newLocalTestProxy(t, local, nil, &stubRoundTripper{respBody: "ok"})
-	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
-
-	// Case-insensitive hostname match; blocked even though unmatched hosts default to allow.
-	if _, err := fmt.Fprintf(client, "GET http://App.Infisical.Com/api/v1/secrets HTTP/1.1\r\nHost: app.infisical.com\r\nConnection: close\r\n\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for the Infisical host, got %d", resp.StatusCode)
-	}
-}
-
 func TestUnmatchedBlockRespectsAllowHost(t *testing.T) {
 	local := &LocalOptions{
 		ProjectID: "proj", Environment: "prod", SecretPath: "/",

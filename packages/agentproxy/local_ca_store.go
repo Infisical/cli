@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -121,18 +121,12 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// lockDir takes an exclusive flock on a lockfile in dir; the returned func releases it.
+// lockDir takes an exclusive lock on a lockfile in dir; the returned func releases it. Uses gofrs/flock
+// so the file is portable (the CLI also builds for Windows) rather than a raw unix.Flock.
 func lockDir(dir string) (func(), error) {
-	f, err := os.OpenFile(filepath.Join(dir, ".ca.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open CA lock: %w", err)
-	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
-		f.Close()
+	fl := flock.New(filepath.Join(dir, ".ca.lock"))
+	if err := fl.Lock(); err != nil {
 		return nil, fmt.Errorf("failed to lock CA dir: %w", err)
 	}
-	return func() {
-		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
-		_ = f.Close()
-	}, nil
+	return func() { _ = fl.Unlock() }, nil
 }
