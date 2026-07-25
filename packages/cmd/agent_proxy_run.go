@@ -52,23 +52,14 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("--proxy is not valid for 'run' (it starts its own ephemeral proxy); use 'agent-proxy connect --proxy=host:port' for a remote proxy"))
 	}
 
-	environment, err := cmd.Flags().GetString("env")
-	if err != nil {
-		util.HandleError(err, "Unable to parse --env")
-	}
-	if !cmd.Flags().Changed("env") {
-		if envFromWorkspace := util.GetEnvFromWorkspaceFile(); envFromWorkspace != "" {
-			environment = envFromWorkspace
-		}
-	}
+	// Resolve --env/--path the same way `agent-proxy connect` does (flag > env var > .infisical.json),
+	// so the two subcommands behave consistently and honor INFISICAL_ENVIRONMENT / INFISICAL_SECRET_PATH.
+	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the --env flag is required"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
 	}
 
-	secretPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse --path")
-	}
+	secretPath := util.ResolveSecretPath(cmd)
 
 	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
