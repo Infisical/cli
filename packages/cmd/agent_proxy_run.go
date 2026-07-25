@@ -97,12 +97,19 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	httpClient := resty.New().SetAuthToken(src.token())
 	placeholders := fetchLocalProxiedServiceConfig(httpClient, projectID, environment, secretPath)
 
+	// The control-plane fence keys off this host, so refuse to start if we can't derive it rather than
+	// silently running with the fence disabled.
+	apiHost := infisicalAPIHost()
+	if apiHost == "" {
+		util.HandleError(fmt.Errorf("could not determine the Infisical API host from domain %q; pass a full URL via --domain (e.g. https://app.infisical.com)", config.INFISICAL_URL))
+	}
+
 	local := &agentproxy.LocalOptions{
 		ProjectID:     projectID,
 		Environment:   environment,
 		SecretPath:    secretPath,
 		UserToken:     src.token,
-		InfisicalHost: infisicalAPIHost(),
+		InfisicalHost: apiHost,
 		IdentityID:    src.label,
 		IdentityName:  src.label,
 	}
@@ -437,9 +444,11 @@ func localProxyURL(proxyAddr string) string {
 	return u.String()
 }
 
-// infisicalAPIHost is the bare hostname of the configured Infisical API (the proxy refuses egress to it).
+// infisicalAPIHost is the bare hostname of the configured Infisical API (the proxy refuses egress to
+// it). ParseRequestURI (not the lenient url.Parse) so a scheme-less domain yields "" and the caller
+// fails closed instead of running with the control-plane fence silently disabled.
 func infisicalAPIHost() string {
-	u, err := url.Parse(config.INFISICAL_URL)
+	u, err := url.ParseRequestURI(config.INFISICAL_URL)
 	if err != nil {
 		return ""
 	}
