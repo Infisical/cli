@@ -1,6 +1,7 @@
 package gatewayv2
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -9,24 +10,35 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 const (
-	maxTestConnRequestBytes = 64 * 1024
-	testConnDefaultTimeout  = 15 * time.Second
-	testConnMaxTimeout      = 60 * time.Second
+	maxTestConnRequestBytes   = 64 * 1024
+	testConnDefaultTimeout    = 15 * time.Second
+	testConnMaxTimeout        = 60 * time.Second
+	connectionTestReqDeadline = 90 * time.Second
 )
+
+func serveConnectionTestOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
+	return serveRPCOverTLS(ctx, conn, reader, forwardConfig, connectionTestMux(), connectionTestReqDeadline, "connection-test")
+}
+
+var connectionTestMux = sync.OnceValue(func() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/test-connection", handleTestConnection)
+	return mux
+})
 
 const (
 	testConnModePostgres = "postgres"
 	testConnModeSSH      = "ssh"
 	testConnModeTCP      = "tcp"
 )
-
-const CapabilityConnectionTest = "connectionTest"
 
 // testConnectionEnvelope carries the fields common to every connection test; mode selects which client validates
 // it and which per-mode params struct the body is decoded into. The target host/port come from the signed cert.
@@ -102,7 +114,7 @@ func doPostgresConnectionTest(ctx context.Context, host string, port int, params
 // can't authenticate at rest (RDP, SSH certificate auth), so at least a bad host/port is rejected.
 func doTCPReachabilityTest(ctx context.Context, host string, port int) error {
 	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host, port))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return err
 	}

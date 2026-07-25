@@ -8,8 +8,14 @@ const (
 	INFISICAL_WORKSPACE_CONFIG_FILE_NAME       = ".infisical.json"
 	INFISICAL_TOKEN_NAME                       = "INFISICAL_TOKEN"
 	INFISICAL_PROJECT_ID_NAME                  = "INFISICAL_PROJECT_ID"
+	INFISICAL_ENVIRONMENT_NAME                 = "INFISICAL_ENVIRONMENT"
+	INFISICAL_SECRET_PATH_NAME                 = "INFISICAL_SECRET_PATH"
 	INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME = "INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN"
-	INFISICAL_VAULT_FILE_PASSPHRASE_ENV_NAME   = "INFISICAL_VAULT_FILE_PASSPHRASE" // This works because we've forked the keyring package and added support for this env variable. This explains why you won't find any occurrences of it in the CLI codebase.
+
+	// Agent proxy (connect)
+	INFISICAL_AGENT_PROXY_ADDRESS_NAME                         = "INFISICAL_AGENT_PROXY_ADDRESS"
+	INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME = "INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS"
+	INFISICAL_VAULT_FILE_PASSPHRASE_ENV_NAME                   = "INFISICAL_VAULT_FILE_PASSPHRASE" // This works because we've forked the keyring package and added support for this env variable. This explains why you won't find any occurrences of it in the CLI codebase.
 
 	INFISICAL_BOOTSTRAP_EMAIL_NAME        = "INFISICAL_ADMIN_EMAIL"
 	INFISICAL_BOOTSTRAP_PASSWORD_NAME     = "INFISICAL_ADMIN_PASSWORD"

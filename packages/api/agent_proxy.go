@@ -116,3 +116,18 @@ func CallListProxiedServices(httpClient *resty.Client, request ListProxiedServic
 	}
 	return res, nil
 }
+
+func CallReportProxiedServiceUsage(httpClient *resty.Client, serviceID string) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/proxied-services/%s/report-usage", config.INFISICAL_URL, serviceID))
+
+	if err != nil {
+		return NewGenericRequestError("CallReportProxiedServiceUsage", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallReportProxiedServiceUsage", response, nil)
+	}
+	return nil
+}

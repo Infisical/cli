@@ -502,6 +502,15 @@ func GetEnvFromWorkspaceFile() string {
 	return workspaceFile.DefaultEnvironment
 }
 
+func GetSecretPathFromWorkspaceFile() string {
+	workspaceFile, err := GetWorkSpaceFromFile()
+	if err != nil {
+		log.Debug().Msgf("GetSecretPathFromWorkspaceFile: [err=%s]", err)
+		return ""
+	}
+	return workspaceFile.DefaultSecretPath
+}
+
 func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
 	branch, err := getCurrentBranch()
 	if err != nil {
