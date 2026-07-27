@@ -132,7 +132,7 @@ func newProxyServer(opts Options) (*proxyServer, error) {
 			return nil, err
 		}
 		ca = localCa
-		resolver = newLocalResolver(opts.Local)
+		resolver = newLocalResolver(opts.Local, leases)
 	} else {
 		ca = newCaManager(opts.ProxyToken)
 		resolver = newAgentCache(opts.ProxyToken, leases)
