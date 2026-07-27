@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -9,7 +8,7 @@ import (
 // generateSeatbeltProfile builds the SBPL profile for a spec. Pure (no OS calls), golden-testable.
 // The keychain services (securityd.xpc, SecurityServer) and trustd are deliberately omitted from the
 // allow-list, so (deny default) blocks keyring reads while injected-CA TLS still works.
-func generateSeatbeltProfile(spec SandboxSpec) string {
+func generateSeatbeltProfile(spec Spec) string {
 	var b []string
 	add := func(lines ...string) { b = append(b, lines...) }
 
@@ -26,7 +25,11 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 		"",
 		"(allow user-preference-read)",
 		"",
-		"; Baseline mach services (keychain services deliberately omitted; trustd gated on AllowTrustd)",
+		// DNS is omitted as deliberately as the keychain: the proxy resolves hostnames on the host, so the
+		// child never needs a resolver. Without one, a client that ignores the proxy env vars fails loudly
+		// instead of reaching the network, and DNS can't be used as an exfiltration channel. Do not add
+		// mDNSResponder here.
+		"; Baseline mach services (keychain + DNS deliberately omitted; trustd gated on AllowTrustd)",
 		"(allow mach-lookup",
 		`  (global-name "com.apple.audio.systemsoundserver")`,
 		`  (global-name "com.apple.distributed_notifications@Uv3")`,
@@ -97,6 +100,17 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 	}
 	add("")
 
+	// Re-open the operator's --allow-read paths after the denies. Emitted read-only and before the write
+	// section, so the trailing write denies still apply: an excepted path inside a credential directory
+	// becomes readable without becoming writable, and its siblings stay denied.
+	if exceptions := dedupeSorted(spec.ReadPaths); len(exceptions) > 0 {
+		add("; Read exceptions (--allow-read): re-open specific paths inside the denied set")
+		for _, p := range exceptions {
+			add(`(allow file-read* (subpath ` + escapeSBPL(p) + `))`)
+		}
+		add("")
+	}
+
 	add("; File write")
 	writePaths := dedupeSorted(append([]string{spec.Cwd, spec.TempDir, "/tmp", "/private/tmp", "/dev/null"}, spec.WritePaths...))
 	for _, p := range writePaths {
@@ -120,23 +134,6 @@ func generateSeatbeltProfile(spec SandboxSpec) string {
 	}
 
 	return strings.Join(b, "\n") + "\n"
-}
-
-func dedupeSorted(in []string) []string {
-	seen := make(map[string]struct{}, len(in))
-	var out []string
-	for _, s := range in {
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // escapeSBPL quotes a path as an SBPL (C-style) string literal.

@@ -2,8 +2,6 @@ package sandbox
 
 import (
 	"errors"
-	"fmt"
-	"os"
 	"os/exec"
 )
 
@@ -19,13 +17,13 @@ type PreflightResult struct {
 // Backend applies an OS sandbox to a command. Wrap returns an *exec.Cmd ready to Start (stdio
 // inherited, Env from the spec) but does not start it.
 type Backend interface {
-	Preflight(spec SandboxSpec) (PreflightResult, error)
-	Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error)
+	Preflight(spec Spec) (PreflightResult, error)
+	Wrap(spec Spec, argv []string) (*exec.Cmd, error)
 }
 
 // NewBackend returns the platform backend, or the uncontained passthrough backend for --no-sandbox.
-func NewBackend(spec SandboxSpec) Backend {
-	if !spec.Sandbox {
+func NewBackend(spec Spec) Backend {
+	if !spec.Enabled {
 		return passthroughBackend{}
 	}
 	return osBackend()
@@ -34,19 +32,13 @@ func NewBackend(spec SandboxSpec) Backend {
 // passthroughBackend runs the command uncontained (--no-sandbox): proxy and scrubbed env still apply.
 type passthroughBackend struct{}
 
-func (passthroughBackend) Preflight(SandboxSpec) (PreflightResult, error) {
+func (passthroughBackend) Preflight(Spec) (PreflightResult, error) {
 	return PreflightResult{Supported: true}, nil
 }
 
-func (passthroughBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
+func (passthroughBackend) Wrap(spec Spec, argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
-		return nil, fmt.Errorf("sandbox: empty command")
+		return nil, errEmptyCommand
 	}
-	// #nosec G204 -- the command is provided directly by the operator running the CLI
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = spec.Env
-	return cmd, nil
+	return newInheritedCmd(argv, spec.Env), nil
 }

@@ -76,7 +76,7 @@ func newRecordingProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope
 	}
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: unmatchedHost},
-		cache:     cache,
+		resolver:  cache,
 		leases:    newLeaseStore(func() string { return "" }),
 		transport: &http.Transport{},
 	}
@@ -115,7 +115,7 @@ func TestForwardCapturesIdentityForRecord(t *testing.T) {
 	}
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
-		cache:     cache,
+		resolver:  cache,
 		leases:    newLeaseStore(func() string { return "" }),
 		transport: reflectingTransport{header: make(http.Header)},
 	}

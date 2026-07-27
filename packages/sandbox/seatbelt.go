@@ -14,7 +14,7 @@ func osBackend() Backend { return seatbeltBackend{} }
 
 type seatbeltBackend struct{}
 
-func (seatbeltBackend) Preflight(SandboxSpec) (PreflightResult, error) {
+func (seatbeltBackend) Preflight(Spec) (PreflightResult, error) {
 	if _, err := os.Stat(sandboxExecPath); err != nil {
 		return PreflightResult{
 			Supported: false,
@@ -25,17 +25,11 @@ func (seatbeltBackend) Preflight(SandboxSpec) (PreflightResult, error) {
 }
 
 // Wrap builds `sandbox-exec -p <profile> <argv...>`; the profile is passed inline, never on disk.
-func (seatbeltBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
+func (seatbeltBackend) Wrap(spec Spec, argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
-		return nil, fmt.Errorf("sandbox: empty command")
+		return nil, errEmptyCommand
 	}
 	profile := generateSeatbeltProfile(spec)
-	args := append([]string{"-p", profile}, argv...)
-	// #nosec G204 -- the command is provided directly by the operator running the CLI
-	cmd := exec.Command(sandboxExecPath, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = spec.Env
-	return cmd, nil
+	full := append([]string{sandboxExecPath, "-p", profile}, argv...)
+	return newInheritedCmd(full, spec.Env), nil
 }

@@ -64,7 +64,7 @@ func TestForwardPassesResponseHeadersThrough(t *testing.T) {
 	respHeader.Set("Location", "https://example.com/next?token=real_secret")
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
-		cache:     cache,
+		resolver:  cache,
 		transport: reflectingTransport{header: respHeader},
 	}
 

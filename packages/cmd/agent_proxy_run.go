@@ -9,11 +9,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
@@ -136,11 +134,17 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 
 	// Supported agents persist their own state under home; make those dirs writable so interactive
 	// sessions can save. It's the agent's own data, not the developer's secrets.
-	writePaths := append(defaultAgentStateWritePaths(home), extraWrite...)
+	writePaths := absolutePaths(append(defaultAgentStateWritePaths(home), extraWrite...))
 
-	spec := sandbox.SandboxSpec{
-		Sandbox:    sandboxEnabled,
-		ReadPaths:  extraRead,
+	// --allow-read carves a read hole in the credential deny set, so name exactly what was re-opened.
+	readExceptions := absolutePaths(extraRead)
+	if sandboxEnabled && len(readExceptions) > 0 {
+		util.PrintWarning(fmt.Sprintf("re-opened for reading inside the sandbox: %s. The agent can read these; they remain non-writable and their siblings stay denied.", strings.Join(readExceptions, ", ")))
+	}
+
+	spec := sandbox.Spec{
+		Enabled:    sandboxEnabled,
+		ReadPaths:  readExceptions,
 		WritePaths: writePaths,
 		DenyPaths:  sandbox.DefaultDenyPaths(home),
 		Cwd:        cwd,
@@ -161,7 +165,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	}
 	if pre.FallbackToSharedNet {
 		spec.NetMode = sandbox.SharedNet
-		util.PrintWarning(fmt.Sprintf("network hard-fence unavailable (%s); falling back to shared host networking. Your credentials remain protected (env scrub, keyring block, filesystem deny); only the network isolation is reduced.", pre.Reason))
+		util.PrintWarning(fmt.Sprintf("network hard-fence unavailable (%s); falling back to shared host networking. The agent can now reach the network directly, so routing through the proxy is advisory (it relies on the proxy env vars) rather than enforced: a tool that ignores them will not be brokered. Credential controls are unaffected (env scrub, keyring block, filesystem deny).", pre.Reason))
 	}
 
 	proxy, err := agentproxy.New(agentproxy.Options{
@@ -250,20 +254,7 @@ func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-ch
 		return 1
 	}
 
-	// Forward only process-directed termination signals. Notifying on ALL signals (signal.Notify with
-	// no filter) also delivers SIGURG (the Go runtime's async-preemption signal, fired constantly) and
-	// SIGCHLD, which we would then spam at the child and race into its exit path, intermittently
-	// corrupting its exit status into 255. Terminal-generated signals (Ctrl-C, SIGWINCH, Ctrl-Z) reach
-	// the child directly: it shares the controlling terminal's foreground process group.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
-	go func() {
-		for sig := range sigCh {
-			if child.Process != nil {
-				_ = child.Process.Signal(sig)
-			}
-		}
-	}()
+	stopForwarding := sandbox.ForwardTerminationSignals(child)
 
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- child.Wait() }()
@@ -277,22 +268,13 @@ func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-ch
 		<-waitCh
 		return 1
 	case err := <-waitCh:
-		signal.Stop(sigCh)
-		return exitCodeFromWait(err)
-	}
-}
-
-func exitCodeFromWait(err error) int {
-	if err == nil {
-		return 0
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			return ws.ExitStatus()
+		stopForwarding()
+		code, ok := sandbox.WaitExitCode(err)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "agent process error: %v\n", err)
 		}
+		return code
 	}
-	fmt.Fprintf(os.Stderr, "agent process error: %v\n", err)
-	return 1
 }
 
 func shutdownProxy(proxy *agentproxy.Proxy) {
@@ -420,6 +402,24 @@ func defaultAgentStateWritePaths(home string) []string {
 	return out
 }
 
+// absolutePaths resolves each path against the cwd and drops empties. Both sandbox backends require
+// absolute paths (SBPL `subpath` and bwrap `--ro-bind` reject relative ones), so a user passing
+// --allow-read ./creds would otherwise produce a profile that fails to load.
+func absolutePaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		out = append(out, abs)
+	}
+	return out
+}
+
 // localProxyURL is the child's proxy URL: no userinfo, so no credential reaches the child.
 func localProxyURL(proxyAddr string) string {
 	u := url.URL{Scheme: "http", Host: proxyAddr}
@@ -473,11 +473,7 @@ func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders m
 		env[key] = val
 	}
 
-	env["HTTPS_PROXY"] = proxy
-	env["HTTP_PROXY"] = proxy
-	env["NO_PROXY"] = mergeNoProxy(operatorNoProxy...)
-	env["NODE_USE_ENV_PROXY"] = "1"
-	env["OPENCLAW_PROXY_URL"] = proxy
+	setProxyEnv(env, proxy, mergeNoProxy(operatorNoProxy...))
 
 	for _, k := range caTrustEnvVars {
 		env[k] = caPath
@@ -522,7 +518,7 @@ func init() {
 	agentProxyRunCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
 	agentProxyRunCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes")
 	agentProxyRunCmd.Flags().String("log-file", "", "write the proxy activity log to this path (default: a per-run temp file, kept off the terminal)")
-	agentProxyRunCmd.Flags().StringArray("allow-read", nil, "extra path the agent may read (repeatable)")
+	agentProxyRunCmd.Flags().StringArray("allow-read", nil, "re-open a credential path the sandbox denies by default, read-only (repeatable; e.g. --allow-read ~/.aws/config)")
 	agentProxyRunCmd.Flags().StringArray("allow-write", nil, "extra path the agent may write (repeatable; implies read)")
 	agentProxyRunCmd.Flags().StringArray("allow-host", nil, "extra host the agent may reach through the proxy (repeatable)")
 	agentProxyRunCmd.Flags().StringArray("pass-env", nil, "let a specific host env var through to the agent (repeatable)")

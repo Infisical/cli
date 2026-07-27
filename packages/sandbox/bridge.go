@@ -3,14 +3,11 @@
 package sandbox
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"os/exec"
-	"os/signal"
-	"syscall"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -43,45 +40,21 @@ func RunSupervisor(probe bool, port int, socket string, argv []string) int {
 	}
 	go runBridge(ln, socket)
 
-	// #nosec G204 -- the wrapped command is provided directly by the operator running the CLI
-	agent := exec.Command(argv[0], argv[1:]...)
-	agent.Stdin = os.Stdin
-	agent.Stdout = os.Stdout
-	agent.Stderr = os.Stderr
-	agent.Env = os.Environ()
-
+	agent := newInheritedCmd(argv, os.Environ())
 	if err := agent.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox supervisor: failed to start the agent: %v\n", err)
 		return 1
 	}
 
-	// Forward only process-directed termination signals. Notifying on ALL signals also delivers SIGURG
-	// (the Go runtime's async-preemption signal) and SIGCHLD, which would be spammed at the agent and
-	// race its exit path, intermittently corrupting its exit status into 255. Terminal-generated
-	// signals reach the agent directly through the shared controlling-terminal foreground group.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
-	go func() {
-		for sig := range sigCh {
-			if agent.Process != nil {
-				_ = agent.Process.Signal(sig)
-			}
-		}
-	}()
-
+	stopForwarding := ForwardTerminationSignals(agent)
 	err = agent.Wait()
-	signal.Stop(sigCh)
-	if err == nil {
-		return 0
+	stopForwarding()
+
+	code, ok := WaitExitCode(err)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "sandbox supervisor: agent error: %v\n", err)
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			return ws.ExitStatus()
-		}
-	}
-	fmt.Fprintf(os.Stderr, "sandbox supervisor: agent error: %v\n", err)
-	return 1
+	return code
 }
 
 // runBridge forwards each loopback TCP connection to the proxy's unix socket. The socket must be a
@@ -105,10 +78,23 @@ func bridgeConn(client net.Conn, socket string) {
 	}
 	defer upstream.Close()
 
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, client); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
-	<-done
+	// Wait for BOTH directions. Tearing down as soon as either copy finished would truncate a response
+	// still streaming back to a client that had already half-closed its request side.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); copyThenCloseWrite(upstream, client) }()
+	go func() { defer wg.Done(); copyThenCloseWrite(client, upstream) }()
+	wg.Wait()
+}
+
+// copyThenCloseWrite copies src into dst, then half-closes dst's write side so the peer sees EOF for
+// this direction while the opposite direction keeps flowing. Both *net.TCPConn and *net.UnixConn
+// implement CloseWrite; anything else just relies on the deferred Close.
+func copyThenCloseWrite(dst, src net.Conn) {
+	_, _ = io.Copy(dst, src)
+	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
 }
 
 // bringLoopbackUp ensures lo is UP so 127.0.0.1 is reachable inside the netns. bwrap already brings

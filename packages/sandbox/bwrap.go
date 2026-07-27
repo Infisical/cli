@@ -25,7 +25,7 @@ type bwrapBackend struct{}
 
 // Preflight checks bwrap is present and probes (by executing an empty-netns bwrap) whether the hard
 // fence works here; if not (e.g. Ubuntu 24.04 userns restriction) it falls back to shared net.
-func (bwrapBackend) Preflight(spec SandboxSpec) (PreflightResult, error) {
+func (bwrapBackend) Preflight(spec Spec) (PreflightResult, error) {
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
 		return PreflightResult{
@@ -66,17 +66,18 @@ func (bwrapBackend) Preflight(spec SandboxSpec) (PreflightResult, error) {
 	}, nil
 }
 
+// probeBwrap runs bwrap with the shared base flags plus extra, and reports whether it exited cleanly.
+func probeBwrap(bwrapPath string, extra []string, command ...string) bool {
+	args := append(bwrapBaseArgs(), extra...)
+	args = append(append(args, "--"), command...)
+	// #nosec G204 -- base flags are fixed and the command is one of this file's own literals
+	return exec.Command(bwrapPath, args...).Run() == nil
+}
+
 // sharedNetWorks probes whether bwrap can start a user-namespaced sandbox that shares host networking.
-// It mirrors the shared-net fallback's own bwrap flags, so a success here means the fallback can run.
+// It reuses the real argv's base flags, so a success here means the fallback can run.
 func sharedNetWorks(bwrapPath string) bool {
-	// #nosec G204 -- fixed argv, no user input
-	cmd := exec.Command(bwrapPath,
-		"--unshare-all", "--share-net", "--die-with-parent",
-		"--ro-bind", "/", "/",
-		"--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
-		"--", "true",
-	)
-	return cmd.Run() == nil
+	return probeBwrap(bwrapPath, []string{"--share-net"}, "true")
 }
 
 // hardFenceWorks probes whether an empty-netns bwrap can start and bring loopback up.
@@ -85,19 +86,12 @@ func hardFenceWorks(bwrapPath string) bool {
 	if err != nil {
 		return false
 	}
-	// #nosec G204 -- fixed argv, no user input
-	cmd := exec.Command(bwrapPath,
-		"--unshare-all", "--die-with-parent",
-		"--ro-bind", "/", "/",
-		"--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
-		"--", self, SupervisorSubcommand, "--probe",
-	)
-	return cmd.Run() == nil
+	return probeBwrap(bwrapPath, nil, self, SupervisorSubcommand, "--probe")
 }
 
-func (bwrapBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
+func (bwrapBackend) Wrap(spec Spec, argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
-		return nil, fmt.Errorf("sandbox: empty command")
+		return nil, errEmptyCommand
 	}
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
@@ -109,11 +103,6 @@ func (bwrapBackend) Wrap(spec SandboxSpec, argv []string) (*exec.Cmd, error) {
 	}
 
 	full := buildBwrapArgv(spec, self, argv, statDenyPath)
-	// #nosec G204 -- the wrapped command is provided directly by the operator running the CLI
-	cmd := exec.Command(bwrapPath, full[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = spec.Env
-	return cmd, nil
+	full[0] = bwrapPath
+	return newInheritedCmd(full, spec.Env), nil
 }

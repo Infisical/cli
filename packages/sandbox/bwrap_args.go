@@ -1,5 +1,7 @@
 package sandbox
 
+import "strconv"
+
 // BridgeLoopbackPort is the loopback port the in-namespace bridge listens on. Fixed is safe: each
 // hard-fence run has its own empty netns, so it never collides across concurrent runs.
 const BridgeLoopbackPort = 17321
@@ -7,6 +9,20 @@ const BridgeLoopbackPort = 17321
 // SupervisorSubcommand re-enters this binary as the in-namespace supervisor. Exported so the cmd
 // package can register the matching hidden command.
 const SupervisorSubcommand = "__sandbox-supervisor"
+
+// bwrapBaseArgs are the containment flags every bwrap invocation starts with, shared by the real argv
+// and by Preflight's probes so a probe can never certify a configuration the real run doesn't use.
+// Omits --new-session (setsid breaks the interactive TTY).
+func bwrapBaseArgs() []string {
+	return []string{
+		"--unshare-all",
+		"--die-with-parent",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--proc", "/proc",
+		"--tmpfs", "/tmp",
+	}
+}
 
 // buildBwrapArgv builds the bwrap argv for a spec. Pure (its filesystem dependency is injected via
 // classify, which reports whether a deny path exists and, if so, whether it is a regular file), so it
@@ -19,18 +35,10 @@ const SupervisorSubcommand = "__sandbox-supervisor"
 // whole sandbox at startup ("Can't mkdir ...: Read-only file system").
 // Deny mounts are emitted after the cwd/tempdir/write binds so they always win: otherwise a cwd bind
 // that is an ancestor of a deny path (running the agent from $HOME) would re-expose ~/.aws, ~/.ssh, etc.
-// Omits --new-session (setsid breaks the interactive TTY). On the hard fence the proxy's unix socket
-// is bind-mounted and the supervisor bridges to it; shared net reaches host loopback directly.
-func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, classify func(string) (exists, isFile bool)) []string {
-	args := []string{
-		"bwrap",
-		"--unshare-all",
-		"--die-with-parent",
-		"--ro-bind", "/", "/",
-		"--dev", "/dev",
-		"--proc", "/proc",
-		"--tmpfs", "/tmp",
-	}
+// On the hard fence the proxy's unix socket lives in the bind-mounted tempdir and the supervisor bridges
+// to it; shared net reaches host loopback directly.
+func buildBwrapArgv(spec Spec, selfExe string, argv []string, classify func(string) (exists, isFile bool)) []string {
+	args := append([]string{"bwrap"}, bwrapBaseArgs()...)
 
 	if spec.NetMode == SharedNet {
 		args = append(args, "--share-net")
@@ -47,10 +55,18 @@ func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, classify fu
 		args = append(args, "--bind", p, p)
 	}
 
-	// Deny mounts LAST so they always win: a cwd or write bind that is an ancestor of a deny path
-	// (e.g. running the agent from $HOME, whose bind would otherwise re-expose ~/.aws, ~/.ssh, ...)
-	// must not be able to re-expose a credential path masked earlier.
+	// Deny mounts after the read/write binds so they always win: a cwd or write bind that is an ancestor
+	// of a deny path (e.g. running the agent from $HOME, whose bind would otherwise re-expose ~/.aws,
+	// ~/.ssh, ...) must not be able to re-expose a credential path masked earlier.
+	exceptions := dedupeSorted(spec.ReadPaths)
+	var maskedDirs []string
 	for _, p := range dedupeSorted(spec.DenyPaths) {
+		// A deny path the operator re-opened wholesale (--allow-read ~/.aws) is simply left unmasked,
+		// rather than masked and then re-bound: re-binding a path we just covered would depend on how
+		// bwrap resolves an already-shadowed source.
+		if containsString(exceptions, p) {
+			continue
+		}
 		exists, isFile := classify(p)
 		if !exists {
 			continue
@@ -59,7 +75,21 @@ func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, classify fu
 			args = append(args, "--ro-bind", "/dev/null", p)
 		} else {
 			args = append(args, "--tmpfs", p)
+			maskedDirs = append(maskedDirs, p)
 		}
+	}
+
+	// Re-bind only the exceptions a mask we just emitted actually covers. Their parent is an empty
+	// tmpfs, which is writable, so bwrap can create the mountpoint. Read-only, and emitted after the
+	// masks so nothing re-covers them.
+	for _, p := range exceptions {
+		if !underAny(p, maskedDirs) {
+			continue // nothing masks it: the read-only root bind already exposes it
+		}
+		if exists, _ := classify(p); !exists {
+			continue // --ro-bind fails on a missing source
+		}
+		args = append(args, "--ro-bind", p, p)
 	}
 
 	args = append(args, "--")
@@ -67,34 +97,11 @@ func buildBwrapArgv(spec SandboxSpec, selfExe string, argv []string, classify fu
 	if spec.NetMode == HardFence && spec.ProxySocket != "" {
 		args = append(args,
 			selfExe, SupervisorSubcommand,
-			"--port", itoa(spec.LoopbackPort),
+			"--port", strconv.Itoa(spec.LoopbackPort),
 			"--socket", spec.ProxySocket,
 			"--",
 		)
 	}
 
 	return append(args, argv...)
-}
-
-// itoa keeps this file dependency-free (no strconv).
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

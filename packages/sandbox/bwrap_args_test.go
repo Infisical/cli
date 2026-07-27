@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func bwrapSpec(net NetMode) SandboxSpec {
-	return SandboxSpec{
-		Sandbox:      true,
+func bwrapSpec(net NetMode) Spec {
+	return Spec{
+		Enabled:      true,
 		Cwd:          "/home/dev/project",
 		TempDir:      "/tmp/infisical-run-xyz",
 		LoopbackPort: BridgeLoopbackPort,
@@ -148,6 +148,95 @@ func TestBwrapArgvSkipsMissingDenyPaths(t *testing.T) {
 	}
 }
 
+func TestBwrapArgvReadExceptionInsideDeniedDir(t *testing.T) {
+	spec := bwrapSpec(HardFence)
+	spec.DenyPaths = []string{"/home/dev/.aws", "/home/dev/.ssh"}
+	spec.ReadPaths = []string{"/home/dev/.aws/config"}
+	args := buildBwrapArgv(spec, "/proc/self/exe", []string{"claude"}, allExistingDirs)
+	joined := strings.Join(args, " ")
+
+	// The directory is still masked, and the one excepted file is re-bound on top of that tmpfs.
+	if !strings.Contains(joined, "--tmpfs /home/dev/.aws") {
+		t.Errorf("the denied dir must still be masked\n%s", joined)
+	}
+	if !strings.Contains(joined, "--ro-bind /home/dev/.aws/config /home/dev/.aws/config") {
+		t.Errorf("the read exception must be re-bound read-only\n%s", joined)
+	}
+	// Ordering is what makes it work: the re-bind must land after the tmpfs that masks its parent.
+	mask := lastArgPairIndex(args, "--tmpfs", "/home/dev/.aws")
+	rebind := lastArgPairIndex(args, "--ro-bind", "/home/dev/.aws/config")
+	if mask == -1 || rebind == -1 || rebind < mask {
+		t.Fatalf("read exception must be emitted after the mask (mask=%d rebind=%d)\n%v", mask, rebind, args)
+	}
+	// It must be read-only: never bound writable.
+	if strings.Contains(joined, "--bind /home/dev/.aws/config") {
+		t.Errorf("a read exception must never be bound writable\n%s", joined)
+	}
+	// The unrelated deny is untouched.
+	if !strings.Contains(joined, "--tmpfs /home/dev/.ssh") {
+		t.Errorf("unrelated deny paths must stay masked\n%s", joined)
+	}
+}
+
+func TestBwrapArgvReadExceptionOfWholeDenyPathSkipsMask(t *testing.T) {
+	spec := bwrapSpec(HardFence)
+	spec.DenyPaths = []string{"/home/dev/.aws", "/home/dev/.ssh"}
+	spec.ReadPaths = []string{"/home/dev/.aws"}
+	joined := strings.Join(buildBwrapArgv(spec, "/proc/self/exe", []string{"claude"}, allExistingDirs), " ")
+
+	// Re-opening a deny path wholesale leaves it unmasked rather than masking then re-binding it.
+	if strings.Contains(joined, "--tmpfs /home/dev/.aws") {
+		t.Errorf("a wholly re-opened deny path must not be masked\n%s", joined)
+	}
+	if strings.Contains(joined, "--ro-bind /home/dev/.aws /home/dev/.aws") {
+		t.Errorf("a wholly re-opened deny path needs no re-bind (root bind already exposes it)\n%s", joined)
+	}
+	if !strings.Contains(joined, "--tmpfs /home/dev/.ssh") {
+		t.Errorf("other deny paths must stay masked\n%s", joined)
+	}
+}
+
+// Nested denies: ~/.aws is masked and ~/.aws/config is itself a deny path that was re-opened. The
+// exception still needs a re-bind, because the parent's tmpfs covers it.
+func TestBwrapArgvReadExceptionUnderMaskedParent(t *testing.T) {
+	spec := bwrapSpec(HardFence)
+	spec.DenyPaths = []string{"/home/dev/.aws", "/home/dev/.aws/config"}
+	spec.ReadPaths = []string{"/home/dev/.aws/config"}
+	args := buildBwrapArgv(spec, "/proc/self/exe", []string{"claude"}, allExistingDirs)
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "--tmpfs /home/dev/.aws ") && !strings.HasSuffix(joined, "--tmpfs /home/dev/.aws") {
+		t.Errorf("the masked parent must still be masked\n%s", joined)
+	}
+	rebind := lastArgPairIndex(args, "--ro-bind", "/home/dev/.aws/config")
+	mask := lastArgPairIndex(args, "--tmpfs", "/home/dev/.aws")
+	if rebind == -1 {
+		t.Fatalf("an exception under a masked parent must be re-bound\n%s", joined)
+	}
+	if rebind < mask {
+		t.Fatalf("the re-bind must follow the parent mask (mask=%d rebind=%d)", mask, rebind)
+	}
+}
+
+func TestBwrapArgvSkipsUselessAndMissingReadExceptions(t *testing.T) {
+	spec := bwrapSpec(HardFence)
+	spec.DenyPaths = []string{"/home/dev/.aws"}
+	// One outside any deny (nothing to re-open), one inside a deny but missing on disk.
+	spec.ReadPaths = []string{"/home/dev/project/notes.md", "/home/dev/.aws/absent"}
+	classify := func(p string) (bool, bool) {
+		return p != "/home/dev/.aws/absent", false
+	}
+	joined := strings.Join(buildBwrapArgv(spec, "/proc/self/exe", []string{"claude"}, classify), " ")
+
+	if strings.Contains(joined, "notes.md") {
+		t.Errorf("a path outside every deny needs no re-bind\n%s", joined)
+	}
+	// A missing source would abort bwrap at startup.
+	if strings.Contains(joined, "/home/dev/.aws/absent") {
+		t.Errorf("a missing read exception must be skipped\n%s", joined)
+	}
+}
+
 func TestBwrapArgvDenyMountsWinOverCwdBind(t *testing.T) {
 	// Agent launched from $HOME: the cwd bind is an ancestor of every deny path.
 	spec := bwrapSpec(HardFence)
@@ -169,15 +258,6 @@ func TestBwrapArgvDenyMountsWinOverCwdBind(t *testing.T) {
 		}
 		if denyIdx < writeBind {
 			t.Errorf("deny mount %q (idx %d) must come after the write bind (idx %d)", deny, denyIdx, writeBind)
-		}
-	}
-}
-
-func TestItoa(t *testing.T) {
-	cases := map[int]string{0: "0", 7: "7", 17321: "17321", -42: "-42"}
-	for in, want := range cases {
-		if got := itoa(in); got != want {
-			t.Errorf("itoa(%d) = %q, want %q", in, got, want)
 		}
 	}
 }

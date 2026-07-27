@@ -39,9 +39,9 @@ type caManager struct {
 	local bool
 
 	mu                sync.Mutex
-	intermediateKey   *ecdsa.PrivateKey
-	intermediateCert  *x509.Certificate
-	intermediateExp   time.Time
+	signingKey        *ecdsa.PrivateKey
+	signingCert       *x509.Certificate
+	signingExp        time.Time
 	lastResignAttempt time.Time
 	resignGen         atomic.Uint64
 
@@ -95,11 +95,11 @@ func generateLocalRoot() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 // caManagerFromRoot wraps an existing local root key/cert as a caManager.
 func caManagerFromRoot(key *ecdsa.PrivateKey, cert *x509.Certificate) *caManager {
 	return &caManager{
-		local:            true,
-		intermediateKey:  key,
-		intermediateCert: cert,
-		intermediateExp:  cert.NotAfter,
-		leafCache:        make(map[string]*leafEntry),
+		local:       true,
+		signingKey:  key,
+		signingCert: cert,
+		signingExp:  cert.NotAfter,
+		leafCache:   make(map[string]*leafEntry),
 	}
 }
 
@@ -119,13 +119,13 @@ func (c *caManager) RootPEM() []byte {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.intermediateCert == nil {
+	if c.signingCert == nil {
 		return nil
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.intermediateCert.Raw})
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.signingCert.Raw})
 }
 
-func (c *caManager) ensureIntermediate() error {
+func (c *caManager) ensureSigningCert() error {
 	// The local root is minted once at construction and is never re-signed.
 	if c.local {
 		return nil
@@ -133,12 +133,12 @@ func (c *caManager) ensureIntermediate() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	remaining := time.Until(c.intermediateExp)
-	if c.intermediateCert != nil && remaining > intermediateRenewThreshold {
+	remaining := time.Until(c.signingExp)
+	if c.signingCert != nil && remaining > intermediateRenewThreshold {
 		return nil
 	}
 
-	canFallBack := c.intermediateCert != nil && remaining > intermediateFallbackMargin
+	canFallBack := c.signingCert != nil && remaining > intermediateFallbackMargin
 	if canFallBack && time.Since(c.lastResignAttempt) < intermediateRetryInterval {
 		return nil
 	}
@@ -183,9 +183,9 @@ func (c *caManager) resignIntermediateLocked() error {
 		return fmt.Errorf("failed to parse intermediate CA certificate: %w", err)
 	}
 
-	c.intermediateKey = key
-	c.intermediateCert = cert
-	c.intermediateExp = cert.NotAfter
+	c.signingKey = key
+	c.signingCert = cert
+	c.signingExp = cert.NotAfter
 	c.resignGen.Add(1)
 	c.leafMu.Lock()
 	c.leafCache = make(map[string]*leafEntry)
@@ -195,7 +195,7 @@ func (c *caManager) resignIntermediateLocked() error {
 }
 
 func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
-	if err := c.ensureIntermediate(); err != nil {
+	if err := c.ensureSigningCert(); err != nil {
 		return tls.Certificate{}, err
 	}
 
@@ -207,8 +207,8 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 	c.leafMu.Unlock()
 
 	c.mu.Lock()
-	interKey := c.intermediateKey
-	interCert := c.intermediateCert
+	interKey := c.signingKey
+	interCert := c.signingCert
 	gen := c.resignGen.Load()
 	c.mu.Unlock()
 

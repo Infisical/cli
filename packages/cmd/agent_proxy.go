@@ -6,15 +6,14 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
@@ -93,6 +92,20 @@ var authAgentEnvKeys = []string{
 }
 
 var requiredNoProxy = []string{"localhost", "127.0.0.1"}
+
+// setProxyEnv points the child's HTTP clients at the proxy. Both letter cases are set on purpose:
+// curl honours only the lowercase http_proxy for plain-HTTP URLs, so an uppercase-only environment
+// sends those requests to DNS instead of the proxy. Shared by connect and run so the two can't drift.
+func setProxyEnv(env map[string]string, proxyURL, noProxy string) {
+	env["HTTP_PROXY"] = proxyURL
+	env["http_proxy"] = proxyURL
+	env["HTTPS_PROXY"] = proxyURL
+	env["https_proxy"] = proxyURL
+	env["NO_PROXY"] = noProxy
+	env["no_proxy"] = noProxy
+	env["NODE_USE_ENV_PROXY"] = "1"
+	env["OPENCLAW_PROXY_URL"] = proxyURL
+}
 
 func mergeNoProxy(operatorEntries ...string) string {
 	seen := make(map[string]bool)
@@ -371,11 +384,7 @@ func buildAgentEnv(proxy, caPath, jwt, extraNoProxy string, placeholders map[str
 		}
 	}
 
-	env["HTTPS_PROXY"] = proxy
-	env["HTTP_PROXY"] = proxy
-	env["NO_PROXY"] = mergeNoProxy(append(operatorNoProxy, extraNoProxy)...)
-	env["NODE_USE_ENV_PROXY"] = "1"
-	env["OPENCLAW_PROXY_URL"] = proxy
+	setProxyEnv(env, proxy, mergeNoProxy(append(operatorNoProxy, extraNoProxy)...))
 
 	for _, k := range caTrustEnvVars {
 		env[k] = caPath
@@ -412,31 +421,20 @@ func runAgentProcess(args, env []string) error {
 	proc.Stderr = os.Stderr
 	proc.Env = env
 
-	// Forward only process-directed termination signals; notifying on ALL signals also delivers SIGURG
-	// (Go's async-preemption signal) and SIGCHLD, which then get spammed at the child and can corrupt
-	// its exit status. Terminal-generated signals reach the child directly via the foreground pgroup.
-	sigChannel := make(chan os.Signal, 1)
-	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
-
 	if err := proc.Start(); err != nil {
 		return err
 	}
 
-	go func() {
-		for sig := range sigChannel {
-			_ = proc.Process.Signal(sig)
-		}
-	}()
-
-	if err := proc.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(ws.ExitStatus())
-			}
-		}
-		return err
+	stopForwarding := sandbox.ForwardTerminationSignals(proc)
+	err := proc.Wait()
+	stopForwarding()
+	if err == nil {
+		return nil
 	}
-	return nil
+	if code, ok := sandbox.WaitExitCode(err); ok {
+		os.Exit(code)
+	}
+	return err
 }
 
 func init() {

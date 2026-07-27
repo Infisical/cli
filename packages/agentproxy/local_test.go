@@ -14,18 +14,10 @@ import (
 	"time"
 )
 
-// newLocalTestProxy builds a local-mode proxyServer with an injected snapshot, mirroring
-// newTestProxy's pipe/one-shot-listener harness for the remote tests.
-func newLocalTestProxy(t *testing.T, local *LocalOptions, services []*resolvedService, rt http.RoundTripper) net.Conn {
+// serveTestProxy serves ps over an in-memory pipe (one connection) and returns the client end,
+// mirroring newTestProxy's harness for the remote tests.
+func serveTestProxy(t *testing.T, ps *proxyServer) net.Conn {
 	t.Helper()
-	resolver := newLocalResolver(local)
-	resolver.services = services
-	resolver.valid = true
-	ps := &proxyServer{
-		opts:      Options{UnmatchedHost: UnmatchedAllow, Local: local},
-		cache:     resolver,
-		transport: rt,
-	}
 	client, server := net.Pipe()
 	l := newOneShotListener(server)
 	srv := ps.newFrontServer()
@@ -37,6 +29,19 @@ func newLocalTestProxy(t *testing.T, local *LocalOptions, services []*resolvedSe
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { _ = client.Close() })
 	return client
+}
+
+// newLocalTestProxy builds a local-mode proxyServer with an injected snapshot and serves it.
+func newLocalTestProxy(t *testing.T, local *LocalOptions, services []*resolvedService, rt http.RoundTripper) net.Conn {
+	t.Helper()
+	resolver := newLocalResolver(local)
+	resolver.services = services
+	resolver.valid = true
+	return serveTestProxy(t, &proxyServer{
+		opts:      Options{UnmatchedHost: UnmatchedAllow, Local: local},
+		resolver:  resolver,
+		transport: rt,
+	})
 }
 
 func TestLocalCaMintsVerifiableLeaves(t *testing.T) {
@@ -163,21 +168,11 @@ func TestLocalModeServesWithoutProxyAuth(t *testing.T) {
 
 func TestRemoteModeChallengesWithoutProxyAuth(t *testing.T) {
 	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
-	ps := &proxyServer{
+	client := serveTestProxy(t, &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
-		cache:     cache,
+		resolver:  cache,
 		transport: &http.Transport{},
-	}
-	client, server := net.Pipe()
-	l := newOneShotListener(server)
-	srv := ps.newFrontServer()
-	srv.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateClosed || s == http.StateHijacked {
-			_ = l.Close()
-		}
-	}
-	go func() { _ = srv.Serve(l) }()
-	t.Cleanup(func() { _ = client.Close() })
+	})
 	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
 
 	if _, err := fmt.Fprintf(client, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"); err != nil {
@@ -205,21 +200,11 @@ func TestUnmatchedBlockRespectsAllowHost(t *testing.T) {
 	resolver.services = nil // no proxied services: every host is "unmatched"
 	resolver.valid = true
 	stub := &stubRoundTripper{respBody: "ok"}
-	ps := &proxyServer{
+	client := serveTestProxy(t, &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedBlock, Local: local, AllowedHosts: []string{"docs.internal"}},
-		cache:     resolver,
+		resolver:  resolver,
 		transport: stub,
-	}
-	client, server := net.Pipe()
-	l := newOneShotListener(server)
-	srv := ps.newFrontServer()
-	srv.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateClosed || s == http.StateHijacked {
-			_ = l.Close()
-		}
-	}
-	go func() { _ = srv.Serve(l) }()
-	t.Cleanup(func() { _ = client.Close() })
+	})
 	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
 
 	// Allowlisted host passes through (case-insensitive) even under block.
@@ -243,21 +228,11 @@ func TestUnmatchedBlockRejectsNonAllowlistedHost(t *testing.T) {
 	}
 	resolver := newLocalResolver(local)
 	resolver.valid = true
-	ps := &proxyServer{
+	client := serveTestProxy(t, &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedBlock, Local: local, AllowedHosts: []string{"docs.internal"}},
-		cache:     resolver,
+		resolver:  resolver,
 		transport: &stubRoundTripper{respBody: "ok"},
-	}
-	client, server := net.Pipe()
-	l := newOneShotListener(server)
-	srv := ps.newFrontServer()
-	srv.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateClosed || s == http.StateHijacked {
-			_ = l.Close()
-		}
-	}
-	go func() { _ = srv.Serve(l) }()
-	t.Cleanup(func() { _ = client.Close() })
+	})
 	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
 
 	if _, err := fmt.Fprintf(client, "GET http://evil.example/x HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n"); err != nil {

@@ -61,8 +61,15 @@ func TestBuildLocalAgentEnvScrubsSecretsAndToken(t *testing.T) {
 	if env["HARMLESS"] != "keep-me" {
 		t.Error("non-secret vars must be preserved")
 	}
-	if env["HTTPS_PROXY"] != "http://127.0.0.1:51234" {
-		t.Errorf("HTTPS_PROXY = %q; want the credential-free proxy URL", env["HTTPS_PROXY"])
+	// Both cases must be set: curl honours only lowercase http_proxy for plain-HTTP URLs, so an
+	// uppercase-only env would send those requests to DNS instead of the proxy.
+	for _, k := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+		if env[k] != "http://127.0.0.1:51234" {
+			t.Errorf("%s = %q; want the credential-free proxy URL", k, env[k])
+		}
+	}
+	if env["no_proxy"] != env["NO_PROXY"] {
+		t.Errorf("no_proxy (%q) must match NO_PROXY (%q)", env["no_proxy"], env["NO_PROXY"])
 	}
 	if !strings.Contains(env["HTTPS_PROXY"], "127.0.0.1") || strings.Contains(env["HTTPS_PROXY"], "@") {
 		t.Errorf("proxy URL must be credential-free loopback, got %q", env["HTTPS_PROXY"])

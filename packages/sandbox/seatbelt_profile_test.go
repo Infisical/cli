@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func testSpec() SandboxSpec {
-	return SandboxSpec{
-		Sandbox:      true,
+func testSpec() Spec {
+	return Spec{
+		Enabled:      true,
 		Cwd:          "/Users/dev/project",
 		TempDir:      "/private/tmp/infisical-run-abc",
 		LoopbackPort: 51234,
@@ -104,8 +104,40 @@ func TestSeatbeltProfileDenyBeforeAllowWrite(t *testing.T) {
 	}
 }
 
+func TestSeatbeltProfileReadExceptions(t *testing.T) {
+	spec := testSpec()
+	spec.ReadPaths = []string{"/Users/dev/.aws/config"}
+	p := generateSeatbeltProfile(spec)
+
+	allowLine := `(allow file-read* (subpath "/Users/dev/.aws/config"))`
+	if !strings.Contains(p, allowLine) {
+		t.Fatalf("missing the read exception:\n%s", p)
+	}
+	// SBPL is last-match-wins, so the exception must come after the deny it overrides...
+	denyRead := strings.Index(p, `(deny file-read* (subpath "/Users/dev/.aws"))`)
+	exception := strings.Index(p, allowLine)
+	if denyRead == -1 || exception < denyRead {
+		t.Fatalf("read exception must follow the read deny (deny=%d exception=%d)", denyRead, exception)
+	}
+	// ...and before the trailing write denies, so re-opening a read never grants a write.
+	writeDeny := strings.Index(p, `(deny file-write* (subpath "/Users/dev/.aws"))`)
+	if writeDeny == -1 || writeDeny < exception {
+		t.Fatalf("write denies must still come last (exception=%d writeDeny=%d)", exception, writeDeny)
+	}
+	if strings.Contains(p, `(allow file-write* (subpath "/Users/dev/.aws/config"))`) {
+		t.Error("a read exception must never emit a write allow")
+	}
+}
+
+func TestSeatbeltProfileNoReadExceptionSection(t *testing.T) {
+	// With no --allow-read, the profile must not gain an empty exceptions section.
+	if strings.Contains(generateSeatbeltProfile(testSpec()), "Read exceptions") {
+		t.Error("no read exceptions should be emitted when ReadPaths is empty")
+	}
+}
+
 func TestPassthroughBackendWrap(t *testing.T) {
-	spec := SandboxSpec{Sandbox: false, Env: []string{"FOO=bar"}}
+	spec := Spec{Enabled: false, Env: []string{"FOO=bar"}}
 	b := NewBackend(spec)
 	if _, ok := b.(passthroughBackend); !ok {
 		t.Fatalf("expected passthrough backend when Sandbox=false, got %T", b)

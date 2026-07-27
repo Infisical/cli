@@ -57,7 +57,7 @@ func newPersistentLocalCaManager(dir string) (*caManager, error) {
 }
 
 // loadLocalRoot reads and validates the root; ok is false if anything is missing, unparseable, not a
-// CA, or near expiry (caller regenerates).
+// CA, near expiry, or a key/cert pair that doesn't belong together (caller regenerates).
 func loadLocalRoot(certPath, keyPath string) (*ecdsa.PrivateKey, *x509.Certificate, bool) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
@@ -81,6 +81,13 @@ func loadLocalRoot(certPath, keyPath string) (*ecdsa.PrivateKey, *x509.Certifica
 	}
 	key, err := x509.ParseECPrivateKey(kb.Bytes)
 	if err != nil {
+		return nil, nil, false
+	}
+	// The cert and key are written as two separate files, so a crash between the writes can leave a new
+	// cert beside the previous key. Both still parse and neither is expired, so without this check the
+	// store would never self-heal and every leaf would be signed by a key the cert doesn't match.
+	certPub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !certPub.Equal(key.Public()) {
 		return nil, nil, false
 	}
 	return key, cert, true

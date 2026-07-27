@@ -102,7 +102,7 @@ type serviceResolver interface {
 type proxyServer struct {
 	opts      Options
 	ca        *caManager
-	cache     serviceResolver
+	resolver  serviceResolver
 	leases    *leaseStore
 	transport http.RoundTripper
 
@@ -119,7 +119,7 @@ func newProxyServer(opts Options) (*proxyServer, error) {
 	leases := newLeaseStore(opts.ProxyToken)
 
 	var ca *caManager
-	var cache serviceResolver
+	var resolver serviceResolver
 	if opts.Local != nil {
 		var localCa *caManager
 		var err error
@@ -132,16 +132,16 @@ func newProxyServer(opts Options) (*proxyServer, error) {
 			return nil, err
 		}
 		ca = localCa
-		cache = newLocalResolver(opts.Local)
+		resolver = newLocalResolver(opts.Local)
 	} else {
 		ca = newCaManager(opts.ProxyToken)
-		cache = newAgentCache(opts.ProxyToken, leases)
+		resolver = newAgentCache(opts.ProxyToken, leases)
 	}
 
 	return &proxyServer{
 		opts:      opts,
 		ca:        ca,
-		cache:     cache,
+		resolver:  resolver,
 		leases:    leases,
 		transport: newUpstreamTransport(),
 		usage:     make(map[string]struct{}),
@@ -219,7 +219,7 @@ func New(opts Options) (*Proxy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize agent proxy CA: %w", err)
 	}
-	if err := ps.ca.ensureIntermediate(); err != nil {
+	if err := ps.ca.ensureSigningCert(); err != nil {
 		return nil, fmt.Errorf("failed to initialize agent proxy CA: %w", err)
 	}
 	return &Proxy{
@@ -232,7 +232,7 @@ func New(opts Options) (*Proxy, error) {
 // Serve runs the poll/lease loops and serves on ln until Shutdown (nil) or a serve error.
 func (p *Proxy) Serve(ln net.Listener) error {
 	go p.ps.pollLoop(p.loopStop)
-	go p.ps.leases.refreshLoop(p.loopStop, p.ps.opts.PollInterval, p.ps.cache.activeJWTs)
+	go p.ps.leases.refreshLoop(p.loopStop, p.ps.opts.PollInterval, p.ps.resolver.activeJWTs)
 
 	err := p.srv.Serve(newLimitListener(ln, maxConcurrentConns))
 	if errors.Is(err, http.ErrServerClosed) {
@@ -255,7 +255,7 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 		// interval, so without a shutdown flush a short session would never report its brokered-service
 		// usage; the daemon path already flushes each tick.
 		p.ps.flushUsage()
-		p.ps.cache.close()
+		p.ps.resolver.close()
 	})
 	return err
 }
@@ -316,7 +316,7 @@ func (ps *proxyServer) pollLoop(stop <-chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			ps.cache.refreshActive()
+			ps.resolver.refreshActive()
 			go ps.flushUsage()
 		case <-stop:
 			return
@@ -356,7 +356,7 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authenticate before minting: otherwise any syntactically valid Proxy-Authorization header forces unbounded key generation and leaf-cache growth.
-	if _, err := ps.cache.get(jwt, scope); err != nil {
+	if _, err := ps.resolver.get(jwt, scope); err != nil {
 		if isAuthError(err) {
 			http.Error(w, "proxy authorization failed", http.StatusForbidden)
 		} else {
@@ -587,13 +587,13 @@ type forwardOutcome struct {
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
-	services, err := ps.cache.get(jwt, scope)
+	services, err := ps.resolver.get(jwt, scope)
 	if err != nil {
 		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
 	}
 
 	// Capture identity now; reading it after the round trip would race a cache eviction and drop the record.
-	agentID, agentName, resolved := ps.cache.identity(jwt, scope)
+	agentID, agentName, resolved := ps.resolver.identity(jwt, scope)
 	outcome := forwardOutcome{agentID: agentID, agentName: agentName, identityResolved: resolved}
 
 	svc := bestMatch(services, hostname, port, req.URL.Path)
