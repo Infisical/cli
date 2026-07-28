@@ -23,12 +23,10 @@ const (
 // and the child's CA bundle reference).
 func LocalCACertPath(dir string) string { return filepath.Join(dir, localCACertFile) }
 
-// newPersistentLocalCaManager loads the local root from dir, or generates and writes one if it is
-// missing, unparseable, or within localCARenewMargin of expiry (self-heal). The key stays on disk so
-// the same root is reused across runs (and can be trusted once in the OS trust store). dir must be a
-// path the sandbox denies, so the agent cannot read the key.
-//
-// A file lock serializes concurrent first-runs so two processes don't both generate/write.
+// newPersistentLocalCaManager loads the local root from dir, regenerating it if missing, unparseable,
+// or near expiry. Keeping the key on disk means the same root survives across runs and can be trusted
+// once in the OS trust store, so dir must be a path the sandbox denies. A file lock keeps two
+// concurrent first-runs from both writing.
 func newPersistentLocalCaManager(dir string) (*caManager, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create local CA dir: %w", err)
@@ -83,9 +81,8 @@ func loadLocalRoot(certPath, keyPath string) (*ecdsa.PrivateKey, *x509.Certifica
 	if err != nil {
 		return nil, nil, false
 	}
-	// The cert and key are written as two separate files, so a crash between the writes can leave a new
-	// cert beside the previous key. Both still parse and neither is expired, so without this check the
-	// store would never self-heal and every leaf would be signed by a key the cert doesn't match.
+	// Cert and key are two separate writes, so a crash between them leaves a new cert beside an old key.
+	// Both parse and neither is expired, so without this check the store never self-heals.
 	certPub, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok || !certPub.Equal(key.Public()) {
 		return nil, nil, false

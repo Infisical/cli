@@ -49,8 +49,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("--proxy is not valid for 'run' (it starts its own ephemeral proxy); use 'agent-proxy connect --proxy=host:port' for a remote proxy"))
 	}
 
-	// Resolve --env/--path the same way `agent-proxy connect` does (flag > env var > .infisical.json),
-	// so the two subcommands behave consistently and honor INFISICAL_ENVIRONMENT / INFISICAL_SECRET_PATH.
+	// Same resolution order as `connect`: flag, then env var, then .infisical.json.
 	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
 		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
@@ -103,11 +102,9 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 	fail := func(e error, messages ...string) { cleanup(); util.HandleError(e, messages...) }
 
-	// Unlike `start` (a daemon whose activity log IS its output), `run` wraps an interactive agent that
-	// owns the terminal. Route the proxy's per-request activity and poll logs to a file so they don't
-	// interleave with the agent's output. --log-file picks a stable path (survives teardown); the
-	// default lives in the per-run tempdir and is removed on exit (tail it live to watch brokering).
-	// HandleError/PrintWarning write to stderr independently, so errors and one-time notices still show.
+	// The agent owns the terminal, so proxy activity goes to a file instead of interleaving with its
+	// output. --log-file pins a stable path; the default lives in the tempdir and dies with the run.
+	// Errors and warnings still reach stderr independently.
 	logFile, _ := cmd.Flags().GetString("log-file")
 	logPath := logFile
 	if logPath == "" {
@@ -125,15 +122,13 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	extraWrite, _ := cmd.Flags().GetStringArray("allow-write")
 	allowHosts, _ := cmd.Flags().GetStringArray("allow-host")
 
-	// On macOS, persist the local root under ~/.infisical (already sandbox-denied, so the agent can't
-	// read the key) and trust it once in the keychain, so native-trust tools (Go CLIs like gh) can be
-	// brokered too. Elsewhere the injected CA env var is enough, so we keep an ephemeral in-memory root.
+	// macOS keeps the root under ~/.infisical (already sandbox-denied) so it can be trusted once in the
+	// keychain, which is what Go tools like gh need. Elsewhere the injected CA env var is enough.
 	if runtime.GOOS == "darwin" && home != "" {
 		local.CADir = filepath.Join(home, ".infisical", "agent-proxy")
 	}
 
-	// Supported agents persist their own state under home; make those dirs writable so interactive
-	// sessions can save. It's the agent's own data, not the developer's secrets.
+	// The agent's own state dirs, so interactive sessions can save. Its data, not the developer's.
 	writePaths := absolutePaths(append(defaultAgentStateWritePaths(home), extraWrite...))
 
 	// --allow-read carves a read hole in the credential deny set, so name exactly what was re-opened.
@@ -178,9 +173,8 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		fail(err, "Failed to initialize the ephemeral agent proxy")
 	}
 
-	// macOS: trust the persistent root once so native-trust tools (gh) accept the proxy's certs, and
-	// allow trustd in the profile for the sandbox. securityd stays blocked, so the token stays
-	// unreadable. Trust-install is non-fatal: env-CA tools (Claude Code, Codex, curl) work regardless.
+	// Non-fatal by design: if the keychain install is declined, env-CA tools still work and only Go
+	// tools lose brokering. securityd stays blocked either way, so the login token stays unreadable.
 	if local.CADir != "" {
 		if sandboxEnabled {
 			spec.AllowTrustd = true
@@ -226,8 +220,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	if !sandboxEnabled {
 		util.PrintWarning("running WITHOUT the OS sandbox (--no-sandbox): the agent is uncontained and can read your keyring, credential files, and reach the network directly. Secrets are still brokered on the wire, but the sandbox boundary is off.")
 	}
-	// The default log lives in the per-run tempdir and is removed on exit, so its path is only worth
-	// surfacing when --log-file pins it to a stable location.
+	// Only worth printing when --log-file pins it somewhere that outlives the run.
 	if logFile != "" {
 		fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logPath))
 	}
@@ -300,17 +293,15 @@ func resolveSandboxEnabled(cmd *cobra.Command) bool {
 	return true
 }
 
-// tokenSource is the parent-held identity for a run. token() is read per request so a future
-// refresher can rotate it; label names the identity in activity records.
+// tokenSource is the parent-held identity for a run. label names it in activity records.
 type tokenSource struct {
 	token func() string
 	label string
 }
 
-// resolveDeveloperTokenSource resolves the run's identity: an explicit --token/env, else the keyring
-// login. No machine-identity path (that's for services, not a person on a laptop). Neither can be
-// refreshed mid-session; we fail fast if the token is already expired but otherwise stay quiet, like
-// other auth-bearing CLIs (kubectl, cloud CLIs) that surface an error at use rather than pre-warning.
+// resolveDeveloperTokenSource resolves the run's identity: --token if given, else the keyring login.
+// There is no machine-identity path; that is for services, not a person on a laptop. Neither source
+// refreshes mid-session, so we fail fast on an already-expired token.
 func resolveDeveloperTokenSource(cmd *cobra.Command) tokenSource {
 	if token, err := util.GetInfisicalToken(cmd); err == nil && token != nil && token.Token != "" {
 		failIfTokenExpired(token.Token, "the provided token")
@@ -402,9 +393,8 @@ func defaultAgentStateWritePaths(home string) []string {
 	return out
 }
 
-// absolutePaths resolves each path against the cwd and drops empties. Both sandbox backends require
-// absolute paths (SBPL `subpath` and bwrap `--ro-bind` reject relative ones), so a user passing
-// --allow-read ./creds would otherwise produce a profile that fails to load.
+// absolutePaths resolves against the cwd and drops empties. SBPL `subpath` and bwrap `--ro-bind` both
+// reject relative paths, so --allow-read ./creds would otherwise build a profile that fails to load.
 func absolutePaths(paths []string) []string {
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {

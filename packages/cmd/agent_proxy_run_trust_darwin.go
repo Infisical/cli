@@ -6,13 +6,9 @@ import (
 	"os/exec"
 )
 
-// ensureCATrusted makes sure the local root at certPath is a trusted anchor in the login keychain, so
-// native-trust clients (Go CLIs like gh) accept the proxy's leaves. It is silent when the cert is
-// already trusted; installing (first run, or after removal/expiry) triggers a one-time macOS password
-// prompt. Returns (installed, error): installed=true means an anchor was just added.
-//
-// This only affects cert TRUST. It never touches keychain secrets: securityd stays blocked in the
-// sandbox, so the agent still cannot read the login token.
+// ensureCATrusted makes the local root a trusted anchor in the login keychain, so Go tools like gh
+// accept the proxy's leaves. Silent if already trusted; installing triggers a one-time password
+// prompt. Affects cert trust only: securityd stays blocked, so keychain secrets remain unreadable.
 func ensureCATrusted(certPath string) (bool, error) {
 	if trustSettingsPresent(certPath) {
 		return false, nil

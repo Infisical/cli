@@ -87,9 +87,8 @@ func bridgeConn(client net.Conn, socket string) {
 	wg.Wait()
 }
 
-// copyThenCloseWrite copies src into dst, then half-closes dst's write side so the peer sees EOF for
-// this direction while the opposite direction keeps flowing. Both *net.TCPConn and *net.UnixConn
-// implement CloseWrite; anything else just relies on the deferred Close.
+// copyThenCloseWrite copies src to dst, then half-closes dst so the peer sees EOF for this direction
+// while the other keeps flowing. TCPConn and UnixConn both implement CloseWrite.
 func copyThenCloseWrite(dst, src net.Conn) {
 	_, _ = io.Copy(dst, src)
 	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
@@ -97,12 +96,10 @@ func copyThenCloseWrite(dst, src net.Conn) {
 	}
 }
 
-// bringLoopbackUp ensures lo is UP so 127.0.0.1 is reachable inside the netns. bwrap already brings
-// loopback up when it creates the new network namespace, so in practice lo is UP by the time we get
-// here; we still check and, only if it is down, try to raise it. The SIOCSIFFLAGS write is refused
-// with EPERM in bwrap's user-namespaced netns even with CAP_NET_ADMIN, so treating that failure as
-// fatal would force every Linux run to fall back to the weaker shared-net path. We therefore return
-// success whenever lo is already UP, and surface the error only when it is genuinely still down.
+// bringLoopbackUp makes sure lo is UP so 127.0.0.1 works inside the netns. bwrap normally raises it
+// already, so this usually just confirms. We only report failure if lo is genuinely still down: the
+// SIOCSIFFLAGS write gets EPERM in a user-namespaced netns even with CAP_NET_ADMIN, and treating that
+// as fatal would push every Linux run onto the weaker shared-net path.
 func bringLoopbackUp() error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {

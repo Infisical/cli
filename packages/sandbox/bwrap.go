@@ -10,9 +10,8 @@ import (
 
 func osBackend() Backend { return bwrapBackend{} }
 
-// statDenyPath reports whether a deny path exists and, if so, whether it is a regular file. A missing
-// path is skipped by buildBwrapArgv (nothing to hide, and the mountpoint can't be created under the
-// read-only root bind).
+// statDenyPath reports whether a deny path exists and whether it is a regular file. buildBwrapArgv
+// skips missing paths: nothing to hide, and the mountpoint cannot be created under the ro root bind.
 func statDenyPath(path string) (exists, isFile bool) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -43,10 +42,9 @@ func (bwrapBackend) Preflight(spec Spec) (PreflightResult, error) {
 		return PreflightResult{Supported: true, UsesBridge: true}, nil
 	}
 
-	// The hard fence probe failed. Before downgrading to shared net, check whether bwrap can create a
-	// user namespace at all: if it cannot (e.g. Ubuntu 24.04 with unprivileged userns fully restricted),
-	// the shared-net fallback would also die at "setting up uid map", so falling back would only trade a
-	// clear error for a raw bwrap crash. In that case report unsupported with actionable guidance.
+	// Before downgrading, check whether bwrap can make a user namespace at all. If it cannot (stock
+	// Ubuntu 24.04 restricts this), the shared-net fallback would also die at "setting up uid map", so
+	// falling back would swap a clear error for a raw bwrap crash. Report unsupported instead.
 	if !sharedNetWorks(bwrapPath) {
 		return PreflightResult{
 			Supported: false,

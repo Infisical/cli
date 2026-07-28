@@ -7,9 +7,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// LocalOptions switches the proxy into local coupled mode (`agent-proxy run`): one developer, one
-// agent, one scope. Requests carry no Proxy-Authorization; every request uses the scope and token
-// fixed here, and API calls use the developer's own token.
+// LocalOptions switches the proxy into local mode (`agent-proxy run`): one developer, one agent, one
+// scope. Requests carry no Proxy-Authorization; everything uses the scope and token fixed here.
 type LocalOptions struct {
 	ProjectID   string
 	Environment string
@@ -18,9 +17,8 @@ type LocalOptions struct {
 	// UserToken returns the developer's current access token; called per request so it can rotate.
 	UserToken func() string
 
-	// CADir, if set, persists the local root CA there (reused across runs and trustable in the OS
-	// trust store) instead of a fresh in-memory root. Must be a sandbox-denied path so the agent
-	// cannot read the key.
+	// CADir persists the local root CA so it survives across runs and can be trusted in the OS trust
+	// store. Must be a sandbox-denied path, or the agent could read the key. Empty means in-memory.
 	CADir string
 
 	// IdentityID/IdentityName label activity records (no wire JWT to decode them from).
@@ -32,9 +30,8 @@ func (l *LocalOptions) scope() agentScope {
 	return agentScope{projectID: l.ProjectID, environment: l.Environment, secretPath: l.SecretPath}
 }
 
-// localResolver is the single-snapshot, single-scope counterpart of agentCache (no keyed map, since
-// the one caller is fixed at startup). The snapshot refreshes on the poll loop and is dropped
-// (fail closed) when the developer's authorization goes away.
+// localResolver is the single-snapshot counterpart of agentCache: no keyed map, because the one caller
+// is fixed at startup. The snapshot refreshes on the poll loop and is dropped if authorization lapses.
 type localResolver struct {
 	opts   *LocalOptions
 	leases *leaseStore
@@ -43,8 +40,7 @@ type localResolver struct {
 	services []*resolvedService
 	valid    bool
 
-	// noLeaseWarned remembers which dynamic secrets have already been reported as unleasable, so the
-	// warning is not repeated on every poll-interval refresh.
+	// noLeaseWarned keeps the unleasable warning to once per secret, not once per poll.
 	noLeaseWarned map[string]bool
 }
 
@@ -81,23 +77,18 @@ func (l *localResolver) resolveSnapshot() ([]*resolvedService, error) {
 		valueToken:          func() string { return token },
 		includeNonProxyable: true,
 		registerDynamic: func(cred api.ProxiedServiceCredential, projectSlug string) *dynamicCredentialRef {
-			// CallerCanLease is the developer's own Lease permission on this dynamic secret, and locally
-			// the developer is the minter, so it is the gate. Skipping here with one clear warning beats
-			// registering a lease that can never be minted and then failing on every request.
-			//
-			// Note this reads the opposite way from `connect`, where the same flag being true is a
-			// misconfiguration: there the agent is a different identity, and an agent that can lease a
-			// brokered dynamic secret could bypass the proxy entirely. Locally there is no second
-			// identity to separate, and the sandbox is what stops the agent minting for itself.
+			// Locally the developer is the minter, so their own Lease permission is the gate. Skipping
+			// with one warning beats registering a lease that can never be minted and failing every
+			// request. Note this reads the opposite way from `connect`, where the agent being able to
+			// lease is a misconfiguration: there it could mint for itself and bypass the proxy. Here
+			// there is no second identity, and the sandbox is what prevents that.
 			if !cred.CallerCanLease {
 				l.warnUnleasable(cred.DynamicSecretName)
 				return nil
 			}
 
-			// Leases are minted and renewed with the developer's own token, the same one used for
-			// discovery and static values. leaseKey.jwt stays empty because local mode carries no wire
-			// credential; the scope alone identifies the single caller, and activeJWTs derives the
-			// matching liveness key from it.
+			// leaseKey.jwt stays empty: local mode has no wire credential, so the scope alone identifies
+			// the caller. activeJWTs derives its liveness key the same way.
 			key := leaseKey{
 				scope:      l.opts.scope(),
 				secretName: cred.DynamicSecretName,
@@ -152,10 +143,9 @@ func (l *localResolver) refreshActive() {
 	l.mu.Unlock()
 }
 
-// activeJWTs tells the lease refresh loop which leases are still live. Local mode has exactly one
-// caller, so this is the single key derived from the empty wire JWT plus the fixed scope, matching the
-// leaseKey registered in resolveSnapshot. It reports nothing while the snapshot is invalid, so a
-// dropped authorization stops lease renewal as well as credential serving.
+// activeJWTs tells the lease loop which leases are live. One caller means one key, derived the same
+// way as the leaseKey in resolveSnapshot. Empty while the snapshot is invalid, so a dropped
+// authorization stops lease renewal too.
 func (l *localResolver) activeJWTs() map[string]struct{} {
 	l.mu.Lock()
 	defer l.mu.Unlock()

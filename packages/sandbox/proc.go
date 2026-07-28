@@ -22,12 +22,10 @@ func newInheritedCmd(argv []string, env []string) *exec.Cmd {
 	return cmd
 }
 
-// ForwardTerminationSignals relays process-directed termination signals (SIGINT, SIGTERM, SIGHUP,
-// SIGQUIT) to cmd's process until the returned stop func is called. Forward only these: notifying on
-// ALL signals also delivers SIGURG (the Go runtime's async-preemption signal, fired constantly) and
-// SIGCHLD, which would be spammed at the child and race its exit path, intermittently corrupting its
-// exit status into 255. Terminal-generated signals (Ctrl-C, SIGWINCH, Ctrl-Z) reach the child
-// directly: it shares the controlling terminal's foreground process group.
+// ForwardTerminationSignals relays SIGINT/SIGTERM/SIGHUP/SIGQUIT to cmd until stop is called.
+// Only these: notifying on ALL signals also delivers SIGURG (Go's async-preemption signal, fired
+// constantly) and SIGCHLD, which race the child's exit path and corrupt its status into 255.
+// Terminal signals like Ctrl-C reach the child directly through the shared foreground group.
 func ForwardTerminationSignals(cmd *exec.Cmd) (stop func()) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
@@ -44,9 +42,8 @@ func ForwardTerminationSignals(cmd *exec.Cmd) (stop func()) {
 	}
 }
 
-// WaitExitCode maps (*exec.Cmd).Wait's error to the child's exit code. ok is false when the error is
-// not an exit status (e.g. the process never started or wait itself failed); the code is then 1 and
-// the caller decides how to report the error.
+// WaitExitCode maps Wait's error to the child's exit code. ok is false when the error is not an exit
+// status at all (never started, or wait itself failed); the code is then 1 for the caller to report.
 func WaitExitCode(err error) (code int, ok bool) {
 	if err == nil {
 		return 0, true

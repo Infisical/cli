@@ -25,10 +25,9 @@ func generateSeatbeltProfile(spec Spec) string {
 		"",
 		"(allow user-preference-read)",
 		"",
-		// DNS is omitted as deliberately as the keychain: the proxy resolves hostnames on the host, so the
-		// child never needs a resolver. Without one, a client that ignores the proxy env vars fails loudly
-		// instead of reaching the network, and DNS can't be used as an exfiltration channel. Do not add
-		// mDNSResponder here.
+		// DNS is omitted as deliberately as the keychain: the proxy resolves on the host, so the child
+		// needs no resolver. Without one, a proxy-ignoring client fails loudly instead of leaking, and
+		// DNS cannot be used to exfiltrate. Do not add mDNSResponder here.
 		"; Baseline mach services (keychain + DNS deliberately omitted; trustd gated on AllowTrustd)",
 		"(allow mach-lookup",
 		`  (global-name "com.apple.audio.systemsoundserver")`,
@@ -100,9 +99,8 @@ func generateSeatbeltProfile(spec Spec) string {
 	}
 	add("")
 
-	// Re-open the operator's --allow-read paths after the denies. Emitted read-only and before the write
-	// section, so the trailing write denies still apply: an excepted path inside a credential directory
-	// becomes readable without becoming writable, and its siblings stay denied.
+	// --allow-read exceptions land after the denies but before the write section, so the trailing write
+	// denies still apply: an excepted path becomes readable, not writable, and its siblings stay denied.
 	if exceptions := dedupeSorted(spec.ReadPaths); len(exceptions) > 0 {
 		add("; Read exceptions (--allow-read): re-open specific paths inside the denied set")
 		for _, p := range exceptions {
@@ -125,9 +123,8 @@ func generateSeatbeltProfile(spec Spec) string {
 	}
 	add("")
 
-	// Re-deny writes to credential paths after the write allows (SBPL is last-match-wins), so a writable
-	// cwd or write path that contains a denied path (e.g. running the agent from $HOME) can't write into
-	// it, for example appending to ~/.ssh/authorized_keys.
+	// Re-deny writes after the write allows (last-match-wins), so running the agent from $HOME cannot
+	// use its writable cwd to append to ~/.ssh/authorized_keys.
 	add("; Credential paths: deny writes too (not just reads)")
 	for _, p := range dedupeSorted(spec.DenyPaths) {
 		add(`(deny file-write* (subpath ` + escapeSBPL(p) + `))`)

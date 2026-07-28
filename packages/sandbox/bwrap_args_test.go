@@ -23,7 +23,6 @@ func bwrapSpec(net NetMode) Spec {
 // own classifier.
 func allExistingDirs(string) (bool, bool) { return true, false }
 
-// argIndex returns the index of the first occurrence of tok, or -1.
 func argIndex(args []string, tok string) int {
 	for i, a := range args {
 		if a == tok {

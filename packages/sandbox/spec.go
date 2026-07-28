@@ -14,9 +14,8 @@ const (
 	// HardFence: no external egress, the proxy is the only route out (macOS (deny default) SBPL;
 	// Linux empty netns bridged to the proxy socket).
 	HardFence NetMode = iota
-	// SharedNet: host network shared. macOS (SBPL still fences to loopback) and the Linux fallback
-	// when unprivileged user namespaces are restricted. Only the network fence weakens, not the
-	// credential controls.
+	// SharedNet shares the host network: the Linux fallback when a network namespace is unavailable.
+	// Only the network fence weakens; the credential controls are unchanged.
 	SharedNet
 )
 
@@ -24,8 +23,8 @@ const (
 type Spec struct {
 	Enabled bool // false => --no-sandbox: run uncontained
 
-	// ReadPaths re-open specific paths inside DenyPaths (--allow-read). Reads are allowed broadly by
-	// default, so these only matter as exceptions carved out of the deny set; they never grant write.
+	// ReadPaths (--allow-read) re-open paths inside DenyPaths. Reads are broadly allowed by default,
+	// so these only matter as exceptions to the deny set, and never grant write.
 	ReadPaths  []string
 	WritePaths []string
 	DenyPaths  []string // read-denied credential paths, subtracted from the broad read allow
@@ -41,9 +40,8 @@ type Spec struct {
 	Env     []string // fully-prepared, scrubbed child environment
 	NetMode NetMode
 
-	// AllowTrustd allows the macOS cert-trust evaluation service so native-trust tools (Go CLIs like
-	// gh) can verify the proxy's leaves against a CA trusted in the keychain. securityd (keychain
-	// secret reads) stays blocked regardless, so the login token remains unreadable. macOS only.
+	// AllowTrustd lets macOS evaluate cert trust, so Go tools like gh accept the proxy's leaves.
+	// securityd stays blocked either way, so keychain secrets remain unreadable. macOS only.
 	AllowTrustd bool
 }
 
@@ -75,7 +73,6 @@ func DefaultDenyPaths(home string) []string {
 	return paths
 }
 
-// containsString reports whether s is present in list.
 func containsString(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
@@ -98,8 +95,7 @@ func underAny(path string, roots []string) bool {
 	return false
 }
 
-// dedupeSorted drops empty strings and duplicates, and sorts, so the profile/argv generators emit
-// deterministic (golden-testable) output. Shared by the Seatbelt and bwrap generators.
+// dedupeSorted drops empties and duplicates and sorts, so the generators emit deterministic output.
 func dedupeSorted(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	var out []string
