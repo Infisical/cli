@@ -1,11 +1,6 @@
 package sandbox
 
-import (
-	"errors"
-	"os/exec"
-)
-
-var errUnsupportedPlatform = errors.New("sandbox: unsupported platform")
+import "os/exec"
 
 type PreflightResult struct {
 	Supported           bool   // false => no OS sandbox here (e.g. Windows, bwrap missing)

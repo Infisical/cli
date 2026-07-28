@@ -14,8 +14,6 @@ import (
 var sandboxSupervisorCmd = &cobra.Command{
 	Use:                   sandbox.SupervisorSubcommand,
 	Hidden:                true,
-	DisableFlagParsing:    false,
-	FParseErrWhitelist:    cobra.FParseErrWhitelist{UnknownFlags: true},
 	DisableFlagsInUseLine: true,
 	// No-op override of root's PersistentPreRun: skip the update check / notices / keyring read (a
 	// network call) that would otherwise run inside the network-less namespace.

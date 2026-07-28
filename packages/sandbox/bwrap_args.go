@@ -1,3 +1,7 @@
+// This file is deliberately NOT behind a //go:build linux tag, even though only the Linux backend
+// calls into it. Keeping it buildable everywhere is what lets bwrap_args_test.go verify the argv (and
+// its load-bearing mount ordering) from a Mac. The cost is that `staticcheck` on darwin reports these
+// as unused, since it discounts test-only callers. Do not "fix" that by adding a build tag.
 package sandbox
 
 import "strconv"

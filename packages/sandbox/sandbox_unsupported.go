@@ -2,7 +2,12 @@
 
 package sandbox
 
-import "os/exec"
+import (
+	"errors"
+	"os/exec"
+)
+
+var errUnsupportedPlatform = errors.New("sandbox: unsupported platform")
 
 func osBackend() Backend { return unsupportedBackend{} }
 
