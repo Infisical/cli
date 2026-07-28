@@ -29,7 +29,7 @@ func (bwrapBackend) Preflight(spec Spec) (PreflightResult, error) {
 	if err != nil {
 		return PreflightResult{
 			Supported: false,
-			Reason:    "bubblewrap (bwrap) is not installed; install it (e.g. `apt install bubblewrap`) or re-run with --no-sandbox",
+			Reason:    "bubblewrap is not installed; install it with your package manager or re-run with --no-sandbox",
 		}, nil
 	}
 
@@ -48,9 +48,8 @@ func (bwrapBackend) Preflight(spec Spec) (PreflightResult, error) {
 	if !sharedNetWorks(bwrapPath) {
 		return PreflightResult{
 			Supported: false,
-			Reason: "the OS sandbox cannot start: unprivileged user namespaces are restricted on this host " +
-				"(e.g. Ubuntu 24.04 AppArmor). Allow them with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` " +
-				"(or install an AppArmor profile permitting bwrap user namespaces), or re-run with --no-sandbox to skip the sandbox.",
+			Reason: "the OS sandbox cannot start because unprivileged user namespaces are restricted on this host; " +
+				"allow them in your system settings or re-run with --no-sandbox",
 		}, nil
 	}
 
@@ -60,7 +59,7 @@ func (bwrapBackend) Preflight(spec Spec) (PreflightResult, error) {
 		Supported:           true,
 		FallbackToSharedNet: true,
 		UsesBridge:          false,
-		Reason:              "the empty-netns hard fence is unavailable on this host. To restore it, install an AppArmor profile allowing bwrap user namespaces or set kernel.apparmor_restrict_unprivileged_userns=0",
+		Reason:              "a private network namespace is unavailable on this host",
 	}, nil
 }
 

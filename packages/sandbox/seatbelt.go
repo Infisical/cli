@@ -18,7 +18,7 @@ func (seatbeltBackend) Preflight(Spec) (PreflightResult, error) {
 	if _, err := os.Stat(sandboxExecPath); err != nil {
 		return PreflightResult{
 			Supported: false,
-			Reason:    fmt.Sprintf("%s not found; cannot sandbox on this macOS host", sandboxExecPath),
+			Reason:    fmt.Sprintf("unable to find %s, so the sandbox cannot start on this host", sandboxExecPath),
 		}, nil
 	}
 	return PreflightResult{Supported: true}, nil
