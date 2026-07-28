@@ -107,7 +107,7 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	case AccountTypeSSH:
 		startSSHAccess(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeRedis:
-		util.PrintErrorMessageAndExit("Redis access not yet supported in the new PAM model")
+		startRedisProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeKubernetes:
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
@@ -379,6 +379,84 @@ func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 	}()
 
 	proxy.Run()
+}
+
+func startRedisProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Failed to parse duration")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &RedisProxyServer{
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			relayHost:              response.RelayHost,
+			relayClientCert:        response.RelayClientCertificate,
+			relayClientKey:         response.RelayClientPrivateKey,
+			relayServerCertChain:   response.RelayServerCertificateChain,
+			gatewayClientCert:      response.GatewayClientCertificate,
+			gatewayClientKey:       response.GatewayClientPrivateKey,
+			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			sessionExpiry:          time.Now().Add(duration),
+			sessionId:              response.SessionId,
+			resourceType:           response.AccountType,
+			ctx:                    ctx,
+			cancel:                 cancel,
+			shutdownCh:             make(chan struct{}),
+		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
+	}
+
+	if err := proxy.Start(port); err != nil {
+		util.HandleError(err, "Failed to start proxy server")
+		return
+	}
+
+	folder, account := parsePath(path)
+	log.Info().Msgf("Redis proxy server listening on port %d", proxy.port)
+	printRedisSessionInfo(folder, account, duration, response.Metadata["username"], proxy.port)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigChan
+		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
+		proxy.gracefulShutdown()
+	}()
+
+	proxy.Run()
+}
+
+func printRedisSessionInfo(folder, account string, duration time.Duration, username string, port int) {
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("              Redis Proxy Session Started!                \n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
+	if folder != "" {
+		fmt.Printf("  Folder:    %s\n", folder)
+	}
+	fmt.Printf("  Account:   %s\n", account)
+	fmt.Printf("  Duration:  %s\n", duration.String())
+	fmt.Printf("\n")
+	fmt.Printf("  Host:      127.0.0.1\n")
+	fmt.Printf("  Port:      %d\n", port)
+	if username != "" {
+		fmt.Printf("  Username:  %s\n", username)
+	}
+	fmt.Printf("  Password:  (not required)\n")
+	fmt.Printf("\n")
+	util.PrintfStderr("  $ redis-cli -h 127.0.0.1 -p %d\n", port)
+	fmt.Printf("\n")
+	fmt.Printf("**********************************************************************\n")
+	fmt.Printf("\n")
 }
 
 func startRDPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
