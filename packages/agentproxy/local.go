@@ -77,11 +77,9 @@ func (l *localResolver) resolveSnapshot() ([]*resolvedService, error) {
 		valueToken:          func() string { return token },
 		includeNonProxyable: true,
 		registerDynamic: func(cred api.ProxiedServiceCredential, projectSlug string) *dynamicCredentialRef {
-			// Locally the developer is the minter, so their own Lease permission is the gate. Skipping
-			// with one warning beats registering a lease that can never be minted and failing every
-			// request. Note this reads the opposite way from `connect`, where the agent being able to
-			// lease is a misconfiguration: there it could mint for itself and bypass the proxy. Here
-			// there is no second identity, and the sandbox is what prevents that.
+			// The developer is the minter here, so their own Lease permission is the gate; skipping with one
+			// warning beats a lease that can never be minted failing every request. Reads the opposite way
+			// from `connect`, where an agent that can lease could mint for itself and bypass the proxy.
 			if !cred.CallerCanLease {
 				l.warnUnleasable(cred.DynamicSecretName)
 				return nil
