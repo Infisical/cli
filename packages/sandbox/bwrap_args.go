@@ -16,9 +16,15 @@ const SupervisorSubcommand = "__sandbox-supervisor"
 
 // bwrapBaseArgs are the containment flags shared by the real argv and by Preflight's probes, so a
 // probe can never certify flags the real run does not use.
-// Deliberately omits --new-session: setsid would detach the terminal and break interactive TUIs.
+//
+// --new-session puts the agent in its own session, which blocks the TIOCSTI ioctl. Without it a
+// sandboxed process can push characters into the terminal's input queue and the shell runs them after
+// the sandbox exits, escaping entirely. Verified on kernel 5.15, where TIOCSTI still exists (6.2 added
+// the dev.tty.legacy_tiocsti switch that disables it). It costs the controlling terminal, not stdio:
+// stdin and stdout stay ttys, and TUIs read keys in raw mode, so Claude Code and Ctrl-C still work.
 func bwrapBaseArgs() []string {
 	return []string{
+		"--new-session",
 		"--unshare-all",
 		"--die-with-parent",
 		"--ro-bind", "/", "/",

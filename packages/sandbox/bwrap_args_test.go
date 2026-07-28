@@ -37,7 +37,7 @@ func TestBwrapArgvHardFence(t *testing.T) {
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
-		"--unshare-all", "--die-with-parent",
+		"--new-session", "--unshare-all", "--die-with-parent",
 		"--tmpfs /home/dev/.aws", "--tmpfs /home/dev/.ssh", "--tmpfs /home/dev/.infisical",
 		"--bind /home/dev/project /home/dev/project",
 		"--bind /tmp/infisical-run-xyz /tmp/infisical-run-xyz",
@@ -54,8 +54,10 @@ func TestBwrapArgvHardFence(t *testing.T) {
 	if strings.Contains(joined, "--share-net") {
 		t.Error("hard fence must not pass --share-net")
 	}
-	if strings.Contains(joined, "--new-session") {
-		t.Error("must never pass --new-session (breaks the interactive TTY)")
+	// --new-session is what blocks TIOCSTI terminal injection; without it a sandboxed agent can queue
+	// keystrokes that the host shell runs after the sandbox exits.
+	if !strings.Contains(joined, "--new-session") {
+		t.Error("must pass --new-session, or the sandbox is escapable via TIOCSTI")
 	}
 
 	// The supervisor + agent must appear after the -- separator, in order.

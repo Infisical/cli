@@ -33,7 +33,7 @@ func liveSpec(t *testing.T, port int) Spec {
 		Cwd:          t.TempDir(),
 		TempDir:      t.TempDir(),
 		LoopbackPort: port,
-		DenyPaths:    DefaultDenyPaths(home),
+		DenyPaths:    DefaultDenyPaths(home, ""),
 		Env:          os.Environ(),
 		NetMode:      HardFence,
 	}

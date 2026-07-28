@@ -83,12 +83,18 @@ var credentialEnvKeys = []string{
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
 }
 
-// Authentication-agent handles: not secret values, but a socket the child could use as a signing
-// oracle for the developer's SSH/GPG keys. Scrubbed by default; --pass-env re-admits a specific one.
+// Addresses of host IPC endpoints. Not secret values, but handing them to the agent points it at
+// sockets it can use: the SSH/GPG agents as a signing oracle, and the session bus, where
+// systemd --user StartTransientUnit runs a process outside the sandbox. Unix sockets are not
+// namespaced, so on Linux dropping these is what keeps them out of reach.
+// Scrubbed by default; --pass-env re-admits a specific one.
 var authAgentEnvKeys = []string{
 	"SSH_AUTH_SOCK",
 	"SSH_AGENT_PID",
 	"GPG_AGENT_INFO",
+	"DBUS_SESSION_BUS_ADDRESS",
+	"DBUS_SYSTEM_BUS_ADDRESS",
+	"XDG_RUNTIME_DIR",
 }
 
 var requiredNoProxy = []string{"localhost", "127.0.0.1"}

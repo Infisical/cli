@@ -141,7 +141,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		Enabled:    sandboxEnabled,
 		ReadPaths:  readExceptions,
 		WritePaths: writePaths,
-		DenyPaths:  sandbox.DefaultDenyPaths(home),
+		DenyPaths:  sandbox.DefaultDenyPaths(home, hostRuntimeDir()),
 		Cwd:        cwd,
 		TempDir:    tempDir,
 		// Linux downgrades to SharedNet via Preflight below; macOS always fences to loopback via SBPL.
@@ -393,6 +393,19 @@ func defaultAgentStateWritePaths(home string) []string {
 	return out
 }
 
+// hostRuntimeDir is the per-user runtime directory holding host IPC sockets (the session bus and
+// friends). Linux only: XDG_RUNTIME_DIR is scrubbed from the child, but the directory itself is still
+// on disk, and unix sockets ignore the network namespace, so it is masked too.
+func hostRuntimeDir() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+		return d
+	}
+	return fmt.Sprintf("/run/user/%d", os.Getuid())
+}
+
 // absolutePaths resolves against the cwd and drops empties. SBPL `subpath` and bwrap `--ro-bind` both
 // reject relative paths, so --allow-read ./creds would otherwise build a profile that fails to load.
 func absolutePaths(paths []string) []string {
@@ -438,6 +451,10 @@ func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders m
 		stale[k] = true
 	}
 	stale[util.INFISICAL_TOKEN_NAME] = true
+	// INFISICAL_JWT authenticates a JWT/OIDC machine identity, so it is as good as a token here and
+	// matches none of the secret-shaped name patterns.
+	stale[util.INFISICAL_JWT_NAME] = true
+	stale[util.INFISICAL_OIDC_AUTH_JWT_NAME] = true
 	stale[util.INFISICAL_DOMAIN_ENV_NAME] = true
 	stale[util.INFISICAL_VAULT_FILE_PASSPHRASE_ENV_NAME] = true
 

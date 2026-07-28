@@ -154,8 +154,17 @@ func TestPassthroughBackendWrap(t *testing.T) {
 	}
 }
 
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDefaultDenyPaths(t *testing.T) {
-	got := DefaultDenyPaths("/Users/dev")
+	got := DefaultDenyPaths("/Users/dev", "/run/user/1000")
 	want := map[string]bool{
 		"/Users/dev/.infisical": true,
 		"/Users/dev/.aws":       true,
@@ -167,7 +176,10 @@ func TestDefaultDenyPaths(t *testing.T) {
 	if len(want) != 0 {
 		t.Fatalf("DefaultDenyPaths missing entries: %v", want)
 	}
-	if DefaultDenyPaths("") != nil {
+	if want := "/run/user/1000"; !contains(got, want) {
+		t.Fatalf("DefaultDenyPaths must include the runtime dir %q", want)
+	}
+	if DefaultDenyPaths("", "") != nil {
 		t.Fatal("DefaultDenyPaths(\"\") should be nil")
 	}
 }

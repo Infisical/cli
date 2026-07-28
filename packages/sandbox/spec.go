@@ -45,8 +45,10 @@ type Spec struct {
 	AllowTrustd bool
 }
 
-// DefaultDenyPaths returns the credential paths denied by default, resolved against home.
-func DefaultDenyPaths(home string) []string {
+// DefaultDenyPaths returns the credential paths denied by default, resolved against home. runtimeDir
+// is the per-user runtime directory (/run/user/<uid> on Linux, empty elsewhere): it holds the session
+// bus and other host IPC sockets, which are not namespaced and would otherwise be reachable.
+func DefaultDenyPaths(home, runtimeDir string) []string {
 	if home == "" {
 		return nil
 	}
@@ -66,9 +68,12 @@ func DefaultDenyPaths(home string) []string {
 		".npmrc",           // npm auth token
 		".gnupg",           // GPG private keys
 	}
-	paths := make([]string, 0, len(rel))
+	paths := make([]string, 0, len(rel)+1)
 	for _, r := range rel {
 		paths = append(paths, home+"/"+r)
+	}
+	if runtimeDir != "" {
+		paths = append(paths, runtimeDir)
 	}
 	return paths
 }
