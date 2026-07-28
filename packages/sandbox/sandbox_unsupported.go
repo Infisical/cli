@@ -4,7 +4,9 @@ package sandbox
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
+	"runtime"
 )
 
 var errUnsupportedPlatform = errors.New("sandbox: unsupported platform")
@@ -17,7 +19,8 @@ type unsupportedBackend struct{}
 func (unsupportedBackend) Preflight(Spec) (PreflightResult, error) {
 	return PreflightResult{
 		Supported: false,
-		Reason:    "the OS sandbox is not available on this platform (macOS and Linux only in v1); re-run with --no-sandbox to run uncontained",
+		Reason: fmt.Sprintf("the OS sandbox is not available on %s; re-run with --no-sandbox to run the "+
+			"agent uncontained (credentials are still brokered and the environment is still scrubbed)", runtime.GOOS),
 	}, nil
 }
 
