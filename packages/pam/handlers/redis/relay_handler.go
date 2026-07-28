@@ -134,9 +134,15 @@ func (h *RelayHandler) Handle(ctx context.Context) error {
 		}
 		switch value.Type {
 		case resp3.TypeArray:
+			if len(value.Elems) == 0 {
+				if err := h.clientToSelfConn.WriteValue(&resp3.Value{Type: resp3.TypeSimpleError, Err: "ERR empty command"}, true); err != nil {
+					return err
+				}
+				continue
+			}
 			cmd := value.Elems[0]
 			if cmd.Type != resp3.TypeBlobString {
-				return fmt.Errorf("expected SimpleString, got %s", cmd.Type)
+				return fmt.Errorf("expected blob string command, got %c", cmd.Type)
 			}
 			cmdStr := strings.ToLower(value.Elems[0].Str)
 			switch cmdStr {

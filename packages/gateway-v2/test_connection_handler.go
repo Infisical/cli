@@ -270,9 +270,15 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 	reader := resp3.NewReader(conn)
 	writer := resp3.NewWriter(conn)
 
-	// only authenticate when both username and password are supplied
-	if params.Username != "" && params.Password != "" {
-		if err := writer.WriteCommand("AUTH", params.Username, params.Password); err != nil {
+	// only authenticate when password is supplied
+	if params.Password != "" {
+		var err error
+		if params.Username != "" {
+			err = writer.WriteCommand("AUTH", params.Username, params.Password)
+		} else {
+			err = writer.WriteCommand("AUTH", params.Password)
+		}
+		if err != nil {
 			return err
 		}
 		value, _, err := reader.ReadValue()

@@ -69,9 +69,15 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	defer func(selfToClientRedisConn *RedisConn) { _ = selfToClientRedisConn.Close() }(selfToClientRedisConn)
 
 	// Only authenticate if credentials are provided
-	if p.config.InjectUsername != "" && p.config.InjectPassword != "" {
-		if err := selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword); err != nil {
-			return err
+	if p.config.InjectPassword != "" {
+		var writeErr error
+		if p.config.InjectUsername != "" {
+			writeErr = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword)
+		} else {
+			writeErr = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectPassword)
+		}
+		if writeErr != nil {
+			return writeErr
 		}
 		if err := selfToClientRedisConn.Writer().Flush(); err != nil {
 			return err
