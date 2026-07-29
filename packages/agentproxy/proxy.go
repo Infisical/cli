@@ -110,6 +110,8 @@ type proxyServer struct {
 	usageMu       sync.Mutex
 	usage         map[string]struct{}
 	usageFlushing atomic.Bool
+	// usageWarnOnce keeps a rejected usage report to one warning per proxy, not one per poll.
+	usageWarnOnce sync.Once
 }
 
 func newProxyServer(opts Options) (*proxyServer, error) {
@@ -175,6 +177,10 @@ func (ps *proxyServer) flushUsage() {
 	client := resty.New().SetAuthToken(ps.opts.ProxyToken()).SetTimeout(usageReportTimeout)
 	for serviceID := range snapshot {
 		if err := api.CallReportProxiedServiceUsage(client, serviceID); err != nil {
+			// Warn once: the usual cause is a missing Report Usage permission, which fails every attempt.
+			ps.usageWarnOnce.Do(func() {
+				log.Warn().Err(err).Msg("cannot report proxied-service usage, so the service's last-used time will not update; this needs the Report Usage permission on proxied services")
+			})
 			log.Debug().Err(err).Msg("failed to report proxied service usage; dropping batch")
 			return
 		}

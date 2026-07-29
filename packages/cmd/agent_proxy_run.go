@@ -20,6 +20,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
+	"github.com/mattn/go-isatty"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -102,19 +104,23 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 	fail := func(e error, messages ...string) { cleanup(); util.HandleError(e, messages...) }
 
-	// The agent owns the terminal, so proxy activity goes to a file instead of interleaving with its
-	// output. --log-file pins a stable path; the default lives in the tempdir and dies with the run.
-	// Errors and warnings still reach stderr independently.
+	// Nothing is written unless --log-file asks for it: a file the operator did not request is one they
+	// cannot find, and on a tmpfs /tmp it would be memory. Without it, problems still surface on stderr
+	// while per-request activity is dropped, so an agent's TUI stays intact. An explicit --log-level
+	// overrides that filter for anyone debugging without a file.
 	logFile, _ := cmd.Flags().GetString("log-file")
-	logPath := logFile
-	if logPath == "" {
-		logPath = filepath.Join(tempDir, "agent-proxy.log")
+	if logFile != "" {
+		logF, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			fail(err, "Unable to open the log file")
+		}
+		log.Logger = log.Output(GetLoggerConfig(logF, true))
+	} else {
+		log.Logger = log.Output(GetLoggerConfig(os.Stderr, !isatty.IsTerminal(os.Stderr.Fd())))
+		if !cmd.Flags().Changed("log-level") && os.Getenv("LOG_LEVEL") == "" {
+			log.Logger = log.Logger.Level(zerolog.WarnLevel)
+		}
 	}
-	logF, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		fail(err, "Unable to open the log file")
-	}
-	log.Logger = log.Output(GetLoggerConfig(logF, true))
 
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
@@ -220,9 +226,8 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	if !sandboxEnabled {
 		util.PrintWarning("Running without the OS sandbox. The agent can read your keyring and credential files and reach the network directly. Credentials are still brokered on the wire.")
 	}
-	// Only worth printing when --log-file pins it somewhere that outlives the run.
 	if logFile != "" {
-		fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logPath))
+		fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logFile))
 	}
 
 	child, err := backend.Wrap(spec, args)
