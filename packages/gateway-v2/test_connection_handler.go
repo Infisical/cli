@@ -2,6 +2,7 @@ package gatewayv2
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -12,7 +13,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +91,10 @@ type ldapTestParams struct {
 }
 
 type kubernetesTestParams struct {
+	AuthMethod            string `json:"authMethod"`
 	Token                 string `json:"token"`
+	Namespace             string `json:"namespace"`
+	ServiceAccountName    string `json:"serviceAccountName"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
 }
@@ -260,6 +266,10 @@ func doLdapConnectionTest(ctx context.Context, host string, port int, params lda
 
 // doKubernetesConnectionTest confirms the API server is reachable and accepts the token (401 = bad credentials)
 func doKubernetesConnectionTest(ctx context.Context, host string, port int, params kubernetesTestParams) error {
+	if params.AuthMethod == "gateway-kubernetes-auth" {
+		return doKubernetesGatewayAuthTest(ctx, params.Namespace, params.ServiceAccountName)
+	}
+
 	tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
 	if err != nil {
 		return err
@@ -283,6 +293,85 @@ func doKubernetesConnectionTest(ctx context.Context, host string, port int, para
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// doKubernetesGatewayAuthTest validates the gateway-kubernetes-auth method: the gateway (which must run inside a
+// pod) authenticates with its own pod service-account token and impersonates the target SA against its in-cluster
+// API server — the account URL/host is not involved.
+func doKubernetesGatewayAuthTest(ctx context.Context, namespace, serviceAccountName string) error {
+	apiHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+	apiPort := os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")
+	if apiHost == "" || apiPort == "" {
+		return fmt.Errorf("gateway is not running inside a Kubernetes pod (KUBERNETES_SERVICE_HOST unset)")
+	}
+	token, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
+	if err != nil {
+		return fmt.Errorf("gateway not running in a Kubernetes pod, unable to read pod service account token: %w", err)
+	}
+	caPEM, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
+	if err != nil {
+		return fmt.Errorf("unable to read pod CA certificate: %w", err)
+	}
+	return kubernetesImpersonationProbe(
+		ctx,
+		net.JoinHostPort(apiHost, apiPort),
+		strings.TrimSpace(string(token)),
+		caPEM,
+		namespace,
+		serviceAccountName,
+	)
+}
+
+// kubernetesImpersonationProbe issues a SelfSubjectRulesReview as the pod's SA while impersonating the target SA.
+// 401 means the pod token is bad; 403 means the gateway's SA lacks impersonation rights; 2xx means both work.
+func kubernetesImpersonationProbe(
+	ctx context.Context,
+	apiAddr, token string,
+	caPEM []byte,
+	namespace, serviceAccountName string,
+) error {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return fmt.Errorf("failed to parse Kubernetes CA certificate")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+
+	body, err := json.Marshal(map[string]any{
+		"apiVersion": "authorization.k8s.io/v1",
+		"kind":       "SelfSubjectRulesReview",
+		"spec":       map[string]string{"namespace": namespace},
+	})
+	if err != nil {
+		return err
+	}
+	reqURL := fmt.Sprintf("https://%s/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", apiAddr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Impersonate-User", fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccountName))
+	req.Header.Set("Impersonate-Group", "system:serviceaccounts")
+	req.Header.Add("Impersonate-Group", fmt.Sprintf("system:serviceaccounts:%s", namespace))
+	req.Header.Add("Impersonate-Group", "system:authenticated")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("kubernetes API rejected the gateway's pod token (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("gateway service account cannot impersonate %s:%s (HTTP %d)", namespace, serviceAccountName, resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
