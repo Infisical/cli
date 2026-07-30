@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,6 +95,49 @@ func TestWriteBytesToFileNilModeMatchesOsCreate(t *testing.T) {
 	require.NoError(t, WriteBytesToFile(bytes.NewBufferString("SECRET=1"), destination, nil))
 
 	assert.Equal(t, statMode(t, reference), statMode(t, destination))
+}
+
+// A chmod failure must not cost the caller the content that was already on
+// disk. This is reachable whenever the destination is writable but owned by
+// another user, where the open succeeds and the fchmod returns EPERM. The
+// failure is injected because fchmod cannot be made to fail portably from an
+// unprivileged test process.
+func TestWriteBytesToFilePreservesContentWhenChmodFails(t *testing.T) {
+	original := chmodFile
+	t.Cleanup(func() { chmodFile = original })
+	chmodFile = func(*os.File, os.FileMode) error {
+		return errors.New("operation not permitted")
+	}
+
+	destination := filepath.Join(t.TempDir(), "app.env")
+	require.NoError(t, os.WriteFile(destination, []byte("PREVIOUS=1"), 0644))
+
+	err := WriteBytesToFile(bytes.NewBufferString("SECRET=1"), destination, fileMode(0600))
+
+	require.Error(t, err)
+	assert.Equal(t, "PREVIOUS=1", readFile(t, destination))
+}
+
+// The open no longer passes O_TRUNC, so guard the explicit truncate that
+// replaced it. Without it a shorter render would leave a tail of the previous
+// one, which for a dotenv file means stale secrets the consumer still parses.
+func TestWriteBytesToFileReplacesLongerContent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode *os.FileMode
+	}{
+		{name: "with configured mode", mode: fileMode(0600)},
+		{name: "without configured mode", mode: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			destination := filepath.Join(t.TempDir(), "app.env")
+			require.NoError(t, os.WriteFile(destination, []byte("PREVIOUS=aaaaaaaaaaaaaaaaaaaaaaaa"), 0644))
+
+			require.NoError(t, WriteBytesToFile(bytes.NewBufferString("NEW=1"), destination, tc.mode))
+
+			assert.Equal(t, "NEW=1", readFile(t, destination))
+		})
+	}
 }
 
 // WriteTemplateToFile is the function the reported issue is about, so cover

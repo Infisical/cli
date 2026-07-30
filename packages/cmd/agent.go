@@ -810,15 +810,26 @@ func parseFileMode(permission string) (*os.FileMode, error) {
 	return &mode, nil
 }
 
-// WriteBytesToFile writes data to the specified file path, creating it with
-// the configured mode rather than os.Create's 0666. Opening with the target
-// mode means the file is never briefly world-readable: the umask can only
-// clear permission bits, so the file on disk is never looser than requested.
+// chmodFile is indirected so the chmod failure path can be covered by a test.
+// fchmod cannot be made to fail portably from an unprivileged process, and the
+// behaviour on failure matters enough to be worth pinning down.
+var chmodFile = (*os.File).Chmod
+
+// WriteBytesToFile writes data to the specified file path, creating it with the
+// configured mode rather than os.Create's 0666. Opening with the target mode
+// means a newly created file is never briefly world-readable: the umask can
+// only clear permission bits, so the file is never looser than requested.
 //
-// The follow-up chmod is still required. It restores bits the umask stripped,
-// and it tightens a file that already existed, where the mode passed to open
-// is ignored entirely. Writing after the chmod keeps secret content out of
-// the file until the permissions are correct.
+// The chmod afterwards is still required. It restores bits the umask stripped,
+// and it tightens a file that already existed, where the mode passed to open is
+// ignored entirely.
+//
+// The file is deliberately opened without O_TRUNC and truncated only once the
+// mode is known to be correct. Truncating first would destroy the previous
+// content before a chmod failure could be reported, which is what happens when
+// the destination is writable but owned by another user. The consumer would be
+// left with an empty secret file rather than the last good one, and every later
+// render would fail the same way, so it would never recover.
 //
 // A nil mode preserves the historical behaviour of leaving the mode to the
 // umask.
@@ -828,16 +839,22 @@ func WriteBytesToFile(data *bytes.Buffer, outputPath string, mode *os.FileMode) 
 		createMode = *mode
 	}
 
-	outputFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, createMode)
+	outputFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE, createMode)
 	if err != nil {
 		return err
 	}
 	defer outputFile.Close()
 
 	if mode != nil {
-		if err := outputFile.Chmod(*mode); err != nil {
+		if err := chmodFile(outputFile, *mode); err != nil {
 			return fmt.Errorf("unable to set permission %#o on %s: %w", *mode, outputPath, err)
 		}
+	}
+
+	// Without O_TRUNC this is what stops a shorter render from leaving
+	// trailing bytes of the previous one behind.
+	if err := outputFile.Truncate(0); err != nil {
+		return fmt.Errorf("unable to truncate %s: %w", outputPath, err)
 	}
 
 	_, err = outputFile.Write(data.Bytes())
