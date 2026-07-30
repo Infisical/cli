@@ -20,7 +20,7 @@ import (
 )
 
 // newTestCA builds a caManager with a locally self-signed intermediate so mintLeaf works offline
-// (ensureIntermediate skips the API when an unexpired intermediate is already set). Returns the
+// (ensureSigningCert skips the API when an unexpired intermediate is already set). Returns the
 // intermediate cert so the client can trust the minted leaf chain.
 func newTestCA(t *testing.T) (*caManager, *x509.Certificate) {
 	t.Helper()
@@ -46,10 +46,10 @@ func newTestCA(t *testing.T) (*caManager, *x509.Certificate) {
 		t.Fatal(err)
 	}
 	return &caManager{
-		intermediateKey:  key,
-		intermediateCert: cert,
-		intermediateExp:  cert.NotAfter,
-		leafCache:        make(map[string]*leafEntry),
+		signingKey:  key,
+		signingCert: cert,
+		signingExp:  cert.NotAfter,
+		leafCache:   make(map[string]*leafEntry),
 	}, cert
 }
 
@@ -98,7 +98,7 @@ func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
 		ca:        ca,
-		cache:     cache,
+		resolver:  cache,
 		transport: stub,
 	}
 
@@ -175,7 +175,7 @@ func TestConnectRequiresProxyAuth(t *testing.T) {
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: UnmatchedAllow},
 		ca:        ca,
-		cache:     cache,
+		resolver:  cache,
 		transport: &stubRoundTripper{},
 	}
 

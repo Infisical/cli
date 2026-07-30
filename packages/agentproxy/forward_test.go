@@ -30,7 +30,7 @@ func newTestProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, ser
 	}
 	ps := &proxyServer{
 		opts:      Options{UnmatchedHost: unmatchedHost},
-		cache:     cache,
+		resolver:  cache,
 		transport: &http.Transport{},
 	}
 	client, server := net.Pipe()

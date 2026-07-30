@@ -38,9 +38,9 @@ func installTestIntermediate(t *testing.T, c *caManager, notAfter time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.intermediateKey = key
-	c.intermediateCert = cert
-	c.intermediateExp = cert.NotAfter
+	c.signingKey = key
+	c.signingCert = cert
+	c.signingExp = cert.NotAfter
 }
 
 func TestEnsureIntermediateFallsBackWhenResignFails(t *testing.T) {
@@ -55,7 +55,7 @@ func TestEnsureIntermediateFallsBackWhenResignFails(t *testing.T) {
 	c := newCaManager(func() string { return "test-token" })
 	installTestIntermediate(t, c, time.Now().Add(1*time.Hour))
 
-	if err := c.ensureIntermediate(); err != nil {
+	if err := c.ensureSigningCert(); err != nil {
 		t.Fatalf("expected fallback to the valid intermediate, got error: %v", err)
 	}
 	leaf, err := c.mintLeaf("api.example.com")
@@ -77,7 +77,7 @@ func TestEnsureIntermediateFailsWithoutFallback(t *testing.T) {
 	defer func() { config.INFISICAL_URL = origURL }()
 
 	c := newCaManager(func() string { return "test-token" })
-	if err := c.ensureIntermediate(); err == nil {
+	if err := c.ensureSigningCert(); err == nil {
 		t.Fatal("expected an error when there is no intermediate to fall back to")
 	}
 }
