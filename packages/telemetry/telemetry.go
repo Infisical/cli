@@ -87,8 +87,10 @@ func (t *Telemetry) SetActor(identityId, orgId string) {
 	t.attachedOrgId = orgId
 }
 
+// Once an actor is set, its organization is authoritative even when empty: falling
+// back to the environment would group the event under a different actor's org.
 func (t *Telemetry) resolveOrganizationId() string {
-	if t.attachedOrgId != "" {
+	if t.attachedIdentityId != "" || t.attachedOrgId != "" {
 		return t.attachedOrgId
 	}
 	_, orgId := machineIdentityClaimsFromEnv()
@@ -269,12 +271,11 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//     uses for MachineIdentityLogin and other identity-scoped events,
 	//     so CLI events flow into the same person record.
 	//  4. Anonymous fallback keyed by the local machine ID.
-	envIdentityId, _ := machineIdentityClaimsFromEnv()
 	if t.attachedIdentityId != "" {
 		distinctId = "identity-" + t.attachedIdentityId
 	} else if infisicalConfig.LoggedInUserEmail != "" {
 		distinctId = infisicalConfig.LoggedInUserEmail
-	} else if envIdentityId != "" {
+	} else if envIdentityId, _ := machineIdentityClaimsFromEnv(); envIdentityId != "" {
 		distinctId = "identity-" + envIdentityId
 	} else if machineId != "" {
 		distinctId = "anonymous_cli_" + machineId
