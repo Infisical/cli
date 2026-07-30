@@ -162,7 +162,6 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	token, tokenSource := resolveAgentToken(cmd)
 
-	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 
 	Telemetry.AttachTokenIdentity(token.Token)
@@ -170,8 +169,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("credentialSource", tokenSource).
-		Set("allowReadableBrokeredSecrets", allowReadableBrokered).
-		Set("noProxySet", extraNoProxy != ""))
+		Set("allowReadableBrokeredSecrets", allowReadableBrokered))
 
 	httpClient := resty.New().SetAuthToken(token.Token)
 
@@ -195,6 +193,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		assertNoBrokeredDynamicSecretsLeasable(leasableDynamicCreds)
 	}
 
+	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
 
 	if err := runAgentProcess(args, env); err != nil {

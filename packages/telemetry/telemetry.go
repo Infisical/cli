@@ -275,11 +275,22 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//     those events to a stale `identity-<id>` would corrupt person-level
 	//     analytics, while attributing them to the logged-in email is always
 	//     correct.
-	//  2. Machine identity attached by the command via AttachTokenIdentity. This
+	//  1. Machine identity attached by the command via AttachTokenIdentity. This
 	//     is the credential the command actually authenticated with, so it wins
-	//     over anything left in the environment; otherwise an unrelated
-	//     `INFISICAL_TOKEN` in the shell would name a different identity than
-	//     the organization the event is grouped under.
+	//     over both a persisted human login and a stray token in the shell:
+	//     otherwise the event names one actor while being grouped under a
+	//     different actor's organization. Only set when the attached token is a
+	//     machine identity token; a user session JWT carries no `identityId`, so
+	//     a login-backed run still falls through to the email below.
+	//  2. Logged-in user email from the persisted config. A logged-in user
+	//     takes precedence over any machine-identity token that happens to
+	//     be exported in the shell, because some commands never authenticate
+	//     against the backend at all (e.g. `infisical user switch`, the
+	//     local-config branch of `infisical login`) and others authenticate
+	//     with the user's session JWT rather than the env-token. Attributing
+	//     those events to a stale `identity-<id>` would corrupt person-level
+	//     analytics, while attributing them to the logged-in email is always
+	//     correct.
 	//  3. Machine-identity access token from env. The dominant case in CI /
 	//     containers / Kubernetes pods, where the only credential is
 	//     `INFISICAL_TOKEN` or the UA-scoped env var. Aligns with the
@@ -288,10 +299,10 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//     person record.
 	//  4. Anonymous fallback keyed by the local machine ID.
 	envIdentityId, _ := machineIdentityClaimsFromEnv()
-	if infisicalConfig.LoggedInUserEmail != "" {
-		distinctId = infisicalConfig.LoggedInUserEmail
-	} else if t.attachedIdentityId != "" {
+	if t.attachedIdentityId != "" {
 		distinctId = "identity-" + t.attachedIdentityId
+	} else if infisicalConfig.LoggedInUserEmail != "" {
+		distinctId = infisicalConfig.LoggedInUserEmail
 	} else if envIdentityId != "" {
 		distinctId = "identity-" + envIdentityId
 	} else if machineId != "" {

@@ -49,11 +49,8 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	Telemetry.AttachTokenIdentity(loginResp.AccessToken)
 	Telemetry.CaptureEvent("cli-command:agent-proxy start", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
-		Set("port", port).
 		Set("unmatchedHost", unmatchedHost).
 		Set("pollInterval", pollInterval).
-		Set("logFormat", logFormat).
-		Set("logFileSet", logFile != "").
 		Set("credentialSource", universalAuthCredentialSource(cmd)))
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))

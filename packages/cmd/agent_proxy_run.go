@@ -129,23 +129,6 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	extraWrite, _ := cmd.Flags().GetStringArray("allow-write")
 	allowHosts, _ := cmd.Flags().GetStringArray("allow-host")
 
-	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
-	setEnv, _ := cmd.Flags().GetStringArray("set-env")
-	Telemetry.AttachTokenIdentity(src.token())
-	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
-		Set("version", util.CLI_VERSION).
-		Set("agent", telemetryAgentName(args)).
-		Set("platform", runtime.GOOS).
-		Set("sandboxEnabled", sandboxEnabled).
-		Set("sandboxSource", sandboxSource(cmd)).
-		Set("unmatchedHost", unmatchedHost).
-		Set("pollInterval", pollInterval).
-		Set("logFileSet", logFile != "").
-		Set("allowReadCount", len(extraRead)).
-		Set("allowWriteCount", len(extraWrite)).
-		Set("allowHostCount", len(allowHosts)).
-		Set("passEnvCount", len(passEnv)).
-		Set("setEnvCount", len(setEnv)))
 
 	// macOS keeps the root under ~/.infisical (already sandbox-denied) so it can be trusted once in the
 	// keychain, which is what Go tools like gh need. Elsewhere the injected CA env var is enough.
@@ -187,6 +170,26 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		spec.NetMode = sandbox.SharedNet
 		util.PrintWarning(fmt.Sprintf("Unable to isolate the network on this host (%s), the agent will share your network connection. Requests are still routed through the proxy, but a program that ignores the proxy settings can reach the network directly. Credential protections are unchanged.", pre.Reason))
 	}
+
+	// Captured after preflight so a fence that silently downgraded is visible, and before the
+	// proxy starts so a run that later dies is still counted.
+	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
+	setEnv, _ := cmd.Flags().GetStringArray("set-env")
+	Telemetry.AttachTokenIdentity(src.token())
+	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("agent", telemetryAgentName(args)).
+		Set("platform", runtime.GOOS).
+		Set("sandboxEnabled", sandboxEnabled).
+		Set("sandboxSource", sandboxSource(cmd)).
+		Set("netDowngraded", pre.FallbackToSharedNet).
+		Set("unmatchedHost", unmatchedHost).
+		Set("pollInterval", pollInterval).
+		Set("allowReadCount", len(extraRead)).
+		Set("allowWriteCount", len(extraWrite)).
+		Set("allowHostCount", len(allowHosts)).
+		Set("passEnvCount", len(passEnv)).
+		Set("setEnvCount", len(setEnv)))
 
 	proxy, err := agentproxy.New(agentproxy.Options{
 		UnmatchedHost: unmatchedHost,
