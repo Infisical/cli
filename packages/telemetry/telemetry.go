@@ -275,21 +275,25 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//     those events to a stale `identity-<id>` would corrupt person-level
 	//     analytics, while attributing them to the logged-in email is always
 	//     correct.
-	//  2. Machine identity, either from an access token in the env (the dominant
-	//     case in CI / containers / Kubernetes pods, where the only credential
-	//     is `INFISICAL_TOKEN` or the UA-scoped env var) or attached by the
-	//     command via AttachTokenIdentity when it logged in with a client
-	//     id/secret. Aligns with the `identity-<id>` distinctId the backend uses
-	//     for MachineIdentityLogin and other identity-scoped events, so CLI
-	//     events flow into the same person record.
-	//  3. Anonymous fallback keyed by the local machine ID.
+	//  2. Machine identity attached by the command via AttachTokenIdentity. This
+	//     is the credential the command actually authenticated with, so it wins
+	//     over anything left in the environment; otherwise an unrelated
+	//     `INFISICAL_TOKEN` in the shell would name a different identity than
+	//     the organization the event is grouped under.
+	//  3. Machine-identity access token from env. The dominant case in CI /
+	//     containers / Kubernetes pods, where the only credential is
+	//     `INFISICAL_TOKEN` or the UA-scoped env var. Aligns with the
+	//     `identity-<id>` distinctId the backend uses for MachineIdentityLogin
+	//     and other identity-scoped events, so CLI events flow into the same
+	//     person record.
+	//  4. Anonymous fallback keyed by the local machine ID.
 	envIdentityId, _ := machineIdentityClaimsFromEnv()
 	if infisicalConfig.LoggedInUserEmail != "" {
 		distinctId = infisicalConfig.LoggedInUserEmail
-	} else if envIdentityId != "" {
-		distinctId = "identity-" + envIdentityId
 	} else if t.attachedIdentityId != "" {
 		distinctId = "identity-" + t.attachedIdentityId
+	} else if envIdentityId != "" {
+		distinctId = "identity-" + envIdentityId
 	} else if machineId != "" {
 		distinctId = "anonymous_cli_" + machineId
 	}

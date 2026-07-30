@@ -160,7 +160,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
 	}
 
-	token := resolveAgentToken(cmd)
+	token, tokenSource := resolveAgentToken(cmd)
 
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
@@ -169,7 +169,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:agent-proxy connect", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
-		Set("credentialSource", credentialSource(cmd)).
+		Set("credentialSource", tokenSource).
 		Set("allowReadableBrokeredSecrets", allowReadableBrokered).
 		Set("noProxySet", extraNoProxy != ""))
 
@@ -212,14 +212,19 @@ func telemetryAgentName(args []string) string {
 	return filepath.Base(args[0])
 }
 
-func credentialSource(cmd *cobra.Command) string {
+// universalAuthCredentialSource names where the client id/secret came from. Only
+// meaningful once a universal auth login is known to be the path taken.
+func universalAuthCredentialSource(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("client-id") {
-		return "flag"
+		return "universal-auth-flag"
 	}
-	return "env"
+	return "universal-auth-env"
 }
 
-func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
+// resolveAgentToken returns the token to authenticate with and a label naming
+// which of its branches produced it, so telemetry reports the path actually
+// taken rather than re-deriving it and drifting from this function.
+func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
 
@@ -231,7 +236,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 		return &models.TokenDetails{
 			Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
 			Token: loginResp.AccessToken,
-		}
+		}, universalAuthCredentialSource(cmd)
 	}
 
 	token, err := util.GetInfisicalToken(cmd)
@@ -241,7 +246,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 	if token == nil {
 		util.HandleError(fmt.Errorf("authentication required; provide --client-id/--client-secret, env vars, or a token"))
 	}
-	return token
+	return token, "token"
 }
 
 // Builds http://<projectId>:<env>/<path>:<jwt>@host:port (username=projectId, password="<env>/<path>:<jwt>", jwt last).

@@ -54,7 +54,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 		Set("pollInterval", pollInterval).
 		Set("logFormat", logFormat).
 		Set("logFileSet", logFile != "").
-		Set("credentialSource", credentialSource(cmd)))
+		Set("credentialSource", universalAuthCredentialSource(cmd)))
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))
 
