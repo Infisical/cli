@@ -179,7 +179,8 @@ type Sink struct {
 }
 
 type SinkDetails struct {
-	Path string `yaml:"path"`
+	Path       string `yaml:"path"`
+	Permission string `yaml:"permission"` // Octal file mode for the written token, e.g. "0600"
 }
 
 type Template struct {
@@ -190,6 +191,7 @@ type Template struct {
 
 	Config struct { // Configurations for the template
 		PollingInterval string `yaml:"polling-interval"` // How often to poll for changes in the secret
+		Permission      string `yaml:"permission"`       // Octal file mode for the rendered file, e.g. "0600"
 		Execute         struct {
 			Command string `yaml:"command"` // Command to execute once the template has been rendered
 			Timeout int64  `yaml:"timeout"` // Timeout for the command
@@ -785,13 +787,58 @@ func FileExists(filepath string) bool {
 	return !info.IsDir()
 }
 
-// WriteToFile writes data to the specified file path.
-func WriteBytesToFile(data *bytes.Buffer, outputPath string) error {
-	outputFile, err := os.Create(outputPath)
+// parseFileMode parses an octal file-mode string from the agent config, such
+// as "0600". An empty string yields a nil mode, which callers treat as "keep
+// the existing behaviour" rather than forcing a permission on the file.
+// Modes above 0777 are rejected so that setuid, setgid and the sticky bit
+// cannot be set on a file holding secret material.
+func parseFileMode(permission string) (*os.FileMode, error) {
+	if permission == "" {
+		return nil, nil
+	}
+
+	parsed, err := strconv.ParseUint(permission, 8, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid file permission %q: expected an octal mode such as \"0600\"", permission)
+	}
+
+	if parsed > 0777 {
+		return nil, fmt.Errorf("invalid file permission %q: must not exceed \"0777\"", permission)
+	}
+
+	mode := os.FileMode(parsed)
+	return &mode, nil
+}
+
+// WriteBytesToFile writes data to the specified file path, creating it with
+// the configured mode rather than os.Create's 0666. Opening with the target
+// mode means the file is never briefly world-readable: the umask can only
+// clear permission bits, so the file on disk is never looser than requested.
+//
+// The follow-up chmod is still required. It restores bits the umask stripped,
+// and it tightens a file that already existed, where the mode passed to open
+// is ignored entirely. Writing after the chmod keeps secret content out of
+// the file until the permissions are correct.
+//
+// A nil mode preserves the historical behaviour of leaving the mode to the
+// umask.
+func WriteBytesToFile(data *bytes.Buffer, outputPath string, mode *os.FileMode) error {
+	createMode := os.FileMode(0666)
+	if mode != nil {
+		createMode = *mode
+	}
+
+	outputFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, createMode)
 	if err != nil {
 		return err
 	}
 	defer outputFile.Close()
+
+	if mode != nil {
+		if err := outputFile.Chmod(*mode); err != nil {
+			return fmt.Errorf("unable to set permission %#o on %s: %w", *mode, outputPath, err)
+		}
+	}
 
 	_, err = outputFile.Write(data.Bytes())
 	return err
@@ -878,7 +925,31 @@ func parseAgentConfigWithMode(configFile []byte, isCertManagerMode bool) (*Confi
 		return nil, err
 	}
 
+	if err := validateFilePermissions(&rawConfig); err != nil {
+		return nil, err
+	}
+
 	return &rawConfig, nil
+}
+
+// validateFilePermissions rejects malformed permission values while the config
+// is being parsed. Catching a typo here fails the agent at startup instead of
+// silently falling back to a looser mode at the first render, which would be
+// invisible until someone stats the file.
+func validateFilePermissions(config *Config) error {
+	for i, sink := range config.Sinks {
+		if _, err := parseFileMode(sink.Config.Permission); err != nil {
+			return fmt.Errorf("sinks[%d].config.permission: %w", i, err)
+		}
+	}
+
+	for i, template := range config.Templates {
+		if _, err := parseFileMode(template.Config.Permission); err != nil {
+			return fmt.Errorf("templates[%d].config.permission: %w", i, err)
+		}
+	}
+
+	return nil
 }
 
 type secretArguments struct {
@@ -1804,11 +1875,29 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 func (tm *AgentManager) WriteTokenToFiles() {
 	token := tm.GetToken()
 
+	writeSink := func(path string, mode *os.FileMode) error {
+		if mode == nil {
+			// Historical behaviour: 0644 is applied only when the file is
+			// created, so an existing sink keeps whatever mode it already has.
+			return os.WriteFile(path, []byte(token), 0644)
+		}
+		return WriteBytesToFile(bytes.NewBufferString(token), path, mode)
+	}
+
 	for _, sinkFile := range tm.filePaths {
 		if sinkFile.Type == "file" {
-			err := ioutil.WriteFile(sinkFile.Config.Path, []byte(token), 0644)
+			// Already validated when the agent config was parsed, so an error
+			// here is not reachable in practice; fall back to the historical
+			// mode rather than dropping the token.
+			mode, err := parseFileMode(sinkFile.Config.Permission)
 			if err != nil {
+				log.Warn().Msgf("sink '%s': %v. Falling back to the default file mode", sinkFile.Config.Path, err)
+				mode = nil
+			}
+
+			if err := writeSink(sinkFile.Config.Path, mode); err != nil {
 				log.Error().Msgf("unable to write file sink to path '%s' because %v", sinkFile.Config.Path, err)
+				continue
 			}
 
 			log.Info().Msgf("new access token saved to file at path '%s'", sinkFile.Config.Path)
@@ -1838,7 +1927,16 @@ func (tm *AgentManager) FetchTokenFromFiles() string {
 }
 
 func (tm *AgentManager) WriteTemplateToFile(bytes *bytes.Buffer, template *Template, templateId int) {
-	if err := WriteBytesToFile(bytes, template.DestinationPath); err != nil {
+	// Already validated when the agent config was parsed, so an error here is
+	// not reachable in practice; fall back to the umask default rather than
+	// dropping the render.
+	mode, err := parseFileMode(template.Config.Permission)
+	if err != nil {
+		log.Warn().Msgf("template engine: %v. Falling back to the default file mode", err)
+		mode = nil
+	}
+
+	if err := WriteBytesToFile(bytes, template.DestinationPath, mode); err != nil {
 		log.Error().Msgf("template engine: unable to write secrets to path because %s. Will try again on next cycle", err)
 		return
 	}
@@ -2673,13 +2771,19 @@ func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorM
 }
 
 func (tm *AgentManager) WriteCertificateFiles(certificate *AgentCertificateConfig, response *api.CertificateResponse) error {
+	// Certificates keep their long-standing 0600 default, including when the
+	// configured value is malformed. The warning is new: previously a typo was
+	// silently swallowed.
 	getFilePermission := func(permission string) os.FileMode {
-		if permission != "" {
-			if perms, err := strconv.ParseInt(permission, 8, 32); err == nil {
-				return os.FileMode(perms)
-			}
+		mode, err := parseFileMode(permission)
+		if err != nil {
+			log.Warn().Msgf("certificate file permission: %v. Falling back to 0600", err)
+			return os.FileMode(0600)
 		}
-		return os.FileMode(0600)
+		if mode == nil {
+			return os.FileMode(0600)
+		}
+		return *mode
 	}
 
 	privateKeyPath := certificate.FileConfig.PrivateKey.Path
