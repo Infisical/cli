@@ -18,6 +18,13 @@ var POSTHOG_API_KEY_FOR_CLI string
 type Telemetry struct {
 	isEnabled     bool
 	posthogClient posthog.Client
+
+	// Identity attached by AttachTokenIdentity. Long-running commands
+	// (agent-proxy start/connect/run) authenticate with a client id/secret or a
+	// flag-supplied token, so there is nothing in the environment for
+	// machineIdentityClaimsFromEnv to read.
+	attachedIdentityId string
+	attachedOrgId      string
 }
 
 type NoOpLogger struct{}
@@ -60,14 +67,40 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 		// is idempotent and persists its state in the local config file.
 		t.IdentifyUserIfNeeded()
 
-		t.posthogClient.Enqueue(posthog.Capture{
+		capture := posthog.Capture{
 			DistinctId: userIdentity,
 			Event:      eventName,
 			Properties: properties,
-		})
+		}
+
+		// Group the event under the organization so usage can be attributed to a
+		// company, matching the `organization` group type the backend sets.
+		if orgId := t.resolveOrganizationId(); orgId != "" {
+			capture.Groups = posthog.NewGroups().Set("organization", orgId)
+		}
+
+		t.posthogClient.Enqueue(capture)
 
 		defer t.posthogClient.Close()
 	}
+}
+
+// AttachTokenIdentity records the identity and organization carried by an
+// Infisical access token the command has already resolved, so events fired
+// afterwards are attributed even when no token is exported in the environment.
+// Accepts both machine identity tokens and user session JWTs.
+func (t *Telemetry) AttachTokenIdentity(token string) {
+	identityId, orgId := tokenIdentityClaims(token)
+	t.attachedIdentityId = identityId
+	t.attachedOrgId = orgId
+}
+
+func (t *Telemetry) resolveOrganizationId() string {
+	if t.attachedOrgId != "" {
+		return t.attachedOrgId
+	}
+	_, orgId := machineIdentityClaimsFromEnv()
+	return orgId
 }
 
 // IdentifyUserIfNeeded sends a PostHog Identify call to enrich the person
@@ -146,23 +179,58 @@ func (t *Telemetry) IdentifyUserIfNeeded() {
 	}
 }
 
-// getMachineIdentityIdFromEnv inspects the environment variables that the
+// tokenIdentityClaims returns the `identityId` and organization claims carried
+// by an Infisical JWT. Machine identity tokens name the organization `orgId`
+// and user session tokens name it `organizationId`; both are read.
+//
+// The function is intentionally best-effort and silent on failure, returning
+// empty strings for a service token (`st.` prefix, not a JWT), a malformed
+// JWT, or a payload missing the claims.
+//
+// The token's signature is not verified — the values are only used to derive a
+// PostHog distinctId and group, never for authorization. The same token has
+// already been (or is about to be) sent to the Infisical API where its
+// signature is verified server-side.
+func tokenIdentityClaims(token string) (identityId string, orgId string) {
+	if token == "" || strings.HasPrefix(token, "st.") {
+		return "", ""
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", ""
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		// Some JWT issuers pad the payload with `=`; tolerate that variant.
+		payloadBytes, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return "", ""
+		}
+	}
+
+	var claims struct {
+		IdentityID     string `json:"identityId"`
+		OrgID          string `json:"orgId"`
+		OrganizationID string `json:"organizationId"`
+	}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return "", ""
+	}
+
+	if claims.OrgID != "" {
+		return claims.IdentityID, claims.OrgID
+	}
+	return claims.IdentityID, claims.OrganizationID
+}
+
+// machineIdentityClaimsFromEnv inspects the environment variables that the
 // CLI uses to receive machine-identity access tokens (the same set checked
 // by util.GetInfisicalToken, minus the `--token` flag which is per-command
-// and not visible to the telemetry layer) and, if a machine-identity JWT
-// is present, returns the `identityId` claim from its payload.
-//
-// The function is intentionally best-effort and silent on failure:
-//   - returns "" if no token is set
-//   - returns "" for service tokens (`st.` prefix), which carry no JWT
-//     payload and represent the deprecated service-token auth mode
-//   - returns "" if the JWT is malformed or missing the `identityId` claim
-//
-// The token's signature is not verified — the value is only used to derive
-// a PostHog distinctId, never for authorization. The same token has already
-// been (or is about to be) sent to the Infisical API where its signature is
-// verified server-side.
-func getMachineIdentityIdFromEnv() string {
+// and not visible to the telemetry layer) and returns the identity and
+// organization claims from the first one set.
+func machineIdentityClaimsFromEnv() (identityId string, orgId string) {
 	// Mirror the env-var precedence in util.GetInfisicalToken so that the
 	// telemetry distinctId aligns with the credential the API call will
 	// actually use:
@@ -175,45 +243,13 @@ func getMachineIdentityIdFromEnv() string {
 		util.INFISICAL_GATEWAY_TOKEN_NAME_LEGACY,
 	}
 
-	var token string
 	for _, name := range envVars {
 		if v := os.Getenv(name); v != "" {
-			token = v
-			break
+			return tokenIdentityClaims(v)
 		}
 	}
 
-	if token == "" {
-		return ""
-	}
-
-	// Service tokens are deprecated and not JWTs — no identityId to extract.
-	if strings.HasPrefix(token, "st.") {
-		return ""
-	}
-
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return ""
-	}
-
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		// Some JWT issuers pad the payload with `=`; tolerate that variant.
-		payloadBytes, err = base64.URLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-
-	var claims struct {
-		IdentityID string `json:"identityId"`
-	}
-	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return ""
-	}
-
-	return claims.IdentityID
+	return "", ""
 }
 
 func (t *Telemetry) GetDistinctId() (string, error) {
@@ -239,17 +275,21 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//     those events to a stale `identity-<id>` would corrupt person-level
 	//     analytics, while attributing them to the logged-in email is always
 	//     correct.
-	//  2. Machine-identity access token from env. This is the dominant case
-	//     in CI / containers / Kubernetes pods, where there is no logged-in
-	//     user and the only credential is `INFISICAL_TOKEN` (or the UA-scoped
-	//     env var). Aligns with the `identity-<id>` distinctId the backend
-	//     uses for MachineIdentityLogin and other identity-scoped events,
-	//     so CLI events flow into the same person record.
+	//  2. Machine identity, either from an access token in the env (the dominant
+	//     case in CI / containers / Kubernetes pods, where the only credential
+	//     is `INFISICAL_TOKEN` or the UA-scoped env var) or attached by the
+	//     command via AttachTokenIdentity when it logged in with a client
+	//     id/secret. Aligns with the `identity-<id>` distinctId the backend uses
+	//     for MachineIdentityLogin and other identity-scoped events, so CLI
+	//     events flow into the same person record.
 	//  3. Anonymous fallback keyed by the local machine ID.
+	envIdentityId, _ := machineIdentityClaimsFromEnv()
 	if infisicalConfig.LoggedInUserEmail != "" {
 		distinctId = infisicalConfig.LoggedInUserEmail
-	} else if identityId := getMachineIdentityIdFromEnv(); identityId != "" {
-		distinctId = "identity-" + identityId
+	} else if envIdentityId != "" {
+		distinctId = "identity-" + envIdentityId
+	} else if t.attachedIdentityId != "" {
+		distinctId = "identity-" + t.attachedIdentityId
 	} else if machineId != "" {
 		distinctId = "anonymous_cli_" + machineId
 	}

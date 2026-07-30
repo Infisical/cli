@@ -17,6 +17,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -161,6 +162,17 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	token := resolveAgentToken(cmd)
 
+	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
+	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
+
+	Telemetry.AttachTokenIdentity(token.Token)
+	Telemetry.CaptureEvent("cli-command:agent-proxy connect", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("agent", telemetryAgentName(args)).
+		Set("credentialSource", credentialSource(cmd)).
+		Set("allowReadableBrokeredSecrets", allowReadableBrokered).
+		Set("noProxySet", extraNoProxy != ""))
+
 	httpClient := resty.New().SetAuthToken(token.Token)
 
 	caResp, err := api.CallGetAgentProxyCa(httpClient)
@@ -176,7 +188,6 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
-	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 	if !allowReadableBrokered {
 		// static readability is derived from realSecrets we already fetch; dynamic lease-ability comes from
 		// the server (callerCanLease) since we don't fetch dynamic secrets here.
@@ -184,12 +195,28 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		assertNoBrokeredDynamicSecretsLeasable(leasableDynamicCreds)
 	}
 
-	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 	env := buildAgentEnv(proxyURL(proxyAddr, projectID, environment, secretPath, token.Token), caPath, token.Token, extraNoProxy, placeholderEnvs, realSecrets)
 
 	if err := runAgentProcess(args, env); err != nil {
 		util.HandleError(err, "Agent process failed")
 	}
+}
+
+// telemetryAgentName is the agent executable's name, with the path and every
+// argument after it dropped: argv past the first word routinely carries
+// credentials, so only the first word is ever reported.
+func telemetryAgentName(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return filepath.Base(args[0])
+}
+
+func credentialSource(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("client-id") {
+		return "flag"
+	}
+	return "env"
 }
 
 func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {

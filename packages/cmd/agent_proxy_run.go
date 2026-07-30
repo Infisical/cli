@@ -21,6 +21,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
 	"github.com/mattn/go-isatty"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -127,6 +128,24 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	extraRead, _ := cmd.Flags().GetStringArray("allow-read")
 	extraWrite, _ := cmd.Flags().GetStringArray("allow-write")
 	allowHosts, _ := cmd.Flags().GetStringArray("allow-host")
+
+	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
+	setEnv, _ := cmd.Flags().GetStringArray("set-env")
+	Telemetry.AttachTokenIdentity(src.token())
+	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("agent", telemetryAgentName(args)).
+		Set("platform", runtime.GOOS).
+		Set("sandboxEnabled", sandboxEnabled).
+		Set("sandboxSource", sandboxSource(cmd)).
+		Set("unmatchedHost", unmatchedHost).
+		Set("pollInterval", pollInterval).
+		Set("logFileSet", logFile != "").
+		Set("allowReadCount", len(extraRead)).
+		Set("allowWriteCount", len(extraWrite)).
+		Set("allowHostCount", len(allowHosts)).
+		Set("passEnvCount", len(passEnv)).
+		Set("setEnvCount", len(setEnv)))
 
 	// macOS keeps the root under ~/.infisical (already sandbox-denied) so it can be trusted once in the
 	// keychain, which is what Go tools like gh need. Elsewhere the injected CA env var is enough.
@@ -279,6 +298,19 @@ func shutdownProxy(proxy *agentproxy.Proxy) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = proxy.Shutdown(ctx)
+}
+
+// sandboxSource names where the sandbox toggle came from, so a deliberate opt-out is
+// distinguishable from the default in telemetry. Mirrors resolveSandboxEnabled's order.
+func sandboxSource(cmd *cobra.Command) string {
+	switch {
+	case cmd.Flags().Changed("sandbox"), cmd.Flags().Changed("no-sandbox"):
+		return "flag"
+	case os.Getenv("INFISICAL_AGENT_PROXY_SANDBOX") != "":
+		return "env"
+	default:
+		return "default"
+	}
 }
 
 // resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.json (a committed
