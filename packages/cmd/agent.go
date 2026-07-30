@@ -816,20 +816,7 @@ func parseFileMode(permission string) (*os.FileMode, error) {
 var chmodFile = (*os.File).Chmod
 
 // WriteBytesToFile writes data to the specified file path, creating it with the
-// configured mode rather than os.Create's 0666. Opening with the target mode
-// means a newly created file is never briefly world-readable: the umask can
-// only clear permission bits, so the file is never looser than requested.
-//
-// The chmod afterwards is still required. It restores bits the umask stripped,
-// and it tightens a file that already existed, where the mode passed to open is
-// ignored entirely.
-//
-// The file is deliberately opened without O_TRUNC and truncated only once the
-// mode is known to be correct. Truncating first would destroy the previous
-// content before a chmod failure could be reported, which is what happens when
-// the destination is writable but owned by another user. The consumer would be
-// left with an empty secret file rather than the last good one, and every later
-// render would fail the same way, so it would never recover.
+// configured mode rather than os.Create's 0666.
 //
 // A nil mode preserves the historical behaviour of leaving the mode to the
 // umask.
@@ -852,7 +839,8 @@ func WriteBytesToFile(data *bytes.Buffer, outputPath string, mode *os.FileMode) 
 	}
 
 	// Without O_TRUNC this is what stops a shorter render from leaving
-	// trailing bytes of the previous one behind.
+	// trailing bytes of the previous one behind. Truncating here avoids a situation
+	// where we cannot write to file due to ownership, yet we truncate it
 	if err := outputFile.Truncate(0); err != nil {
 		return fmt.Errorf("unable to truncate %s: %w", outputPath, err)
 	}
