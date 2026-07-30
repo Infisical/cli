@@ -19,10 +19,7 @@ type Telemetry struct {
 	isEnabled     bool
 	posthogClient posthog.Client
 
-	// Identity attached by AttachTokenIdentity. Long-running commands
-	// (agent-proxy start/connect/run) authenticate with a client id/secret or a
-	// flag-supplied token, so there is nothing in the environment for
-	// machineIdentityClaimsFromEnv to read.
+	// Set by SetActor for commands whose credential is not in the environment.
 	attachedIdentityId string
 	attachedOrgId      string
 }
@@ -73,8 +70,6 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 			Properties: properties,
 		}
 
-		// Group the event under the organization so usage can be attributed to a
-		// company, matching the `organization` group type the backend sets.
 		if orgId := t.resolveOrganizationId(); orgId != "" {
 			capture.Groups = posthog.NewGroups().Set("organization", orgId)
 		}
@@ -85,12 +80,9 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 	}
 }
 
-// AttachTokenIdentity records the identity and organization carried by an
-// Infisical access token the command has already resolved, so events fired
-// afterwards are attributed even when no token is exported in the environment.
-// Accepts both machine identity tokens and user session JWTs.
-func (t *Telemetry) AttachTokenIdentity(token string) {
-	identityId, orgId := tokenIdentityClaims(token)
+// SetActor records who the command is acting as, for commands that resolve their
+// own credential and so have nothing in the environment to read.
+func (t *Telemetry) SetActor(identityId, orgId string) {
 	t.attachedIdentityId = identityId
 	t.attachedOrgId = orgId
 }
@@ -179,19 +171,14 @@ func (t *Telemetry) IdentifyUserIfNeeded() {
 	}
 }
 
-// tokenIdentityClaims returns the `identityId` and organization claims carried
-// by an Infisical JWT. Machine identity tokens name the organization `orgId`
-// and user session tokens name it `organizationId`; both are read.
+// IdentityClaimsFromToken reads the identity and organization claims out of an
+// Infisical JWT. Nothing from the token itself is kept. Machine identity tokens
+// name the organization `orgId`, user session tokens `organizationId`.
 //
-// The function is intentionally best-effort and silent on failure, returning
-// empty strings for a service token (`st.` prefix, not a JWT), a malformed
-// JWT, or a payload missing the claims.
-//
-// The token's signature is not verified — the values are only used to derive a
-// PostHog distinctId and group, never for authorization. The same token has
-// already been (or is about to be) sent to the Infisical API where its
-// signature is verified server-side.
-func tokenIdentityClaims(token string) (identityId string, orgId string) {
+// Best-effort and silent on failure: returns empty strings for a service token
+// (`st.` prefix, not a JWT) or a malformed payload. The signature is not
+// verified because the values are only used for telemetry, never authorization.
+func IdentityClaimsFromToken(token string) (identityId string, orgId string) {
 	if token == "" || strings.HasPrefix(token, "st.") {
 		return "", ""
 	}
@@ -225,11 +212,9 @@ func tokenIdentityClaims(token string) (identityId string, orgId string) {
 	return claims.IdentityID, claims.OrganizationID
 }
 
-// machineIdentityClaimsFromEnv inspects the environment variables that the
-// CLI uses to receive machine-identity access tokens (the same set checked
-// by util.GetInfisicalToken, minus the `--token` flag which is per-command
-// and not visible to the telemetry layer) and returns the identity and
-// organization claims from the first one set.
+// machineIdentityClaimsFromEnv returns the claims from the first machine-identity
+// access token set in the environment (the same set util.GetInfisicalToken checks,
+// minus the `--token` flag, which is per-command and not visible here).
 func machineIdentityClaimsFromEnv() (identityId string, orgId string) {
 	// Mirror the env-var precedence in util.GetInfisicalToken so that the
 	// telemetry distinctId aligns with the credential the API call will
@@ -245,7 +230,7 @@ func machineIdentityClaimsFromEnv() (identityId string, orgId string) {
 
 	for _, name := range envVars {
 		if v := os.Getenv(name); v != "" {
-			return tokenIdentityClaims(v)
+			return IdentityClaimsFromToken(v)
 		}
 	}
 
@@ -266,22 +251,8 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	}
 
 	// Resolution priority:
-	//  1. Logged-in user email from the persisted config. A logged-in user
-	//     takes precedence over any machine-identity token that happens to
-	//     be exported in the shell, because some commands never authenticate
-	//     against the backend at all (e.g. `infisical user switch`, the
-	//     local-config branch of `infisical login`) and others authenticate
-	//     with the user's session JWT rather than the env-token. Attributing
-	//     those events to a stale `identity-<id>` would corrupt person-level
-	//     analytics, while attributing them to the logged-in email is always
-	//     correct.
-	//  1. Machine identity attached by the command via AttachTokenIdentity. This
-	//     is the credential the command actually authenticated with, so it wins
-	//     over both a persisted human login and a stray token in the shell:
-	//     otherwise the event names one actor while being grouped under a
-	//     different actor's organization. Only set when the attached token is a
-	//     machine identity token; a user session JWT carries no `identityId`, so
-	//     a login-backed run still falls through to the email below.
+	//  1. Actor set by SetActor: the credential the command itself resolved, so it
+	//     outranks anything on the machine. Empty for a user session token.
 	//  2. Logged-in user email from the persisted config. A logged-in user
 	//     takes precedence over any machine-identity token that happens to
 	//     be exported in the shell, because some commands never authenticate
@@ -291,12 +262,12 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//     those events to a stale `identity-<id>` would corrupt person-level
 	//     analytics, while attributing them to the logged-in email is always
 	//     correct.
-	//  3. Machine-identity access token from env. The dominant case in CI /
-	//     containers / Kubernetes pods, where the only credential is
-	//     `INFISICAL_TOKEN` or the UA-scoped env var. Aligns with the
-	//     `identity-<id>` distinctId the backend uses for MachineIdentityLogin
-	//     and other identity-scoped events, so CLI events flow into the same
-	//     person record.
+	//  3. Machine-identity access token from env. This is the dominant case
+	//     in CI / containers / Kubernetes pods, where there is no logged-in
+	//     user and the only credential is `INFISICAL_TOKEN` (or the UA-scoped
+	//     env var). Aligns with the `identity-<id>` distinctId the backend
+	//     uses for MachineIdentityLogin and other identity-scoped events,
+	//     so CLI events flow into the same person record.
 	//  4. Anonymous fallback keyed by the local machine ID.
 	envIdentityId, _ := machineIdentityClaimsFromEnv()
 	if t.attachedIdentityId != "" {

@@ -17,6 +17,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
@@ -129,7 +130,6 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	extraWrite, _ := cmd.Flags().GetStringArray("allow-write")
 	allowHosts, _ := cmd.Flags().GetStringArray("allow-host")
 
-
 	// macOS keeps the root under ~/.infisical (already sandbox-denied) so it can be trusted once in the
 	// keychain, which is what Go tools like gh need. Elsewhere the injected CA env var is enough.
 	if runtime.GOOS == "darwin" && home != "" {
@@ -171,11 +171,10 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.PrintWarning(fmt.Sprintf("Unable to isolate the network on this host (%s), the agent will share your network connection. Requests are still routed through the proxy, but a program that ignores the proxy settings can reach the network directly. Credential protections are unchanged.", pre.Reason))
 	}
 
-	// Captured after preflight so a fence that silently downgraded is visible, and before the
-	// proxy starts so a run that later dies is still counted.
+	// After preflight so a downgraded fence is visible; before the proxy starts so a run that dies still counts.
 	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
 	setEnv, _ := cmd.Flags().GetStringArray("set-env")
-	Telemetry.AttachTokenIdentity(src.token())
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(src.token()))
 	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
@@ -303,8 +302,7 @@ func shutdownProxy(proxy *agentproxy.Proxy) {
 	_ = proxy.Shutdown(ctx)
 }
 
-// sandboxSource names where the sandbox toggle came from, so a deliberate opt-out is
-// distinguishable from the default in telemetry. Mirrors resolveSandboxEnabled's order.
+// Mirrors resolveSandboxEnabled's order, so a deliberate opt-out is distinguishable from the default.
 func sandboxSource(cmd *cobra.Command) string {
 	switch {
 	case cmd.Flags().Changed("sandbox"), cmd.Flags().Changed("no-sandbox"):

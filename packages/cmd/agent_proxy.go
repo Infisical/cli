@@ -14,6 +14,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
@@ -164,7 +165,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 
-	Telemetry.AttachTokenIdentity(token.Token)
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(token.Token))
 	Telemetry.CaptureEvent("cli-command:agent-proxy connect", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
@@ -201,9 +202,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	}
 }
 
-// telemetryAgentName is the agent executable's name, with the path and every
-// argument after it dropped: argv past the first word routinely carries
-// credentials, so only the first word is ever reported.
+// Only the executable name: argv past the first word routinely carries credentials.
 func telemetryAgentName(args []string) string {
 	if len(args) == 0 {
 		return ""
@@ -211,8 +210,6 @@ func telemetryAgentName(args []string) string {
 	return filepath.Base(args[0])
 }
 
-// universalAuthCredentialSource names where the client id/secret came from. Only
-// meaningful once a universal auth login is known to be the path taken.
 func universalAuthCredentialSource(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("client-id") {
 		return "universal-auth-flag"
@@ -220,9 +217,7 @@ func universalAuthCredentialSource(cmd *cobra.Command) string {
 	return "universal-auth-env"
 }
 
-// resolveAgentToken returns the token to authenticate with and a label naming
-// which of its branches produced it, so telemetry reports the path actually
-// taken rather than re-deriving it and drifting from this function.
+// Returns the token and a label for the branch that produced it.
 func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")

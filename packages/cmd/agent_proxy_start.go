@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/posthog/posthog-go"
@@ -46,7 +47,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to authenticate the agent proxy machine identity")
 	}
 
-	Telemetry.AttachTokenIdentity(loginResp.AccessToken)
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(loginResp.AccessToken))
 	Telemetry.CaptureEvent("cli-command:agent-proxy start", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("unmatchedHost", unmatchedHost).
