@@ -22,13 +22,13 @@ func TestEscapePowerShellSingleQuotesNeutralizesInjection(t *testing.T) {
 }
 
 func TestBuildCommandScriptPropagatesFailures(t *testing.T) {
-	script := buildCommandScript("Write-Output ok", "nonce123")
+	script := buildCommandScript("Write-Output ok", "infisical-nonce123")
 
 	for _, expected := range []string{
 		"$ErrorActionPreference = 'Stop'",
-		"if (-not $?) { $InfisicalExitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }",
+		"if (-not $?) { $infisicalnonce123 = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }",
 		"[Console]::Error.WriteLine($_.Exception.Message)",
-		"[Console]::Out.WriteLine('nonce123:' + $InfisicalExitCode)",
+		"[Console]::Out.WriteLine('infisical-nonce123:' + $infisicalnonce123)",
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("expected script to contain %q, got:\n%s", expected, script)
@@ -195,7 +195,7 @@ func TestNormalizePowerShellStderrDropsEmptyEnvelope(t *testing.T) {
 }
 
 func TestBuildCommandScriptDoesNotDuplicateProgressPreference(t *testing.T) {
-	if strings.Contains(buildCommandScript("Write-Output ok", "nonce123"), "$ProgressPreference") {
+	if strings.Contains(buildCommandScript("Write-Output ok", "infisical-nonce123"), "$ProgressPreference") {
 		t.Fatal("expected the wrapper to leave $ProgressPreference to winrm.Powershell")
 	}
 }
@@ -291,5 +291,32 @@ func TestTakeCommandTrailerKeepsDeliberateBlankLines(t *testing.T) {
 	}
 	if remaining != "line\n\n\n" {
 		t.Fatalf("expected only the separator to be stripped, got %q", remaining)
+	}
+}
+
+func TestBuildCommandScriptNamesTheOutcomeVariablePerRun(t *testing.T) {
+	// The command shares scope with the wrapper, so a fixed name could be assigned by the command
+	// itself and report the wrong outcome. Naming it after the nonce makes that impossible to hit.
+	first := buildCommandScript("Write-Output ok", "infisical-aaaa")
+	second := buildCommandScript("Write-Output ok", "infisical-bbbb")
+
+	if !strings.Contains(first, "$infisicalaaaa") || !strings.Contains(second, "$infisicalbbbb") {
+		t.Fatal("expected the outcome variable to be named after the run's nonce")
+	}
+	if strings.Contains(first, "$InfisicalExitCode") {
+		t.Fatal("expected no fixed variable name a command could collide with")
+	}
+	if strings.Contains(commandOutcomeVariable("infisical-aaaa"), "-") {
+		t.Fatal("a PowerShell identifier cannot contain a dash")
+	}
+}
+
+func TestBuildCommandScriptSurvivesACommandTouchingTheOldName(t *testing.T) {
+	// The exact collision the review raised: a command that assigns the wrapper's variable.
+	script := buildCommandScript("$InfisicalExitCode = 0; throw \"boom\"", "infisical-cccc")
+
+	// The command's assignment hits its own variable, not the one the trailer reports.
+	if !strings.Contains(script, "[Console]::Out.WriteLine('infisical-cccc:' + $infisicalcccc)") {
+		t.Fatalf("expected the trailer to read the run's own variable, got:\n%s", script)
 	}
 }

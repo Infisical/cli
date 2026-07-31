@@ -539,20 +539,24 @@ func (w *limitedBuffer) Write(p []byte) (int, error) {
 // commandScriptTemplate wraps the operator's command (%[1]s) so it reports its exit code in a stdout
 // trailer tagged with a per-run nonce (%[2]s). An exit from inside the try block arrives as 0.
 const commandScriptTemplate = `$ErrorActionPreference = 'Stop'
-$InfisicalExitCode = 0
+$%[3]s = 0
 try {
 %[1]s
-if (-not $?) { $InfisicalExitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }
+if (-not $?) { $%[3]s = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }
 } catch {
 [Console]::Error.WriteLine($_.Exception.Message)
-$InfisicalExitCode = 1
+$%[3]s = 1
 }
 [Console]::Out.WriteLine('')
-[Console]::Out.WriteLine('%[2]s:' + $InfisicalExitCode)
+[Console]::Out.WriteLine('%[2]s:' + $%[3]s)
 `
 
 func buildCommandScript(command, nonce string) string {
-	return fmt.Sprintf(commandScriptTemplate, command, nonce)
+	return fmt.Sprintf(commandScriptTemplate, command, nonce, commandOutcomeVariable(nonce))
+}
+
+func commandOutcomeVariable(nonce string) string {
+	return strings.ReplaceAll(nonce, "-", "")
 }
 
 func newCommandNonce() (string, error) {
