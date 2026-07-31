@@ -273,8 +273,8 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 		_ = conn.SetDeadline(deadline)
 	}
 
-	reader := resp3.NewReader(conn)
 	writer := resp3.NewWriter(conn)
+	reader := bufio.NewReader(io.LimitReader(conn, maxRedisTestReplyBytes))
 
 	// only authenticate when password is supplied
 	if params.Password != "" {
@@ -287,29 +287,45 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 		if err != nil {
 			return err
 		}
-		value, _, err := reader.ReadValue()
+		reply, err := readRedisReplyLine(reader)
 		if err != nil {
 			return err
 		}
-		if value.Str != "OK" {
-			if value.Type == resp3.TypeSimpleError || value.Type == resp3.TypeBlobError {
-				return fmt.Errorf("redis authentication failed: %s", value.Err)
-			}
-			return fmt.Errorf("redis authentication failed")
+		if reply != "+OK" {
+			return fmt.Errorf("redis authentication failed: %s", redisReplyErrorText(reply))
 		}
 	}
 
 	if err := writer.WriteCommand("PING"); err != nil {
 		return err
 	}
-	value, _, err := reader.ReadValue()
+	reply, err := readRedisReplyLine(reader)
 	if err != nil {
 		return err
 	}
-	if value.Type == resp3.TypeSimpleError || value.Type == resp3.TypeBlobError {
-		return fmt.Errorf("redis PING failed: %s", value.Err)
+	if len(reply) > 0 && (reply[0] == '-' || reply[0] == '!') {
+		return fmt.Errorf("redis PING failed: %s", redisReplyErrorText(reply))
 	}
 	return nil
+}
+
+const maxRedisTestReplyBytes = 64 * 1024
+
+// readRedisReplyLine reads a single RESP reply line (bounded by the LimitReader) and trims the CRLF
+func readRedisReplyLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// redisReplyErrorText strips a RESP error prefix ('-' or '!') for use in an error message
+func redisReplyErrorText(line string) string {
+	if len(line) > 0 && (line[0] == '-' || line[0] == '!') {
+		return strings.TrimSpace(line[1:])
+	}
+	return strings.TrimSpace(line)
 }
 
 // doLdapConnectionTest binds to the target directory with the supplied credentials (the Windows AD auth check)
