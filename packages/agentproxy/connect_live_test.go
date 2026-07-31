@@ -46,9 +46,9 @@ func TestConnectTunnelLiveOverTCP(t *testing.T) {
 	upstreamPool := x509.NewCertPool()
 	upstreamPool.AddCert(upstream.Certificate())
 	ps := &proxyServer{
-		opts:  Options{UnmatchedHost: UnmatchedAllow},
-		ca:    ca,
-		cache: cache,
+		opts:     Options{UnmatchedHost: UnmatchedAllow},
+		ca:       ca,
+		resolver: cache,
 		transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: upstreamPool},
 			TLSNextProto:    map[string]func(string, *tls.Conn) http.RoundTripper{},

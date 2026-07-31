@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -44,6 +46,13 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, "Failed to authenticate the agent proxy machine identity")
 	}
+
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(loginResp.AccessToken))
+	Telemetry.CaptureEvent("cli-command:agent-proxy start", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("unmatchedHost", unmatchedHost).
+		Set("pollInterval", pollInterval).
+		Set("credentialSource", universalAuthCredentialSource(cmd)))
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))
 
