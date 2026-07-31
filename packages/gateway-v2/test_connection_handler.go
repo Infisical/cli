@@ -279,7 +279,7 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 	// only authenticate when password is supplied
 	if params.Password != "" {
 		var err error
-		if params.Username != "" {
+		if params.Username != "" && params.Username != "default" {
 			err = writer.WriteCommand("AUTH", params.Username, params.Password)
 		} else {
 			err = writer.WriteCommand("AUTH", params.Password)

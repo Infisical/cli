@@ -446,6 +446,10 @@ func printRedisSessionInfo(folder, account string, duration time.Duration, usern
 	fmt.Printf("  Account:   %s\n", account)
 	fmt.Printf("  Duration:  %s\n", duration.String())
 	fmt.Printf("\n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("                        Connection Details                            \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("\n")
 	fmt.Printf("  Host:      127.0.0.1\n")
 	fmt.Printf("  Port:      %d\n", port)
 	if username != "" {
@@ -453,7 +457,22 @@ func printRedisSessionInfo(folder, account string, duration time.Duration, usern
 	}
 	fmt.Printf("  Password:  (not required)\n")
 	fmt.Printf("\n")
-	util.PrintfStderr("  $ redis-cli -h 127.0.0.1 -p %d\n", port)
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("                           How to Connect                             \n")
+	fmt.Printf("----------------------------------------------------------------------\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Use your preferred Redis client to connect to 127.0.0.1:%d.\n", port)
+	fmt.Printf("  No password is needed.\n")
+	fmt.Printf("\n")
+	fmt.Printf("  Example:\n")
+	util.PrintfStderr("    $ redis-cli -h 127.0.0.1 -p %d\n", port)
+	fmt.Printf("\n")
+	fmt.Printf("  Connection string:\n")
+	if username != "" {
+		util.PrintfStderr("    redis://%s@127.0.0.1:%d\n", username, port)
+	} else {
+		util.PrintfStderr("    redis://127.0.0.1:%d\n", port)
+	}
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")

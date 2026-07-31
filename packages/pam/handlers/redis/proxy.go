@@ -71,7 +71,7 @@ func (p *RedisProxy) HandleConnection(ctx context.Context, clientConn net.Conn) 
 	// Only authenticate if credentials are provided
 	if p.config.InjectPassword != "" {
 		var writeErr error
-		if p.config.InjectUsername != "" {
+		if p.config.InjectUsername != "" && p.config.InjectUsername != "default" {
 			writeErr = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectUsername, p.config.InjectPassword)
 		} else {
 			writeErr = selfToClientRedisConn.Writer().WriteCommand("AUTH", p.config.InjectPassword)
