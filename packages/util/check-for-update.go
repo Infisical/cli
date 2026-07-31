@@ -407,6 +407,15 @@ func getUpdateInstructions(goos string, execPath string) string {
 		if isNpm {
 			return "To update, run: npm update -g @infisical/cli"
 		}
+		// Nix-managed binaries live in the immutable store. The system package
+		// manager did not install them and cannot update them, so stay quiet
+		// rather than print a command that will not work.
+		if strings.Contains(p, "/nix/store/") {
+			return ""
+		}
+		if strings.Contains(p, "linuxbrew") {
+			return "To update, run: brew update && brew upgrade infisical"
+		}
 		pkgManager := getLinuxPackageManager()
 		switch pkgManager {
 		case "apt-get":

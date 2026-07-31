@@ -96,6 +96,18 @@ func TestGetUpdateInstructions(t *testing.T) {
 			execPath: "/home/user/.npm-global/lib/node_modules/@infisical/cli/bin/infisical",
 			expected: "npm update -g @infisical/cli",
 		},
+		{
+			name:        "linux nix returns empty",
+			goos:        "linux",
+			execPath:    "/nix/store/abc123-infisical-0.41.90/bin/infisical",
+			expectEmpty: true,
+		},
+		{
+			name:     "linux linuxbrew",
+			goos:     "linux",
+			execPath: "/home/linuxbrew/.linuxbrew/bin/infisical",
+			expected: "brew update && brew upgrade infisical",
+		},
 	}
 
 	for _, tt := range tests {
