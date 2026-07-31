@@ -23,7 +23,8 @@ func TestGetUpdateInstructions(t *testing.T) {
 		goos        string
 		execPath    string
 		expected    string
-		expectEmpty bool // true means assert empty result (vs. skipping runtime-dependent cases)
+		expectEmpty bool   // true means assert empty result (vs. skipping runtime-dependent cases)
+		notExpected string // assert the result does NOT contain this, for paths that must not match a detector
 	}{
 		// darwin
 		{
@@ -108,6 +109,18 @@ func TestGetUpdateInstructions(t *testing.T) {
 			execPath: "/home/linuxbrew/.linuxbrew/bin/infisical",
 			expected: "brew update && brew upgrade infisical",
 		},
+		{
+			name:     "linux linuxbrew single-user prefix",
+			goos:     "linux",
+			execPath: "/home/user/.linuxbrew/bin/infisical",
+			expected: "brew update && brew upgrade infisical",
+		},
+		{
+			name:        "linux linuxbrew-tools is not a brew install",
+			goos:        "linux",
+			execPath:    "/opt/linuxbrew-tools/bin/infisical",
+			notExpected: "brew",
+		},
 	}
 
 	for _, tt := range tests {
@@ -116,6 +129,12 @@ func TestGetUpdateInstructions(t *testing.T) {
 			if tt.expectEmpty {
 				if result != "" {
 					t.Errorf("expected empty result, got %q", result)
+				}
+				return
+			}
+			if tt.notExpected != "" {
+				if strings.Contains(result, tt.notExpected) {
+					t.Errorf("expected %q not to contain %q", result, tt.notExpected)
 				}
 				return
 			}
