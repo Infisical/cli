@@ -15,6 +15,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -457,6 +459,203 @@ func RemoveFiles(ctx context.Context, creds Credentials, paths []string) error {
 		}
 	}
 	return nil
+}
+
+// CommandResult is the outcome of a command run on the host. A non-zero ExitCode means the command failed.
+type CommandResult struct {
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	Truncated bool
+}
+
+// maxCommandOutputBytes caps the output captured per stream so a verbose command can't exhaust memory.
+const maxCommandOutputBytes = 64 * 1024
+
+// limitedBuffer buffers up to limit bytes and sets truncated once more arrives. Writes never fail. The
+// retained tail means truncation can drop output without losing the trailer, which is written last.
+type limitedBuffer struct {
+	buf       *bytes.Buffer
+	limit     int
+	truncated bool
+	tail      []byte
+}
+
+const commandTailBytes = 512
+
+func (w *limitedBuffer) Write(p []byte) (int, error) {
+	if remaining := w.limit - w.buf.Len(); remaining > 0 {
+		if len(p) > remaining {
+			w.buf.Write(p[:remaining])
+			w.truncated = true
+		} else {
+			w.buf.Write(p)
+		}
+	} else if len(p) > 0 {
+		w.truncated = true
+	}
+
+	w.tail = append(w.tail, p...)
+	if len(w.tail) > commandTailBytes {
+		w.tail = append([]byte(nil), w.tail[len(w.tail)-commandTailBytes:]...)
+	}
+	return len(p), nil
+}
+
+// commandScriptTemplate wraps the operator's command (%[1]s) so it reports its exit code in a stdout
+// trailer tagged with a per-run nonce (%[2]s). An exit from inside the try block arrives as 0.
+const commandScriptTemplate = `$ErrorActionPreference = 'Stop'
+$InfisicalExitCode = 0
+try {
+%[1]s
+if (-not $?) { $InfisicalExitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }
+} catch {
+[Console]::Error.WriteLine($_.Exception.Message)
+$InfisicalExitCode = 1
+}
+[Console]::Out.WriteLine('')
+[Console]::Out.WriteLine('%[2]s:' + $InfisicalExitCode)
+`
+
+func buildCommandScript(command, nonce string) string {
+	return fmt.Sprintf(commandScriptTemplate, command, nonce)
+}
+
+func newCommandNonce() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("failed to prepare the command: %w", err)
+	}
+	return "infisical-" + hex.EncodeToString(buf), nil
+}
+
+// takeCommandTrailer splits the trailer off stdout, matching the marker anywhere so output with no
+// trailing newline can't hide it.
+func takeCommandTrailer(stdout, nonce string) (code int, remaining string, ok bool) {
+	marker := nonce + ":"
+	start := strings.LastIndex(stdout, marker)
+	if start < 0 {
+		return 0, stdout, false
+	}
+
+	code, err := strconv.Atoi(strings.TrimSpace(stdout[start+len(marker):]))
+	if err != nil {
+		return 0, stdout, false
+	}
+	// Drop only the blank line the script writes, so output ending in blank lines keeps them.
+	return code, strings.TrimSuffix(strings.TrimSuffix(stdout[:start], "\n"), "\r"), true
+}
+
+// noOutcomeMessage covers both causes: PowerShell parses the whole script before running any of it.
+const noOutcomeMessage = "The command did not report a result: it either called exit, which stops the " +
+	"script early, or did not parse. Use `throw \"reason\"` to fail the sync deliberately."
+
+// maxEncodedCommandChars bounds the -EncodedCommand command line, which Windows caps at 8191 characters.
+const maxEncodedCommandChars = 8000
+
+var clixmlTextNode = regexp.MustCompile(`(?s)<S[^>]*>(.*?)</S>`)
+
+var clixmlEntities = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&", "&quot;", `"`, "&apos;", "'")
+
+// normalizePowerShellStderr converts the CLIXML PowerShell writes to stderr when it has no console.
+func normalizePowerShellStderr(s string) string {
+	if !strings.HasPrefix(strings.TrimSpace(s), "#< CLIXML") {
+		return s
+	}
+	matches := clixmlTextNode.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		// Keep the raw payload rather than dropping the diagnostic.
+		return s
+	}
+
+	var parts []string
+	for _, match := range matches {
+		text := match[1]
+		text = strings.ReplaceAll(text, "_x000D__x000A_", "\n")
+		text = strings.ReplaceAll(text, "_x000D_", "")
+		text = strings.ReplaceAll(text, "_x000A_", "\n")
+		text = clixmlEntities.Replace(text)
+		if trimmed := strings.TrimSpace(text); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// resolveCommandOutcome turns what the script reported into the code and stderr the caller sees. An
+// unstated outcome has to fail: the script carries no `exit`, so powershell.exe returns 0 either way.
+func resolveCommandOutcome(code int, stated bool, stderr string) (int, string) {
+	if stated {
+		return code, stderr
+	}
+	// Prepended, because the caller quotes the first line of stderr as the failure reason.
+	return 1, strings.TrimSpace(noOutcomeMessage + "\n" + stderr)
+}
+
+// RunCommand runs a command on the host. The script goes on the command line as -EncodedCommand, so it
+// is length-bounded and visible in the host's process table.
+func RunCommand(
+	ctx context.Context,
+	creds Credentials,
+	command string,
+	timeout time.Duration,
+) (CommandResult, error) {
+	nonce, err := newCommandNonce()
+	if err != nil {
+		return CommandResult{}, err
+	}
+
+	encoded := winrm.Powershell(buildCommandScript(command, nonce))
+	if encoded == "" {
+		return CommandResult{}, errors.New("failed to encode the command")
+	}
+	if len(encoded) > maxEncodedCommandChars {
+		return CommandResult{}, fmt.Errorf(
+			"the command is too long to run on Windows once encoded (%d of %d characters). Shorten it, "+
+				"or move the logic into a script on the host and call that script",
+			len(encoded), maxEncodedCommandChars,
+		)
+	}
+
+	client, clientErr := newClient(ctx, creds)
+	if clientErr != nil {
+		return CommandResult{}, clientErr
+	}
+
+	runCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	var stdout, stderr bytes.Buffer
+	stdoutWriter := &limitedBuffer{buf: &stdout, limit: maxCommandOutputBytes}
+	stderrWriter := &limitedBuffer{buf: &stderr, limit: maxCommandOutputBytes}
+
+	_, runErr := client.RunWithContext(runCtx, encoded, stdoutWriter, stderrWriter)
+	if runErr != nil {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return CommandResult{}, fmt.Errorf("command timed out after %s", timeout)
+		}
+		return CommandResult{}, wrapTransportError(runErr)
+	}
+
+	result := CommandResult{
+		Stderr:    normalizePowerShellStderr(stderr.String()),
+		Truncated: stdoutWriter.truncated || stderrWriter.truncated,
+	}
+
+	code, remaining, stated := takeCommandTrailer(stdout.String(), nonce)
+	result.Stdout = remaining
+	if !stated {
+		// Truncation drops the head, so fall back to the retained tail.
+		code, _, stated = takeCommandTrailer(string(stdoutWriter.tail), nonce)
+	}
+
+	result.ExitCode, result.Stderr = resolveCommandOutcome(code, stated, result.Stderr)
+
+	return result, nil
 }
 
 // escapePowerShellSingleQuotes escapes a value for a PowerShell single-quoted string by doubling the single quote.
