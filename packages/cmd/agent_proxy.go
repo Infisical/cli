@@ -14,9 +14,11 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -159,7 +161,16 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
 	}
 
-	token := resolveAgentToken(cmd)
+	token, tokenSource := resolveAgentToken(cmd)
+
+	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
+
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(token.Token))
+	Telemetry.CaptureEvent("cli-command:agent-proxy connect", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("agent", telemetryAgentName(args)).
+		Set("credentialSource", tokenSource).
+		Set("allowReadableBrokeredSecrets", allowReadableBrokered))
 
 	httpClient := resty.New().SetAuthToken(token.Token)
 
@@ -176,7 +187,6 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
-	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 	if !allowReadableBrokered {
 		// static readability is derived from realSecrets we already fetch; dynamic lease-ability comes from
 		// the server (callerCanLease) since we don't fetch dynamic secrets here.
@@ -192,7 +202,23 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	}
 }
 
-func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
+// Only the executable name: argv past the first word routinely carries credentials.
+func telemetryAgentName(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return filepath.Base(args[0])
+}
+
+func universalAuthCredentialSource(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("client-id") {
+		return "universal-auth-flag"
+	}
+	return "universal-auth-env"
+}
+
+// Returns the token and a label for the branch that produced it.
+func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
 
@@ -204,7 +230,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 		return &models.TokenDetails{
 			Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
 			Token: loginResp.AccessToken,
-		}
+		}, universalAuthCredentialSource(cmd)
 	}
 
 	token, err := util.GetInfisicalToken(cmd)
@@ -214,7 +240,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 	if token == nil {
 		util.HandleError(fmt.Errorf("authentication required; provide --client-id/--client-secret, env vars, or a token"))
 	}
-	return token
+	return token, "token"
 }
 
 // Builds http://<projectId>:<env>/<path>:<jwt>@host:port (username=projectId, password="<env>/<path>:<jwt>", jwt last).

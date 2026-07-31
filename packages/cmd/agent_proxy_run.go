@@ -17,10 +17,12 @@ import (
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
 	"github.com/mattn/go-isatty"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -169,6 +171,25 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.PrintWarning(fmt.Sprintf("Unable to isolate the network on this host (%s), the agent will share your network connection. Requests are still routed through the proxy, but a program that ignores the proxy settings can reach the network directly. Credential protections are unchanged.", pre.Reason))
 	}
 
+	// After preflight so a downgraded fence is visible; before the proxy starts so a run that dies still counts.
+	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
+	setEnv, _ := cmd.Flags().GetStringArray("set-env")
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(src.token()))
+	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("agent", telemetryAgentName(args)).
+		Set("platform", runtime.GOOS).
+		Set("sandboxEnabled", sandboxEnabled).
+		Set("sandboxSource", sandboxSource(cmd)).
+		Set("netDowngraded", pre.FallbackToSharedNet).
+		Set("unmatchedHost", unmatchedHost).
+		Set("pollInterval", pollInterval).
+		Set("allowReadCount", len(extraRead)).
+		Set("allowWriteCount", len(extraWrite)).
+		Set("allowHostCount", len(allowHosts)).
+		Set("passEnvCount", len(passEnv)).
+		Set("setEnvCount", len(setEnv)))
+
 	proxy, err := agentproxy.New(agentproxy.Options{
 		UnmatchedHost: unmatchedHost,
 		PollInterval:  time.Duration(pollInterval) * time.Second,
@@ -279,6 +300,18 @@ func shutdownProxy(proxy *agentproxy.Proxy) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = proxy.Shutdown(ctx)
+}
+
+// Mirrors resolveSandboxEnabled's order, so a deliberate opt-out is distinguishable from the default.
+func sandboxSource(cmd *cobra.Command) string {
+	switch {
+	case cmd.Flags().Changed("sandbox"), cmd.Flags().Changed("no-sandbox"):
+		return "flag"
+	case os.Getenv("INFISICAL_AGENT_PROXY_SANDBOX") != "":
+		return "env"
+	default:
+		return "default"
+	}
 }
 
 // resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.json (a committed
