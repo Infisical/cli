@@ -181,6 +181,32 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 	}
 }
 
+// CreatePamFolder creates a PAM folder in the project and returns its ID.
+func CreatePamFolder(t *testing.T, ctx context.Context, infra *PAMTestInfra, name string) openapitypes.UUID {
+	resp, err := infra.ApiClient.CreatePamFolderWithResponse(ctx, client.CreatePamFolderJSONRequestBody{
+		Name: name,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create folder: %s", string(resp.Body))
+	slog.Info("Created PAM folder", "folderId", resp.JSON200.Folder.Id, "name", name)
+	return resp.JSON200.Folder.Id
+}
+
+// CreatePamTemplate creates an account template of the given type, attached to the infra gateway,
+// and returns its ID. Accounts created from it inherit the gateway.
+func CreatePamTemplate(t *testing.T, ctx context.Context, infra *PAMTestInfra, name string, accountType client.CreatePamAccountTemplateJSONBodyType) openapitypes.UUID {
+	gatewayId := infra.GatewayId
+	resp, err := infra.ApiClient.CreatePamAccountTemplateWithResponse(ctx, client.CreatePamAccountTemplateJSONRequestBody{
+		Name:      name,
+		Type:      accountType,
+		GatewayId: &gatewayId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create template: %s", string(resp.Body))
+	slog.Info("Created PAM template", "templateId", resp.JSON200.Template.Id, "name", name, "type", accountType)
+	return resp.JSON200.Template.Id
+}
+
 func LoginUser(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 	loginCmd := helpers.Command{
 		Test:               t,

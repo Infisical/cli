@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	"github.com/jackc/pgx/v5"
@@ -18,10 +17,6 @@ import (
 )
 
 func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
-	// TODO: Re-enable once the PAM revamp's e2e tests are updated. Temporarily
-	// skipped so it stops blocking production.
-	t.Skip("Temporarily disabled pending PAM revamp test updates")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -59,20 +54,27 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	directConn.Close(ctx)
 	slog.Info("Verified PAM Postgres is accessible directly")
 
-	// Get host/port for PAM resource creation
+	// Get host/port for the PAM account
 	pgHost, err := pgContainer.Host(ctx)
 	require.NoError(t, err)
 	pgPort, err := pgContainer.MappedPort(ctx, "5432")
 	require.NoError(t, err)
 
-	// Create Postgres PAM resource via API
-	resourceName := "pg-resource"
-	pgResResp, err := infra.ApiClient.CreatePostgresPamResourceWithResponse(
+	// Create folder + template + account (new PAM model)
+	folderName := "pg-folder"
+	accountName := "pg-account"
+	folderId := CreatePamFolder(t, ctx, infra, folderName)
+	templateId := CreatePamTemplate(t, ctx, infra, "pg-template", client.CreatePamAccountTemplateJSONBodyTypePostgres)
+
+	gatewayId := infra.GatewayId
+	password := pgPassword
+	acctResp, err := infra.ApiClient.CreatePostgresPamAccountWithResponse(
 		ctx,
-		client.CreatePostgresPamResourceJSONRequestBody{
-			ProjectId: uuid.MustParse(infra.ProjectId),
-			GatewayId: &infra.GatewayId,
-			Name:      resourceName,
+		client.CreatePostgresPamAccountJSONRequestBody{
+			FolderId:   folderId,
+			TemplateId: templateId,
+			GatewayId:  &gatewayId,
+			Name:       accountName,
 			ConnectionDetails: struct {
 				Database              string  `json:"database"`
 				Host                  string  `json:"host"`
@@ -87,47 +89,30 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 				SslEnabled:            false,
 				SslRejectUnauthorized: false,
 			},
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, pgResResp.StatusCode())
-	resourceId := pgResResp.JSON200.Resource.Id
-	slog.Info("Created Postgres PAM resource", "resourceId", resourceId)
-
-	// Create Postgres PAM account via API
-	accountName := "pg-account"
-	pgAcctResp, err := infra.ApiClient.CreatePostgresPamAccountWithResponse(
-		ctx,
-		client.CreatePostgresPamAccountJSONRequestBody{
-			ResourceId: resourceId,
-			Name:       accountName,
 			Credentials: struct {
-				Password string `json:"password"`
-				Username string `json:"username"`
+				Password *string `json:"password,omitempty"`
+				Username string  `json:"username"`
 			}{
 				Username: pgUser,
-				Password: pgPassword,
+				Password: &password,
 			},
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, pgAcctResp.StatusCode())
+	require.Equal(t, http.StatusOK, acctResp.StatusCode(), "create account: %s", string(acctResp.Body))
 	slog.Info("Created Postgres PAM account")
 
 	// Login with provisioned admin user
 	LoginUser(t, ctx, infra)
 
-	// Run pam db access
+	// Run pam access <folder>/<account>
 	freePort := helpers.GetFreePort()
 	pamCmd := helpers.Command{
 		Test:               t,
 		RunMethod:          helpers.RunMethodSubprocess,
 		DisableTempHomeDir: true,
 		Args: []string{
-			"pam", "db", "access",
-			"--resource", resourceName,
-			"--account", accountName,
-			"--project-id", infra.ProjectId,
+			"pam", "access", fmt.Sprintf("%s/%s", folderName, accountName),
 			"--duration", "5m",
 			"--port", fmt.Sprintf("%d", freePort),
 		},
@@ -143,12 +128,15 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &pamCmd,
 		Condition: func() helpers.ConditionResult {
-			if strings.Contains(pamCmd.Stdout(), "Database Proxy Session Started") {
+			if strings.Contains(pamCmd.Stdout(), "Proxy Session Started") {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
 		},
 	})
+	if result != helpers.WaitSuccess {
+		pamCmd.DumpOutput()
+	}
 	require.Equal(t, helpers.WaitSuccess, result, "Database proxy should start successfully")
 
 	// Connect via pgx to the proxy and run SELECT 1
