@@ -140,7 +140,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	require.Equal(t, helpers.WaitSuccess, result, "Database proxy should start successfully")
 
 	// Connect via pgx to the proxy and run SELECT 1
-	proxyConnStr := fmt.Sprintf("postgres://%s@localhost:%d/%s?sslmode=disable", pgUser, freePort, pgDatabase)
+	proxyConnStr := fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s?sslmode=disable", pgUser, freePort, pgDatabase)
 	var proxyConn *pgx.Conn
 	connectResult := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &pamCmd,

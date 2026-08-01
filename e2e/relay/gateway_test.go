@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	openapitypes "github.com/oapi-codegen/runtime/types"
@@ -23,6 +23,26 @@ import (
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
+
+// createPamFolder and createPamTemplate mirror the helpers in the pam package for use in the relay
+// test (folder + gateway-attached template are prerequisites for creating accounts in the new model).
+func createPamFolder(t *testing.T, ctx context.Context, c client.ClientWithResponsesInterface, name string) openapitypes.UUID {
+	resp, err := c.CreatePamFolderWithResponse(ctx, client.CreatePamFolderJSONRequestBody{Name: name})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create folder: %s", string(resp.Body))
+	return resp.JSON200.Folder.Id
+}
+
+func createPamTemplate(t *testing.T, ctx context.Context, c client.ClientWithResponsesInterface, name string, accountType client.CreatePamAccountTemplateJSONBodyType, gatewayId *openapitypes.UUID) openapitypes.UUID {
+	resp, err := c.CreatePamAccountTemplateWithResponse(ctx, client.CreatePamAccountTemplateJSONRequestBody{
+		Name:      name,
+		Type:      accountType,
+		GatewayId: gatewayId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create template: %s", string(resp.Body))
+	return resp.JSON200.Template.Id
+}
 
 func TestGateway_RegistersAGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,7 +230,6 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, projectResp.StatusCode(), http.StatusOK)
-	projectId := projectResp.JSON200.Project.Id
 
 	t.Run("kubernetes", func(t *testing.T) {
 		t.Parallel()
@@ -264,23 +283,32 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
 		slog.Info("Mock HTTP server started", "url", serverURL)
 
-		k8sPamResResp, err := c.CreateKubernetesPamResourceWithResponse(
-			ctx,
-			client.CreateKubernetesPamResourceJSONRequestBody{
-				ProjectId: uuid.MustParse(projectId),
-				GatewayId: &gatewayId,
-				Name:      "k8s-resource",
-				ConnectionDetails: struct {
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-					Url                   string  `json:"url"`
-				}{
-					Url:                   serverURL,
-					SslRejectUnauthorized: false,
-				},
-			})
+		folderId := createPamFolder(t, ctx, c, "k8s-folder")
+		templateId := createPamTemplate(t, ctx, c, "k8s-template", client.CreatePamAccountTemplateJSONBodyTypeKubernetes, &gatewayId)
+		k8sBody, err := json.Marshal(map[string]interface{}{
+			"folderId":   folderId.String(),
+			"templateId": templateId.String(),
+			"gatewayId":  gatewayId.String(),
+			"name":       "k8s-account",
+			"connectionDetails": map[string]interface{}{
+				"url":                   serverURL,
+				"sslRejectUnauthorized": false,
+			},
+			"credentials": map[string]interface{}{
+				"authMethod":          "service-account-token",
+				"serviceAccountToken": "dummy-token",
+			},
+		})
 		require.NoError(t, err)
-		require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
+		k8sURL := fmt.Sprintf("%s/api/v1/pam/accounts/kubernetes", infisical.ApiUrl(t))
+		k8sReq, err := http.NewRequestWithContext(ctx, http.MethodPost, k8sURL, bytes.NewReader(k8sBody))
+		require.NoError(t, err)
+		k8sReq.Header.Set("Authorization", "Bearer "+infisical.ProvisionResult().Token)
+		k8sReq.Header.Set("Content-Type", "application/json")
+		k8sResp, err := http.DefaultClient.Do(k8sReq)
+		require.NoError(t, err)
+		defer k8sResp.Body.Close()
+		require.Equal(t, http.StatusOK, k8sResp.StatusCode)
 		require.True(t, versionEndpointHit)
 	})
 
@@ -320,29 +348,32 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		require.Equal(t, "PONG", pong)
 		slog.Info("Verified Redis is accessible", "addr", connectionString)
 
-		// Create Redis PAM resource
-		redisPortFloat := float32(redisPort.Int())
-		redisPamResResp, err := c.CreateRedisPamResourceWithResponse(
-			ctx,
-			client.CreateRedisPamResourceJSONRequestBody{
-				ProjectId: uuid.MustParse(projectId),
-				GatewayId: &gatewayId,
-				Name:      "redis-resource",
-				ConnectionDetails: struct {
-					Host                  string  `json:"host"`
-					Port                  float32 `json:"port"`
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslEnabled            bool    `json:"sslEnabled"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-				}{
-					Host:                  redisHost,
-					Port:                  redisPortFloat,
-					SslEnabled:            false,
-					SslRejectUnauthorized: false,
-				},
-			})
+		// Create Redis PAM account (no generated client method on this branch; use a raw POST).
+		folderId := createPamFolder(t, ctx, c, "redis-folder")
+		templateId := createPamTemplate(t, ctx, c, "redis-template", client.CreatePamAccountTemplateJSONBodyTypeRedis, &gatewayId)
+		redisBody, err := json.Marshal(map[string]interface{}{
+			"folderId":   folderId.String(),
+			"templateId": templateId.String(),
+			"gatewayId":  gatewayId.String(),
+			"name":       "redis-account",
+			"connectionDetails": map[string]interface{}{
+				"host":                  redisHost,
+				"port":                  redisPort.Int(),
+				"sslEnabled":            false,
+				"sslRejectUnauthorized": false,
+			},
+			"credentials": map[string]interface{}{"username": "default"},
+		})
 		require.NoError(t, err)
-		require.Equal(t, redisPamResResp.StatusCode(), http.StatusOK)
-		slog.Info("Redis PAM resource created successfully")
+		accURL := fmt.Sprintf("%s/api/v1/pam/accounts/redis", infisical.ApiUrl(t))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, accURL, bytes.NewReader(redisBody))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+infisical.ProvisionResult().Token)
+		req.Header.Set("Content-Type", "application/json")
+		redisResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer redisResp.Body.Close()
+		require.Equal(t, http.StatusOK, redisResp.StatusCode)
+		slog.Info("Redis PAM account created successfully")
 	})
 }
