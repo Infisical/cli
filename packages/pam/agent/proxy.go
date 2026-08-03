@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -208,7 +207,7 @@ func (p *AgentProxy) handleConnection(clientConn net.Conn) {
 	// ones the relay stream underneath was opened with.
 	session, release, err := p.provider.Acquire(p.ctx)
 	if err != nil {
-		if errors.Is(err, ErrSessionProviderClosed) || errors.Is(err, context.Canceled) {
+		if isShutdownError(err) {
 			log.Debug().Str("account", p.path).Msg("Connection accepted during shutdown, not creating a session")
 			return
 		}

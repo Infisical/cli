@@ -17,6 +17,12 @@ import (
 // connection accepted during teardown must not be able to create a session we would never end.
 var ErrSessionProviderClosed = errors.New("session provider is shut down")
 
+// isShutdownError reports whether a session could not be created because the run is ending, which
+// is an ordinary race with teardown rather than a failure worth reporting.
+func isShutdownError(err error) bool {
+	return errors.Is(err, ErrSessionProviderClosed) || errors.Is(err, context.Canceled)
+}
+
 // trackedSession is one PAM session plus the connections currently streaming through it. A session
 // is only ended once nothing is using it, so retiring the session one connection found unusable
 // cannot cut off another connection mid-transfer.

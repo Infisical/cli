@@ -11,9 +11,8 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-// Account types that expose a local port and can therefore be proxied on demand. The value is the
-// label shown to the agent.
-var portBasedAccountTypes = map[string]string{
+// Account types the agent flow can expose, mapped to the label shown to the agent.
+var supportedAccountTypes = map[string]string{
 	"postgres":   "PostgreSQL",
 	"mysql":      "MySQL",
 	"mssql":      "SQL Server",
@@ -149,8 +148,8 @@ func unusableReason(account api.PAMAccessibleAccount, opts Options) string {
 		return reason
 	}
 
-	if _, portBased := portBasedAccountTypes[account.AccountType]; !portBased {
-		return fmt.Sprintf("%s accounts deliver credentials as files rather than over a port, so they can't be proxied here", account.AccountType)
+	if _, supported := supportedAccountTypes[account.AccountType]; !supported {
+		return fmt.Sprintf("%s accounts are not supported by the agent flow yet", account.AccountType)
 	}
 
 	if !account.CanLaunch {
@@ -176,7 +175,7 @@ func newResolvedAccount(account api.PAMAccessibleAccount, opts Options) Resolved
 	return ResolvedAccount{
 		Path:        accountPath(account),
 		AccountType: account.AccountType,
-		TypeLabel:   portBasedAccountTypes[account.AccountType],
+		TypeLabel:   supportedAccountTypes[account.AccountType],
 		Description: account.Description,
 		Duration:    opts.Duration,
 		Reason:      opts.Reason,
