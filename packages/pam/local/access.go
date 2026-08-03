@@ -123,6 +123,39 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	}
 }
 
+// CreateSession launches a PAM session for the account at the given path and returns the raw
+// response. It is non-interactive: callers that cannot prompt (because a child process owns the
+// terminal) get an error rather than a hung prompt.
+func CreateSession(httpClient *resty.Client, path, reason, targetHost string, duration time.Duration) (*api.PAMAccessResponse, error) {
+	// The API parses durations with npm ms, which can't read Go compound formats like "2h30m",
+	// so send plain milliseconds
+	response, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
+		Path:       path,
+		Duration:   fmt.Sprintf("%dms", duration.Milliseconds()),
+		Reason:     reason,
+		TargetHost: targetHost,
+	}, false)
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+// NewLiveSession converts an access response into the session details a proxy dials through.
+func NewLiveSession(response *api.PAMAccessResponse, expiry time.Time) LiveSession {
+	return LiveSession{
+		SessionId:              response.SessionId,
+		RelayHost:              response.RelayHost,
+		RelayClientCert:        response.RelayClientCertificate,
+		RelayClientKey:         response.RelayClientPrivateKey,
+		RelayServerCertChain:   response.RelayServerCertificateChain,
+		GatewayClientCert:      response.GatewayClientCertificate,
+		GatewayClientKey:       response.GatewayClientPrivateKey,
+		GatewayServerCertChain: response.GatewayServerCertificateChain,
+		Expiry:                 expiry,
+	}
+}
+
 // handleApprovalRequired intercepts the PAM_APPROVAL_REQUIRED gate. In an interactive terminal it
 // offers to submit an access request for the account; otherwise it prints guidance. Returns true when
 // the error was an approval-required error (handled here), false to let normal error handling proceed.
