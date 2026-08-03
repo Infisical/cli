@@ -6,18 +6,19 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/sandbox"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -84,7 +85,35 @@ var credentialEnvKeys = []string{
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
 }
 
+// Addresses of host IPC endpoints. Not secret values, but handing them to the agent points it at
+// sockets it can use: the SSH/GPG agents as a signing oracle, and the session bus, where
+// systemd --user StartTransientUnit runs a process outside the sandbox. Unix sockets are not
+// namespaced, so on Linux dropping these is what keeps them out of reach.
+// Scrubbed by default; --pass-env re-admits a specific one.
+var authAgentEnvKeys = []string{
+	"SSH_AUTH_SOCK",
+	"SSH_AGENT_PID",
+	"GPG_AGENT_INFO",
+	"DBUS_SESSION_BUS_ADDRESS",
+	"DBUS_SYSTEM_BUS_ADDRESS",
+	"XDG_RUNTIME_DIR",
+}
+
 var requiredNoProxy = []string{"localhost", "127.0.0.1"}
+
+// setProxyEnv points the child's HTTP clients at the proxy. Both letter cases are set on purpose:
+// curl honours only the lowercase http_proxy for plain-HTTP URLs, so an uppercase-only environment
+// sends those requests to DNS instead of the proxy. Shared by connect and run so the two can't drift.
+func setProxyEnv(env map[string]string, proxyURL, noProxy string) {
+	env["HTTP_PROXY"] = proxyURL
+	env["http_proxy"] = proxyURL
+	env["HTTPS_PROXY"] = proxyURL
+	env["https_proxy"] = proxyURL
+	env["NO_PROXY"] = noProxy
+	env["no_proxy"] = noProxy
+	env["NODE_USE_ENV_PROXY"] = "1"
+	env["OPENCLAW_PROXY_URL"] = proxyURL
+}
 
 func mergeNoProxy(operatorEntries ...string) string {
 	seen := make(map[string]bool)
@@ -132,7 +161,16 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
 	}
 
-	token := resolveAgentToken(cmd)
+	token, tokenSource := resolveAgentToken(cmd)
+
+	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
+
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(token.Token))
+	Telemetry.CaptureEvent("cli-command:agent-proxy connect", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("agent", telemetryAgentName(args)).
+		Set("credentialSource", tokenSource).
+		Set("allowReadableBrokeredSecrets", allowReadableBrokered))
 
 	httpClient := resty.New().SetAuthToken(token.Token)
 
@@ -149,7 +187,6 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	realSecrets := fetchAgentRealSecrets(token, projectID, environment, secretPath)
 
-	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 	if !allowReadableBrokered {
 		// static readability is derived from realSecrets we already fetch; dynamic lease-ability comes from
 		// the server (callerCanLease) since we don't fetch dynamic secrets here.
@@ -165,7 +202,23 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	}
 }
 
-func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
+// Only the executable name: argv past the first word routinely carries credentials.
+func telemetryAgentName(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return filepath.Base(args[0])
+}
+
+func universalAuthCredentialSource(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("client-id") {
+		return "universal-auth-flag"
+	}
+	return "universal-auth-env"
+}
+
+// Returns the token and a label for the branch that produced it.
+func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
 
@@ -177,7 +230,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 		return &models.TokenDetails{
 			Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
 			Token: loginResp.AccessToken,
-		}
+		}, universalAuthCredentialSource(cmd)
 	}
 
 	token, err := util.GetInfisicalToken(cmd)
@@ -187,7 +240,7 @@ func resolveAgentToken(cmd *cobra.Command) *models.TokenDetails {
 	if token == nil {
 		util.HandleError(fmt.Errorf("authentication required; provide --client-id/--client-secret, env vars, or a token"))
 	}
-	return token
+	return token, "token"
 }
 
 // Builds http://<projectId>:<env>/<path>:<jwt>@host:port (username=projectId, password="<env>/<path>:<jwt>", jwt last).
@@ -363,11 +416,7 @@ func buildAgentEnv(proxy, caPath, jwt, extraNoProxy string, placeholders map[str
 		}
 	}
 
-	env["HTTPS_PROXY"] = proxy
-	env["HTTP_PROXY"] = proxy
-	env["NO_PROXY"] = mergeNoProxy(append(operatorNoProxy, extraNoProxy)...)
-	env["NODE_USE_ENV_PROXY"] = "1"
-	env["OPENCLAW_PROXY_URL"] = proxy
+	setProxyEnv(env, proxy, mergeNoProxy(append(operatorNoProxy, extraNoProxy)...))
 
 	for _, k := range caTrustEnvVars {
 		env[k] = caPath
@@ -404,28 +453,20 @@ func runAgentProcess(args, env []string) error {
 	proc.Stderr = os.Stderr
 	proc.Env = env
 
-	sigChannel := make(chan os.Signal, 1)
-	signal.Notify(sigChannel)
-
 	if err := proc.Start(); err != nil {
 		return err
 	}
 
-	go func() {
-		for sig := range sigChannel {
-			_ = proc.Process.Signal(sig)
-		}
-	}()
-
-	if err := proc.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(ws.ExitStatus())
-			}
-		}
-		return err
+	stopForwarding := sandbox.ForwardTerminationSignals(proc)
+	err := proc.Wait()
+	stopForwarding()
+	if err == nil {
+		return nil
 	}
-	return nil
+	if code, ok := sandbox.WaitExitCode(err); ok {
+		os.Exit(code)
+	}
+	return err
 }
 
 func init() {

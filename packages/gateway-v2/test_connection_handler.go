@@ -2,19 +2,31 @@ package gatewayv2
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/msdsn"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 const (
@@ -35,23 +47,54 @@ var connectionTestMux = sync.OnceValue(func() *http.ServeMux {
 })
 
 const (
-	testConnModePostgres = "postgres"
-	testConnModeSSH      = "ssh"
-	testConnModeTCP      = "tcp"
+	testConnModeSQL        = "sql"
+	testConnModeMongoDB    = "mongodb"
+	testConnModeLDAP       = "ldap"
+	testConnModeKubernetes = "kubernetes"
+	testConnModeSSH        = "ssh"
+	testConnModeTCP        = "tcp"
 )
 
 // testConnectionEnvelope carries the fields common to every connection test; mode selects which client validates
 // it and which per-mode params struct the body is decoded into. The target host/port come from the signed cert.
 type testConnectionEnvelope struct {
-	Mode      string `json:"mode"` // "postgres" | "ssh" | "tcp"
+	Mode      string `json:"mode"`
 	TimeoutMs int    `json:"timeoutMs"`
 }
 
-type postgresTestParams struct {
+type sqlTestParams struct {
+	Dialect               string `json:"dialect"` // "postgres" | "mysql" | "mssql"
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Database              string `json:"database"`
 	SslEnabled            bool   `json:"sslEnabled"`
+	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
+	SslCertificate        string `json:"sslCertificate"`
+}
+
+type mongoTestParams struct {
+	Username              string `json:"username"`
+	Password              string `json:"password"`
+	AuthSource            string `json:"authSource"`
+	SslEnabled            bool   `json:"sslEnabled"`
+	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
+	SslCertificate        string `json:"sslCertificate"`
+}
+
+type ldapTestParams struct {
+	Username               string `json:"username"`
+	Password               string `json:"password"`
+	UseLdaps               bool   `json:"useLdaps"`
+	LdapRejectUnauthorized *bool  `json:"ldapRejectUnauthorized"`
+	LdapCaCert             string `json:"ldapCaCert"`
+	LdapTlsServerName      string `json:"ldapTlsServerName"`
+}
+
+type kubernetesTestParams struct {
+	AuthMethod            string `json:"authMethod"`
+	Token                 string `json:"token"`
+	Namespace             string `json:"namespace"`
+	ServiceAccountName    string `json:"serviceAccountName"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
 }
@@ -72,42 +115,268 @@ type testConnectionResponse struct {
 	Result testConnectionResult `json:"result"`
 }
 
-// doPostgresConnectionTest authenticates against the target Postgres and runs a trivial query.
-func doPostgresConnectionTest(ctx context.Context, host string, port int, params postgresTestParams) error {
-	config, err := pgx.ParseConfig("")
-	if err != nil {
-		return fmt.Errorf("failed to build connection config: %w", err)
-	}
-	config.Host = host
-	config.Fallbacks = nil
-	config.Port = uint16(port)
-	config.User = params.Username
-	config.Password = params.Password
-	config.Database = params.Database
-
-	if params.SslEnabled {
-		rejectUnauthorized := params.SslRejectUnauthorized == nil || *params.SslRejectUnauthorized
-		tlsConfig := &tls.Config{ServerName: host, InsecureSkipVerify: !rejectUnauthorized}
-		if params.SslCertificate != "" {
-			pool := x509.NewCertPool()
-			if !pool.AppendCertsFromPEM([]byte(params.SslCertificate)) {
-				return fmt.Errorf("failed to parse SSL certificate")
-			}
-			tlsConfig.RootCAs = pool
+// buildTestTLSConfig verifies the server by default; an explicit CA pins it, and rejectUnauthorized=false disables it
+func buildTestTLSConfig(serverName, caCertificate string, rejectUnauthorized *bool) (*tls.Config, error) {
+	reject := rejectUnauthorized == nil || *rejectUnauthorized
+	tlsConfig := &tls.Config{ServerName: serverName, InsecureSkipVerify: !reject}
+	if caCertificate != "" {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(caCertificate)) {
+			return nil, fmt.Errorf("failed to parse SSL certificate")
 		}
-		config.TLSConfig = tlsConfig
-	} else {
-		config.TLSConfig = nil
+		tlsConfig.RootCAs = pool
+	}
+	return tlsConfig, nil
+}
+
+// openSQLTestDB builds a lazily-connecting *sql.DB for the target using the dialect's driver and a shared TLS config
+func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error) {
+	var tlsConfig *tls.Config
+	if params.SslEnabled {
+		var err error
+		if tlsConfig, err = buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized); err != nil {
+			return nil, err
+		}
 	}
 
-	conn, err := pgx.ConnectConfig(ctx, config)
+	switch params.Dialect {
+	case "postgres":
+		config, err := pgx.ParseConfig("")
+		if err != nil {
+			return nil, fmt.Errorf("failed to build connection config: %w", err)
+		}
+		config.Host = host
+		config.Port = uint16(port)
+		config.User = params.Username
+		config.Password = params.Password
+		config.Database = params.Database
+		config.TLSConfig = tlsConfig
+		config.Fallbacks = nil
+		return stdlib.OpenDB(*config), nil
+	case "mysql":
+		config := mysql.NewConfig()
+		config.Net = "tcp"
+		config.Addr = net.JoinHostPort(host, strconv.Itoa(port))
+		config.User = params.Username
+		config.Passwd = params.Password
+		config.DBName = params.Database
+		config.TLS = tlsConfig
+		connector, err := mysql.NewConnector(config)
+		if err != nil {
+			return nil, err
+		}
+		return sql.OpenDB(connector), nil
+	case "mssql":
+		query := url.Values{}
+		query.Set("database", params.Database)
+		if params.SslEnabled {
+			query.Set("encrypt", "true")
+		} else {
+			query.Set("encrypt", "disable")
+		}
+		dsn := (&url.URL{
+			Scheme:   "sqlserver",
+			User:     url.UserPassword(params.Username, params.Password),
+			Host:     net.JoinHostPort(host, strconv.Itoa(port)),
+			RawQuery: query.Encode(),
+		}).String()
+		config, err := msdsn.Parse(dsn)
+		if err != nil {
+			return nil, err
+		}
+		if tlsConfig != nil {
+			config.TLSConfig = tlsConfig
+		}
+		return sql.OpenDB(mssql.NewConnectorConfig(config)), nil
+	default:
+		return nil, fmt.Errorf("unsupported SQL dialect: %q", params.Dialect)
+	}
+}
+
+// doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
+func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlTestParams) error {
+	db, err := openSQLTestDB(host, port, params)
 	if err != nil {
 		return err
 	}
-	defer conn.Close(ctx)
+	defer db.Close()
 
 	var result int
-	return conn.QueryRow(ctx, "SELECT 1").Scan(&result)
+	return db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
+}
+
+// doMongoConnectionTest authenticates against the target MongoDB and pings it
+func doMongoConnectionTest(ctx context.Context, host string, port int, params mongoTestParams) error {
+	opts := options.Client().SetHosts([]string{net.JoinHostPort(host, strconv.Itoa(port))}).SetDirect(true)
+	if params.Username != "" {
+		opts.SetAuth(options.Credential{
+			Username:   params.Username,
+			Password:   params.Password,
+			AuthSource: params.AuthSource,
+		})
+	}
+	if params.SslEnabled {
+		tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
+		if err != nil {
+			return err
+		}
+		opts.SetTLSConfig(tlsConfig)
+	}
+
+	client, err := mongo.Connect(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	return client.Ping(ctx, nil)
+}
+
+// doLdapConnectionTest binds to the target directory with the supplied credentials (the Windows AD auth check)
+func doLdapConnectionTest(ctx context.Context, host string, port int, params ldapTestParams) error {
+	timeout := testConnDefaultTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = time.Until(deadline)
+	}
+
+	scheme := "ldap"
+	opts := []ldap.DialOpt{ldap.DialWithDialer(&net.Dialer{Timeout: timeout})}
+	if params.UseLdaps {
+		scheme = "ldaps"
+		serverName := params.LdapTlsServerName
+		if serverName == "" {
+			serverName = host
+		}
+		tlsConfig, err := buildTestTLSConfig(serverName, params.LdapCaCert, params.LdapRejectUnauthorized)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, ldap.DialWithTLSConfig(tlsConfig))
+	}
+
+	conn, err := ldap.DialURL(fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, strconv.Itoa(port))), opts...)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetTimeout(timeout)
+
+	return conn.Bind(params.Username, params.Password)
+}
+
+// doKubernetesConnectionTest confirms the API server is reachable and accepts the token (401 = bad credentials)
+func doKubernetesConnectionTest(ctx context.Context, host string, port int, params kubernetesTestParams) error {
+	if params.AuthMethod == "gateway-kubernetes-auth" {
+		return doKubernetesGatewayAuthTest(ctx, params.Namespace, params.ServiceAccountName)
+	}
+
+	tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
+	url := fmt.Sprintf("https://%s/api", net.JoinHostPort(host, strconv.Itoa(port)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if params.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+params.Token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// doKubernetesGatewayAuthTest validates the gateway-kubernetes-auth method: the gateway (which must run inside a
+// pod) authenticates with its own pod service-account token and impersonates the target SA against its in-cluster
+// API server — the account URL/host is not involved.
+func doKubernetesGatewayAuthTest(ctx context.Context, namespace, serviceAccountName string) error {
+	apiHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+	apiPort := os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")
+	if apiHost == "" || apiPort == "" {
+		return fmt.Errorf("gateway is not running inside a Kubernetes pod (KUBERNETES_SERVICE_HOST unset)")
+	}
+	token, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
+	if err != nil {
+		return fmt.Errorf("gateway not running in a Kubernetes pod, unable to read pod service account token: %w", err)
+	}
+	caPEM, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
+	if err != nil {
+		return fmt.Errorf("unable to read pod CA certificate: %w", err)
+	}
+	return kubernetesImpersonationProbe(
+		ctx,
+		net.JoinHostPort(apiHost, apiPort),
+		strings.TrimSpace(string(token)),
+		caPEM,
+		namespace,
+		serviceAccountName,
+	)
+}
+
+// kubernetesImpersonationProbe issues a SelfSubjectRulesReview as the pod's SA while impersonating the target SA.
+// 401 means the pod token is bad; 403 means the gateway's SA lacks impersonation rights; 2xx means both work.
+func kubernetesImpersonationProbe(
+	ctx context.Context,
+	apiAddr, token string,
+	caPEM []byte,
+	namespace, serviceAccountName string,
+) error {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return fmt.Errorf("failed to parse Kubernetes CA certificate")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+
+	body, err := json.Marshal(map[string]any{
+		"apiVersion": "authorization.k8s.io/v1",
+		"kind":       "SelfSubjectRulesReview",
+		"spec":       map[string]string{"namespace": namespace},
+	})
+	if err != nil {
+		return err
+	}
+	reqURL := fmt.Sprintf("https://%s/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", apiAddr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Impersonate-User", fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccountName))
+	req.Header.Set("Impersonate-Group", "system:serviceaccounts")
+	req.Header.Add("Impersonate-Group", fmt.Sprintf("system:serviceaccounts:%s", namespace))
+	req.Header.Add("Impersonate-Group", "system:authenticated")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("kubernetes API rejected the gateway's pod token (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("gateway service account cannot impersonate %s:%s (HTTP %d)", namespace, serviceAccountName, resp.StatusCode)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // doTCPReachabilityTest confirms the target host:port accepts a TCP connection. It's the fallback for targets we
@@ -119,6 +388,18 @@ func doTCPReachabilityTest(ctx context.Context, host string, port int) error {
 		return err
 	}
 	return conn.Close()
+}
+
+// runWithContext bounds op by ctx even when the underlying driver ignores context cancellation
+func runWithContext(ctx context.Context, op func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- op() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("connection test timed out")
+	}
 }
 
 func handleTestConnection(w http.ResponseWriter, r *http.Request) {
@@ -148,38 +429,65 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 	target, _ := r.Context().Value(rpcTargetContextKey{}).(rpcTarget)
 
-	var testErr error
-	switch env.Mode {
-	case testConnModePostgres:
-		var params postgresTestParams
-		if err := json.Unmarshal(body, &params); err != nil {
+	decode := func(params any) bool {
+		if err := json.Unmarshal(body, params); err != nil {
 			writeRPCError(w, http.StatusBadRequest, "Invalid request body")
+			return false
+		}
+		return true
+	}
+
+	var op func() error
+	switch env.Mode {
+	case testConnModeSQL:
+		var params sqlTestParams
+		if !decode(&params) {
 			return
 		}
-		testErr = doPostgresConnectionTest(ctx, target.host, target.port, params)
+		op = func() error { return doSQLConnectionTest(ctx, target.host, target.port, params) }
+	case testConnModeMongoDB:
+		var params mongoTestParams
+		if !decode(&params) {
+			return
+		}
+		op = func() error { return doMongoConnectionTest(ctx, target.host, target.port, params) }
+	case testConnModeLDAP:
+		var params ldapTestParams
+		if !decode(&params) {
+			return
+		}
+		op = func() error { return doLdapConnectionTest(ctx, target.host, target.port, params) }
+	case testConnModeKubernetes:
+		var params kubernetesTestParams
+		if !decode(&params) {
+			return
+		}
+		op = func() error { return doKubernetesConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeSSH:
 		var params sshTestParams
-		if err := json.Unmarshal(body, &params); err != nil {
-			writeRPCError(w, http.StatusBadRequest, "Invalid request body")
+		if !decode(&params) {
 			return
 		}
-		_, testErr = doSSHExec(target.host, target.port, sshExecEnvelope{
-			Command:     "true",
-			AuthMethod:  params.AuthMethod,
-			Username:    params.Username,
-			Password:    params.Password,
-			PrivateKey:  params.PrivateKey,
-			Certificate: params.Certificate,
-			TimeoutMs:   env.TimeoutMs,
-		})
+		op = func() error {
+			_, err := doSSHExec(target.host, target.port, sshExecEnvelope{
+				Command:     "true",
+				AuthMethod:  params.AuthMethod,
+				Username:    params.Username,
+				Password:    params.Password,
+				PrivateKey:  params.PrivateKey,
+				Certificate: params.Certificate,
+				TimeoutMs:   env.TimeoutMs,
+			})
+			return err
+		}
 	case testConnModeTCP:
-		testErr = doTCPReachabilityTest(ctx, target.host, target.port)
+		op = func() error { return doTCPReachabilityTest(ctx, target.host, target.port) }
 	default:
 		writeRPCError(w, http.StatusBadRequest, fmt.Sprintf("unsupported test-connection mode: %q", env.Mode))
 		return
 	}
 
-	if testErr != nil {
+	if testErr := runWithContext(ctx, op); testErr != nil {
 		writeRPCError(w, http.StatusBadGateway, testErr.Error())
 		return
 	}
