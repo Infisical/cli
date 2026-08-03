@@ -186,6 +186,69 @@ func (p *AgentProxy) validateGatewaySupport() error {
 	return p.validateErr
 }
 
+// relayOutcome says which side brought a proxied connection to an end.
+type relayOutcome int
+
+const (
+	// relayClientFinished: the client stopped sending, and the gateway's reply was drained after it.
+	relayClientFinished relayOutcome = iota
+	// relayGatewayFinished: the gateway stopped sending, or could no longer be written to.
+	relayGatewayFinished
+	// relayCancelled: the proxy is shutting down.
+	relayCancelled
+)
+
+// relay copies between the client and the gateway until one side finishes, and reports which.
+//
+// A client may stop sending and carry on reading, which is how an HTTP client behaves when it
+// half-closes after a request. Returning as soon as either direction ends would close both sockets
+// and truncate a reply still in flight, so when the client finishes first the gateway is drained
+// before returning. There is no deadline on that drain: what is left to transfer may be a large
+// download, and a client that is really gone makes the copy towards it fail straight away.
+func relay(ctx context.Context, clientConn, gatewayConn net.Conn) relayOutcome {
+	gatewayDone := make(chan error, 1)
+	clientDone := make(chan error, 1)
+
+	go func() {
+		_, err := io.Copy(clientConn, gatewayConn)
+		// Nothing more from the gateway, so let the client see EOF on its read side.
+		halfCloseWrite(clientConn)
+		gatewayDone <- err
+	}()
+
+	go func() {
+		_, err := io.Copy(gatewayConn, clientConn)
+		// Nothing more from the client, so let the gateway see EOF and finish its reply.
+		halfCloseWrite(gatewayConn)
+		clientDone <- err
+	}()
+
+	select {
+	case <-clientDone:
+		select {
+		case <-gatewayDone:
+		case <-ctx.Done():
+			return relayCancelled
+		}
+		return relayClientFinished
+
+	case <-gatewayDone:
+		return relayGatewayFinished
+
+	case <-ctx.Done():
+		return relayCancelled
+	}
+}
+
+// halfCloseWrite says "nothing more from me" while leaving the read side open, so a transfer already
+// under way in the other direction survives. The client leg is TCP and the gateway leg is TLS, and
+// both implement it; anything else is left to the full close on return.
+func halfCloseWrite(conn net.Conn) {
+	if closer, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = closer.CloseWrite()
+	}
+}
+
 func (p *AgentProxy) handleConnection(clientConn net.Conn) {
 	defer func() {
 		clientConn.Close()
@@ -248,37 +311,27 @@ func (p *AgentProxy) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	gatewayErrCh := make(chan error, 1)
-	clientErrCh := make(chan error, 1)
+	switch relay(connCtx, clientConn, gatewayConn) {
+	case relayClientFinished:
+		// The client ended the conversation, so the session is still good.
+		log.Debug().Str("account", p.path).Msg("Client disconnected, gateway drained")
 
-	go func() {
-		defer connCancel()
-		_, err := io.Copy(clientConn, gatewayConn)
-		gatewayErrCh <- err
-	}()
-
-	go func() {
-		defer connCancel()
-		_, err := io.Copy(gatewayConn, clientConn)
-		clientErrCh <- err
-	}()
-
-	// For a persistent protocol a gateway-side disconnect means the session is gone (expired, or
-	// terminated from the dashboard). The session is discarded so the agent's next connection
-	// transparently gets a new one, and the proxy stays up to serve it.
-	//
-	// Where the gateway closes once per request, that same signal marks the end of the request and
-	// the session is kept.
-	select {
-	case <-gatewayErrCh:
+	case relayGatewayFinished:
+		// For a persistent protocol the gateway ending it means the session is gone (expired, or
+		// terminated from the dashboard). The session is discarded so the agent's next connection
+		// transparently gets a new one, and the proxy stays up to serve it.
+		//
+		// Where the gateway closes once per request, that same signal marks the end of the request and
+		// the session is kept.
 		if p.gatewayClosePerRequest {
 			log.Debug().Str("account", p.path).Msg("Gateway closed after request, keeping session")
 		} else {
 			log.Debug().Str("account", p.path).Msg("Gateway disconnected, discarding session")
 			p.provider.Discard(session)
 		}
-	case <-clientErrCh:
-	case <-connCtx.Done():
+
+	case relayCancelled:
+		log.Debug().Str("account", p.path).Msg("Connection cancelled")
 	}
 
 	log.Debug().Str("account", p.path).Msgf("Connection closed for %s", clientConn.RemoteAddr())
