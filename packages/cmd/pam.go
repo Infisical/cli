@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	pamagent "github.com/Infisical/infisical-merge/packages/pam/agent"
@@ -78,31 +80,37 @@ var pamAgentCmd = &cobra.Command{
 	Args:                  cobra.NoArgs,
 }
 
-// agentConnectUsage is shown with every argument error, since the '--' separator and the manifest
-// argument are easy to get wrong and the usual cobra error doesn't show the shape of the command.
-const agentConnectUsage = "  infisical pam agent connect <manifest.yaml> -- <agent command>"
+// agentConnectUsage is shown with every argument error, since the '--' separator is easy to get
+// wrong and the usual cobra error doesn't show the shape of the command.
+const agentConnectUsage = "  infisical pam agent connect -- <agent command>"
 
 var pamAgentConnectCmd = &cobra.Command{
-	Use:   "connect <manifest> -- <agent command>",
-	Short: "Start local proxies from a manifest and launch an AI agent against them",
-	Long: `Start a local proxy for each PAM account listed in a manifest file, then launch an AI
-agent with instructions describing how to reach them.
+	Use:   "connect -- <agent command>",
+	Short: "Start local proxies for your PAM accounts and launch an AI agent against them",
+	Long: `Start a local proxy for each PAM account you can launch, then launch an AI agent with
+instructions describing how to reach them.
+
+By default every account you have access to is included, and anything that can't be
+proxied is listed with the reason. Narrow it with --account, which may be repeated. An
+account named with --account that can't be launched is an error.
+
+Each account gets a free port chosen by the OS and keeps it for the whole run, so
+nothing else can take that port while the agent is working.
 
 Sessions are created lazily: binding the ports costs nothing, and an account the agent
 never connects to never opens a PAM session.
 
-The manifest path comes first, then the agent command after a '--' separator. Each
-manifest account takes an 'account' path and a 'port', plus optional 'duration',
-'reason', 'agent_instructions', and 'target_host' for accounts that front more than one
-host, such as a Windows AD account covering a domain.
+Per-account guidance for the agent comes from the account's description in Infisical.
 
 Instructions are delivered in whatever format the agent understands, and their path is
 always exported as INFISICAL_PAM_CONTEXT_FILE so custom agents can pick them up too.
 
 Authenticates as the logged-in user by default, or as a machine identity when --token
 or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
-	Example: `  infisical pam agent connect manifest.yaml -- claude
-  infisical pam agent connect manifest.yaml -- codex --model gpt-5`,
+	Example: `  infisical pam agent connect -- claude
+  infisical pam agent connect --account prod/orders-db -- codex --model gpt-5
+  infisical pam agent connect --account prod/orders-db --account prod/bastion --duration 30m -- claude
+  infisical pam agent connect --reason "investigating INC-4021" -- claude`,
 	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		agentOverride, err := cmd.Flags().GetString("agent")
@@ -115,23 +123,38 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 			util.HandleError(err, "Unable to parse log-file flag")
 		}
 
-		// The manifest is the leading argument and everything after '--' is the agent command,
-		// passed through untouched. Without a separator the first argument is still the manifest,
-		// so a plain 'connect manifest.yaml claude' works; anything taking flags of its own needs
-		// the '--', or cobra would try to parse them here.
-		manifestArgs, childArgs := args, []string(nil)
-		if dash := cmd.ArgsLenAtDash(); dash >= 0 {
-			manifestArgs, childArgs = args[:dash], args[dash:]
-		} else if len(args) > 0 {
-			manifestArgs, childArgs = args[:1], args[1:]
+		accounts, err := cmd.Flags().GetStringArray("account")
+		if err != nil {
+			util.HandleError(err, "Unable to parse account flag")
 		}
 
-		if len(manifestArgs) == 0 {
-			util.PrintErrorMessageAndExit("No manifest given. Pass the path to one first, for example:\n" + agentConnectUsage)
+		reason, err := cmd.Flags().GetString("reason")
+		if err != nil {
+			util.HandleError(err, "Unable to parse reason flag")
 		}
-		if len(manifestArgs) > 1 {
-			util.PrintErrorMessageAndExit("Expected a single manifest path before '--', for example:\n" + agentConnectUsage)
+
+		durationStr, err := cmd.Flags().GetString("duration")
+		if err != nil {
+			util.HandleError(err, "Unable to parse duration flag")
 		}
+		duration, err := time.ParseDuration(durationStr)
+		if err != nil {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid duration %q. Use formats like '1h', '30m', '2h30m'.", durationStr))
+		}
+		if duration <= 0 {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Duration %q must be positive.", durationStr))
+		}
+
+		accounts = splitAccountFlags(accounts)
+
+		// Everything after '--' is the agent command, passed through untouched. Without a separator
+		// the arguments are still taken as the command, but anything with flags of its own needs the
+		// '--', or cobra would try to parse them here.
+		childArgs := args
+		if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+			childArgs = args[dash:]
+		}
+
 		if len(childArgs) == 0 {
 			util.PrintErrorMessageAndExit("No agent command given. Pass one after '--', for example:\n" + agentConnectUsage)
 		}
@@ -139,7 +162,9 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 		accessToken := resolveAgentAccessToken(cmd)
 
 		exitCode, err := pamagent.Run(pamagent.Options{
-			ManifestPath:  manifestArgs[0],
+			Accounts:      accounts,
+			Duration:      duration,
+			Reason:        reason,
 			Argv:          childArgs,
 			AgentOverride: agentOverride,
 			LogFile:       logFile,
@@ -153,6 +178,21 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 			os.Exit(exitCode)
 		}
 	},
+}
+
+// splitAccountFlags lets one --account carry a comma-separated list, so both
+// '--account a/b --account c/d' and '--account a/b,c/d' work. Blank entries are dropped rather than
+// sent on to be reported as a missing account.
+func splitAccountFlags(values []string) []string {
+	var accounts []string
+	for _, value := range values {
+		for _, account := range strings.Split(value, ",") {
+			if account = strings.TrimSpace(account); account != "" {
+				accounts = append(accounts, account)
+			}
+		}
+	}
+	return accounts
 }
 
 // resolveAgentAccessToken returns the token to authenticate with. A machine identity access token
@@ -191,6 +231,9 @@ func init() {
 	pamAccessCmd.Flags().Int("port", 0, "Port for the local proxy server (0 for auto-assign)")
 	pamAccessCmd.Flags().String("target", "", "Target host to connect to (for accounts that allow multiple hosts, e.g. Windows AD)")
 
+	pamAgentConnectCmd.Flags().StringArray("account", nil, "Account to expose, as folder/account. Repeatable. Defaults to every account you can launch")
+	pamAgentConnectCmd.Flags().String("duration", "1h", "How long each PAM session may last (e.g. '1h', '30m', '2h30m')")
+	pamAgentConnectCmd.Flags().String("reason", "", "Reason for access, recorded for audit. Required by accounts whose policy demands one")
 	pamAgentConnectCmd.Flags().String("agent", "", "Override agent detection (claude, codex, gemini, generic)")
 	pamAgentConnectCmd.Flags().String("token", "", "Run as a machine identity using its access token")
 	pamAgentConnectCmd.Flags().String("log-file", "", "Where to write proxy logs while the agent runs")

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -20,31 +21,30 @@ import (
 
 // Options configures a single `pam agent connect` run.
 type Options struct {
-	ManifestPath  string
+	// Accounts narrows the run to these paths. Empty means every account the caller can launch.
+	Accounts []string
+	Duration time.Duration
+	Reason   string
+
 	Argv          []string
 	AgentOverride string
 	LogFile       string
 	AccessToken   string
 }
 
-// Run starts a proxy per manifest account and launches the agent. It returns the child's exit code.
+// Run binds a proxy per account and launches the agent. It returns the child's exit code.
 func Run(opts Options) (int, error) {
-	manifest, err := LoadManifest(opts.ManifestPath)
-	if err != nil {
-		return 1, err
-	}
-
 	httpClient := resty.New()
 	httpClient.SetAuthToken(opts.AccessToken)
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
-	// Resolve every account and check it could actually launch, without creating any sessions.
-	resolved, err := Preflight(httpClient, manifest)
+	// Work out what to bind and check it could actually launch, without creating any sessions.
+	resolved, skipped, err := ResolveAccounts(httpClient, opts)
 	if err != nil {
 		return 1, err
 	}
 
-	session := &runSession{httpClient: httpClient}
+	session := &runSession{httpClient: httpClient, skipped: skipped}
 	defer session.cleanup()
 
 	if err := session.startProxies(resolved); err != nil {
@@ -61,6 +61,7 @@ type runSession struct {
 	httpClient   *resty.Client
 	proxies      []*AgentProxy
 	liveAccounts []LiveAccount
+	skipped      []SkippedAccount
 	tempDir      string
 	extraEnv     []string
 	cleanups     []func()
@@ -68,11 +69,13 @@ type runSession struct {
 
 func (s *runSession) startProxies(resolved []ResolvedAccount) error {
 	for _, account := range resolved {
-		provider := NewLazySessionProvider(s.httpClient, account.Path(), account.Reason, account.Entry.TargetHost, account.Duration)
-		proxy := NewAgentProxy(s.httpClient, account.Path(), account.AccountType, provider)
+		provider := NewLazySessionProvider(s.httpClient, account.Path, account.Reason, account.Duration)
+		proxy := NewAgentProxy(s.httpClient, account.Path, account.AccountType, provider)
 
-		if err := proxy.Start(account.Entry.Port); err != nil {
-			return fmt.Errorf("could not bind port %d for %s: %w", account.Entry.Port, account.Path(), err)
+		// Port 0 asks the OS for a free one. The listener then holds it for the whole run, so the
+		// port an account is announced on is the port it keeps, and nothing else can take it.
+		if err := proxy.Start(0); err != nil {
+			return fmt.Errorf("could not bind a port for %s: %w", account.Path, err)
 		}
 
 		s.proxies = append(s.proxies, proxy)
@@ -80,7 +83,7 @@ func (s *runSession) startProxies(resolved []ResolvedAccount) error {
 
 		connectionString, example := connectionFor(account.AccountType, proxy.Port())
 		s.liveAccounts = append(s.liveAccounts, LiveAccount{
-			Path:             account.Path(),
+			Path:             account.Path,
 			Type:             account.AccountType,
 			TypeLabel:        account.TypeLabel,
 			Host:             "127.0.0.1",
@@ -88,7 +91,6 @@ func (s *runSession) startProxies(resolved []ResolvedAccount) error {
 			ConnectionString: connectionString,
 			Example:          example,
 			Description:      collapseWhitespace(account.Description),
-			Instructions:     collapseWhitespace(account.Entry.AgentInstructions),
 		})
 	}
 
@@ -104,8 +106,8 @@ func (s *runSession) prepareEnvironment() error {
 	s.tempDir = tempDir
 	s.cleanups = append(s.cleanups, func() { os.RemoveAll(tempDir) })
 
-	// Kubernetes clients need a kubeconfig rather than a port. Scope it to the child process
-	// instead of rewriting the user's real kubeconfig and switching their current context.
+	// Kubernetes clients read a kubeconfig, so one is written for this run and scoped to the child
+	// process, leaving the user's own kubeconfig and current context alone.
 	kubeconfigPath, err := s.writeKubeconfig()
 	if err != nil {
 		return err
@@ -238,6 +240,15 @@ func (s *runSession) printBanner(adapter Adapter, delivery Delivery, logFile str
 		util.PrintfStderr("    127.0.0.1:%-6d %s (%s)\n", account.Port, account.Path, account.TypeLabel)
 	}
 	util.PrintfStderr("\n")
+
+	// Say what was left out and why, so an account missing from the list above is explained.
+	if len(s.skipped) > 0 {
+		util.PrintfStderr("  Not started:\n")
+		for _, account := range s.skipped {
+			util.PrintfStderr("    %s: %s\n", account.Path, account.Reason)
+		}
+		util.PrintfStderr("\n")
+	}
 	if delivery.Summary != "" {
 		util.PrintfStderr("  Instructions %s\n", delivery.Summary)
 	}
@@ -249,9 +260,9 @@ func (s *runSession) printBanner(adapter Adapter, delivery Delivery, logFile str
 func (s *runSession) cleanup() {
 	var failures []string
 
-	// Shut the proxies down together rather than one after another. Each one waits for its
-	// connections to finish and then for its session to be ended, and a user who Ctrl+Cs a second
-	// time because a serial teardown looked stuck would kill the process with sessions still live.
+	// Shut the proxies down concurrently. Each one waits for its connections to finish and then for
+	// its session to be ended, and that wait needs to overlap: teardown that looks stuck invites a
+	// second Ctrl+C, which would kill the process with sessions still live.
 	var wait sync.WaitGroup
 	for _, proxy := range s.proxies {
 		wait.Add(1)
@@ -286,8 +297,7 @@ func (s *runSession) cleanup() {
 // writeKubeconfig builds a kubeconfig covering every kubernetes account, or returns "" if none.
 //
 // It also records each cluster's context name on the account, and which one ended up as the current
-// context, so the instructions can tell the agent when a --context flag is needed instead of
-// claiming every cluster is the one kubectl reaches by default.
+// context, so the instructions can tell the agent when a --context flag is needed.
 func (s *runSession) writeKubeconfig() (string, error) {
 	var clusters, contexts, users []string
 	currentContext := ""

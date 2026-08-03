@@ -191,10 +191,8 @@ func stripManagedBlock(contents, runID string) string {
 }
 
 // stripStaleManagedBlocks removes this run's own block plus any block whose run is no longer
-// running, and keeps blocks belonging to runs that are still going.
-//
-// Deleting every block indiscriminately would take the instructions out from under an agent that is
-// still working in this directory, which is the whole reason blocks carry a run ID.
+// running, and keeps blocks belonging to runs that are still going. Keeping them is what the run ID
+// is for: an agent still working in this directory needs its instructions to stay put.
 func stripStaleManagedBlocks(contents, ownRunID string) string {
 	stripped := managedBlockPattern.ReplaceAllStringFunc(contents, func(block string) string {
 		match := managedBlockPattern.FindStringSubmatch(block)
@@ -215,9 +213,9 @@ func stripStaleManagedBlocks(contents, ownRunID string) string {
 
 // runIsAlive reports whether the process that wrote a block is still running.
 //
-// A PID can be reused by an unrelated process, which would keep a stale block alive until the next
-// run. That is the safe direction to be wrong in: the alternative is deleting the instructions of a
-// live agent. Anything that isn't a PID we recognize is left alone for the same reason.
+// A reused PID can keep a stale block alive until the next run, which is the safe direction to be
+// wrong in, since the cost of the opposite is deleting a live agent's instructions. Anything that
+// isn't a PID we recognize is left alone for the same reason.
 func runIsAlive(runID string) bool {
 	pid, err := strconv.Atoi(runID)
 	if err != nil || pid <= 0 {

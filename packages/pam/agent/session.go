@@ -33,13 +33,12 @@ type trackedSession struct {
 // deadline passes, at which point the next request creates a fresh one. Accounts that are never
 // connected to never create a session at all, so they leave no session record behind.
 //
-// Every session it stops handing out is terminated rather than dropped, so a session we abandon
-// does not sit in the org as a live privileged session until it expires on its own.
+// Every session it stops handing out is terminated, so no session it abandons stays live in the
+// org until its own deadline passes.
 type LazySessionProvider struct {
 	httpClient *resty.Client
 	path       string
 	reason     string
-	targetHost string
 	duration   time.Duration
 
 	// terminate ends one session. Set by the proxy that owns this provider, because the preferred
@@ -60,17 +59,18 @@ type LazySessionProvider struct {
 	pending sync.WaitGroup
 }
 
-func NewLazySessionProvider(httpClient *resty.Client, path, reason, targetHost string, duration time.Duration) *LazySessionProvider {
+func NewLazySessionProvider(httpClient *resty.Client, path, reason string, duration time.Duration) *LazySessionProvider {
 	provider := &LazySessionProvider{
 		httpClient: httpClient,
 		path:       path,
 		reason:     reason,
-		targetHost: targetHost,
 		duration:   duration,
 		retired:    make(map[string]*trackedSession),
 	}
 	provider.createSession = func() (*api.PAMAccessResponse, error) {
-		return pam.CreateSession(provider.httpClient, provider.path, provider.reason, provider.targetHost, provider.duration)
+		// No target host: Windows AD is the only account type that picks one, and it is withheld from
+		// the agent flow.
+		return pam.CreateSession(provider.httpClient, provider.path, provider.reason, "", provider.duration)
 	}
 	return provider
 }
@@ -138,9 +138,9 @@ func (l *LazySessionProvider) ensureLocked(ctx context.Context) (*trackedSession
 		if time.Now().Before(l.current.session.Expiry) {
 			return l.current, nil
 		}
-		// Our deadline has passed, so this session can't be handed out again. Retire it rather than
-		// just dropping it: the API caps duration at the account's maximum, so what we treat as an
-		// expired session may or may not still be live server-side.
+		// Our deadline has passed, so this session can't be handed out again. It still gets retired
+		// and terminated: the API caps duration at the account's maximum, so a session we consider
+		// expired may still be live server-side.
 		l.retireCurrentLocked()
 	}
 
@@ -243,7 +243,7 @@ func (l *LazySessionProvider) retireCurrentLocked() {
 }
 
 // endLocked starts terminating a session, at most once. Termination dials the relay, so it runs in
-// the background rather than under the lock every other connection is waiting on.
+// the background, leaving the lock free for the connections waiting on it.
 func (l *LazySessionProvider) endLocked(tracked *trackedSession) {
 	delete(l.retired, tracked.session.SessionId)
 

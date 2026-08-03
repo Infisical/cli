@@ -14,25 +14,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// gatewayResourceType maps an account type to the resource type the gateway advertises for it.
-//
-// The gateway reports brokering protocols rather than account types, so a Windows AD account is
-// served under "windows" and never appears as "windows-ad" in its capabilities. Validating the raw
-// account type would reject a perfectly current gateway. startRDPProxy in packages/pam/local
-// hardcodes the same translation for the interactive flow, where the account type is known to be
-// one of those two.
-func gatewayResourceType(accountType string) string {
-	if accountType == pam.AccountTypeWindowsAd {
-		return pam.AccountTypeWindows
-	}
-	return accountType
-}
-
 // AgentProxy is a loopback TCP relay whose PAM session is created on first connection. Every
 // port-based account type uses it, since the client side of all of them is the same raw relay.
 //
-// It owns its own lifecycle rather than borrowing the interactive proxies': those exit the process
-// on shutdown, which would kill the agent this one was launched for.
+// It owns its own context, shutdown channel and connection tracking, because shutting one of these
+// down must leave the process running for the agent it was launched for.
 type AgentProxy struct {
 	// transport dials the relay and gateway, and knows how to end a session.
 	transport *pam.BaseProxyServer
@@ -63,13 +49,14 @@ func NewAgentProxy(httpClient *resty.Client, path, accountType string, provider 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	proxy := &AgentProxy{
-		transport: pam.NewAgentTransport(ctx, httpClient, gatewayResourceType(accountType), provider),
+		// The gateway advertises every type proxied here under its own name, so accountType is what
+		// its capabilities are checked against.
+		transport: pam.NewAgentTransport(ctx, httpClient, accountType, provider),
 		path:      path,
 		provider:  provider,
 		// A kubernetes client opens one connection per command, and the gateway closes its side once
-		// the request is answered. Treating that as session death would discard a perfectly good
-		// session after every kubectl invocation. KubernetesProxyServer.handleConnection in
-		// packages/pam/local makes the same distinction.
+		// the request is answered. That close is the end of a request, not the end of the session.
+		// KubernetesProxyServer.handleConnection in packages/pam/local draws the same distinction.
 		gatewayClosePerRequest: accountType == pam.AccountTypeKubernetes,
 		ctx:                    ctx,
 		cancel:                 cancel,
@@ -113,9 +100,8 @@ func (p *AgentProxy) recordError(err error) {
 	p.lastErr = err
 }
 
-// Run accepts connections until shutdown. Unlike the single-session proxies there is no overall
-// expiry check here: session expiry is handled per session by the provider, which mints a fresh
-// one on the next connection.
+// Run accepts connections until shutdown. Expiry is handled per session by the provider, which
+// mints a fresh one on the next connection, so there is nothing to check here.
 func (p *AgentProxy) Run() {
 	defer p.server.Close()
 
@@ -192,9 +178,8 @@ func (p *AgentProxy) waitForConnections(timeout time.Duration) {
 }
 
 // validateGatewaySupport checks the gateway advertises this account type, once per proxy. It runs
-// after a session exists, since fetching capabilities needs the session's certificates.
-// The result is remembered rather than recomputed, so an unsupported type keeps failing
-// every connection instead of silently passing after the first attempt.
+// after a session exists, since fetching capabilities needs the session's certificates. The result
+// is remembered, so an account type the gateway does not serve fails on every connection.
 func (p *AgentProxy) validateGatewaySupport() error {
 	p.validateOnce.Do(func() {
 		p.validateErr = p.transport.ValidateResourceTypeSupported()
@@ -218,9 +203,9 @@ func (p *AgentProxy) handleConnection(clientConn net.Conn) {
 
 	// This is where a session is born. Everything before now was just a bound socket.
 	//
-	// Both hops are dialed with this one resolved session. Resolving again for the gateway hop
-	// would let a session created in between be used for the handshake, presenting certificates
-	// the relay stream underneath was never opened with.
+	// Both hops are dialed with this one resolved session, and must stay that way: the gateway
+	// handshake presents the certificates of whichever session it is given, and they have to be the
+	// ones the relay stream underneath was opened with.
 	session, release, err := p.provider.Acquire(p.ctx)
 	if err != nil {
 		if errors.Is(err, ErrSessionProviderClosed) || errors.Is(err, context.Canceled) {
@@ -280,11 +265,11 @@ func (p *AgentProxy) handleConnection(clientConn net.Conn) {
 	}()
 
 	// For a persistent protocol a gateway-side disconnect means the session is gone (expired, or
-	// terminated from the dashboard). Unlike a single-session proxy we don't shut down: we discard
-	// the session so the agent's next connection transparently gets a new one.
+	// terminated from the dashboard). The session is discarded so the agent's next connection
+	// transparently gets a new one, and the proxy stays up to serve it.
 	//
-	// Where the gateway closes once per request, that same signal is just the end of the request,
-	// and discarding on it would create a session per command.
+	// Where the gateway closes once per request, that same signal marks the end of the request and
+	// the session is kept.
 	select {
 	case <-gatewayErrCh:
 		if p.gatewayClosePerRequest {

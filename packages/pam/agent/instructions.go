@@ -21,11 +21,9 @@ type LiveAccount struct {
 	Port             int
 	ConnectionString string
 	Example          string
-	// Description is authored on the account in Infisical, so it reaches the agent even when the
-	// manifest says nothing. Teams often keep their usage notes there rather than per workflow.
+	// Description is authored on the account in Infisical and is the only per-account guidance the
+	// agent gets. Usage notes belong on the account.
 	Description string
-	// Instructions come from the manifest's agent_instructions, and are optional.
-	Instructions string
 	// KubeContext is this cluster's context in the session kubeconfig, for kubernetes accounts.
 	KubeContext string
 	// IsCurrentKubeContext marks the one kubernetes account plain kubectl commands reach.
@@ -60,7 +58,7 @@ func connectionFor(accountType string, port int) (connectionString, example stri
 		// flags that needs depends on the other accounts, so the example is built in
 		// RenderInstructions where every account is known.
 		return "", ""
-	case "windows", "windows-ad":
+	case "windows":
 		return "", fmt.Sprintf("connect an RDP client to 127.0.0.1:%d", port)
 	}
 	return "", ""
@@ -105,9 +103,6 @@ func RenderInstructions(accounts []LiveAccount) string {
 		if description := strings.TrimSpace(account.Description); description != "" {
 			fmt.Fprintf(&out, "- Description: %s\n", collapseWhitespace(description))
 		}
-		if instructions := strings.TrimSpace(account.Instructions); instructions != "" {
-			fmt.Fprintf(&out, "- Guidance: %s\n", collapseWhitespace(instructions))
-		}
 		out.WriteString("\n")
 	}
 
@@ -125,9 +120,8 @@ func RenderInstructions(accounts []LiveAccount) string {
 // command that actually goes there.
 //
 // Only one context in the session kubeconfig can be the current one, so with more than one
-// kubernetes account a bare `kubectl get pods` reaches whichever cluster happens to hold it. Every
-// other cluster has to be named explicitly, and saying "kubectl targets this cluster" under all of
-// them would send privileged commands to the wrong cluster.
+// kubernetes account a bare `kubectl get pods` reaches whichever cluster holds it. Every other
+// cluster has to be named with --context, or privileged commands land on the wrong cluster.
 func kubernetesGuidance(account LiveAccount) (note, example string) {
 	if account.Type != "kubernetes" || account.KubeContext == "" {
 		return "", ""

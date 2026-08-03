@@ -8,17 +8,16 @@ import (
 )
 
 // This file is the whole surface the agent runner (packages/pam/agent) uses to reach the PAM
-// transport. Proxies for agents live in that package, next to the rest of the agent code, rather
-// than here among the interactive `pam access` proxies; what they still need from here is the relay
-// and gateway dialing every proxy shares, which is unexported because BaseProxyServer owns it.
+// transport. It lives here because BaseProxyServer owns the relay and gateway dialing, and both its
+// fields and those methods are unexported.
 //
 // Nothing in the interactive flow calls anything below.
 
 // NewAgentTransport builds the transport half of a proxy whose PAM session is created on demand.
 //
 // resourceType is what gets compared against the gateway's advertised capabilities, and provider
-// resolves the session behind each dial. ctx belongs to the caller, which owns its own shutdown:
-// unlike the interactive proxies, an agent's proxy ending must not take the process with it.
+// resolves the session behind each dial. ctx belongs to the caller, which owns its own shutdown,
+// because an agent's proxy ending must leave the process running.
 func NewAgentTransport(ctx context.Context, httpClient *resty.Client, resourceType string, provider SessionProvider) *BaseProxyServer {
 	return &BaseProxyServer{
 		httpClient:   httpClient,
@@ -26,8 +25,7 @@ func NewAgentTransport(ctx context.Context, httpClient *resty.Client, resourceTy
 		provider:     provider,
 		ctx:          ctx,
 		shutdownCh:   make(chan struct{}),
-		// Belt and braces: nothing here reaches gracefulShutdown, but if it ever did, one account's
-		// proxy exiting the whole process would take the agent down with it.
+		// One account's proxy must never exit the process, which would take the agent down with it.
 		keepProcessAlive: true,
 	}
 }
@@ -40,8 +38,7 @@ func (b *BaseProxyServer) DialRelay(session LiveSession) (net.Conn, error) {
 // DialGateway performs the gateway mTLS handshake over relayConn.
 //
 // Callers pass the same session they dialed the relay with. The handshake presents that session's
-// certificates, so resolving a session again here could hand the gateway credentials that don't
-// belong to the relay stream underneath.
+// certificates, and they have to match the relay stream they travel over.
 func (b *BaseProxyServer) DialGateway(relayConn net.Conn, alpn ALPN, session LiveSession) (net.Conn, error) {
 	return b.createGatewayConnectionWith(relayConn, alpn, session)
 }
