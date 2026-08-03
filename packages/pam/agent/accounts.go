@@ -41,7 +41,6 @@ type ResolvedAccount struct {
 	Path        string
 	AccountType string
 	TypeLabel   string
-	Description string
 	Duration    time.Duration
 	Reason      string
 }
@@ -176,7 +175,6 @@ func newResolvedAccount(account api.PAMAccessibleAccount, opts Options) Resolved
 		Path:        accountPath(account),
 		AccountType: account.AccountType,
 		TypeLabel:   supportedAccountTypes[account.AccountType],
-		Description: account.Description,
 		Duration:    opts.Duration,
 		Reason:      opts.Reason,
 	}

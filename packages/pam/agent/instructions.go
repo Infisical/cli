@@ -21,9 +21,6 @@ type LiveAccount struct {
 	Port             int
 	ConnectionString string
 	Example          string
-	// Description is authored on the account in Infisical and is the only per-account guidance the
-	// agent gets. Usage notes belong on the account.
-	Description string
 	// KubeContext is this cluster's context in the session kubeconfig, for kubernetes accounts.
 	KubeContext string
 	// IsCurrentKubeContext marks the one kubernetes account plain kubectl commands reach.
@@ -89,7 +86,7 @@ func RenderInstructions(accounts []LiveAccount) string {
 			example = account.Example
 		}
 
-		fmt.Fprintf(&out, "## %s (%s)\n", account.Path, account.TypeLabel)
+		fmt.Fprintf(&out, "## %s (%s)\n", flatten(account.Path), account.TypeLabel)
 		fmt.Fprintf(&out, "- Host: 127.0.0.1, port %d\n", account.Port)
 		if account.ConnectionString != "" {
 			fmt.Fprintf(&out, "- Connection string: %s\n", account.ConnectionString)
@@ -99,9 +96,6 @@ func RenderInstructions(accounts []LiveAccount) string {
 		}
 		if note != "" {
 			fmt.Fprintf(&out, "- %s\n", note)
-		}
-		if description := strings.TrimSpace(account.Description); description != "" {
-			fmt.Fprintf(&out, "- Description: %s\n", collapseWhitespace(description))
 		}
 		out.WriteString("\n")
 	}
@@ -147,7 +141,9 @@ func pluralizeAccounts(count int) string {
 	return fmt.Sprintf("%d privileged accounts are", count)
 }
 
-// collapseWhitespace flattens YAML folded blocks into a single line so list items stay readable.
-func collapseWhitespace(value string) string {
+// flatten reduces text that came from the account record to a single line. Markdown structure only
+// exists at the start of a line, so nothing arriving from outside can forge a heading or a bullet in
+// a document the agent reads as its instructions.
+func flatten(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }

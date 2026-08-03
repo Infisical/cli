@@ -90,7 +90,6 @@ func (s *runSession) startProxies(resolved []ResolvedAccount) error {
 			Port:             proxy.Port(),
 			ConnectionString: connectionString,
 			Example:          example,
-			Description:      collapseWhitespace(account.Description),
 		})
 	}
 
