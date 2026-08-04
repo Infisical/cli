@@ -481,16 +481,11 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 
 	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 
-	// The agent hanging up mid-request (an interrupted prompt, or the agent exiting) cancels the request
-	// context and fails the round trip. Nothing went wrong, and no response can reach a client that is
-	// already gone, so it is not an error: an agent's TUI shares this terminal, and an ERROR line with an
-	// invented status would land on top of it. What already happened still counts, though. A credential
-	// applied to the request stays `brokered` and a refused host stays `blocked`, so hanging up at the
-	// right moment cannot drop either from the activity log.
 	canceled := err != nil && r.Context().Err() != nil
 
 	status := http.StatusOK
 	decision := decisionPassthrough
+	// Blocked and brokered are checked before canceled, so hanging up cannot drop them from the log.
 	switch {
 	case errors.Is(err, errHostBlocked):
 		decision, status = decisionBlocked, http.StatusForbidden
@@ -510,7 +505,6 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	ps.emitActivity(method, reqPath, hostname, port, decision, status, scope, outcome, err)
 
 	if err != nil {
-		// A canceled request has no one left to answer, so the error response is skipped.
 		if !canceled {
 			http.Error(w, err.Error(), status)
 		}
@@ -562,7 +556,6 @@ func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision st
 		Str("host", hostname).
 		Int("port", portNum).
 		Str("path", reqPath)
-	// A canceled request never got a response, so it reports no status rather than an invented one.
 	if status != 0 {
 		ev = ev.Int("status", status)
 	}

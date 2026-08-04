@@ -191,8 +191,6 @@ func TestPlainForwardBlocksUnmatchedHost(t *testing.T) {
 	}
 }
 
-// An agent that hangs up mid-request (an interrupted prompt, or the agent exiting) must not put an
-// error on the terminal its TUI is drawing to.
 func TestClientAbortIsNotLoggedAsError(t *testing.T) {
 	var buf bytes.Buffer
 	previous := log.Logger
@@ -218,7 +216,6 @@ func TestClientAbortIsNotLoggedAsError(t *testing.T) {
 		u.Host, u.Host, proxyAuthHeader("proj", "dev", "/", jwt)); err != nil {
 		t.Fatal(err)
 	}
-	// Give the proxy time to reach the (hanging) upstream, then go away like an interrupted agent.
 	time.Sleep(200 * time.Millisecond)
 	_ = client.Close()
 
@@ -243,8 +240,6 @@ func TestClientAbortIsNotLoggedAsError(t *testing.T) {
 	}
 }
 
-// A credential already applied to the request must stay on the record at its normal level, so hanging
-// up mid-request cannot keep a brokered call out of the activity log.
 func TestClientAbortStillRecordsBrokeredCredential(t *testing.T) {
 	var buf bytes.Buffer
 	previous := log.Logger
