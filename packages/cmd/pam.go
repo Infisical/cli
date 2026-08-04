@@ -72,20 +72,20 @@ The path format is: /folder/account-name (leading slash optional)`,
 	},
 }
 
-var pamAgentCmd = &cobra.Command{
-	Use:                   "agent",
+var pamAgenticCmd = &cobra.Command{
+	Use:                   "agentic",
 	Short:                 "Run AI agents against PAM accounts",
 	Long:                  "Run AI agents against PAM accounts through local proxies",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 }
 
-// agentConnectUsage is shown with every argument error, since the '--' separator is easy to get
+// agenticAccessUsage is shown with every argument error, since the '--' separator is easy to get
 // wrong and the usual cobra error doesn't show the shape of the command.
-const agentConnectUsage = "  infisical pam agent connect -- <agent command>"
+const agenticAccessUsage = "  infisical pam agentic access -- <agent command>"
 
-var pamAgentConnectCmd = &cobra.Command{
-	Use:   "connect -- <agent command>",
+var pamAgenticAccessCmd = &cobra.Command{
+	Use:   "access -- <agent command>",
 	Short: "Start local proxies for your PAM accounts and launch an AI agent against them",
 	Long: `Start a local proxy for each PAM account you can launch, then launch an AI agent with
 instructions describing how to reach them.
@@ -107,10 +107,10 @@ always exported as INFISICAL_PAM_CONTEXT_FILE so custom agents can pick them up 
 
 Authenticates as the logged-in user by default, or as a machine identity when --token
 or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
-	Example: `  infisical pam agent connect -- claude
-  infisical pam agent connect --account prod/orders-db -- codex --model gpt-5
-  infisical pam agent connect --account prod/orders-db --account prod/bastion --duration 30m -- claude
-  infisical pam agent connect --reason "investigating INC-4021" -- claude`,
+	Example: `  infisical pam agentic access -- claude
+  infisical pam agentic access --account prod/orders-db -- codex --model gpt-5
+  infisical pam agentic access --account prod/orders-db --account prod/bastion --duration 30m -- claude
+  infisical pam agentic access --reason "investigating INC-4021" -- claude`,
 	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		agentOverride, err := cmd.Flags().GetString("agent")
@@ -156,7 +156,7 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 		}
 
 		if len(childArgs) == 0 {
-			util.PrintErrorMessageAndExit("No agent command given. Pass one after '--', for example:\n" + agentConnectUsage)
+			util.PrintErrorMessageAndExit("No agent command given. Pass one after '--', for example:\n" + agenticAccessUsage)
 		}
 
 		accessToken := resolveAgentAccessToken(cmd)
@@ -231,16 +231,16 @@ func init() {
 	pamAccessCmd.Flags().Int("port", 0, "Port for the local proxy server (0 for auto-assign)")
 	pamAccessCmd.Flags().String("target", "", "Target host to connect to (for accounts that allow multiple hosts, e.g. Windows AD)")
 
-	pamAgentConnectCmd.Flags().StringArray("account", nil, "Account to expose, as folder/account. Repeatable. Defaults to every account you can launch")
-	pamAgentConnectCmd.Flags().String("duration", "1h", "How long each PAM session may last (e.g. '1h', '30m', '2h30m')")
-	pamAgentConnectCmd.Flags().String("reason", "", "Reason for access, recorded for audit. Required by accounts whose policy demands one")
-	pamAgentConnectCmd.Flags().String("agent", "", "Override agent detection (claude, codex, gemini, generic)")
-	pamAgentConnectCmd.Flags().String("token", "", "Run as a machine identity using its access token")
-	pamAgentConnectCmd.Flags().String("log-file", "", "Where to write proxy logs while the agent runs")
+	pamAgenticAccessCmd.Flags().StringArray("account", nil, "Account to expose, as folder/account. Repeatable. Defaults to every account you can launch")
+	pamAgenticAccessCmd.Flags().String("duration", "1h", "How long each PAM session may last (e.g. '1h', '30m', '2h30m')")
+	pamAgenticAccessCmd.Flags().String("reason", "", "Reason for access, recorded for audit. Required by accounts whose policy demands one")
+	pamAgenticAccessCmd.Flags().String("agent", "", "Override agent detection (claude, codex, gemini, generic)")
+	pamAgenticAccessCmd.Flags().String("token", "", "Run as a machine identity using its access token")
+	pamAgenticAccessCmd.Flags().String("log-file", "", "Where to write proxy logs while the agent runs")
 
-	pamAgentCmd.AddCommand(pamAgentConnectCmd)
+	pamAgenticCmd.AddCommand(pamAgenticAccessCmd)
 
 	pamCmd.AddCommand(pamAccessCmd)
-	pamCmd.AddCommand(pamAgentCmd)
+	pamCmd.AddCommand(pamAgenticCmd)
 	RootCmd.AddCommand(pamCmd)
 }

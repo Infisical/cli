@@ -25,7 +25,7 @@ import (
 // comfortably.
 const maxKubeContextLen = 200
 
-// Options configures a single `pam agent connect` run.
+// Options configures a single `pam agentic access` run.
 type Options struct {
 	// Accounts narrows the run to these paths. Empty means every account the caller can launch.
 	Accounts []string
@@ -104,7 +104,7 @@ func (s *runSession) startProxies(resolved []ResolvedAccount) error {
 
 // prepareEnvironment writes the context file and assembles the variables the child inherits.
 func (s *runSession) prepareEnvironment() error {
-	tempDir, err := os.MkdirTemp("", "infisical-pam-agent-")
+	tempDir, err := os.MkdirTemp("", "infisical-pam-agentic-")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
@@ -220,11 +220,11 @@ func (s *runSession) redirectLogs(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve home directory: %w", err)
 		}
-		dir := filepath.Join(home, ".infisical", "pam-agent")
+		dir := filepath.Join(home, ".infisical", "pam-agentic")
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", fmt.Errorf("failed to create log directory: %w", err)
 		}
-		path = filepath.Join(dir, "agent-connect.log")
+		path = filepath.Join(dir, "access.log")
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
