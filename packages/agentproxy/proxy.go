@@ -482,19 +482,23 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 
 	// The agent hanging up mid-request (an interrupted prompt, or the agent exiting) cancels the request
-	// context and fails the round trip. Nothing went wrong, and no response can be delivered to a client
-	// that is already gone, so it is recorded as its own decision rather than a proxy error: an agent's
-	// TUI shares this terminal, and an ERROR line with an invented status would land on top of it.
-	if err != nil && r.Context().Err() != nil {
-		ps.emitActivity(method, reqPath, hostname, port, decisionCanceled, 0, scope, outcome, r.Context().Err())
-		return
-	}
+	// context and fails the round trip. Nothing went wrong, and no response can reach a client that is
+	// already gone, so it is not an error: an agent's TUI shares this terminal, and an ERROR line with an
+	// invented status would land on top of it. What already happened still counts, though. A credential
+	// applied to the request stays `brokered` and a refused host stays `blocked`, so hanging up at the
+	// right moment cannot drop either from the activity log.
+	canceled := err != nil && r.Context().Err() != nil
 
 	status := http.StatusOK
 	decision := decisionPassthrough
 	switch {
 	case errors.Is(err, errHostBlocked):
 		decision, status = decisionBlocked, http.StatusForbidden
+	case canceled && outcome.service != nil:
+		decision, status = decisionBrokered, 0
+		ps.recordUsage(outcome.service.id)
+	case canceled:
+		decision, status = decisionCanceled, 0
 	case err != nil:
 		decision, status = decisionError, http.StatusBadGateway
 	case outcome.service != nil:
@@ -506,7 +510,10 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	ps.emitActivity(method, reqPath, hostname, port, decision, status, scope, outcome, err)
 
 	if err != nil {
-		http.Error(w, err.Error(), status)
+		// A canceled request has no one left to answer, so the error response is skipped.
+		if !canceled {
+			http.Error(w, err.Error(), status)
+		}
 		return
 	}
 	defer resp.Body.Close()
