@@ -43,6 +43,7 @@ func TestLevelFor(t *testing.T) {
 		decisionPassthrough: zerolog.DebugLevel,
 		decisionBlocked:     zerolog.WarnLevel,
 		decisionError:       zerolog.ErrorLevel,
+		decisionCanceled:    zerolog.DebugLevel,
 	}
 	for decision, want := range cases {
 		if got := levelFor(decision); got != want {
