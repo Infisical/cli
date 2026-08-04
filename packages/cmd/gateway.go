@@ -205,10 +205,11 @@ var gatewayCmd = &cobra.Command{
 }
 
 var gatewayStartCmd = &cobra.Command{
-	Use:                   "start [name]",
-	Short:                 "Start the new Infisical gateway",
-	Long:                  "Start the new Infisical gateway component.",
-	Example:               "infisical gateway start my-gateway --token=<token>",
+	Use:   "start [name]",
+	Short: "Start the new Infisical gateway",
+	Long:  "Start the new Infisical gateway component.",
+	Example: `infisical gateway start my-gateway --token=<token>
+  infisical gateway start my-gateway --enroll-method=kubernetes --gateway-id=<gateway-id>`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
@@ -233,6 +234,13 @@ var gatewayStartCmd = &cobra.Command{
 		// Fall back to env var for systemd-managed runs where flags aren't set.
 		if enrollMethod == "" {
 			enrollMethod = os.Getenv("INFISICAL_GATEWAY_ENROLL_METHOD")
+		}
+		if enrollMethod != "" &&
+			enrollMethod != gatewayv2.EnrollMethodToken &&
+			enrollMethod != gatewayv2.EnrollMethodAws &&
+			enrollMethod != gatewayv2.EnrollMethodKubernetes {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid enroll method: %s. Valid values are '%s', '%s', and '%s'",
+				enrollMethod, gatewayv2.EnrollMethodToken, gatewayv2.EnrollMethodAws, gatewayv2.EnrollMethodKubernetes))
 		}
 		var alreadyEnrolled bool
 		var enrolledAccessToken string // set during fresh enrollment, used directly to avoid env var interference
@@ -300,6 +308,50 @@ var gatewayStartCmd = &cobra.Command{
 			log.Info().Msg("Starting gateway...")
 		}
 
+		// --- Kubernetes Auth path ---
+		if enrollMethod == gatewayv2.EnrollMethodKubernetes {
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				gatewayID = os.Getenv(gatewayv2.INFISICAL_GATEWAY_ID_KEY)
+			}
+			if gatewayID == "" {
+				stored, _ := gatewayv2.LoadStoredGatewayID(gatewayName)
+				gatewayID = stored
+			}
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=kubernetes"))
+			}
+
+			tokenPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-token-path", []string{util.INFISICAL_KUBERNETES_SERVICE_ACCOUNT_TOKEN_NAME})
+
+			httpClient, err := util.GetRestyClientWithCustomHeaders()
+			if err != nil {
+				util.HandleError(err, "unable to create HTTP client")
+			}
+
+			log.Info().Msg("Authenticating gateway via Kubernetes Auth (service account token review)...")
+			accessTokenStr, err := gatewayv2.LoginGatewayWithKubernetes(httpClient, gatewayID, tokenPath)
+			if err != nil {
+				util.HandleError(err, "Kubernetes Auth login failed")
+			}
+
+			enrolledAccessToken = accessTokenStr
+			alreadyEnrolled = true // skip the stored-token branch below; we have a fresh one in hand
+
+			// No SaveAccessToken here: a fresh JWT is minted on every start, so an on-disk copy
+			// would only ever be stale.
+			if err := gatewayv2.SaveGatewayID(gatewayName, gatewayID); err != nil {
+				util.HandleError(err, "failed to save gateway id to config")
+			}
+
+			if err := gatewayv2.SaveDomain(gatewayName, config.INFISICAL_URL); err != nil {
+				util.HandleError(err, "failed to save domain to config")
+			}
+
+			log.Info().Msgf("Gateway authenticated via Kubernetes Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
+			log.Info().Msg("Starting gateway...")
+		}
+
 		// --- Enrollment token path ---
 		if enrollMethod == gatewayv2.EnrollMethodToken {
 			enrollToken, err := cmd.Flags().GetString("token")
@@ -347,7 +399,9 @@ var gatewayStartCmd = &cobra.Command{
 			log.Info().Msg("Starting gateway...")
 		}
 
-		isResourceAuth := enrollMethod == gatewayv2.EnrollMethodToken || enrollMethod == gatewayv2.EnrollMethodAws
+		isResourceAuth := enrollMethod == gatewayv2.EnrollMethodToken ||
+			enrollMethod == gatewayv2.EnrollMethodAws ||
+			enrollMethod == gatewayv2.EnrollMethodKubernetes
 
 		// Only use the stored token when no explicit identity credentials are provided.
 		// If --token or --auth-method is set, the user wants the identity-based path.
@@ -621,6 +675,9 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 		}
 
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+		if enrollMethod == gatewayv2.EnrollMethodKubernetes {
+			util.HandleError(errors.New("--enroll-method=kubernetes is only supported for in-cluster gateways, which are not managed by systemd. Deploy the gateway as a Kubernetes workload and run 'infisical gateway start' with --enroll-method=kubernetes instead"))
+		}
 
 		pkcs11ModulePath, _ := cmd.Flags().GetString("pkcs11-module")
 		if pkcs11ModulePath != "" && !filepath.IsAbs(pkcs11ModulePath) {
@@ -783,15 +840,15 @@ func init() {
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id")
-	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
-	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token or --enroll-method=aws)")
+	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, kubernetes]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id. when set to 'kubernetes', authenticates with the pod's service account token using --gateway-id")
+	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws or --enroll-method=kubernetes)")
+	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token, --enroll-method=aws, or --enroll-method=kubernetes)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
 	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
 	gatewayStartCmd.Flags().String("client-secret", "", "client secret for universal auth")
 	gatewayStartCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
-	gatewayStartCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
+	gatewayStartCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth (defaults to /var/run/secrets/kubernetes.io/serviceaccount/token)")
 	gatewayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	gatewayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 	gatewayStartCmd.Flags().String("pam-session-recording-path", "", "directory path for PAM session recordings (defaults to /var/lib/infisical/session_recordings)")
@@ -803,7 +860,7 @@ func init() {
 
 	// Systemd install command flags (v2)
 	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id)")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id). 'kubernetes' is not available here: in-cluster gateways are not managed by systemd")
 	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
