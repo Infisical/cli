@@ -14,8 +14,10 @@ const (
 	// HardFence: no external egress, the proxy is the only route out (macOS (deny default) SBPL;
 	// Linux empty netns bridged to the proxy socket).
 	HardFence NetMode = iota
-	// SharedNet shares the host network: the Linux fallback when a network namespace is unavailable.
-	// Only the network fence weakens; the credential controls are unchanged.
+	// SharedNet shares the host network: the Linux fallback when a network namespace is unavailable,
+	// and the deliberate choice for callers with no proxy to route through (PAM agentic access, whose
+	// proxies are per-account TCP listeners rather than a forward proxy, so the agent still needs its
+	// own egress). Only the network fence weakens; the credential controls are unchanged.
 	SharedNet
 )
 
@@ -41,7 +43,6 @@ type Spec struct {
 	NetMode NetMode
 
 	// AllowTrustd lets macOS evaluate cert trust, so Go tools like gh accept the proxy's leaves.
-	// securityd stays blocked either way, so keychain secrets remain unreadable. macOS only.
 	AllowTrustd bool
 }
 

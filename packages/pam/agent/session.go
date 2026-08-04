@@ -53,6 +53,16 @@ type LazySessionProvider struct {
 	// createSession is the API call that mints a session, indirected so the lifecycle around it can
 	// be exercised without one.
 	createSession func() (*api.PAMAccessResponse, error)
+	// raiseApproval submits an access request for this account, indirected for the same reason.
+	raiseApproval func() (string, error)
+
+	// requestApproval allows raising an access request when the API gates this account behind one.
+	requestApproval bool
+	// approvalRaised records that a request is in flight for the gate currently being waited on, so a
+	// burst of connections submits one request rather than one per connection. It is cleared as soon
+	// as a session is created: grants are time-bounded, and the grant that opened this gate expiring
+	// has to raise a fresh request rather than wait on the one it already consumed.
+	approvalRaised bool
 
 	mu      sync.Mutex
 	current *trackedSession
@@ -65,18 +75,22 @@ type LazySessionProvider struct {
 	pending sync.WaitGroup
 }
 
-func NewLazySessionProvider(httpClient *resty.Client, path, reason string, duration time.Duration) *LazySessionProvider {
+func NewLazySessionProvider(httpClient *resty.Client, path, reason string, duration time.Duration, requestApproval bool) *LazySessionProvider {
 	provider := &LazySessionProvider{
-		httpClient: httpClient,
-		path:       path,
-		reason:     reason,
-		duration:   duration,
-		retired:    make(map[string]*trackedSession),
+		httpClient:      httpClient,
+		path:            path,
+		reason:          reason,
+		duration:        duration,
+		requestApproval: requestApproval,
+		retired:         make(map[string]*trackedSession),
 	}
 	provider.createSession = func() (*api.PAMAccessResponse, error) {
 		// No target host: Windows AD is the only account type that picks one, and it is withheld from
 		// the agent flow.
 		return pam.CreateSession(provider.httpClient, provider.path, provider.reason, "", provider.duration)
+	}
+	provider.raiseApproval = func() (string, error) {
+		return raiseAccessRequest(provider.httpClient, provider.path, provider.reason, provider.duration)
 	}
 	return provider
 }
@@ -154,13 +168,77 @@ func (l *LazySessionProvider) ensureLocked(ctx context.Context) (*trackedSession
 
 	response, err := l.createSession()
 	if err != nil {
+		// An approval gate isn't a failure to report and move past. It is the moment the access
+		// request gets raised, and every later connection is a retry that succeeds once approved.
+		if isApprovalGate(err) {
+			return nil, l.handleApprovalGateLocked(err)
+		}
 		return nil, fmt.Errorf("failed to create PAM session for %s: %w", l.path, err)
 	}
 
 	l.current = &trackedSession{session: pam.NewLiveSession(response, time.Now().Add(l.duration))}
 
+	// Whatever gate this account was behind is open now, and the request that opened it is spent. A
+	// grant is time-bounded, so when it runs out the next refusal has to raise a new request; leaving
+	// this set would leave the account waiting forever on an approval it already used.
+	l.approvalRaised = false
+
 	log.Info().Str("account", l.path).Str("sessionId", l.current.session.SessionId).Msg("PAM session created")
 	return l.current, nil
+}
+
+// handleApprovalGateLocked raises the access request for an account the API has just refused, and
+// reports what the caller is now waiting for.
+//
+// The request is raised here rather than when the run starts, for the same reason sessions are
+// created here: an account the agent never touches should cost a reviewer nothing. A run over fifty
+// accounts must not put fifty requests in front of somebody for the two the agent will use.
+//
+// This is reached for a first approval and for a grant that has since run out, and treats them the
+// same: raise a request, keep the port, come back to life on the first connection after approval.
+// The proxy is meant to outlive any single grant, so a grant expiring is a normal part of a long run
+// rather than the end of the account.
+//
+// Everything except "a request is already in flight" is read from the refusal each time rather than
+// remembered, so approvers added to a folder part-way through a run take effect on the next
+// connection instead of needing the run restarted.
+func (l *LazySessionProvider) handleApprovalGateLocked(cause error) error {
+	gate := readApprovalGate(cause)
+
+	if !l.requestApproval {
+		return fmt.Errorf("%s requires approval, and --no-approval-request was set", l.path)
+	}
+
+	// A folder with no approvers can never grant a request, so say that instead of submitting one
+	// nobody is able to act on.
+	if !gate.hasApprovalPolicy {
+		return fmt.Errorf(
+			"%s requires approval, but its folder has no approvers configured. "+
+				"Ask a folder admin to add approvers under the folder's Approvals tab", l.path)
+	}
+
+	// One request per gate. A burst of connections to a gated account arrives here once each, and a
+	// second submission would only be rejected as a duplicate.
+	if l.approvalRaised || gate.hasPendingRequest {
+		l.approvalRaised = true
+		return awaitingApprovalError(l.path, gate.expired)
+	}
+
+	requestID, err := l.raiseApproval()
+	if err != nil {
+		// Deliberately left retryable: approval is a human process measured in minutes and the agent
+		// will reach for this account again, so a submission that failed on a blip shouldn't sink the
+		// account for the rest of the run.
+		log.Error().Err(err).Str("account", l.path).Msg("Failed to raise access request")
+		return fmt.Errorf("%s requires approval and the access request could not be raised: %s",
+			l.path, approvalErrorText(err))
+	}
+
+	l.approvalRaised = true
+	log.Info().Str("account", l.path).Str("requestId", requestID).Bool("regrant", gate.expired).
+		Msg("Access request raised on demand, awaiting approval")
+
+	return awaitingApprovalError(l.path, gate.expired)
 }
 
 // Current returns the live session without creating one.

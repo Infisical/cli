@@ -25,6 +25,13 @@ type LiveAccount struct {
 	KubeContext string
 	// IsCurrentKubeContext marks the one kubernetes account plain kubectl commands reach.
 	IsCurrentKubeContext bool
+	// AwaitingApproval marks an account whose port is bound but which cannot open a session until a
+	// reviewer approves the request raised for it.
+	AwaitingApproval bool
+	// RequiresApproval marks an account behind an approval policy, whether or not it is granted right
+	// now. A grant is time-bounded, so even one that works at the start of a run can need approving
+	// again before the run is over.
+	RequiresApproval bool
 }
 
 // connectionFor builds the connection string and a CLI example for a port-based account type.
@@ -87,6 +94,14 @@ func RenderInstructions(accounts []LiveAccount) string {
 		}
 
 		fmt.Fprintf(&out, "## %s (%s)\n", flatten(account.Path), account.TypeLabel)
+		if account.AwaitingApproval {
+			out.WriteString("- STATUS: NEEDS APPROVAL. This account needs a human to approve access, and is not usable\n")
+			out.WriteString("  yet. Your first connection attempt raises an access request automatically, and that\n")
+			out.WriteString("  attempt fails. The port below stays reserved throughout. Once a reviewer approves, the\n")
+			out.WriteString("  next attempt works, with nothing to restart or re-run, so retry periodically rather\n")
+			out.WriteString("  than treating the account as unreachable. Only reach for this account if you actually\n")
+			out.WriteString("  need it: the attempt puts a request in front of a person.\n")
+		}
 		fmt.Fprintf(&out, "- Host: 127.0.0.1, port %d\n", account.Port)
 		if account.ConnectionString != "" {
 			fmt.Fprintf(&out, "- Connection string: %s\n", account.ConnectionString)
@@ -107,7 +122,42 @@ func RenderInstructions(accounts []LiveAccount) string {
 	out.WriteString("  not how you connect to them.\n")
 	out.WriteString("- These proxies stop working when the Infisical session ends.\n")
 
+	// Said explicitly because the failure mode we care about is an agent deciding a blocked account
+	// justifies finding its own way in.
+	if anyAwaitingApproval(accounts) {
+		out.WriteString("- An account marked NEEDS APPROVAL is blocked on a human, not on you. Do not look for\n")
+		out.WriteString("  another route to it and do not use credentials from any other source. If you cannot\n")
+		out.WriteString("  make progress without it, say so and stop.\n")
+	}
+
+	// Applies to accounts that are granted right now too: a grant is time-bounded, and one running out
+	// mid-run looks exactly like an account that broke unless the agent has been told otherwise.
+	if anyRequiresApproval(accounts) {
+		out.WriteString("- Access to some of these accounts is granted for a limited window. An account that\n")
+		out.WriteString("  worked earlier can start refusing connections once its window closes. A new approval\n")
+		out.WriteString("  request is raised for you automatically on the next attempt, and the port does not\n")
+		out.WriteString("  change. Treat it as a wait, not as a broken account.\n")
+	}
+
 	return out.String()
+}
+
+func anyAwaitingApproval(accounts []LiveAccount) bool {
+	for _, account := range accounts {
+		if account.AwaitingApproval {
+			return true
+		}
+	}
+	return false
+}
+
+func anyRequiresApproval(accounts []LiveAccount) bool {
+	for _, account := range accounts {
+		if account.RequiresApproval {
+			return true
+		}
+	}
+	return false
 }
 
 // kubernetesGuidance explains how kubectl reaches this particular cluster, and returns the sample

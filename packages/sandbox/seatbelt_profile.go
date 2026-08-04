@@ -71,10 +71,9 @@ func generateSeatbeltProfile(spec Spec) string {
 	)
 
 	if spec.AllowTrustd {
-		// Cert-trust evaluation only. securityd/SecurityServer (keychain secret reads) stay omitted, so
-		// the login token remains unreadable; this just lets native-trust clients verify certs.
+		// Cert-trust evaluation only.
 		add(
-			"; trustd: cert-trust evaluation (keychain secret access still denied)",
+			"; trustd: cert-trust evaluation",
 			`(allow mach-lookup (global-name "com.apple.trustd") (global-name "com.apple.trustd.agent"))`,
 			"",
 		)
@@ -83,12 +82,22 @@ func generateSeatbeltProfile(spec Spec) string {
 	// Egress must be filtered on `remote ip`, not `local ip` (a local filter matches the any-address
 	// and would admit all egress). Bind/inbound are wildcarded so agents can run local dev servers.
 	add("; Network")
-	port := strconv.Itoa(spec.LoopbackPort)
 	add(
 		`(allow network-bind (local ip "*:*"))`,
 		`(allow network-inbound (local ip "*:*"))`,
-		`(allow network-outbound (remote ip "localhost:`+port+`"))`,
 	)
+	if spec.NetMode == SharedNet {
+		// SharedNet keeps only the credential and filesystem controls. It is for callers that have no
+		// proxy to route through, so the child reaches the network itself and needs a resolver to do it.
+		// mDNSResponder is allowed in this branch alone: granting it above would hand the hard fence the
+		// DNS exfil channel its loopback-only egress rule exists to deny.
+		add(
+			`(allow network-outbound)`,
+			`(allow mach-lookup (global-name "com.apple.mDNSResponder"))`,
+		)
+	} else {
+		add(`(allow network-outbound (remote ip "localhost:` + strconv.Itoa(spec.LoopbackPort) + `"))`)
+	}
 	add("")
 
 	// Broad read, then subtract the credential deny paths (SBPL is last-match-wins).

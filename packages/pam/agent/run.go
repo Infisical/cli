@@ -7,12 +7,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog"
@@ -31,6 +33,15 @@ type Options struct {
 	Accounts []string
 	Duration time.Duration
 	Reason   string
+
+	// RequestApproval allows raising an access request the first time the agent touches an account
+	// that is gated behind approval. Off means such an account simply reports the gate and stays
+	// unusable for the run.
+	RequestApproval bool
+
+	// NoSandbox runs the agent uncontained. The credential boundary below is then gone, so this is an
+	// opt-out for hosts where the sandbox cannot start or an agent needs a denied path.
+	NoSandbox bool
 
 	Argv          []string
 	AgentOverride string
@@ -53,7 +64,7 @@ func Run(opts Options) (int, error) {
 	session := &runSession{httpClient: httpClient, skipped: skipped}
 	defer session.cleanup()
 
-	if err := session.startProxies(resolved); err != nil {
+	if err := session.startProxies(resolved, opts.RequestApproval); err != nil {
 		return 1, err
 	}
 
@@ -73,9 +84,9 @@ type runSession struct {
 	cleanups     []func()
 }
 
-func (s *runSession) startProxies(resolved []ResolvedAccount) error {
+func (s *runSession) startProxies(resolved []ResolvedAccount, requestApproval bool) error {
 	for _, account := range resolved {
-		provider := NewLazySessionProvider(s.httpClient, account.Path, account.Reason, account.Duration)
+		provider := NewLazySessionProvider(s.httpClient, account.Path, account.Reason, account.Duration, requestApproval)
 		proxy := NewAgentProxy(s.httpClient, account.Path, account.AccountType, provider)
 
 		// Port 0 asks the OS for a free one. The listener then holds it for the whole run, so the
@@ -96,6 +107,8 @@ func (s *runSession) startProxies(resolved []ResolvedAccount) error {
 			Port:             proxy.Port(),
 			ConnectionString: connectionString,
 			Example:          example,
+			AwaitingApproval: account.AwaitingApproval(),
+			RequiresApproval: account.RequiresApproval,
 		})
 	}
 
@@ -133,15 +146,169 @@ func (s *runSession) writeContextFile(document string) (string, error) {
 	return path, nil
 }
 
+// infisicalAuthEnvKeys are the variables the CLI's own auth resolution reads. The agent reaches its
+// accounts over loopback and never needs an Infisical credential, so none of these are handed down:
+// one that was would let it call the API directly and open sessions outside the accounts, duration and
+// approval gates this run was launched with.
+//
+// This is hygiene, not a boundary. A child running as the same user can still read the parent's argv,
+// so it is the sandbox below, not this list, that contains a deliberately hostile agent.
+var infisicalAuthEnvKeys = []string{
+	util.INFISICAL_TOKEN_NAME,
+	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
+	util.INFISICAL_GATEWAY_TOKEN_NAME_LEGACY, // bare "TOKEN", still read by util.GetInfisicalToken
+	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
+	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME,
+	util.INFISICAL_JWT_NAME,
+	util.INFISICAL_OIDC_AUTH_JWT_NAME,
+	util.INFISICAL_LDAP_USERNAME,
+	util.INFISICAL_LDAP_PASSWORD,
+	util.INFISICAL_KUBERNETES_SERVICE_ACCOUNT_TOKEN_NAME,
+	util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME,
+	util.INFISICAL_AUTH_METHOD_NAME,
+	util.INFISICAL_MACHINE_IDENTITY_ID_NAME,
+	util.INFISICAL_ORGANIZATION_ID,
+	util.INFISICAL_VAULT_FILE_PASSPHRASE_ENV_NAME, // unlocks the file-backed keyring
+	util.INFISICAL_BOOTSTRAP_EMAIL_NAME,
+	util.INFISICAL_BOOTSTRAP_PASSWORD_NAME,
+	util.INFISICAL_BOOTSTRAP_ORGANIZATION_NAME,
+}
+
 func (s *runSession) childEnv(document string) ([]string, error) {
 	contextPath, err := s.writeContextFile(document)
 	if err != nil {
 		return nil, err
 	}
 
-	env := append(os.Environ(), s.extraEnv...)
+	stripped := make(map[string]bool, len(infisicalAuthEnvKeys))
+	for _, key := range infisicalAuthEnvKeys {
+		stripped[key] = true
+	}
+
+	var env []string
+	for _, entry := range os.Environ() {
+		if name, _, found := strings.Cut(entry, "="); found && stripped[name] {
+			continue
+		}
+		env = append(env, entry)
+	}
+
+	env = append(env, s.extraEnv...)
 	env = append(env, fmt.Sprintf("INFISICAL_PAM_CONTEXT_FILE=%s", contextPath))
 	return env, nil
+}
+
+// sandboxChild puts the agent behind the OS sandbox (macOS Seatbelt, Linux bubblewrap).
+//
+// One of the agent proxy's controls is deliberately not used: the network fence. PAM's proxies are
+// per-account TCP listeners rather than a forward proxy, so there is no route out to confine the agent
+// to, and it still needs its own egress to reach the API behind it.
+//
+// What is kept, and is the point: the agent cannot authenticate as the user who launched the run, so
+// it cannot step outside its brokered sessions. The keyring stays unreachable (the macOS keychain
+// services are denied by default) and so does everything the CLI stores, per pamDenyPaths. Writes are
+// confined to the working directory, this run's temp dir and the agent's own state dirs.
+func (s *runSession) sandboxChild(argv, env []string, noSandbox bool) (*exec.Cmd, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the working directory: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the home directory: %w", err)
+	}
+
+	spec := sandbox.Spec{
+		Enabled:    !noSandbox,
+		Cwd:        cwd,
+		TempDir:    s.tempDir,
+		WritePaths: agentStateWritePaths(home),
+		DenyPaths:  pamDenyPaths(home, hostRuntimeDir()),
+		Env:        env,
+		NetMode:    sandbox.SharedNet,
+	}
+
+	backend := sandbox.NewBackend(spec)
+	pre, err := backend.Preflight(spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check sandbox support on this host: %w", err)
+	}
+
+	// Here the sandbox is defence in depth rather than the product's promise: brokered, gated and
+	// audited access still holds without it. So a host that cannot run one degrades loudly instead of
+	// refusing to start, which is what the agent proxy does because there the boundary *is* the promise.
+	if !pre.Supported {
+		util.PrintfStderr("\n  Warning: the agent is running uncontained: %s\n", pre.Reason)
+		util.PrintfStderr("  It can read your Infisical login and other credential files on this host.\n")
+		spec.Enabled = false
+		backend = sandbox.NewBackend(spec)
+	}
+
+	return backend.Wrap(spec, argv)
+}
+
+// pamDenyPaths is deliberately narrower than sandbox.DefaultDenyPaths. The agent proxy withholds every
+// credential it can find, because its promise is that the agent never holds one. PAM's promise is
+// narrower: privileged account access is brokered, session-bound and audited. The agent is a working
+// coding agent in the caller's own repo, so denying ~/.aws, ~/.ssh or ~/.kube would break ordinary work
+// (git over SSH, the cloud CLIs) without protecting anything PAM is responsible for.
+//
+// Two things are denied. Everything the Infisical CLI authenticates with, since that is what would let
+// the agent call the API directly and open sessions outside this run's accounts, duration and approval
+// gates. And, on Linux, the per-user runtime directory, which is not a credential at all: it carries
+// the session bus, where systemd --user StartTransientUnit starts a process outside the sandbox, and
+// the secret-service socket the "auto" vault backend keeps the login in. Leaving it open would make the
+// first denial unenforceable, so it stays shut even though the rest has been opened up.
+func pamDenyPaths(home, runtimeDir string) []string {
+	if home == "" {
+		return nil
+	}
+	paths := []string{
+		filepath.Join(home, ".infisical"),           // config file: logged-in email and domain
+		filepath.Join(home, "infisical-keyring"),    // file-vault backend store (JWT + backup key)
+		filepath.Join(home, ".config", "infisical"), // XDG config location
+	}
+	if runtimeDir != "" {
+		paths = append(paths, runtimeDir)
+	}
+	return paths
+}
+
+// agentStateWritePaths returns the state directories the supported agents need to write: sessions,
+// transcripts, history and config. Without them an agent starts but cannot record anything, which
+// surfaces as permission-denied transcript writes rather than as a sandbox error.
+//
+// Only paths that already exist are returned, since bwrap --bind fails on a missing source.
+func agentStateWritePaths(home string) []string {
+	if home == "" {
+		return nil
+	}
+	candidates := []string{
+		filepath.Join(home, ".claude"),      // Claude Code state (sessions, history, cache)
+		filepath.Join(home, ".claude.json"), // Claude Code top-level config
+		filepath.Join(home, ".codex"),       // Codex state
+		filepath.Join(home, ".gemini"),      // Gemini CLI state
+	}
+
+	var paths []string
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+// hostRuntimeDir is the per-user runtime directory holding host IPC sockets, which DefaultDenyPaths
+// keeps out of reach. Linux only, since those sockets are not namespaced there; empty elsewhere.
+func hostRuntimeDir() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir
+	}
+	return fmt.Sprintf("/run/user/%d", os.Getuid())
 }
 
 func (s *runSession) runChild(document string, opts Options) (int, error) {
@@ -165,11 +332,12 @@ func (s *runSession) runChild(document string, opts Options) (int, error) {
 
 	s.printBanner(adapter, delivery, logFile)
 
-	command := exec.Command(delivery.Args[0], delivery.Args[1:]...)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	command.Env = env
+	// Wrap returns the command ready to start with stdio inherited; PAM keeps its own signal handling
+	// below rather than sandbox.ForwardTerminationSignals, which forwards SIGINT.
+	command, err := s.sandboxChild(delivery.Args, env, opts.NoSandbox)
+	if err != nil {
+		return 1, err
+	}
 
 	if err := command.Start(); err != nil {
 		return 1, fmt.Errorf("failed to start %s: %w", delivery.Args[0], err)
@@ -242,7 +410,13 @@ func (s *runSession) printBanner(adapter Adapter, delivery Delivery, logFile str
 	util.PrintfStderr("  Infisical PAM proxies ready for %s\n", adapter.Name)
 	util.PrintfStderr("\n")
 	for _, account := range s.liveAccounts {
-		util.PrintfStderr("    127.0.0.1:%-6d %s (%s)\n", account.Port, account.Path, account.TypeLabel)
+		// An account still gated behind approval has a port but no session yet, so say so here rather
+		// than letting it look identical to one that is ready.
+		status := ""
+		if account.AwaitingApproval {
+			status = "  [awaiting approval]"
+		}
+		util.PrintfStderr("    127.0.0.1:%-6d %s (%s)%s\n", account.Port, account.Path, account.TypeLabel, status)
 	}
 	util.PrintfStderr("\n")
 

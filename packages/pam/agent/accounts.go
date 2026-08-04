@@ -43,6 +43,17 @@ type ResolvedAccount struct {
 	TypeLabel   string
 	Duration    time.Duration
 	Reason      string
+
+	// RequiresApproval and AccessStatus are the approval gate as it stood at resolve time.
+	RequiresApproval bool
+	AccessStatus     string
+}
+
+// AwaitingApproval reports whether a session for this account is gated behind a reviewer. Such an
+// account still gets a port: the request is raised on first use, and approval landing mid-run brings
+// the account to life on the next connection without anything being restarted.
+func (a ResolvedAccount) AwaitingApproval() bool {
+	return a.RequiresApproval && a.AccessStatus != accessStatusGranted
 }
 
 // SkippedAccount is an account that was discovered but cannot be proxied, with the reason. The
@@ -155,12 +166,9 @@ func unusableReason(account api.PAMAccessibleAccount, opts Options) string {
 		return "you don't have permission to launch sessions for this account"
 	}
 
-	if account.RequiresApproval && account.AccessStatus != accessStatusGranted {
-		if account.AccessStatus == accessStatusPending {
-			return "your access request is still awaiting approval"
-		}
-		return fmt.Sprintf("requires approval. Request access with 'infisical pam access %s' or from the dashboard", accountPath(account))
-	}
+	// An approval gate is deliberately not a reason to skip. RequestApprovals raises a request for
+	// these accounts and their proxy is bound anyway, so approval landing part-way through a run is
+	// enough to bring the account up without restarting the agent.
 
 	// Prompting is impossible once the agent owns the terminal, so a reason has to come from --reason.
 	if account.RequireReason && strings.TrimSpace(opts.Reason) == "" {
@@ -172,11 +180,13 @@ func unusableReason(account api.PAMAccessibleAccount, opts Options) string {
 
 func newResolvedAccount(account api.PAMAccessibleAccount, opts Options) ResolvedAccount {
 	return ResolvedAccount{
-		Path:        accountPath(account),
-		AccountType: account.AccountType,
-		TypeLabel:   supportedAccountTypes[account.AccountType],
-		Duration:    opts.Duration,
-		Reason:      opts.Reason,
+		Path:             accountPath(account),
+		AccountType:      account.AccountType,
+		TypeLabel:        supportedAccountTypes[account.AccountType],
+		Duration:         opts.Duration,
+		Reason:           opts.Reason,
+		RequiresApproval: account.RequiresApproval,
+		AccessStatus:     account.AccessStatus,
 	}
 }
 

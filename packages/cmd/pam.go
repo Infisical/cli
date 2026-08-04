@@ -1,14 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	pamagent "github.com/Infisical/infisical-merge/packages/pam/agent"
 	pam "github.com/Infisical/infisical-merge/packages/pam/local"
 	"github.com/Infisical/infisical-merge/packages/util"
+	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/spf13/cobra"
 )
 
@@ -100,6 +104,12 @@ nothing else can take that port while the agent is working.
 Sessions are created lazily: binding the ports costs nothing, and an account the agent
 never connects to never opens a PAM session.
 
+Accounts behind an approval policy are included, and their approval requests are raised
+lazily too: the first time the agent touches such an account, a request is raised for it
+and that attempt fails. Once a reviewer approves, the next attempt works, with nothing to
+restart. An account the agent never touches never puts a request in front of anyone. Pass
+--no-approval-request to leave these accounts out entirely.
+
 Per-account guidance for the agent comes from the account's description in Infisical.
 
 Instructions are delivered in whatever format the agent understands, and their path is
@@ -133,6 +143,16 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 			util.HandleError(err, "Unable to parse reason flag")
 		}
 
+		noApprovalRequest, err := cmd.Flags().GetBool("no-approval-request")
+		if err != nil {
+			util.HandleError(err, "Unable to parse no-approval-request flag")
+		}
+
+		noSandbox, err := cmd.Flags().GetBool("no-sandbox")
+		if err != nil {
+			util.HandleError(err, "Unable to parse no-sandbox flag")
+		}
+
 		durationStr, err := cmd.Flags().GetString("duration")
 		if err != nil {
 			util.HandleError(err, "Unable to parse duration flag")
@@ -162,13 +182,15 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 		accessToken := resolveAgentAccessToken(cmd)
 
 		exitCode, err := pamagent.Run(pamagent.Options{
-			Accounts:      accounts,
-			Duration:      duration,
-			Reason:        reason,
-			Argv:          childArgs,
-			AgentOverride: agentOverride,
-			LogFile:       logFile,
-			AccessToken:   accessToken,
+			Accounts:        accounts,
+			Duration:        duration,
+			Reason:          reason,
+			Argv:            childArgs,
+			AgentOverride:   agentOverride,
+			LogFile:         logFile,
+			AccessToken:     accessToken,
+			RequestApproval: !noApprovalRequest,
+			NoSandbox:       noSandbox,
 		})
 		if err != nil {
 			util.PrintErrorMessageAndExit(err.Error())
@@ -211,6 +233,12 @@ func resolveAgentAccessToken(cmd *cobra.Command) string {
 		return token.Token
 	}
 
+	// No ready-made token, so a machine identity may still authenticate itself with its own
+	// credentials. Only if it asked to: otherwise this falls through to the stored login.
+	if accessToken := authenticateMachineIdentity(cmd); accessToken != "" {
+		return accessToken
+	}
+
 	util.RequireLogin()
 
 	loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
@@ -225,6 +253,76 @@ func resolveAgentAccessToken(cmd *cobra.Command) string {
 	return loggedInUserDetails.UserCredentials.JTWToken
 }
 
+// agenticAuthMethods lists what --auth-method accepts, for the flag help and for the error when it
+// doesn't. Kept next to the strategy table below so the two cannot drift apart.
+const agenticAuthMethods = "universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth, ldap-auth"
+
+// authenticateMachineIdentity exchanges a machine identity's own credentials for an access token when
+// --auth-method (or INFISICAL_AUTH_METHOD) names one. It returns "" when no method was asked for, which
+// leaves the caller on its stored-login path.
+//
+// This keeps its own strategy table rather than sharing one with login, gateway and kmip, which each
+// keep theirs. Consolidating the four is worth doing, but not from here.
+func authenticateMachineIdentity(cmd *cobra.Command) string {
+	authMethod, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "auth-method", []string{util.INFISICAL_AUTH_METHOD_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse auth-method flag")
+	}
+
+	// "user" is spelled out by some callers to mean the human login, which is already the fallback.
+	if authMethod == "" || authMethod == "user" {
+		return ""
+	}
+
+	valid, strategy := util.IsAuthMethodValid(authMethod, false)
+	if !valid {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid auth method %q. Supported: %s.", authMethod, agenticAuthMethods))
+	}
+
+	customHeaders, err := util.GetInfisicalCustomHeadersMap()
+	if err != nil {
+		util.HandleError(err, "Unable to get custom headers")
+	}
+
+	client := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
+		SiteUrl:          config.INFISICAL_URL,
+		UserAgent:        api.USER_AGENT,
+		AutoTokenRefresh: false,
+		CustomHeaders:    customHeaders,
+	})
+
+	authenticator := util.NewSdkAuthenticator(client, cmd)
+	strategies := map[util.AuthStrategyType]func() (infisicalSdk.MachineIdentityCredential, error){
+		util.AuthStrategy.UNIVERSAL_AUTH:    authenticator.HandleUniversalAuthLogin,
+		util.AuthStrategy.KUBERNETES_AUTH:   authenticator.HandleKubernetesAuthLogin,
+		util.AuthStrategy.AZURE_AUTH:        authenticator.HandleAzureAuthLogin,
+		util.AuthStrategy.GCP_ID_TOKEN_AUTH: authenticator.HandleGcpIdTokenAuthLogin,
+		util.AuthStrategy.GCP_IAM_AUTH:      authenticator.HandleGcpIamAuthLogin,
+		util.AuthStrategy.AWS_IAM_AUTH:      authenticator.HandleAwsIamAuthLogin,
+		util.AuthStrategy.OIDC_AUTH:         authenticator.HandleOidcAuthLogin,
+		util.AuthStrategy.JWT_AUTH:          authenticator.HandleJwtAuthLogin,
+		util.AuthStrategy.LDAP_AUTH:         authenticator.HandleLdapAuthLogin,
+	}
+
+	// IsAuthMethodValid accepts every strategy in util.AVAILABLE_AUTH_STRATEGIES, so a method added
+	// there without a handler here has to be reported. Indexing a missing key yields a nil func, and
+	// calling that panics, which is what the same table does elsewhere in the CLI for ldap-auth.
+	login, supported := strategies[strategy]
+	if !supported {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Auth method %q is not supported here. Supported: %s.", authMethod, agenticAuthMethods))
+	}
+
+	credential, err := login()
+	if err != nil {
+		util.HandleError(err, fmt.Sprintf("Unable to authenticate with %s", authMethod))
+	}
+	if credential.AccessToken == "" {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Authenticating with %s returned no access token.", authMethod))
+	}
+
+	return credential.AccessToken
+}
+
 func init() {
 	pamAccessCmd.Flags().String("reason", "", "Reason for accessing the account (stored for audit purposes)")
 	pamAccessCmd.Flags().String("duration", "1h", "Duration for access session (e.g., '1h', '30m', '2h30m')")
@@ -236,7 +334,23 @@ func init() {
 	pamAgenticAccessCmd.Flags().String("reason", "", "Reason for access, recorded for audit. Required by accounts whose policy demands one")
 	pamAgenticAccessCmd.Flags().String("agent", "", "Override agent detection (claude, codex, gemini, generic)")
 	pamAgenticAccessCmd.Flags().String("token", "", "Run as a machine identity using its access token")
+
+	// Machine identity auth. Every input the util.SdkAuthenticator handlers read has to be declared
+	// here, not just documented: GetCmdFlagOrEnv asks cobra for the flag first and fails on an
+	// undeclared one, so the environment variable fallbacks are unreachable without these.
+	pamAgenticAccessCmd.Flags().String("auth-method", "", "Authenticate as a machine identity with its own credentials instead of a ready-made --token ["+agenticAuthMethods+"]")
+	pamAgenticAccessCmd.Flags().String("client-id", "", "Client id for universal auth")
+	pamAgenticAccessCmd.Flags().String("client-secret", "", "Client secret for universal auth")
+	pamAgenticAccessCmd.Flags().String("machine-identity-id", "", "Machine identity id for the kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth and ldap-auth methods")
+	pamAgenticAccessCmd.Flags().String("service-account-token-path", "", "Service account token path for kubernetes auth")
+	pamAgenticAccessCmd.Flags().String("service-account-key-file-path", "", "Service account key file path for gcp-iam auth")
+	pamAgenticAccessCmd.Flags().String("jwt", "", "JWT for the jwt-based methods [oidc-auth, jwt-auth]")
+	pamAgenticAccessCmd.Flags().String("ldap-username", "", "Username for ldap-auth")
+	pamAgenticAccessCmd.Flags().String("ldap-password", "", "Password for ldap-auth")
+	pamAgenticAccessCmd.Flags().String("organization-slug", "", "Scope the session to this sub-organization the machine identity can reach. Defaults to the organization the identity was created in")
 	pamAgenticAccessCmd.Flags().String("log-file", "", "Where to write proxy logs while the agent runs")
+	pamAgenticAccessCmd.Flags().Bool("no-approval-request", false, "Don't raise access requests for accounts that need approval; report the gate instead")
+	pamAgenticAccessCmd.Flags().Bool("no-sandbox", false, "Run the agent uncontained, letting it read your Infisical login and other credential files")
 
 	pamAgenticCmd.AddCommand(pamAgenticAccessCmd)
 
