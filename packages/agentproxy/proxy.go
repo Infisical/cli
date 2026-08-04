@@ -71,6 +71,7 @@ const (
 	decisionPassthrough = "passthrough"
 	decisionBlocked     = "blocked"
 	decisionError       = "error"
+	decisionCanceled    = "canceled"
 
 	activityEventName = "agent-proxy.request"
 
@@ -286,7 +287,7 @@ func Start(opts Options) error {
 		return fmt.Errorf("failed to listen on port %d: %w", opts.Port, err)
 	}
 	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
-	log.Info().Msg("per-request activity logging on: brokered=info, blocked=warn, error=error, passthrough=debug (use --log-level to filter)")
+	log.Info().Msg("per-request activity logging on: brokered=info, blocked=warn, error=error, passthrough=debug, canceled=debug (use --log-level to filter)")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -480,6 +481,15 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 
 	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
 
+	// The agent hanging up mid-request (an interrupted prompt, or the agent exiting) cancels the request
+	// context and fails the round trip. Nothing went wrong, and no response can be delivered to a client
+	// that is already gone, so it is recorded as its own decision rather than a proxy error: an agent's
+	// TUI shares this terminal, and an ERROR line with an invented status would land on top of it.
+	if err != nil && r.Context().Err() != nil {
+		ps.emitActivity(method, reqPath, hostname, port, decisionCanceled, 0, scope, outcome, r.Context().Err())
+		return
+	}
+
 	status := http.StatusOK
 	decision := decisionPassthrough
 	switch {
@@ -524,7 +534,7 @@ func levelFor(decision string) zerolog.Level {
 		return zerolog.WarnLevel
 	case decisionError:
 		return zerolog.ErrorLevel
-	case decisionPassthrough:
+	case decisionPassthrough, decisionCanceled:
 		return zerolog.DebugLevel
 	default:
 		return zerolog.InfoLevel
@@ -544,8 +554,11 @@ func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision st
 		Str("method", method).
 		Str("host", hostname).
 		Int("port", portNum).
-		Str("path", reqPath).
-		Int("status", status)
+		Str("path", reqPath)
+	// A canceled request never got a response, so it reports no status rather than an invented one.
+	if status != 0 {
+		ev = ev.Int("status", status)
+	}
 	if outcome.agentName != "" {
 		ev = ev.Str("agentName", outcome.agentName)
 	}
