@@ -39,8 +39,9 @@ type Options struct {
 	// unusable for the run.
 	RequestApproval bool
 
-	// NoSandbox runs the agent uncontained. The credential boundary below is then gone, so this is an
-	// opt-out for hosts where the sandbox cannot start or an agent needs a denied path.
+	// NoSandbox runs the agent uncontained, giving up the credential boundary in sandboxChild. It is the
+	// only way to run on a host with no OS sandbox, since that case fails rather than downgrading, and
+	// the escape hatch for an agent that needs a denied path.
 	NoSandbox bool
 
 	Argv          []string
@@ -234,14 +235,19 @@ func (s *runSession) sandboxChild(argv, env []string, noSandbox bool) (*exec.Cmd
 		return nil, fmt.Errorf("failed to check sandbox support on this host: %w", err)
 	}
 
-	// Here the sandbox is defence in depth rather than the product's promise: brokered, gated and
-	// audited access still holds without it. So a host that cannot run one degrades loudly instead of
-	// refusing to start, which is what the agent proxy does because there the boundary *is* the promise.
+	// Fail closed. A host that cannot start a sandbox must not silently get an uncontained agent that
+	// can read the caller's Infisical credentials: running without the boundary has to be something the
+	// operator chose with --no-sandbox, which every Reason here already names. With that flag the
+	// backend is the passthrough one, whose Preflight always reports support, so this never blocks an
+	// explicit opt-out.
 	if !pre.Supported {
-		util.PrintfStderr("\n  Warning: the agent is running uncontained: %s\n", pre.Reason)
+		return nil, fmt.Errorf("%s", pre.Reason)
+	}
+
+	// Explicitly uncontained, so say so once: the deny set and the keyring boundary are both gone.
+	if !spec.Enabled {
+		util.PrintfStderr("\n  Warning: --no-sandbox, so the agent is running uncontained.\n")
 		util.PrintfStderr("  It can read your Infisical login and other credential files on this host.\n")
-		spec.Enabled = false
-		backend = sandbox.NewBackend(spec)
 	}
 
 	return backend.Wrap(spec, argv)
