@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
+	"github.com/smallnest/resp3"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -49,6 +50,7 @@ var connectionTestMux = sync.OnceValue(func() *http.ServeMux {
 const (
 	testConnModeSQL        = "sql"
 	testConnModeMongoDB    = "mongodb"
+	testConnModeRedis      = "redis"
 	testConnModeLDAP       = "ldap"
 	testConnModeKubernetes = "kubernetes"
 	testConnModeSSH        = "ssh"
@@ -76,6 +78,14 @@ type mongoTestParams struct {
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	AuthSource            string `json:"authSource"`
+	SslEnabled            bool   `json:"sslEnabled"`
+	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
+	SslCertificate        string `json:"sslCertificate"`
+}
+
+type redisTestParams struct {
+	Username              string `json:"username"`
+	Password              string `json:"password"`
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
@@ -230,6 +240,92 @@ func doMongoConnectionTest(ctx context.Context, host string, port int, params mo
 	defer func() { _ = client.Disconnect(ctx) }()
 
 	return client.Ping(ctx, nil)
+}
+
+// doRedisConnectionTest authenticates against the target Redis and PINGs it
+func doRedisConnectionTest(ctx context.Context, host string, port int, params redisTestParams) error {
+	timeout := testConnDefaultTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = time.Until(deadline)
+	}
+
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	dialer := &net.Dialer{Timeout: timeout}
+
+	var conn net.Conn
+	if params.SslEnabled {
+		tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
+		if err != nil {
+			return err
+		}
+		if conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsConfig); err != nil {
+			return err
+		}
+	} else {
+		var err error
+		if conn, err = dialer.DialContext(ctx, "tcp", addr); err != nil {
+			return err
+		}
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	writer := resp3.NewWriter(conn)
+	reader := bufio.NewReader(io.LimitReader(conn, maxRedisTestReplyBytes))
+
+	// only authenticate when password is supplied
+	if params.Password != "" {
+		var err error
+		if params.Username != "" && params.Username != "default" {
+			err = writer.WriteCommand("AUTH", params.Username, params.Password)
+		} else {
+			err = writer.WriteCommand("AUTH", params.Password)
+		}
+		if err != nil {
+			return err
+		}
+		reply, err := readRedisReplyLine(reader)
+		if err != nil {
+			return err
+		}
+		if reply != "+OK" {
+			return fmt.Errorf("redis authentication failed: %s", redisReplyErrorText(reply))
+		}
+	}
+
+	if err := writer.WriteCommand("PING"); err != nil {
+		return err
+	}
+	reply, err := readRedisReplyLine(reader)
+	if err != nil {
+		return err
+	}
+	if len(reply) > 0 && (reply[0] == '-' || reply[0] == '!') {
+		return fmt.Errorf("redis PING failed: %s", redisReplyErrorText(reply))
+	}
+	return nil
+}
+
+const maxRedisTestReplyBytes = 64 * 1024
+
+// readRedisReplyLine reads a single RESP reply line (bounded by the LimitReader) and trims the CRLF
+func readRedisReplyLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// redisReplyErrorText strips a RESP error prefix ('-' or '!') for use in an error message
+func redisReplyErrorText(line string) string {
+	if len(line) > 0 && (line[0] == '-' || line[0] == '!') {
+		return strings.TrimSpace(line[1:])
+	}
+	return strings.TrimSpace(line)
 }
 
 // doLdapConnectionTest binds to the target directory with the supplied credentials (the Windows AD auth check)
@@ -451,6 +547,12 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		op = func() error { return doMongoConnectionTest(ctx, target.host, target.port, params) }
+	case testConnModeRedis:
+		var params redisTestParams
+		if !decode(&params) {
+			return
+		}
+		op = func() error { return doRedisConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeLDAP:
 		var params ldapTestParams
 		if !decode(&params) {
