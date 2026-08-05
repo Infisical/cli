@@ -95,9 +95,17 @@ jobs:
         working-directory: ${{ env.working-directory }}
         run: npm pack
 
+      # npm publish returns E403 for a version that already exists, which would
+      # make a re-run of an otherwise-recoverable release fail here. Skip if the
+      # version is already on the registry.
       - name: Publish NPM
         working-directory: ${{ env.working-directory }}
-        run: npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public
+        run: |
+          if npm view "@infisical/cli@${{ env.CLI_VERSION }}" version >/dev/null 2>&1; then
+            echo "@infisical/cli@${{ env.CLI_VERSION }} already published, skipping"
+            exit 0
+          fi
+          npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
@@ -212,7 +220,12 @@ jobs:
           name: goreleaser-dist-linux
           path: dist/
           retention-days: 7
+      # continue-on-error: without --fail-fast, goreleaser collects publisher
+      # errors and keeps going, so one failing publisher (e.g. an AUR outage)
+      # still leaves Docker and the GitHub release assets published
       - name: GoReleaser (release)
+        id: goreleaser
+        continue-on-error: true
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
@@ -260,16 +273,48 @@ jobs:
           chmod 600 /tmp/infisical-apk.rsa
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+      # The publish below no longer depends on goreleaser's exit code, so it can
+      # be reached with a dist/ that a failed build left empty or partial.
+      # upload_to_s3.sh globs (`for i in *.deb`) and would treat that as a
+      # no-op success, so require the packages we expect before touching the
+      # repos.
+      - name: Check release artifacts are present
+        id: artifacts
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        env:
+          GORELEASER_OUTCOME: ${{ steps.goreleaser.outcome }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for ext in deb rpm apk; do
+            # `|| true`: goreleaser can fail before dist/ is even created, and
+            # pipefail would otherwise abort this step before it reports why.
+            count=$(find dist -maxdepth 1 -type f -name "*.${ext}" 2>/dev/null | wc -l | tr -d ' ' || true)
+            echo "dist/*.${ext}: ${count}"
+            [ "$count" -gt 0 ] || missing+=("${ext}")
+          done
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+          echo "::error::No ${missing[*]} package(s) in dist/ - skipping the repository publish."
+          # If goreleaser reported success, an empty dist/ is an unexplained
+          # failure that nothing downstream would catch, so fail here.
+          if [ "$GORELEASER_OUTCOME" = "success" ]; then
+            exit 1
+          fi
+
       # upload_to_s3.sh syncs the whole apk repo down before rebuilding the index, and
       # that repo holds the full backfilled history.
       - name: Free disk space before publish
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        if: steps.artifacts.outputs.publish == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h /
       - name: Publish packages to repositories
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        if: steps.artifacts.outputs.publish == 'true'
         run: bash upload_to_s3.sh
         env:
           AWS_DEFAULT_REGION: us-east-1
@@ -279,13 +324,20 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
       - name: Invalidate Cloudfront cache
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        if: steps.artifacts.outputs.publish == 'true'
         run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/*' '/deb/dists/stable/*' '/apk/stable/main/*'
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.INFISICAL_CLI_REPO_CLOUDFRONT_DISTRIBUTION_ID }}
+
+      # Must stay the last step in this job: everything above is allowed to run
+      # despite a goreleaser publisher failure, and this is what keeps the run
+      # red so the failure is still visible and alerted on.
+      - name: Fail if GoReleaser reported errors
+        if: steps.goreleaser.outcome == 'failure'
+        run: exit 1
 
   goreleaser-darwin:
     runs-on: macos-latest
