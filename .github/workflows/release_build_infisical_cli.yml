@@ -90,19 +90,21 @@ jobs:
             --jq '.assets[].name' | sort > /tmp/release-assets.txt
           echo "Release $TAG has $(wc -l < /tmp/release-assets.txt) asset(s)."
           missing=()
+          required=0
           for combo in \
-            linux_amd64:tar.gz linux_arm64:tar.gz linux_armv6:tar.gz linux_armv7:tar.gz \
+            linux_amd64:tar.gz linux_arm64:tar.gz linux_386:tar.gz linux_armv6:tar.gz linux_armv7:tar.gz \
             darwin_amd64:tar.gz darwin_arm64:tar.gz \
             windows_amd64:zip windows_arm64:zip \
             freebsd_amd64:tar.gz freebsd_arm64:tar.gz freebsd_armv6:tar.gz freebsd_armv7:tar.gz; do
+            required=$((required + 1))
             name="cli_${CLI_VERSION}_${combo%%:*}.${combo##*:}"
             grep -qxF "$name" /tmp/release-assets.txt || missing+=("$name")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Release $TAG is missing ${#missing[@]} asset(s) that the npm preinstall downloads, refusing to publish: ${missing[*]}"
+            echo "::error::Release $TAG is missing ${#missing[@]} of $required asset(s) that the npm preinstall downloads, refusing to publish: ${missing[*]}"
             exit 1
           fi
-          echo "All 12 assets required by the npm preinstall are present."
+          echo "All $required assets required by the npm preinstall are present."
 
       - name: Setup Node
         uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
