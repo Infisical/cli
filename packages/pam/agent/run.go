@@ -224,13 +224,14 @@ func (s *runSession) sandboxChild(argv, env []string, noSandbox bool) (*exec.Cmd
 	}
 
 	spec := sandbox.Spec{
-		Enabled:    !noSandbox,
-		Cwd:        cwd,
-		TempDir:    s.tempDir,
-		WritePaths: agentStateWritePaths(home),
-		DenyPaths:  pamDenyPaths(home, hostRuntimeDir()),
-		Env:        env,
-		NetMode:    sandbox.SharedNet,
+		Enabled:     !noSandbox,
+		Cwd:         cwd,
+		TempDir:     s.tempDir,
+		WritePaths:  agentStateWritePaths(home),
+		DenyPaths:   pamDenyPaths(home, hostRuntimeDir()),
+		DenySockets: pamDenySockets(home),
+		Env:         env,
+		NetMode:     sandbox.SharedNet,
 	}
 
 	backend := sandbox.NewBackend(spec)
@@ -255,6 +256,49 @@ func (s *runSession) sandboxChild(argv, env []string, noSandbox bool) (*exec.Cmd
 	}
 
 	return backend.Wrap(spec, argv)
+}
+
+// pamDenySockets lists container-runtime control sockets. A daemon socket is root-equivalent: an agent
+// that can reach one can start a container that bind-mounts the home directory, read straight through
+// every mask in pamDenyPaths, and then authenticate as the caller to open PAM sessions outside this
+// run's accounts, duration and approval gates.
+//
+// These are kept apart from pamDenyPaths because a path mask does not cover a socket. Connecting to one
+// is a network operation, so it survives a file deny and needs the socket-specific control instead.
+//
+// Symlinked sockets are listed by their target as well, since seatbelt matches the resolved path and
+// Docker Desktop points /var/run/docker.sock at the one under ~/.docker.
+func pamDenySockets(home string) []string {
+	candidates := []string{
+		"/var/run/docker.sock",
+		"/run/docker.sock",
+		"/var/run/podman/podman.sock",
+		"/run/podman/podman.sock",
+		"/var/run/containerd/containerd.sock",
+		"/run/containerd/containerd.sock",
+		"/var/run/crio/crio.sock",
+		"/run/crio/crio.sock",
+		"/var/run/buildkit/buildkitd.sock",
+	}
+	if home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".docker", "run", "docker.sock"),           // Docker Desktop
+			filepath.Join(home, ".rd", "docker.sock"),                      // Rancher Desktop
+			filepath.Join(home, ".colima", "default", "docker.sock"),       // Colima
+			filepath.Join(home, ".orbstack", "run", "docker.sock"),         // OrbStack
+			filepath.Join(home, ".lima", "default", "sock", "docker.sock"), // Lima
+			filepath.Join(home, ".local", "share", "containers", "podman", "machine", "podman.sock"),
+		)
+	}
+
+	sockets := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		sockets = append(sockets, path)
+		if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != path {
+			sockets = append(sockets, resolved)
+		}
+	}
+	return sockets
 }
 
 // pamDenyPaths is deliberately narrower than sandbox.DefaultDenyPaths. The agent proxy withholds every

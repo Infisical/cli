@@ -98,6 +98,16 @@ func generateSeatbeltProfile(spec Spec) string {
 	} else {
 		add(`(allow network-outbound (remote ip "localhost:` + strconv.Itoa(spec.LoopbackPort) + `"))`)
 	}
+
+	// After the allow, since SBPL is last-match-wins. Connecting to a unix socket is network-outbound
+	// rather than a file operation, so this is the only rule that makes a container daemon or similar
+	// host-control socket unreachable; a DenyPaths mask on the same path does not.
+	if sockets := dedupeSorted(spec.DenySockets); len(sockets) > 0 {
+		add("; Host-control sockets: unreachable even though egress is otherwise open")
+		for _, p := range sockets {
+			add(`(deny network-outbound (literal ` + escapeSBPL(p) + `))`)
+		}
+	}
 	add("")
 
 	// Broad read, then subtract the credential deny paths (SBPL is last-match-wins).

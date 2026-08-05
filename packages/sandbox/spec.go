@@ -31,6 +31,15 @@ type Spec struct {
 	WritePaths []string
 	DenyPaths  []string // read-denied credential paths, subtracted from the broad read allow
 
+	// DenySockets are unix sockets the child must not be able to connect to, for callers that allow
+	// unrestricted egress. A DenyPaths entry does not cover one: connecting to a unix socket is a
+	// network-outbound operation on macOS, not a file read, so a path mask leaves it reachable. The
+	// hard fence needs none of these, since its loopback-only egress rule already denies them.
+	//
+	// Entries must name the resolved path: seatbelt matches after symlink resolution, so denying a
+	// symlink to a socket does nothing.
+	DenySockets []string
+
 	Cwd     string
 	TempDir string // per-run 0700 dir: CA cert, and the unix socket on the Linux hard fence
 
