@@ -19,13 +19,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"k8s.io/client-go/tools/clientcmd"
-	k8sapi "k8s.io/client-go/tools/clientcmd/api"
 )
-
-// maxKubeContextLen keeps a context name to a length kubectl and the instruction document can carry
-// comfortably.
-const maxKubeContextLen = 200
 
 // Options configures a single `pam agentic access` run.
 type Options struct {
@@ -47,14 +41,24 @@ type Options struct {
 	Argv          []string
 	AgentOverride string
 	LogFile       string
-	AccessToken   string
+
+	// AccessToken returns the token to authenticate PAM API calls with. It is a function rather than a
+	// string because an agent session outlives a single token: when a machine identity authenticated
+	// itself, the SDK renews in the background and this returns the current value.
+	AccessToken func() string
 }
 
 // Run binds a proxy per account and launches the agent. It returns the child's exit code.
 func Run(opts Options) (int, error) {
 	httpClient := resty.New()
-	httpClient.SetAuthToken(opts.AccessToken)
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
+
+	// Read the token per request rather than fixing it once. Sessions are created lazily and ended at
+	// teardown, so calls happen throughout a run that can outlast the token it started with.
+	httpClient.OnBeforeRequest(func(_ *resty.Client, request *resty.Request) error {
+		request.SetAuthToken(opts.AccessToken())
+		return nil
+	})
 
 	// Work out what to bind and check it could actually launch, without creating any sessions.
 	resolved, skipped, err := ResolveAccounts(httpClient, opts)
@@ -477,84 +481,4 @@ func (s *runSession) cleanup() {
 		}
 		util.PrintfStderr("\n")
 	}
-}
-
-// writeKubeconfig builds a kubeconfig covering every kubernetes account, or returns "" if none.
-//
-// It also records each cluster's context name on the account, and which one ended up as the current
-// context, so the instructions can tell the agent when a --context flag is needed.
-func (s *runSession) writeKubeconfig() (string, error) {
-	config := k8sapi.NewConfig()
-	taken := make(map[string]bool)
-
-	for i, account := range s.liveAccounts {
-		if account.Type != "kubernetes" {
-			continue
-		}
-
-		name := kubeContextName(account.Path, taken)
-
-		config.Clusters[name] = &k8sapi.Cluster{Server: fmt.Sprintf("http://127.0.0.1:%d", account.Port)}
-		config.AuthInfos[name] = &k8sapi.AuthInfo{}
-		config.Contexts[name] = &k8sapi.Context{Cluster: name, AuthInfo: name}
-
-		s.liveAccounts[i].KubeContext = name
-
-		if config.CurrentContext == "" {
-			config.CurrentContext = name
-			s.liveAccounts[i].IsCurrentKubeContext = true
-		}
-	}
-
-	if config.CurrentContext == "" {
-		return "", nil
-	}
-
-	// Serialized by client-go rather than assembled as text, so nothing that arrives in an account
-	// path can turn into kubeconfig structure. A newline in the wrong place could otherwise add an
-	// exec credential plugin, which kubectl runs as a command.
-	contents, err := clientcmd.Write(*config)
-	if err != nil {
-		return "", fmt.Errorf("failed to build kubeconfig: %w", err)
-	}
-
-	path := filepath.Join(s.tempDir, "kubeconfig")
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
-		return "", fmt.Errorf("failed to write kubeconfig: %w", err)
-	}
-	return path, nil
-}
-
-// kubeContextName turns an account path into a context name.
-//
-// The name reaches kubectl and the instruction document, so it is reduced to letters, digits, dots,
-// dashes and underscores. Names also have to stay distinct: contexts live in a map, so a repeat would
-// overwrite an entry and leave one cluster answering on another one's proxy.
-func kubeContextName(path string, taken map[string]bool) string {
-	var out strings.Builder
-	out.WriteString("infisical-pam-")
-
-	dashed := false
-	for _, r := range path {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
-			out.WriteRune(r)
-			dashed = false
-		case !dashed:
-			out.WriteRune('-')
-			dashed = true
-		}
-	}
-
-	name := strings.TrimRight(out.String(), "-")
-	if len(name) > maxKubeContextLen {
-		name = strings.TrimRight(name[:maxKubeContextLen], "-")
-	}
-
-	unique := name
-	for attempt := 2; taken[unique]; attempt++ {
-		unique = fmt.Sprintf("%s-%d", name, attempt)
-	}
-	taken[unique] = true
-	return unique
 }

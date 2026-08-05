@@ -94,29 +94,11 @@ var pamAgenticAccessCmd = &cobra.Command{
 	Long: `Start a local proxy for each PAM account you can launch, then launch an AI agent with
 instructions describing how to reach them.
 
-By default every account you have access to is included, and anything that can't be
-proxied is listed with the reason. Narrow it with --account, which may be repeated. An
-account named with --account that can't be launched is an error.
-
-Each account gets a free port chosen by the OS and keeps it for the whole run, so
-nothing else can take that port while the agent is working.
-
-Sessions are created lazily: binding the ports costs nothing, and an account the agent
-never connects to never opens a PAM session.
-
-Accounts behind an approval policy are included, and their approval requests are raised
-lazily too: the first time the agent touches such an account, a request is raised for it
-and that attempt fails. Once a reviewer approves, the next attempt works, with nothing to
-restart. An account the agent never touches never puts a request in front of anyone. Pass
---no-approval-request to leave these accounts out entirely.
-
-Per-account guidance for the agent comes from the account's description in Infisical.
+By default every account you have access to is included. Narrow it with --account, which
+may be repeated.
 
 Instructions are delivered in whatever format the agent understands, and their path is
-always exported as INFISICAL_PAM_CONTEXT_FILE so custom agents can pick them up too.
-
-Authenticates as the logged-in user by default, or as a machine identity when --token
-or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
+always exported as INFISICAL_PAM_CONTEXT_FILE so custom agents can pick them up too.`,
 	Example: `  infisical pam agentic access -- claude
   infisical pam agentic access --account prod/orders-db -- codex --model gpt-5
   infisical pam agentic access --account prod/orders-db --account prod/bastion --duration 30m -- claude
@@ -179,7 +161,8 @@ or INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN is set.`,
 			util.PrintErrorMessageAndExit("No agent command given. Pass one after '--', for example:\n" + agenticAccessUsage)
 		}
 
-		accessToken := resolveAgentAccessToken(cmd)
+		accessToken, stopAuth := resolveAgentAccessToken(cmd)
+		defer stopAuth()
 
 		exitCode, err := pamagent.Run(pamagent.Options{
 			Accounts:        accounts,
@@ -217,10 +200,15 @@ func splitAccountFlags(values []string) []string {
 	return accounts
 }
 
-// resolveAgentAccessToken returns the token to authenticate with. A machine identity access token
-// takes precedence when one is supplied, since an unattended agent shouldn't depend on a human's
-// browser login session staying alive. Otherwise we fall back to the stored user login.
-func resolveAgentAccessToken(cmd *cobra.Command) string {
+// resolveAgentAccessToken returns the token to authenticate with, and a stop function to release
+// whatever backs it. A machine identity access token takes precedence when one is supplied, since an
+// unattended agent shouldn't depend on a human's browser login session staying alive. Otherwise we
+// fall back to the stored user login.
+//
+// The token is returned as a getter because only the machine identity path can be renewed: the SDK
+// keeps that one fresh in the background, so the run reads the current value instead of the one it
+// started with. A supplied token and a stored login are both fixed for the run.
+func resolveAgentAccessToken(cmd *cobra.Command) (accessToken func() string, stop func()) {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse token")
@@ -230,13 +218,17 @@ func resolveAgentAccessToken(cmd *cobra.Command) string {
 		if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
 			util.PrintErrorMessageAndExit("PAM does not support service tokens. Use a machine identity access token, or log in as a user.")
 		}
-		return token.Token
+		// Neither of the fixed-token paths can be renewed, so an already-expired one is worth catching
+		// now: the alternative is a run that binds every proxy, prints its banner, launches the agent,
+		// and only fails once the agent tries its first connection.
+		failIfTokenExpired(token.Token, "the provided token")
+		return func() string { return token.Token }, func() {}
 	}
 
 	// No ready-made token, so a machine identity may still authenticate itself with its own
 	// credentials. Only if it asked to: otherwise this falls through to the stored login.
-	if accessToken := authenticateMachineIdentity(cmd); accessToken != "" {
-		return accessToken
+	if source, stopAuth := authenticateMachineIdentity(cmd); source != nil {
+		return source, stopAuth
 	}
 
 	util.RequireLogin()
@@ -250,20 +242,21 @@ func resolveAgentAccessToken(cmd *cobra.Command) string {
 		loggedInUserDetails = util.EstablishUserLoginSession()
 	}
 
-	return loggedInUserDetails.UserCredentials.JTWToken
+	// Reached with an expired login when the API was unreachable, so the refresh above was skipped.
+	jwt := loggedInUserDetails.UserCredentials.JTWToken
+	failIfTokenExpired(jwt, "your login")
+	return func() string { return jwt }, func() {}
 }
 
 // agenticAuthMethods lists what --auth-method accepts, for the flag help and for the error when it
 // doesn't. Kept next to the strategy table below so the two cannot drift apart.
 const agenticAuthMethods = "universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth, ldap-auth"
 
-// authenticateMachineIdentity exchanges a machine identity's own credentials for an access token when
-// --auth-method (or INFISICAL_AUTH_METHOD) names one. It returns "" when no method was asked for, which
-// leaves the caller on its stored-login path.
-//
-// This keeps its own strategy table rather than sharing one with login, gateway and kmip, which each
-// keep theirs. Consolidating the four is worth doing, but not from here.
-func authenticateMachineIdentity(cmd *cobra.Command) string {
+// authenticateMachineIdentity authenticates a machine identity with its own credentials when
+// --auth-method (or INFISICAL_AUTH_METHOD) names one, returning a getter for its current access token
+// and a stop function. Both are nil when no method was asked for, which leaves the caller on its
+// stored-login path.
+func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string, stop func()) {
 	authMethod, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "auth-method", []string{util.INFISICAL_AUTH_METHOD_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse auth-method flag")
@@ -271,7 +264,7 @@ func authenticateMachineIdentity(cmd *cobra.Command) string {
 
 	// "user" is spelled out by some callers to mean the human login, which is already the fallback.
 	if authMethod == "" || authMethod == "user" {
-		return ""
+		return nil, nil
 	}
 
 	valid, strategy := util.IsAuthMethodValid(authMethod, false)
@@ -284,11 +277,15 @@ func authenticateMachineIdentity(cmd *cobra.Command) string {
 		util.HandleError(err, "Unable to get custom headers")
 	}
 
-	client := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
-		SiteUrl:          config.INFISICAL_URL,
-		UserAgent:        api.USER_AGENT,
-		AutoTokenRefresh: false,
-		CustomHeaders:    customHeaders,
+	// AutoTokenRefresh is left at its default of true, so the client runs a background lifecycle
+	// goroutine that keeps this identity's token renewed for as long as ctx lives. An agent session is
+	// long-running and outlives the first token, and the caller reads the current one per request, so
+	// this is what keeps PAM API calls working late in a run. Same arrangement as the gateway.
+	ctx, cancel := context.WithCancel(cmd.Context())
+	client := infisicalSdk.NewInfisicalClient(ctx, infisicalSdk.Config{
+		SiteUrl:       config.INFISICAL_URL,
+		UserAgent:     api.USER_AGENT,
+		CustomHeaders: customHeaders,
 	})
 
 	authenticator := util.NewSdkAuthenticator(client, cmd)
@@ -309,18 +306,23 @@ func authenticateMachineIdentity(cmd *cobra.Command) string {
 	// calling that panics, which is what the same table does elsewhere in the CLI for ldap-auth.
 	login, supported := strategies[strategy]
 	if !supported {
+		cancel()
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Auth method %q is not supported here. Supported: %s.", authMethod, agenticAuthMethods))
 	}
 
 	credential, err := login()
 	if err != nil {
+		cancel()
 		util.HandleError(err, fmt.Sprintf("Unable to authenticate with %s", authMethod))
 	}
 	if credential.AccessToken == "" {
+		cancel()
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Authenticating with %s returned no access token.", authMethod))
 	}
 
-	return credential.AccessToken
+	// The client's own getter, not the credential we just received: it returns whatever the lifecycle
+	// goroutine last renewed to.
+	return client.Auth().GetAccessToken, cancel
 }
 
 func init() {
