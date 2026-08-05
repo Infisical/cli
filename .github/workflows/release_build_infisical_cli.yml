@@ -48,8 +48,8 @@ jobs:
     if: |
       always() &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
-      needs.goreleaser.result == 'success' &&
-      needs.goreleaser-darwin.result == 'success' &&
+      needs.goreleaser.result != 'skipped' && needs.goreleaser.result != 'cancelled' &&
+      needs.goreleaser-darwin.result != 'skipped' && needs.goreleaser-darwin.result != 'cancelled' &&
       needs.cli-tests.result == 'success' &&
       (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     runs-on: ubuntu-latest
@@ -74,6 +74,35 @@ jobs:
 
       - name: Print version
         run: echo ${{ env.CLI_VERSION }}
+
+      # The real gate for this job. `npm install -g @infisical/cli` runs
+      # npm/src/index.cjs at preinstall, which downloads
+      # cli_<version>_<platform>_<arch>.<ext> from this release, so publishing
+      # before those assets exist ships a package that 404s on install.
+      # Keep in sync with getPlatform()/getArchitecture() in npm/src/index.cjs.
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort > /tmp/release-assets.txt
+          echo "Release $TAG has $(wc -l < /tmp/release-assets.txt) asset(s)."
+          missing=()
+          for combo in \
+            linux_amd64:tar.gz linux_arm64:tar.gz linux_armv6:tar.gz linux_armv7:tar.gz \
+            darwin_amd64:tar.gz darwin_arm64:tar.gz \
+            windows_amd64:zip windows_arm64:zip \
+            freebsd_amd64:tar.gz freebsd_arm64:tar.gz freebsd_armv6:tar.gz freebsd_armv7:tar.gz; do
+            name="cli_${CLI_VERSION}_${combo%%:*}.${combo##*:}"
+            grep -qxF "$name" /tmp/release-assets.txt || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Release $TAG is missing ${#missing[@]} asset(s) that the npm preinstall downloads, refusing to publish: ${missing[*]}"
+            exit 1
+          fi
+          echo "All 12 assets required by the npm preinstall are present."
 
       - name: Setup Node
         uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
@@ -285,20 +314,23 @@ jobs:
           GORELEASER_OUTCOME: ${{ steps.goreleaser.outcome }}
         run: |
           set -euo pipefail
+          # Keep in sync with the `builds:`
+          # list of the `infisical` nfpm in .goreleaser.yaml.
+          ARCHES="386 amd64 arm64 armv6 armv7"
           missing=()
           for ext in deb rpm apk; do
-            # `|| true`: goreleaser can fail before dist/ is even created, and
-            # pipefail would otherwise abort this step before it reports why.
-            count=$(find dist -maxdepth 1 -type f -name "*.${ext}" 2>/dev/null | wc -l | tr -d ' ' || true)
-            echo "dist/*.${ext}: ${count}"
-            [ "$count" -gt 0 ] || missing+=("${ext}")
+            for arch in $ARCHES; do
+              count=$(find dist -maxdepth 1 -type f -name "infisical_*_linux_${arch}.${ext}" 2>/dev/null | wc -l | tr -d ' ' || true)
+              [ "$count" -gt 0 ] || missing+=("linux_${arch}.${ext}")
+            done
           done
           if [ ${#missing[@]} -eq 0 ]; then
+            echo "All 15 expected linux packages present in dist/."
             echo "publish=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "publish=false" >> "$GITHUB_OUTPUT"
-          echo "::error::No ${missing[*]} package(s) in dist/ - skipping the repository publish."
+          echo "::error::dist/ is missing ${#missing[@]} expected package(s) - skipping the repository publish: ${missing[*]}"
           # If goreleaser reported success, an empty dist/ is an unexplained
           # failure that nothing downstream would catch, so fail here.
           if [ "$GORELEASER_OUTCOME" = "success" ]; then
