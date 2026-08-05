@@ -416,8 +416,8 @@ github.com/indece-official/go-ebcdic v1.2.0 h1:nKCubkNoXrGvBp3MSYuplOQnhANCDEY51
 github.com/indece-official/go-ebcdic v1.2.0/go.mod h1:RBddVJt0Ks0eDLRG5dhPwBDRiTNA7n+yv0dVFpSs46Q=
 github.com/infisical/go-sdk v0.7.0 h1:x9/1PczL+ioVD1jCp4LHQzPpBawatbmkjAC0S1OAtUA=
 github.com/infisical/go-sdk v0.7.0/go.mod h1:yEfXF+3YDDXiJ9zzJUSzW6me6XXPPEDK52fSU6JfpCA=
-github.com/infisical/infisical-kmip v0.3.20-0.20260805182853-a96df71b6d14 h1:6//zuxPFhsx8EE3y5E/ooS9KigSsvTIbk2jf91BTNtw=
-github.com/infisical/infisical-kmip v0.3.20-0.20260805182853-a96df71b6d14/go.mod h1:bO1M4YtKyutNg1bREPmlyZspC5duSR7hyQ3lPmLzrIs=
+github.com/infisical/infisical-kmip v0.3.20-0.20260805190802-0b7dadb616b3 h1:4rwG5XE+IFUOXsfiBx6UW7dVgJeWM/RxQNgh4gd1kwg=
+github.com/infisical/infisical-kmip v0.3.20-0.20260805190802-0b7dadb616b3/go.mod h1:bO1M4YtKyutNg1bREPmlyZspC5duSR7hyQ3lPmLzrIs=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
