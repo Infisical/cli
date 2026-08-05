@@ -2,6 +2,7 @@ package agentproxy
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -12,6 +13,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func proxyAuthHeader(projectID, environment, secretPath, jwt string) string {
@@ -184,5 +188,111 @@ func TestPlainForwardBlocksUnmatchedHost(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403 in block mode for an unmatched host, got %d", resp.StatusCode)
+	}
+}
+
+func TestClientAbortIsNotLoggedAsError(t *testing.T) {
+	var buf bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = previous })
+
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	t.Cleanup(func() { close(release); upstream.Close() })
+
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jwt := "test.jwt.token"
+	scope := agentScope{projectID: "proj", environment: "dev", secretPath: "/"}
+	client := newTestProxy(t, UnmatchedAllow, jwt, scope, nil)
+
+	if _, err := fmt.Fprintf(client, "POST http://%s/v1/messages HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nContent-Length: 0\r\n\r\n",
+		u.Host, u.Host, proxyAuthHeader("proj", "dev", "/", jwt)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_ = client.Close()
+
+	var line string
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		if line = buf.String(); strings.Contains(line, activityEventName) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(line, activityEventName) {
+		t.Fatalf("expected an activity record for the aborted request, got %q", line)
+	}
+	if !strings.Contains(line, `"decision":"`+decisionCanceled+`"`) {
+		t.Errorf("expected decision %q, got %q", decisionCanceled, line)
+	}
+	if strings.Contains(line, `"level":"error"`) {
+		t.Errorf("client abort logged at error level: %q", line)
+	}
+	if strings.Contains(line, `"status":`) {
+		t.Errorf("a canceled request has no response status to report: %q", line)
+	}
+}
+
+func TestClientAbortStillRecordsBrokeredCredential(t *testing.T) {
+	var buf bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = previous })
+
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	t.Cleanup(func() { close(release); upstream.Close() })
+
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jwt := "test.jwt.token"
+	scope := agentScope{projectID: "proj", environment: "dev", secretPath: "/"}
+	services := []*resolvedService{{
+		name:         "internal",
+		hostPatterns: parseHostPatterns(u.Hostname()),
+		isEnabled:    true,
+		credentials: []resolvedCredential{
+			{secretKey: "GITHUB_PAT", role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
+		},
+	}}
+	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
+
+	if _, err := fmt.Fprintf(client, "POST http://%s/issues HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nContent-Length: 0\r\n\r\n",
+		u.Host, u.Host, proxyAuthHeader("proj", "dev", "/", jwt)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_ = client.Close()
+
+	var line string
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		if line = buf.String(); strings.Contains(line, activityEventName) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(line, `"decision":"`+decisionBrokered+`"`) {
+		t.Errorf("a credential was applied, so the record must stay %q: %q", decisionBrokered, line)
+	}
+	if !strings.Contains(line, `"level":"info"`) {
+		t.Errorf("brokered records must stay at info so they survive the default filter: %q", line)
+	}
+	if !strings.Contains(line, "GITHUB_PAT") {
+		t.Errorf("the applied credential must still be named on the record: %q", line)
+	}
+	if strings.Contains(line, "real_secret") {
+		t.Errorf("the record must never contain the secret value: %q", line)
 	}
 }
