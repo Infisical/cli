@@ -527,9 +527,8 @@ func TestWebSocketOverConnectTunnel(t *testing.T) {
 			return
 		}
 		frames <- text
-		// Reply so the test can assert the upstream-to-client direction, which is a separate copier and was
-		// previously unasserted: a client that never receives frames is a broken WebSocket even if the
-		// outbound substitution is perfect.
+		// The return direction is a separate copier: a client that never receives frames is a broken WebSocket
+		// even when the outbound substitution is perfect.
 		_ = writeWSTextFrame(conn, "reply-from-upstream", false)
 		// Hold the handler open so the reply is not raced by the deferred close.
 		time.Sleep(2 * time.Second)

@@ -387,10 +387,9 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	// Normally this function owns the conn, but a handler inside the tunnel may hijack it again (a WebSocket
-	// pipe, which outlives the tunnel server). Serve returns as soon as the one-shot listener closes, which
-	// happens the moment the inner handler hijacks, so closing unconditionally here would cut a live WebSocket
-	// out from under itself.
+	// A handler inside the tunnel may hijack the conn again (a WebSocket pipe, which outlives the tunnel
+	// server). Serve returns the moment that happens, while the handler is still running, so closing
+	// unconditionally here would cut a live WebSocket out from under itself.
 	tunnelOwnsConn := true
 	defer func() {
 		if tunnelOwnsConn {
@@ -643,10 +642,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	return resp, outcome, nil
 }
 
-// prepareUpstream resolves the agent's services, picks the best match, enforces the unmatched-host policy and
-// injects that service's credentials into req. It stops short of dispatching: the HTTP path hands req to the
-// pooled transport, while the WebSocket path has to own the connection itself. The resolved credentials come
-// back so the WebSocket path can arm frame substitution.
+// Stops short of dispatching, because the HTTP path hands req to the pooled transport while the WebSocket path
+// has to own the connection itself. The resolved credentials come back so that path can arm frame
+// substitution.
 func (ps *proxyServer) prepareUpstream(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (forwardOutcome, []resolvedCredential, error) {
 	services, err := ps.resolver.get(jwt, scope)
 	if err != nil {

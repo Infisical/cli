@@ -22,16 +22,14 @@ import (
 )
 
 const (
-	// wsIdleTimeout bounds a silent WebSocket. Without it a stalled or abandoned connection pins a goroutine
-	// pair, an upstream TLS conn, and one of the proxy's maxConcurrentConns slots indefinitely. Real-time
-	// APIs and their keepalive pings sit well inside this window.
+	// Without an idle bound a stalled or abandoned connection pins a goroutine pair, an upstream conn, and one
+	// of the proxy's maxConcurrentConns slots indefinitely. Real-time keepalives sit well inside this window.
 	wsIdleTimeout = 10 * time.Minute
 
-	// wsResponseTimeout bounds the upstream's reply to the upgrade request.
 	wsResponseTimeout = 30 * time.Second
 
-	// maxWSSubstitutionPayload caps the frame payload buffered for substitution; larger text frames stream
-	// through untouched. Frame length is attacker-controlled, and auth payloads are tiny.
+	// Larger text frames stream through untouched: frame length is attacker-controlled and auth payloads are
+	// tiny, so buffering by the declared length would be a memory-exhaustion lever.
 	maxWSSubstitutionPayload = 1 << 20
 )
 
@@ -41,9 +39,8 @@ const (
 	wsOpClose = 0x8
 )
 
-// websocketHandshakeHeaderNames are the upgrade headers that have to survive stripHopByHopHeaders. Without
-// them the upstream never switches protocols, which is why the handshake fails outright when they are cut.
-// Connection is deliberately absent: it is rebuilt rather than restored, see prepareUpstream.
+// These have to survive stripHopByHopHeaders, or the upstream never switches protocols. Connection is
+// deliberately absent: prepareUpstream rebuilds it rather than carrying the agent's value over.
 var websocketHandshakeHeaderNames = []string{
 	"Origin",
 	"Sec-Websocket-Extensions",
@@ -67,8 +64,6 @@ func isWebSocketUpgrade(r *http.Request) bool {
 	return false
 }
 
-// captureWebSocketHandshakeHeaders snapshots the upgrade headers so they can be restored after the
-// hop-by-hop strip.
 func captureWebSocketHandshakeHeaders(src http.Header) http.Header {
 	captured := make(http.Header)
 	for _, name := range websocketHandshakeHeaderNames {
@@ -88,9 +83,8 @@ func restoreHeaders(dst, src http.Header) {
 	}
 }
 
-// serveWebSocket handles an upgrade request off the MITM tunnel (wss) or a plaintext forward request (ws).
-// It runs the same resolve-match-inject path as forwardHTTP, then takes over the connection instead of
-// relaying a response body: after 101 the proxy owns both sockets for the connection's lifetime.
+// Serves both wss (off the MITM tunnel) and ws (a plaintext forward request). After 101 the proxy owns both
+// sockets for the connection's lifetime rather than relaying through the ResponseWriter.
 func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, scheme, hostname, port, jwt string, scope agentScope) {
 	reqPath := r.URL.EscapedPath()
 	if len(reqPath) > maxLoggedPathLen {
@@ -108,10 +102,9 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		return
 	}
 
-	// Compression has to be settled before the handshake goes out. A permessage-deflate frame carries RSV1
-	// and is never substituted, so leaving the offer in place would let the connection negotiate compression
-	// and silently turn frame substitution into a no-op. Most clients offer it by default, so dropping the
-	// offer is what makes the surface work at all; it only costs bandwidth, and only when subs are armed.
+	// Settled before the handshake goes out. A permessage-deflate frame carries RSV1 and is never substituted,
+	// and most clients offer compression by default, so leaving the offer in would silently turn substitution
+	// into a no-op. Costs bandwidth, and only where the surface is actually used.
 	wsSubs := websocketSubstitutions(creds)
 	if len(wsSubs) > 0 && dropPerMessageDeflate(r.Header) {
 		log.Debug().
@@ -132,8 +125,7 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		ps.recordUsage(outcome.service.id)
 	}
 
-	// The upstream declined to upgrade: relay its response like any other, so the agent sees the real
-	// rejection (401, 404, ...) rather than a proxy error.
+	// Relay a refusal like any other response, so the agent sees the real 401 or 404 rather than a proxy error.
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		defer func() {
 			_ = resp.Body.Close()
@@ -153,9 +145,8 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		return
 	}
 
-	// The upgrade record reports only what was actually applied to the handshake. Credentials armed for frame
-	// substitution are not claimed here: no frame has been rewritten yet, and an agent may never send the
-	// placeholder at all. The close record below reports what really happened.
+	// Reports only what was applied to the handshake. Credentials armed for frame substitution are not claimed
+	// here: no frame has been rewritten yet, and the agent may never send the placeholder at all.
 	ps.emitActivity(r.Method, reqPath, hostname, port, decision, http.StatusSwitchingProtocols, scope, outcome, nil)
 
 	hijacker, ok := w.(http.Hijacker)
@@ -170,9 +161,8 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		return
 	}
 
-	// The inner tunnel server set ReadTimeout/WriteTimeout deadlines on this conn before the handler ran, and
-	// Hijack leaves them in place. Clearing them is what keeps a long-lived WebSocket from dying at
-	// tunnelReadTimeout; the pipe below applies its own idle deadline instead.
+	// Hijack leaves the server's ReadTimeout/WriteTimeout deadlines on the conn, which would kill a long-lived
+	// WebSocket at tunnelReadTimeout. The pipe below applies its own idle deadline instead.
 	_ = clientConn.SetDeadline(time.Time{})
 
 	_ = clientConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -185,8 +175,8 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 
 	substituted := pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, wsSubs)
 
-	// A connection that rewrote a credential is an audit event, so it is logged at the same level as a
-	// brokered request rather than being filtered out with the passthrough noise.
+	// A connection that rewrote a credential is an audit event, so it must not be filtered out with the
+	// passthrough noise.
 	level := zerolog.DebugLevel
 	if substituted > 0 {
 		level = zerolog.InfoLevel
@@ -204,9 +194,7 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		Msg("websocket closed")
 }
 
-// dropPerMessageDeflate removes any compression extension from an upgrade offer, reporting whether it
-// changed the header. Offers are comma separated and their parameters semicolon separated, so splitting on
-// commas is safe.
+// Offers are comma separated and their parameters semicolon separated, so splitting on commas is safe.
 func dropPerMessageDeflate(h http.Header) bool {
 	values := h.Values("Sec-Websocket-Extensions")
 	if len(values) == 0 {
@@ -240,9 +228,8 @@ func dropPerMessageDeflate(h http.Header) bool {
 	return true
 }
 
-// upstreamTLSConfig returns the TLS settings the plain HTTP path would use, so a WebSocket verifies its
-// upstream identically. The WebSocket dial cannot go through http.Transport (it needs the raw conn), which is
-// exactly why the config has to be read off the transport explicitly instead of being inherited.
+// The WebSocket dial needs the raw conn, so it cannot inherit the transport's settings by going through it.
+// Reading them off explicitly is what keeps upstream verification identical to the plain HTTP path.
 func (ps *proxyServer) upstreamTLSConfig(serverName string) *tls.Config {
 	cfg := &tls.Config{}
 	if t, ok := ps.transport.(*http.Transport); ok && t.TLSClientConfig != nil {
@@ -259,8 +246,8 @@ func (ps *proxyServer) upstreamTLSConfig(serverName string) *tls.Config {
 	return cfg
 }
 
-// dialWebSocketUpstream performs the upgrade handshake against the upstream on a connection the proxy owns,
-// because a hijacked WebSocket cannot be driven through http.Transport's pooled round tripper.
+// A hijacked WebSocket cannot be driven through http.Transport's pooled round tripper, so the handshake runs
+// on a connection the proxy owns.
 func (ps *proxyServer) dialWebSocketUpstream(ctx context.Context, outReq *http.Request) (net.Conn, *bufio.Reader, *http.Response, error) {
 	dialer := &net.Dialer{}
 	rawConn, err := dialer.DialContext(ctx, "tcp", outReq.URL.Host)
@@ -298,8 +285,7 @@ func (ps *proxyServer) dialWebSocketUpstream(ctx context.Context, outReq *http.R
 	return conn, reader, resp, nil
 }
 
-// writeWebSocketSwitchingResponse writes the 101 by hand: the ResponseWriter is already hijacked, so
-// Go's response machinery is no longer available to frame it.
+// The ResponseWriter is already hijacked, so Go's response machinery cannot frame this.
 func writeWebSocketSwitchingResponse(w io.Writer, resp *http.Response) error {
 	proto := resp.Proto
 	if proto == "" {
@@ -337,10 +323,9 @@ func writeWebSocketSwitchingResponse(w io.Writer, resp *http.Response) error {
 	return err
 }
 
-// isSafeWebSocketSwitchHeader keeps the handshake headers the client needs to accept the upgrade and drops
-// unknown Sec-* headers, so the upstream cannot smuggle extension state the proxy has not accounted for. It
-// also drops body-framing headers: a 101 carries no body, and a stray Content-Length or Transfer-Encoding
-// would desynchronize the client's frame parser.
+// Unknown Sec-* headers are dropped so the upstream cannot smuggle extension state the proxy has not
+// accounted for. Body-framing headers are dropped too: a 101 carries no body, and a stray Content-Length or
+// Transfer-Encoding would desynchronize the client's frame parser.
 func isSafeWebSocketSwitchHeader(name string) bool {
 	canonical := http.CanonicalHeaderKey(name)
 	switch canonical {
@@ -361,9 +346,8 @@ func isSafeWebSocketSwitchHeader(name string) bool {
 	return true
 }
 
-// pipeWebSocket relays frames both ways until either side closes, returning the number of client frames
-// rewritten. Substitution runs on the client-to-upstream direction only: the proxy must never inject a real
-// credential into a frame travelling back toward the agent.
+// Substitution runs on the client-to-upstream direction only: the proxy must never inject a real credential
+// into a frame travelling back toward the agent.
 func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, wsSubs []wsSubstitution) int {
 	done := make(chan struct{}, 2)
 	var closeOnce sync.Once
@@ -400,9 +384,8 @@ func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn
 	return substituted
 }
 
-// copyWithIdleTimeout streams src to dst, refreshing srcConn's read deadline each iteration so a silent
-// connection trips the deadline instead of blocking forever. srcConn must be the net.Conn that src reads
-// from: the deadline only covers real socket reads, not bytes already buffered.
+// srcConn must be the net.Conn that src reads from: the refreshed deadline only covers real socket reads, not
+// bytes already buffered, and a silent connection has to trip it rather than block forever.
 func copyWithIdleTimeout(dst io.Writer, src io.Reader, srcConn net.Conn) {
 	buf := make([]byte, 32*1024)
 	for {
@@ -419,9 +402,8 @@ func copyWithIdleTimeout(dst io.Writer, src io.Reader, srcConn net.Conn) {
 	}
 }
 
-// copyWSFramesWithSubstitution parses frames on the way to the upstream and substitutes placeholders in
-// complete, uncompressed text frames. Binary, fragmented, compressed (RSV1) and oversized frames are
-// forwarded byte-for-byte, so an unsupported shape degrades to passthrough rather than corrupting the stream.
+// Binary, fragmented, compressed (RSV1) and oversized frames are forwarded byte-for-byte, so a shape the
+// parser cannot safely rewrite degrades to passthrough instead of corrupting the stream.
 func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn, subs []wsSubstitution) int {
 	r := bufio.NewReaderSize(src, 32*1024)
 	substituted := 0
@@ -546,9 +528,8 @@ func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn
 	}
 }
 
-// writeSubstitutedFrame re-encodes a text frame whose payload changed length, preserving FIN/RSV/opcode and
-// generating a fresh masking key (RFC 6455 section 5.3 requires client masks be unpredictable, so reusing
-// the client's key would leak the plaintext relationship between the placeholder and the real credential).
+// RFC 6455 section 5.3 requires client masks be unpredictable, and reusing the client's key would leak the
+// XOR relationship between the placeholder and the real credential, so a fresh key is generated here.
 func writeSubstitutedFrame(dst io.Writer, firstByte byte, payload []byte, masked bool) error {
 	newLen := uint64(len(payload))
 
