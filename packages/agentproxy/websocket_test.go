@@ -128,8 +128,28 @@ func wsSubs(placeholder, value string) []wsSubstitution {
 func runFrameCopy(t *testing.T, frames []byte, subs []wsSubstitution) ([]byte, int) {
 	t.Helper()
 	var dst bytes.Buffer
-	n := copyWSFramesWithSubstitution(&dst, bytes.NewReader(frames), wsFakeConn{}, subs)
+	idle := &wsIdle{conns: [2]net.Conn{wsFakeConn{}, wsFakeConn{}}}
+	n := copyWSFrames(&dst, bytes.NewReader(frames), idle, forwardReplacements(subs))
 	return dst.Bytes(), n
+}
+
+// runReverseFrameCopy drives the upstream-to-client direction, where the swap runs the other way.
+func runReverseFrameCopy(t *testing.T, frames []byte, subs []wsSubstitution) ([]byte, int) {
+	t.Helper()
+	var dst bytes.Buffer
+	idle := &wsIdle{conns: [2]net.Conn{wsFakeConn{}, wsFakeConn{}}}
+	n := copyWSFrames(&dst, bytes.NewReader(frames), idle, reverseReplacements(subs))
+	return dst.Bytes(), n
+}
+
+// unmaskedTextFrame is what a server sends: RFC 6455 forbids masking server-to-client frames.
+func unmaskedTextFrame(t *testing.T, text string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := writeWSTextFrame(&buf, text, false); err != nil {
+		t.Fatalf("writeWSTextFrame: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func TestWebSocketSubstitutesTextFrame(t *testing.T) {
@@ -687,6 +707,81 @@ func TestUpgradeConnectionHeaderIsRebuilt(t *testing.T) {
 	if got := r.Header.Get("Sec-WebSocket-Key"); got == "" {
 		t.Fatal("Sec-WebSocket-Key was lost, the handshake would fail")
 	}
+}
+
+// The agent chooses where its placeholder goes, so it can plant one in a field the service echoes and read the
+// real credential out of the reply. The return path has to swap it back.
+func TestWebSocketReverseSubstitutionRedactsReflectedCredential(t *testing.T) {
+	reply := `{"correlation_id":"xoxb-real","error":"bad token xoxb-real"}`
+	frames := append(unmaskedTextFrame(t, reply), []byte{0x88, 0x00}...)
+
+	out, n := runReverseFrameCopy(t, frames, wsSubs("__tk__", "xoxb-real"))
+	if n != 1 {
+		t.Fatalf("redacted count = %d, want 1", n)
+	}
+	got, err := readWSTextFrame(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("readWSTextFrame: %v", err)
+	}
+	if strings.Contains(got, "xoxb-real") {
+		t.Fatalf("the real credential reached the agent: %q", got)
+	}
+	if want := `{"correlation_id":"__tk__","error":"bad token __tk__"}`; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A server frame must stay unmasked after being rewritten, or the client will reject it.
+func TestWebSocketReverseSubstitutionKeepsServerFramesUnmasked(t *testing.T) {
+	frames := append(unmaskedTextFrame(t, "token xoxb-real"), []byte{0x88, 0x00}...)
+
+	out, _ := runReverseFrameCopy(t, frames, wsSubs("__tk__", "xoxb-real"))
+	if out[1]&0x80 != 0 {
+		t.Fatal("rewritten server frame was masked")
+	}
+}
+
+func TestWebSocketReverseSubstitutionLeavesUnrelatedFrames(t *testing.T) {
+	frames := append(unmaskedTextFrame(t, `{"ok":true}`), []byte{0x88, 0x00}...)
+
+	out, n := runReverseFrameCopy(t, frames, wsSubs("__tk__", "xoxb-real"))
+	if n != 0 {
+		t.Fatalf("redacted count = %d, want 0", n)
+	}
+	got, err := readWSTextFrame(bytes.NewReader(out))
+	if err != nil || got != `{"ok":true}` {
+		t.Fatalf("got %q (err %v)", got, err)
+	}
+}
+
+// Traffic either way is activity. A per-direction deadline would tear down a subscribe-mostly stream that
+// receives for hours while sending nothing.
+func TestWSIdleExtendsBothDirections(t *testing.T) {
+	a, b := &deadlineRecorder{}, &deadlineRecorder{}
+	idle := &wsIdle{conns: [2]net.Conn{a, b}}
+
+	idle.extend()
+	if a.calls != 1 || b.calls != 1 {
+		t.Fatalf("extend touched %d and %d deadlines, want 1 each", a.calls, b.calls)
+	}
+	if a.last.IsZero() || b.last.IsZero() {
+		t.Fatal("extend did not set a deadline on both conns")
+	}
+	if a.last.Before(time.Now().Add(wsIdleTimeout / 2)) {
+		t.Fatalf("deadline %v is not roughly wsIdleTimeout out", a.last)
+	}
+}
+
+type deadlineRecorder struct {
+	wsFakeConn
+	calls int
+	last  time.Time
+}
+
+func (d *deadlineRecorder) SetReadDeadline(t time.Time) error {
+	d.calls++
+	d.last = t
+	return nil
 }
 
 // A compressed frame carries RSV1 and is never substituted, so the offer has to be dropped or the surface

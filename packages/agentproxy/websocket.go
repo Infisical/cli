@@ -28,6 +28,10 @@ const (
 
 	wsResponseTimeout = 30 * time.Second
 
+	// The response timeout only starts once TCP is up, so without a dial bound an agent can aim a WebSocket at a
+	// black-holed address and pin a connection slot for however long the OS takes to give up.
+	wsDialTimeout = 10 * time.Second
+
 	// Larger text frames stream through untouched: frame length is attacker-controlled and auth payloads are
 	// tiny, so buffering by the declared length would be a memory-exhaustion lever.
 	maxWSSubstitutionPayload = 1 << 20
@@ -173,15 +177,15 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 	}
 	_ = clientConn.SetWriteDeadline(time.Time{})
 
-	substituted := pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, wsSubs)
+	counts := pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, wsSubs)
 
 	// A connection that rewrote a credential is an audit event, so it must not be filtered out with the
 	// passthrough noise.
 	level := zerolog.DebugLevel
-	if substituted > 0 {
+	if counts.substituted > 0 || counts.redacted > 0 {
 		level = zerolog.InfoLevel
 	}
-	log.WithLevel(level).
+	ev := log.WithLevel(level).
 		Str("event", activityEventName).
 		Str("decision", decision).
 		Str("agentId", outcome.agentID).
@@ -190,8 +194,18 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		Str("secretPath", scope.secretPath).
 		Str("host", hostname).
 		Str("path", reqPath).
-		Int("framesSubstituted", substituted).
-		Msg("websocket closed")
+		Int("framesSubstituted", counts.substituted).
+		Int("framesRedacted", counts.redacted)
+	// Named only once a frame was actually rewritten, so the record cannot claim a credential was applied to a
+	// connection that never carried one.
+	if counts.substituted > 0 {
+		labels := make([]AppliedCredential, 0, len(wsSubs))
+		for _, sub := range wsSubs {
+			labels = append(labels, sub.label)
+		}
+		ev = ev.Interface("credentials", labels)
+	}
+	ev.Msg("websocket closed")
 }
 
 // Offers are comma separated and their parameters semicolon separated, so splitting on commas is safe.
@@ -249,7 +263,7 @@ func (ps *proxyServer) upstreamTLSConfig(serverName string) *tls.Config {
 // A hijacked WebSocket cannot be driven through http.Transport's pooled round tripper, so the handshake runs
 // on a connection the proxy owns.
 func (ps *proxyServer) dialWebSocketUpstream(ctx context.Context, outReq *http.Request) (net.Conn, *bufio.Reader, *http.Response, error) {
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{Timeout: wsDialTimeout}
 	rawConn, err := dialer.DialContext(ctx, "tcp", outReq.URL.Host)
 	if err != nil {
 		return nil, nil, nil, err
@@ -346,9 +360,30 @@ func isSafeWebSocketSwitchHeader(name string) bool {
 	return true
 }
 
-// Substitution runs on the client-to-upstream direction only: the proxy must never inject a real credential
-// into a frame travelling back toward the agent.
-func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, wsSubs []wsSubstitution) int {
+// wsIdle extends both read deadlines together. Per-direction deadlines would tear down a live connection: a
+// subscribe-mostly stream can receive for hours while sending nothing, and its own deadline would expire and
+// take the whole connection with it. Traffic either way counts as activity, so a timeout means both directions
+// have gone quiet.
+type wsIdle struct {
+	mu    sync.Mutex
+	conns [2]net.Conn
+}
+
+func (w *wsIdle) extend() {
+	deadline := time.Now().Add(wsIdleTimeout)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, c := range w.conns {
+		_ = c.SetReadDeadline(deadline)
+	}
+}
+
+type wsCounts struct {
+	substituted int
+	redacted    int
+}
+
+func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, wsSubs []wsSubstitution) wsCounts {
 	done := make(chan struct{}, 2)
 	var closeOnce sync.Once
 	closeBoth := func() {
@@ -358,7 +393,10 @@ func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn
 		})
 	}
 
-	substituted := 0
+	idle := &wsIdle{conns: [2]net.Conn{clientConn, upstreamConn}}
+	idle.extend()
+
+	var counts wsCounts
 	go func() {
 		defer func() {
 			done <- struct{}{}
@@ -366,9 +404,9 @@ func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn
 		}()
 		src := io.MultiReader(clientReader, clientConn)
 		if len(wsSubs) > 0 {
-			substituted = copyWSFramesWithSubstitution(upstreamConn, src, clientConn, wsSubs)
+			counts.substituted = copyWSFrames(upstreamConn, src, idle, forwardReplacements(wsSubs))
 		} else {
-			copyWithIdleTimeout(upstreamConn, src, clientConn)
+			copyWithIdleTimeout(upstreamConn, src, idle)
 		}
 	}()
 	go func() {
@@ -376,22 +414,29 @@ func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn
 			done <- struct{}{}
 			closeBoth()
 		}()
-		copyWithIdleTimeout(clientConn, io.MultiReader(upstreamReader, upstreamConn), upstreamConn)
+		src := io.MultiReader(upstreamReader, upstreamConn)
+		// The agent picks where its placeholder goes, so it can plant one in a field the service echoes (a
+		// correlation id, an error message) and read the real credential out of the reply. Swapping the value
+		// back on the way in closes that, and also stops a service that quotes the credential in an error from
+		// leaking it by accident.
+		if len(wsSubs) > 0 {
+			counts.redacted = copyWSFrames(clientConn, src, idle, reverseReplacements(wsSubs))
+		} else {
+			copyWithIdleTimeout(clientConn, src, idle)
+		}
 	}()
 
 	<-done
 	<-done
-	return substituted
+	return counts
 }
 
-// srcConn must be the net.Conn that src reads from: the refreshed deadline only covers real socket reads, not
-// bytes already buffered, and a silent connection has to trip it rather than block forever.
-func copyWithIdleTimeout(dst io.Writer, src io.Reader, srcConn net.Conn) {
+func copyWithIdleTimeout(dst io.Writer, src io.Reader, idle *wsIdle) {
 	buf := make([]byte, 32*1024)
 	for {
-		_ = srcConn.SetReadDeadline(time.Now().Add(wsIdleTimeout))
 		n, err := src.Read(buf)
 		if n > 0 {
+			idle.extend()
 			if _, werr := dst.Write(buf[:n]); werr != nil {
 				return
 			}
@@ -404,16 +449,14 @@ func copyWithIdleTimeout(dst io.Writer, src io.Reader, srcConn net.Conn) {
 
 // Binary, fragmented, compressed (RSV1) and oversized frames are forwarded byte-for-byte, so a shape the
 // parser cannot safely rewrite degrades to passthrough instead of corrupting the stream.
-func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn, subs []wsSubstitution) int {
+func copyWSFrames(dst io.Writer, src io.Reader, idle *wsIdle, reps []wsReplacement) int {
 	r := bufio.NewReaderSize(src, 32*1024)
-	substituted := 0
+	rewritten := 0
 
 	for {
-		_ = srcConn.SetReadDeadline(time.Now().Add(wsIdleTimeout))
-
 		hdr := make([]byte, 2)
 		if _, err := io.ReadFull(r, hdr); err != nil {
-			return substituted
+			return rewritten
 		}
 
 		fin := hdr[0]&0x80 != 0
@@ -427,26 +470,26 @@ func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn
 		case 126:
 			extHdr = make([]byte, 2)
 			if _, err := io.ReadFull(r, extHdr); err != nil {
-				return substituted
+				return rewritten
 			}
 			payloadLen = uint64(binary.BigEndian.Uint16(extHdr))
 		case 127:
 			extHdr = make([]byte, 8)
 			if _, err := io.ReadFull(r, extHdr); err != nil {
-				return substituted
+				return rewritten
 			}
 			payloadLen = binary.BigEndian.Uint64(extHdr)
 			// RFC 6455 section 5.2: the MSB must be 0. Rejecting here prevents an int64 overflow in io.CopyN
 			// that would desynchronize the frame parser.
 			if payloadLen > math.MaxInt64 {
-				return substituted
+				return rewritten
 			}
 		}
 
 		var maskKey [4]byte
 		if masked {
 			if _, err := io.ReadFull(r, maskKey[:]); err != nil {
-				return substituted
+				return rewritten
 			}
 		}
 
@@ -476,23 +519,25 @@ func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn
 					Msg("websocket text frame not eligible for substitution; forwarding unchanged")
 			}
 			if !writeFrameHeader() {
-				return substituted
+				return rewritten
 			}
 			if payloadLen > 0 {
 				if _, err := io.CopyN(dst, r, int64(payloadLen)); err != nil {
-					return substituted
+					return rewritten
 				}
 			}
+			idle.extend()
 			if opcode == wsOpClose {
-				return substituted
+				return rewritten
 			}
 			continue
 		}
 
 		payload := make([]byte, payloadLen)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return substituted
+			return rewritten
 		}
+		idle.extend()
 
 		raw := make([]byte, len(payload))
 		copy(raw, payload)
@@ -504,8 +549,8 @@ func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn
 		}
 
 		text := string(payload)
-		for _, sub := range subs {
-			if replaced, ok := replaceWithinLimit(text, sub.placeholder, sub.value, maxWSSubstitutionPayload); ok {
+		for _, rep := range reps {
+			if replaced, ok := replaceWithinLimit(text, rep.from, rep.to, maxWSSubstitutionPayload); ok {
 				text = replaced
 			}
 		}
@@ -513,18 +558,18 @@ func copyWSFramesWithSubstitution(dst io.Writer, src io.Reader, srcConn net.Conn
 		// Nothing matched: forward the original bytes rather than re-encoding an identical frame.
 		if text == string(payload) {
 			if !writeFrameHeader() {
-				return substituted
+				return rewritten
 			}
 			if _, err := dst.Write(raw); err != nil {
-				return substituted
+				return rewritten
 			}
 			continue
 		}
 
 		if err := writeSubstitutedFrame(dst, hdr[0], []byte(text), masked); err != nil {
-			return substituted
+			return rewritten
 		}
-		substituted++
+		rewritten++
 	}
 }
 

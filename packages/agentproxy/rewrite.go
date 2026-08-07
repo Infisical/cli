@@ -30,6 +30,29 @@ type wsSubstitution struct {
 	label       AppliedCredential
 }
 
+// wsReplacement is one direction's swap. Outbound turns the placeholder into the real value; inbound turns it
+// back, so a value the service reflects never reaches the agent.
+type wsReplacement struct {
+	from string
+	to   string
+}
+
+func forwardReplacements(subs []wsSubstitution) []wsReplacement {
+	out := make([]wsReplacement, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, wsReplacement{from: sub.placeholder, to: sub.value})
+	}
+	return out
+}
+
+func reverseReplacements(subs []wsSubstitution) []wsReplacement {
+	out := make([]wsReplacement, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, wsReplacement{from: sub.value, to: sub.placeholder})
+	}
+	return out
+}
+
 func websocketSubstitutions(creds []resolvedCredential) []wsSubstitution {
 	var out []wsSubstitution
 	for _, cred := range creds {
