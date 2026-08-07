@@ -1030,6 +1030,10 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModeWinRM {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting WinRM request from non-platform actor")
+			return
+		}
 		log.Info().Msg("Starting WinRM handler")
 		if err := serveWinrmOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
 			log.Error().Err(err).Msg("WinRM handler ended with error")

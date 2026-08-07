@@ -22,6 +22,7 @@ type sshExecEnvelope struct {
 	Username    string `json:"username"`
 	Password    string `json:"password"`
 	PrivateKey  string `json:"privateKey"`
+	Passphrase  string `json:"passphrase"`
 	Certificate string `json:"certificate"`
 	TimeoutMs   int    `json:"timeoutMs"`
 }
@@ -45,18 +46,25 @@ type sshExecErrorBody struct {
 	Message string `json:"message"`
 }
 
+func parseSSHExecPrivateKey(privateKey, passphrase string) (ssh.Signer, error) {
+	if passphrase != "" {
+		return ssh.ParsePrivateKeyWithPassphrase([]byte(privateKey), []byte(passphrase))
+	}
+	return ssh.ParsePrivateKey([]byte(privateKey))
+}
+
 func buildSSHExecAuth(env sshExecEnvelope) ([]ssh.AuthMethod, error) {
 	switch env.AuthMethod {
 	case "password":
 		return []ssh.AuthMethod{ssh.Password(env.Password)}, nil
 	case "public-key":
-		signer, err := ssh.ParsePrivateKey([]byte(env.PrivateKey))
+		signer, err := parseSSHExecPrivateKey(env.PrivateKey, env.Passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse private key: %w", err)
 		}
 		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
 	case "certificate":
-		signer, err := ssh.ParsePrivateKey([]byte(env.PrivateKey))
+		signer, err := parseSSHExecPrivateKey(env.PrivateKey, env.Passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse private key: %w", err)
 		}

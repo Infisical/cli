@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,19 @@ type winrmRemoveParams struct {
 	Paths []string `json:"paths"`
 }
 
+type winrmRunCommandParams struct {
+	winrmTransportParams
+	Command   string `json:"command"`
+	TimeoutMs int    `json:"timeoutMs"`
+}
+
+type winrmRunCommandResult struct {
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exitCode"`
+	Truncated bool   `json:"truncated"`
+}
+
 type winrmRotateParams struct {
 	winrmTransportParams
 	Kind        string `json:"kind"` // "local" or "domain"
@@ -106,6 +120,10 @@ const (
 	winrmOpDeadline          = 120 * time.Second
 	winrmConnDeadline        = winrmOpDeadline + 15*time.Second
 	maxWinrmRequestBodyBytes = 4 * 1024 * 1024
+
+	maxWinrmCommandChars       = 2048
+	defaultWinrmCommandTimeout = 30 * time.Second
+	maxWinrmCommandTimeout     = 90 * time.Second
 )
 
 // serveWinrmOverTLS reads a single HTTP request off the TLS relay connection and dispatches it to the mux.
@@ -153,6 +171,7 @@ var serveWinrmMux = sync.OnceValue(func() *http.ServeMux {
 	mux.HandleFunc("/v1/test-connection", wrapWinrm(handleWinrmConnectionTest))
 	mux.HandleFunc("/v1/deliver-files", wrapWinrm(handleWinrmDeliverFiles))
 	mux.HandleFunc("/v1/remove-files", wrapWinrm(handleWinrmRemoveFiles))
+	mux.HandleFunc("/v1/run-command", wrapWinrm(handleWinrmRunCommand))
 	mux.HandleFunc("/v1/enumerate-accounts", wrapWinrm(handleWinrmEnumerateAccounts))
 	mux.HandleFunc("/v1/enumerate-dependencies", wrapWinrm(handleWinrmEnumerateDependencies))
 	mux.HandleFunc("/v1/rotate-credential", wrapWinrm(handleWinrmRotateCredential))
@@ -290,6 +309,43 @@ func handleWinrmRemoveFiles(ctx context.Context, env *winrmRequestEnvelope) (any
 		return nil, err
 	}
 	return map[string]any{"removed": len(p.Paths)}, nil
+}
+
+// handleWinrmRunCommand runs a single command on the host. A non-zero exit code is not an RPC error
+func handleWinrmRunCommand(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
+	var p winrmRunCommandParams
+	if err := json.Unmarshal(env.Params, &p); err != nil {
+		return nil, fmt.Errorf("malformed run-command params")
+	}
+	if strings.TrimSpace(p.Command) == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+	if len(p.Command) > maxWinrmCommandChars {
+		return nil, fmt.Errorf("command exceeds %d characters", maxWinrmCommandChars)
+	}
+
+	result, err := winrm.RunCommand(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.Command, resolveWinrmCommandTimeout(p.TimeoutMs))
+	if err != nil {
+		return nil, err
+	}
+	return winrmRunCommandResult{
+		Stdout:    result.Stdout,
+		Stderr:    result.Stderr,
+		ExitCode:  result.ExitCode,
+		Truncated: result.Truncated,
+	}, nil
+}
+
+// resolveWinrmCommandTimeout clamps a requested timeout in milliseconds to the ceiling.
+func resolveWinrmCommandTimeout(timeoutMs int) time.Duration {
+	// Compare in milliseconds: converting to a Duration first overflows int64 for large values.
+	if timeoutMs <= 0 {
+		return defaultWinrmCommandTimeout
+	}
+	if timeoutMs > int(maxWinrmCommandTimeout/time.Millisecond) {
+		return maxWinrmCommandTimeout
+	}
+	return time.Duration(timeoutMs) * time.Millisecond
 }
 
 func handleWinrmEnumerateAccounts(ctx context.Context, env *winrmRequestEnvelope) (any, error) {
