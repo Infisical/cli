@@ -330,8 +330,9 @@ func (s *runSession) sandboxChild(argv, env []string, noSandbox bool) (*exec.Cmd
 // These are kept apart from pamDenyPaths because a path mask does not cover a socket. Connecting to one
 // is a network operation, so it survives a file deny and needs the socket-specific control instead.
 //
-// Symlinked sockets are listed by their target as well, since seatbelt matches the resolved path and
-// Docker Desktop points /var/run/docker.sock at the one under ~/.docker.
+// Each candidate is listed by its resolved target rather than as typed, which matters because both
+// platforms act on the real file: seatbelt matches the resolved path, and Docker Desktop points
+// /var/run/docker.sock at the one under ~/.docker.
 func pamDenySockets(home string) []string {
 	candidates := []string{
 		"/var/run/docker.sock",
@@ -357,10 +358,21 @@ func pamDenySockets(home string) []string {
 
 	sockets := make([]string, 0, len(candidates))
 	for _, path := range candidates {
-		sockets = append(sockets, path)
-		if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != path {
+		// The resolved path replaces the guessed one rather than joining it. Blocking the real file is
+		// what does the work on both platforms, since the kernel resolves the link before the connect
+		// and seatbelt matches the resolved path anyway.
+		//
+		// Listing the unresolved path as well actively breaks the Linux sandbox. /var/run is a symlink
+		// to /run on most distros, so os.Stat says /var/run/containerd/containerd.sock exists, and
+		// bwrap is then asked to mount there; it will not create a mount destination through a
+		// symlinked parent, so it aborts the whole run rather than skipping the entry.
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
 			sockets = append(sockets, resolved)
+			continue
 		}
+		// Unresolvable means nothing is there yet. Kept anyway: bwrap skips a destination that does not
+		// exist, but seatbelt denies by path, so listing it still covers a socket that appears mid-run.
+		sockets = append(sockets, path)
 	}
 	return sockets
 }
