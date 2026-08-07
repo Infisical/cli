@@ -264,27 +264,55 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
 		slog.Info("Mock HTTP server started", "url", serverURL)
 
-		k8sPamResResp, err := c.CreateKubernetesPamResourceWithResponse(
-			ctx,
-			client.CreateKubernetesPamResourceJSONRequestBody{
-				ProjectId: uuid.MustParse(projectId),
-				GatewayId: &gatewayId,
-				Name:      "k8s-resource",
-				ConnectionDetails: struct {
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-					Url                   string  `json:"url"`
-				}{
-					Url:                   serverURL,
-					SslRejectUnauthorized: false,
-				},
-			})
+		// The revamped PAM model creates a kubernetes account via
+		// folder -> account template (type=kubernetes) -> account.
+		folderResp, err := c.CreatePamFolderWithResponse(ctx, client.CreatePamFolderJSONRequestBody{
+			Name: "k8s-folder",
+		})
 		require.NoError(t, err)
-		require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
+		require.Equal(t, http.StatusOK, folderResp.StatusCode())
+		require.NotNil(t, folderResp.JSON200)
+		folderId := folderResp.JSON200.Folder.Id
+
+		templateResp, err := c.CreatePamAccountTemplateWithResponse(ctx, client.CreatePamAccountTemplateJSONRequestBody{
+			Name: "k8s-template",
+			Type: "kubernetes",
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, templateResp.StatusCode())
+		require.NotNil(t, templateResp.JSON200)
+		templateId := templateResp.JSON200.Template.Id
+
+		acctResp, err := c.CreateKubernetesPamAccountWithResponse(ctx, client.CreateKubernetesPamAccountJSONRequestBody{
+			Name:       "k8s-account",
+			FolderId:   folderId,
+			TemplateId: templateId,
+			GatewayId:  &gatewayId,
+			ConnectionDetails: struct {
+				SslCertificate        *string `json:"sslCertificate,omitempty"`
+				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+				Url                   string  `json:"url"`
+			}{
+				Url:                   serverURL,
+				SslRejectUnauthorized: false,
+			},
+			Credentials: struct {
+				AuthMethod          string `json:"authMethod"`
+				ServiceAccountToken string `json:"serviceAccountToken"`
+			}{
+				AuthMethod:          "service-account-token",
+				ServiceAccountToken: "e2e-dummy-token",
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, acctResp.StatusCode())
 		require.True(t, versionEndpointHit)
 	})
 
 	t.Run("redis", func(t *testing.T) {
+		// TODO: re-enable once redis PAM is re-implemented on the backend.
+		// redis exists in the PamAccountType enum but has no registered account route on current backend main, so creation 404s.
+		t.Skip("skipping: redis PAM is not currently implemented as an account type on the backend; will be re-added soon")
 		t.Parallel()
 		ctx := t.Context()
 		// Start a Redis container using testcontainers Redis module
