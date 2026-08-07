@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -139,6 +140,11 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 			if storedToken, _ := localkmip.LoadStoredAccessToken(serverName); storedToken != "" {
 				log.Info().Msg("Using stored KMIP server access token")
 				serverConfig.AccessToken = storedToken
+				// Only AWS enrollment persists a server ID, so its presence means this server can
+				// re-authenticate via STS when the stored token is rejected mid-run.
+				if storedServerID, _ := localkmip.LoadStoredServerID(serverName); storedServerID != "" {
+					serverConfig.RefreshAccessToken = newAwsRefreshAccessTokenFunc(serverName, storedServerID)
+				}
 			}
 		}
 		if serverConfig.AccessToken == "" {
@@ -147,6 +153,33 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 	}
 
 	kmip.StartServer(serverConfig)
+}
+
+// newAwsRefreshAccessTokenFunc returns a function that re-authenticates the KMIP server via
+// AWS STS and persists the new access token, used by the renewal loop when the current token
+// is rejected. Bounded timeouts so a hung API call cannot stall renewal indefinitely.
+func newAwsRefreshAccessTokenFunc(serverName, kmipServerID string) func() (string, error) {
+	return func() (string, error) {
+		refreshClient, err := util.GetRestyClientWithCustomHeaders()
+		if err != nil {
+			return "", fmt.Errorf("unable to create HTTP client: %w", err)
+		}
+		refreshClient.SetTimeout(30 * time.Second)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		newToken, err := localkmip.LoginKmipServerWithAws(ctx, refreshClient, kmipServerID)
+		if err != nil {
+			return "", fmt.Errorf("AWS Auth re-login failed: %w", err)
+		}
+
+		if err := localkmip.SaveAccessToken(serverName, newToken); err != nil {
+			log.Warn().Msgf("failed to persist refreshed KMIP access token: %v", err)
+		}
+
+		return newToken, nil
+	}
 }
 
 // enrollKmipServer obtains a KMIP server access token via token or AWS enrollment,
@@ -187,25 +220,7 @@ func enrollKmipServer(cmd *cobra.Command, enrollMethod, serverName string) (stri
 
 		log.Info().Msgf("KMIP server authenticated via AWS Auth. State saved to %s", localkmip.GetConfPathDisplay(serverName))
 
-		refreshAccessToken := func() (string, error) {
-			refreshClient, err := util.GetRestyClientWithCustomHeaders()
-			if err != nil {
-				return "", fmt.Errorf("unable to create HTTP client: %w", err)
-			}
-
-			newToken, err := localkmip.LoginKmipServerWithAws(context.Background(), refreshClient, kmipServerID)
-			if err != nil {
-				return "", fmt.Errorf("AWS Auth re-login failed: %w", err)
-			}
-
-			if err := localkmip.SaveAccessToken(serverName, newToken); err != nil {
-				log.Warn().Msgf("failed to persist refreshed KMIP access token: %v", err)
-			}
-
-			return newToken, nil
-		}
-
-		return accessToken, refreshAccessToken
+		return accessToken, newAwsRefreshAccessTokenFunc(serverName, kmipServerID)
 	}
 
 	// Enrollment token path
