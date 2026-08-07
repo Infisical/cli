@@ -1,25 +1,21 @@
 package pam
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
+	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -65,149 +61,111 @@ func startSSHContainer(t *testing.T, ctx context.Context, env map[string]string)
 	return ctr, host, port.Int()
 }
 
-func createSSHPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
-	resp, err := infra.ApiClient.CreateSshPamResourceWithResponse(
-		ctx,
-		client.CreateSshPamResourceJSONRequestBody{
-			ProjectId: uuid.MustParse(infra.ProjectId),
-			GatewayId: &infra.GatewayId,
-			Name:      name,
-			ConnectionDetails: struct {
-				Host string  `json:"host"`
-				Port float32 `json:"port"`
-			}{
-				Host: host,
-				Port: float32(port),
-			},
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode())
-	slog.Info("Created SSH PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
-	return resp.JSON200.Resource.Id
-}
-
-func createSSHPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceId uuid.UUID, name string, credentials map[string]interface{}) {
-	body, err := json.Marshal(map[string]interface{}{
-		"resourceId":      resourceId.String(),
-		"name":            name,
-		"rotationEnabled": false,
-		"credentials":     credentials,
-	})
-	require.NoError(t, err)
-
-	result := helpers.WaitFor(t, helpers.WaitForOptions{
-		Timeout:  90 * time.Second,
-		Interval: 3 * time.Second,
-		Condition: func() helpers.ConditionResult {
-			resp, callErr := infra.ApiClient.CreateSshPamAccountWithBodyWithResponse(
-				ctx, "application/json", bytes.NewReader(append([]byte(nil), body...)),
-			)
-			if callErr != nil {
-				slog.Warn("SSH PAM account creation attempt failed, retrying...", "error", callErr)
-				return helpers.ConditionWait
-			}
-			if resp.StatusCode() != http.StatusOK {
-				slog.Warn("SSH PAM account creation returned non-200, retrying...", "status", resp.StatusCode(), "body", string(resp.Body))
-				return helpers.ConditionWait
-			}
-			return helpers.ConditionSuccess
-		},
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "SSH PAM account creation should succeed for %s", name)
-	slog.Info("Created SSH PAM account", "name", name)
-}
-
-func runSSHSessionAndVerify(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceName, accountName, command, expectedOutput string) {
-	stdinReader, stdinWriter := io.Pipe()
-
+// runSSHSessionAndVerify starts the SSH proxy (`pam access <folder>/<account>`), connects an SSH
+// client to the local port (the gateway injects credentials, so the client uses no auth), runs a
+// command, and verifies the output.
+func runSSHSessionAndVerify(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName, accountName, command, expectedOutput string) {
+	freePort := helpers.GetFreePort()
 	pamCmd := helpers.Command{
 		Test:               t,
 		RunMethod:          helpers.RunMethodSubprocess,
 		DisableTempHomeDir: true,
-		Stdin:              stdinReader,
 		Args: []string{
-			"pam", "ssh", "access",
-			"--resource", resourceName,
-			"--account", accountName,
-			"--project-id", infra.ProjectId,
+			"pam", "access", fmt.Sprintf("%s/%s", folderName, accountName),
 			"--duration", "5m",
+			"--port", fmt.Sprintf("%d", freePort),
 		},
 		Env: map[string]string{
 			"HOME":              infra.SharedHomeDir,
 			"INFISICAL_API_URL": infra.Infisical.ApiUrl(t),
-			"PATH":              os.Getenv("PATH"),
 		},
 	}
 	pamCmd.Start(ctx)
 	t.Cleanup(pamCmd.Stop)
 
-	go func() {
-		fmt.Fprintln(stdinWriter, command)
-	}()
-
-	echoResult := helpers.WaitFor(t, helpers.WaitForOptions{
+	startResult := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &pamCmd,
-		Timeout:          60 * time.Second,
-		Interval:         1 * time.Second,
 		Condition: func() helpers.ConditionResult {
-			if strings.Contains(pamCmd.Stdout(), expectedOutput) {
+			if strings.Contains(pamCmd.Stdout(), "SSH Proxy Session Started") {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
 		},
 	})
-	if echoResult != helpers.WaitSuccess {
-		pamCmd.DumpOutput()
+	if startResult != helpers.WaitSuccess {
+		infra.DumpOutput(&pamCmd)
 	}
-	require.Equal(t, helpers.WaitSuccess, echoResult, "Should see expected output %q", expectedOutput)
+	require.Equal(t, helpers.WaitSuccess, startResult, "SSH proxy should start successfully")
 
-	stdinWriter.Close()
-
-	exitResult := helpers.WaitFor(t, helpers.WaitForOptions{
-		Timeout:  30 * time.Second,
-		Interval: 2 * time.Second,
+	var output string
+	echoResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		EnsureCmdRunning: &pamCmd,
+		Timeout:          60 * time.Second,
+		Interval:         2 * time.Second,
 		Condition: func() helpers.ConditionResult {
-			if !pamCmd.IsRunning() {
-				if pamCmd.ExitCode() == 0 {
-					slog.Info("PAM SSH access completed successfully")
-					return helpers.ConditionSuccess
-				}
-				pamCmd.DumpOutput()
-				return helpers.ConditionBreakEarly
+			sshClient, err := ssh.Dial("tcp", fmt.Sprintf("localhost:%d", freePort), &ssh.ClientConfig{
+				User:            sshUser,
+				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				Timeout:         5 * time.Second,
+			})
+			if err != nil {
+				slog.Warn("SSH proxy connection attempt failed, retrying...", "error", err)
+				return helpers.ConditionWait
 			}
-			return helpers.ConditionWait
+			defer sshClient.Close()
+
+			session, err := sshClient.NewSession()
+			if err != nil {
+				slog.Warn("SSH session open failed, retrying...", "error", err)
+				return helpers.ConditionWait
+			}
+			defer session.Close()
+
+			out, err := session.CombinedOutput(command)
+			if err != nil {
+				slog.Warn("SSH command failed, retrying...", "error", err)
+				return helpers.ConditionWait
+			}
+			output = string(out)
+			return helpers.ConditionSuccess
 		},
 	})
-	require.Equal(t, helpers.WaitSuccess, exitResult, "pam ssh access should complete successfully")
+	if echoResult != helpers.WaitSuccess {
+		infra.DumpOutput(&pamCmd)
+	}
+	require.Equal(t, helpers.WaitSuccess, echoResult, "should run a command over the SSH proxy")
+	require.Contains(t, output, expectedOutput, "command output should contain %q", expectedOutput)
 }
 
-// configureCertAuth replicates the real user flow for certificate auth setup:
-// the frontend shows a `curl <setup-url> | sudo bash` command that the user
-// runs on their SSH server. We do the same inside the container.
-// The setup script configures /etc/ssh but can't restart sshd (no systemctl in alpine),
-// so we send SIGHUP to reload the config afterward.
-func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, container testcontainers.Container, sshPort int, resourceId uuid.UUID) {
+// configureCertAuth mirrors the real setup flow: run the dashboard's `curl <setup-url> | bash` on
+// the SSH server. Fetching the script also provisions the account's SSH CA. pipefail is required,
+// or a failed curl leaves bash exiting 0 and the missing CA surfaces later as "ssh: no key found".
+func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, sshContainer testcontainers.Container, sshPort int, accountId openapitypes.UUID) {
 	// ApiUrl returns a localhost URL which isn't reachable from inside the container.
 	// Use host.docker.internal (configured via ExtraHosts in startSSHContainer) instead.
 	apiURL := strings.Replace(infra.Infisical.ApiUrl(t), "localhost", "host.docker.internal", 1)
-	setupURL := fmt.Sprintf("%s/api/v1/pam/resources/ssh/%s/ssh-ca-setup", apiURL, resourceId)
-	curlCmd := fmt.Sprintf(`curl -sf -H "Authorization: Bearer %s" "%s" | bash`, infra.ProvisionResult.Token, setupURL)
+	setupURL := fmt.Sprintf("%s/api/v1/pam/accounts/%s/ssh-ca-setup", apiURL, accountId)
+	curlCmd := fmt.Sprintf(
+		`set -o pipefail; curl -sS --fail-with-body -H "Authorization: Bearer %s" "%s" | bash`,
+		infra.ProvisionResult.Token, setupURL,
+	)
 
-	exitCode, _, err := container.Exec(ctx, []string{"bash", "-c", curlCmd})
+	exitCode, output, err := sshContainer.Exec(ctx, []string{"bash", "-c", curlCmd})
 	require.NoError(t, err)
+	if exitCode != 0 {
+		out, readErr := io.ReadAll(output)
+		require.NoError(t, readErr)
+		t.Logf("ssh-ca-setup output:\n%s", string(out))
+	}
 	require.Equal(t, 0, exitCode, "ssh-ca-setup script should succeed")
 
 	// The setup script can't restart sshd in alpine (no systemctl/service).
 	// Reload config by sending SIGHUP to sshd (PID 1).
-	exitCode, _, err = container.Exec(ctx, []string{"kill", "-HUP", "1"})
+	exitCode, _, err = sshContainer.Exec(ctx, []string{"kill", "-HUP", "1"})
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, "sshd reload should succeed")
 
-	// Wait for sshd to be fully responsive after config reload.
-	// A TCP dial is not enough — sshd never closes the listen socket during
-	// SIGHUP, so the port is always reachable. Instead, do an actual SSH
-	// handshake to confirm sshd is serving connections after the reload.
+	// Confirm sshd is serving connections again after the reload with a real handshake.
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		Timeout:  10 * time.Second,
 		Interval: 500 * time.Millisecond,
@@ -228,12 +186,11 @@ func configureCertAuth(t *testing.T, ctx context.Context, infra *PAMTestInfra, c
 	require.Equal(t, helpers.WaitSuccess, result, "sshd should be responsive after cert auth config reload")
 }
 
-// runSSHAuthTest handles all auth-method-specific setup and runs the SSH session test.
-// Each auth method configures the container and PAM account differently:
-//   - password:    uses hardcoded testuser/testpass from entrypoint; account gets username + password
-//   - public-key:  container gets SSH_AUTHORIZED_KEY (generated ed25519); account gets username + privateKey
-//   - certificate: container configured via curl | bash (ssh-ca-setup endpoint); account gets just username
-func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, method string) {
+// runSSHAuthTest configures the container + PAM account for one auth method and runs the session:
+//   - password:    hardcoded testuser/testpass; account gets username + password
+//   - public-key:  container gets SSH_AUTHORIZED_KEY; account gets username + privateKey
+//   - certificate: container configured via curl | bash (per-account ssh-ca-setup); account gets username
+func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName string, folderId, templateId openapitypes.UUID, method string) {
 	containerEnv := map[string]string{}
 	accountCreds := map[string]interface{}{
 		"authMethod": method,
@@ -257,42 +214,39 @@ func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, meth
 		accountCreds["privateKey"] = string(pem.EncodeToMemory(privKeyPEM))
 
 	case "certificate":
-		// No extra container config needed.
-		// Cert auth is configured after resource creation via curl | bash.
+		// No extra container config; cert auth is configured after account creation.
 	}
 
-	container, sshHost, sshPort := startSSHContainer(t, ctx, containerEnv)
+	sshContainer, sshHost, sshPort := startSSHContainer(t, ctx, containerEnv)
 	slog.Info("SSH container started", "method", method, "host", sshHost, "port", sshPort)
 
-	resourceName := fmt.Sprintf("ssh-%s-resource", method)
-	resourceId := createSSHPamResource(t, ctx, infra, resourceName, sshHost, sshPort)
+	accountName := fmt.Sprintf("ssh-%s-account", method)
+	accountId := CreatePamAccount(t, ctx, infra, "ssh", accountName, folderId, templateId,
+		map[string]interface{}{"host": sshHost, "port": sshPort}, accountCreds)
 
 	if method == "certificate" {
-		configureCertAuth(t, ctx, infra, container, sshPort, resourceId)
+		configureCertAuth(t, ctx, infra, sshContainer, sshPort, accountId)
 	}
 
-	accountName := fmt.Sprintf("ssh-%s-account", method)
-	createSSHPamAccount(t, ctx, infra, resourceId, accountName, accountCreds)
-
 	marker := fmt.Sprintf("hello-%s", method)
-	runSSHSessionAndVerify(t, ctx, infra, resourceName, accountName, "echo "+marker, marker)
+	runSSHSessionAndVerify(t, ctx, infra, folderName, accountName, "echo "+marker, marker)
 }
 
 func TestPAM_SSH(t *testing.T) {
-	// TODO: Re-enable once the PAM revamp's e2e tests are updated. Temporarily
-	// skipped so it stops blocking production.
-	t.Skip("Temporarily disabled pending PAM revamp test updates")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	infra := SetupPAMInfra(t, ctx)
 	LoginUser(t, ctx, infra)
 
+	folderName := "ssh-folder"
+	folderId := CreatePamFolder(t, ctx, infra, folderName)
+	templateId := CreatePamTemplate(t, ctx, infra, "ssh-template", client.CreatePamAccountTemplateJSONBodyTypeSsh)
+
 	methods := []string{"password", "public-key", "certificate"}
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
-			runSSHAuthTest(t, ctx, infra, method)
+			runSSHAuthTest(t, ctx, infra, folderName, folderId, templateId, method)
 		})
 	}
 }
