@@ -10,6 +10,8 @@ sinks:
   - type: "file"
     config:
       path: "access-token"
+      # Optional octal mode for the written token. Defaults to 0644.
+      permission: "0600"
 templates:
   - template-content: |
       {{- with secret "202f04d7-e4cb-43d4-a292-e893712d61fc" "dev" "/" }}
@@ -20,6 +22,9 @@ templates:
     destination-path: my-dot-env-0.env
     config:
       polling-interval: 60s
+      # Optional octal mode for the rendered file. When omitted the mode is
+      # left to the process umask, which usually means 0644.
+      permission: "0600"
       execute:
         command: docker-compose -f docker-compose.prod.yml down && docker-compose -f docker-compose.prod.yml up -d
 
