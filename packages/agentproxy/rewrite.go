@@ -18,8 +18,36 @@ const (
 	surfacePath        = "path"
 	surfaceQuery       = "query"
 	surfaceBody        = "body"
+	surfaceWebSocket   = "websocket"
 	maxBodyRewriteSize = 10 * 1024 * 1024
 )
+
+// wsSubstitution is a credential armed for WebSocket frame substitution. Unlike the other surfaces this one
+// cannot be applied to the request, because the placeholder appears in frames sent after the upgrade, so it
+// is carried to the frame pipe instead.
+type wsSubstitution struct {
+	placeholder string
+	value       string
+	label       AppliedCredential
+}
+
+// websocketSubstitutions selects the credentials whose surfaces include "websocket".
+func websocketSubstitutions(creds []resolvedCredential) []wsSubstitution {
+	var out []wsSubstitution
+	for _, cred := range creds {
+		if cred.role != roleCredentialSub || cred.placeholder == "" {
+			continue
+		}
+		if !hasSurface(cred.surfaces, surfaceWebSocket) {
+			continue
+		}
+		label := credLabel(cred)
+		label.Role = roleCredentialSub
+		label.Surfaces = []string{surfaceWebSocket}
+		out = append(out, wsSubstitution{placeholder: cred.placeholder, value: cred.value, label: label})
+	}
+	return out
+}
 
 type AppliedCredential struct {
 	Key                string   `json:"key,omitempty"`

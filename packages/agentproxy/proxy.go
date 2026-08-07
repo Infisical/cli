@@ -387,7 +387,16 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer clientConn.Close()
+	// Normally this function owns the conn, but a handler inside the tunnel may hijack it again (a WebSocket
+	// pipe, which outlives the tunnel server). Serve returns as soon as the one-shot listener closes, which
+	// happens the moment the inner handler hijacks, so closing unconditionally here would cut a live WebSocket
+	// out from under itself.
+	tunnelOwnsConn := true
+	defer func() {
+		if tunnelOwnsConn {
+			_ = clientConn.Close()
+		}
+	}()
 
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
@@ -405,13 +414,18 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
 
-	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
+	if ps.serveTunnel(tlsConn, hostname, port, jwt, scope) {
+		tunnelOwnsConn = false
+	}
 }
 
 // serveTunnel serves HTTP/1.1 requests off the decrypted MITM connection using a fresh http.Server over a
-// one-shot listener, so the tunnel gets the same header/timeout enforcement as the ingress.
-func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) {
+// one-shot listener, so the tunnel gets the same header/timeout enforcement as the ingress. It reports whether
+// the inner handler hijacked the connection, in which case that handler owns it and the caller must not close
+// it: Serve returns immediately on hijack while the handler is still running.
+func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) bool {
 	listener := newOneShotListener(tlsConn)
+	var hijacked atomic.Bool
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ps.forwardHTTP(w, r, "https", hostname, port, jwt, scope)
@@ -424,12 +438,16 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string
 		// The one-shot listener yields the single conn once, then blocks; closing it on terminal conn state
 		// makes Serve return. The conn is owned by http.Server (Closed) or the hijack handler, not closed here.
 		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateHijacked {
+				hijacked.Store(true)
+			}
 			if state == http.StateHijacked || state == http.StateClosed {
 				_ = listener.Close()
 			}
 		},
 	}
 	_ = srv.Serve(listener)
+	return hijacked.Load()
 }
 
 // Only http:// absolute-form is served; https:// is rejected so the proxy can never be used to silently TLS-strip (HTTPS must arrive as CONNECT).
@@ -469,6 +487,13 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	// credential) back in the response body, which would let the agent read a secret it can't fetch directly.
 	if r.Method == http.MethodTrace || r.Method == "TRACK" {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// A WebSocket upgrade cannot be relayed through the ResponseWriter: after 101 the connection stops being
+	// request/response and the proxy has to own both sockets.
+	if isWebSocketUpgrade(r) {
+		ps.serveWebSocket(w, r, scheme, hostname, port, jwt, scope)
 		return
 	}
 
@@ -606,9 +631,26 @@ type forwardOutcome struct {
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
+	outcome, _, err := ps.prepareUpstream(req, scheme, hostname, port, jwt, scope)
+	if err != nil {
+		return nil, outcome, err
+	}
+
+	resp, err := ps.transport.RoundTrip(req)
+	if err != nil {
+		return nil, outcome, err
+	}
+	return resp, outcome, nil
+}
+
+// prepareUpstream resolves the agent's services, picks the best match, enforces the unmatched-host policy and
+// injects that service's credentials into req. It stops short of dispatching: the HTTP path hands req to the
+// pooled transport, while the WebSocket path has to own the connection itself. The resolved credentials come
+// back so the WebSocket path can arm frame substitution.
+func (ps *proxyServer) prepareUpstream(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (forwardOutcome, []resolvedCredential, error) {
 	services, err := ps.resolver.get(jwt, scope)
 	if err != nil {
-		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
+		return forwardOutcome{}, nil, fmt.Errorf("failed to resolve agent permissions: %w", err)
 	}
 
 	// Capture identity now; reading it after the round trip would race a cache eviction and drop the record.
@@ -618,7 +660,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
 	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock && !ps.hostAllowlisted(hostname) {
-		return nil, outcome, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
+		return outcome, nil, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
 	}
 
 	outcome.service = svc
@@ -629,23 +671,36 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	req.Host = hostHeaderForScheme(scheme, req.URL.Host)
 	req.RequestURI = ""
 
+	// The upgrade headers are hop-by-hop, so snapshot them before the strip: without Upgrade, Connection and
+	// the Sec-WebSocket-* set the upstream never switches protocols.
+	var handshake http.Header
+	if isWebSocketUpgrade(req) {
+		handshake = captureWebSocketHandshakeHeaders(req.Header)
+	}
+
 	// Strip hop-by-hop before injecting so a client's Connection header cannot delete the injected credential (injected always wins).
 	stripHopByHopHeaders(req.Header)
 
+	// Restored before injection, for the same reason: a header rewrite naming one of these still wins.
+	if handshake != nil {
+		restoreHeaders(req.Header, handshake)
+		// Connection is rebuilt, not restored. Every token an agent puts here is hop-by-hop to the upstream, so
+		// forwarding the agent's own value would let it send "Connection: Upgrade, Authorization" and have the
+		// service strip the injected credential before seeing it. Upgrade is all the handshake needs.
+		req.Header.Set("Connection", "Upgrade")
+	}
+
+	var creds []resolvedCredential
 	if svc != nil {
-		creds := ps.materializeCredentials(svc)
+		creds = ps.materializeCredentials(svc)
 		applied, err := applyCredentials(req, creds)
 		if err != nil {
-			return nil, outcome, fmt.Errorf("failed to apply credentials: %w", err)
+			return outcome, nil, fmt.Errorf("failed to apply credentials: %w", err)
 		}
 		outcome.applied = applied
 	}
 
-	resp, err := ps.transport.RoundTrip(req)
-	if err != nil {
-		return nil, outcome, err
-	}
-	return resp, outcome, nil
+	return outcome, creds, nil
 }
 
 // hostAllowlisted reports whether hostname is in AllowedHosts (case-insensitive).
