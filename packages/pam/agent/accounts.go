@@ -8,20 +8,32 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	pam "github.com/Infisical/infisical-merge/packages/pam/local"
 	"github.com/go-resty/resty/v2"
 )
 
-// Account types the agent flow can expose, mapped to the label shown to the agent.
-var supportedAccountTypes = map[string]string{
-	"postgres":   "PostgreSQL",
-	"mysql":      "MySQL",
-	"mssql":      "SQL Server",
-	"oracledb":   "Oracle",
-	"mongodb":    "MongoDB",
-	"redis":      "Redis",
-	"ssh":        "SSH",
-	"kubernetes": "Kubernetes",
-	"windows":    "Windows RDP",
+// Account types the agent flow can expose. Deliberately a list of its own rather than everything the
+// CLI can reach: aws-iam, gcp-service-account and azure-cli hand out credentials rather than front a
+// port, so nothing here can contain what an agent does with them.
+var supportedAccountTypes = map[string]bool{
+	"postgres":   true,
+	"mysql":      true,
+	"mssql":      true,
+	"oracledb":   true,
+	"mongodb":    true,
+	"redis":      true,
+	"ssh":        true,
+	"kubernetes": true,
+	"windows":    true,
+}
+
+// typeLabelFor names an account type for display, from the same table the `infisical pam access`
+// banner reads, so an agent and a human are shown the same name for the same type.
+func typeLabelFor(accountType string) string {
+	if display, ok := pam.ConnectionDisplayFor(accountType); ok && display.TypeLabel != "" {
+		return display.TypeLabel
+	}
+	return accountType
 }
 
 // Account types held back from the agent flow on purpose, with the reason to show when one turns up.
@@ -85,6 +97,10 @@ func ResolveAccounts(httpClient *resty.Client, opts Options) ([]ResolvedAccount,
 
 // resolveRequested handles an explicit --account list. Every problem is collected and reported
 // together, so one run shows a caller everything they need to fix.
+//
+// An account named more than once is bound once. Naming it twice is a typo rather than a request for
+// two of it, and honouring it literally would cost a second port and open a second session against
+// the same account, leaving a duplicate in the audit trail for nothing.
 func resolveRequested(accounts []api.PAMAccessibleAccount, opts Options) ([]ResolvedAccount, error) {
 	byPath := make(map[string]api.PAMAccessibleAccount, len(accounts))
 	for _, account := range accounts {
@@ -95,10 +111,22 @@ func resolveRequested(accounts []api.PAMAccessibleAccount, opts Options) ([]Reso
 	var problems []string
 	anyNotFound := false
 
+	// Keyed by the lookup key rather than by what was typed, which is the account's own path once it
+	// resolves. Spellings that differ only by case or a leading slash therefore collapse together, the
+	// same way they do when matching. A name that resolves to nothing is deduplicated on what was
+	// typed, so repeating a typo reports it once rather than once per mention.
+	seen := make(map[string]bool, len(opts.Accounts))
+
 	for _, requested := range opts.Accounts {
 		label := requested
 
-		account, found := byPath[strings.ToLower(strings.TrimPrefix(requested, "/"))]
+		key := strings.ToLower(strings.TrimPrefix(requested, "/"))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		account, found := byPath[key]
 		if !found {
 			problems = append(problems, fmt.Sprintf("%s: not found, or you don't have access to it", label))
 			anyNotFound = true
@@ -166,9 +194,23 @@ func unusableReason(account api.PAMAccessibleAccount, opts Options) string {
 		return "you don't have permission to launch sessions for this account"
 	}
 
-	// An approval gate is deliberately not a reason to skip. RequestApprovals raises a request for
-	// these accounts and their proxy is bound anyway, so approval landing part-way through a run is
-	// enough to bring the account up without restarting the agent.
+	// MFA needs a human in a browser at the moment the session is created, and an agent run has
+	// nobody there. Unlike an approval gate, nothing can change that part-way through, so the account
+	// is left out rather than given a port that could only ever refuse.
+	if account.RequireMfa {
+		return "requires MFA, which cannot be completed from an agent run. Use 'infisical pam access' from your own terminal"
+	}
+
+	// An approval gate is deliberately not a reason to skip while requests can be raised: one is
+	// raised for the account on first use and its proxy is bound anyway, so approval landing part-way
+	// through a run brings the account up without restarting the agent.
+	//
+	// Without --no-approval-request that hope is real. With it, nothing will ever raise the request, so
+	// the account cannot come up no matter how long the agent waits. Reserving a port for it and
+	// telling the agent to keep retrying would promise something this run has been told not to do.
+	if account.RequiresApproval && account.AccessStatus != accessStatusGranted && !opts.RequestApproval {
+		return "requires approval, and --no-approval-request was set, so no request can be raised for it"
+	}
 
 	// Prompting is impossible once the agent owns the terminal, so a reason has to come from --reason.
 	if account.RequireReason && strings.TrimSpace(opts.Reason) == "" {
@@ -182,7 +224,7 @@ func newResolvedAccount(account api.PAMAccessibleAccount, opts Options) Resolved
 	return ResolvedAccount{
 		Path:             accountPath(account),
 		AccountType:      account.AccountType,
-		TypeLabel:        supportedAccountTypes[account.AccountType],
+		TypeLabel:        typeLabelFor(account.AccountType),
 		Duration:         opts.Duration,
 		Reason:           opts.Reason,
 		RequiresApproval: account.RequiresApproval,
@@ -231,19 +273,47 @@ func availableAccounts(accounts []api.PAMAccessibleAccount) string {
 }
 
 // listAllAccessibleAccounts pages through the accessible-accounts endpoint.
+//
+// pageSize is what we ask for, never what we assume arrives. A server may return fewer than requested,
+// and against one that caps pages lower the two obvious shortcuts both lose accounts without saying
+// so: stepping the offset by the requested size skips whatever was not returned, and treating a short
+// page as the final one stops at the first capped response. Either way an account the caller can reach
+// goes quietly missing from the run, which is the worst way for this to fail.
+//
+// So the offset advances by what actually arrived, and the loop ends only on a page with nothing in it
+// or on having collected everything the server said there was.
 func listAllAccessibleAccounts(httpClient *resty.Client) ([]api.PAMAccessibleAccount, error) {
 	const pageSize = 100
 
+	// Purely a runaway guard, not a pagination assumption. A server that ignored the offset would
+	// return the same page forever and every page would look like progress; TotalCount ends that in
+	// practice, and this ends it even when the response carries no total, so a broken endpoint fails
+	// instead of hanging before the agent has started.
+	const maxPages = 1000
+
 	var all []api.PAMAccessibleAccount
-	for offset := 0; ; offset += pageSize {
+	offset := 0
+
+	for pages := 0; ; pages++ {
+		if pages >= maxPages {
+			return nil, fmt.Errorf(
+				"failed to list PAM accounts: gave up after %d pages, which means the endpoint is not paging", maxPages)
+		}
+
 		page, err := api.CallPAMListAccessibleAccounts(httpClient, offset, pageSize)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list PAM accounts: %w", err)
 		}
 
-		all = append(all, page.Accounts...)
+		// An empty page is the end, whatever any total claims.
+		if len(page.Accounts) == 0 {
+			break
+		}
 
-		if len(page.Accounts) < pageSize || len(all) >= page.TotalCount {
+		all = append(all, page.Accounts...)
+		offset += len(page.Accounts)
+
+		if page.TotalCount > 0 && len(all) >= page.TotalCount {
 			break
 		}
 	}

@@ -265,16 +265,26 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 	return true
 }
 
-// DatabaseDisplayConfig holds the display configuration for a database type
-type DatabaseDisplayConfig struct {
-	TypeLabel        string                                             // e.g., "PostgreSQL", "MySQL", "SQL Server"
-	DefaultPort      int                                                // default port for this database type
-	ConnectionString func(username, database string, port int) string   // builds the connection string
-	UsageExamples    func(username, database string, port int) []string // CLI usage examples
+// AccountConnectionDisplay describes how a client reaches one account type through a local proxy.
+//
+// This is the single source of truth for it. Both the banner `infisical pam access` prints and the
+// instructions handed to an agent are built from these, so the two cannot describe the same account
+// differently, and a fix to how one connects is a fix for both.
+type AccountConnectionDisplay struct {
+	TypeLabel   string // e.g., "PostgreSQL", "MySQL", "SQL Server"
+	DefaultPort int    // default port for this account type
+	// ConnectionString builds the connection string, and is nil for account types that have none.
+	ConnectionString func(username, database string, port int) string
+	// UsageExamples builds sample CLI commands, and is nil for account types reached without one.
+	UsageExamples func(username, database string, port int) []string
 }
 
-// databaseConfigs maps account types to their display configurations
-var databaseConfigs = map[string]DatabaseDisplayConfig{
+// accountDisplays maps account types to how a client connects to them.
+//
+// A caller that knows the account's real username and database passes them; the agent flow creates
+// sessions lazily and so has neither, and passes placeholders. Every entry therefore has to render
+// something sane for an empty database.
+var accountDisplays = map[string]AccountConnectionDisplay{
 	AccountTypePostgres: {
 		TypeLabel:   "PostgreSQL",
 		DefaultPort: 5432,
@@ -315,12 +325,12 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 		TypeLabel:   "MongoDB",
 		DefaultPort: 27017,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mongodb://127.0.0.1:%d/%s", port, database)
+			return mongoDBURI(database, port)
 		},
+		// Given as a URI rather than --host/--port so the option below cannot be lost by someone
+		// adapting the command.
 		UsageExamples: func(username, database string, port int) []string {
-			return []string{
-				fmt.Sprintf("mongosh --host 127.0.0.1 --port %d %s", port, database),
-			}
+			return []string{fmt.Sprintf("mongosh %q", mongoDBURI(database, port))}
 		},
 	},
 	AccountTypeOracleDB: {
@@ -335,11 +345,86 @@ var databaseConfigs = map[string]DatabaseDisplayConfig{
 			}
 		},
 	},
+	AccountTypeRedis: {
+		TypeLabel:   "Redis",
+		DefaultPort: 6379,
+		ConnectionString: func(username, database string, port int) string {
+			if username == "" {
+				return fmt.Sprintf("redis://127.0.0.1:%d", port)
+			}
+			return fmt.Sprintf("redis://%s@127.0.0.1:%d", username, port)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{fmt.Sprintf("redis-cli -h 127.0.0.1 -p %d", port)}
+		},
+	},
+	AccountTypeSSH: {
+		TypeLabel:   "SSH",
+		DefaultPort: 22,
+		// Host key checking is disabled because the proxy presents a different key per session, so
+		// a client that remembers one would refuse the next.
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null %s@127.0.0.1", port, username),
+				fmt.Sprintf("scp -P %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null <local-file> %s@127.0.0.1:<remote-path>", port, username),
+			}
+		},
+	},
+	// Kubernetes and Windows are reached through a generated kubeconfig and an RDP client rather
+	// than an address a caller types, so they carry a label and nothing else. Their instructions
+	// depend on what else the session set up, and are built by the flow that set it up.
+	AccountTypeKubernetes: {
+		TypeLabel:   "Kubernetes",
+		DefaultPort: 443,
+	},
+	AccountTypeWindows: {
+		TypeLabel:   "Windows RDP",
+		DefaultPort: 3389,
+	},
+}
+
+// mongoDBURI builds the loopback URI for a MongoDB proxy, for an account whose database is known or
+// not.
+//
+// directConnection=true is load-bearing, not decoration. The gateway relays the target's hello reply
+// to the client, and that reply still names the target's replica set and lists its members' real
+// addresses. A driver that reads those abandons the loopback address it was given and dials the
+// members instead, which nothing on the client's side can reach, so it hangs until it times out.
+// This keeps the driver on the only address that works.
+//
+// Suppressing those fields gateway-side would fix it for every client without asking any of them to
+// pass this, and would be the better fix. Until that happens, this is the fix, so do not drop it as
+// redundant.
+func mongoDBURI(database string, port int) string {
+	return fmt.Sprintf("mongodb://127.0.0.1:%d/%s?directConnection=true", port, database)
+}
+
+// ConnectionDisplayFor returns how a client reaches the given account type, and whether anything is
+// known about it.
+func ConnectionDisplayFor(accountType string) (AccountConnectionDisplay, bool) {
+	display, ok := accountDisplays[accountType]
+	return display, ok
+}
+
+// ConnectionExamples returns the sample commands for an account type, or nil if it has none.
+func (d AccountConnectionDisplay) ConnectionExamples(username, database string, port int) []string {
+	if d.UsageExamples == nil {
+		return nil
+	}
+	return d.UsageExamples(username, database, port)
+}
+
+// Connection returns the connection string for an account type, or "" if it has none.
+func (d AccountConnectionDisplay) Connection(username, database string, port int) string {
+	if d.ConnectionString == nil {
+		return ""
+	}
+	return d.ConnectionString(username, database, port)
 }
 
 // startDatabaseProxy starts a local database proxy for any SQL-like database type
 func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
-	config, ok := databaseConfigs[response.AccountType]
+	config, ok := accountDisplays[response.AccountType]
 	if !ok {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("No display config for database type: %s", response.AccountType))
 		return
@@ -497,15 +582,14 @@ func printRedisSessionInfo(folder, account string, duration time.Duration, usern
 	fmt.Printf("  Use your preferred Redis client to connect to 127.0.0.1:%d.\n", port)
 	fmt.Printf("  No password is needed.\n")
 	fmt.Printf("\n")
+	config := accountDisplays[AccountTypeRedis]
 	fmt.Printf("  Example:\n")
-	util.PrintfStderr("    $ redis-cli -h 127.0.0.1 -p %d\n", port)
+	for _, ex := range config.ConnectionExamples(username, "", port) {
+		util.PrintfStderr("    $ %s\n", ex)
+	}
 	fmt.Printf("\n")
 	fmt.Printf("  Connection string:\n")
-	if username != "" {
-		util.PrintfStderr("    redis://%s@127.0.0.1:%d\n", username, port)
-	} else {
-		util.PrintfStderr("    redis://127.0.0.1:%d\n", port)
-	}
+	util.PrintfStderr("    %s\n", config.Connection(username, "", port))
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
@@ -697,8 +781,9 @@ func printSSHSessionInfo(folder, account string, duration time.Duration, usernam
 	fmt.Printf("  Credentials are handled automatically by the gateway.\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Examples:\n")
-	util.PrintfStderr("    $ ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null %s@127.0.0.1\n", port, username)
-	util.PrintfStderr("    $ scp -P %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null <local-file> %s@127.0.0.1:<remote-path>\n", port, username)
+	for _, ex := range accountDisplays[AccountTypeSSH].ConnectionExamples(username, "", port) {
+		util.PrintfStderr("    $ %s\n", ex)
+	}
 	fmt.Printf("\n")
 	fmt.Printf("  Press Ctrl+C to stop the proxy.\n")
 	fmt.Printf("\n")
@@ -707,7 +792,7 @@ func printSSHSessionInfo(folder, account string, duration time.Duration, usernam
 }
 
 // printDatabaseSessionInfo prints the connection info banner for database sessions
-func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account string, duration time.Duration, username, database string, port int) {
+func printDatabaseSessionInfo(config AccountConnectionDisplay, folder, account string, duration time.Duration, username, database string, port int) {
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("              %s Proxy Session Started!                \n", config.TypeLabel)
@@ -740,20 +825,18 @@ func printDatabaseSessionInfo(config DatabaseDisplayConfig, folder, account stri
 	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
 	fmt.Printf("  to 127.0.0.1:%d. No password is needed.\n", port)
 	fmt.Printf("\n")
-	if config.UsageExamples != nil {
-		examples := config.UsageExamples(username, database, port)
-		if len(examples) > 0 {
-			fmt.Printf("  Example:\n")
-			for _, ex := range examples {
-				util.PrintfStderr("    $ %s\n", ex)
-			}
-			fmt.Printf("\n")
+	if examples := config.ConnectionExamples(username, database, port); len(examples) > 0 {
+		fmt.Printf("  Example:\n")
+		for _, ex := range examples {
+			util.PrintfStderr("    $ %s\n", ex)
 		}
+		fmt.Printf("\n")
 	}
-	fmt.Printf("  Connection string:\n")
-	connStr := config.ConnectionString(username, database, port)
-	util.PrintfStderr("    %s\n", connStr)
-	fmt.Printf("\n")
+	if connStr := config.Connection(username, database, port); connStr != "" {
+		fmt.Printf("  Connection string:\n")
+		util.PrintfStderr("    %s\n", connStr)
+		fmt.Printf("\n")
+	}
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("\n")
 }

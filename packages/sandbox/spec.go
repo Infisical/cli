@@ -4,6 +4,10 @@
 package sandbox
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -86,6 +90,50 @@ func DefaultDenyPaths(home, runtimeDir string) []string {
 		paths = append(paths, runtimeDir)
 	}
 	return paths
+}
+
+// AgentStateWritePaths returns the state paths the supported agents need to write: sessions,
+// transcripts, history and config. Without them an agent starts but cannot record anything, which
+// surfaces as permission-denied writes rather than as a sandbox error.
+//
+// Only paths that already exist are returned, since bwrap --bind fails on a missing source.
+//
+// Shared by every caller that sandboxes an agent, so that adding support for one does not mean
+// remembering to widen a second copy of this list somewhere else.
+func AgentStateWritePaths(home string) []string {
+	if home == "" {
+		return nil
+	}
+	candidates := []string{
+		filepath.Join(home, ".claude"),      // Claude Code state (sessions, history, cache)
+		filepath.Join(home, ".claude.json"), // Claude Code top-level config
+		filepath.Join(home, ".codex"),       // Codex state
+		filepath.Join(home, ".gemini"),      // Gemini CLI state
+	}
+
+	var paths []string
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+// HostRuntimeDir is the per-user runtime directory holding host IPC sockets: the session bus and
+// friends. Linux only, because those sockets are not namespaced there; empty elsewhere.
+//
+// Scrubbing XDG_RUNTIME_DIR from the child is not enough on its own, since the directory is still on
+// disk and unix sockets ignore the network namespace, so callers pass this to DefaultDenyPaths to
+// have it masked as well.
+func HostRuntimeDir() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir
+	}
+	return fmt.Sprintf("/run/user/%d", os.Getuid())
 }
 
 func containsString(list []string, s string) bool {

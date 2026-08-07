@@ -43,8 +43,25 @@ var adapters = []Adapter{
 // cross-agent convention, and an agent that ignores it still gets the environment variables.
 var fallbackAdapter = Adapter{Name: "generic", contextFile: "AGENTS.md"}
 
+// knownAgentNames lists every value --agent accepts. Built from the adapters themselves so it cannot
+// drift from what is actually supported.
+func knownAgentNames() []string {
+	names := make([]string, 0, len(adapters)+1)
+	for _, adapter := range adapters {
+		names = append(names, adapter.Name)
+	}
+	return append(names, fallbackAdapter.Name)
+}
+
 // SelectAdapter picks an adapter from the child command name, or by explicit override.
-func SelectAdapter(argv []string, override string) Adapter {
+//
+// The two routes to the fallback are not the same thing, so only one of them is allowed to be quiet.
+// Reaching it by detection is the ordinary case: an unrecognised command is what running a custom
+// agent looks like, and the fallback is how that is supported. Reaching it through --agent is a
+// mistake, because naming an agent asserts that we handle it specially; someone passing
+// '--agent opencode' would otherwise be handed the generic adapter and never learn that the agent
+// they named is not one we know.
+func SelectAdapter(argv []string, override string) (Adapter, error) {
 	name := override
 	if name == "" && len(argv) > 0 {
 		name = filepath.Base(argv[0])
@@ -54,10 +71,21 @@ func SelectAdapter(argv []string, override string) Adapter {
 
 	for _, adapter := range adapters {
 		if strings.EqualFold(adapter.Name, name) {
-			return adapter
+			return adapter, nil
 		}
 	}
-	return fallbackAdapter
+	// Named explicitly, "generic" is a real choice rather than a fallback: it is what to ask for when
+	// the agent is not one of the above and the AGENTS.md convention is the right delivery for it.
+	if strings.EqualFold(fallbackAdapter.Name, name) {
+		return fallbackAdapter, nil
+	}
+
+	if override != "" {
+		return Adapter{}, fmt.Errorf(
+			"unknown agent %q. Supported: %s. Without --agent the agent is detected from the command name, so '-- claude' selects claude",
+			override, strings.Join(knownAgentNames(), ", "))
+	}
+	return fallbackAdapter, nil
 }
 
 // Apply delivers the document to the agent, returning the argv to run and a cleanup function.

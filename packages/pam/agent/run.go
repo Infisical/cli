@@ -3,11 +3,11 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,8 +29,12 @@ type Options struct {
 	Reason   string
 
 	// RequestApproval allows raising an access request the first time the agent touches an account
-	// that is gated behind approval. Off means such an account simply reports the gate and stays
-	// unusable for the run.
+	// that is gated behind approval.
+	//
+	// Off means an account waiting on approval is left out of the run entirely rather than bound to a
+	// port: nothing would ever raise the request that unblocks it, so holding a port and telling the
+	// agent to retry would promise access this run cannot deliver. An account already granted still
+	// takes part, since it works right now.
 	RequestApproval bool
 
 	// NoSandbox runs the agent uncontained, giving up the credential boundary in sandboxChild. It is the
@@ -60,22 +64,38 @@ func Run(opts Options) (int, error) {
 		return nil
 	})
 
+	// Resolved before anything is created. An unknown --agent is a typo, and reporting it only after
+	// ports are bound would make the caller fix it and start over having already spent the setup.
+	adapter, err := SelectAdapter(opts.Argv, opts.AgentOverride)
+	if err != nil {
+		return 1, err
+	}
+
+	session := &runSession{httpClient: httpClient}
+	defer session.cleanup()
+
+	// Before anything that logs. The proxies log from their own goroutines the moment they start, and
+	// zerolog's default writer is stderr, so redirecting any later left that first burst on the
+	// terminal the agent is about to take over, and out of the file the banner points at.
+	logFile, err := session.redirectLogs(opts.LogFile)
+	if err != nil {
+		return 1, err
+	}
+
 	// Work out what to bind and check it could actually launch, without creating any sessions.
 	resolved, skipped, err := ResolveAccounts(httpClient, opts)
 	if err != nil {
 		return 1, err
 	}
-
-	session := &runSession{httpClient: httpClient, skipped: skipped}
-	defer session.cleanup()
+	session.skipped = skipped
 
 	if err := session.startProxies(resolved, opts.RequestApproval); err != nil {
 		return 1, err
 	}
 
-	document := RenderInstructions(session.liveAccounts)
+	document := RenderInstructions(session.liveAccounts, opts.RequestApproval)
 
-	return session.runChild(document, opts)
+	return session.runChild(document, adapter, logFile, opts)
 }
 
 // runSession owns everything created during a run so teardown has a single place to look.
@@ -103,7 +123,7 @@ func (s *runSession) startProxies(resolved []ResolvedAccount, requestApproval bo
 		s.proxies = append(s.proxies, proxy)
 		go proxy.Run()
 
-		connectionString, example := connectionFor(account.AccountType, proxy.Port())
+		connectionString, examples := connectionFor(account.AccountType, proxy.Port())
 		s.liveAccounts = append(s.liveAccounts, LiveAccount{
 			Path:             account.Path,
 			Type:             account.AccountType,
@@ -111,7 +131,7 @@ func (s *runSession) startProxies(resolved []ResolvedAccount, requestApproval bo
 			Host:             "127.0.0.1",
 			Port:             proxy.Port(),
 			ConnectionString: connectionString,
-			Example:          example,
+			Examples:         examples,
 			AwaitingApproval: account.AwaitingApproval(),
 			RequiresApproval: account.RequiresApproval,
 		})
@@ -156,8 +176,9 @@ func (s *runSession) writeContextFile(document string) (string, error) {
 // one that was would let it call the API directly and open sessions outside the accounts, duration and
 // approval gates this run was launched with.
 //
-// This is hygiene, not a boundary. A child running as the same user can still read the parent's argv,
-// so it is the sandbox below, not this list, that contains a deliberately hostile agent.
+// This list is hygiene, not a boundary. A child running as the same user can still read the parent's
+// argv, so it is the sandbox below, not this list, that contains a deliberately hostile agent.
+// containerRuntimeEnvKeys is a different matter: those hold part of the boundary open.
 var infisicalAuthEnvKeys = []string{
 	util.INFISICAL_TOKEN_NAME,
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
@@ -179,14 +200,49 @@ var infisicalAuthEnvKeys = []string{
 	util.INFISICAL_BOOTSTRAP_ORGANIZATION_NAME,
 }
 
+// containerRuntimeEnvKeys each name a container daemon endpoint for a client to use. They are
+// withheld for the same reason pamDenySockets exists, and are the other half of it.
+//
+// pamDenySockets denies the well-known socket paths, because a daemon socket is root-equivalent: an
+// agent that reaches one starts a container that bind-mounts the home directory, reads straight
+// through every mask in pamDenyPaths, and then authenticates as the caller to open PAM sessions
+// outside this run's accounts, duration and approval gates. Denying paths does not finish the job,
+// because each of these variables names somewhere else to go instead: a daemon over TCP on another
+// host, which is not a path at all and which the shared network reaches, or a socket in a location
+// the list cannot know. A machine running Colima, Rancher Desktop, OrbStack or a remote daemon
+// usually has one of them set already, so leaving them in place hands the agent a working way around
+// the deny list that it did not have to find.
+//
+// This does not stop an agent from setting one itself, and nothing available in a shared-network
+// sandbox would. What it removes is the ready-made route, which is the part we are responsible for.
+var containerRuntimeEnvKeys = []string{
+	// Docker, and everything else speaking its API (nerdctl, podman-docker, testcontainers).
+	"DOCKER_HOST",
+	"DOCKER_CONTEXT", // selects a stored context whose endpoint replaces the default socket
+	"DOCKER_CONFIG",  // relocates config.json, which carries the current context
+	// Podman.
+	"CONTAINER_HOST",
+	"CONTAINER_CONNECTION",
+	// containerd, and nerdctl talking to it directly.
+	"CONTAINERD_ADDRESS",
+	// BuildKit.
+	"BUILDKIT_HOST",
+	// CRI, as read by crictl and anything else using its endpoints.
+	"CONTAINER_RUNTIME_ENDPOINT",
+	"IMAGE_SERVICE_ENDPOINT",
+}
+
 func (s *runSession) childEnv(document string) ([]string, error) {
 	contextPath, err := s.writeContextFile(document)
 	if err != nil {
 		return nil, err
 	}
 
-	stripped := make(map[string]bool, len(infisicalAuthEnvKeys))
+	stripped := make(map[string]bool, len(infisicalAuthEnvKeys)+len(containerRuntimeEnvKeys))
 	for _, key := range infisicalAuthEnvKeys {
+		stripped[key] = true
+	}
+	for _, key := range containerRuntimeEnvKeys {
 		stripped[key] = true
 	}
 
@@ -227,11 +283,19 @@ func (s *runSession) sandboxChild(argv, env []string, noSandbox bool) (*exec.Cmd
 		Enabled:     !noSandbox,
 		Cwd:         cwd,
 		TempDir:     s.tempDir,
-		WritePaths:  agentStateWritePaths(home),
-		DenyPaths:   pamDenyPaths(home, hostRuntimeDir()),
+		WritePaths:  sandbox.AgentStateWritePaths(home),
+		DenyPaths:   pamDenyPaths(home, sandbox.HostRuntimeDir()),
 		DenySockets: pamDenySockets(home),
 		Env:         env,
 		NetMode:     sandbox.SharedNet,
+
+		// Required here, unlike in the agent proxy. That flow terminates TLS itself and hands the child
+		// a CA bundle, so a denied trustd merely pushes tools onto the bundle. PAM brokers nothing and
+		// injects no bundle, so denying trustd leaves a macOS child with no way to evaluate trust at
+		// all: anything using the system verifier, which is every Go tool, fails with a certificate
+		// error on any HTTPS call. Cert evaluation is all this opens; the keychain services that hold
+		// the caller's login stay denied, which is the boundary that matters here.
+		AllowTrustd: true,
 	}
 
 	backend := sandbox.NewBackend(spec)
@@ -328,46 +392,7 @@ func pamDenyPaths(home, runtimeDir string) []string {
 	return paths
 }
 
-// agentStateWritePaths returns the state directories the supported agents need to write: sessions,
-// transcripts, history and config. Without them an agent starts but cannot record anything, which
-// surfaces as permission-denied transcript writes rather than as a sandbox error.
-//
-// Only paths that already exist are returned, since bwrap --bind fails on a missing source.
-func agentStateWritePaths(home string) []string {
-	if home == "" {
-		return nil
-	}
-	candidates := []string{
-		filepath.Join(home, ".claude"),      // Claude Code state (sessions, history, cache)
-		filepath.Join(home, ".claude.json"), // Claude Code top-level config
-		filepath.Join(home, ".codex"),       // Codex state
-		filepath.Join(home, ".gemini"),      // Gemini CLI state
-	}
-
-	var paths []string
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			paths = append(paths, path)
-		}
-	}
-	return paths
-}
-
-// hostRuntimeDir is the per-user runtime directory holding host IPC sockets, which DefaultDenyPaths
-// keeps out of reach. Linux only, since those sockets are not namespaced there; empty elsewhere.
-func hostRuntimeDir() string {
-	if runtime.GOOS != "linux" {
-		return ""
-	}
-	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
-		return dir
-	}
-	return fmt.Sprintf("/run/user/%d", os.Getuid())
-}
-
-func (s *runSession) runChild(document string, opts Options) (int, error) {
-	adapter := SelectAdapter(opts.Argv, opts.AgentOverride)
-
+func (s *runSession) runChild(document string, adapter Adapter, logFile string, opts Options) (int, error) {
 	delivery, err := adapter.Apply(document, opts.Argv)
 	if err != nil {
 		return 1, err
@@ -375,11 +400,6 @@ func (s *runSession) runChild(document string, opts Options) (int, error) {
 	s.cleanups = append(s.cleanups, delivery.Cleanup)
 
 	env, err := s.childEnv(document)
-	if err != nil {
-		return 1, err
-	}
-
-	logFile, err := s.redirectLogs(opts.LogFile)
 	if err != nil {
 		return 1, err
 	}
@@ -435,18 +455,25 @@ func (s *runSession) runChild(document string, opts Options) (int, error) {
 	return 0, nil
 }
 
-// redirectLogs sends proxy logging to a file so it cannot corrupt the agent's terminal UI.
+// redirectLogs points proxy logging at the requested file, or throws it away when none was asked for,
+// and reports where it went.
+//
+// Proxy logs cannot be left on stderr: the agent owns that terminal, and log lines written into a TUI
+// corrupt it. Defaulting to a file under the home directory is not the answer either, because it
+// leaves an append-only log growing on a machine whose owner never asked for one, naming the accounts
+// reached and when. So the default is to discard, and the banner says how to turn logging on.
 func (s *runSession) redirectLogs(path string) (string, error) {
 	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve home directory: %w", err)
-		}
-		dir := filepath.Join(home, ".infisical", "pam-agentic")
+		log.Logger = zerolog.New(io.Discard)
+		return "", nil
+	}
+
+	// The path was named explicitly, so creating what it needs is doing as asked rather than leaving
+	// anything behind uninvited.
+	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return "", fmt.Errorf("failed to create log directory: %w", err)
+			return "", fmt.Errorf("failed to create log directory %s: %w", dir, err)
 		}
-		path = filepath.Join(dir, "access.log")
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -485,7 +512,11 @@ func (s *runSession) printBanner(adapter Adapter, delivery Delivery, logFile str
 	if delivery.Summary != "" {
 		util.PrintfStderr("  Instructions %s\n", delivery.Summary)
 	}
-	util.PrintfStderr("  Proxy logs: %s\n", logFile)
+	if logFile != "" {
+		util.PrintfStderr("  Proxy logs: %s\n", logFile)
+	} else {
+		util.PrintfStderr("  Proxy logs: not recorded (pass --log-file <path> to keep them)\n")
+	}
 	util.PrintfStderr("\n")
 }
 

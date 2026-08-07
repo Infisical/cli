@@ -940,6 +940,7 @@ type PAMAccessibleAccount struct {
 	CanLaunch        bool    `json:"canLaunch"`
 	RequiresApproval bool    `json:"requiresApproval"`
 	RequireReason    bool    `json:"requireReason"`
+	RequireMfa       bool    `json:"requireMfa"`
 	AccessStatus     string  `json:"accessStatus"` // none | pending | granted
 	DisabledReason   *string `json:"disabledReason"`
 }

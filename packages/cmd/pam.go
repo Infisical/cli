@@ -147,7 +147,12 @@ always exported as INFISICAL_PAM_CONTEXT_FILE so custom agents can pick them up 
 			util.PrintErrorMessageAndExit(fmt.Sprintf("Duration %q must be positive.", durationStr))
 		}
 
-		accounts = splitAccountFlags(accounts)
+		accounts, namedNothing := resolveAccountFlags(accounts, cmd.Flags().Changed("account"))
+		if namedNothing {
+			util.PrintErrorMessageAndExit(
+				"--account was given but names no account. Pass a path like 'prod/orders-db', " +
+					"or drop the flag entirely to include every account you have access to.")
+		}
 
 		// Everything after '--' is the agent command, passed through untouched. Without a separator
 		// the arguments are still taken as the command, but anything with flags of its own needs the
@@ -185,9 +190,24 @@ always exported as INFISICAL_PAM_CONTEXT_FILE so custom agents can pick them up 
 	},
 }
 
+// resolveAccountFlags turns repeated and comma-separated --account values into the accounts to bind,
+// and reports whether the flag was given but named none.
+//
+// That second result is the point. An empty list means every account in the organization, so
+// '--account ","' or '--account " "' would otherwise widen the run to the whole org, which is the
+// opposite of what naming a scope asks for.
+//
+// flagGiven has to come from the flag set rather than from the values, because pflag discards an empty
+// one: '--account ""' and '--account=' both parse to an empty slice, indistinguishable from the flag
+// never appearing. Only the flag set remembers that it was set.
+func resolveAccountFlags(values []string, flagGiven bool) (accounts []string, namedNothing bool) {
+	accounts = splitAccountFlags(values)
+	return accounts, flagGiven && len(accounts) == 0
+}
+
 // splitAccountFlags lets one --account carry a comma-separated list, so both
 // '--account a/b --account c/d' and '--account a/b,c/d' work. Blank entries are dropped rather than
-// sent on to be reported as a missing account.
+// sent on to be reported as a missing account, so a trailing comma or a stray space is forgiving.
 func splitAccountFlags(values []string) []string {
 	var accounts []string
 	for _, value := range values {
@@ -350,8 +370,8 @@ func init() {
 	pamAgenticAccessCmd.Flags().String("ldap-username", "", "Username for ldap-auth")
 	pamAgenticAccessCmd.Flags().String("ldap-password", "", "Password for ldap-auth")
 	pamAgenticAccessCmd.Flags().String("organization-slug", "", "Scope the session to this sub-organization the machine identity can reach. Defaults to the organization the identity was created in")
-	pamAgenticAccessCmd.Flags().String("log-file", "", "Where to write proxy logs while the agent runs")
-	pamAgenticAccessCmd.Flags().Bool("no-approval-request", false, "Don't raise access requests for accounts that need approval; report the gate instead")
+	pamAgenticAccessCmd.Flags().String("log-file", "", "Write proxy logs to this file while the agent runs; without it they are not recorded")
+	pamAgenticAccessCmd.Flags().Bool("no-approval-request", false, "Don't raise access requests for accounts that need approval; leave those accounts out of the run")
 	pamAgenticAccessCmd.Flags().Bool("no-sandbox", false, "Run the agent uncontained, letting it read your Infisical login and other credential files")
 
 	pamAgenticCmd.AddCommand(pamAgenticAccessCmd)

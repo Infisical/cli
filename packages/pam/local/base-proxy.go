@@ -359,7 +359,12 @@ func (b *BaseProxyServer) HandleGatewayDisconnect() {
 	b.shutdownOnce.Do(func() {
 		fmt.Println("\nConnection to session lost. Shutting down proxy...")
 		close(b.shutdownCh)
-		b.cancel()
+		// Guarded rather than assumed. This is exported and BaseProxyServer is built in several
+		// places, so a constructor that forgets cancel should lose its shutdown signal, not panic on
+		// a gateway drop, which is the one moment this runs.
+		if b.cancel != nil {
+			b.cancel()
+		}
 	})
 }
 
