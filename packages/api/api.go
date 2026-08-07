@@ -54,6 +54,7 @@ const (
 	operationCallEnrollGateway                     = "CallEnrollGateway"
 	operationCallAwsAuthLoginGateway               = "CallAwsAuthLoginGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
+	operationCallPAMListAccessibleAccounts         = "CallPAMListAccessibleAccounts"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMCreateAccessRequest            = "CallPAMCreateAccessRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
@@ -1134,6 +1135,32 @@ func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAcces
 	}
 
 	return pamAccessResponse, nil
+}
+
+// CallPAMListAccessibleAccounts lists the PAM accounts the caller can see, one page at a time.
+// This is a read-only lookup: it does not create a session. The PAM project is resolved
+// server-side from the caller's organization, so no project ID is sent.
+func CallPAMListAccessibleAccounts(httpClient *resty.Client, offset, limit int) (PAMAccessibleAccountsResponse, error) {
+	var accessibleAccountsResponse PAMAccessibleAccountsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&accessibleAccountsResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParams(map[string]string{
+			"offset": strconv.Itoa(offset),
+			"limit":  strconv.Itoa(limit),
+		}).
+		Get(fmt.Sprintf("%v/v1/pam/accounts/accessible", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMAccessibleAccountsResponse{}, NewGenericRequestError(operationCallPAMListAccessibleAccounts, err)
+	}
+
+	if response.IsError() {
+		return PAMAccessibleAccountsResponse{}, NewAPIErrorWithResponse(operationCallPAMListAccessibleAccounts, response, nil)
+	}
+
+	return accessibleAccountsResponse, nil
 }
 
 func CallPAMAccessApprovalRequest(httpClient *resty.Client, request PAMAccessApprovalRequest) (PAMAccessApprovalRequestResponse, error) {

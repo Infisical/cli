@@ -115,7 +115,9 @@ func (p *KubernetesProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("Kubernetes proxy shutdown complete")
-		os.Exit(0)
+		if p.exitAfterShutdown() {
+			os.Exit(0)
+		}
 	})
 }
 
