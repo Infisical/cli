@@ -1,7 +1,6 @@
 package pam
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,12 +8,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"math/big"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,70 +39,25 @@ func startRedisContainer(t *testing.T, ctx context.Context, opts ...testcontaine
 	return container
 }
 
-// createRedisPamAccount creates a Redis account in the given folder/template. There is no generated
-// client method for Redis on this branch (the account type isn't wired into the backend yet), so the
-// request is a raw authenticated POST. Account creation runs a connection test through the gateway,
-// so it is retried while things settle.
-func createRedisPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderId, templateId openapitypes.UUID, name, host string, port int, sslEnabled bool, sslCertificate, username, password *string) {
-	gatewayId := infra.GatewayId
-
+// createRedisPamAccount creates a Redis account. A non-nil sslCertificate enables TLS.
+func createRedisPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderId, templateId openapitypes.UUID,
+	name, host string, port int, sslCertificate *string, username string, password *string) {
 	connectionDetails := map[string]interface{}{
 		"host":                  host,
 		"port":                  port,
-		"sslEnabled":            sslEnabled,
+		"sslEnabled":            sslCertificate != nil,
 		"sslRejectUnauthorized": false,
 	}
 	if sslCertificate != nil {
 		connectionDetails["sslCertificate"] = *sslCertificate
 	}
-	credentials := map[string]interface{}{}
-	if username != nil {
-		credentials["username"] = *username
-	}
+
+	credentials := map[string]interface{}{"username": username}
 	if password != nil {
 		credentials["password"] = *password
 	}
 
-	body, err := json.Marshal(map[string]interface{}{
-		"folderId":          folderId.String(),
-		"templateId":        templateId.String(),
-		"gatewayId":         gatewayId.String(),
-		"name":              name,
-		"connectionDetails": connectionDetails,
-		"credentials":       credentials,
-	})
-	require.NoError(t, err)
-
-	url := fmt.Sprintf("%s/api/v1/pam/accounts/redis", infra.Infisical.ApiUrl(t))
-	result := helpers.WaitFor(t, helpers.WaitForOptions{
-		Timeout:  90 * time.Second,
-		Interval: 3 * time.Second,
-		Condition: func() helpers.ConditionResult {
-			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-			if reqErr != nil {
-				slog.Warn("Redis PAM account request build failed, retrying...", "error", reqErr)
-				return helpers.ConditionWait
-			}
-			req.Header.Set("Authorization", "Bearer "+infra.ProvisionResult.Token)
-			req.Header.Set("Content-Type", "application/json")
-
-			resp, callErr := http.DefaultClient.Do(req)
-			if callErr != nil {
-				slog.Warn("Redis PAM account creation attempt failed, retrying...", "error", callErr)
-				return helpers.ConditionWait
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				buf := new(bytes.Buffer)
-				_, _ = buf.ReadFrom(resp.Body)
-				slog.Warn("Redis PAM account creation returned non-200, retrying...", "status", resp.StatusCode, "body", buf.String())
-				return helpers.ConditionWait
-			}
-			return helpers.ConditionSuccess
-		},
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "Redis PAM account creation should succeed for %s", name)
-	slog.Info("Created Redis PAM account", "name", name)
+	CreatePamAccount(t, ctx, infra, "redis", name, folderId, templateId, connectionDetails, credentials)
 }
 
 func startRedisProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName, accountName string) (int, *helpers.Command) {
@@ -127,25 +79,25 @@ func startRedisProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, fol
 	pamCmd.Start(ctx)
 	t.Cleanup(pamCmd.Stop)
 
-	// The Redis proxy prints its banner to stderr.
+	// The banner is printed to stdout (fmt.Printf), like the other non-RDP proxies.
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &pamCmd,
 		Condition: func() helpers.ConditionResult {
-			if strings.Contains(pamCmd.Stderr(), "Redis Proxy Session Started") {
+			if strings.Contains(pamCmd.Stdout(), "Redis Proxy Session Started") {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
 		},
 	})
 	if result != helpers.WaitSuccess {
-		pamCmd.DumpOutput()
+		infra.DumpOutput(&pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, result, "Redis proxy should start successfully")
 
 	return freePort, &pamCmd
 }
 
-func verifyRedisThroughProxy(t *testing.T, ctx context.Context, pamCmd *helpers.Command, proxyAddr, testKey, testValue string) {
+func verifyRedisThroughProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, pamCmd *helpers.Command, proxyAddr, testKey, testValue string) {
 	var rdb *redis.Client
 	connectResult := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: pamCmd,
@@ -162,6 +114,9 @@ func verifyRedisThroughProxy(t *testing.T, ctx context.Context, pamCmd *helpers.
 			return helpers.ConditionSuccess
 		},
 	})
+	if connectResult != helpers.WaitSuccess {
+		infra.DumpOutput(pamCmd)
+	}
 	require.Equal(t, helpers.WaitSuccess, connectResult, "Should connect to Redis through proxy")
 	t.Cleanup(func() { rdb.Close() })
 
@@ -227,11 +182,6 @@ func generateSelfSignedCert(t *testing.T, host, certDir string) (caPEM string) {
 }
 
 func TestPAM_Redis(t *testing.T) {
-	// Redis PAM support is not wired into the backend on this branch (no Redis account type), so there
-	// is no create-account endpoint yet. This test is written against the new folder/template/account
-	// model as if Redis were available; remove the skip once the Redis feature lands.
-	t.Skip("Redis PAM not available on this branch; remove skip once the Redis feature lands")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -260,10 +210,10 @@ func TestPAM_Redis(t *testing.T) {
 		rdb.Close()
 
 		accountName := "redis-noauth-account"
-		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), false, nil, &defaultUser, nil)
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), nil, defaultUser, nil)
 
 		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, folderName, accountName)
-		verifyRedisThroughProxy(t, ctx, pamCmd, fmt.Sprintf("localhost:%d", proxyPort), "e2e-noauth-key", "e2e-noauth-value")
+		verifyRedisThroughProxy(t, ctx, infra, pamCmd, fmt.Sprintf("localhost:%d", proxyPort), "e2e-noauth-key", "e2e-noauth-value")
 	})
 
 	t.Run("acl-user-password", func(t *testing.T) {
@@ -300,11 +250,11 @@ user %s on >%s ~* +@all -@dangerous
 		accountName := "redis-acl-account"
 		username := aclUser
 		password := aclPass
-		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), false, nil, &username, &password)
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), nil, username, &password)
 
 		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, folderName, accountName)
 		proxyAddr := fmt.Sprintf("localhost:%d", proxyPort)
-		verifyRedisThroughProxy(t, ctx, pamCmd, proxyAddr, "e2e-acl-key", "e2e-acl-value")
+		verifyRedisThroughProxy(t, ctx, infra, pamCmd, proxyAddr, "e2e-acl-key", "e2e-acl-value")
 
 		// ACL permissions are enforced: FLUSHALL is @dangerous and must be denied.
 		proxyClient := redis.NewClient(&redis.Options{Addr: proxyAddr})
@@ -375,10 +325,10 @@ user %s on >%s ~* +@all -@dangerous
 		accountName := "redis-ssl-account"
 		username := aclUser
 		password := aclPass
-		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), true, &caPEM, &username, &password)
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), &caPEM, username, &password)
 
 		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, folderName, accountName)
-		verifyRedisThroughProxy(t, ctx, pamCmd, fmt.Sprintf("localhost:%d", proxyPort), "e2e-ssl-key", "e2e-ssl-value")
+		verifyRedisThroughProxy(t, ctx, infra, pamCmd, fmt.Sprintf("localhost:%d", proxyPort), "e2e-ssl-key", "e2e-ssl-value")
 	})
 
 	t.Run("multiple-concurrent-connections", func(t *testing.T) {
@@ -390,7 +340,7 @@ user %s on >%s ~* +@all -@dangerous
 		require.NoError(t, err)
 
 		accountName := "redis-concurrent-account"
-		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), false, nil, &defaultUser, nil)
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), nil, defaultUser, nil)
 
 		proxyPort, _ := startRedisProxy(t, ctx, infra, folderName, accountName)
 		proxyAddr := fmt.Sprintf("localhost:%d", proxyPort)

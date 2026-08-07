@@ -86,7 +86,7 @@ func startRDPProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, folde
 		},
 	})
 	if result != helpers.WaitSuccess {
-		pamCmd.DumpOutput()
+		infra.DumpOutput(&pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, result, "RDP proxy should start successfully")
 
@@ -184,11 +184,9 @@ func expectFreeRDPFailure(t *testing.T, ctx context.Context, binary string, host
 }
 
 func TestPAM_RDP(t *testing.T) {
-	// Ported to the new folder/template/account model, but not yet runnable here: Windows sessions
-	// require S3 recording configured on the template, whose validation can't run against the
-	// containerized backend, and the client checks need a freerdp-capable runner. Re-enable once
-	// recording config is wired into the harness.
-	t.Skip("RDP e2e pending recording-config wiring for the new PAM model")
+	// Windows accounts need an aws-s3 recording backend, a recording connection and an S3 config on
+	// the template, which the harness can't set up yet. Drop the skip once that is wired in.
+	t.Skip("RDP e2e pending S3 recording-config wiring for the new PAM model")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

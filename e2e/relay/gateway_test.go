@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -138,10 +139,11 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 }
 
 func TestGateway_RelayGatewayConnectivity(t *testing.T) {
-	// TODO: Re-enable once the PAM revamp's e2e tests are updated. This test
-	// creates PAM resources against the revamped PAM API and is temporarily
-	// skipped so it stops blocking production.
-	t.Skip("Temporarily disabled pending PAM revamp test updates")
+	// The redis subtest passes; kubernetes does not. Account creation now runs a connection test
+	// that probes the target over HTTPS at /api, but the mock server serves plain HTTP at
+	// /version, so it fails and the versionEndpointHit assertion no longer matches what the
+	// backend does. Needs a TLS mock server and a reworked assertion.
+	t.Skip("PAM revamp: kubernetes subtest needs a TLS mock server and a reworked assertion")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -279,8 +281,9 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 			server.Shutdown(shutdownCtx)
 		})
 
-		// Get the server URL
-		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
+		// Addr() on a wildcard listener reports [::], which the backend's connection test can't
+		// dial. Use the loopback address with the bound port.
+		serverURL := fmt.Sprintf("http://127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
 		slog.Info("Mock HTTP server started", "url", serverURL)
 
 		folderId := createPamFolder(t, ctx, c, "k8s-folder")
@@ -308,7 +311,9 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		k8sResp, err := http.DefaultClient.Do(k8sReq)
 		require.NoError(t, err)
 		defer k8sResp.Body.Close()
-		require.Equal(t, http.StatusOK, k8sResp.StatusCode)
+		k8sRespBody, err := io.ReadAll(k8sResp.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, k8sResp.StatusCode, "create k8s account: %s", string(k8sRespBody))
 		require.True(t, versionEndpointHit)
 	})
 

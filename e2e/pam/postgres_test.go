@@ -135,7 +135,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 		},
 	})
 	if result != helpers.WaitSuccess {
-		pamCmd.DumpOutput()
+		infra.DumpOutput(&pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, result, "Database proxy should start successfully")
 
@@ -156,6 +156,9 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 			return helpers.ConditionSuccess
 		},
 	})
+	if connectResult != helpers.WaitSuccess {
+		infra.DumpOutput(&pamCmd)
+	}
 	require.Equal(t, helpers.WaitSuccess, connectResult, "Should connect to database through proxy")
 	defer proxyConn.Close(ctx)
 

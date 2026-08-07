@@ -1,16 +1,19 @@
 package pam
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/infisical/cli/e2e-tests/packages/client"
@@ -100,20 +103,23 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 	})
 	require.Equal(t, helpers.WaitSuccess, result)
 
-	// Start gateway
+	// Start gateway. It must be enrolled rather than started on the machine identity token:
+	// the PAM session credential, end and chunk-upload routes only accept GATEWAY_ACCESS_TOKEN.
 	tmpLogDir := t.TempDir()
 	sessionRecordingPath := filepath.Join(tmpLogDir, "session-recording")
 	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
 	gatewayName := helpers.RandomSlug(2)
+	gatewayId, enrollmentToken := CreateGatewayWithEnrollmentToken(t, ctx, svc, gatewayName)
 	gatewayCmd := &helpers.Command{
 		Test: t,
-		Args: []string{"gateway", "start",
-			fmt.Sprintf("--name=%s", gatewayName),
+		Args: []string{"gateway", "start", gatewayName,
+			"--enroll-method", "token",
+			"--token", enrollmentToken,
+			"--domain", svc.ApiUrl(t),
 			fmt.Sprintf("--pam-session-recording-path=%s", sessionRecordingPath),
 		},
 		Env: map[string]string{
 			"INFISICAL_API_URL": svc.ApiUrl(t),
-			"INFISICAL_TOKEN":   *identity.TokenAuthToken,
 		},
 	}
 	gatewayCmd.Start(ctx)
@@ -123,20 +129,6 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 		ExpectedString:   "Gateway is reachable by Infisical",
 	})
 	require.Equal(t, helpers.WaitSuccess, result)
-
-	// Find gateway ID
-	var gatewayId openapitypes.UUID
-	resp, err := c.ListGatewaysWithResponse(ctx)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode())
-	for _, gateway := range *resp.JSON200 {
-		if gateway.Name == gatewayName && gateway.Heartbeat != nil {
-			gatewayId = gateway.Id
-			slog.Info("Found gateway ID", "gatewayId", gatewayId)
-			break
-		}
-	}
-	require.NotZero(t, gatewayId, "Gateway ID should be set")
 
 	// Create PAM project
 	projDesc := "e2e tests for PAM"
@@ -179,6 +171,126 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 		ProvisionResult: svc.ProvisionResult(),
 		SharedHomeDir:   sharedHomeDir,
 	}
+}
+
+// postJSON sends an authenticated JSON POST and decodes the response into out. Used for endpoints
+// missing from the generated client (see e2e/openapi-cfg.yaml).
+func postJSON(t *testing.T, ctx context.Context, url, token string, body, out interface{}) {
+	// Fastify rejects an empty body when a JSON content type is set.
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, reader)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "POST %s: %s", url, string(respBody))
+	require.NoError(t, json.Unmarshal(respBody, out))
+}
+
+// CreateGatewayWithEnrollmentToken registers a token-auth gateway and mints its enrollment token,
+// which `gateway start --enroll-method token` exchanges for a gateway access token.
+func CreateGatewayWithEnrollmentToken(t *testing.T, ctx context.Context, svc *helpers.InfisicalService, name string) (openapitypes.UUID, string) {
+	apiUrl := svc.ApiUrl(t)
+	token := svc.ProvisionResult().Token
+
+	var gateway struct {
+		Id openapitypes.UUID `json:"id"`
+	}
+	postJSON(t, ctx, fmt.Sprintf("%s/api/v3/gateways", apiUrl), token, map[string]interface{}{
+		"name":       name,
+		"authMethod": map[string]interface{}{"method": "token"},
+	}, &gateway)
+	require.NotZero(t, gateway.Id, "Gateway ID should be set")
+
+	var enrollment struct {
+		Token string `json:"token"`
+	}
+	postJSON(t, ctx,
+		fmt.Sprintf("%s/api/v3/gateways/%s/token-auth/generate-enrollment-token", apiUrl, gateway.Id),
+		token, nil, &enrollment,
+	)
+	require.NotEmpty(t, enrollment.Token, "Gateway enrollment token should be set")
+
+	slog.Info("Created gateway", "gatewayId", gateway.Id, "name", name)
+	return gateway.Id, enrollment.Token
+}
+
+// DumpOutput dumps the proxy, relay and gateway output. Proxy failures usually surface on the
+// gateway side, so the `pam access` output alone rarely explains them.
+func (infra *PAMTestInfra) DumpOutput(pamCmd *helpers.Command) {
+	slog.Error("-------- pam access --------")
+	pamCmd.DumpOutput()
+	slog.Error("-------- relay --------")
+	infra.RelayCmd.DumpOutput()
+	slog.Error("-------- gateway --------")
+	infra.GatewayCmd.DumpOutput()
+}
+
+// CreatePamAccount creates an account of the given type in the folder/template and returns its ID.
+// Creation runs a connection test through the gateway, so it is retried while things settle.
+func CreatePamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, accountType, name string,
+	folderId, templateId openapitypes.UUID, connectionDetails, credentials map[string]interface{}) openapitypes.UUID {
+	body, err := json.Marshal(map[string]interface{}{
+		"folderId":          folderId.String(),
+		"templateId":        templateId.String(),
+		"gatewayId":         infra.GatewayId.String(),
+		"name":              name,
+		"connectionDetails": connectionDetails,
+		"credentials":       credentials,
+	})
+	require.NoError(t, err)
+
+	url := fmt.Sprintf("%s/api/v1/pam/accounts/%s", infra.Infisical.ApiUrl(t), accountType)
+	var created struct {
+		Account struct {
+			Id openapitypes.UUID `json:"id"`
+		} `json:"account"`
+	}
+
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  90 * time.Second,
+		Interval: 3 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+			require.NoError(t, reqErr)
+			req.Header.Set("Authorization", "Bearer "+infra.ProvisionResult.Token)
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, callErr := http.DefaultClient.Do(req)
+			if callErr != nil {
+				slog.Warn("PAM account creation failed, retrying...", "type", accountType, "error", callErr)
+				return helpers.ConditionWait
+			}
+			defer resp.Body.Close()
+
+			respBody, readErr := io.ReadAll(resp.Body)
+			require.NoError(t, readErr)
+			if resp.StatusCode != http.StatusOK {
+				slog.Warn("PAM account creation returned non-200, retrying...",
+					"type", accountType, "status", resp.StatusCode, "body", string(respBody))
+				return helpers.ConditionWait
+			}
+			require.NoError(t, json.Unmarshal(respBody, &created))
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "%s PAM account creation should succeed for %s", accountType, name)
+	slog.Info("Created PAM account", "type", accountType, "name", name, "accountId", created.Account.Id)
+	return created.Account.Id
 }
 
 // CreatePamFolder creates a PAM folder in the project and returns its ID.
