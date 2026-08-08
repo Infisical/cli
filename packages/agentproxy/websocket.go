@@ -192,6 +192,24 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 		return websocketSubstitutions(ps.materializeCredentials(svc))
 	}
 
+	// Only brokered connections are tracked. A passthrough socket never had a credential applied, so it has
+	// nothing to lose when the agent's grant goes away and must not be hung up for failing to match a service it
+	// never matched.
+	if outcome.service != nil {
+		unregister := ps.ws.add(wsSession{
+			jwt:      jwt,
+			scope:    scope,
+			hostname: hostname,
+			port:     port,
+			path:     matchPath,
+			close: func() {
+				_ = clientConn.Close()
+				_ = upstreamConn.Close()
+			},
+		})
+		defer unregister()
+	}
+
 	counts := pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, resolveSubs, len(wsSubs) > 0)
 
 	// A connection that rewrote a credential is an audit event, so it must not be filtered out with the
@@ -641,4 +659,69 @@ func writeSubstitutedFrame(dst io.Writer, firstByte byte, payload []byte, masked
 
 	_, err := dst.Write(frame)
 	return err
+}
+
+// wsRegistry tracks live brokered WebSockets so the poll can hang up on an agent that has lost access. HTTP
+// needs nothing like this: a request arriving after a revocation simply fails. An established socket has no
+// such moment, so without this it keeps running until it idles out, however long the agent keeps it busy.
+type wsRegistry struct {
+	mu   sync.Mutex
+	next uint64
+	live map[uint64]wsSession
+}
+
+type wsSession struct {
+	jwt      string
+	scope    agentScope
+	hostname string
+	port     string
+	path     string
+	close    func()
+}
+
+// add returns the function that stops tracking this connection; it must be called when the pipe returns, or the
+// registry grows for the life of the proxy.
+func (r *wsRegistry) add(s wsSession) func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.live == nil {
+		r.live = map[uint64]wsSession{}
+	}
+	r.next++
+	id := r.next
+	r.live[id] = s
+	return func() {
+		r.mu.Lock()
+		delete(r.live, id)
+		r.mu.Unlock()
+	}
+}
+
+func (r *wsRegistry) snapshot() []wsSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]wsSession, 0, len(r.live))
+	for _, s := range r.live {
+		out = append(out, s)
+	}
+	return out
+}
+
+// closeRevokedWebSockets hangs up any tracked connection whose agent can no longer use the service it was
+// brokered for. Only brokered connections are tracked, so a passthrough socket is never closed for failing to
+// match a service it never had.
+func (ps *proxyServer) closeRevokedWebSockets() {
+	for _, s := range ps.ws.snapshot() {
+		services, err := ps.resolver.get(s.jwt, s.scope)
+		if err == nil && bestMatch(services, s.hostname, s.port, s.path) != nil {
+			continue
+		}
+		log.Warn().
+			Str("host", s.hostname).
+			Str("projectId", s.scope.projectID).
+			Str("environment", s.scope.environment).
+			Str("secretPath", s.scope.secretPath).
+			Msg("agent is no longer authorized for this proxied service; closing its websocket")
+		s.close()
+	}
 }

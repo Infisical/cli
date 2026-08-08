@@ -113,6 +113,9 @@ type proxyServer struct {
 	usageFlushing atomic.Bool
 	// usageWarnOnce keeps a rejected usage report to one warning per proxy, not one per poll.
 	usageWarnOnce sync.Once
+
+	// ws tracks live brokered WebSockets so a revocation can reach an already-established connection.
+	ws wsRegistry
 }
 
 func newProxyServer(opts Options) (*proxyServer, error) {
@@ -324,6 +327,7 @@ func (ps *proxyServer) pollLoop(stop <-chan struct{}) {
 		select {
 		case <-ticker.C:
 			ps.resolver.refreshActive()
+			ps.closeRevokedWebSockets()
 			go ps.flushUsage()
 		case <-stop:
 			return

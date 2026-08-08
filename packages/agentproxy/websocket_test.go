@@ -875,6 +875,78 @@ func TestWebSocketStopsSubstitutingWhenGrantRevoked(t *testing.T) {
 	}
 }
 
+// Revoking a grant has to reach an already-open connection even when the agent sends nothing, which is the
+// common shape: a handshake-brokered stream that only receives. Per-message resolution cannot help there, so the
+// poll hangs the connection up instead.
+func TestCloseRevokedWebSocketsHangsUpUnauthorizedAgent(t *testing.T) {
+	jwt := "test.jwt.token"
+	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
+	services := []*resolvedService{{
+		name:         "realtime",
+		hostPatterns: parseHostPatterns("example.com"),
+		isEnabled:    true,
+	}}
+
+	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
+	cache.entries[cacheKey(jwt, scope)] = &agentEntry{jwt: jwt, scope: scope, services: services, lastSeen: time.Now()}
+	ps := &proxyServer{opts: Options{UnmatchedHost: UnmatchedAllow}, resolver: cache, transport: &http.Transport{}}
+
+	closed := false
+	unregister := ps.ws.add(wsSession{
+		jwt:      jwt,
+		scope:    scope,
+		hostname: "example.com",
+		port:     "443",
+		path:     "/ws",
+		close:    func() { closed = true },
+	})
+	defer unregister()
+
+	// Still authorized: the connection must be left alone.
+	ps.closeRevokedWebSockets()
+	if closed {
+		t.Fatal("closed a connection whose agent is still authorized")
+	}
+
+	// Revoke by dropping the agent from the cache, which is what refreshActive does on an auth failure. The
+	// re-resolve then fails because this cache has no working API client.
+	cache.mu.Lock()
+	delete(cache.entries, cacheKey(jwt, scope))
+	cache.mu.Unlock()
+
+	ps.closeRevokedWebSockets()
+	if !closed {
+		t.Fatal("an unauthorized agent kept its websocket open")
+	}
+}
+
+// A passthrough connection never had a credential applied, so it must not be hung up for not matching a service.
+func TestCloseRevokedWebSocketsLeavesPassthroughAlone(t *testing.T) {
+	ps := &proxyServer{opts: Options{UnmatchedHost: UnmatchedAllow}}
+	closed := false
+	// Nothing is registered for a passthrough connection, so the sweep has nothing to act on.
+	ps.closeRevokedWebSockets()
+	if closed {
+		t.Fatal("closed something that was never registered")
+	}
+	if got := len(ps.ws.snapshot()); got != 0 {
+		t.Fatalf("registry holds %d sessions, want 0", got)
+	}
+}
+
+// The registry must not grow for the life of the proxy.
+func TestWSRegistryUnregisters(t *testing.T) {
+	var r wsRegistry
+	stop := r.add(wsSession{hostname: "a"})
+	if got := len(r.snapshot()); got != 1 {
+		t.Fatalf("registry holds %d, want 1", got)
+	}
+	stop()
+	if got := len(r.snapshot()); got != 0 {
+		t.Fatalf("registry holds %d after unregister, want 0", got)
+	}
+}
+
 // A compressed frame carries RSV1 and is never substituted, so the offer has to be dropped or the surface
 // silently does nothing on any client that negotiates compression.
 func TestDropPerMessageDeflate(t *testing.T) {
