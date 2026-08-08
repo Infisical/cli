@@ -177,7 +177,22 @@ func (ps *proxyServer) serveWebSocket(w http.ResponseWriter, r *http.Request, sc
 	}
 	_ = clientConn.SetWriteDeadline(time.Time{})
 
-	counts := pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, wsSubs)
+	// Resolved per message from the same place an HTTP request resolves it, so a rotated lease is picked up and a
+	// revoked grant stops the substitution rather than replaying a value captured at the upgrade.
+	matchPath := r.URL.Path
+	resolveSubs := func() []wsSubstitution {
+		services, err := ps.resolver.get(jwt, scope)
+		if err != nil {
+			return nil
+		}
+		svc := bestMatch(services, hostname, port, matchPath)
+		if svc == nil {
+			return nil
+		}
+		return websocketSubstitutions(ps.materializeCredentials(svc))
+	}
+
+	counts := pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, resolveSubs, len(wsSubs) > 0)
 
 	// A connection that rewrote a credential is an audit event, so it must not be filtered out with the
 	// passthrough noise.
@@ -383,7 +398,10 @@ type wsCounts struct {
 	redacted    int
 }
 
-func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, wsSubs []wsSubstitution) wsCounts {
+// resolveSubs is called per eligible message rather than once per connection, so a WebSocket picks up a rotated
+// dynamic lease and a revoked grant the same way an HTTP request does. It returns nothing when the agent is no
+// longer authorized, which leaves the placeholder in the message and fails closed at the service.
+func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, resolveSubs func() []wsSubstitution, armed bool) wsCounts {
 	done := make(chan struct{}, 2)
 	var closeOnce sync.Once
 	closeBoth := func() {
@@ -403,8 +421,10 @@ func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn
 			closeBoth()
 		}()
 		src := io.MultiReader(clientReader, clientConn)
-		if len(wsSubs) > 0 {
-			counts.substituted = copyWSFrames(upstreamConn, src, idle, forwardReplacements(wsSubs))
+		if armed {
+			counts.substituted = copyWSFrames(upstreamConn, src, idle, func() []wsReplacement {
+				return forwardReplacements(resolveSubs())
+			})
 		} else {
 			copyWithIdleTimeout(upstreamConn, src, idle)
 		}
@@ -419,8 +439,10 @@ func pipeWebSocket(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn
 		// correlation id, an error message) and read the real credential out of the reply. Swapping the value
 		// back on the way in closes that, and also stops a service that quotes the credential in an error from
 		// leaking it by accident.
-		if len(wsSubs) > 0 {
-			counts.redacted = copyWSFrames(clientConn, src, idle, reverseReplacements(wsSubs))
+		if armed {
+			counts.redacted = copyWSFrames(clientConn, src, idle, func() []wsReplacement {
+				return reverseReplacements(resolveSubs())
+			})
 		} else {
 			copyWithIdleTimeout(clientConn, src, idle)
 		}
@@ -449,7 +471,7 @@ func copyWithIdleTimeout(dst io.Writer, src io.Reader, idle *wsIdle) {
 
 // Binary, fragmented, compressed (RSV1) and oversized frames are forwarded byte-for-byte, so a shape the
 // parser cannot safely rewrite degrades to passthrough instead of corrupting the stream.
-func copyWSFrames(dst io.Writer, src io.Reader, idle *wsIdle, reps []wsReplacement) int {
+func copyWSFrames(dst io.Writer, src io.Reader, idle *wsIdle, replacements func() []wsReplacement) int {
 	r := bufio.NewReaderSize(src, 32*1024)
 	rewritten := 0
 
@@ -549,7 +571,7 @@ func copyWSFrames(dst io.Writer, src io.Reader, idle *wsIdle, reps []wsReplaceme
 		}
 
 		text := string(payload)
-		for _, rep := range reps {
+		for _, rep := range replacements() {
 			if replaced, ok := replaceWithinLimit(text, rep.from, rep.to, maxWSSubstitutionPayload); ok {
 				text = replaced
 			}

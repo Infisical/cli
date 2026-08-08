@@ -129,7 +129,7 @@ func runFrameCopy(t *testing.T, frames []byte, subs []wsSubstitution) ([]byte, i
 	t.Helper()
 	var dst bytes.Buffer
 	idle := &wsIdle{conns: [2]net.Conn{wsFakeConn{}, wsFakeConn{}}}
-	n := copyWSFrames(&dst, bytes.NewReader(frames), idle, forwardReplacements(subs))
+	n := copyWSFrames(&dst, bytes.NewReader(frames), idle, func() []wsReplacement { return forwardReplacements(subs) })
 	return dst.Bytes(), n
 }
 
@@ -138,7 +138,7 @@ func runReverseFrameCopy(t *testing.T, frames []byte, subs []wsSubstitution) ([]
 	t.Helper()
 	var dst bytes.Buffer
 	idle := &wsIdle{conns: [2]net.Conn{wsFakeConn{}, wsFakeConn{}}}
-	n := copyWSFrames(&dst, bytes.NewReader(frames), idle, reverseReplacements(subs))
+	n := copyWSFrames(&dst, bytes.NewReader(frames), idle, func() []wsReplacement { return reverseReplacements(subs) })
 	return dst.Bytes(), n
 }
 
@@ -782,6 +782,97 @@ func (d *deadlineRecorder) SetReadDeadline(t time.Time) error {
 	d.calls++
 	d.last = t
 	return nil
+}
+
+// A rotated lease has to reach an already-open connection, the same way it reaches the next HTTP request. The
+// value is resolved per message, so the second frame must carry the new one.
+func TestWebSocketPicksUpRotatedValuePerMessage(t *testing.T) {
+	value := "lease-v1"
+	resolve := func() []wsReplacement {
+		return []wsReplacement{{from: "__tk__", to: value}}
+	}
+
+	var frames []byte
+	frames = append(frames, maskedTextFrame(t, `{"token":"__tk__"}`)...)
+	frames = append(frames, maskedTextFrame(t, `{"token":"__tk__"}`)...)
+	frames = append(frames, maskedCloseFrame()...)
+
+	// Rotate between the two messages by flipping what the resolver returns after the first call.
+	calls := 0
+	rotating := func() []wsReplacement {
+		calls++
+		if calls > 1 {
+			value = "lease-v2"
+		}
+		return resolve()
+	}
+
+	var dst bytes.Buffer
+	idle := &wsIdle{conns: [2]net.Conn{wsFakeConn{}, wsFakeConn{}}}
+	if n := copyWSFrames(&dst, bytes.NewReader(frames), idle, rotating); n != 2 {
+		t.Fatalf("substituted %d frames, want 2", n)
+	}
+
+	r := bytes.NewReader(dst.Bytes())
+	first, err := readWSTextFrame(r)
+	if err != nil {
+		t.Fatalf("first frame: %v", err)
+	}
+	second, err := readWSTextFrame(r)
+	if err != nil {
+		t.Fatalf("second frame: %v", err)
+	}
+	if first != `{"token":"lease-v1"}` {
+		t.Fatalf("first frame = %q", first)
+	}
+	if second != `{"token":"lease-v2"}` {
+		t.Fatalf("second frame = %q, want the rotated value", second)
+	}
+}
+
+// Revoking the agent's grant has to stop substitution on an open connection, not just on the next HTTP request.
+// An empty resolver result leaves the placeholder in the message, which the service rejects.
+func TestWebSocketStopsSubstitutingWhenGrantRevoked(t *testing.T) {
+	revoked := false
+	resolve := func() []wsReplacement {
+		if revoked {
+			return nil
+		}
+		return []wsReplacement{{from: "__tk__", to: "real-secret"}}
+	}
+
+	var frames []byte
+	frames = append(frames, maskedTextFrame(t, `{"token":"__tk__"}`)...)
+	frames = append(frames, maskedTextFrame(t, `{"token":"__tk__"}`)...)
+	frames = append(frames, maskedCloseFrame()...)
+
+	calls := 0
+	revoking := func() []wsReplacement {
+		calls++
+		if calls > 1 {
+			revoked = true
+		}
+		return resolve()
+	}
+
+	var dst bytes.Buffer
+	idle := &wsIdle{conns: [2]net.Conn{wsFakeConn{}, wsFakeConn{}}}
+	if n := copyWSFrames(&dst, bytes.NewReader(frames), idle, revoking); n != 1 {
+		t.Fatalf("substituted %d frames, want 1 (the second must not be brokered)", n)
+	}
+
+	r := bytes.NewReader(dst.Bytes())
+	first, _ := readWSTextFrame(r)
+	second, err := readWSTextFrame(r)
+	if err != nil {
+		t.Fatalf("second frame: %v", err)
+	}
+	if first != `{"token":"real-secret"}` {
+		t.Fatalf("first frame = %q, want the credential applied before revocation", first)
+	}
+	if second != `{"token":"__tk__"}` {
+		t.Fatalf("second frame = %q, want the placeholder left in place after revocation", second)
+	}
 }
 
 // A compressed frame carries RSV1 and is never substituted, so the offer has to be dropped or the surface
