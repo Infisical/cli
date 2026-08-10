@@ -15,6 +15,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// minRefreshableTTL is both the floor on how long refreshProxyToken waits between attempts and, for
+// that reason, the shortest access token lifetime the proxy can keep ahead of. A token that expires
+// sooner is rejected at startup rather than renewed too late.
+const minRefreshableTTL = 30 * time.Second
+
 func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	port, _ := cmd.Flags().GetInt("port")
 	unmatchedHost, _ := cmd.Flags().GetString("unmatched-host")
@@ -52,6 +57,12 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 		}
 		accessToken = credential.AccessToken
 		accessTokenTTL = int(credential.ExpiresIn)
+		// refreshProxyToken never waits less than its retry interval, so a token that expires inside that
+		// window is renewed only after it is already dead, and every request in the gap fails. Refused
+		// rather than half-served, on the same threshold and for the same reason as `infisical agent`.
+		if accessTokenTTL > 0 && accessTokenTTL <= int(minRefreshableTTL.Seconds()) {
+			util.HandleError(fmt.Errorf("the agent proxy cannot refresh an access token with a TTL of %s or less; raise the TTL on this identity's auth method", minRefreshableTTL))
+		}
 	default:
 		util.HandleError(fmt.Errorf("agent proxy credentials required; pass --auth-method [%s] with that method's credentials, --client-id/--client-secret, or a token", util.MachineIdentityAuthMethods))
 	}
@@ -91,7 +102,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 // uses: login performs a full authentication rather than a renewal, so nothing here depends on which
 // one it is.
 func refreshProxyToken(token *atomic.Value, login func() (infisicalSdk.MachineIdentityCredential, error), ttlSeconds int) {
-	const retryInterval = 30 * time.Second
+	const retryInterval = minRefreshableTTL
 
 	halfTTL := func() time.Duration {
 		wait := time.Duration(ttlSeconds) * time.Second / 2
