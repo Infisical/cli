@@ -10,8 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// A missing registration breaks that method even for someone who only set its environment variable,
-// and does it at authentication time rather than at startup.
+// A missing registration breaks that method at authentication time, not at startup.
 func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	commands := map[string]*cobra.Command{
 		"agent-proxy start":   agentProxyStartCmd,
@@ -30,8 +29,7 @@ func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	}
 }
 
-// One per case, so a flag set in one cannot change what another observes: the source label
-// distinguishes a flag from an environment variable.
+// One per case: the source label distinguishes a flag from an environment variable.
 func newAgentProxyAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{}
 	util.RegisterMachineIdentityAuthFlags(cmd, "test")
@@ -39,7 +37,6 @@ func newAgentProxyAuthCmd() *cobra.Command {
 	return cmd
 }
 
-// So a case sees only what it sets, and the developer's own environment cannot decide the outcome.
 func clearAgentProxyAuthEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range util.MachineIdentityAuthEnvVars {
@@ -54,8 +51,7 @@ func clearAgentProxyAuthEnv(t *testing.T) {
 	}
 }
 
-// The token values are deliberately not JWTs, so the expiry guard reads no claims and the resolver
-// returns instead of exiting.
+// The token values are not JWTs, so the expiry guard reads no claims and returns instead of exiting.
 func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -132,7 +128,6 @@ func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
 	}
 }
 
-// Only the non-erroring paths: the rest of packages/cmd exits the process on bad input.
 func TestResolveAgentProxyLoginPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -170,8 +165,6 @@ func TestResolveAgentProxyLoginPrecedence(t *testing.T) {
 			wantSource: "aws-iam-env",
 		},
 		{
-			// "user" is how some callers spell the human login, and there is no such thing here, so it
-			// has to fall through rather than be treated as a method name.
 			name:      "the user pseudo-method is not a machine identity",
 			env:       map[string]string{util.INFISICAL_AUTH_METHOD_NAME: "user"},
 			wantLogin: false,
@@ -197,7 +190,6 @@ func TestResolveAgentProxyLoginPrecedence(t *testing.T) {
 	}
 }
 
-// Checks the derivation held, so adding an auth method cannot quietly widen what the agent inherits.
 func TestCredentialEnvKeysCoverEveryAuthEnvVar(t *testing.T) {
 	scrubbed := make(map[string]bool, len(credentialEnvKeys))
 	for _, key := range credentialEnvKeys {
@@ -211,7 +203,6 @@ func TestCredentialEnvKeysCoverEveryAuthEnvVar(t *testing.T) {
 	}
 }
 
-// Asserted on the built environment, not just the list feeding it.
 func TestBuildAgentEnvScrubsMachineIdentityCredentials(t *testing.T) {
 	for _, envVar := range append([]string{util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME}, util.MachineIdentityAuthEnvVars...) {
 		t.Setenv(envVar, "leaked-"+envVar)

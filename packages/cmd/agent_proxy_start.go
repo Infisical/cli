@@ -15,8 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Both the floor on how long refreshProxyToken waits and, for that reason, the shortest token
-// lifetime the proxy can stay ahead of.
+// The floor on refreshProxyToken's wait, and so the shortest TTL it can stay ahead of.
 const minRefreshableTTL = 30 * time.Second
 
 func runAgentProxyStart(cmd *cobra.Command, args []string) {
@@ -44,8 +43,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	var accessTokenTTL int
 	switch {
 	case resolved.token != nil:
-		// Nothing here can renew a token it did not fetch, and the proxy is meant to outlive any single
-		// one, so say so rather than let it be discovered when every request fails at once.
+		// Unrenewable, and the proxy is meant to outlive any single token.
 		accessToken = resolved.token.Token
 		log.Warn().Msg("The agent proxy is running on a fixed token, which it cannot renew. It will stop working when that token expires; use --auth-method or client credentials to have it re-authenticate on its own.")
 	case resolved.login != nil:
@@ -55,8 +53,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 		}
 		accessToken = credential.AccessToken
 		accessTokenTTL = int(credential.ExpiresIn)
-		// Renewed only after it is already dead otherwise, failing every request in the gap. Same
-		// threshold and reason as `infisical agent`.
+		// Otherwise renewed only after it is already dead, failing every request in the gap.
 		if accessTokenTTL > 0 && accessTokenTTL <= int(minRefreshableTTL.Seconds()) {
 			util.HandleError(fmt.Errorf("the agent proxy cannot refresh an access token with a TTL of %s or less; raise the TTL on this identity's auth method", minRefreshableTTL))
 		}
@@ -75,8 +72,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))
 
-	// atomic.Value rather than the SDK's getter, which reads its token field without the client's
-	// mutex while the proxy reads on the per-request path. See resolveAgentProxyLogin.
+	// Not the SDK's getter: it reads the renewed field without the mutex, and this is read per request.
 	var proxyToken atomic.Value
 	proxyToken.Store(accessToken)
 	if login != nil {
@@ -94,7 +90,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 }
 
-// login authenticates in full rather than renewing, so nothing here depends on which method it uses.
 func refreshProxyToken(token *atomic.Value, login func() (infisicalSdk.MachineIdentityCredential, error), ttlSeconds int) {
 	const retryInterval = minRefreshableTTL
 
