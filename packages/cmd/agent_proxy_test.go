@@ -33,6 +33,115 @@ func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	}
 }
 
+// newAgentProxyAuthCmd is a stand-in for the real subcommands, carrying the same auth flags. Tests
+// build one each so that setting a flag in one case cannot change what another case observes, which
+// matters because the source label distinguishes a flag from an environment variable.
+func newAgentProxyAuthCmd() *cobra.Command {
+	cmd := &cobra.Command{}
+	util.RegisterMachineIdentityAuthFlags(cmd, "test")
+	cmd.Flags().String("token", "", "")
+	return cmd
+}
+
+// clearAgentProxyAuthEnv removes everything either resolver reads, so a case sees only what it sets
+// and the developer's own environment cannot decide the outcome.
+func clearAgentProxyAuthEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range util.MachineIdentityAuthEnvVars {
+		t.Setenv(key, "")
+	}
+	for _, key := range []string{
+		util.INFISICAL_TOKEN_NAME,
+		util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
+		util.INFISICAL_GATEWAY_TOKEN_NAME_LEGACY,
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+// A ready-made token normally wins, matching `pam agentic-access`. The exception is a machine identity
+// named on the command line, which beats a token that came only from the environment: INFISICAL_TOKEN
+// is the variable most likely to be exported for something else, and connect itself sets it in every
+// agent environment it launches, so a flag the operator typed must not lose to it.
+//
+// The token values here are deliberately not JWTs, so that the expiry guard reads no claims and the
+// resolver returns instead of exiting.
+func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        map[string]string
+		flags      map[string]string
+		wantToken  bool
+		wantSource string
+	}{
+		{
+			name:       "a token in the environment is used on its own",
+			env:        map[string]string{util.INFISICAL_TOKEN_NAME: "opaque-token"},
+			wantToken:  true,
+			wantSource: "token",
+		},
+		{
+			name: "a token beats an auth method that also came from the environment",
+			env: map[string]string{
+				util.INFISICAL_TOKEN_NAME:       "opaque-token",
+				util.INFISICAL_AUTH_METHOD_NAME: "aws-iam",
+			},
+			wantToken:  true,
+			wantSource: "token",
+		},
+		{
+			name:       "an auth method passed as a flag beats a token from the environment",
+			env:        map[string]string{util.INFISICAL_TOKEN_NAME: "opaque-token"},
+			flags:      map[string]string{"auth-method": "aws-iam"},
+			wantToken:  false,
+			wantSource: "aws-iam-flag",
+		},
+		{
+			name:       "a token passed as a flag beats an auth method passed as a flag",
+			flags:      map[string]string{"token": "opaque-token", "auth-method": "aws-iam"},
+			wantToken:  true,
+			wantSource: "token",
+		},
+		{
+			name: "client credentials on the command line beat a token from the environment",
+			env:  map[string]string{util.INFISICAL_TOKEN_NAME: "opaque-token"},
+			flags: map[string]string{
+				"client-id":     "id",
+				"client-secret": "secret",
+			},
+			wantToken:  false,
+			wantSource: "universal-auth-flag",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAgentProxyAuthEnv(t)
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+			cmd := newAgentProxyAuthCmd()
+			for name, value := range tt.flags {
+				if err := cmd.Flags().Set(name, value); err != nil {
+					t.Fatalf("setting --%s: %v", name, err)
+				}
+			}
+
+			resolved := resolveAgentProxyCredential(cmd)
+
+			if (resolved.token != nil) != tt.wantToken {
+				t.Fatalf("token != nil = %v, want %v", resolved.token != nil, tt.wantToken)
+			}
+			if !tt.wantToken && resolved.login == nil {
+				t.Fatal("expected a login function, got none")
+			}
+			if resolved.source != tt.wantSource {
+				t.Errorf("source = %q, want %q", resolved.source, tt.wantSource)
+			}
+		})
+	}
+}
+
 // Which credentials win when more than one is present, asserted on the branch resolveAgentProxyLogin
 // picks rather than on a login it cannot perform in a test. Only the non-erroring paths are covered:
 // the rest of packages/cmd exits the process on a bad input, and this follows that.
@@ -83,14 +192,12 @@ func TestResolveAgentProxyLoginPrecedence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, key := range append([]string{}, util.MachineIdentityAuthEnvVars...) {
-				t.Setenv(key, "")
-			}
+			clearAgentProxyAuthEnv(t)
 			for key, value := range tt.env {
 				t.Setenv(key, value)
 			}
 
-			login, source := resolveAgentProxyLogin(agentProxyConnectCmd)
+			login, source := resolveAgentProxyLogin(newAgentProxyAuthCmd())
 
 			if (login != nil) != tt.wantLogin {
 				t.Fatalf("login != nil = %v, want %v", login != nil, tt.wantLogin)

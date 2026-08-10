@@ -34,31 +34,29 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 	log.Logger = log.Output(logWriter)
 
-	// Same order as connect and as `pam agentic-access`: a ready-made token first, then a machine
-	// identity authenticating with its own credentials.
+	resolved := resolveAgentProxyCredential(cmd)
+
 	var accessToken string
 	var accessTokenTTL int
-	var login func() (infisicalSdk.MachineIdentityCredential, error)
-	credentialSource := "token"
-
-	if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
+	switch {
+	case resolved.token != nil:
 		// A token minted elsewhere. Nothing here can renew it, and the proxy is meant to outlive any
 		// single token, so this is worth saying out loud rather than leaving to be discovered when every
 		// request starts failing at once.
-		accessToken = token.Token
+		accessToken = resolved.token.Token
 		log.Warn().Msg("The agent proxy is running on a fixed token, which it cannot renew. It will stop working when that token expires; use --auth-method or client credentials to have it re-authenticate on its own.")
-	} else {
-		login, credentialSource = resolveAgentProxyLogin(cmd)
-		if login == nil {
-			util.HandleError(fmt.Errorf("agent proxy credentials required; pass --auth-method [%s] with that method's credentials, --client-id/--client-secret, or a token", util.MachineIdentityAuthMethods))
-		}
-		credential, err := login()
+	case resolved.login != nil:
+		credential, err := resolved.login()
 		if err != nil {
 			util.HandleError(err, "Failed to authenticate the agent proxy machine identity")
 		}
 		accessToken = credential.AccessToken
 		accessTokenTTL = int(credential.ExpiresIn)
+	default:
+		util.HandleError(fmt.Errorf("agent proxy credentials required; pass --auth-method [%s] with that method's credentials, --client-id/--client-secret, or a token", util.MachineIdentityAuthMethods))
 	}
+	credentialSource := resolved.source
+	login := resolved.login
 
 	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(accessToken))
 	Telemetry.CaptureEvent("cli-command:agent-proxy start", posthog.NewProperties().

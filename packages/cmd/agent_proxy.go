@@ -244,14 +244,61 @@ func resolveAgentProxyStaticToken(cmd *cobra.Command, subject string) *models.To
 	return token
 }
 
+// agentProxyCredential is how a command authenticates. Exactly one of token and login is set, unless
+// nothing was configured at all, in which case neither is.
+type agentProxyCredential struct {
+	token  *models.TokenDetails
+	login  func() (infisicalSdk.MachineIdentityCredential, error)
+	source string
+}
+
+// machineIdentityGivenAsFlag reports whether this invocation named a machine identity on the command
+// line, rather than inheriting one from the environment.
+func machineIdentityGivenAsFlag(cmd *cobra.Command) bool {
+	return cmd.Flags().Changed("auth-method") ||
+		cmd.Flags().Changed("client-id") ||
+		cmd.Flags().Changed("client-secret")
+}
+
+// resolveAgentProxyCredential chooses between a token the operator already has and a machine identity
+// that authenticates itself.
+//
+// A ready-made token comes first, as it does in `pam agentic-access`. The exception is a flag that was
+// actually typed: --auth-method or client credentials on the command line beat a token that came only
+// from the environment. Without that exception INFISICAL_TOKEN would win, and it is the variable most
+// likely to be exported for something else entirely, not least because `connect` sets it in every
+// agent environment it launches.
+func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
+	tokenFirst := cmd.Flags().Changed("token") || !machineIdentityGivenAsFlag(cmd)
+
+	if tokenFirst {
+		if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
+			return agentProxyCredential{token: token, source: "token"}
+		}
+	}
+
+	if login, source := resolveAgentProxyLogin(cmd); login != nil {
+		return agentProxyCredential{login: login, source: source}
+	}
+
+	// Only reachable when a machine identity was named on the command line but resolved to nothing,
+	// which resolveAgentProxyLogin already rejects. Kept so the token is never dropped silently.
+	if !tokenFirst {
+		if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
+			return agentProxyCredential{token: token, source: "token"}
+		}
+	}
+
+	return agentProxyCredential{}
+}
+
 // resolveAgentProxyLogin works out how this command's machine identity authenticates, and returns a
 // function that performs one authentication per call along with a label naming the branch for
 // telemetry. Both are nil when nothing was configured.
 //
-// Callers reach this only after resolveAgentProxyStaticToken has come up empty, which is the order
-// `pam agentic-access` resolves in too: a ready-made token first, then a machine identity
-// authenticating with its own credentials. Within this function the order is an explicit
-// --auth-method, then client credentials on their own as the shorthand for universal-auth.
+// The order within this function is an explicit --auth-method, then client credentials on their own as
+// the shorthand for universal-auth. resolveAgentProxyCredential decides how this ranks against a
+// ready-made token.
 //
 // Each call builds its own SDK client and lets it go again. The SDK cannot be told to skip its
 // background token lifecycle (Config.AutoTokenRefresh is a bool tagged `default:"true"`, and
@@ -335,23 +382,22 @@ func authMethodCredentialSource(cmd *cobra.Command, authMethod string) string {
 // execs, and nothing can reach in and rewrite it afterwards. When it expires the agent's requests
 // start coming back 403 and the agent has to be relaunched.
 func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
-	if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
-		return token, "token"
+	resolved := resolveAgentProxyCredential(cmd)
+	if resolved.token != nil {
+		return resolved.token, resolved.source
 	}
-
-	login, source := resolveAgentProxyLogin(cmd)
-	if login == nil {
+	if resolved.login == nil {
 		util.HandleError(fmt.Errorf("authentication required; pass --auth-method [%s] with that method's credentials, --client-id/--client-secret, or a token", util.MachineIdentityAuthMethods))
 	}
 
-	credential, err := login()
+	credential, err := resolved.login()
 	if err != nil {
 		util.HandleError(err, "Failed to authenticate the agent machine identity")
 	}
 	return &models.TokenDetails{
 		Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
 		Token: credential.AccessToken,
-	}, source
+	}, resolved.source
 }
 
 // Builds http://<projectId>:<env>/<path>:<jwt>@host:port (username=projectId, password="<env>/<path>:<jwt>", jwt last).
@@ -481,11 +527,9 @@ func fetchAgentRealSecrets(token *models.TokenDetails, projectID, environment, s
 		ExpandSecretReferences: true,
 		IncludeImport:          true,
 	}
-	if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-		params.InfisicalToken = token.Token
-	} else if token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
-		params.UniversalAuthAccessToken = token.Token
-	}
+	// Always an identity access token: resolveAgentProxyStaticToken turns a service token away, and
+	// every auth method produces one of these.
+	params.UniversalAuthAccessToken = token.Token
 
 	secrets, err := util.GetAllEnvironmentVariables(params, "")
 	if err != nil {
