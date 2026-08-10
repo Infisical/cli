@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// A missing registration breaks that method at authentication time, not at startup.
 func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	commands := map[string]*cobra.Command{
 		"agent-proxy start":   agentProxyStartCmd,
@@ -29,7 +28,6 @@ func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	}
 }
 
-// One per case: the source label distinguishes a flag from an environment variable.
 func newAgentProxyAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{}
 	util.RegisterMachineIdentityAuthFlags(cmd, "test")

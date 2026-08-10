@@ -6,8 +6,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
-// This list is maintained by hand while the agent proxy derives its own from the shared one, so
-// adding an auth method to the CLI would update that one and silently leave this behind.
+// Maintained by hand, while the agent proxy derives its own from the shared list.
 func TestInfisicalAuthEnvKeysCoverMachineIdentityAuthEnvVars(t *testing.T) {
 	stripped := make(map[string]bool, len(infisicalAuthEnvKeys))
 	for _, key := range infisicalAuthEnvKeys {

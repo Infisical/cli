@@ -80,8 +80,6 @@ var proxyEnvKeys = []string{
 	"OPENCLAW_PROXY_URL",
 }
 
-// Derived rather than listed, so an auth method added to the CLI cannot quietly widen what the agent
-// inherits. Buys little for the methods whose credential is ambient to the host anyway.
 var credentialEnvKeys = append([]string{
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
 }, util.MachineIdentityAuthEnvVars...)
@@ -211,8 +209,7 @@ func telemetryAgentName(args []string) string {
 	return filepath.Base(args[0])
 }
 
-// A service token authenticates to the secrets API but not as a machine identity, and an expired one
-// would otherwise surface as an unexplained 403 on the agent's first proxied request.
+// A service token authenticates to the secrets API but not as a machine identity.
 func resolveAgentProxyStaticToken(cmd *cobra.Command, subject string) *models.TokenDetails {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -268,10 +265,10 @@ func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
 	return second()
 }
 
-// Each call builds its own SDK client and drops it. AutoTokenRefresh cannot be switched off (it is a
-// bool tagged `default:"true"`, and setDefaults rewrites any false bool back), so a client kept alive
-// would re-authenticate on its own schedule alongside the caller's, doubling this identity's auth
-// events. Its getter goes unused for a second reason: it reads the renewed field without the mutex.
+// A client per login, dropped after. AutoTokenRefresh cannot be switched off (a bool tagged
+// `default:"true"`, and setDefaults rewrites any false bool back), so one kept alive would
+// re-authenticate alongside the caller's own renewal. Its getter reads that field without the mutex,
+// which is why callers take the returned credential instead.
 func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.MachineIdentityCredential, error), source string) {
 	authMethod, err := util.ResolveAuthMethod(cmd)
 	if err != nil {
@@ -334,8 +331,6 @@ func authMethodCredentialSource(cmd *cobra.Command, authMethod string) string {
 	return authMethod + "-env"
 }
 
-// The token is frozen here: connect writes it into the agent's environment and execs, so an expiry
-// mid-run means 403s until relaunch.
 func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
 	resolved := resolveAgentProxyCredential(cmd)
 	if resolved.token != nil {

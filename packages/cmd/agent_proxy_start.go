@@ -43,7 +43,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	var accessTokenTTL int
 	switch {
 	case resolved.token != nil:
-		// Unrenewable, and the proxy is meant to outlive any single token.
 		accessToken = resolved.token.Token
 		log.Warn().Msg("The agent proxy is running on a fixed token, which it cannot renew. It will stop working when that token expires; use --auth-method or client credentials to have it re-authenticate on its own.")
 	case resolved.login != nil:
@@ -72,7 +71,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))
 
-	// Not the SDK's getter: it reads the renewed field without the mutex, and this is read per request.
 	var proxyToken atomic.Value
 	proxyToken.Store(accessToken)
 	if login != nil {

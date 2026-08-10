@@ -293,8 +293,6 @@ var MachineIdentityAuthFlags = []string{
 	"organization-slug",
 }
 
-// A command that hands an environment to a child it does not trust scrubs these, so that adding a
-// strategy cannot quietly widen what the child inherits.
 var MachineIdentityAuthEnvVars = []string{
 	INFISICAL_AUTH_METHOD_NAME,
 	INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
@@ -358,7 +356,6 @@ var machineIdentityStrategies = map[AuthStrategyType]bool{
 	AuthStrategy.LDAP_AUTH:         true,
 }
 
-// The returned function authenticates once per call and renews nothing.
 func MachineIdentityLoginFunc(cmd *cobra.Command, client infisicalSdk.InfisicalClientInterface, authMethod string) (func() (infisicalSdk.MachineIdentityCredential, error), error) {
 	if err := ValidateAuthMethod(authMethod); err != nil {
 		return nil, err
