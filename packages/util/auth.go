@@ -275,3 +275,133 @@ func (a *SdkAuthenticator) HandleLdapAuthLogin() (credential infisicalSdk.Machin
 
 	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).LdapAuthLogin(identityId, ldapUsername, ldapPassword)
 }
+
+// MachineIdentityAuthMethods lists what --auth-method accepts, for flag help and for the error when
+// it is given something else. Kept beside the strategy table in MachineIdentityLoginFunc so the two
+// cannot drift apart.
+const MachineIdentityAuthMethods = "universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth, ldap-auth"
+
+// MachineIdentityAuthFlags are the flags the strategies above read. Every one has to be registered on
+// a command that offers --auth-method: GetCmdFlagOrEnv looks the flag up before it looks at the
+// environment and returns an error for a name the command never declared, so a missing registration
+// breaks that method even for someone who only ever set its environment variable.
+var MachineIdentityAuthFlags = []string{
+	"auth-method",
+	"client-id",
+	"client-secret",
+	"machine-identity-id",
+	"service-account-token-path",
+	"service-account-key-file-path",
+	"jwt",
+	"ldap-username",
+	"ldap-password",
+	"organization-slug",
+}
+
+// MachineIdentityAuthEnvVars are the environment variables the strategies read. A command that hands
+// an environment to a child process it does not trust scrubs these, so that adding a strategy cannot
+// quietly widen what the child inherits.
+var MachineIdentityAuthEnvVars = []string{
+	INFISICAL_AUTH_METHOD_NAME,
+	INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
+	INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME,
+	INFISICAL_MACHINE_IDENTITY_ID_NAME,
+	INFISICAL_KUBERNETES_SERVICE_ACCOUNT_TOKEN_NAME,
+	INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME,
+	INFISICAL_JWT_NAME,
+	INFISICAL_OIDC_AUTH_JWT_NAME,
+	INFISICAL_LDAP_USERNAME,
+	INFISICAL_LDAP_PASSWORD,
+}
+
+// RegisterMachineIdentityAuthFlags declares every flag in MachineIdentityAuthFlags on cmd. identity
+// names whose credentials these are, since a command may authenticate more than one identity and the
+// help is the only place that distinction shows up.
+func RegisterMachineIdentityAuthFlags(cmd *cobra.Command, identity string) {
+	cmd.Flags().String("auth-method", "", fmt.Sprintf("how to authenticate the %s machine identity ["+MachineIdentityAuthMethods+"]", identity))
+	cmd.Flags().String("client-id", "", fmt.Sprintf("client id for universal auth, for the %s machine identity", identity))
+	cmd.Flags().String("client-secret", "", fmt.Sprintf("client secret for universal auth, for the %s machine identity", identity))
+	cmd.Flags().String("machine-identity-id", "", "machine identity id, for every method except universal-auth")
+	cmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth (on a pod, /var/run/secrets/kubernetes.io/serviceaccount/token)")
+	cmd.Flags().String("service-account-key-file-path", "", "service account key file path for gcp-iam auth")
+	cmd.Flags().String("jwt", "", "JWT for the jwt-based methods [oidc-auth, jwt-auth]")
+	cmd.Flags().String("ldap-username", "", "username for ldap-auth")
+	cmd.Flags().String("ldap-password", "", "password for ldap-auth")
+	cmd.Flags().String("organization-slug", "", "scope the identity to this sub-organization. Defaults to the organization the identity was created in")
+}
+
+// ResolveAuthMethod returns the machine identity auth method named by --auth-method or
+// INFISICAL_AUTH_METHOD. It returns "" when none was named, and also for "user", which some callers
+// spell out to mean the human login; both leave the caller on whatever fallback it has.
+func ResolveAuthMethod(cmd *cobra.Command) (string, error) {
+	authMethod, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "auth-method", []string{INFISICAL_AUTH_METHOD_NAME}, "")
+	if err != nil {
+		return "", err
+	}
+	if authMethod == "user" {
+		return "", nil
+	}
+	return authMethod, nil
+}
+
+// ValidateAuthMethod reports whether authMethod names a strategy MachineIdentityLoginFunc can
+// authenticate, so that a caller can reject a typo before building anything.
+func ValidateAuthMethod(authMethod string) error {
+	valid, strategy := IsAuthMethodValid(authMethod, false)
+	if !valid {
+		return fmt.Errorf("invalid auth method %q. Supported: %s", authMethod, MachineIdentityAuthMethods)
+	}
+	if !machineIdentityStrategies[strategy] {
+		return fmt.Errorf("auth method %q is not supported here. Supported: %s", authMethod, MachineIdentityAuthMethods)
+	}
+	return nil
+}
+
+// machineIdentityStrategies is which strategies MachineIdentityLoginFunc has a handler for.
+// IsAuthMethodValid accepts every strategy in AVAILABLE_AUTH_STRATEGIES, and one added there without
+// a handler here has to be reported rather than indexed: a missing key yields a nil func, and calling
+// that panics.
+var machineIdentityStrategies = map[AuthStrategyType]bool{
+	AuthStrategy.UNIVERSAL_AUTH:    true,
+	AuthStrategy.KUBERNETES_AUTH:   true,
+	AuthStrategy.AZURE_AUTH:        true,
+	AuthStrategy.GCP_ID_TOKEN_AUTH: true,
+	AuthStrategy.GCP_IAM_AUTH:      true,
+	AuthStrategy.AWS_IAM_AUTH:      true,
+	AuthStrategy.OIDC_AUTH:         true,
+	AuthStrategy.JWT_AUTH:          true,
+	AuthStrategy.LDAP_AUTH:         true,
+}
+
+// MachineIdentityLoginFunc returns the function that authenticates authMethod, which must have come
+// from ResolveAuthMethod. The function performs one authentication per call and returns that
+// credential, so a caller that needs a fresh token later calls it again; nothing here renews on its
+// own.
+func MachineIdentityLoginFunc(cmd *cobra.Command, client infisicalSdk.InfisicalClientInterface, authMethod string) (func() (infisicalSdk.MachineIdentityCredential, error), error) {
+	if err := ValidateAuthMethod(authMethod); err != nil {
+		return nil, err
+	}
+	_, strategy := IsAuthMethodValid(authMethod, false)
+
+	authenticator := NewSdkAuthenticator(client, cmd)
+	strategies := map[AuthStrategyType]func() (infisicalSdk.MachineIdentityCredential, error){
+		AuthStrategy.UNIVERSAL_AUTH:    authenticator.HandleUniversalAuthLogin,
+		AuthStrategy.KUBERNETES_AUTH:   authenticator.HandleKubernetesAuthLogin,
+		AuthStrategy.AZURE_AUTH:        authenticator.HandleAzureAuthLogin,
+		AuthStrategy.GCP_ID_TOKEN_AUTH: authenticator.HandleGcpIdTokenAuthLogin,
+		AuthStrategy.GCP_IAM_AUTH:      authenticator.HandleGcpIamAuthLogin,
+		AuthStrategy.AWS_IAM_AUTH:      authenticator.HandleAwsIamAuthLogin,
+		AuthStrategy.OIDC_AUTH:         authenticator.HandleOidcAuthLogin,
+		AuthStrategy.JWT_AUTH:          authenticator.HandleJwtAuthLogin,
+		AuthStrategy.LDAP_AUTH:         authenticator.HandleLdapAuthLogin,
+	}
+
+	// Not indexed blind, even though ValidateAuthMethod has already passed: it consults
+	// machineIdentityStrategies, and if that list and this table ever disagree the lookup yields a nil
+	// func that panics at the call site rather than here.
+	login, supported := strategies[strategy]
+	if !supported {
+		return nil, fmt.Errorf("auth method %q is not supported here. Supported: %s", authMethod, MachineIdentityAuthMethods)
+	}
+	return login, nil
+}

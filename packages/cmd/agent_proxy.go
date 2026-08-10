@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
+	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -78,12 +80,24 @@ var proxyEnvKeys = []string{
 	"OPENCLAW_PROXY_URL",
 }
 
-// Stripped so the agent never sees the long-lived MI credentials, only the scoped short-lived JWT set below.
-var credentialEnvKeys = []string{
-	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
-	util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME,
+// Stripped so the agent is handed only the scoped short-lived JWT set below, and not whatever the
+// parent authenticated with.
+//
+// Derived from util.MachineIdentityAuthEnvVars rather than listed here, so that a machine identity
+// auth method added to the CLI cannot quietly widen what the agent inherits. INFISICAL_AUTH_METHOD is
+// in that list and matters as much as the credentials: connect deliberately sets INFISICAL_TOKEN for
+// the agent, and a stray auth method would send a CLI call inside the agent down a machine identity
+// login instead of using that token.
+//
+// How much this is worth depends on the method. For universal-auth, ldap-auth and the jwt-based
+// methods the credential is a value that lives only in the environment, so removing it is a real
+// boundary. For kubernetes, aws-iam, azure and gcp-id-token the credential is an ambient capability of
+// the host (a service account token file, an instance metadata endpoint) that the agent can reach
+// whether or not it inherits these; there the isolation comes from the agent running on a different
+// host to the proxy, and from the agent identity holding Proxy and nothing else.
+var credentialEnvKeys = append([]string{
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
-}
+}, util.MachineIdentityAuthEnvVars...)
 
 // Addresses of host IPC endpoints. Not secret values, but handing them to the agent points it at
 // sockets it can use: the SSH/GPG agents as a signing oracle, and the session bus, where
@@ -210,37 +224,134 @@ func telemetryAgentName(args []string) string {
 	return filepath.Base(args[0])
 }
 
-func universalAuthCredentialSource(cmd *cobra.Command) string {
-	if cmd.Flags().Changed("client-id") {
-		return "universal-auth-flag"
-	}
-	return "universal-auth-env"
-}
-
-// Returns the token and a label for the branch that produced it.
-func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
-	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
-	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
-
-	if clientID != "" && clientSecret != "" {
-		loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
-		if err != nil {
-			util.HandleError(err, "Failed to authenticate the agent machine identity")
-		}
-		return &models.TokenDetails{
-			Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
-			Token: loginResp.AccessToken,
-		}, universalAuthCredentialSource(cmd)
-	}
-
+// resolveAgentProxyStaticToken returns a token the operator fetched elsewhere, or nil if none was
+// given. The two guards match what `pam agentic-access` applies to the same input: a service token
+// authenticates to the secrets API but not as a machine identity, so it cannot stand in for one here,
+// and an expired token is worth catching now rather than at the agent's first proxied request, which
+// is where it would otherwise surface as an unexplained 403.
+func resolveAgentProxyStaticToken(cmd *cobra.Command, subject string) *models.TokenDetails {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to resolve authentication")
 	}
 	if token == nil {
-		util.HandleError(fmt.Errorf("authentication required; provide --client-id/--client-secret, env vars, or a token"))
+		return nil
 	}
-	return token, "token"
+	if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+		util.PrintErrorMessageAndExit("The agent proxy does not support service tokens. Use a machine identity access token, or authenticate with --auth-method.")
+	}
+	failIfTokenExpired(token.Token, subject)
+	return token
+}
+
+// resolveAgentProxyLogin works out how this command's machine identity authenticates, and returns a
+// function that performs one authentication per call along with a label naming the branch for
+// telemetry. Both are nil when nothing was configured.
+//
+// Callers reach this only after resolveAgentProxyStaticToken has come up empty, which is the order
+// `pam agentic-access` resolves in too: a ready-made token first, then a machine identity
+// authenticating with its own credentials. Within this function the order is an explicit
+// --auth-method, then client credentials on their own as the shorthand for universal-auth.
+//
+// Each call builds its own SDK client and lets it go again. The SDK cannot be told to skip its
+// background token lifecycle (Config.AutoTokenRefresh is a bool tagged `default:"true"`, and
+// setDefaults rewrites any false bool back to its default). Left alive, that goroutine would
+// re-authenticate on its own schedule alongside the renewal the caller is already driving, doubling
+// this identity's authentication events; a client that dies with its login cannot. Separately, and
+// the reason nothing here returns the SDK's own getter: that goroutine renews into a field
+// Auth().GetAccessToken reads without taking the client's mutex, and both commands read the token
+// from a per-request path.
+func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.MachineIdentityCredential, error), source string) {
+	authMethod, err := util.ResolveAuthMethod(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to parse auth-method flag")
+	}
+
+	if authMethod == "" {
+		clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
+		clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
+		if clientID == "" && clientSecret == "" {
+			return nil, ""
+		}
+		// Half a credential is a mistake rather than a request for a different method, and saying which
+		// half is missing beats listing every method the command accepts.
+		if clientID == "" {
+			util.HandleError(fmt.Errorf("client id required; pass --client-id or set %s", util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME))
+		}
+		if clientSecret == "" {
+			util.HandleError(fmt.Errorf("client secret required; pass --client-secret or set %s", util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME))
+		}
+		authMethod = string(util.AuthStrategy.UNIVERSAL_AUTH)
+	}
+
+	// Rejected here rather than at the first login, so that a typo fails before the command has done
+	// anything else.
+	if err := util.ValidateAuthMethod(authMethod); err != nil {
+		util.PrintErrorMessageAndExit(err.Error())
+	}
+
+	customHeaders, err := util.GetInfisicalCustomHeadersMap()
+	if err != nil {
+		util.HandleError(err, "Unable to get custom headers")
+	}
+
+	login = func() (infisicalSdk.MachineIdentityCredential, error) {
+		ctx, cancel := context.WithCancel(cmd.Context())
+		defer cancel()
+
+		client := infisicalSdk.NewInfisicalClient(ctx, infisicalSdk.Config{
+			SiteUrl:       config.INFISICAL_URL,
+			UserAgent:     api.USER_AGENT,
+			CustomHeaders: customHeaders,
+		})
+		authenticate, err := util.MachineIdentityLoginFunc(cmd, client, authMethod)
+		if err != nil {
+			return infisicalSdk.MachineIdentityCredential{}, err
+		}
+		credential, err := authenticate()
+		if err != nil {
+			return infisicalSdk.MachineIdentityCredential{}, err
+		}
+		if credential.AccessToken == "" {
+			return infisicalSdk.MachineIdentityCredential{}, fmt.Errorf("authenticating with %s returned no access token", authMethod)
+		}
+		return credential, nil
+	}
+	return login, authMethodCredentialSource(cmd, authMethod)
+}
+
+// authMethodCredentialSource labels how the identity was configured, for telemetry. The method alone
+// would not distinguish the two ways of asking for the same one.
+func authMethodCredentialSource(cmd *cobra.Command, authMethod string) string {
+	if cmd.Flags().Changed("auth-method") || cmd.Flags().Changed("client-id") {
+		return authMethod + "-flag"
+	}
+	return authMethod + "-env"
+}
+
+// Returns the token and a label for the branch that produced it.
+//
+// Whichever branch wins, the token is frozen here: connect writes it into the agent's environment and
+// execs, and nothing can reach in and rewrite it afterwards. When it expires the agent's requests
+// start coming back 403 and the agent has to be relaunched.
+func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
+	if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
+		return token, "token"
+	}
+
+	login, source := resolveAgentProxyLogin(cmd)
+	if login == nil {
+		util.HandleError(fmt.Errorf("authentication required; pass --auth-method [%s] with that method's credentials, --client-id/--client-secret, or a token", util.MachineIdentityAuthMethods))
+	}
+
+	credential, err := login()
+	if err != nil {
+		util.HandleError(err, "Failed to authenticate the agent machine identity")
+	}
+	return &models.TokenDetails{
+		Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
+		Token: credential.AccessToken,
+	}, source
 }
 
 // Builds http://<projectId>:<env>/<path>:<jwt>@host:port (username=projectId, password="<env>/<path>:<jwt>", jwt last).
@@ -474,17 +585,16 @@ func init() {
 	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
 	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
 	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
-	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
-	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
-	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
+	util.RegisterMachineIdentityAuthFlags(agentProxyConnectCmd, "agent")
+	agentProxyConnectCmd.Flags().String("token", "", "machine identity access token to use instead of authenticating; takes precedence over --auth-method")
 	agentProxyConnectCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 	agentProxyConnectCmd.Flags().Bool("allow-readable-brokered-secrets", false, "start even if the agent can read secrets that proxied services broker to it (bypasses a misconfiguration guardrail; falls back to INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS)")
 
 	agentProxyStartCmd.Flags().Int("port", 17322, "port for the agent proxy to listen on")
 	agentProxyStartCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
 	agentProxyStartCmd.Flags().Int("poll-interval", 60, "seconds between permission/credential refreshes for active agents")
-	agentProxyStartCmd.Flags().String("client-id", "", "universal auth client id for the agent proxy machine identity")
-	agentProxyStartCmd.Flags().String("client-secret", "", "universal auth client secret for the agent proxy machine identity")
+	util.RegisterMachineIdentityAuthFlags(agentProxyStartCmd, "agent proxy")
+	agentProxyStartCmd.Flags().String("token", "", "machine identity access token to use instead of authenticating; takes precedence over --auth-method, and the proxy cannot renew it")
 	agentProxyStartCmd.Flags().String("log-format", "console", "log output format: console | json")
 	agentProxyStartCmd.Flags().String("log-file", "", "also write json logs to this file (in addition to the console/json stream)")
 

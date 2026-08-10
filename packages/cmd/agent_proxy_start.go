@@ -9,6 +9,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
+	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -33,32 +34,49 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 	log.Logger = log.Output(logWriter)
 
-	clientID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
-	if err != nil || clientID == "" {
-		util.HandleError(fmt.Errorf("agent proxy credentials required; set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _SECRET or pass --client-id / --client-secret"))
-	}
-	clientSecret, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
-	if err != nil || clientSecret == "" {
-		util.HandleError(fmt.Errorf("agent proxy client secret required"))
+	// Same order as connect and as `pam agentic-access`: a ready-made token first, then a machine
+	// identity authenticating with its own credentials.
+	var accessToken string
+	var accessTokenTTL int
+	var login func() (infisicalSdk.MachineIdentityCredential, error)
+	credentialSource := "token"
+
+	if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
+		// A token minted elsewhere. Nothing here can renew it, and the proxy is meant to outlive any
+		// single token, so this is worth saying out loud rather than leaving to be discovered when every
+		// request starts failing at once.
+		accessToken = token.Token
+		log.Warn().Msg("The agent proxy is running on a fixed token, which it cannot renew. It will stop working when that token expires; use --auth-method or client credentials to have it re-authenticate on its own.")
+	} else {
+		login, credentialSource = resolveAgentProxyLogin(cmd)
+		if login == nil {
+			util.HandleError(fmt.Errorf("agent proxy credentials required; pass --auth-method [%s] with that method's credentials, --client-id/--client-secret, or a token", util.MachineIdentityAuthMethods))
+		}
+		credential, err := login()
+		if err != nil {
+			util.HandleError(err, "Failed to authenticate the agent proxy machine identity")
+		}
+		accessToken = credential.AccessToken
+		accessTokenTTL = int(credential.ExpiresIn)
 	}
 
-	loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
-	if err != nil {
-		util.HandleError(err, "Failed to authenticate the agent proxy machine identity")
-	}
-
-	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(loginResp.AccessToken))
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(accessToken))
 	Telemetry.CaptureEvent("cli-command:agent-proxy start", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("unmatchedHost", unmatchedHost).
 		Set("pollInterval", pollInterval).
-		Set("credentialSource", universalAuthCredentialSource(cmd)))
+		Set("credentialSource", credentialSource))
 
 	log.Info().Msg(color.GreenString("Agent proxy authenticated; starting MITM proxy"))
 
+	// atomic.Value rather than the SDK's own getter: the proxy reads this on the per-request path while
+	// the refresher writes it, and Auth().GetAccessToken reads the SDK's token field without holding
+	// the client's mutex. See resolveAgentProxyLogin.
 	var proxyToken atomic.Value
-	proxyToken.Store(loginResp.AccessToken)
-	go refreshProxyToken(&proxyToken, clientID, clientSecret, loginResp.AccessTokenTTL)
+	proxyToken.Store(accessToken)
+	if login != nil {
+		go refreshProxyToken(&proxyToken, login, accessTokenTTL)
+	}
 
 	err = agentproxy.Start(agentproxy.Options{
 		Port:          port,
@@ -71,7 +89,10 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 }
 
-func refreshProxyToken(token *atomic.Value, clientID, clientSecret string, ttlSeconds int) {
+// refreshProxyToken re-authenticates the proxy's machine identity on a schedule, whatever method it
+// uses: login performs a full authentication rather than a renewal, so nothing here depends on which
+// one it is.
+func refreshProxyToken(token *atomic.Value, login func() (infisicalSdk.MachineIdentityCredential, error), ttlSeconds int) {
 	const retryInterval = 30 * time.Second
 
 	halfTTL := func() time.Duration {
@@ -86,15 +107,15 @@ func refreshProxyToken(token *atomic.Value, clientID, clientSecret string, ttlSe
 	for {
 		time.Sleep(wait)
 
-		loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
+		credential, err := login()
 		if err != nil {
 			log.Warn().Err(err).Msgf("Failed to refresh agent proxy token, retrying in %s", retryInterval)
 			wait = retryInterval
 			continue
 		}
-		token.Store(loginResp.AccessToken)
-		if loginResp.AccessTokenTTL > 0 {
-			ttlSeconds = loginResp.AccessTokenTTL
+		token.Store(credential.AccessToken)
+		if credential.ExpiresIn > 0 {
+			ttlSeconds = int(credential.ExpiresIn)
 		}
 		wait = halfTTL()
 	}

@@ -268,28 +268,17 @@ func resolveAgentAccessToken(cmd *cobra.Command) (accessToken func() string, sto
 	return func() string { return jwt }, func() {}
 }
 
-// agenticAuthMethods lists what --auth-method accepts, for the flag help and for the error when it
-// doesn't. Kept next to the strategy table below so the two cannot drift apart.
-const agenticAuthMethods = "universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth, ldap-auth"
-
 // authenticateMachineIdentity authenticates a machine identity with its own credentials when
 // --auth-method (or INFISICAL_AUTH_METHOD) names one, returning a getter for its current access token
 // and a stop function. Both are nil when no method was asked for, which leaves the caller on its
 // stored-login path.
 func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string, stop func()) {
-	authMethod, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "auth-method", []string{util.INFISICAL_AUTH_METHOD_NAME}, "")
+	authMethod, err := util.ResolveAuthMethod(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse auth-method flag")
 	}
-
-	// "user" is spelled out by some callers to mean the human login, which is already the fallback.
-	if authMethod == "" || authMethod == "user" {
+	if authMethod == "" {
 		return nil, nil
-	}
-
-	valid, strategy := util.IsAuthMethodValid(authMethod, false)
-	if !valid {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid auth method %q. Supported: %s.", authMethod, agenticAuthMethods))
 	}
 
 	customHeaders, err := util.GetInfisicalCustomHeadersMap()
@@ -308,26 +297,10 @@ func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string,
 		CustomHeaders: customHeaders,
 	})
 
-	authenticator := util.NewSdkAuthenticator(client, cmd)
-	strategies := map[util.AuthStrategyType]func() (infisicalSdk.MachineIdentityCredential, error){
-		util.AuthStrategy.UNIVERSAL_AUTH:    authenticator.HandleUniversalAuthLogin,
-		util.AuthStrategy.KUBERNETES_AUTH:   authenticator.HandleKubernetesAuthLogin,
-		util.AuthStrategy.AZURE_AUTH:        authenticator.HandleAzureAuthLogin,
-		util.AuthStrategy.GCP_ID_TOKEN_AUTH: authenticator.HandleGcpIdTokenAuthLogin,
-		util.AuthStrategy.GCP_IAM_AUTH:      authenticator.HandleGcpIamAuthLogin,
-		util.AuthStrategy.AWS_IAM_AUTH:      authenticator.HandleAwsIamAuthLogin,
-		util.AuthStrategy.OIDC_AUTH:         authenticator.HandleOidcAuthLogin,
-		util.AuthStrategy.JWT_AUTH:          authenticator.HandleJwtAuthLogin,
-		util.AuthStrategy.LDAP_AUTH:         authenticator.HandleLdapAuthLogin,
-	}
-
-	// IsAuthMethodValid accepts every strategy in util.AVAILABLE_AUTH_STRATEGIES, so a method added
-	// there without a handler here has to be reported. Indexing a missing key yields a nil func, and
-	// calling that panics, which is what the same table does elsewhere in the CLI for ldap-auth.
-	login, supported := strategies[strategy]
-	if !supported {
+	login, err := util.MachineIdentityLoginFunc(cmd, client, authMethod)
+	if err != nil {
 		cancel()
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Auth method %q is not supported here. Supported: %s.", authMethod, agenticAuthMethods))
+		util.PrintErrorMessageAndExit(err.Error())
 	}
 
 	credential, err := login()
@@ -360,7 +333,7 @@ func init() {
 	// Machine identity auth. Every input the util.SdkAuthenticator handlers read has to be declared
 	// here, not just documented: GetCmdFlagOrEnv asks cobra for the flag first and fails on an
 	// undeclared one, so the environment variable fallbacks are unreachable without these.
-	pamAgenticAccessCmd.Flags().String("auth-method", "", "Authenticate as a machine identity with its own credentials instead of a ready-made --token ["+agenticAuthMethods+"]")
+	pamAgenticAccessCmd.Flags().String("auth-method", "", "Authenticate as a machine identity with its own credentials instead of a ready-made --token ["+util.MachineIdentityAuthMethods+"]")
 	pamAgenticAccessCmd.Flags().String("client-id", "", "Client id for universal auth")
 	pamAgenticAccessCmd.Flags().String("client-secret", "", "Client secret for universal auth")
 	pamAgenticAccessCmd.Flags().String("machine-identity-id", "", "Machine identity id for the kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth and ldap-auth methods")
