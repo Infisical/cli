@@ -80,21 +80,12 @@ var proxyEnvKeys = []string{
 	"OPENCLAW_PROXY_URL",
 }
 
-// Stripped so the agent is handed only the scoped short-lived JWT set below, and not whatever the
-// parent authenticated with.
+// Stripped so the agent is handed only the scoped short-lived JWT set below. Derived rather than
+// listed, so that an auth method added to the CLI cannot quietly widen what the agent inherits.
 //
-// Derived from util.MachineIdentityAuthEnvVars rather than listed here, so that a machine identity
-// auth method added to the CLI cannot quietly widen what the agent inherits. INFISICAL_AUTH_METHOD is
-// in that list and matters as much as the credentials: connect deliberately sets INFISICAL_TOKEN for
-// the agent, and a stray auth method would send a CLI call inside the agent down a machine identity
-// login instead of using that token.
-//
-// How much this is worth depends on the method. For universal-auth, ldap-auth and the jwt-based
-// methods the credential is a value that lives only in the environment, so removing it is a real
-// boundary. For kubernetes, aws-iam, azure and gcp-id-token the credential is an ambient capability of
-// the host (a service account token file, an instance metadata endpoint) that the agent can reach
-// whether or not it inherits these; there the isolation comes from the agent running on a different
-// host to the proxy, and from the agent identity holding Proxy and nothing else.
+// Worth less than it looks for kubernetes, aws-iam, azure and gcp-id-token, whose credential is an
+// ambient capability of the host the agent can reach anyway; there the isolation comes from the agent
+// running on a different host and holding Proxy and nothing else.
 var credentialEnvKeys = append([]string{
 	util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME,
 }, util.MachineIdentityAuthEnvVars...)
@@ -224,11 +215,9 @@ func telemetryAgentName(args []string) string {
 	return filepath.Base(args[0])
 }
 
-// resolveAgentProxyStaticToken returns a token the operator fetched elsewhere, or nil if none was
-// given. The two guards match what `pam agentic-access` applies to the same input: a service token
-// authenticates to the secrets API but not as a machine identity, so it cannot stand in for one here,
-// and an expired token is worth catching now rather than at the agent's first proxied request, which
-// is where it would otherwise surface as an unexplained 403.
+// Both guards match `pam agentic-access`: a service token authenticates to the secrets API but not as
+// a machine identity, and an expired one would otherwise surface as an unexplained 403 on the agent's
+// first proxied request.
 func resolveAgentProxyStaticToken(cmd *cobra.Command, subject string) *models.TokenDetails {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -244,30 +233,23 @@ func resolveAgentProxyStaticToken(cmd *cobra.Command, subject string) *models.To
 	return token
 }
 
-// agentProxyCredential is how a command authenticates. Exactly one of token and login is set, unless
-// nothing was configured at all, in which case neither is.
+// Exactly one of token and login is set, or neither when nothing was configured.
 type agentProxyCredential struct {
 	token  *models.TokenDetails
 	login  func() (infisicalSdk.MachineIdentityCredential, error)
 	source string
 }
 
-// machineIdentityGivenAsFlag reports whether this invocation named a machine identity on the command
-// line, rather than inheriting one from the environment.
 func machineIdentityGivenAsFlag(cmd *cobra.Command) bool {
 	return cmd.Flags().Changed("auth-method") ||
 		cmd.Flags().Changed("client-id") ||
 		cmd.Flags().Changed("client-secret")
 }
 
-// resolveAgentProxyCredential chooses between a token the operator already has and a machine identity
-// that authenticates itself.
-//
-// A ready-made token comes first, as it does in `pam agentic-access`. The exception is a flag that was
-// actually typed: --auth-method or client credentials on the command line beat a token that came only
-// from the environment. Without that exception INFISICAL_TOKEN would win, and it is the variable most
-// likely to be exported for something else entirely, not least because `connect` sets it in every
-// agent environment it launches.
+// A ready-made token comes first, as in `pam agentic-access`, except when a machine identity was
+// typed on the command line and the token came only from the environment. Without that exception
+// INFISICAL_TOKEN would win, and it is the variable most likely to be exported for something else,
+// not least because `connect` sets it in every agent environment it launches.
 func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
 	tokenFirst := cmd.Flags().Changed("token") || !machineIdentityGivenAsFlag(cmd)
 
@@ -281,8 +263,8 @@ func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
 		return agentProxyCredential{login: login, source: source}
 	}
 
-	// Only reachable when a machine identity was named on the command line but resolved to nothing,
-	// which resolveAgentProxyLogin already rejects. Kept so the token is never dropped silently.
+	// Only reachable if a machine identity was named but resolved to nothing, which
+	// resolveAgentProxyLogin already rejects. Kept so the token is never dropped silently.
 	if !tokenFirst {
 		if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
 			return agentProxyCredential{token: token, source: "token"}
@@ -292,22 +274,15 @@ func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
 	return agentProxyCredential{}
 }
 
-// resolveAgentProxyLogin works out how this command's machine identity authenticates, and returns a
-// function that performs one authentication per call along with a label naming the branch for
-// telemetry. Both are nil when nothing was configured.
-//
-// The order within this function is an explicit --auth-method, then client credentials on their own as
-// the shorthand for universal-auth. resolveAgentProxyCredential decides how this ranks against a
-// ready-made token.
+// An explicit --auth-method first, then client credentials on their own as the shorthand for
+// universal-auth. Both return values are nil when nothing was configured.
 //
 // Each call builds its own SDK client and lets it go again. The SDK cannot be told to skip its
 // background token lifecycle (Config.AutoTokenRefresh is a bool tagged `default:"true"`, and
-// setDefaults rewrites any false bool back to its default). Left alive, that goroutine would
+// setDefaults rewrites any false bool back to its default), and left alive that goroutine would
 // re-authenticate on its own schedule alongside the renewal the caller is already driving, doubling
-// this identity's authentication events; a client that dies with its login cannot. Separately, and
-// the reason nothing here returns the SDK's own getter: that goroutine renews into a field
-// Auth().GetAccessToken reads without taking the client's mutex, and both commands read the token
-// from a per-request path.
+// this identity's authentication events. Nothing here returns the SDK's getter either: it reads the
+// renewed field without taking the client's mutex, and both commands read the token per request.
 func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.MachineIdentityCredential, error), source string) {
 	authMethod, err := util.ResolveAuthMethod(cmd)
 	if err != nil {
@@ -320,8 +295,7 @@ func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.Mach
 		if clientID == "" && clientSecret == "" {
 			return nil, ""
 		}
-		// Half a credential is a mistake rather than a request for a different method, and saying which
-		// half is missing beats listing every method the command accepts.
+		// Half a credential is a mistake, not a request for a different method.
 		if clientID == "" {
 			util.HandleError(fmt.Errorf("client id required; pass --client-id or set %s", util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME))
 		}
@@ -331,8 +305,7 @@ func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.Mach
 		authMethod = string(util.AuthStrategy.UNIVERSAL_AUTH)
 	}
 
-	// Rejected here rather than at the first login, so that a typo fails before the command has done
-	// anything else.
+	// Before anything is built, so a typo fails immediately rather than at the first login.
 	if err := util.ValidateAuthMethod(authMethod); err != nil {
 		util.PrintErrorMessageAndExit(err.Error())
 	}
@@ -367,8 +340,7 @@ func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.Mach
 	return login, authMethodCredentialSource(cmd, authMethod)
 }
 
-// authMethodCredentialSource labels how the identity was configured, for telemetry. The method alone
-// would not distinguish the two ways of asking for the same one.
+// The method alone would not distinguish the two ways of asking for the same one.
 func authMethodCredentialSource(cmd *cobra.Command, authMethod string) string {
 	if cmd.Flags().Changed("auth-method") || cmd.Flags().Changed("client-id") {
 		return authMethod + "-flag"
@@ -376,11 +348,8 @@ func authMethodCredentialSource(cmd *cobra.Command, authMethod string) string {
 	return authMethod + "-env"
 }
 
-// Returns the token and a label for the branch that produced it.
-//
-// Whichever branch wins, the token is frozen here: connect writes it into the agent's environment and
-// execs, and nothing can reach in and rewrite it afterwards. When it expires the agent's requests
-// start coming back 403 and the agent has to be relaunched.
+// Returns the token and a label for the branch that produced it. The token is frozen here: connect
+// writes it into the agent's environment and execs, so an expiry mid-run means 403s until relaunch.
 func resolveAgentToken(cmd *cobra.Command) (*models.TokenDetails, string) {
 	resolved := resolveAgentProxyCredential(cmd)
 	if resolved.token != nil {

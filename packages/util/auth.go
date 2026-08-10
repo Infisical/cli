@@ -276,15 +276,11 @@ func (a *SdkAuthenticator) HandleLdapAuthLogin() (credential infisicalSdk.Machin
 	return a.infisicalClient.Auth().WithOrganizationSlug(organizationSlug).LdapAuthLogin(identityId, ldapUsername, ldapPassword)
 }
 
-// MachineIdentityAuthMethods lists what --auth-method accepts, for flag help and for the error when
-// it is given something else. Kept beside the strategy table in MachineIdentityLoginFunc so the two
-// cannot drift apart.
 const MachineIdentityAuthMethods = "universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth, ldap-auth"
 
-// MachineIdentityAuthFlags are the flags the strategies above read. Every one has to be registered on
-// a command that offers --auth-method: GetCmdFlagOrEnv looks the flag up before it looks at the
-// environment and returns an error for a name the command never declared, so a missing registration
-// breaks that method even for someone who only ever set its environment variable.
+// Every one of these has to be registered on a command that offers --auth-method: GetCmdFlagOrEnv
+// looks the flag up before the environment and errors on a name the command never declared, so a
+// missing registration breaks that method even for someone who only set its environment variable.
 var MachineIdentityAuthFlags = []string{
 	"auth-method",
 	"client-id",
@@ -298,9 +294,8 @@ var MachineIdentityAuthFlags = []string{
 	"organization-slug",
 }
 
-// MachineIdentityAuthEnvVars are the environment variables the strategies read. A command that hands
-// an environment to a child process it does not trust scrubs these, so that adding a strategy cannot
-// quietly widen what the child inherits.
+// A command that hands an environment to a child it does not trust scrubs these, so that adding a
+// strategy cannot quietly widen what the child inherits.
 var MachineIdentityAuthEnvVars = []string{
 	INFISICAL_AUTH_METHOD_NAME,
 	INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME,
@@ -314,8 +309,7 @@ var MachineIdentityAuthEnvVars = []string{
 	INFISICAL_LDAP_PASSWORD,
 }
 
-// RegisterMachineIdentityAuthFlags declares every flag in MachineIdentityAuthFlags on cmd. identity
-// names whose credentials these are, since a command may authenticate more than one identity and the
+// identity names whose credentials these are, since a command may authenticate more than one and the
 // help is the only place that distinction shows up.
 func RegisterMachineIdentityAuthFlags(cmd *cobra.Command, identity string) {
 	cmd.Flags().String("auth-method", "", fmt.Sprintf("how to authenticate the %s machine identity ["+MachineIdentityAuthMethods+"]", identity))
@@ -330,9 +324,8 @@ func RegisterMachineIdentityAuthFlags(cmd *cobra.Command, identity string) {
 	cmd.Flags().String("organization-slug", "", "scope the identity to this sub-organization. Defaults to the organization the identity was created in")
 }
 
-// ResolveAuthMethod returns the machine identity auth method named by --auth-method or
-// INFISICAL_AUTH_METHOD. It returns "" when none was named, and also for "user", which some callers
-// spell out to mean the human login; both leave the caller on whatever fallback it has.
+// Returns "" both when no method was named and for "user", which some callers spell out to mean the
+// human login; either way the caller falls through to whatever it has.
 func ResolveAuthMethod(cmd *cobra.Command) (string, error) {
 	authMethod, err := GetCmdFlagOrEnvWithDefaultValue(cmd, "auth-method", []string{INFISICAL_AUTH_METHOD_NAME}, "")
 	if err != nil {
@@ -344,8 +337,7 @@ func ResolveAuthMethod(cmd *cobra.Command) (string, error) {
 	return authMethod, nil
 }
 
-// ValidateAuthMethod reports whether authMethod names a strategy MachineIdentityLoginFunc can
-// authenticate, so that a caller can reject a typo before building anything.
+// Separate from MachineIdentityLoginFunc so a caller can reject a typo before building a client.
 func ValidateAuthMethod(authMethod string) error {
 	valid, strategy := IsAuthMethodValid(authMethod, false)
 	if !valid {
@@ -357,10 +349,9 @@ func ValidateAuthMethod(authMethod string) error {
 	return nil
 }
 
-// machineIdentityStrategies is which strategies MachineIdentityLoginFunc has a handler for.
-// IsAuthMethodValid accepts every strategy in AVAILABLE_AUTH_STRATEGIES, and one added there without
-// a handler here has to be reported rather than indexed: a missing key yields a nil func, and calling
-// that panics.
+// IsAuthMethodValid accepts every strategy in AVAILABLE_AUTH_STRATEGIES, including ones with no
+// handler below. Those have to be reported rather than indexed: a missing key yields a nil func, and
+// calling that panics, which is what `infisical login` does today for ldap-auth.
 var machineIdentityStrategies = map[AuthStrategyType]bool{
 	AuthStrategy.UNIVERSAL_AUTH:    true,
 	AuthStrategy.KUBERNETES_AUTH:   true,
@@ -373,10 +364,8 @@ var machineIdentityStrategies = map[AuthStrategyType]bool{
 	AuthStrategy.LDAP_AUTH:         true,
 }
 
-// MachineIdentityLoginFunc returns the function that authenticates authMethod, which must have come
-// from ResolveAuthMethod. The function performs one authentication per call and returns that
-// credential, so a caller that needs a fresh token later calls it again; nothing here renews on its
-// own.
+// The returned function authenticates once per call and renews nothing, so a caller that needs a
+// fresh token later calls it again.
 func MachineIdentityLoginFunc(cmd *cobra.Command, client infisicalSdk.InfisicalClientInterface, authMethod string) (func() (infisicalSdk.MachineIdentityCredential, error), error) {
 	if err := ValidateAuthMethod(authMethod); err != nil {
 		return nil, err
@@ -396,9 +385,8 @@ func MachineIdentityLoginFunc(cmd *cobra.Command, client infisicalSdk.InfisicalC
 		AuthStrategy.LDAP_AUTH:         authenticator.HandleLdapAuthLogin,
 	}
 
-	// Not indexed blind, even though ValidateAuthMethod has already passed: it consults
-	// machineIdentityStrategies, and if that list and this table ever disagree the lookup yields a nil
-	// func that panics at the call site rather than here.
+	// Not indexed blind despite ValidateAuthMethod passing: it consults machineIdentityStrategies, and
+	// if that list and this table disagree the nil func would panic at the call site instead.
 	login, supported := strategies[strategy]
 	if !supported {
 		return nil, fmt.Errorf("auth method %q is not supported here. Supported: %s", authMethod, MachineIdentityAuthMethods)

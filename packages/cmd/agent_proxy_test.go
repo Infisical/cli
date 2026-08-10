@@ -10,11 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Every command offering --auth-method has to declare all of the flags the strategies read, including
-// the ones only some methods use. GetCmdFlagOrEnv looks a flag up before it looks at the environment
-// and errors on a name the command never declared, so a missing registration breaks that method even
-// for someone who only ever set its environment variable, and does it at authentication time rather
-// than at startup.
+// A missing registration breaks that method even for someone who only set its environment variable,
+// and does it at authentication time rather than at startup.
 func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	commands := map[string]*cobra.Command{
 		"agent-proxy start":   agentProxyStartCmd,
@@ -33,9 +30,8 @@ func TestMachineIdentityAuthFlagsAreRegistered(t *testing.T) {
 	}
 }
 
-// newAgentProxyAuthCmd is a stand-in for the real subcommands, carrying the same auth flags. Tests
-// build one each so that setting a flag in one case cannot change what another case observes, which
-// matters because the source label distinguishes a flag from an environment variable.
+// One per case, so a flag set in one cannot change what another observes: the source label
+// distinguishes a flag from an environment variable.
 func newAgentProxyAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{}
 	util.RegisterMachineIdentityAuthFlags(cmd, "test")
@@ -43,8 +39,7 @@ func newAgentProxyAuthCmd() *cobra.Command {
 	return cmd
 }
 
-// clearAgentProxyAuthEnv removes everything either resolver reads, so a case sees only what it sets
-// and the developer's own environment cannot decide the outcome.
+// So a case sees only what it sets, and the developer's own environment cannot decide the outcome.
 func clearAgentProxyAuthEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range util.MachineIdentityAuthEnvVars {
@@ -59,13 +54,8 @@ func clearAgentProxyAuthEnv(t *testing.T) {
 	}
 }
 
-// A ready-made token normally wins, matching `pam agentic-access`. The exception is a machine identity
-// named on the command line, which beats a token that came only from the environment: INFISICAL_TOKEN
-// is the variable most likely to be exported for something else, and connect itself sets it in every
-// agent environment it launches, so a flag the operator typed must not lose to it.
-//
-// The token values here are deliberately not JWTs, so that the expiry guard reads no claims and the
-// resolver returns instead of exiting.
+// The token values are deliberately not JWTs, so the expiry guard reads no claims and the resolver
+// returns instead of exiting.
 func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -142,9 +132,7 @@ func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
 	}
 }
 
-// Which credentials win when more than one is present, asserted on the branch resolveAgentProxyLogin
-// picks rather than on a login it cannot perform in a test. Only the non-erroring paths are covered:
-// the rest of packages/cmd exits the process on a bad input, and this follows that.
+// Only the non-erroring paths: the rest of packages/cmd exits the process on bad input.
 func TestResolveAgentProxyLoginPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -209,8 +197,7 @@ func TestResolveAgentProxyLoginPrecedence(t *testing.T) {
 	}
 }
 
-// The scrub list is derived from the auth env vars rather than written out, so that adding a machine
-// identity auth method cannot quietly widen what the agent inherits. This checks the derivation held.
+// Checks the derivation held, so adding an auth method cannot quietly widen what the agent inherits.
 func TestCredentialEnvKeysCoverEveryAuthEnvVar(t *testing.T) {
 	scrubbed := make(map[string]bool, len(credentialEnvKeys))
 	for _, key := range credentialEnvKeys {
@@ -224,8 +211,7 @@ func TestCredentialEnvKeysCoverEveryAuthEnvVar(t *testing.T) {
 	}
 }
 
-// buildAgentEnv is what stands between the parent's credentials and the agent, so the guarantee is
-// worth asserting on the built environment and not just on the list feeding it.
+// Asserted on the built environment, not just the list feeding it.
 func TestBuildAgentEnvScrubsMachineIdentityCredentials(t *testing.T) {
 	for _, envVar := range append([]string{util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME}, util.MachineIdentityAuthEnvVars...) {
 		t.Setenv(envVar, "leaked-"+envVar)
