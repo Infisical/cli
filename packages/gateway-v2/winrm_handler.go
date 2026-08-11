@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/rs/zerolog/log"
@@ -121,12 +122,10 @@ const (
 	winrmConnDeadline        = winrmOpDeadline + 15*time.Second
 	maxWinrmRequestBodyBytes = 4 * 1024 * 1024
 
-	// The script is piped to the host over stdin, so cmd.exe's 8191-character command-line limit no
-	// longer applies and this is a product bound rather than a platform one. It must stay well under
-	// ~57000, the point at which the base64 payload (2.67x the script) exceeds one WinRM Send: each
-	// extra chunk waits out a full output-poll cycle for the transport lock. Keep in step with
-	// POST_SYNC_COMMAND_MAX_LENGTH in the control plane.
-	maxWinrmCommandChars       = 8192
+	// Backstop above the control plane's product limit, not a second gate: the command arrives with
+	// placeholders substituted, and {{certificateFiles}} grows with the certificate count. Stay under
+	// ~57000, where the payload stops fitting in one WinRM Send.
+	maxWinrmCommandChars       = 32768
 	defaultWinrmCommandTimeout = 30 * time.Second
 	maxWinrmCommandTimeout     = 90 * time.Second
 )
@@ -325,7 +324,9 @@ func handleWinrmRunCommand(ctx context.Context, env *winrmRequestEnvelope) (any,
 	if strings.TrimSpace(p.Command) == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	if len(p.Command) > maxWinrmCommandChars {
+	// Characters, not bytes: the control plane counts characters, so a byte count would reject a
+	// non-ASCII command it had already accepted.
+	if utf8.RuneCountInString(p.Command) > maxWinrmCommandChars {
 		return nil, fmt.Errorf("command exceeds %d characters", maxWinrmCommandChars)
 	}
 

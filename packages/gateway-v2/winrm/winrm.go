@@ -212,17 +212,8 @@ func pinnedServerName(caCert []byte) string {
 	return cert.Subject.CommonName
 }
 
-// serializedTransport funnels every SOAP request for one client through a single mutex.
-//
-// NTLM message sealing is RC4 keyed by a sequence counter, so two goroutines sealing on the same
-// session desynchronize the keystream and the host rejects the message with "checksum does not
-// match". The library issues requests from several goroutines at once (fetchOutput drains a
-// command's output while the caller writes stdin) and does not lock around them, so serializing here
-// is what makes writing stdin possible at all.
-//
-// This removes overlap we never wanted: RunCommand's bootstrap reads stdin to EOF before producing
-// any output, so writing and reading are already two ordered phases. The library interleaves them
-// only to avoid a pipe deadlock in the general case, which our flow cannot hit.
+// NTLM sealing is RC4 keyed by a sequence counter, and the library writes stdin and drains output
+// from separate goroutines without locking, desynchronizing the keystream ("checksum does not match").
 type serializedTransport struct {
 	winrm.Transporter
 	mu sync.Mutex
@@ -236,10 +227,8 @@ func (t *serializedTransport) Post(client *winrm.Client, message *soap.SoapMessa
 
 type clientOption func(*winrm.Parameters)
 
-// stdinOperationTimeout shortens the WSMan operation timeout for commands that write stdin. The
-// output poll otherwise long-polls for the 60s default while holding the transport lock, which would
-// stall the stdin write for a minute. Shorter means it returns empty and releases the lock promptly;
-// slurpAllOutput treats an OperationTimeout fault as "not finished, keep polling".
+// Short so the output poll releases the transport lock instead of long-polling for the 60s default
+// while stdin waits behind it.
 const stdinOperationTimeout = "PT2S"
 
 func withOperationTimeout(timeout string) clientOption {
@@ -273,9 +262,8 @@ func newClient(ctx context.Context, creds Credentials, opts ...clientOption) (*w
 		params.TransportDecorator = func() winrm.Transporter { return enc }
 	}
 
-	// Applied last so it wraps whichever transport the mode selected. The decorator runs once per
-	// client, so the mutex is scoped to a single NTLM session, which is exactly the sealing state it
-	// has to protect.
+	// Last, so it wraps whichever transport the mode chose. Runs once per client, scoping the mutex to
+	// one NTLM session.
 	decorate := params.TransportDecorator
 	params.TransportDecorator = func() winrm.Transporter {
 		return &serializedTransport{Transporter: decorate()}
@@ -695,9 +683,8 @@ func resolveCommandOutcome(code int, stated bool, stderr string) (int, string) {
 	return 1, strings.TrimSpace(noOutcomeMessage + "\n" + stderr)
 }
 
-// RunCommand runs a command on the host. Only the fixed bootstrap goes on the command line; the
-// script itself is piped over stdin, so it carries no length limit and any Unicode survives. See
-// commandBootstrap.
+// RunCommand runs a command on the host. Only the bootstrap goes on the command line; the script is
+// piped over stdin. See commandBootstrap.
 func RunCommand(
 	ctx context.Context,
 	creds Credentials,
