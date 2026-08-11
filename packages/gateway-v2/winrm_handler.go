@@ -121,7 +121,12 @@ const (
 	winrmConnDeadline        = winrmOpDeadline + 15*time.Second
 	maxWinrmRequestBodyBytes = 4 * 1024 * 1024
 
-	maxWinrmCommandChars       = 2048
+	// The script is piped to the host over stdin, so cmd.exe's 8191-character command-line limit no
+	// longer applies and this is a product bound rather than a platform one. It must stay well under
+	// ~57000, the point at which the base64 payload (2.67x the script) exceeds one WinRM Send: each
+	// extra chunk waits out a full output-poll cycle for the transport lock. Keep in step with
+	// POST_SYNC_COMMAND_MAX_LENGTH in the control plane.
+	maxWinrmCommandChars       = 8192
 	defaultWinrmCommandTimeout = 30 * time.Second
 	maxWinrmCommandTimeout     = 90 * time.Second
 )

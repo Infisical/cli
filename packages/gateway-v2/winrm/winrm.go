@@ -20,9 +20,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/masterzen/winrm"
+	"github.com/masterzen/winrm/soap"
 )
 
 // ErrConnect marks a failure to reach the Windows host.
@@ -210,12 +212,49 @@ func pinnedServerName(caCert []byte) string {
 	return cert.Subject.CommonName
 }
 
+// serializedTransport funnels every SOAP request for one client through a single mutex.
+//
+// NTLM message sealing is RC4 keyed by a sequence counter, so two goroutines sealing on the same
+// session desynchronize the keystream and the host rejects the message with "checksum does not
+// match". The library issues requests from several goroutines at once (fetchOutput drains a
+// command's output while the caller writes stdin) and does not lock around them, so serializing here
+// is what makes writing stdin possible at all.
+//
+// This removes overlap we never wanted: RunCommand's bootstrap reads stdin to EOF before producing
+// any output, so writing and reading are already two ordered phases. The library interleaves them
+// only to avoid a pipe deadlock in the general case, which our flow cannot hit.
+type serializedTransport struct {
+	winrm.Transporter
+	mu sync.Mutex
+}
+
+func (t *serializedTransport) Post(client *winrm.Client, message *soap.SoapMessage) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.Transporter.Post(client, message)
+}
+
+type clientOption func(*winrm.Parameters)
+
+// stdinOperationTimeout shortens the WSMan operation timeout for commands that write stdin. The
+// output poll otherwise long-polls for the 60s default while holding the transport lock, which would
+// stall the stdin write for a minute. Shorter means it returns empty and releases the lock promptly;
+// slurpAllOutput treats an OperationTimeout fault as "not finished, keep polling".
+const stdinOperationTimeout = "PT2S"
+
+func withOperationTimeout(timeout string) clientOption {
+	return func(p *winrm.Parameters) { p.Timeout = timeout }
+}
+
 // newClient builds a WinRM client. Both modes authenticate with NTLM; they differ in how the SOAP body
 // is kept confidential. HTTP (default) uses NTLM message sealing, so the body is confidential without a
 // server certificate (default listeners require this). HTTPS relies on TLS, verifying the listener against
 // the system trust store, an optional pinned CA (self-signed listener), or skipping verification if Insecure.
-func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
+func newClient(ctx context.Context, creds Credentials, opts ...clientOption) (*winrm.Client, error) {
 	params := *winrm.DefaultParameters
+	for _, opt := range opts {
+		opt(&params)
+	}
 	if creds.UseHTTPS {
 		// NTLM authentication over TLS. The bounded dial caps the response read and carries the operation
 		// deadline; the library otherwise reads the body unbounded and issues its request without a context.
@@ -232,6 +271,14 @@ func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
 			return nil, fmt.Errorf("%w: failed to initialize NTLM message encryption: %v", ErrConnect, err)
 		}
 		params.TransportDecorator = func() winrm.Transporter { return enc }
+	}
+
+	// Applied last so it wraps whichever transport the mode selected. The decorator runs once per
+	// client, so the mutex is scoped to a single NTLM session, which is exactly the sealing state it
+	// has to protect.
+	decorate := params.TransportDecorator
+	params.TransportDecorator = func() winrm.Transporter {
+		return &serializedTransport{Transporter: decorate()}
 	}
 
 	endpoint := winrm.NewEndpoint(
@@ -538,7 +585,10 @@ func (w *limitedBuffer) Write(p []byte) (int, error) {
 
 // commandScriptTemplate wraps the operator's command (%[1]s) so it reports its exit code in a stdout
 // trailer tagged with a per-run nonce (%[2]s). An exit from inside the try block arrives as 0.
-const commandScriptTemplate = `$ErrorActionPreference = 'Stop'
+// Sets $ProgressPreference itself: the script is piped to stdin rather than passed to
+// winrm.Powershell, which is what used to prepend it.
+const commandScriptTemplate = `$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 $%[3]s = 0
 try {
 %[1]s
@@ -585,11 +635,28 @@ func takeCommandTrailer(stdout, nonce string) (code int, remaining string, ok bo
 }
 
 // noOutcomeMessage covers both causes: PowerShell parses the whole script before running any of it.
-const noOutcomeMessage = "The command did not report a result: it either called exit, which stops the " +
-	"script early, or did not parse. Use `throw \"reason\"` to fail the sync deliberately."
+// Kept under the control plane's 120-character failure-detail cap, so the remedy is not the part
+// that gets cut off.
+const noOutcomeMessage = "The command called exit or did not parse, so it reported no result. " +
+	"Use `throw \"reason\"` to fail deliberately."
 
-// maxEncodedCommandChars bounds the -EncodedCommand command line, which Windows caps at 8191 characters.
-const maxEncodedCommandChars = 8000
+// Script travels via stdin, not the command line: cmd.exe caps a command line at ~8155 chars, and
+// the process table would expose the pkcs12 password. Base64 because PowerShell decodes stdin using
+// the host's code page. '&' not .Invoke(), which buffers output and would reorder the exit trailer.
+// Never -File -/-Command -: 5.1 reads stdin-as-source as a REPL and silently drops multi-line blocks.
+const commandBootstrap = `$b=[Console]::In.ReadToEnd(); ` +
+	`$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b)); ` +
+	`& ([ScriptBlock]::Create($s))`
+
+// utf16LEBytes encodes to UTF-16LE without a BOM, matching what the bootstrap decodes with.
+func utf16LEBytes(s string) []byte {
+	units := utf16.Encode([]rune(s))
+	buf := make([]byte, 0, len(units)*2)
+	for _, u := range units {
+		buf = append(buf, byte(u), byte(u>>8))
+	}
+	return buf
+}
 
 var clixmlEntities = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&", "&quot;", `"`, "&apos;", "'")
 
@@ -628,8 +695,9 @@ func resolveCommandOutcome(code int, stated bool, stderr string) (int, string) {
 	return 1, strings.TrimSpace(noOutcomeMessage + "\n" + stderr)
 }
 
-// RunCommand runs a command on the host. The script goes on the command line as -EncodedCommand, so it
-// is length-bounded and visible in the host's process table.
+// RunCommand runs a command on the host. Only the fixed bootstrap goes on the command line; the
+// script itself is piped over stdin, so it carries no length limit and any Unicode survives. See
+// commandBootstrap.
 func RunCommand(
 	ctx context.Context,
 	creds Credentials,
@@ -641,19 +709,13 @@ func RunCommand(
 		return CommandResult{}, err
 	}
 
-	encoded := winrm.Powershell(buildCommandScript(command, nonce))
+	encoded := winrm.Powershell(commandBootstrap)
 	if encoded == "" {
 		return CommandResult{}, errors.New("failed to encode the command")
 	}
-	if len(encoded) > maxEncodedCommandChars {
-		return CommandResult{}, fmt.Errorf(
-			"the command is too long to run on Windows once encoded (%d of %d characters). Shorten it, "+
-				"or move the logic into a script on the host and call that script",
-			len(encoded), maxEncodedCommandChars,
-		)
-	}
+	payload := base64.StdEncoding.EncodeToString(utf16LEBytes(buildCommandScript(command, nonce)))
 
-	client, clientErr := newClient(ctx, creds)
+	client, clientErr := newClient(ctx, creds, withOperationTimeout(stdinOperationTimeout))
 	if clientErr != nil {
 		return CommandResult{}, clientErr
 	}
@@ -669,7 +731,7 @@ func RunCommand(
 	stdoutWriter := &limitedBuffer{buf: &stdout, limit: maxCommandOutputBytes}
 	stderrWriter := &limitedBuffer{buf: &stderr, limit: maxCommandOutputBytes}
 
-	_, runErr := client.RunWithContext(runCtx, encoded, stdoutWriter, stderrWriter)
+	_, runErr := client.RunWithContextWithInput(runCtx, encoded, stdoutWriter, stderrWriter, strings.NewReader(payload))
 	if runErr != nil {
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			return CommandResult{}, fmt.Errorf("command timed out after %s", timeout)

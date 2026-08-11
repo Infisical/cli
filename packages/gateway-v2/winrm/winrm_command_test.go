@@ -3,11 +3,11 @@ package winrm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/masterzen/winrm"
+	"unicode/utf16"
 )
 
 func TestEscapePowerShellSingleQuotesNeutralizesInjection(t *testing.T) {
@@ -194,35 +194,87 @@ func TestNormalizePowerShellStderrDropsEmptyEnvelope(t *testing.T) {
 	}
 }
 
-func TestBuildCommandScriptDoesNotDuplicateProgressPreference(t *testing.T) {
-	if strings.Contains(buildCommandScript("Write-Output ok", "infisical-nonce123"), "$ProgressPreference") {
-		t.Fatal("expected the wrapper to leave $ProgressPreference to winrm.Powershell")
+func TestBuildCommandScriptSetsProgressPreference(t *testing.T) {
+	// The script is piped to stdin, so winrm.Powershell no longer prepends this for us. Without it,
+	// progress bars land on stderr and get reported as the command's failure reason.
+	if !strings.Contains(buildCommandScript("Write-Output ok", "infisical-nonce123"), "$ProgressPreference") {
+		t.Fatal("expected the wrapper to set $ProgressPreference itself")
 	}
 }
 
-func TestRunCommandRejectsAnOverlongEncodedCommand(t *testing.T) {
-	// The length check runs before any connection, so no host is needed.
-	_, err := RunCommand(context.Background(), Credentials{}, strings.Repeat("a", 10_000), time.Second)
+func TestRunCommandAcceptsACommandPastTheOldCommandLineLimit(t *testing.T) {
+	// Would have been rejected outright when the script travelled as -EncodedCommand. It now fails
+	// on the connection instead, which is what proves the length gate is gone.
+	_, err := RunCommand(context.Background(), Credentials{}, strings.Repeat("a", 8192), time.Second)
 
-	if err == nil {
-		t.Fatal("expected an over-long command to be rejected")
-	}
-	if !strings.Contains(err.Error(), "too long to run on Windows once encoded") {
-		t.Fatalf("expected the encoded-length error, got %v", err)
+	if err != nil && strings.Contains(err.Error(), "too long") {
+		t.Fatalf("expected no length rejection, got %v", err)
 	}
 }
 
-func TestHandlerCommandCapAlwaysFitsInsideTheEncodedCeiling(t *testing.T) {
-	// Mirrors maxWinrmCommandChars in the parent package.
-	const handlerCommandCap = 2048
+func TestUtf16LEBytesMatchesWhatTheBootstrapDecodes(t *testing.T) {
+	// The bootstrap calls [Text.Encoding]::Unicode.GetString, which is UTF-16LE with no BOM. A BOM
+	// here would arrive as a leading U+FEFF and break the first statement of the script.
+	got := utf16LEBytes("aé")
 
-	encoded := winrm.Powershell(buildCommandScript(strings.Repeat("a", handlerCommandCap), "infisical-0123456789abcdef0123456789abcdef"))
-
-	if len(encoded) > maxEncodedCommandChars {
-		t.Fatalf("a command at the handler's %d-char cap encodes to %d, past the %d ceiling",
-			handlerCommandCap, len(encoded), maxEncodedCommandChars)
+	want := []byte{'a', 0x00, 0xe9, 0x00}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("utf16LEBytes = % x, want % x", got, want)
 	}
-	t.Logf("handler cap %d chars -> %d encoded, ceiling %d", handlerCommandCap, len(encoded), maxEncodedCommandChars)
+}
+
+func TestUtf16LEBytesEncodesAstralCharactersAsASurrogatePair(t *testing.T) {
+	got := utf16LEBytes("\U0001F512")
+
+	want := []byte{0x3d, 0xd8, 0x12, 0xdd}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("utf16LEBytes = % x, want % x", got, want)
+	}
+}
+
+func TestPayloadRoundTripsThroughTheBootstrapEncoding(t *testing.T) {
+	// Mirrors what the bootstrap does in reverse, so a change to either side has to change both.
+	script := buildCommandScript("Write-Output 'café'\n\nWrite-Output 'ok' # comment", "infisical-nonce123")
+
+	payload := base64.StdEncoding.EncodeToString(utf16LEBytes(script))
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("payload is not valid base64: %v", err)
+	}
+	units := make([]uint16, 0, len(raw)/2)
+	for i := 0; i+1 < len(raw); i += 2 {
+		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
+	}
+
+	if decoded := string(utf16.Decode(units)); decoded != script {
+		t.Fatalf("round trip changed the script:\n got %q\nwant %q", decoded, script)
+	}
+	if i := strings.IndexFunc(payload, func(r rune) bool { return r > 0x7e }); i >= 0 {
+		t.Fatalf("payload must be ASCII so the host's code page cannot alter it, found %q at %d", payload[i], i)
+	}
+}
+
+func TestRunCommandAcceptsNonASCII(t *testing.T) {
+	// Base64 keeps the wire ASCII, so the operator is no longer restricted. Fails on the connection
+	// rather than on validation, which is the point.
+	_, err := RunCommand(context.Background(), Credentials{}, "Write-Output 'café'", time.Second)
+
+	if err != nil && strings.Contains(err.Error(), "ASCII") {
+		t.Fatalf("expected no character-set rejection, got %v", err)
+	}
+}
+
+func TestHandlerCommandCapStaysWithinTheRpcBodyLimit(t *testing.T) {
+	// Mirrors maxWinrmCommandChars in the parent package. The encoded ceiling no longer gates
+	// RunCommand, but the command still has to fit in the RPC body alongside the envelope.
+	const handlerCommandCap = 8192
+
+	script := buildCommandScript(strings.Repeat("a", handlerCommandCap), "infisical-0123456789abcdef0123456789abcdef")
+
+	if len(script) > 1*1024*1024 {
+		t.Fatalf("a command at the handler's %d-char cap builds a %d-byte script", handlerCommandCap, len(script))
+	}
+	t.Logf("handler cap %d chars -> %d byte script", handlerCommandCap, len(script))
 }
 
 func TestResolveCommandOutcome(t *testing.T) {
@@ -240,7 +292,7 @@ func TestResolveCommandOutcome(t *testing.T) {
 		if code == 0 {
 			t.Fatal("expected an unstated outcome to fail, not to inherit a zero exit code")
 		}
-		if !strings.Contains(stderr, "did not report a result") {
+		if !strings.Contains(stderr, "reported no result") {
 			t.Fatalf("expected the reason to be explained, got %q", stderr)
 		}
 	})
@@ -256,8 +308,18 @@ func TestResolveCommandOutcome(t *testing.T) {
 
 	t.Run("leads with the explanation so the caller quotes it", func(t *testing.T) {
 		_, stderr := resolveCommandOutcome(0, false, "some earlier noise")
-		if !strings.HasPrefix(stderr, "The command did not report a result") {
+		if !strings.HasPrefix(stderr, noOutcomeMessage) {
 			t.Fatalf("expected the explanation first, got %q", stderr)
+		}
+	})
+
+	t.Run("the explanation fits the control plane's failure-detail cap", func(t *testing.T) {
+		// The control plane quotes the first stderr line into lastSyncMessage and caps it at 120
+		// characters. Overrun and the remedy is exactly the part that gets cut.
+		const failureDetailCap = 120
+		if len(noOutcomeMessage) > failureDetailCap {
+			t.Fatalf("noOutcomeMessage is %d chars, past the %d cap: %q",
+				len(noOutcomeMessage), failureDetailCap, noOutcomeMessage)
 		}
 	})
 }

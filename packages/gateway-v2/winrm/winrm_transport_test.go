@@ -3,10 +3,24 @@ package winrm
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/masterzen/winrm"
+	"github.com/masterzen/winrm/soap"
 )
+
+// innerTransport unwraps the serialization wrapper so a test can assert on the transport the scheme
+// actually selected.
+func innerTransport(t *testing.T, client *winrm.Client) winrm.Transporter {
+	t.Helper()
+	wrapped, ok := client.Parameters.TransportDecorator().(*serializedTransport)
+	if !ok {
+		t.Fatalf("expected the transport to be wrapped for serialization, got %T", client.Parameters.TransportDecorator())
+	}
+	return wrapped.Transporter
+}
 
 // TestNewClientTransportByScheme locks in the transport split: HTTP uses NTLM message encryption
 // (*winrm.Encryption), HTTPS uses NTLM auth over TLS (*winrm.ClientNTLM).
@@ -17,16 +31,94 @@ func TestNewClientTransportByScheme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newClient(http): %v", err)
 	}
-	if _, ok := httpClient.Parameters.TransportDecorator().(*winrm.Encryption); !ok {
-		t.Errorf("HTTP: expected *winrm.Encryption, got %T", httpClient.Parameters.TransportDecorator())
+	if inner := innerTransport(t, httpClient); !isType[*winrm.Encryption](inner) {
+		t.Errorf("HTTP: expected *winrm.Encryption, got %T", inner)
 	}
 
 	httpsClient, err := newClient(context.Background(), Credentials{Host: "127.0.0.1", Port: 5986, Username: "u", Password: "p", UseHTTPS: true})
 	if err != nil {
 		t.Fatalf("newClient(https): %v", err)
 	}
-	if _, ok := httpsClient.Parameters.TransportDecorator().(*winrm.ClientNTLM); !ok {
-		t.Errorf("HTTPS: expected *winrm.ClientNTLM, got %T", httpsClient.Parameters.TransportDecorator())
+	if inner := innerTransport(t, httpsClient); !isType[*winrm.ClientNTLM](inner) {
+		t.Errorf("HTTPS: expected *winrm.ClientNTLM, got %T", inner)
+	}
+}
+
+func isType[T any](v any) bool {
+	_, ok := v.(T)
+	return ok
+}
+
+// concurrencyProbe records whether two Post calls were ever in flight at once.
+type concurrencyProbe struct {
+	inFlight atomic.Int32
+	overlap  atomic.Bool
+	calls    atomic.Int32
+}
+
+func (p *concurrencyProbe) Post(*winrm.Client, *soap.SoapMessage) (string, error) {
+	if p.inFlight.Add(1) > 1 {
+		p.overlap.Store(true)
+	}
+	time.Sleep(time.Millisecond)
+	p.calls.Add(1)
+	p.inFlight.Add(-1)
+	return "", nil
+}
+
+func (p *concurrencyProbe) Transport(*winrm.Endpoint) error { return nil }
+
+func hammer(tr winrm.Transporter) *sync.WaitGroup {
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = tr.Post(nil, nil)
+		}()
+	}
+	return &wg
+}
+
+// TestSerializedTransportPreventsOverlappingPosts is the whole point of the wrapper: NTLM sealing is
+// RC4 with a sequence counter, so two goroutines sealing at once corrupt the keystream and the host
+// answers "checksum does not match".
+func TestSerializedTransportPreventsOverlappingPosts(t *testing.T) {
+	probe := &concurrencyProbe{}
+	tr := &serializedTransport{Transporter: probe}
+
+	hammer(tr).Wait()
+
+	if probe.overlap.Load() {
+		t.Fatal("two Post calls overlapped despite the serialization wrapper")
+	}
+	if got := probe.calls.Load(); got != 16 {
+		t.Fatalf("expected all 16 calls to complete, got %d", got)
+	}
+}
+
+// TestConcurrencyProbeDetectsOverlapWithoutTheWrapper keeps the test above honest: without the
+// wrapper the same probe must see overlap, otherwise it would pass for the wrong reason.
+func TestConcurrencyProbeDetectsOverlapWithoutTheWrapper(t *testing.T) {
+	probe := &concurrencyProbe{}
+
+	hammer(probe).Wait()
+
+	if !probe.overlap.Load() {
+		t.Fatal("probe saw no overlap unwrapped, so it cannot prove the wrapper does anything")
+	}
+}
+
+func TestWithOperationTimeoutOverridesTheDefault(t *testing.T) {
+	params := *winrm.DefaultParameters
+	if params.Timeout != "PT60S" {
+		t.Fatalf("expected the library default to be PT60S, got %q", params.Timeout)
+	}
+
+	withOperationTimeout(stdinOperationTimeout)(&params)
+
+	if params.Timeout != stdinOperationTimeout {
+		t.Fatalf("Timeout = %q, want %q", params.Timeout, stdinOperationTimeout)
 	}
 }
 
