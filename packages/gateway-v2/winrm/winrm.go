@@ -225,25 +225,12 @@ func (t *serializedTransport) Post(client *winrm.Client, message *soap.SoapMessa
 	return t.Transporter.Post(client, message)
 }
 
-type clientOption func(*winrm.Parameters)
-
-// Short so the output poll releases the transport lock instead of long-polling for the 60s default
-// while stdin waits behind it.
-const stdinOperationTimeout = "PT2S"
-
-func withOperationTimeout(timeout string) clientOption {
-	return func(p *winrm.Parameters) { p.Timeout = timeout }
-}
-
 // newClient builds a WinRM client. Both modes authenticate with NTLM; they differ in how the SOAP body
 // is kept confidential. HTTP (default) uses NTLM message sealing, so the body is confidential without a
 // server certificate (default listeners require this). HTTPS relies on TLS, verifying the listener against
 // the system trust store, an optional pinned CA (self-signed listener), or skipping verification if Insecure.
-func newClient(ctx context.Context, creds Credentials, opts ...clientOption) (*winrm.Client, error) {
+func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
 	params := *winrm.DefaultParameters
-	for _, opt := range opts {
-		opt(&params)
-	}
 	if creds.UseHTTPS {
 		// NTLM authentication over TLS. The bounded dial caps the response read and carries the operation
 		// deadline; the library otherwise reads the body unbounded and issues its request without a context.
@@ -632,7 +619,14 @@ const noOutcomeMessage = "The command called exit or did not parse, so it report
 // the process table would expose the pkcs12 password. Base64 because PowerShell decodes stdin using
 // the host's code page. '&' not .Invoke(), which buffers output and would reorder the exit trailer.
 // Never -File -/-Command -: 5.1 reads stdin-as-source as a REPL and silently drops multi-line blocks.
-const commandBootstrap = `$b=[Console]::In.ReadToEnd(); ` +
+// Written before the bootstrap blocks on stdin. The output poll holds the transport lock until it
+// has something to return, and nothing can be returned until stdin arrives, which needs that same
+// lock. One byte up front breaks the standoff, so the poll releases the lock in the time PowerShell
+// takes to start rather than waiting out its operation timeout.
+const commandReadySentinel = "\x01"
+
+const commandBootstrap = `[Console]::Out.Write([char]1); [Console]::Out.Flush(); ` +
+	`$b=[Console]::In.ReadToEnd(); ` +
 	`$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b)); ` +
 	`& ([ScriptBlock]::Create($s))`
 
@@ -702,7 +696,7 @@ func RunCommand(
 	}
 	payload := base64.StdEncoding.EncodeToString(utf16LEBytes(buildCommandScript(command, nonce)))
 
-	client, clientErr := newClient(ctx, creds, withOperationTimeout(stdinOperationTimeout))
+	client, clientErr := newClient(ctx, creds)
 	if clientErr != nil {
 		return CommandResult{}, clientErr
 	}
@@ -732,7 +726,7 @@ func RunCommand(
 	}
 
 	code, remaining, stated := takeCommandTrailer(stdout.String(), nonce)
-	result.Stdout = remaining
+	result.Stdout = strings.TrimPrefix(remaining, commandReadySentinel)
 	if !stated {
 		// Truncation drops the head, so fall back to the retained tail.
 		code, _, stated = takeCommandTrailer(string(stdoutWriter.tail), nonce)

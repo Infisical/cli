@@ -194,6 +194,24 @@ func TestNormalizePowerShellStderrDropsEmptyEnvelope(t *testing.T) {
 	}
 }
 
+// The sentinel exists to give the output poll something to return before stdin arrives. If it were
+// written after the read, the poll would hold the transport lock until its operation timeout and the
+// stdin write would sit behind it.
+func TestBootstrapWritesTheReadySentinelBeforeReadingStdin(t *testing.T) {
+	sentinelAt := strings.Index(commandBootstrap, "[Console]::Out.Write([char]1)")
+	readAt := strings.Index(commandBootstrap, "[Console]::In.ReadToEnd()")
+
+	if sentinelAt < 0 || readAt < 0 {
+		t.Fatalf("bootstrap is missing the sentinel write or the stdin read: %q", commandBootstrap)
+	}
+	if sentinelAt > readAt {
+		t.Fatal("the sentinel must be written before the bootstrap blocks on stdin")
+	}
+	if !strings.Contains(commandBootstrap, "[Console]::Out.Flush()") {
+		t.Fatal("the sentinel must be flushed, or it can sit in a buffer until the script ends")
+	}
+}
+
 func TestBuildCommandScriptSetsProgressPreference(t *testing.T) {
 	// The script is piped to stdin, so winrm.Powershell no longer prepends this for us. Without it,
 	// progress bars land on stderr and get reported as the command's failure reason.
@@ -209,6 +227,38 @@ func TestRunCommandAcceptsACommandPastTheOldCommandLineLimit(t *testing.T) {
 
 	if err != nil && strings.Contains(err.Error(), "too long") {
 		t.Fatalf("expected no length rejection, got %v", err)
+	}
+}
+
+func TestReadySentinelIsStrippedFromStdout(t *testing.T) {
+	nonce := "infisical-nonce123"
+	raw := commandReadySentinel + "real output\n\n" + nonce + ":0\n"
+
+	code, remaining, stated := takeCommandTrailer(raw, nonce)
+	stdout := strings.TrimPrefix(remaining, commandReadySentinel)
+
+	if !stated || code != 0 {
+		t.Fatalf("trailer parse failed: code=%d stated=%v", code, stated)
+	}
+	if strings.Contains(stdout, commandReadySentinel) {
+		t.Fatalf("the sentinel reached the caller's stdout: %q", stdout)
+	}
+	if !strings.HasPrefix(stdout, "real output") {
+		t.Fatalf("stdout = %q, want it to start with the command's own output", stdout)
+	}
+}
+
+// The bootstrap writes the sentinel before the operator's script runs, so ours is always the first
+// byte and TrimPrefix removes exactly one. A command that opens by printing the same byte keeps it.
+func TestStrippingTheSentinelKeepsAnIdenticalByteFromTheCommand(t *testing.T) {
+	nonce := "infisical-nonce123"
+	raw := commandReadySentinel + commandReadySentinel + "output\n\n" + nonce + ":0\n"
+
+	_, remaining, _ := takeCommandTrailer(raw, nonce)
+
+	stdout := strings.TrimPrefix(remaining, commandReadySentinel)
+	if !strings.HasPrefix(stdout, commandReadySentinel) {
+		t.Fatalf("stripped the command's own leading byte as well: %q", stdout)
 	}
 }
 

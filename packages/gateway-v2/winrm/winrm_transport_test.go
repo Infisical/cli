@@ -109,16 +109,18 @@ func TestConcurrencyProbeDetectsOverlapWithoutTheWrapper(t *testing.T) {
 	}
 }
 
-func TestWithOperationTimeoutOverridesTheDefault(t *testing.T) {
-	params := *winrm.DefaultParameters
-	if params.Timeout != "PT60S" {
-		t.Fatalf("expected the library default to be PT60S, got %q", params.Timeout)
+// The output poll is released by the bootstrap's ready sentinel, not by a shortened timeout. A short
+// one would also apply to shell creation and the Send, neither of which retries on a timeout fault.
+func TestClientKeepsTheDefaultOperationTimeout(t *testing.T) {
+	winrm.DefaultParameters.TransportDecorator = nil
+
+	client, err := newClient(context.Background(), Credentials{Host: "127.0.0.1", Port: 5985, Username: "u", Password: "p"})
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
 	}
 
-	withOperationTimeout(stdinOperationTimeout)(&params)
-
-	if params.Timeout != stdinOperationTimeout {
-		t.Fatalf("Timeout = %q, want %q", params.Timeout, stdinOperationTimeout)
+	if client.Parameters.Timeout != "PT60S" {
+		t.Fatalf("Timeout = %q, want the PT60S default", client.Parameters.Timeout)
 	}
 }
 
