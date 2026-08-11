@@ -74,11 +74,11 @@ func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
 			wantSource: "token",
 		},
 		{
-			name:       "an auth method passed as a flag beats a token from the environment",
+			name:       "a token in the environment beats an auth method passed as a flag",
 			env:        map[string]string{util.INFISICAL_TOKEN_NAME: "opaque-token"},
 			flags:      map[string]string{"auth-method": "aws-iam"},
-			wantToken:  false,
-			wantSource: "aws-iam-flag",
+			wantToken:  true,
+			wantSource: "token",
 		},
 		{
 			name:       "a token passed as a flag beats an auth method passed as a flag",
@@ -87,8 +87,13 @@ func TestResolveAgentProxyCredentialPrecedence(t *testing.T) {
 			wantSource: "token",
 		},
 		{
-			name: "client credentials on the command line beat a token from the environment",
-			env:  map[string]string{util.INFISICAL_TOKEN_NAME: "opaque-token"},
+			name:       "an auth method is used when no token is present",
+			flags:      map[string]string{"auth-method": "aws-iam"},
+			wantToken:  false,
+			wantSource: "aws-iam-flag",
+		},
+		{
+			name: "client credentials are used when no token is present",
 			flags: map[string]string{
 				"client-id":     "id",
 				"client-secret": "secret",

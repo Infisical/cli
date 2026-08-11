@@ -231,38 +231,17 @@ type agentProxyCredential struct {
 	source string
 }
 
-func machineIdentityGivenAsFlag(cmd *cobra.Command) bool {
-	return cmd.Flags().Changed("auth-method") ||
-		cmd.Flags().Changed("client-id") ||
-		cmd.Flags().Changed("client-secret")
-}
-
-// A ready-made token comes first, as in `pam agentic-access`, except when a machine identity was typed
-// on the command line and the token came only from the environment. Without that exception
-// INFISICAL_TOKEN would win, and `connect` sets it in every agent environment it launches.
+// A ready-made token first, then a machine identity, as in `gateway` and `pam agentic-access`. A token
+// wins however it was supplied, so an INFISICAL_TOKEN left in the environment beats a typed
+// --auth-method; that is the behaviour of both those commands too.
 func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
-	staticToken := func() agentProxyCredential {
-		if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
-			return agentProxyCredential{token: token, source: "token"}
-		}
-		return agentProxyCredential{}
+	if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
+		return agentProxyCredential{token: token, source: "token"}
 	}
-	machineIdentity := func() agentProxyCredential {
-		if login, source := resolveAgentProxyLogin(cmd); login != nil {
-			return agentProxyCredential{login: login, source: source}
-		}
-		return agentProxyCredential{}
+	if login, source := resolveAgentProxyLogin(cmd); login != nil {
+		return agentProxyCredential{login: login, source: source}
 	}
-
-	first, second := staticToken, machineIdentity
-	if machineIdentityGivenAsFlag(cmd) && !cmd.Flags().Changed("token") {
-		first, second = machineIdentity, staticToken
-	}
-
-	if resolved := first(); resolved.token != nil || resolved.login != nil {
-		return resolved
-	}
-	return second()
+	return agentProxyCredential{}
 }
 
 // A client per login, dropped after. AutoTokenRefresh cannot be switched off (a bool tagged
