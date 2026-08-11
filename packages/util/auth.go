@@ -375,7 +375,6 @@ func MachineIdentityLoginFunc(cmd *cobra.Command, client infisicalSdk.InfisicalC
 		AuthStrategy.LDAP_AUTH:         authenticator.HandleLdapAuthLogin,
 	}
 
-	// ValidateAuthMethod consults machineIdentityStrategies, not this table.
 	login, supported := strategies[strategy]
 	if !supported {
 		return nil, fmt.Errorf("auth method %q is not supported here. Supported: %s", authMethod, MachineIdentityAuthMethods)

@@ -209,7 +209,6 @@ func telemetryAgentName(args []string) string {
 	return filepath.Base(args[0])
 }
 
-// A service token authenticates to the secrets API but not as a machine identity.
 func resolveAgentProxyStaticToken(cmd *cobra.Command, subject string) *models.TokenDetails {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -231,9 +230,8 @@ type agentProxyCredential struct {
 	source string
 }
 
-// A ready-made token first, then a machine identity, as in `gateway` and `pam agentic-access`. A token
-// wins however it was supplied, so an INFISICAL_TOKEN left in the environment beats a typed
-// --auth-method; that is the behaviour of both those commands too.
+// Token first, then machine identity, as in `gateway` and `pam agentic-access`. A token wins however
+// it arrived, so INFISICAL_TOKEN beats a typed --auth-method there too.
 func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
 	if token := resolveAgentProxyStaticToken(cmd, "the provided token"); token != nil {
 		return agentProxyCredential{token: token, source: "token"}
@@ -244,10 +242,9 @@ func resolveAgentProxyCredential(cmd *cobra.Command) agentProxyCredential {
 	return agentProxyCredential{}
 }
 
-// A client per login, dropped after. AutoTokenRefresh cannot be switched off (a bool tagged
-// `default:"true"`, and setDefaults rewrites any false bool back), so one kept alive would
-// re-authenticate alongside the caller's own renewal. Its getter reads that field without the mutex,
-// which is why callers take the returned credential instead.
+// A client per login, dropped after: AutoTokenRefresh cannot be switched off (a bool tagged
+// `default:"true"`, which setDefaults restores), so one kept alive would re-authenticate alongside the
+// caller's own renewal. Its getter reads that field without the mutex, hence the returned credential.
 func resolveAgentProxyLogin(cmd *cobra.Command) (login func() (infisicalSdk.MachineIdentityCredential, error), source string) {
 	authMethod, err := util.ResolveAuthMethod(cmd)
 	if err != nil {

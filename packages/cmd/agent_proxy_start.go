@@ -52,7 +52,6 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 		}
 		accessToken = credential.AccessToken
 		accessTokenTTL = int(credential.ExpiresIn)
-		// Otherwise renewed only after it is already dead, failing every request in the gap.
 		if accessTokenTTL > 0 && accessTokenTTL <= int(minRefreshableTTL.Seconds()) {
 			util.HandleError(fmt.Errorf("the agent proxy cannot refresh an access token with a TTL of %s or less; raise the TTL on this identity's auth method", minRefreshableTTL))
 		}
