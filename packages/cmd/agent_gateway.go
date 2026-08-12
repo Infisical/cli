@@ -15,6 +15,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/agentproxy/tunnel"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/gatewaydial"
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -70,6 +71,58 @@ func assertNoLegacyScopeFlags(cmd *cobra.Command) error {
 	return nil
 }
 
+// Auth for every agent gateway command, in the order a caller expects: an explicit token, then the usual
+// token environment variables, then universal-auth client credentials, then the interactive login. The
+// client-credential path matters because remote mode is the unattended case, where there is no keyring
+// login to fall back on.
+func resolveAgentGatewayToken(cmd *cobra.Command) (*models.TokenDetails, string, error) {
+	if token, err := util.GetInfisicalToken(cmd); err == nil && token != nil && token.Token != "" {
+		return token, "token", nil
+	}
+
+	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(
+		cmd,
+		"client-id",
+		[]string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME},
+		"",
+	)
+	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(
+		cmd,
+		"client-secret",
+		[]string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME},
+		"",
+	)
+
+	if clientID != "" && clientSecret != "" {
+		loginResponse, err := util.UniversalAuthLogin(clientID, clientSecret)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to authenticate the machine identity: %w", err)
+		}
+		return &models.TokenDetails{
+			Type:  util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER,
+			Token: loginResponse.AccessToken,
+		}, "machine identity", nil
+	}
+
+	// Naming the halves that are missing, because setting only one of the pair is the common mistake.
+	if clientID != "" || clientSecret != "" {
+		missing := "--client-secret (or INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)"
+		if clientID == "" {
+			missing = "--client-id (or INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)"
+		}
+		return nil, "", fmt.Errorf("machine identity credentials are incomplete: %s is missing", missing)
+	}
+
+	details, err := util.GetCurrentLoggedInUserDetails(true)
+	if err != nil || !details.IsUserLoggedIn || details.LoginExpired || details.UserCredentials.JTWToken == "" {
+		return nil, "", fmt.Errorf(
+			"could not resolve your Infisical credentials; run 'infisical login', pass --token, or set INFISICAL_UNIVERSAL_AUTH_CLIENT_ID and INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET",
+		)
+	}
+
+	return &models.TokenDetails{Token: details.UserCredentials.JTWToken}, details.UserCredentials.Email, nil
+}
+
 func agentGatewayHTTPClient(token string) *resty.Client {
 	return resty.New().SetAuthToken(token)
 }
@@ -101,9 +154,9 @@ func lookupAgentGateway(client *resty.Client, projectId string, name string) (ap
 }
 
 func runAgentGatewayList(cmd *cobra.Command, args []string) {
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil || token == nil {
-		util.HandleError(fmt.Errorf("could not resolve your Infisical credentials; run 'infisical login' or pass --token"))
+	token, _, err := resolveAgentGatewayToken(cmd)
+	if err != nil {
+		util.HandleError(err)
 	}
 
 	projectId, err := getAgentGatewayProjectId(cmd)
@@ -343,6 +396,8 @@ func relayToGateway(ctx context.Context, session *remoteBrokerSession, conn net.
 func init() {
 	agentGatewayListCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
 	agentGatewayListCmd.Flags().String("token", "", "machine identity access token")
+	agentGatewayListCmd.Flags().String("client-id", "", "universal auth client id (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
+	agentGatewayListCmd.Flags().String("client-secret", "", "universal auth client secret (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 
 	agentGatewayCmd.AddCommand(agentGatewayListCmd)
 	secretsAgentCmd.AddCommand(agentGatewayCmd)
@@ -382,11 +437,9 @@ func openAgentGatewaySession(cmd *cobra.Command, mode api.AgentGatewaySessionMod
 		)
 	}
 
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil || token == nil {
-		return nil, api.CreateAgentGatewaySessionResponse{}, fmt.Errorf(
-			"could not resolve your Infisical credentials; run 'infisical login' or pass --token",
-		)
+	token, _, err := resolveAgentGatewayToken(cmd)
+	if err != nil {
+		return nil, api.CreateAgentGatewaySessionResponse{}, err
 	}
 
 	projectId, err := getAgentGatewayProjectId(cmd)
@@ -539,6 +592,8 @@ func init() {
 		command.Flags().String("name", "", "name of the Agent Gateway to broker through (falls back to INFISICAL_AGENT_GATEWAY or defaultAgentGateway in .infisical.json)")
 		command.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
 		command.Flags().String("token", "", "machine identity access token")
+		command.Flags().String("client-id", "", "universal auth client id (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
+		command.Flags().String("client-secret", "", "universal auth client secret (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 		command.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 		command.Flags().StringArray("pass-env", nil, "pass one of your environment variables through to the agent (can be specified multiple times)")
 		command.Flags().StringArray("set-env", nil, "set an environment variable in the agent as KEY=VALUE (can be specified multiple times)")

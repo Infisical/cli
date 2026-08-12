@@ -319,16 +319,17 @@ type tokenSource struct {
 // resolveDeveloperTokenSource resolves the run's identity: --token if given, else the keyring login.
 // There is no machine-identity path; that is for services, not a person on a laptop. Neither source
 // refreshes mid-session, so we fail fast on an already-expired token.
+// One chain for both modes, so a credential that works for connect also works for run. Neither source
+// refreshes mid-session, so an already-expired token fails fast rather than at the first brokered request.
 func resolveDeveloperTokenSource(cmd *cobra.Command) tokenSource {
-	if token, err := util.GetInfisicalToken(cmd); err == nil && token != nil && token.Token != "" {
-		failIfTokenExpired(token.Token, "the provided token")
-		return tokenSource{token: func() string { return token.Token }, label: "token"}
+	token, label, err := resolveAgentGatewayToken(cmd)
+	if err == nil && token != nil && token.Token != "" {
+		failIfTokenExpired(token.Token, "your credentials")
+		return tokenSource{token: func() string { return token.Token }, label: label}
 	}
 
-	details, err := util.GetCurrentLoggedInUserDetails(true)
-	if err != nil || !details.IsUserLoggedIn || details.LoginExpired {
-		details = util.EstablishUserLoginSession()
-	}
+	// Local mode is interactive by definition, so an absent login is worth prompting for rather than failing.
+	details := util.EstablishUserLoginSession()
 	if details.UserCredentials.JTWToken == "" {
 		util.HandleError(fmt.Errorf("could not resolve your Infisical login; run 'infisical login' or pass --token"))
 	}

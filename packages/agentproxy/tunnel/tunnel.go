@@ -15,6 +15,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -43,9 +45,104 @@ type streamConn struct {
 	writer io.Writer
 	closer func() error
 	flush  func()
+
+	// A stream has no socket of its own, so read deadlines are implemented here rather than delegated. They
+	// are not optional: net/http's hijack path (abortPendingRead) sets the read deadline in the past and then
+	// blocks until the in-flight read returns, so a no-op deadline deadlocks every CONNECT the moment an
+	// agent asks for an HTTPS host. Reads therefore run on their own goroutine and Read waits with a timer.
+	readOnce     sync.Once
+	reads        chan readChunk
+	leftover     []byte
+	readErr      error
+	deadlineMu   sync.Mutex
+	readDeadline time.Time
+	// Closed and replaced on every SetReadDeadline, so a read already blocked with no deadline still learns
+	// that one has appeared. Without it the hijack path sets a deadline nothing is listening for.
+	deadlineChanged chan struct{}
 }
 
-func (c *streamConn) Read(b []byte) (int, error) { return c.reader.Read(b) }
+type readChunk struct {
+	data []byte
+	err  error
+}
+
+// The reader goroutine owns the underlying body and hands whole chunks over, so a read abandoned on a
+// deadline loses nothing: the chunk waits in the channel for the next Read.
+func (c *streamConn) startReader() {
+	c.reads = make(chan readChunk, 1)
+	go func() {
+		for {
+			buf := make([]byte, 32*1024)
+			n, err := c.reader.Read(buf)
+			if n > 0 {
+				c.reads <- readChunk{data: buf[:n]}
+			}
+			if err != nil {
+				c.reads <- readChunk{err: err}
+				return
+			}
+		}
+	}()
+}
+
+// The deadline and the channel that announces a change to it, read together so a waiter cannot miss an
+// update between the two.
+func (c *streamConn) deadlineState() (time.Time, chan struct{}) {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if c.deadlineChanged == nil {
+		c.deadlineChanged = make(chan struct{})
+	}
+	return c.readDeadline, c.deadlineChanged
+}
+
+func (c *streamConn) Read(b []byte) (int, error) {
+	c.readOnce.Do(c.startReader)
+
+	if len(c.leftover) > 0 {
+		n := copy(b, c.leftover)
+		c.leftover = c.leftover[n:]
+		return n, nil
+	}
+	if c.readErr != nil {
+		return 0, c.readErr
+	}
+
+	for {
+		deadline, changed := c.deadlineState()
+
+		var timeout <-chan time.Time
+		var timer *time.Timer
+		if !deadline.IsZero() {
+			if !time.Now().Before(deadline) {
+				return 0, os.ErrDeadlineExceeded
+			}
+			timer = time.NewTimer(time.Until(deadline))
+			timeout = timer.C
+		}
+
+		select {
+		case chunk := <-c.reads:
+			if timer != nil {
+				timer.Stop()
+			}
+			if len(chunk.data) > 0 {
+				n := copy(b, chunk.data)
+				c.leftover = chunk.data[n:]
+				return n, nil
+			}
+			c.readErr = chunk.err
+			return 0, chunk.err
+		case <-timeout:
+			return 0, os.ErrDeadlineExceeded
+		case <-changed:
+			// A deadline arrived, moved, or was cleared. Re-arm against the new one.
+			if timer != nil {
+				timer.Stop()
+			}
+		}
+	}
+}
 
 func (c *streamConn) Write(b []byte) (int, error) {
 	n, err := c.writer.Write(b)
@@ -65,9 +162,23 @@ func (c *streamConn) Close() error {
 func (c *streamConn) LocalAddr() net.Addr  { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)} }
 func (c *streamConn) RemoteAddr() net.Addr { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)} }
 
-// Deadlines are the underlying connection's business; a stream has none of its own.
-func (c *streamConn) SetDeadline(time.Time) error      { return nil }
-func (c *streamConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *streamConn) SetDeadline(t time.Time) error {
+	return c.SetReadDeadline(t)
+}
+
+func (c *streamConn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	c.readDeadline = t
+	if c.deadlineChanged != nil {
+		close(c.deadlineChanged)
+	}
+	c.deadlineChanged = make(chan struct{})
+	c.deadlineMu.Unlock()
+	return nil
+}
+
+// Writes go into the HTTP/2 flow-control window rather than to a socket, and nothing in the forwarding path
+// relies on interrupting one, so a write deadline is accepted and ignored.
 func (c *streamConn) SetWriteDeadline(time.Time) error { return nil }
 
 // Client multiplexes outbound tunnels over one connection.

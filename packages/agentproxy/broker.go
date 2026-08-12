@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -117,19 +118,40 @@ func (b *Broker) ServeConn(conn net.Conn, session Session) {
 		ReadHeaderTimeout: frontReadHeaderTimeout,
 	}
 
-	// One connection, served until the agent hangs up. oneShotListener is the same adapter the CONNECT MITM
-	// path already uses to run an http.Server over a single connection. It must be built by its constructor:
-	// a bare struct literal leaves its channels nil and Accept then blocks forever.
-	listener := newOneShotListener(conn)
-	server.ConnState = func(_ net.Conn, state http.ConnState) {
-		if state == http.StateHijacked || state == http.StateClosed {
-			_ = listener.Close()
-		}
-	}
+	// ServeConn must not return until the connection is genuinely finished, because in the gateway its caller
+	// is an HTTP/2 handler and returning closes the stream this connection *is*. That rules out ending on
+	// Serve's return: a CONNECT hijacks, Serve stops immediately, and the MITM handshake would then be cut
+	// off mid-flight on a stream nobody is holding open any more. The conn's own Close is the real signal,
+	// and both paths reach it: http.Server closes it on the keep-alive path, and the hijack handler closes it
+	// when its tunnel ends.
+	closed := make(chan struct{})
+	tracked := &closeNotifyConn{Conn: conn, closed: closed}
+	listener := newOneShotListener(tracked)
 
-	if err := server.Serve(listener); err != nil {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+
+	select {
+	case <-closed:
+	case err := <-serveErr:
+		// Serve gave up before anything was hijacked (a listener error, or the request was malformed).
 		log.Debug().Err(err).Msg("agent gateway tunnel closed")
 	}
+	_ = listener.Close()
+}
+
+// closeNotifyConn reports the one moment ServeConn cares about: this connection is done with, whoever closed
+// it. Close is idempotent for the caller's sake, since both http.Server and the hijack path may reach it.
+type closeNotifyConn struct {
+	net.Conn
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *closeNotifyConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() { close(c.closed) })
+	return err
 }
 
 // ForgetSession drops a session's cached credentials as soon as its transport goes away, rather than leaving

@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -133,5 +136,100 @@ func TestBrokeredCredentialReachesUpstreamButNeverTheAgentsConnection(t *testing
 	// connection the agent holds.
 	if recorded.contains(realSecret) {
 		t.Fatal("the real credential crossed the agent's own connection; brokering is not confining it")
+	}
+}
+
+// The HTTPS path, which is the one agents actually take: CONNECT, MITM, then a request inside the tunnel,
+// all of it over a multiplexed stream. This is what a plain-HTTP test cannot catch, because CONNECT hijacks
+// the connection and ServeConn has to stay alive across the hijack or the stream dies under the handshake.
+func TestBrokerServesConnectOverATunnelStream(t *testing.T) {
+	const realSecret = "sk_live_connect_path"
+
+	ca, interCert := newTestCA(t)
+	stub := &stubRoundTripper{respBody: "ok"}
+
+	services := []*resolvedService{{
+		id:           "svc-1",
+		name:         "billing",
+		hostPatterns: parseHostPatterns("example.com"),
+		isEnabled:    true,
+		credentials: []resolvedCredential{
+			{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: realSecret},
+		},
+	}}
+
+	broker := &Broker{
+		shared: &proxyServer{
+			opts:         Options{UnmatchedHost: UnmatchedAllow},
+			ca:           ca,
+			transport:    stub,
+			usageTracker: newUsageTracker(),
+			bundles:      staticResolver{services_: services},
+		},
+		bundles: newBundleResolver(func() string { return "" }, 0),
+		stop:    make(chan struct{}),
+	}
+	defer close(broker.stop)
+
+	session := *testSession()
+	brokerSide, agentSide := net.Pipe()
+	recorded := &recordingConn{Conn: agentSide}
+
+	go func() {
+		_ = tunnel.Serve(brokerSide, bufio.NewReader(brokerSide), func(stream net.Conn) {
+			broker.ServeConn(stream, session)
+		})
+	}()
+
+	client, err := tunnel.NewClient(recorded)
+	if err != nil {
+		t.Fatalf("failed to start the tunnel client: %v", err)
+	}
+	defer client.Close()
+
+	stream, err := client.Open(context.Background())
+	if err != nil {
+		t.Fatalf("failed to open a stream: %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := fmt.Fprintf(stream, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"); err != nil {
+		t.Fatalf("failed to write CONNECT: %v", err)
+	}
+
+	established := "HTTP/1.1 200 Connection Established\r\n\r\n"
+	buf := make([]byte, len(established))
+	if _, err := io.ReadFull(stream, buf); err != nil {
+		t.Fatalf("reading the CONNECT response: %v", err)
+	}
+	if string(buf) != established {
+		t.Fatalf("unexpected CONNECT response: %q", buf)
+	}
+
+	pool := x509.NewCertPool()
+	pool.AddCert(interCert)
+	tlsClient := tls.Client(stream, &tls.Config{ServerName: "example.com", RootCAs: pool})
+	// The handshake is the assertion: it can only complete if ServeConn kept the stream open past the hijack.
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("MITM TLS handshake through the tunnel failed: %v", err)
+	}
+
+	if _, err := io.WriteString(tlsClient, "GET /v1/charges HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
+		t.Fatalf("failed to write the tunneled request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsClient), nil)
+	if err != nil {
+		t.Fatalf("reading the tunneled response: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.gotAuth) != 1 || stub.gotAuth[0] != "Bearer "+realSecret {
+		t.Fatalf("upstream did not receive the brokered credential: %v", stub.gotAuth)
+	}
+	if recorded.contains(realSecret) {
+		t.Fatal("the real credential crossed the agent's own connection")
 	}
 }
