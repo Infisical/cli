@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,12 +14,10 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentproxy"
-	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
-	"github.com/go-resty/resty/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog"
@@ -28,19 +25,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var agentProxyRunCmd = &cobra.Command{
-	Use:                   "run [flags] -- [agent start command]",
-	Short:                 "Launch an agent on this machine, sandboxed, with credentials brokered on the wire",
-	Example:               "infisical secrets agent-proxy run --env=dev --path=/myapp -- claude",
-	DisableFlagsInUseLine: true,
-	Args: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return fmt.Errorf("provide the agent command to run after '--', e.g. -- claude")
-		}
-		return nil
-	},
-	Run: runAgentProxyRun,
-}
+const (
+	sandboxEnvVar = "INFISICAL_AGENT_GATEWAY_SANDBOX"
+	// Still honoured so an existing wrapper script does not silently start running agents uncontained.
+	legacySandboxEnvVar = "INFISICAL_AGENT_PROXY_SANDBOX"
+)
 
 // secretShapedEnvSubstrings: env vars whose name contains any of these are scrubbed from the child
 // (coarse on purpose; --pass-env re-admits a specific one).
@@ -48,62 +37,31 @@ var secretShapedEnvSubstrings = []string{
 	"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY",
 }
 
-func runAgentProxyRun(cmd *cobra.Command, args []string) {
-	if cmd.Flags().Changed("proxy") {
-		util.HandleError(fmt.Errorf("--proxy is not valid for 'run' (it starts its own ephemeral proxy); use 'agent-proxy connect --proxy=host:port' for a remote proxy"))
-	}
-
-	// Same resolution order as `connect`: flag, then env var, then .infisical.json.
-	environment := util.ResolveEnvironmentName(cmd)
-	if environment == "" {
-		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
-	}
-
-	secretPath := util.ResolveSecretPath(cmd)
-
-	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-	if err != nil {
-		util.HandleError(err, "Unable to parse --projectId")
-	}
-	if projectID == "" {
-		if workspaceFile, wsErr := util.GetWorkSpaceFromFile(); wsErr == nil {
-			projectID = workspaceFile.WorkspaceId
-		}
-	}
-	if projectID == "" {
-		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
-	}
-
+// runLocalBroker brokers for one session in this process and runs the agent beside it, sandboxed. Local mode
+// resolves credentials under the caller's own permissions because the broker shares the caller's process:
+// there is no boundary between them, and the sandbox is what keeps the *agent* away from the plaintext.
+func runLocalBroker(cmd *cobra.Command, args []string, session localBrokerSession, endSession func()) {
 	unmatchedHost, _ := cmd.Flags().GetString("unmatched-host")
 	if unmatchedHost != agentproxy.UnmatchedAllow && unmatchedHost != agentproxy.UnmatchedBlock {
 		util.HandleError(fmt.Errorf("--unmatched-host must be 'allow' or 'block', got %q", unmatchedHost))
 	}
-	pollInterval, _ := cmd.Flags().GetInt("poll-interval")
 
 	sandboxEnabled := resolveSandboxEnabled(cmd)
 
-	// The single identity for the run: fetches config and secret values in the parent. The child gets none of it.
-	src := resolveDeveloperTokenSource(cmd)
-
-	httpClient := resty.New().SetAuthToken(src.token())
-	placeholders := fetchLocalProxiedServiceConfig(httpClient, projectID, environment, secretPath)
-
-	local := &agentproxy.LocalOptions{
-		ProjectID:    projectID,
-		Environment:  environment,
-		SecretPath:   secretPath,
-		UserToken:    src.token,
-		IdentityID:   src.label,
-		IdentityName: src.label,
-	}
-
 	// Per-run 0700 tempdir: only the public CA cert (and the unix socket on the Linux hard fence) hit disk.
-	tempDir, err := os.MkdirTemp("", "infisical-agent-proxy-run-")
+	tempDir, err := os.MkdirTemp("", "infisical-agent-gateway-run-")
 	if err != nil {
 		util.HandleError(err, "Unable to create a temporary directory")
 	}
 	// os.Exit (and util.HandleError) skip deferred funcs, so clean up explicitly at every exit path.
-	cleanup := func() { _ = os.RemoveAll(tempDir) }
+	cleanup := func() {
+		_ = os.RemoveAll(tempDir)
+		// os.Exit and util.HandleError both skip deferred funcs, so the session is ended here rather than
+		// left for the backend's expiry sweep.
+		if endSession != nil {
+			endSession()
+		}
+	}
 	fail := func(e error, messages ...string) { cleanup(); util.HandleError(e, messages...) }
 
 	// Nothing is written unless --log-file asks for it: a file the operator did not request is one they
@@ -112,9 +70,9 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	// overrides that filter for anyone debugging without a file.
 	logFile, _ := cmd.Flags().GetString("log-file")
 	if logFile != "" {
-		logF, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			fail(err, "Unable to open the log file")
+		logF, logErr := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if logErr != nil {
+			fail(logErr, "Unable to open the log file")
 		}
 		log.Logger = log.Output(GetLoggerConfig(logF, true))
 	} else {
@@ -132,8 +90,9 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 
 	// macOS keeps the root under ~/.infisical (already sandbox-denied) so it can be trusted once in the
 	// keychain, which is what Go tools like gh need. Elsewhere the injected CA env var is enough.
+	caDir := ""
 	if runtime.GOOS == "darwin" && home != "" {
-		local.CADir = filepath.Join(home, ".infisical", "agent-proxy")
+		caDir = filepath.Join(home, ".infisical", "agent-gateways")
 	}
 
 	// The agent's own state dirs, so interactive sessions can save. Its data, not the developer's.
@@ -168,14 +127,14 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	}
 	if pre.FallbackToSharedNet {
 		spec.NetMode = sandbox.SharedNet
-		util.PrintWarning(fmt.Sprintf("Unable to isolate the network on this host (%s), the agent will share your network connection. Requests are still routed through the proxy, but a program that ignores the proxy settings can reach the network directly. Credential protections are unchanged.", pre.Reason))
+		util.PrintWarning(fmt.Sprintf("Unable to isolate the network on this host (%s), the agent will share your network connection. Requests are still routed through the broker, but a program that ignores the proxy settings can reach the network directly. Credential protections are unchanged.", pre.Reason))
 	}
 
-	// After preflight so a downgraded fence is visible; before the proxy starts so a run that dies still counts.
+	// After preflight so a downgraded fence is visible; before brokering starts so a run that dies still counts.
 	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
 	setEnv, _ := cmd.Flags().GetStringArray("set-env")
-	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(src.token()))
-	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
+	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(session.Token()))
+	Telemetry.CaptureEvent("cli-command:agent gateway run", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("platform", runtime.GOOS).
@@ -183,90 +142,114 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		Set("sandboxSource", sandboxSource(cmd)).
 		Set("netDowngraded", pre.FallbackToSharedNet).
 		Set("unmatchedHost", unmatchedHost).
-		Set("pollInterval", pollInterval).
 		Set("allowReadCount", len(extraRead)).
 		Set("allowWriteCount", len(extraWrite)).
 		Set("allowHostCount", len(allowHosts)).
 		Set("passEnvCount", len(passEnv)).
 		Set("setEnvCount", len(setEnv)))
 
-	proxy, err := agentproxy.New(agentproxy.Options{
+	// The secret in the proxy URL is what stops another process on this machine using the listener. The
+	// sandbox already fences the agent, but --no-sandbox, and the shared-network fallback, do not.
+	localSecret := util.GenerateRandomString(32)
+
+	broker, err := agentproxy.NewBroker(agentproxy.BrokerOptions{
+		Token:         session.Token,
 		UnmatchedHost: unmatchedHost,
-		PollInterval:  time.Duration(pollInterval) * time.Second,
-		Local:         local,
-		AllowedHosts:  allowHosts,
+		ProxySecret:   localSecret,
+		LocalCADir:    caDir,
+		UseLocalCA:    true,
 	})
 	if err != nil {
-		fail(err, "Unable to start the agent proxy")
+		fail(err, "Unable to start the local broker")
+	}
+
+	brokerSession := agentproxy.Session{
+		ID:               session.ID,
+		AgentGatewayID:   session.AgentGatewayID,
+		AgentGatewayName: session.AgentGatewayName,
+		ActorName:        session.ActorName,
+		ExpiresAt:        session.ExpiresAt,
+		UnmatchedHost:    unmatchedHost,
+		AllowedHosts:     allowHosts,
 	}
 
 	// Non-fatal by design: if the keychain install is declined, env-CA tools still work and only Go
 	// tools lose brokering. securityd stays blocked either way, so the login token stays unreadable.
-	if local.CADir != "" {
+	if caDir != "" {
 		if sandboxEnabled {
 			spec.AllowTrustd = true
 		}
-		switch installed, terr := ensureCATrusted(agentproxy.LocalCACertPath(local.CADir)); {
+		switch installed, terr := ensureCATrusted(agentproxy.LocalCACertPath(caDir)); {
 		case terr != nil:
-			util.PrintWarning(fmt.Sprintf("Unable to add the agent proxy CA to your login keychain (%v). Most tools will still work, but some may report a certificate error.", terr))
+			util.PrintWarning(fmt.Sprintf("Unable to add the Infisical broker CA to your login keychain (%v). Most tools will still work, but some may report a certificate error.", terr))
 		case installed:
-			util.PrintWarning("Added the Infisical agent proxy CA to your login keychain. This is one-time and persists for future runs.")
+			util.PrintWarning("Added the Infisical broker CA to your login keychain. This is one-time and persists for future runs.")
 		}
 	}
 
-	// Hard fence: proxy on a unix socket in the tempdir, reached via the bridge. Otherwise: TCP loopback.
+	// Hard fence: broker on a unix socket in the tempdir, reached via the bridge. Otherwise: TCP loopback.
 	var listener net.Listener
-	var childProxyURL string
+	var childProxyHost string
 	if pre.UsesBridge {
 		spec.ProxySocket = filepath.Join(tempDir, "proxy.sock")
 		listener, err = net.Listen("unix", spec.ProxySocket)
 		if err != nil {
-			fail(err, "Unable to start the local proxy")
+			fail(err, "Unable to start the local broker listener")
 		}
 		spec.LoopbackPort = sandbox.BridgeLoopbackPort
-		childProxyURL = fmt.Sprintf("http://127.0.0.1:%d", sandbox.BridgeLoopbackPort)
+		childProxyHost = fmt.Sprintf("127.0.0.1:%d", sandbox.BridgeLoopbackPort)
 	} else {
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			fail(err, "Unable to start the local proxy")
+			fail(err, "Unable to start the local broker listener")
 		}
 		spec.LoopbackPort = listener.Addr().(*net.TCPAddr).Port
-		childProxyURL = localProxyURL(listener.Addr().String())
+		childProxyHost = listener.Addr().String()
 	}
 
-	caPath := filepath.Join(tempDir, "local-ca.pem")
-	if err := os.WriteFile(caPath, proxy.LocalRootPEM(), 0o600); err != nil {
+	caPath := filepath.Join(tempDir, "broker-ca.pem")
+	if err := os.WriteFile(caPath, broker.RootPEM(), 0o600); err != nil {
 		fail(err, "Unable to write the CA certificate")
 	}
 
-	proxyErrCh := make(chan error, 1)
-	go func() { proxyErrCh <- proxy.Serve(listener) }()
+	brokerErrCh := make(chan error, 1)
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				brokerErrCh <- acceptErr
+				return
+			}
+			go broker.ServeConn(conn, brokerSession)
+		}
+	}()
 
-	spec.Env = buildLocalAgentEnv(cmd, childProxyURL, caPath, placeholders)
+	spec.Env = buildLocalAgentEnv(cmd, localProxyURL(childProxyHost, localSecret), caPath, session.Placeholders)
 
 	if !sandboxEnabled {
 		util.PrintWarning("Running without the OS sandbox. The agent can read your keyring and credential files and reach the network directly. Credentials are still brokered on the wire.")
 	}
 	if logFile != "" {
-		fmt.Fprintln(os.Stderr, color.HiBlackString("proxy activity log: "+logFile))
+		fmt.Fprintln(os.Stderr, color.HiBlackString("broker activity log: "+logFile))
 	}
 
 	child, err := backend.Wrap(spec, args)
 	if err != nil {
-		shutdownProxy(proxy)
+		broker.Close()
 		fail(err, "Unable to start the agent in the sandbox")
 	}
 
-	exitCode := runSandboxedChild(child, proxy, proxyErrCh)
-	shutdownProxy(proxy)
+	exitCode := runSandboxedChild(child, broker, brokerErrCh)
+	_ = listener.Close()
+	broker.Close()
 	cleanup()
 	os.Exit(exitCode)
 }
 
-// runSandboxedChild starts the child, forwards signals, and returns its exit code; if the proxy dies
-// first it kills the child.
-func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-chan error) int {
-	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent behind the Infisical agent proxy (sandboxed)"))
+// runSandboxedChild starts the child, forwards signals, and returns its exit code; if the broker's listener
+// dies first it kills the child rather than leaving it running with no route out.
+func runSandboxedChild(child *exec.Cmd, broker *agentproxy.Broker, brokerErrCh <-chan error) int {
+	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent with its requests brokered on this machine (sandboxed)"))
 
 	if err := child.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start the agent process: %v\n", err)
@@ -279,8 +262,8 @@ func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-ch
 	go func() { waitCh <- child.Wait() }()
 
 	select {
-	case err := <-proxyErrCh:
-		fmt.Fprintf(os.Stderr, "%s\n", color.RedString("the ephemeral proxy stopped unexpectedly (%v); terminating the agent", err))
+	case err := <-brokerErrCh:
+		fmt.Fprintf(os.Stderr, "%s\n", color.RedString("the local broker stopped unexpectedly (%v); terminating the agent", err))
 		if child.Process != nil {
 			_ = child.Process.Kill()
 		}
@@ -296,18 +279,12 @@ func runSandboxedChild(child *exec.Cmd, proxy *agentproxy.Proxy, proxyErrCh <-ch
 	}
 }
 
-func shutdownProxy(proxy *agentproxy.Proxy) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = proxy.Shutdown(ctx)
-}
-
 // Mirrors resolveSandboxEnabled's order, so a deliberate opt-out is distinguishable from the default.
 func sandboxSource(cmd *cobra.Command) string {
 	switch {
 	case cmd.Flags().Changed("sandbox"), cmd.Flags().Changed("no-sandbox"):
 		return "flag"
-	case os.Getenv("INFISICAL_AGENT_PROXY_SANDBOX") != "":
+	case os.Getenv(sandboxEnvVar) != "", os.Getenv(legacySandboxEnvVar) != "":
 		return "env"
 	default:
 		return "default"
@@ -325,8 +302,10 @@ func resolveSandboxEnabled(cmd *cobra.Command) bool {
 		v, _ := cmd.Flags().GetBool("no-sandbox")
 		return !v
 	}
-	if v := os.Getenv("INFISICAL_AGENT_PROXY_SANDBOX"); v != "" {
-		return !(v == "0" || strings.EqualFold(v, "false") || strings.EqualFold(v, "off"))
+	for _, name := range []string{sandboxEnvVar, legacySandboxEnvVar} {
+		if v := os.Getenv(name); v != "" {
+			return !(v == "0" || strings.EqualFold(v, "false") || strings.EqualFold(v, "off"))
+		}
 	}
 	return true
 }
@@ -385,32 +364,6 @@ func jwtExpiry(token string) (time.Time, bool) {
 	return time.Unix(claims.Exp, 0), true
 }
 
-// fetchLocalProxiedServiceConfig returns the placeholder env to inject. No CanProxy filter (locally
-// the gate is Read Value); disabled services are skipped. Real secret values are never fetched here.
-func fetchLocalProxiedServiceConfig(httpClient *resty.Client, projectID, environment, secretPath string) map[string]string {
-	resp, err := api.CallListProxiedServices(httpClient, api.ListProxiedServicesRequest{
-		ProjectID:   projectID,
-		Environment: environment,
-		SecretPath:  secretPath,
-	})
-	if err != nil {
-		util.HandleError(err, "Failed to list proxied services")
-	}
-
-	placeholders := map[string]string{}
-	for _, svc := range resp.Services {
-		if !svc.IsEnabled {
-			continue
-		}
-		for _, cred := range svc.Credentials {
-			if cred.Role == "credential-substitution" && cred.PlaceholderKey != "" {
-				placeholders[cred.PlaceholderKey] = cred.PlaceholderValue
-			}
-		}
-	}
-	return placeholders
-}
-
 // absolutePaths resolves against the cwd and drops empties. SBPL `subpath` and bwrap `--ro-bind` both
 // reject relative paths, so --allow-read ./creds would otherwise build a profile that fails to load.
 func absolutePaths(paths []string) []string {
@@ -428,15 +381,16 @@ func absolutePaths(paths []string) []string {
 	return out
 }
 
-// localProxyURL is the child's proxy URL: no userinfo, so no credential reaches the child.
-func localProxyURL(proxyAddr string) string {
-	u := url.URL{Scheme: "http", Host: proxyAddr}
+// localProxyURL is the child's proxy URL. The userinfo carries this run's listener secret, which is
+// meaningless outside this process: it authorizes use of the listener, not access to any credential.
+func localProxyURL(proxyAddr, secret string) string {
+	u := url.URL{Scheme: "http", User: url.UserPassword("session", secret), Host: proxyAddr}
 	return u.String()
 }
 
 // buildLocalAgentEnv builds the child env: a scrubbed parent env (no INFISICAL_TOKEN/DOMAIN, no
 // secret-shaped vars) plus the credential-free proxy vars, CA trust vars, and placeholders.
-func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders map[string]string) []string {
+func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders []agentproxy.Placeholder) []string {
 	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
 	setEnv, _ := cmd.Flags().GetStringArray("set-env")
 
@@ -449,9 +403,10 @@ func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders m
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
-	for _, k := range credentialEnvKeys {
-		stale[k] = true
-	}
+	// The long-lived machine identity credentials, so the agent never inherits an identity of its own.
+	stale[util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME] = true
+	stale[util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME] = true
+	stale[util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME] = true
 	for _, k := range authAgentEnvKeys {
 		stale[k] = true
 	}
@@ -491,8 +446,8 @@ func buildLocalAgentEnv(cmd *cobra.Command, proxy, caPath string, placeholders m
 		env[k] = caPath
 	}
 
-	for k, v := range placeholders {
-		env[k] = v
+	for _, placeholder := range placeholders {
+		env[placeholder.Key] = placeholder.Value
 	}
 
 	// --set-env wins last so operators can force a literal value into the child.
@@ -518,26 +473,4 @@ func isSecretShapedEnvName(name string) bool {
 		}
 	}
 	return false
-}
-
-func init() {
-	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
-	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
-	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
-	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
-	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
-	agentProxyRunCmd.Flags().Bool("no-sandbox", false, "disable the OS sandbox; the agent can then read your files and reach the network directly")
-	agentProxyRunCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
-	agentProxyRunCmd.Flags().Int("poll-interval", 60, "interval in seconds to refresh permissions and credentials")
-	agentProxyRunCmd.Flags().String("log-file", "", "write the proxy activity log to this path instead of a temporary file")
-	agentProxyRunCmd.Flags().StringArray("allow-read", nil, "allow the agent to read a path the sandbox denies by default (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("allow-write", nil, "allow the agent to write a path (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("allow-host", nil, "allow the agent to reach a host that has no proxied service (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("pass-env", nil, "pass one of your environment variables through to the agent (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("set-env", nil, "set an environment variable in the agent as KEY=VALUE (can be specified multiple times)")
-	// --proxy exists only so we can reject it with a helpful message pointing at connect.
-	agentProxyRunCmd.Flags().String("proxy", "", "")
-	_ = agentProxyRunCmd.Flags().MarkHidden("proxy")
-
-	agentProxyCmd.AddCommand(agentProxyRunCmd)
 }

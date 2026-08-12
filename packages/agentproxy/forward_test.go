@@ -3,7 +3,6 @@ package agentproxy
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -18,23 +17,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func proxyAuthHeader(projectID, environment, secretPath, jwt string) string {
-	password := fmt.Sprintf("%s/%s:%s", environment, strings.TrimPrefix(secretPath, "/"), jwt)
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(projectID+":"+password))
-}
+// The secret every test listener expects, so a request without it exercises the 407 path.
+const testProxySecret = "test-listener-secret"
 
-func newTestProxy(t *testing.T, unmatchedHost, jwt string, scope agentScope, services []*resolvedService) net.Conn {
+func newTestProxy(t *testing.T, unmatchedHost string, services []*resolvedService) net.Conn {
 	t.Helper()
-	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
-	cache.entries[cacheKey(jwt, scope)] = &agentEntry{
-		jwt:      jwt,
-		scope:    scope,
-		services: services,
-		lastSeen: time.Now(),
-	}
 	ps := &proxyServer{
-		opts:      Options{UnmatchedHost: unmatchedHost},
-		resolver:  cache,
+		opts:      Options{UnmatchedHost: unmatchedHost, ProxySecret: testProxySecret},
+		session:   testSession(),
+		bundles:   staticResolver{services_: services},
 		transport: &http.Transport{},
 	}
 	client, server := net.Pipe()
@@ -64,8 +55,6 @@ func TestPlainForwardInjectsCredentialsAndKeepsAlive(t *testing.T) {
 	}
 	hostname := u.Hostname()
 
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	services := []*resolvedService{{
 		name:         "internal",
 		hostPatterns: parseHostPatterns(hostname),
@@ -74,12 +63,12 @@ func TestPlainForwardInjectsCredentialsAndKeepsAlive(t *testing.T) {
 			{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
 		},
 	}}
-	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
+	client := newTestProxy(t, UnmatchedAllow, services)
 	reader := bufio.NewReader(client)
 
 	for i := 0; i < 2; i++ {
 		_, err := fmt.Fprintf(client, "GET http://%s/hello HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\n\r\n",
-			u.Host, u.Host, proxyAuthHeader("proj", "prod", "/", jwt))
+			u.Host, u.Host, proxySecretHeader(testProxySecret))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,8 +106,6 @@ func TestPlainForwardInjectedHeaderSurvivesHostileConnectionHeader(t *testing.T)
 		t.Fatal(err)
 	}
 
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	services := []*resolvedService{{
 		name:         "internal",
 		hostPatterns: parseHostPatterns(u.Hostname()),
@@ -127,10 +114,10 @@ func TestPlainForwardInjectedHeaderSurvivesHostileConnectionHeader(t *testing.T)
 			{role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
 		},
 	}}
-	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
+	client := newTestProxy(t, UnmatchedAllow, services)
 
 	fmt.Fprintf(client, "GET http://%s/hello HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nConnection: Authorization\r\nAuthorization: Bearer client_fake\r\n\r\n",
-		u.Host, u.Host, proxyAuthHeader("proj", "prod", "/", jwt))
+		u.Host, u.Host, proxySecretHeader(testProxySecret))
 	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -147,11 +134,10 @@ func TestPlainForwardInjectedHeaderSurvivesHostileConnectionHeader(t *testing.T)
 }
 
 func TestPlainForwardRejectsHTTPSAbsoluteForm(t *testing.T) {
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	client := newTestProxy(t, UnmatchedAllow, "jwt", scope, nil)
+	client := newTestProxy(t, UnmatchedAllow, nil)
 
 	fmt.Fprintf(client, "GET https://example.com/ HTTP/1.1\r\nHost: example.com\r\nProxy-Authorization: %s\r\n\r\n",
-		proxyAuthHeader("proj", "prod", "/", "jwt"))
+		proxySecretHeader(testProxySecret))
 	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -162,8 +148,7 @@ func TestPlainForwardRejectsHTTPSAbsoluteForm(t *testing.T) {
 }
 
 func TestPlainForwardRequiresProxyAuth(t *testing.T) {
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	client := newTestProxy(t, UnmatchedAllow, "jwt", scope, nil)
+	client := newTestProxy(t, UnmatchedAllow, nil)
 
 	fmt.Fprintf(client, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
@@ -176,12 +161,10 @@ func TestPlainForwardRequiresProxyAuth(t *testing.T) {
 }
 
 func TestPlainForwardBlocksUnmatchedHost(t *testing.T) {
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	client := newTestProxy(t, UnmatchedBlock, jwt, scope, nil)
+	client := newTestProxy(t, UnmatchedBlock, nil)
 
 	fmt.Fprintf(client, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nProxy-Authorization: %s\r\n\r\n",
-		proxyAuthHeader("proj", "prod", "/", jwt))
+		proxySecretHeader(testProxySecret))
 	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -208,12 +191,10 @@ func TestClientAbortIsNotLoggedAsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "dev", secretPath: "/"}
-	client := newTestProxy(t, UnmatchedAllow, jwt, scope, nil)
+	client := newTestProxy(t, UnmatchedAllow, nil)
 
 	if _, err := fmt.Fprintf(client, "POST http://%s/v1/messages HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nContent-Length: 0\r\n\r\n",
-		u.Host, u.Host, proxyAuthHeader("proj", "dev", "/", jwt)); err != nil {
+		u.Host, u.Host, proxySecretHeader(testProxySecret)); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -257,8 +238,6 @@ func TestClientAbortStillRecordsBrokeredCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "dev", secretPath: "/"}
 	services := []*resolvedService{{
 		name:         "internal",
 		hostPatterns: parseHostPatterns(u.Hostname()),
@@ -267,10 +246,10 @@ func TestClientAbortStillRecordsBrokeredCredential(t *testing.T) {
 			{secretKey: "GITHUB_PAT", role: roleHeaderRewrite, headerName: "Authorization", headerPrefix: "Bearer", value: "real_secret"},
 		},
 	}}
-	client := newTestProxy(t, UnmatchedAllow, jwt, scope, services)
+	client := newTestProxy(t, UnmatchedAllow, services)
 
 	if _, err := fmt.Fprintf(client, "POST http://%s/issues HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\nContent-Length: 0\r\n\r\n",
-		u.Host, u.Host, proxyAuthHeader("proj", "dev", "/", jwt)); err != nil {
+		u.Host, u.Host, proxySecretHeader(testProxySecret)); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)

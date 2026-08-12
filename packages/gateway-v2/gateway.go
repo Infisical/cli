@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/agentproxy"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/Infisical/infisical-merge/packages/pam"
@@ -46,6 +47,9 @@ const (
 	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
 	ForwardModeConnectionTest  ForwardMode = "CONNECTION_TEST"
 	ForwardModeWinRM           ForwardMode = "WINRM"
+	ForwardModeAgentGateway    ForwardMode = "AGENT_GATEWAY"
+	// Not a data path: one connection whose certificate names a session this gateway must stop brokering.
+	ForwardModeAgentGatewayCancellation ForwardMode = "AGENT_GATEWAY_CANCELLATION"
 )
 
 type ActorType string
@@ -61,21 +65,34 @@ const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
 const PAM_INFO_OID = "1.3.6.1.4.1.12345.100.3"
 
+// Pins a connection to one agent gateway session. The gateway trusts this extension and ignores anything
+// the agent claims in band, which is what makes it structurally impossible for one agent's connection to be
+// served another agent's credentials.
+const AGENT_GATEWAY_INFO_OID = "1.3.6.1.4.1.12345.100.4"
+
 // ForwardConfig contains the configuration for forwarding
 type ForwardConfig struct {
-	Mode          ForwardMode
-	CACertificate []byte // Decoded CA certificate for HTTPS verification
-	VerifyTLS     bool   // Whether to verify TLS certificates
-	TargetHost    string
-	TargetPort    int
-	ActorType     ActorType
-	PAMConfig     pam.GatewayPAMConfig
+	Mode             ForwardMode
+	CACertificate    []byte // Decoded CA certificate for HTTPS verification
+	VerifyTLS        bool   // Whether to verify TLS certificates
+	TargetHost       string
+	TargetPort       int
+	ActorType        ActorType
+	PAMConfig        pam.GatewayPAMConfig
+	AgentGatewayInfo AgentGatewayInfo
 }
 
 // RoutingInfo represents the routing information embedded in client certificates
 type RoutingInfo struct {
 	TargetHost string `json:"targetHost"`
 	TargetPort int    `json:"targetPort"`
+}
+
+// AgentGatewayInfo is the session identity carried in the client certificate.
+type AgentGatewayInfo struct {
+	SessionId        string `json:"sessionId"`
+	AgentGatewayID   string `json:"agentGatewayId"`
+	AgentGatewayName string `json:"agentGatewayName"`
 }
 
 type PAMInfo struct {
@@ -144,6 +161,22 @@ type Gateway struct {
 	mongoProxies   map[string]*mongoProxyEntry
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
+
+	// Created on the first agent gateway connection, so a gateway that never brokers never signs a CA
+	// intermediate and never holds a credential.
+	agentBrokerOnce     sync.Once
+	agentBrokerInstance *agentproxy.Broker
+	agentBrokerErr      error
+	// The token the broker presents when it fetches a resolved bundle. Kept in step with httpClient's.
+	agentBrokerToken   string
+	agentBrokerTokenMu sync.RWMutex
+	// Operators who do not want this gateway brokering agent traffic at all: the capability stops being
+	// advertised, so the backend refuses sessions rather than the client failing at the ALPN.
+	disableAgentGateway bool
+	// Live agent gateway sessions, so Infisical can have one dropped without waiting for the broker's next
+	// credential refresh. Several transports can share a session id, hence a slice.
+	agentSessions   map[string][]func()
+	agentSessionsMu sync.Mutex
 }
 
 // mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
@@ -188,6 +221,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		pamSessionUploader:    session.NewSessionUploader(httpClient, pamCredentialsManager),
 		pamSessions:           make(map[string][]*pamSessionEntry),
 		mongoProxies:          make(map[string]*mongoProxyEntry),
+		agentSessions:         make(map[string][]func()),
 		pkcs11Module:          pkcs11Module,
 	}, nil
 }
@@ -386,9 +420,17 @@ func (g *Gateway) reapIdleSessions() {
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
+		// The whole capability object is replaced on every beat, so everything this gateway can do has to be
+		// reported every time rather than incrementally.
 		capabilities := map[string]any{}
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
+		}
+		if !g.disableAgentGateway {
+			// Lets the backend refuse a session, and the dashboard grey out the gateway, instead of the
+			// client discovering it through an unreadable ALPN negotiation failure.
+			capabilities[CapabilityAgentGateway] = true
+			capabilities[CapabilityAgentGatewayProtocol] = agentGatewayProtocolVersion
 		}
 		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
 		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
@@ -500,6 +542,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 func (g *Gateway) SetToken(token string) {
 	g.httpClient.SetAuthToken(token)
+	g.agentBrokerTokenMu.Lock()
+	g.agentBrokerToken = token
+	g.agentBrokerTokenMu.Unlock()
 }
 
 func (g *Gateway) Stop() {
@@ -1029,6 +1074,30 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Debug().Err(err).Msg("Connection-test handler ended with error")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeAgentGateway {
+		// A session is required and comes only from the certificate. A platform certificate has no session
+		// and no brokering grant, so it is refused rather than treated as a privileged caller.
+		if forwardConfig.AgentGatewayInfo.SessionId == "" {
+			log.Warn().Msg("Rejecting agent gateway request with no session in its certificate")
+			return
+		}
+		if forwardConfig.ActorType == ActorTypePlatform {
+			log.Warn().Msg("Rejecting agent gateway request from a platform actor")
+			return
+		}
+		if err := g.serveAgentGateway(tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Agent gateway handler ended with error")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeAgentGatewayCancellation {
+		// Only Infisical itself ends somebody else's session, and the session id is in the certificate rather
+		// than on the wire, so there is nothing to parse and nothing a client could substitute.
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting agent gateway cancellation from a non-platform actor")
+			return
+		}
+		g.cancelAgentGatewaySession(forwardConfig.AgentGatewayInfo.SessionId)
+		return
 	} else if forwardConfig.Mode == ForwardModeWinRM {
 		if forwardConfig.ActorType != ActorTypePlatform {
 			log.Warn().Msg("Rejecting WinRM request from non-platform actor")
@@ -1115,6 +1184,14 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 		config.Mode = ForwardModeWinRM
 		return config, nil
 
+	case "infisical-agent-gateway":
+		config.Mode = ForwardModeAgentGateway
+		return config, nil
+
+	case "infisical-agent-gateway-cancellation":
+		config.Mode = ForwardModeAgentGatewayCancellation
+		return config, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported ALPN protocol: %s", negotiatedProtocol)
 	}
@@ -1190,6 +1267,13 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 			config.ActorType = ActorType(actorDetails.Type)
 		}
 		// Extract PAM info from client certificate custom extension
+		if ext.Id.String() == AGENT_GATEWAY_INFO_OID {
+			var agentGatewayInfo AgentGatewayInfo
+			if err := json.Unmarshal(ext.Value, &agentGatewayInfo); err != nil {
+				return fmt.Errorf("failed to parse agent gateway info JSON: %v", err)
+			}
+			config.AgentGatewayInfo = agentGatewayInfo
+		}
 		if ext.Id.String() == PAM_INFO_OID {
 			var pamInfo PAMInfo
 			if err := json.Unmarshal(ext.Value, &pamInfo); err != nil {
@@ -1292,6 +1376,8 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-discovery",
 		"infisical-connection-test",
 		"infisical-winrm",
+		"infisical-agent-gateway",
+		"infisical-agent-gateway-cancellation",
 	}
 	if pkcs11Loaded {
 		base = append(base, "infisical-pkcs11")

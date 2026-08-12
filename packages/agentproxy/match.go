@@ -117,7 +117,10 @@ func hostsEqual(a, b string) bool {
 	return ipA != nil && ipB != nil && ipA.Equal(ipB)
 }
 
-// Full ties are broken by lexicographically-smallest service name so the winner is deterministic regardless of the unordered list-endpoint result.
+// Full ties are broken by the backend-supplied priority, then by lexicographically-smallest service name so
+// the winner is deterministic. Priority matters because an agent gateway can broker services from more than
+// one project, so two services can legitimately match the same host; picking the alphabetically-first name
+// silently chose a credential, which has security consequences when the two hold different tenants' tokens.
 func bestMatch(services []*resolvedService, host, port, path string) *resolvedService {
 	var best *resolvedService
 	var bestDetail matchDetail
@@ -135,7 +138,10 @@ func bestMatch(services []*resolvedService, host, port, path string) *resolvedSe
 			case best == nil, detail.betterThan(bestDetail):
 				best = svc
 				bestDetail = detail
-			case detail.equalTo(bestDetail) && svc.name < best.name:
+			case detail.equalTo(bestDetail) && svc.priority < best.priority:
+				best = svc
+				bestDetail = detail
+			case detail.equalTo(bestDetail) && svc.priority == best.priority && svc.name < best.name:
 				best = svc
 				bestDetail = detail
 			}

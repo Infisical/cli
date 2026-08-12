@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/agentproxy"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/spf13/cobra"
 )
@@ -37,8 +38,8 @@ func TestBuildLocalAgentEnvScrubsSecretsAndToken(t *testing.T) {
 	t.Setenv("HARMLESS", "keep-me")
 
 	cmd := newRunTestCmd()
-	placeholders := map[string]string{"STRIPE_KEY": "__PLACEHOLDER__"}
-	env := envToMap(buildLocalAgentEnv(cmd, "http://127.0.0.1:51234", "/tmp/ca.pem", placeholders))
+	placeholders := []agentproxy.Placeholder{{Key: "STRIPE_KEY", Value: "__PLACEHOLDER__"}}
+	env := envToMap(buildLocalAgentEnv(cmd, "http://session:listener-secret@127.0.0.1:51234", "/tmp/ca.pem", placeholders))
 
 	// The developer token must never reach the child, by name or by value anywhere.
 	if _, ok := env["INFISICAL_TOKEN"]; ok {
@@ -65,15 +66,17 @@ func TestBuildLocalAgentEnvScrubsSecretsAndToken(t *testing.T) {
 	// Both cases must be set: curl honours only lowercase http_proxy for plain-HTTP URLs, so an
 	// uppercase-only env would send those requests to DNS instead of the proxy.
 	for _, k := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
-		if env[k] != "http://127.0.0.1:51234" {
-			t.Errorf("%s = %q; want the credential-free proxy URL", k, env[k])
+		if env[k] != "http://session:listener-secret@127.0.0.1:51234" {
+			t.Errorf("%s = %q; want the listener's proxy URL", k, env[k])
 		}
 	}
 	if env["no_proxy"] != env["NO_PROXY"] {
 		t.Errorf("no_proxy (%q) must match NO_PROXY (%q)", env["no_proxy"], env["NO_PROXY"])
 	}
-	if !strings.Contains(env["HTTPS_PROXY"], "127.0.0.1") || strings.Contains(env["HTTPS_PROXY"], "@") {
-		t.Errorf("proxy URL must be credential-free loopback, got %q", env["HTTPS_PROXY"])
+	// Loopback only, and the only thing in the userinfo is this run's listener secret, which grants use of
+	// the listener rather than access to any credential.
+	if !strings.Contains(env["HTTPS_PROXY"], "127.0.0.1") {
+		t.Errorf("proxy URL must be loopback, got %q", env["HTTPS_PROXY"])
 	}
 	if env["SSL_CERT_FILE"] != "/tmp/ca.pem" || env["NODE_EXTRA_CA_CERTS"] != "/tmp/ca.pem" {
 		t.Error("CA trust vars must point at the local CA cert")
@@ -106,10 +109,12 @@ func TestBuildLocalAgentEnvSetEnvWins(t *testing.T) {
 	}
 }
 
-func TestLocalProxyURLHasNoCredential(t *testing.T) {
-	u := localProxyURL("127.0.0.1:51234")
-	if u != "http://127.0.0.1:51234" {
-		t.Fatalf("local proxy URL = %q; want a bare loopback URL with no userinfo", u)
+// The listener secret is what stops another process on this machine using the broker: the sandbox fences the
+// agent, but --no-sandbox and the shared-network fallback do not.
+func TestLocalProxyURLCarriesTheListenerSecret(t *testing.T) {
+	u := localProxyURL("127.0.0.1:51234", "s3cret")
+	if u != "http://session:s3cret@127.0.0.1:51234" {
+		t.Fatalf("local proxy URL = %q; want the listener secret in the userinfo", u)
 	}
 }
 

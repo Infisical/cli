@@ -1,41 +1,11 @@
 package agentproxy
 
 import (
-	"encoding/base64"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
 )
-
-func makeJWT(t *testing.T, payloadJSON string) string {
-	t.Helper()
-	seg := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
-	return strings.Join([]string{seg(`{"alg":"HS256"}`), seg(payloadJSON), "sig"}, ".")
-}
-
-func TestDecodeAgentIdentity(t *testing.T) {
-	cases := []struct {
-		name     string
-		jwt      string
-		wantID   string
-		wantName string
-	}{
-		{"valid", makeJWT(t, `{"identityId":"id-1","identityName":"claude-agent"}`), "id-1", "claude-agent"},
-		{"missing name", makeJWT(t, `{"identityId":"id-2"}`), "id-2", ""},
-		{"malformed (not three segments)", "not-a-jwt", "", ""},
-		{"malformed payload", "a.$$$.c", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			id, name := decodeAgentIdentity(tc.jwt)
-			if id != tc.wantID || name != tc.wantName {
-				t.Fatalf("got (%q, %q), want (%q, %q)", id, name, tc.wantID, tc.wantName)
-			}
-		})
-	}
-}
 
 func TestLevelFor(t *testing.T) {
 	cases := map[string]zerolog.Level{
@@ -78,7 +48,7 @@ func TestApplyCredentialsReportsDynamicSecret(t *testing.T) {
 			headerName:   "Authorization",
 			headerPrefix: "Bearer",
 			value:        "minted-lease-value",
-			dynamic:      &dynamicCredentialRef{key: leaseKey{secretName: "my-postgres-creds"}, field: "DB_PASSWORD"},
+			dynamic:      &dynamicCredentialRef{secretName: "my-postgres-creds", field: "DB_PASSWORD"},
 		},
 	}}
 	applied, err := applyCredentials(req, svc.credentials)

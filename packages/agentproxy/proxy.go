@@ -1,7 +1,7 @@
 package agentproxy
 
 import (
-	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -9,13 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -73,117 +70,111 @@ const (
 	decisionError       = "error"
 	decisionCanceled    = "canceled"
 
-	activityEventName = "agent-proxy.request"
+	activityEventName = "agent-gateway.request"
 
 	maxLoggedPathLen = 2048
 )
 
 type Options struct {
-	Port          int
 	UnmatchedHost string
-	PollInterval  time.Duration
-	ProxyToken    func() string
-
-	// Local switches the proxy into local coupled mode; nil = remote.
-	Local *LocalOptions
+	// The credential used to fetch resolved bundles: a gateway access token in the gateway, or the caller's
+	// own token in local mode.
+	ProxyToken func() string
 
 	// AllowedHosts pass through with no credential even under UnmatchedBlock (run --allow-host).
 	AllowedHosts []string
+
+	// ProxySecret, when set, must be presented by the client in Proxy-Authorization. Local mode sets it so a
+	// loopback listener is not an open credential-injection service for every other process on the machine;
+	// remote mode leaves it empty, because there the client is authenticated by mTLS before it reaches here.
+	ProxySecret string
 }
 
-// serviceResolver resolves credentials: agentCache (remote) or localResolver (local).
-type serviceResolver interface {
-	get(jwt string, scope agentScope) ([]*resolvedService, error)
-	identity(jwt string, scope agentScope) (id, name string, ok bool)
-	refreshActive()
-	activeJWTs() map[string]struct{}
-	close()
+// sessionResolver hands the server the services a session may broker. One implementation in production
+// (bundleResolver, which fetches and caches resolved bundles); tests substitute a static one.
+type sessionResolver interface {
+	services(session Session) ([]*resolvedService, error)
 }
 
 type proxyServer struct {
 	opts      Options
 	ca        *caManager
-	resolver  serviceResolver
-	leases    *leaseStore
 	transport http.RoundTripper
 
-	// usage holds the set of proxied-service IDs brokered since the last flush (deduped per tick).
-	usageMu       sync.Mutex
-	usage         map[string]struct{}
-	usageFlushing atomic.Bool
-	// usageWarnOnce keeps a rejected usage report to one warning per proxy, not one per poll.
-	usageWarnOnce sync.Once
+	// The session this server brokers for. In the gateway it comes from the mTLS certificate the connection
+	// presented, so it is authoritative and is never read from a request; in local mode the CLI holds one.
+	session *Session
+	bundles sessionResolver
+
+	// Behind a pointer so a Broker can take a cheap per-session view of this server without copying a lock:
+	// every session shares one usage tracker, which is what dedupes reports across them.
+	usageTracker *usageTracker
 }
 
-func newProxyServer(opts Options) (*proxyServer, error) {
-	if opts.Local != nil && opts.ProxyToken == nil {
-		opts.ProxyToken = opts.Local.UserToken
-	}
-	leases := newLeaseStore(opts.ProxyToken)
-
-	var ca *caManager
-	var resolver serviceResolver
-	if opts.Local != nil {
-		var localCa *caManager
-		var err error
-		if opts.Local.CADir != "" {
-			localCa, err = newPersistentLocalCaManager(opts.Local.CADir)
-		} else {
-			localCa, err = newLocalCaManager()
-		}
-		if err != nil {
-			return nil, err
-		}
-		ca = localCa
-		resolver = newLocalResolver(opts.Local, leases)
-	} else {
-		ca = newCaManager(opts.ProxyToken)
-		resolver = newAgentCache(opts.ProxyToken, leases)
-	}
-
-	return &proxyServer{
-		opts:      opts,
-		ca:        ca,
-		resolver:  resolver,
-		leases:    leases,
-		transport: newUpstreamTransport(),
-		usage:     make(map[string]struct{}),
-	}, nil
+// usageTracker holds the proxied-service ids brokered since the last flush, per session. Keyed by session
+// because "last used" is reported through the session that brokered it, and one broker serves many.
+type usageTracker struct {
+	mu       sync.Mutex
+	sessions map[string]map[string]struct{}
+	flushing atomic.Bool
+	// warnOnce keeps a rejected usage report to one warning per broker, not one per poll.
+	warnOnce sync.Once
 }
 
+func newUsageTracker() *usageTracker {
+	return &usageTracker{sessions: make(map[string]map[string]struct{})}
+}
+
+// A server built without a tracker simply does not report usage. Both real construction paths always set
+// one; this keeps a bare proxyServer value usable, which the tests rely on, without making usage reporting a
+// required dependency of forwarding a request.
 func (ps *proxyServer) recordUsage(serviceID string) {
-	ps.usageMu.Lock()
-	if ps.usage == nil {
-		ps.usage = make(map[string]struct{})
+	if ps.usageTracker == nil || ps.session == nil {
+		return
 	}
-	ps.usage[serviceID] = struct{}{}
-	ps.usageMu.Unlock()
+	ps.usageTracker.mu.Lock()
+	defer ps.usageTracker.mu.Unlock()
+	if ps.usageTracker.sessions == nil {
+		ps.usageTracker.sessions = make(map[string]map[string]struct{})
+	}
+	if ps.usageTracker.sessions[ps.session.ID] == nil {
+		ps.usageTracker.sessions[ps.session.ID] = make(map[string]struct{})
+	}
+	ps.usageTracker.sessions[ps.session.ID][serviceID] = struct{}{}
 }
 
-func (ps *proxyServer) flushUsage() {
-	if !ps.usageFlushing.CompareAndSwap(false, true) {
+// flush reports each session's brokered services through that session. Best effort: a failed batch is
+// dropped rather than retried, because a "last used" timestamp is not worth holding memory for.
+func (t *usageTracker) flush(token func() string) {
+	if t == nil || token == nil {
 		return
 	}
-	defer ps.usageFlushing.Store(false)
-
-	ps.usageMu.Lock()
-	if len(ps.usage) == 0 {
-		ps.usageMu.Unlock()
+	if !t.flushing.CompareAndSwap(false, true) {
 		return
 	}
-	snapshot := ps.usage
-	ps.usage = make(map[string]struct{})
-	ps.usageMu.Unlock()
+	defer t.flushing.Store(false)
 
-	client := resty.New().SetAuthToken(ps.opts.ProxyToken()).SetTimeout(usageReportTimeout)
-	for serviceID := range snapshot {
-		if err := api.CallReportProxiedServiceUsage(client, serviceID); err != nil {
-			// Warn once: the usual cause is a missing Report Usage permission, which fails every attempt.
-			ps.usageWarnOnce.Do(func() {
-				log.Warn().Err(err).Msg("cannot report proxied-service usage, so the service's last-used time will not update; this needs the Report Usage permission on proxied services")
+	t.mu.Lock()
+	if len(t.sessions) == 0 {
+		t.mu.Unlock()
+		return
+	}
+	snapshot := t.sessions
+	t.sessions = make(map[string]map[string]struct{})
+	t.mu.Unlock()
+
+	client := resty.New().SetAuthToken(token()).SetTimeout(usageReportTimeout)
+	for sessionID, serviceIDs := range snapshot {
+		ids := make([]string, 0, len(serviceIDs))
+		for serviceID := range serviceIDs {
+			ids = append(ids, serviceID)
+		}
+		if err := api.CallReportAgentGatewayUsage(client, sessionID, ids); err != nil {
+			// Warn once: the usual cause is a session that has ended, which fails every attempt.
+			t.warnOnce.Do(func() {
+				log.Warn().Err(err).Msg("cannot report proxied-service usage, so the services' last-used times will not update")
 			})
-			log.Debug().Err(err).Msg("failed to report proxied service usage; dropping batch")
-			return
+			log.Debug().Err(err).Msgf("failed to report proxied service usage; dropping batch [sessionId=%s]", sessionID)
 		}
 	}
 }
@@ -212,132 +203,26 @@ func (ps *proxyServer) newFrontServer() *http.Server {
 	}
 }
 
-// Proxy lets the caller own binding, serving, and shutdown (used by `agent-proxy run`); the remote
-// `start` command uses the blocking Start wrapper below.
-type Proxy struct {
-	ps       *proxyServer
-	srv      *http.Server
-	loopStop chan struct{}
-	stopOnce sync.Once
+// requestAuthorized guards the listener itself, not the credentials: which session a connection belongs to
+// is decided before this server sees it. Only local mode sets a secret; see Options.ProxySecret.
+func (ps *proxyServer) requestAuthorized(r *http.Request) bool {
+	if ps.opts.ProxySecret == "" {
+		return true
+	}
+	presented, ok := parseProxySecret(r.Header.Get("Proxy-Authorization"))
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(ps.opts.ProxySecret)) == 1
 }
 
-func New(opts Options) (*Proxy, error) {
-	ps, err := newProxyServer(opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize agent proxy CA: %w", err)
+// The services this connection's session may broker. Fetched and cached by the resolver, which fails closed
+// once the session stops being valid.
+func (ps *proxyServer) resolveServices() ([]*resolvedService, error) {
+	if ps.session == nil || ps.bundles == nil {
+		return nil, fmt.Errorf("this broker has no session, so there is nothing to broker")
 	}
-	if err := ps.ca.ensureSigningCert(); err != nil {
-		return nil, fmt.Errorf("failed to initialize agent proxy CA: %w", err)
-	}
-	return &Proxy{
-		ps:       ps,
-		srv:      ps.newFrontServer(),
-		loopStop: make(chan struct{}),
-	}, nil
-}
-
-// Serve runs the poll/lease loops and serves on ln until Shutdown (nil) or a serve error.
-func (p *Proxy) Serve(ln net.Listener) error {
-	go p.ps.pollLoop(p.loopStop)
-	go p.ps.leases.refreshLoop(p.loopStop, p.ps.opts.PollInterval, p.ps.resolver.activeJWTs)
-
-	err := p.srv.Serve(newLimitListener(ln, maxConcurrentConns))
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
-}
-
-// Shutdown stops the loops, revokes leases, drains in-flight requests (bounded by ctx), and drops
-// cached credentials. Idempotent.
-func (p *Proxy) Shutdown(ctx context.Context) error {
-	var err error
-	p.stopOnce.Do(func() {
-		close(p.loopStop)
-		revokeCtx, cancel := context.WithTimeout(context.Background(), leaseRevokeShutdownTimeout)
-		defer cancel()
-		p.ps.leases.revokeAll(revokeCtx)
-		err = p.srv.Shutdown(ctx)
-		// Flush usage recorded since the last poll tick. `run` is frequently shorter than one poll
-		// interval, so without a shutdown flush a short session would never report its brokered-service
-		// usage; the daemon path already flushes each tick.
-		p.ps.flushUsage()
-		p.ps.resolver.close()
-	})
-	return err
-}
-
-// LocalRootPEM returns the local root CA's public cert (local mode only; nil otherwise).
-func (p *Proxy) LocalRootPEM() []byte {
-	return p.ps.ca.RootPEM()
-}
-
-func Start(opts Options) error {
-	p, err := New(opts)
-	if err != nil {
-		return err
-	}
-
-	if addr := portInUse(opts.Port); addr != "" {
-		return fmt.Errorf("port %d is already in use (%s); another process is listening. Choose a free port with --port", opts.Port, addr)
-	}
-
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", opts.Port))
-	if err != nil {
-		return fmt.Errorf("failed to listen on port %d: %w", opts.Port, err)
-	}
-	log.Info().Msgf("Infisical agent proxy listening on :%d", opts.Port)
-	log.Info().Msg("per-request activity logging on: brokered=info, blocked=warn, error=error, passthrough=debug, canceled=debug (use --log-level to filter)")
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		log.Info().Msg("shutting down agent proxy; revoking active leases")
-		ctx, cancel := context.WithTimeout(context.Background(), leaseRevokeShutdownTimeout)
-		defer cancel()
-		_ = p.Shutdown(ctx)
-	}()
-
-	return p.Serve(listener)
-}
-
-func portInUse(port int) string {
-	for _, addr := range []string{fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("[::1]:%d", port)} {
-		conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return addr
-		}
-	}
-	return ""
-}
-
-func (ps *proxyServer) pollLoop(stop <-chan struct{}) {
-	interval := ps.opts.PollInterval
-	if interval <= 0 {
-		interval = 60 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			ps.resolver.refreshActive()
-			go ps.flushUsage()
-		case <-stop:
-			return
-		}
-	}
-}
-
-// requestScope returns the request's scope and wire credential. Remote parses Proxy-Authorization;
-// local serves the startup scope with no wire credential.
-func (ps *proxyServer) requestScope(r *http.Request) (agentScope, string, bool) {
-	if l := ps.opts.Local; l != nil {
-		return l.scope(), "", true
-	}
-	return parseProxyAuth(r.Header.Get("Proxy-Authorization"))
+	return ps.bundles.services(*ps.session)
 }
 
 func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
@@ -350,8 +235,7 @@ func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
 
 func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// All authentication and HTTP error responses happen before Hijack: once hijacked, no HTTP status can be sent.
-	scope, jwt, ok := ps.requestScope(r)
-	if !ok {
+	if !ps.requestAuthorized(r) {
 		writeProxyAuthChallenge(w)
 		return
 	}
@@ -363,11 +247,11 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authenticate before minting: otherwise any syntactically valid Proxy-Authorization header forces unbounded key generation and leaf-cache growth.
-	if _, err := ps.resolver.get(jwt, scope); err != nil {
-		if isAuthError(err) {
-			http.Error(w, "proxy authorization failed", http.StatusForbidden)
+	if _, err := ps.resolveServices(); err != nil {
+		if errors.Is(err, ErrSessionRevoked) {
+			http.Error(w, "this brokering session is no longer valid", http.StatusForbidden)
 		} else {
-			http.Error(w, "failed to resolve agent permissions", http.StatusBadGateway)
+			http.Error(w, "failed to resolve the credentials for this session", http.StatusBadGateway)
 		}
 		return
 	}
@@ -405,16 +289,16 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
 
-	ps.serveTunnel(tlsConn, hostname, port, jwt, scope)
+	ps.serveTunnel(tlsConn, hostname, port)
 }
 
 // serveTunnel serves HTTP/1.1 requests off the decrypted MITM connection using a fresh http.Server over a
 // one-shot listener, so the tunnel gets the same header/timeout enforcement as the ingress.
-func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, jwt string, scope agentScope) {
+func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port string) {
 	listener := newOneShotListener(tlsConn)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ps.forwardHTTP(w, r, "https", hostname, port, jwt, scope)
+			ps.forwardHTTP(w, r, "https", hostname, port)
 		}),
 		ReadHeaderTimeout: tunnelReadHeaderTimeout,
 		ReadTimeout:       tunnelReadTimeout,
@@ -445,8 +329,7 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	scope, jwt, ok := ps.requestScope(r)
-	if !ok {
+	if !ps.requestAuthorized(r) {
 		writeProxyAuthChallenge(w)
 		return
 	}
@@ -460,11 +343,11 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		r.URL.Path = "/"
 	}
 
-	ps.forwardHTTP(w, r, "http", hostname, port, jwt, scope)
+	ps.forwardHTTP(w, r, "http", hostname, port)
 }
 
 // forwardHTTP resolves the upstream response and relays it to the client via the ResponseWriter.
-func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, jwt string, scope agentScope) {
+func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port string) {
 	// Reject request-echo methods: TRACE/TRACK make the upstream reflect the request (including the injected
 	// credential) back in the response body, which would let the agent read a secret it can't fetch directly.
 	if r.Method == http.MethodTrace || r.Method == "TRACK" {
@@ -479,7 +362,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
 	}
 
-	resp, outcome, err := ps.forward(r, scheme, hostname, port, jwt, scope)
+	resp, outcome, err := ps.forward(r, scheme, hostname, port)
 
 	canceled := err != nil && r.Context().Err() != nil
 
@@ -502,7 +385,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	default:
 		decision, status = decisionPassthrough, resp.StatusCode
 	}
-	ps.emitActivity(method, reqPath, hostname, port, decision, status, scope, outcome, err)
+	ps.emitActivity(method, reqPath, hostname, port, decision, status, outcome, err)
 
 	if err != nil {
 		if !canceled {
@@ -542,25 +425,26 @@ func levelFor(decision string) zerolog.Level {
 	}
 }
 
-func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision string, status int, scope agentScope, outcome forwardOutcome, cause error) {
+func (ps *proxyServer) emitActivity(method, reqPath, hostname, port, decision string, status int, outcome forwardOutcome, cause error) {
 	portNum, _ := strconv.Atoi(port)
 
 	ev := log.WithLevel(levelFor(decision)).
 		Str("event", activityEventName).
 		Str("decision", decision).
-		Str("agentId", outcome.agentID).
-		Str("projectId", scope.projectID).
-		Str("environment", scope.environment).
-		Str("secretPath", scope.secretPath).
 		Str("method", method).
 		Str("host", hostname).
 		Int("port", portNum).
 		Str("path", reqPath)
+	// The session is what attributes a request, and it came from the certificate (or, locally, from the run
+	// itself), so nothing the agent sends can change who a record names.
+	if ps.session != nil {
+		ev = ev.Str("agentGateway", ps.session.AgentGatewayName).Str("sessionId", ps.session.ID)
+		if ps.session.ActorName != "" {
+			ev = ev.Str("actorName", ps.session.ActorName)
+		}
+	}
 	if status != 0 {
 		ev = ev.Int("status", status)
-	}
-	if outcome.agentName != "" {
-		ev = ev.Str("agentName", outcome.agentName)
 	}
 	if outcome.service != nil {
 		ev = ev.Str("serviceId", outcome.service.id).Str("serviceName", outcome.service.name)
@@ -598,22 +482,17 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 }
 
 type forwardOutcome struct {
-	service          *resolvedService
-	applied          []AppliedCredential
-	agentID          string
-	agentName        string
-	identityResolved bool
+	service *resolvedService
+	applied []AppliedCredential
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt string, scope agentScope) (*http.Response, forwardOutcome, error) {
-	services, err := ps.resolver.get(jwt, scope)
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port string) (*http.Response, forwardOutcome, error) {
+	services, err := ps.resolveServices()
 	if err != nil {
-		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve agent permissions: %w", err)
+		return nil, forwardOutcome{}, fmt.Errorf("failed to resolve this session's credentials: %w", err)
 	}
 
-	// Capture identity now; reading it after the round trip would race a cache eviction and drop the record.
-	agentID, agentName, resolved := ps.resolver.identity(jwt, scope)
-	outcome := forwardOutcome{agentID: agentID, agentName: agentName, identityResolved: resolved}
+	outcome := forwardOutcome{}
 
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
@@ -633,8 +512,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, jwt st
 	stripHopByHopHeaders(req.Header)
 
 	if svc != nil {
-		creds := ps.materializeCredentials(svc)
-		applied, err := applyCredentials(req, creds)
+		applied, err := applyCredentials(req, svc.credentials)
 		if err != nil {
 			return nil, outcome, fmt.Errorf("failed to apply credentials: %w", err)
 		}
@@ -656,24 +534,6 @@ func (ps *proxyServer) hostAllowlisted(hostname string) bool {
 		}
 	}
 	return false
-}
-
-func (ps *proxyServer) materializeCredentials(svc *resolvedService) []resolvedCredential {
-	creds := make([]resolvedCredential, 0, len(svc.credentials))
-	for _, cred := range svc.credentials {
-		if cred.dynamic == nil {
-			creds = append(creds, cred)
-			continue
-		}
-		value, ok := ps.leases.value(cred.dynamic.key, cred.dynamic.field)
-		if !ok {
-			log.Warn().Msgf("proxied service %q: no valid lease value for dynamic secret %q field %q; skipping credential", svc.name, cred.dynamic.key.secretName, cred.dynamic.field)
-			continue
-		}
-		cred.value = value
-		creds = append(creds, cred)
-	}
-	return creds
 }
 
 func hostHeaderForScheme(scheme, target string) string {
@@ -722,46 +582,27 @@ func stripHopByHopHeaders(h http.Header) {
 	}
 }
 
-func parseProxyAuth(header string) (agentScope, string, bool) {
+// parseProxySecret pulls the password half out of a Basic Proxy-Authorization header. The username is
+// ignored: the only thing being checked is that the caller knows this run's secret.
+func parseProxySecret(header string) (string, bool) {
 	const prefix = "Basic "
 	if !strings.HasPrefix(header, prefix) {
-		return agentScope{}, "", false
+		return "", false
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, prefix))
 	if err != nil {
-		return agentScope{}, "", false
+		return "", false
 	}
-
 	userinfo := string(decoded)
-	firstColon := strings.Index(userinfo, ":")
-	if firstColon == -1 {
-		return agentScope{}, "", false
+	colon := strings.Index(userinfo, ":")
+	if colon == -1 {
+		return "", false
 	}
-	projectID := userinfo[:firstColon]
-	password := userinfo[firstColon+1:]
-
-	lastColon := strings.LastIndex(password, ":")
-	if lastColon == -1 {
-		return agentScope{}, "", false
+	secret := userinfo[colon+1:]
+	if secret == "" {
+		return "", false
 	}
-	scopeStr := password[:lastColon]
-	jwt := password[lastColon+1:]
-
-	slash := strings.Index(scopeStr, "/")
-	var environment, secretPath string
-	if slash == -1 {
-		environment = scopeStr
-		secretPath = "/"
-	} else {
-		environment = scopeStr[:slash]
-		secretPath = scopeStr[slash:]
-	}
-
-	if projectID == "" || environment == "" || jwt == "" {
-		return agentScope{}, "", false
-	}
-
-	return agentScope{projectID: projectID, environment: environment, secretPath: secretPath}, jwt, true
+	return secret, true
 }
 
 func writeProxyAuthChallenge(w http.ResponseWriter) {

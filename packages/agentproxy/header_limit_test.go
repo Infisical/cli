@@ -12,9 +12,7 @@ import (
 // A client sending a header block larger than maxRequestHeaderBytes (before auth) must be rejected
 // with 431 rather than allowed to grow proxy memory unbounded.
 func TestOversizedRequestHeadersRejected(t *testing.T) {
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
-	client := newTestProxy(t, UnmatchedAllow, jwt, scope, nil)
+	client := newTestProxy(t, UnmatchedAllow, nil)
 
 	go func() {
 		huge := strings.Repeat("a", maxRequestHeaderBytes+4096)

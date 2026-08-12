@@ -35,7 +35,7 @@ type AppliedCredential struct {
 // secret name and output field. It never carries the value.
 func credLabel(cred resolvedCredential) AppliedCredential {
 	if cred.dynamic != nil {
-		return AppliedCredential{DynamicSecretName: cred.dynamic.key.secretName, DynamicSecretField: cred.dynamic.field}
+		return AppliedCredential{DynamicSecretName: cred.dynamic.secretName, DynamicSecretField: cred.dynamic.field}
 	}
 	return AppliedCredential{Key: cred.secretKey}
 }

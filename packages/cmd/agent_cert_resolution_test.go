@@ -389,4 +389,3 @@ func TestResolveCertificateNameReferences_MultipleCerts(t *testing.T) {
 	assert.Empty(t, certs[3].ApplicationID)
 	assert.Empty(t, certs[3].ProfileID)
 }
-

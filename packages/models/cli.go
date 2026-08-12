@@ -114,6 +114,9 @@ type WorkspaceConfigFile struct {
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 	DefaultSecretPath             string            `json:"defaultSecretPath,omitempty"`
 	Domain                        string            `json:"domain,omitempty"`
+	// Safe to commit: naming an agent gateway escalates nothing, because the backend authorizes the caller
+	// against that gateway's access list regardless of who names it.
+	DefaultAgentGateway string `json:"defaultAgentGateway,omitempty"`
 }
 
 type SymmetricEncryptionResult struct {

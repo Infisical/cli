@@ -80,8 +80,6 @@ func (s *stubRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 // Drives a full CONNECT → TLS-terminate → tunneled HTTP request through the new http.Server machinery
 // (hijack, one-shot listener, inner server) and asserts credentials are injected and keep-alive works.
 func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
-	jwt := "test.jwt.token"
-	scope := agentScope{projectID: "proj", environment: "prod", secretPath: "/"}
 	services := []*resolvedService{{
 		name:         "stripe",
 		hostPatterns: parseHostPatterns("example.com"),
@@ -93,12 +91,11 @@ func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
 
 	ca, interCert := newTestCA(t)
 	stub := &stubRoundTripper{respBody: "ok"}
-	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
-	cache.entries[cacheKey(jwt, scope)] = &agentEntry{jwt: jwt, scope: scope, services: services, lastSeen: time.Now()}
 	ps := &proxyServer{
-		opts:      Options{UnmatchedHost: UnmatchedAllow},
+		opts:      Options{UnmatchedHost: UnmatchedAllow, ProxySecret: testProxySecret},
 		ca:        ca,
-		resolver:  cache,
+		session:   testSession(),
+		bundles:   staticResolver{services_: services},
 		transport: stub,
 	}
 
@@ -117,7 +114,7 @@ func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
 
 	// 1. CONNECT and read the raw tunnel-established response (exact bytes, so we don't consume TLS data).
 	_, err := fmt.Fprintf(client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: %s\r\n\r\n",
-		proxyAuthHeader("proj", "prod", "/", jwt))
+		proxySecretHeader(testProxySecret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,11 +168,11 @@ func TestConnectTunnelInjectsCredentialsAndKeepsAlive(t *testing.T) {
 // hijack — exercising the pre-hijack error path through the ResponseWriter.
 func TestConnectRequiresProxyAuth(t *testing.T) {
 	ca, _ := newTestCA(t)
-	cache := newAgentCache(func() string { return "" }, newLeaseStore(func() string { return "" }))
 	ps := &proxyServer{
-		opts:      Options{UnmatchedHost: UnmatchedAllow},
+		opts:      Options{UnmatchedHost: UnmatchedAllow, ProxySecret: testProxySecret},
 		ca:        ca,
-		resolver:  cache,
+		session:   testSession(),
+		bundles:   staticResolver{},
 		transport: &stubRoundTripper{},
 	}
 

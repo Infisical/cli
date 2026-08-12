@@ -1,6 +1,7 @@
 package agentproxy
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -249,18 +250,21 @@ func TestBodyOversizedForwardedUnchanged(t *testing.T) {
 	}
 }
 
-func TestProxyAuthParsing(t *testing.T) {
-	// base64("proj-123:prod/myapp:jwt.abc.def")
-	header := "Basic cHJvai0xMjM6cHJvZC9teWFwcDpqd3QuYWJjLmRlZg=="
-	scope, jwt, ok := parseProxyAuth(header)
-	if !ok {
-		t.Fatal("expected parse to succeed")
+func TestProxySecretParsing(t *testing.T) {
+	secret, ok := parseProxySecret(proxySecretHeader("s3cret"))
+	if !ok || secret != "s3cret" {
+		t.Fatalf("parseProxySecret = (%q, %v), want (%q, true)", secret, ok, "s3cret")
 	}
-	if scope.projectID != "proj-123" || scope.environment != "prod" || scope.secretPath != "/myapp" {
-		t.Fatalf("unexpected scope: %+v", scope)
-	}
-	if jwt != "jwt.abc.def" {
-		t.Fatalf("unexpected jwt: %q", jwt)
+
+	for name, header := range map[string]string{
+		"not basic":      "Bearer abc",
+		"not base64":     "Basic $$$",
+		"no colon":       "Basic " + base64.StdEncoding.EncodeToString([]byte("nosecret")),
+		"empty password": "Basic " + base64.StdEncoding.EncodeToString([]byte("session:")),
+	} {
+		if _, ok := parseProxySecret(header); ok {
+			t.Fatalf("%s should not parse as a secret", name)
+		}
 	}
 }
 
