@@ -158,13 +158,14 @@ type resolvedUserPolicy struct {
 // evaluate applies the intersection: a request is allowed when it matches at least one rule on an agent
 // policy AND at least one rule on a user policy. Neither side is a subset of the other, so this is a
 // per-request check, not set arithmetic. The winning agent policy is the most specific match, which is
-// what decides whose credentials get injected.
+// what decides whose credentials get injected. The user side picks its winner the same way even though
+// only its existence gates the request, so the pair reported to the activity feed is comparable.
 func evaluate(
 	agentPolicies []*resolvedAgentPolicy,
 	userPolicies []*resolvedUserPolicy,
 	scheme, host, port, path, method string,
-) (matched *resolvedAgentPolicy, userAllowed bool) {
-	var bestDetail matchDetail
+) (matched *resolvedAgentPolicy, matchedUser *resolvedUserPolicy) {
+	var bestAgent, bestUser matchDetail
 
 	for _, policy := range agentPolicies {
 		for _, rule := range policy.rules {
@@ -173,27 +174,30 @@ func evaluate(
 				continue
 			}
 			switch {
-			case matched == nil, detail.betterThan(bestDetail):
-				matched, bestDetail = policy, detail
-			case detail.equalTo(bestDetail) && policy.name < matched.name:
-				matched, bestDetail = policy, detail
+			case matched == nil, detail.betterThan(bestAgent):
+				matched, bestAgent = policy, detail
+			case detail.equalTo(bestAgent) && policy.name < matched.name:
+				matched, bestAgent = policy, detail
 			}
 		}
 	}
 
 	for _, policy := range userPolicies {
 		for _, rule := range policy.rules {
-			if ok, _ := rule.pattern.match(scheme, host, port, path, method); ok {
-				userAllowed = true
-				break
+			ok, detail := rule.pattern.match(scheme, host, port, path, method)
+			if !ok {
+				continue
 			}
-		}
-		if userAllowed {
-			break
+			switch {
+			case matchedUser == nil, detail.betterThan(bestUser):
+				matchedUser, bestUser = policy, detail
+			case detail.equalTo(bestUser) && policy.name < matchedUser.name:
+				matchedUser, bestUser = policy, detail
+			}
 		}
 	}
 
-	return matched, userAllowed
+	return matched, matchedUser
 }
 
 // agentCoversHost reports whether any agent rule could match this host at all, ignoring method and path.

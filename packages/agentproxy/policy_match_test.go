@@ -87,16 +87,16 @@ func TestEvaluateUserNarrowsAgent(t *testing.T) {
 	agents := []*resolvedAgentPolicy{agentPolicy("slack", parsePolicyPattern("api.slack.com", nil))}
 	users := []*resolvedUserPolicy{userPolicy("read-only", parsePolicyPattern("api.slack.com", []string{"GET"}))}
 
-	matched, allowed := evaluate(agents, users, "https", "api.slack.com", "443", "/conversations.list", "GET")
-	if matched == nil || !allowed {
+	matched, matchedUser := evaluate(agents, users, "https", "api.slack.com", "443", "/conversations.list", "GET")
+	if matched == nil || matchedUser == nil {
 		t.Fatal("expected GET to be allowed by both sides")
 	}
 
-	matched, allowed = evaluate(agents, users, "https", "api.slack.com", "443", "/chat.postMessage", "POST")
+	matched, matchedUser = evaluate(agents, users, "https", "api.slack.com", "443", "/chat.postMessage", "POST")
 	if matched == nil {
 		t.Error("expected the agent side to still match a POST")
 	}
-	if allowed {
+	if matchedUser != nil {
 		t.Error("expected the user side to reject a POST")
 	}
 }
@@ -104,11 +104,11 @@ func TestEvaluateUserNarrowsAgent(t *testing.T) {
 func TestEvaluateWithNoUserPolicyDeniesEverything(t *testing.T) {
 	agents := []*resolvedAgentPolicy{agentPolicy("slack", parsePolicyPattern("api.slack.com", nil))}
 
-	matched, allowed := evaluate(agents, nil, "https", "api.slack.com", "443", "/x", "GET")
+	matched, matchedUser := evaluate(agents, nil, "https", "api.slack.com", "443", "/x", "GET")
 	if matched == nil {
 		t.Error("expected the agent side to match")
 	}
-	if allowed {
+	if matchedUser != nil {
 		t.Error("expected no user policy to mean nothing is allowed")
 	}
 }
@@ -117,11 +117,11 @@ func TestEvaluateAgentWithoutRuleForHostDenies(t *testing.T) {
 	agents := []*resolvedAgentPolicy{agentPolicy("slack", parsePolicyPattern("api.slack.com", nil))}
 	users := []*resolvedUserPolicy{userPolicy("wide", parsePolicyPattern("api.github.com", nil))}
 
-	matched, allowed := evaluate(agents, users, "https", "api.github.com", "443", "/x", "GET")
+	matched, matchedUser := evaluate(agents, users, "https", "api.github.com", "443", "/x", "GET")
 	if matched != nil {
 		t.Error("expected no agent policy to match a host it has no rule for")
 	}
-	if !allowed {
+	if matchedUser == nil {
 		t.Error("expected the user side to match its own host")
 	}
 }
@@ -132,12 +132,29 @@ func TestEvaluatePrefersMoreSpecificAgentPolicy(t *testing.T) {
 	exact := agentPolicy("exact", parsePolicyPattern("api.example.com", nil))
 	users := []*resolvedUserPolicy{userPolicy("all", parsePolicyPattern("*.example.com", nil))}
 
-	matched, allowed := evaluate([]*resolvedAgentPolicy{wildcard, exact}, users, "https", "api.example.com", "443", "/", "GET")
-	if !allowed || matched == nil {
+	matched, matchedUser := evaluate([]*resolvedAgentPolicy{wildcard, exact}, users, "https", "api.example.com", "443", "/", "GET")
+	if matchedUser == nil || matched == nil {
 		t.Fatal("expected a match")
 	}
 	if matched.name != "exact" {
 		t.Errorf("expected the exact-host policy to win, got %q", matched.name)
+	}
+}
+
+// The user policy reported to the activity feed is the most specific one, same as the agent side.
+func TestEvaluatePrefersMoreSpecificUserPolicy(t *testing.T) {
+	agents := []*resolvedAgentPolicy{agentPolicy("wide", parsePolicyPattern("*.example.com", nil))}
+	users := []*resolvedUserPolicy{
+		userPolicy("wildcard", parsePolicyPattern("*.example.com", nil)),
+		userPolicy("exact", parsePolicyPattern("api.example.com", nil)),
+	}
+
+	_, matchedUser := evaluate(agents, users, "https", "api.example.com", "443", "/", "GET")
+	if matchedUser == nil {
+		t.Fatal("expected a user policy to match")
+	}
+	if matchedUser.name != "exact" {
+		t.Errorf("expected the exact-host user policy to win, got %q", matchedUser.name)
 	}
 }
 

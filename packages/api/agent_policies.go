@@ -122,14 +122,15 @@ func CallResolveAgentSession(httpClient *resty.Client, sessionToken string) (Res
 }
 
 type AgentSessionActivityEvent struct {
-	Decision   string `json:"decision"`
-	Method     string `json:"method"`
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	Path       string `json:"path"`
-	StatusCode int    `json:"statusCode,omitempty"`
-	PolicyName string `json:"policyName,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Decision       string `json:"decision"`
+	Method         string `json:"method"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Path           string `json:"path"`
+	StatusCode     int    `json:"statusCode,omitempty"`
+	PolicyName     string `json:"policyName,omitempty"`
+	UserPolicyName string `json:"userPolicyName,omitempty"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 type recordAgentSessionActivityRequest struct {

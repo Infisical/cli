@@ -217,7 +217,7 @@ func (ps *policyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// opens the tunnel and is decided per request inside it, where the method and path are known.
 	allowlisted := hostAllowed(session.allowedHosts, hostname)
 	if !allowlisted && !agentCoversHost(session.agentPolicies, hostname, port) {
-		ps.record(session, "blocked", r.Method, hostname, port, "", 0, "", "no policy covers this host")
+		ps.record(session, "blocked", r.Method, hostname, port, "", 0, "", "", "no policy covers this host")
 		http.Error(w, "host is not allowed by policy", http.StatusForbidden)
 		return
 	}
@@ -325,20 +325,20 @@ func (ps *policyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, sche
 		return
 	}
 
-	matched, userAllowed := evaluate(session.agentPolicies, session.userPolicies, scheme, hostname, port, r.URL.Path, r.Method)
+	matched, matchedUser := evaluate(session.agentPolicies, session.userPolicies, scheme, hostname, port, r.URL.Path, r.Method)
 	allowlisted := hostAllowed(session.allowedHosts, hostname)
 
 	switch {
-	case matched != nil && userAllowed:
+	case matched != nil && matchedUser != nil:
 		// Brokered: both sides allow it, so the credential goes on.
 	case allowlisted:
 		// Passes through with no credential. Infrastructure hosts an agent needs to function live here.
 	default:
 		reason := "no agent policy allows this request"
-		if matched != nil && !userAllowed {
+		if matched != nil && matchedUser == nil {
 			reason = "no user policy allows this request"
 		}
-		ps.record(session, "blocked", r.Method, hostname, port, r.URL.Path, http.StatusForbidden, policyName(matched), reason)
+		ps.record(session, "blocked", r.Method, hostname, port, r.URL.Path, http.StatusForbidden, policyName(matched), userPolicyName(matchedUser), reason)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(policyDeniedBody))
@@ -356,9 +356,9 @@ func (ps *policyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, sche
 	stripHopByHopHeaders(r.Header)
 
 	decision := "passthrough"
-	if matched != nil && userAllowed {
+	if matched != nil && matchedUser != nil {
 		if _, applyErr := applyCredentials(r, matched.credentials); applyErr != nil {
-			ps.record(session, "error", r.Method, hostname, port, r.URL.Path, http.StatusBadGateway, matched.name, "failed to apply credentials")
+			ps.record(session, "error", r.Method, hostname, port, r.URL.Path, http.StatusBadGateway, matched.name, userPolicyName(matchedUser), "failed to apply credentials")
 			http.Error(w, "failed to apply credentials", http.StatusBadGateway)
 			return
 		}
@@ -367,7 +367,7 @@ func (ps *policyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, sche
 
 	resp, err := ps.transport.RoundTrip(r)
 	if err != nil {
-		ps.record(session, "error", r.Method, hostname, port, r.URL.Path, http.StatusBadGateway, policyName(matched), err.Error())
+		ps.record(session, "error", r.Method, hostname, port, r.URL.Path, http.StatusBadGateway, policyName(matched), userPolicyName(matchedUser), err.Error())
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
@@ -381,10 +381,17 @@ func (ps *policyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, sche
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(flushingWriter{w: w}, resp.Body)
 
-	ps.record(session, decision, r.Method, hostname, port, r.URL.Path, resp.StatusCode, policyName(matched), "")
+	ps.record(session, decision, r.Method, hostname, port, r.URL.Path, resp.StatusCode, policyName(matched), userPolicyName(matchedUser), "")
 }
 
 func policyName(policy *resolvedAgentPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	return policy.name
+}
+
+func userPolicyName(policy *resolvedUserPolicy) string {
 	if policy == nil {
 		return ""
 	}
@@ -395,7 +402,7 @@ func (ps *policyServer) record(
 	session *sessionEntry,
 	decision, method, host, port, path string,
 	status int,
-	policy, reason string,
+	policy, userPolicy, reason string,
 ) {
 	portNum, _ := strconv.Atoi(port)
 	if portNum == 0 {
@@ -418,17 +425,19 @@ func (ps *policyServer) record(
 		Str("path", path).
 		Int("status", status).
 		Str("policy", policy).
+		Str("userPolicy", userPolicy).
 		Str("reason", reason).
 		Msg("agent request")
 
 	ps.resolver.recordActivity(session.token, api.AgentSessionActivityEvent{
-		Decision:   decision,
-		Method:     method,
-		Host:       host,
-		Port:       portNum,
-		Path:       path,
-		StatusCode: status,
-		PolicyName: policy,
-		Reason:     reason,
+		Decision:       decision,
+		Method:         method,
+		Host:           host,
+		Port:           portNum,
+		Path:           path,
+		StatusCode:     status,
+		PolicyName:     policy,
+		UserPolicyName: userPolicy,
+		Reason:         reason,
 	})
 }
