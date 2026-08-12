@@ -149,7 +149,11 @@ func (ps *policyServer) heartbeatLoop(stop <-chan struct{}) {
 
 // sessionToken pulls the session token out of Proxy-Authorization. Both forms are accepted because an
 // agent's HTTP client decides which one it sends: Basic with the token as the username (what an
-// http://<token>@host:port proxy URL produces) and Bearer.
+// http://<token>:@host:port proxy URL produces) and Bearer.
+//
+// The proxy URL needs the trailing colon after the token. urllib3 parses http://<token>@host as having
+// no password and sends no Proxy-Authorization at all, so the request arrives here unauthenticated and
+// gets a 407; curl and Node send the header either way.
 func sessionToken(header string) (string, bool) {
 	if strings.HasPrefix(header, "Bearer ") {
 		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))

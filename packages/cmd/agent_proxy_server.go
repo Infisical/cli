@@ -26,7 +26,14 @@ var agentProxyServerCmd = &cobra.Command{
 
 An agent proxy is registered in Infisical under Networking. Point an agent's HTTP_PROXY at it with a
 session token as the proxy credential, and it applies the policies for that session: a request is allowed
-when both the agent's policies and the user's allow it, and only then is a credential attached.`,
+when both the agent's policies and the user's allow it, and only then is a credential attached.
+
+The proxy URL must carry the session token with a trailing colon:
+
+  HTTP_PROXY=http://<session-token>:@<proxy-host>:17323
+
+The colon matters. Without it the userinfo has no password, and some clients (urllib3, and so requests)
+then send no Proxy-Authorization header at all and get a 407.`,
 	Example: `# First run, with a one-time enrollment token from the Infisical UI
 infisical agent-proxy start --token=<enrollment-token> --port=17323
 
