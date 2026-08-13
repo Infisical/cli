@@ -181,7 +181,9 @@ func runLocalBroker(cmd *cobra.Command, args []string, session localBrokerSessio
 		ActorName:        session.ActorName,
 		ExpiresAt:        session.ExpiresAt,
 		UnmatchedHost:    unmatchedHost,
-		AllowedHosts:     allowHosts,
+		// The gateway's list plus this run's own additions: a local run may widen its own allowances, and
+		// cannot narrow what was configured centrally.
+		AllowedHosts: append(append([]string{}, session.AllowedHosts...), allowHosts...),
 	}
 
 	// Non-fatal by design: if the keychain install is declined, env-CA tools still work and only Go

@@ -66,6 +66,9 @@ var errHostBlocked = errors.New("host blocked by policy")
 const (
 	decisionBrokered    = "brokered"
 	decisionPassthrough = "passthrough"
+	// A host that no service matches but the agent gateway's allow list permits. Distinct from passthrough so
+	// a recording shows that somebody decided this host was fine, rather than that nothing was configured.
+	decisionAllowlisted = "allowlisted"
 	decisionBlocked     = "blocked"
 	decisionError       = "error"
 	decisionCanceled    = "canceled"
@@ -384,6 +387,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	case outcome.service != nil:
 		decision, status = decisionBrokered, resp.StatusCode
 		ps.recordUsage(outcome.service.id)
+	case outcome.allowlisted:
+		decision, status = decisionAllowlisted, resp.StatusCode
 	default:
 		decision, status = decisionPassthrough, resp.StatusCode
 	}
@@ -469,6 +474,8 @@ func levelFor(decision string) zerolog.Level {
 		return zerolog.ErrorLevel
 	case decisionPassthrough, decisionCanceled:
 		return zerolog.DebugLevel
+	case decisionAllowlisted:
+		return zerolog.InfoLevel
 	default:
 		return zerolog.InfoLevel
 	}
@@ -533,6 +540,8 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 type forwardOutcome struct {
 	service *resolvedService
 	applied []AppliedCredential
+	// Set when the request only got through because the host is on the agent gateway's allow list.
+	allowlisted bool
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port string) (*http.Response, forwardOutcome, error) {
@@ -545,8 +554,11 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port string)
 
 	svc := bestMatch(services, hostname, port, req.URL.Path)
 
-	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock && !ps.hostAllowlisted(hostname) {
-		return nil, outcome, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
+	if svc == nil && ps.opts.UnmatchedHost == UnmatchedBlock {
+		if !ps.hostAllowlisted(hostname) {
+			return nil, outcome, fmt.Errorf("host %q has no matching proxied service: %w", hostname, errHostBlocked)
+		}
+		outcome.allowlisted = true
 	}
 
 	outcome.service = svc

@@ -118,6 +118,7 @@ func (g *Gateway) serveAgentGateway(tlsConn *tls.Conn, reader *bufio.Reader, con
 		AgentGatewayName: config.AgentGatewayInfo.AgentGatewayName,
 		ActorType:        string(config.ActorType),
 		UnmatchedHost:    config.AgentGatewayInfo.UnmatchedHostPolicy,
+		AllowedHosts:     config.AgentGatewayInfo.AllowedHosts,
 		// A certificate's own expiry bounds the connection: a long-lived mux must not outlive the
 		// authorization that opened it.
 		ExpiresAt: tlsConn.ConnectionState().PeerCertificates[0].NotAfter,

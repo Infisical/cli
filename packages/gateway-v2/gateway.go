@@ -95,7 +95,8 @@ type AgentGatewayInfo struct {
 	AgentGatewayName string `json:"agentGatewayName"`
 	// Where a request whose host matches no connected service goes. Carried in the certificate with the
 	// session identity, so it is the server's policy and not something the client can negotiate.
-	UnmatchedHostPolicy string `json:"unmatchedHostPolicy,omitempty"`
+	UnmatchedHostPolicy string   `json:"unmatchedHostPolicy,omitempty"`
+	AllowedHosts        []string `json:"allowedHosts,omitempty"`
 }
 
 type PAMInfo struct {

@@ -546,6 +546,8 @@ type localBrokerSession struct {
 	Token            func() string
 	// The agent gateway's own policy for unmatched hosts. The flag can only tighten it, never loosen it.
 	UnmatchedHost string
+	// Hosts the agent gateway permits without a credential. A local run may add to these, never remove.
+	AllowedHosts []string
 }
 
 func runAgentGatewayRun(cmd *cobra.Command, args []string) {
@@ -587,6 +589,7 @@ func runAgentGatewayRun(cmd *cobra.Command, args []string) {
 		Placeholders:     placeholders,
 		Token:            src.token,
 		UnmatchedHost:    session.Session.UnmatchedHostPolicy,
+		AllowedHosts:     session.Session.AllowedHosts,
 	}, endSession)
 }
 

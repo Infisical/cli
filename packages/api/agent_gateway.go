@@ -73,6 +73,7 @@ type CreateAgentGatewaySessionResponse struct {
 		RenewAfterSeconds   int                     `json:"renewAfterSeconds"`
 		RefreshAfterSeconds int                     `json:"refreshAfterSeconds"`
 		UnmatchedHostPolicy string                  `json:"unmatchedHostPolicy"`
+		AllowedHosts        []string                `json:"allowedHosts"`
 	} `json:"session"`
 }
 
