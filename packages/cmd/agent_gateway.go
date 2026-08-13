@@ -597,6 +597,7 @@ func init() {
 		command.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 		command.Flags().StringArray("pass-env", nil, "pass one of your environment variables through to the agent (can be specified multiple times)")
 		command.Flags().StringArray("set-env", nil, "set an environment variable in the agent as KEY=VALUE (can be specified multiple times)")
+		command.Flags().Bool("no-trust-store", false, "do not add the brokering CA to the OS trust store; tools that ignore the CA environment variables (gh, most Go programs) will then reject brokered connections")
 	}
 
 	// Local-only: everything below is about the broker and the sandbox this process runs, neither of which
@@ -626,6 +627,8 @@ func runAgentBehindLocalProxy(
 	caCertificate string,
 	placeholders []agentproxy.Placeholder,
 ) error {
+	skipTrustStore, _ := cmd.Flags().GetBool("no-trust-store")
+
 	if len(args) == 0 {
 		return fmt.Errorf("nothing to run; put your agent's command after --, for example: -- claude")
 	}
@@ -637,6 +640,24 @@ func runAgentBehindLocalProxy(
 			return fmt.Errorf("failed to write the CA the agent must trust: %w", err)
 		}
 		caPath = written
+
+		// The trust environment variables below cover clients that read them (curl, Node, Python, Deno), but
+		// Go tools such as gh consult the OS trust store instead and ignore them entirely. Without this, `gh`
+		// fails with "certificate is not trusted" while curl through the same broker succeeds. Non-fatal: if
+		// the prompt is declined, everything except natively-trusting tools still works.
+		if !skipTrustStore {
+			switch installed, err := ensureCATrusted(caPath); {
+			case err != nil:
+				util.PrintWarning(fmt.Sprintf(
+					"Unable to add your organization's Infisical CA to the login keychain (%v). Tools that read the CA environment variables still work; Go tools such as gh will report a certificate error.",
+					err,
+				))
+			case installed:
+				util.PrintWarning(
+					"Added your organization's Infisical CA to your login keychain as a trusted anchor, so tools that use the OS trust store (gh, and most Go programs) accept brokered connections. This is one-time and persists. Pass --no-trust-store to skip it.",
+				)
+			}
+		}
 	}
 
 	// Remote mode has no sandbox, so the environment scrub is the only thing keeping the caller's own

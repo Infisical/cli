@@ -322,3 +322,49 @@ func CallGetAgentGatewayPlaceholders(httpClient *resty.Client, sessionId string)
 	}
 	return placeholders, nil
 }
+
+// AgentGatewaySessionRequest is one recorded request. Names only: no header values, no bodies, and a path as
+// the agent sent it, so a substituted path carries the placeholder rather than the credential.
+type AgentGatewaySessionRequest struct {
+	OccurredAt   time.Time                              `json:"occurredAt"`
+	Method       string                                 `json:"method"`
+	Host         string                                 `json:"host"`
+	Port         int                                    `json:"port,omitempty"`
+	Path         string                                 `json:"path,omitempty"`
+	Decision     string                                 `json:"decision"`
+	StatusCode   int                                    `json:"statusCode,omitempty"`
+	ServiceID    string                                 `json:"serviceId,omitempty"`
+	ServiceName  string                                 `json:"serviceName,omitempty"`
+	Credentials  []AgentGatewaySessionRequestCredential `json:"credentials,omitempty"`
+	ErrorMessage string                                 `json:"errorMessage,omitempty"`
+}
+
+type AgentGatewaySessionRequestCredential struct {
+	Key                string   `json:"key,omitempty"`
+	DynamicSecretName  string   `json:"dynamicSecretName,omitempty"`
+	DynamicSecretField string   `json:"dynamicSecretField,omitempty"`
+	Role               string   `json:"role,omitempty"`
+	Header             string   `json:"header,omitempty"`
+	Surfaces           []string `json:"surfaces,omitempty"`
+}
+
+// Best effort by design: a recording is worth having, but never worth failing a brokered request over.
+func CallRecordAgentGatewaySessionRequests(httpClient *resty.Client, sessionId string, requests []AgentGatewaySessionRequest) error {
+	if len(requests) == 0 {
+		return nil
+	}
+
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(map[string]any{"requests": requests}).
+		Post(fmt.Sprintf("%v/v1/agent-gateways/sessions/%s/requests", config.INFISICAL_URL, sessionId))
+
+	if err != nil {
+		return NewGenericRequestError("CallRecordAgentGatewaySessionRequests", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallRecordAgentGatewaySessionRequests", response, nil)
+	}
+	return nil
+}

@@ -109,6 +109,8 @@ type proxyServer struct {
 	// Behind a pointer so a Broker can take a cheap per-session view of this server without copying a lock:
 	// every session shares one usage tracker, which is what dedupes reports across them.
 	usageTracker *usageTracker
+	// The session recording. Shared for the same reason, and keyed by session inside.
+	recorder *recorder
 }
 
 // usageTracker holds the proxied-service ids brokered since the last flush, per session. Keyed by session
@@ -386,6 +388,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status = decisionPassthrough, resp.StatusCode
 	}
 	ps.emitActivity(method, reqPath, hostname, port, decision, status, outcome, err)
+	ps.recordRequest(method, reqPath, hostname, port, decision, status, outcome, err)
 
 	if err != nil {
 		if !canceled {
@@ -410,6 +413,52 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	w.WriteHeader(resp.StatusCode)
 	// Flush per chunk so streamed responses (e.g. SSE) reach the client instead of buffering.
 	_, _ = io.Copy(flushingWriter{w}, resp.Body)
+}
+
+// recordRequest is the recording's single entry point, taking the same arguments as the activity log so the
+// two can never describe a request differently.
+func (ps *proxyServer) recordRequest(
+	method, reqPath, hostname, port, decision string,
+	status int,
+	outcome forwardOutcome,
+	cause error,
+) {
+	if ps.recorder == nil || ps.session == nil {
+		return
+	}
+
+	portNum, _ := strconv.Atoi(port)
+
+	request := api.AgentGatewaySessionRequest{
+		OccurredAt: time.Now().UTC(),
+		Method:     method,
+		Host:       hostname,
+		Port:       portNum,
+		Path:       reqPath,
+		Decision:   decision,
+		StatusCode: status,
+	}
+	if outcome.service != nil {
+		request.ServiceID = outcome.service.id
+		request.ServiceName = outcome.service.name
+	}
+	for _, applied := range outcome.applied {
+		request.Credentials = append(request.Credentials, api.AgentGatewaySessionRequestCredential{
+			Key:                applied.Key,
+			DynamicSecretName:  applied.DynamicSecretName,
+			DynamicSecretField: applied.DynamicSecretField,
+			Role:               applied.Role,
+			Header:             applied.Header,
+			Surfaces:           applied.Surfaces,
+		})
+	}
+	if cause != nil {
+		request.ErrorMessage = cause.Error()
+	}
+
+	if ps.recorder.record(ps.session.ID, request) {
+		go ps.recorder.flush()
+	}
 }
 
 func levelFor(decision string) zerolog.Level {

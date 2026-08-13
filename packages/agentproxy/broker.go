@@ -79,6 +79,8 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 
 	bundles := newBundleResolver(opts.Token, opts.BundleTTL)
 
+	recording := newRecorder(opts.Token)
+
 	shared := &proxyServer{
 		opts: Options{
 			UnmatchedHost: unmatched,
@@ -89,6 +91,7 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 		transport:    newUpstreamTransport(),
 		usageTracker: newUsageTracker(),
 		bundles:      bundles,
+		recorder:     recording,
 	}
 
 	broker := &Broker{shared: shared, bundles: bundles, stop: make(chan struct{})}
@@ -168,13 +171,30 @@ func (b *Broker) RootPEM() []byte {
 
 func (b *Broker) Close() {
 	close(b.stop)
-	// Usage recorded since the last tick would otherwise be lost, and a local run is often shorter than one
-	// flush interval.
+	// Anything recorded since the last tick would otherwise be lost, and a local run is often shorter than
+	// one flush interval.
 	b.shared.usageTracker.flush(b.shared.opts.ProxyToken)
+	b.shared.recorder.flush()
 	b.bundles.close()
 }
 
 func (b *Broker) evictLoop() {
+	// The recording flushes far more often than the idle sweep: a session being watched live should show its
+	// requests within seconds, not within a minute.
+	records := time.NewTicker(recordFlushInterval)
+	defer records.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-b.stop:
+				return
+			case <-records.C:
+				b.shared.recorder.flush()
+			}
+		}
+	}()
+
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
