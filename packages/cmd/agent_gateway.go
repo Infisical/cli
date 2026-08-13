@@ -544,6 +544,8 @@ type localBrokerSession struct {
 	ExpiresAt        time.Time
 	Placeholders     []agentproxy.Placeholder
 	Token            func() string
+	// The agent gateway's own policy for unmatched hosts. The flag can only tighten it, never loosen it.
+	UnmatchedHost string
 }
 
 func runAgentGatewayRun(cmd *cobra.Command, args []string) {
@@ -584,6 +586,7 @@ func runAgentGatewayRun(cmd *cobra.Command, args []string) {
 		ExpiresAt:        session.Session.ExpiresAt,
 		Placeholders:     placeholders,
 		Token:            src.token,
+		UnmatchedHost:    session.Session.UnmatchedHostPolicy,
 	}, endSession)
 }
 

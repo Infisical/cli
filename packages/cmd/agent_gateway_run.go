@@ -46,6 +46,17 @@ func runLocalBroker(cmd *cobra.Command, args []string, session localBrokerSessio
 		util.HandleError(fmt.Errorf("--unmatched-host must be 'allow' or 'block', got %q", unmatchedHost))
 	}
 
+	// The agent gateway's policy is the floor: a run may be stricter than the server asked for, never looser,
+	// so a local flag cannot talk its way out of an allow list somebody configured centrally.
+	if session.UnmatchedHost == agentproxy.UnmatchedBlock {
+		if unmatchedHost != agentproxy.UnmatchedBlock {
+			util.PrintWarning(
+				"This Agent Gateway blocks hosts that no connected proxied service matches, so --unmatched-host=allow is ignored.",
+			)
+		}
+		unmatchedHost = agentproxy.UnmatchedBlock
+	}
+
 	sandboxEnabled := resolveSandboxEnabled(cmd)
 
 	// Per-run 0700 tempdir: only the public CA cert (and the unix socket on the Linux hard fence) hit disk.
