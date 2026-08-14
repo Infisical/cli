@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -71,12 +70,6 @@ type BaseProxyServer struct {
 	activeConnections      sync.WaitGroup
 	shutdownOnce           sync.Once
 	shutdownCh             chan struct{}
-
-	// Kept separate from shutdownOnce: sharing one Once meant whichever path fired first
-	// silently disabled the other.
-	shutdownSignalOnce sync.Once
-	sessionLostOnce    sync.Once
-	establishFailures  atomic.Int32
 
 	// provider, when set, resolves the session lazily instead of using the fields above.
 	provider SessionProvider
@@ -352,36 +345,6 @@ func (b *BaseProxyServer) fallbackToAPITerminationWith(session LiveSession) {
 	} else {
 		log.Debug().Msg("Session terminated successfully via API fallback")
 	}
-}
-
-// signalShutdown closes shutdownCh exactly once, whichever path gets there first.
-func (b *BaseProxyServer) signalShutdown() {
-	b.shutdownSignalOnce.Do(func() {
-		close(b.shutdownCh)
-	})
-}
-
-// HandleSessionLost stops the proxy when the whole session is gone rather than one connection.
-// It only raises the signal: each accept loop calls its own gracefulShutdown, which is what
-// notifies the platform. Cancelling the context here instead would race that branch and skip it.
-func (b *BaseProxyServer) HandleSessionLost(reason string) {
-	b.sessionLostOnce.Do(func() {
-		fmt.Printf("\n%s Shutting down proxy...\n", reason)
-		b.signalShutdown()
-	})
-}
-
-// A single failed dial is a blip; a run of them means the resource is unreachable.
-const establishFailureLimit = 3
-
-func (b *BaseProxyServer) NoteEstablishFailure(reason string) {
-	if b.establishFailures.Add(1) >= establishFailureLimit {
-		b.HandleSessionLost(reason)
-	}
-}
-
-func (b *BaseProxyServer) NoteEstablishSuccess() {
-	b.establishFailures.Store(0)
 }
 
 // NewDisconnectChannels creates the error channels a proxied connection uses to report which side

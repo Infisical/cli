@@ -44,7 +44,7 @@ func (p *SSHProxyServer) gracefulShutdown() {
 		p.NotifySessionTermination()
 
 		// Signal the accept loop to stop
-		p.signalShutdown()
+		close(p.shutdownCh)
 
 		// Close the server to stop accepting new connections
 		if p.server != nil {
@@ -74,7 +74,6 @@ func (p *SSHProxyServer) Run() {
 			return
 		case <-p.shutdownCh:
 			log.Debug().Msg("Shutdown signal received, stopping proxy server")
-			p.gracefulShutdown()
 			return
 		default:
 			// Check if session has expired
@@ -130,7 +129,6 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
-		p.NoteEstablishFailure("Cannot reach the Infisical relay.")
 		return
 	}
 	defer relayConn.Close()
@@ -139,12 +137,9 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway")
-		p.NoteEstablishFailure("Cannot reach the Infisical gateway.")
 		return
 	}
 	defer gatewayConn.Close()
-
-	p.NoteEstablishSuccess()
 
 	log.Debug().Msg("Established connection to SSH gateway")
 

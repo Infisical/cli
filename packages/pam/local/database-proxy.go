@@ -49,7 +49,7 @@ func (p *DatabaseProxyServer) gracefulShutdown() {
 
 		p.NotifySessionTermination()
 
-		p.signalShutdown()
+		close(p.shutdownCh)
 
 		if p.server != nil {
 			p.server.Close()
@@ -76,7 +76,6 @@ func (p *DatabaseProxyServer) Run() {
 			return
 		case <-p.shutdownCh:
 			log.Info().Msg("Shutdown signal received, stopping proxy server")
-			p.gracefulShutdown()
 			return
 		default:
 			if time.Now().After(p.sessionExpiry) {
@@ -129,7 +128,6 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
-		p.NoteEstablishFailure("Cannot reach the Infisical relay.")
 		return
 	}
 	defer relayConn.Close()
@@ -137,12 +135,9 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway")
-		p.NoteEstablishFailure("Cannot reach the Infisical gateway.")
 		return
 	}
 	defer gatewayConn.Close()
-
-	p.NoteEstablishSuccess()
 
 	log.Info().Msg("Established connection to database resource")
 
