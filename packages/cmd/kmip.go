@@ -140,10 +140,12 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 			if storedToken, _ := localkmip.LoadStoredAccessToken(serverName); storedToken != "" {
 				log.Info().Msg("Using stored KMIP server access token")
 				serverConfig.AccessToken = storedToken
-				// Only AWS enrollment persists a server ID, so its presence means this server can
-				// re-authenticate via STS when the stored token is rejected mid-run.
-				if storedServerID, _ := localkmip.LoadStoredServerID(serverName); storedServerID != "" {
-					serverConfig.RefreshAccessToken = newAwsRefreshAccessTokenFunc(serverName, storedServerID)
+				// Keyed off the recorded enroll method rather than the server ID: LoadStoredServerID
+				// falls back to INFISICAL_KMIP_SERVER_ID, so a token-enrolled server with that
+				// variable set would be wired for STS refresh it cannot perform, and a rejected
+				// token would surface as an AWS failure instead of "re-enroll this server".
+				if serverID, canRefresh := localkmip.ResolveAwsRefreshServerID(serverName); canRefresh {
+					serverConfig.RefreshAccessToken = newAwsRefreshAccessTokenFunc(serverName, serverID)
 				}
 			}
 		}
@@ -214,6 +216,9 @@ func enrollKmipServer(cmd *cobra.Command, enrollMethod, serverName string) (stri
 		if err := localkmip.SaveServerID(serverName, kmipServerID); err != nil {
 			util.HandleError(err, "failed to save KMIP server id to config")
 		}
+		if err := localkmip.SaveEnrollMethod(serverName, localkmip.EnrollMethodAws); err != nil {
+			util.HandleError(err, "failed to save KMIP enroll method to config")
+		}
 		if err := localkmip.SaveDomain(serverName, config.INFISICAL_URL); err != nil {
 			util.HandleError(err, "failed to save domain to config")
 		}
@@ -256,6 +261,9 @@ func enrollKmipServer(cmd *cobra.Command, enrollMethod, serverName string) (stri
 
 	if err := localkmip.SaveAccessToken(serverName, enrollResp.AccessToken); err != nil {
 		util.HandleError(err, "failed to save KMIP server access token")
+	}
+	if err := localkmip.SaveEnrollMethod(serverName, localkmip.EnrollMethodToken); err != nil {
+		util.HandleError(err, "failed to save KMIP enroll method to config")
 	}
 	if err := localkmip.SaveEnrollmentToken(serverName, enrollToken); err != nil {
 		util.HandleError(err, "failed to save enrollment token to config")
