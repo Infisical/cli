@@ -101,6 +101,7 @@ func (p *AzureProxyServer) Run() {
 		case <-p.ctx.Done():
 			return
 		case <-p.shutdownCh:
+			p.Shutdown()
 			return
 		default:
 		}
@@ -134,7 +135,7 @@ func (p *AzureProxyServer) Run() {
 func (p *AzureProxyServer) Shutdown() {
 	p.shutdownOnce.Do(func() {
 		p.NotifySessionTermination()
-		close(p.shutdownCh)
+		p.signalShutdown()
 		if p.server != nil {
 			p.server.Close()
 		}

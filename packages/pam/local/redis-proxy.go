@@ -43,7 +43,7 @@ func (p *RedisProxyServer) gracefulShutdown() {
 		p.NotifySessionTermination()
 
 		// Signal the accept loop to stop
-		close(p.shutdownCh)
+		p.signalShutdown()
 
 		// Close the server to stop accepting new connections
 		if p.server != nil {
@@ -73,6 +73,7 @@ func (p *RedisProxyServer) Run() {
 			return
 		case <-p.shutdownCh:
 			log.Info().Msg("Shutdown signal received, stopping proxy server")
+			p.gracefulShutdown()
 			return
 		default:
 			// Check if session has expired
@@ -127,6 +128,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
+		p.NoteEstablishFailure("Cannot reach the Infisical relay.")
 		return
 	}
 	defer relayConn.Close()
@@ -134,9 +136,12 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway")
+		p.NoteEstablishFailure("Cannot reach the Infisical gateway.")
 		return
 	}
 	defer gatewayConn.Close()
+
+	p.NoteEstablishSuccess()
 
 	log.Info().Msg("Established connection to Redis resource")
 
@@ -173,7 +178,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 		clientErrCh <- err
 	}()
 
-	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

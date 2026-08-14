@@ -22,7 +22,6 @@ type KubernetesProxyServer struct {
 	kubeConfigOriginalContext string
 }
 
-
 func (p *KubernetesProxyServer) SetupKubeconfig(clusterName string) error {
 	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
 	config, err := configLoader.Load()
@@ -101,7 +100,7 @@ func (p *KubernetesProxyServer) gracefulShutdown() {
 		p.NotifySessionTermination()
 
 		// Signal the accept loop to stop
-		close(p.shutdownCh)
+		p.signalShutdown()
 
 		// Close the server to stop accepting new connections
 		if p.server != nil {
@@ -131,6 +130,7 @@ func (p *KubernetesProxyServer) Run() {
 			return
 		case <-p.shutdownCh:
 			log.Info().Msg("Shutdown signal received, stopping proxy server")
+			p.gracefulShutdown()
 			return
 		default:
 			// Check if session has expired
@@ -185,6 +185,7 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 	relayConn, err := p.CreateRelayConnection()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay")
+		p.NoteEstablishFailure("Cannot reach the Infisical relay.")
 		return
 	}
 	defer relayConn.Close()
@@ -192,21 +193,19 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 	gatewayConn, err := p.CreateGatewayConnection(relayConn, ALPNInfisicalPAMProxy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway")
+		p.NoteEstablishFailure("Cannot reach the Infisical gateway.")
 		return
 	}
 	defer gatewayConn.Close()
+
+	p.NoteEstablishSuccess()
 
 	log.Info().Msg("Established connection to kubernetes resource")
 
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	// For Kubernetes, each kubectl command opens a separate connection.
-	// Unlike persistent protocols (SSH, databases), the gateway closing after
-	// handling a request is normal — not a session-level disconnect.
-	// So we just wait for either side to finish and return, without triggering
-	// HandleGatewayDisconnect which would shut down the entire proxy.
-	done := make(chan struct{}, 2)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
 	// Gateway → Client
 	go func() {
@@ -219,7 +218,7 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		done <- struct{}{}
+		gatewayErrCh <- err
 	}()
 
 	// Client → Gateway
@@ -233,15 +232,10 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		done <- struct{}{}
+		clientErrCh <- err
 	}()
 
-	// Wait for either side to finish — this is a per-connection close, not a session close
-	select {
-	case <-done:
-	case <-connCtx.Done():
-		log.Info().Msg("Connection cancelled by context")
-	}
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

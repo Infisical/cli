@@ -164,7 +164,7 @@ func (p *GCPProxyServer) gracefulShutdown() {
 		p.RevertGcloudProxy()
 		p.NotifySessionTermination()
 
-		close(p.shutdownCh)
+		p.signalShutdown()
 
 		if p.server != nil {
 			p.server.Close()
@@ -189,6 +189,7 @@ func (p *GCPProxyServer) Run() {
 			return
 		case <-p.shutdownCh:
 			log.Info().Msg("Shutdown signal received, stopping proxy server")
+			p.gracefulShutdown()
 			return
 		default:
 			if time.Now().After(p.sessionExpiry) {
