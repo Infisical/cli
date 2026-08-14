@@ -140,10 +140,6 @@ func startKmipServer(cmd *cobra.Command, args []string) {
 			if storedToken, _ := localkmip.LoadStoredAccessToken(serverName); storedToken != "" {
 				log.Info().Msg("Using stored KMIP server access token")
 				serverConfig.AccessToken = storedToken
-				// Keyed off the recorded enroll method rather than the server ID: LoadStoredServerID
-				// falls back to INFISICAL_KMIP_SERVER_ID, so a token-enrolled server with that
-				// variable set would be wired for STS refresh it cannot perform, and a rejected
-				// token would surface as an AWS failure instead of "re-enroll this server".
 				if serverID, canRefresh := localkmip.ResolveAwsRefreshServerID(serverName); canRefresh {
 					serverConfig.RefreshAccessToken = newAwsRefreshAccessTokenFunc(serverName, serverID)
 				}

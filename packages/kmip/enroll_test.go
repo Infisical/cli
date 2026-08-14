@@ -11,7 +11,6 @@ func cleanup(t *testing.T, name string) {
 }
 
 func TestAwsRefreshOnlyForAwsEnrolledServers(t *testing.T) {
-	// The review finding: token-enrolled, but the environment carries a server ID.
 	t.Run("token enrolled with env server id", func(t *testing.T) {
 		name := "probe-token"
 		defer cleanup(t, name)
@@ -39,7 +38,6 @@ func TestAwsRefreshOnlyForAwsEnrolledServers(t *testing.T) {
 		}
 	})
 
-	// Enrolled before the method was recorded: must keep working.
 	t.Run("legacy aws enrolled without a recorded method", func(t *testing.T) {
 		name := "probe-legacy"
 		defer cleanup(t, name)
@@ -52,7 +50,6 @@ func TestAwsRefreshOnlyForAwsEnrolledServers(t *testing.T) {
 		}
 	})
 
-	// A legacy token-enrolled server has no server ID in the conf file, only the env var.
 	t.Run("legacy token enrolled with env server id", func(t *testing.T) {
 		name := "probe-legacy-token"
 		defer cleanup(t, name)
@@ -86,7 +83,6 @@ func TestResolveAwsRefreshServerIDEdgeCases(t *testing.T) {
 		}
 	})
 
-	// Re-enrolled from aws to token: the old server ID is still in the conf file.
 	t.Run("stale server id from a previous aws enrollment", func(t *testing.T) {
 		name := "probe-reenrolled"
 		defer cleanup(t, name)

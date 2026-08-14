@@ -131,9 +131,7 @@ func SaveServerID(name, kmipServerID string) error {
 	return saveConfKey(name, INFISICAL_KMIP_SERVER_ID_KEY, kmipServerID)
 }
 
-// Deliberately conf-file only, unlike the loaders above. The env var is how an operator asks for a
-// method on this run; the conf file records how the server actually enrolled, which is what tells
-// us whether it can re-authenticate on its own.
+// Conf-file only: the env var says what this run asked for, not how the server enrolled.
 func LoadStoredEnrollMethod(name string) (string, error) {
 	return loadConfKey(name, INFISICAL_KMIP_ENROLL_METHOD_KEY)
 }
@@ -142,18 +140,13 @@ func SaveEnrollMethod(name, method string) error {
 	return saveConfKey(name, INFISICAL_KMIP_ENROLL_METHOD_KEY, method)
 }
 
-// Conf-file only, for deciding what a server is rather than what this run asked for. Servers
-// enrolled before the method was recorded have a server ID here and nothing else, which is what
-// identifies them as AWS-enrolled.
 func LoadPersistedServerID(name string) (string, error) {
 	return loadConfKey(name, INFISICAL_KMIP_SERVER_ID_KEY)
 }
 
-// Reports the server ID to re-authenticate with when a stored access token is rejected mid-run,
-// and whether STS refresh applies at all. Both reads ignore the environment: INFISICAL_KMIP_SERVER_ID
-// says what this run was handed, not how the server enrolled, so honouring it here would wire a
-// token-enrolled server for a refresh it cannot perform and turn a rejected token into an AWS error.
-// A server enrolled before the method was recorded is identified by a conf-file server ID alone.
+// Ignores the environment throughout: honouring INFISICAL_KMIP_SERVER_ID here would wire a
+// token-enrolled server for an STS refresh it cannot perform. A missing method means the server
+// enrolled before it was recorded, where a conf-file server ID identifies AWS enrollment.
 func ResolveAwsRefreshServerID(name string) (string, bool) {
 	method, _ := LoadStoredEnrollMethod(name)
 	serverID, _ := LoadPersistedServerID(name)
