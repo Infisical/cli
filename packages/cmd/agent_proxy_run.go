@@ -137,7 +137,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	}
 
 	// The agent's own state dirs, so interactive sessions can save. Its data, not the developer's.
-	writePaths := absolutePaths(append(defaultAgentStateWritePaths(home), extraWrite...))
+	writePaths := absolutePaths(append(sandbox.AgentStateWritePaths(home), extraWrite...))
 
 	// --allow-read carves a read hole in the credential deny set, so name exactly what was re-opened.
 	readExceptions := absolutePaths(extraRead)
@@ -149,7 +149,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		Enabled:    sandboxEnabled,
 		ReadPaths:  readExceptions,
 		WritePaths: writePaths,
-		DenyPaths:  sandbox.DefaultDenyPaths(home, hostRuntimeDir()),
+		DenyPaths:  sandbox.DefaultDenyPaths(home, sandbox.HostRuntimeDir()),
 		Cwd:        cwd,
 		TempDir:    tempDir,
 		// Linux downgrades to SharedNet via Preflight below; macOS always fences to loopback via SBPL.
@@ -409,39 +409,6 @@ func fetchLocalProxiedServiceConfig(httpClient *resty.Client, projectID, environ
 		}
 	}
 	return placeholders
-}
-
-// defaultAgentStateWritePaths returns the supported agents' state paths under home that exist (only
-// existing ones: bwrap --bind fails on a missing source).
-func defaultAgentStateWritePaths(home string) []string {
-	if home == "" {
-		return nil
-	}
-	candidates := []string{
-		filepath.Join(home, ".claude"),      // Claude Code state dir (sessions, history, cache)
-		filepath.Join(home, ".claude.json"), // Claude Code top-level config
-		filepath.Join(home, ".codex"),       // Codex state dir
-	}
-	var out []string
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// hostRuntimeDir is the per-user runtime directory holding host IPC sockets (the session bus and
-// friends). Linux only: XDG_RUNTIME_DIR is scrubbed from the child, but the directory itself is still
-// on disk, and unix sockets ignore the network namespace, so it is masked too.
-func hostRuntimeDir() string {
-	if runtime.GOOS != "linux" {
-		return ""
-	}
-	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
-		return d
-	}
-	return fmt.Sprintf("/run/user/%d", os.Getuid())
 }
 
 // absolutePaths resolves against the cwd and drops empties. SBPL `subpath` and bwrap `--ro-bind` both

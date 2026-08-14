@@ -6,13 +6,8 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/session"
-	"github.com/Infisical/infisical-merge/packages/util"
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -20,110 +15,6 @@ type RedisProxyServer struct {
 	BaseProxyServer // Embed common functionality
 	server          net.Listener
 	port            int
-}
-
-func StartRedisLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string, port int) {
-	log.Info().Msgf("Starting Redis proxy for account: %s", accessParams.GetDisplayName())
-	log.Info().Msgf("Session duration: %s", durationStr)
-
-	httpClient := resty.New()
-	httpClient.SetAuthToken(accessToken)
-	httpClient.SetHeader("User-Agent", "infisical-cli")
-
-	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
-
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest, true)
-	if err != nil {
-		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
-			return
-		}
-		util.HandleError(err, "Failed to access PAM account")
-		return
-	}
-
-	// Verify this is a Redis resource
-	if pamResponse.ResourceType != session.ResourceTypeRedis {
-		util.HandleError(fmt.Errorf("account is not a Redis resource, got: %s", pamResponse.ResourceType), "Invalid resource type")
-		return
-	}
-
-	log.Info().Msgf("Redis session created with ID: %s", pamResponse.SessionId)
-
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		util.HandleError(err, "Failed to parse duration")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	proxy := &RedisProxyServer{
-		BaseProxyServer: BaseProxyServer{
-			httpClient:             httpClient,
-			relayHost:              pamResponse.RelayHost,
-			relayClientCert:        pamResponse.RelayClientCertificate,
-			relayClientKey:         pamResponse.RelayClientPrivateKey,
-			relayServerCertChain:   pamResponse.RelayServerCertificateChain,
-			gatewayClientCert:      pamResponse.GatewayClientCertificate,
-			gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
-			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
-			sessionExpiry:          time.Now().Add(duration),
-			sessionId:              pamResponse.SessionId,
-			resourceType:           pamResponse.ResourceType,
-			ctx:                    ctx,
-			cancel:                 cancel,
-			shutdownCh:             make(chan struct{}),
-		},
-	}
-
-	if err := proxy.ValidateResourceTypeSupported(); err != nil {
-		util.HandleError(err, "Gateway version outdated")
-		return
-	}
-
-	err = proxy.Start(port)
-	if err != nil {
-		util.HandleError(err, "Failed to start proxy server")
-		return
-	}
-
-	if port == 0 {
-		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d (auto-assigned)\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
-	} else {
-		util.PrintfStderr("Redis proxy started for account %s with duration %s on port %d\n", accessParams.GetDisplayName(), duration.String(), proxy.port)
-	}
-
-	username, ok := pamResponse.Metadata["username"]
-	if !ok {
-		username = "" // Redis may not always have username
-	}
-
-	log.Info().Msgf("Redis proxy server listening on port %d", proxy.port)
-	util.PrintfStderr("\n")
-	util.PrintfStderr("**********************************************************************\n")
-	util.PrintfStderr("                  Redis Proxy Session Started!                  \n")
-	util.PrintfStderr("----------------------------------------------------------------------\n")
-	util.PrintfStderr("Resource: %s, Account: %s\n", accessParams.ResourceName, accessParams.AccountName)
-	util.PrintfStderr("\n")
-	util.PrintfStderr("You can now connect to your Redis instance using:\n")
-	if username != "" {
-		util.PrintfStderr("redis://%s@127.0.0.1:%d", username, proxy.port)
-	} else {
-		util.PrintfStderr("redis://127.0.0.1:%d", proxy.port)
-	}
-	util.PrintfStderr("\n**********************************************************************\n")
-	util.PrintfStderr("\n")
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
-		proxy.gracefulShutdown()
-	}()
-
-	proxy.Run()
 }
 
 func (p *RedisProxyServer) Start(port int) error {
@@ -166,7 +57,9 @@ func (p *RedisProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("Redis proxy shutdown complete")
-		os.Exit(0)
+		if p.exitAfterShutdown() {
+			os.Exit(0)
+		}
 	})
 }
 
@@ -252,7 +145,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 
 	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
-	// Gateway → Client: if this side closes first, the gateway dropped the connection
+	// Gateway → Client
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(clientConn, gatewayConn)
@@ -266,7 +159,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 		gatewayErrCh <- err
 	}()
 
-	// Client → Gateway: if this side closes first, the client disconnected normally
+	// Client → Gateway
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(gatewayConn, clientConn)

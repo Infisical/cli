@@ -62,7 +62,9 @@ func (p *RDPProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("RDP proxy shutdown complete")
-		os.Exit(0)
+		if p.exitAfterShutdown() {
+			os.Exit(0)
+		}
 	})
 }
 

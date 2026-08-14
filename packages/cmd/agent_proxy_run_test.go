@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/spf13/cobra"
 )
 
@@ -122,7 +123,7 @@ func TestDefaultAgentStateWritePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := defaultAgentStateWritePaths(home)
+	got := sandbox.AgentStateWritePaths(home)
 	has := func(p string) bool {
 		for _, g := range got {
 			if g == filepath.Join(home, p) {
@@ -137,7 +138,7 @@ func TestDefaultAgentStateWritePaths(t *testing.T) {
 	if has(".codex") {
 		t.Errorf("non-existent ~/.codex must NOT be included (bwrap --bind would fail), got %v", got)
 	}
-	if defaultAgentStateWritePaths("") != nil {
+	if sandbox.AgentStateWritePaths("") != nil {
 		t.Error("empty home must return nil")
 	}
 }

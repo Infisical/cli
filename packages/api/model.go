@@ -929,6 +929,27 @@ type PAMCreateAccessRequestResponse struct {
 	} `json:"request"`
 }
 
+// PAMAccessibleAccount is one entry from the accessible-accounts listing. It carries everything
+// needed to decide whether a session could be launched, without creating one.
+type PAMAccessibleAccount struct {
+	Id               string  `json:"id"`
+	Name             string  `json:"name"`
+	Description      string  `json:"description"`
+	FolderName       string  `json:"folderName"`
+	AccountType      string  `json:"accountType"`
+	CanLaunch        bool    `json:"canLaunch"`
+	RequiresApproval bool    `json:"requiresApproval"`
+	RequireReason    bool    `json:"requireReason"`
+	RequireMfa       bool    `json:"requireMfa"`
+	AccessStatus     string  `json:"accessStatus"` // none | pending | granted
+	DisabledReason   *string `json:"disabledReason"`
+}
+
+type PAMAccessibleAccountsResponse struct {
+	Accounts   []PAMAccessibleAccount `json:"accounts"`
+	TotalCount int                    `json:"totalCount"`
+}
+
 type PAMPolicyRuleConfig struct {
 	Patterns []string `json:"patterns"`
 }
