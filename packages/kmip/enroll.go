@@ -131,6 +131,31 @@ func SaveServerID(name, kmipServerID string) error {
 	return saveConfKey(name, INFISICAL_KMIP_SERVER_ID_KEY, kmipServerID)
 }
 
+// Conf-file only: the env var says what this run asked for, not how the server enrolled.
+func LoadStoredEnrollMethod(name string) (string, error) {
+	return loadConfKey(name, INFISICAL_KMIP_ENROLL_METHOD_KEY)
+}
+
+func SaveEnrollMethod(name, method string) error {
+	return saveConfKey(name, INFISICAL_KMIP_ENROLL_METHOD_KEY, method)
+}
+
+func LoadPersistedServerID(name string) (string, error) {
+	return loadConfKey(name, INFISICAL_KMIP_SERVER_ID_KEY)
+}
+
+// Ignores the environment throughout: honouring INFISICAL_KMIP_SERVER_ID here would wire a
+// token-enrolled server for an STS refresh it cannot perform. A missing method means the server
+// enrolled before it was recorded, where a conf-file server ID identifies AWS enrollment.
+func ResolveAwsRefreshServerID(name string) (string, bool) {
+	method, _ := LoadStoredEnrollMethod(name)
+	serverID, _ := LoadPersistedServerID(name)
+	if serverID == "" {
+		return "", false
+	}
+	return serverID, method == EnrollMethodAws || method == ""
+}
+
 func GetConfPathDisplay(name string) string {
 	path, err := kmipConfPath(name)
 	if err != nil {
