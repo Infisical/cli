@@ -28,8 +28,6 @@ import (
 	"github.com/smallnest/resp3"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
-
-	"github.com/Infisical/infisical-merge/packages/pam"
 )
 
 const (
@@ -67,12 +65,9 @@ type testConnectionEnvelope struct {
 }
 
 type sqlTestParams struct {
-	Dialect               string `json:"dialect"`    // "postgres" | "mysql" | "mssql"
-	AuthMethod            string `json:"authMethod"` // empty, or unrecognised, means the password below
+	Dialect               string `json:"dialect"` // "postgres" | "mysql" | "mssql"
 	Username              string `json:"username"`
 	Password              string `json:"password"`
-	AwsRegion             string `json:"awsRegion"`
-	RoleArn               string `json:"roleArn"`
 	Database              string `json:"database"`
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
@@ -210,21 +205,6 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 
 // doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
 func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlTestParams) error {
-	if params.AuthMethod == pam.AwsIamAuthMethod {
-		token, err := pam.BuildRdsAuthToken(ctx, pam.RdsAuthTokenParams{
-			Host:        host,
-			Port:        port,
-			Region:      params.AwsRegion,
-			DBUser:      params.Username,
-			RoleArn:     params.RoleArn,
-			SessionName: "infisical-pam-connection-test",
-		})
-		if err != nil {
-			return err
-		}
-		params.Password = token
-	}
-
 	db, err := openSQLTestDB(host, port, params)
 	if err != nil {
 		return err

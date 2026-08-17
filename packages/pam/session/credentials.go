@@ -21,8 +21,6 @@ type PAMCredentials struct {
 	AuthMethod            string
 	Username              string
 	Password              string
-	AwsRegion             string
-	RoleArn               string
 	Database              string
 	ConnectionString      string // MongoDB: full URI (mongodb[+srv]://...)
 	PrivateKey            string
@@ -182,8 +180,6 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		AuthMethod:            response.Credentials.AuthMethod,
 		Username:              response.Credentials.Username,
 		Password:              response.Credentials.Password,
-		AwsRegion:             response.Credentials.AwsRegion,
-		RoleArn:               response.Credentials.RoleArn,
 		Database:              response.Credentials.Database,
 		ConnectionString:      response.Credentials.ConnectionString,
 		PrivateKey:            response.Credentials.PrivateKey,
