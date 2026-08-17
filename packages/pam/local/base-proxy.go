@@ -347,46 +347,21 @@ func (b *BaseProxyServer) fallbackToAPITerminationWith(session LiveSession) {
 	}
 }
 
-// HandleGatewayDisconnect should be called when a gateway connection drops unexpectedly
-// (i.e., not initiated by the user via Ctrl+C). This happens when:
-//   - An administrator terminates the session from the Infisical UI
-//   - The session expires on the gateway side
-//   - The gateway or relay goes down
-//
-// It prints a message and triggers proxy shutdown so the CLI process exits
-// cleanly instead of hanging with a dead backend connection.
-func (b *BaseProxyServer) HandleGatewayDisconnect() {
-	b.shutdownOnce.Do(func() {
-		fmt.Println("\nConnection to session lost. Shutting down proxy...")
-		close(b.shutdownCh)
-		// Guarded rather than assumed. This is exported and BaseProxyServer is built in several
-		// places, so a constructor that forgets cancel should lose its shutdown signal, not panic on
-		// a gateway drop, which is the one moment this runs.
-		if b.cancel != nil {
-			b.cancel()
-		}
-	})
-}
-
-// NewDisconnectChannels creates the error channels used to distinguish gateway
-// disconnects from normal client disconnects.
+// NewDisconnectChannels creates the error channels a proxied connection uses to report which side
+// finished first.
 func (b *BaseProxyServer) NewDisconnectChannels() (gatewayErrCh, clientErrCh chan error) {
 	return make(chan error, 1), make(chan error, 1)
 }
 
-// WaitForDisconnect blocks until either the gateway or client side of a proxied
-// connection closes. If the gateway disconnects, the proxy shuts down.
-func (b *BaseProxyServer) WaitForDisconnect(gatewayErrCh, clientErrCh <-chan error, connCtx context.Context) {
+// WaitForConnectionClose blocks until either side of one proxied connection finishes, and ends
+// only that connection. A gateway-side close is not a session-level event: the gateway closes a
+// stream whenever the resource does, which is routine for pooled clients and for exchanges the
+// server answers by closing, such as a Postgres CancelRequest.
+func (b *BaseProxyServer) WaitForConnectionClose(gatewayErrCh, clientErrCh <-chan error, connCtx context.Context) {
 	select {
 	case <-gatewayErrCh:
-		b.HandleGatewayDisconnect()
 	case <-clientErrCh:
 	case <-connCtx.Done():
-		select {
-		case <-gatewayErrCh:
-			b.HandleGatewayDisconnect()
-		default:
-		}
 	}
 }
 

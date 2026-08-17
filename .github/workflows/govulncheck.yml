@@ -29,17 +29,39 @@ jobs:
       # Fails on ANY vulnerable module version (deps + stdlib for the CI toolchain),
       # regardless of reachability — matches external (Trivy-style) scanners.
       #
-      # ALLOWLIST holds advisories we knowingly accept: each must have no fixed
-      # version available AND not be present in our build graph (unreachable).
-      # Everything else — including any future fixable advisory — still fails.
+      # DEP_ALLOWLIST holds dependency advisories we knowingly accept: each must
+      # have no fixed version available AND not be present in our build graph
+      # (unreachable). Everything else still fails.
       #   - GO-2026-5932: golang.org/x/crypto/openpgp is unmaintained (Fixed in: N/A).
       #     We do not import openpgp anywhere; verify with:
       #       go list -deps ./... | grep openpgp   # (expect no output)
+      #
+      # STDLIB_ALLOWLIST holds standard-library advisories whose only remedy is a
+      # toolchain bump. Every workflow here — including the release build — pins
+      # 1.25.12, so moving off it is its own change and is deliberately deferred.
+      # Listing the IDs rather than skipping stdlib wholesale keeps the gate
+      # honest: a newly published stdlib advisory still fails until someone
+      # decides to accept or fix it.
       - name: Run govulncheck (module versions)
         env:
           CGO_ENABLED: "0"
         run: |
-          ALLOWLIST="GO-2026-5932"
+          DEP_ALLOWLIST="GO-2026-5932"
+
+          # Fixed in stdlib@go1.25.13, except GO-2026-5942 (stdlib@go1.26.6).
+          # Delete these once the pinned toolchain covers them.
+          STDLIB_ALLOWLIST="
+            GO-2026-5026
+            GO-2026-5942
+            GO-2026-5972
+            GO-2026-6088
+            GO-2026-6089
+            GO-2026-6090
+            GO-2026-6091
+            GO-2026-6218
+          "
+
+          ALLOWLIST="$DEP_ALLOWLIST $STDLIB_ALLOWLIST"
 
           # Human-readable report (informational; govulncheck exits 3 when it
           # finds anything, so don't let that fail the step on its own).
@@ -48,15 +70,21 @@ jobs:
           # Machine-readable gate: fail only on advisories not in the allowlist.
           govulncheck -scan module -format json > govulncheck.json || true
           findings="$(jq -r 'select(.finding != null) | .finding.osv' govulncheck.json | sort -u)"
+          allowed="$(tr ' ' '\n' <<< "$ALLOWLIST" | grep -v '^$' | sort -u)"
 
           unexpected=""
           for id in $findings; do
-            if ! grep -qxF "$id" <<< "$(tr ' ' '\n' <<< "$ALLOWLIST")"; then
+            if ! grep -qxF "$id" <<< "$allowed"; then
               unexpected="$unexpected $id"
             fi
           done
 
-          echo "=== Allowlisted (no fix available, not in build graph): $ALLOWLIST ==="
+          echo "=== Allowlisted: $(tr '\n' ' ' <<< "$allowed")==="
+
+          stale="$(comm -23 <(echo "$allowed") <(echo "$findings"))"
+          if [ -n "$stale" ]; then
+            echo "::warning::Allowlist entries no longer reported, drop them: $(tr '\n' ' ' <<< "$stale")"
+          fi
 
           if [ -n "${unexpected// /}" ]; then
             echo "::error::Non-allowlisted vulnerabilities found:$unexpected"

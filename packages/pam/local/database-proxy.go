@@ -172,7 +172,7 @@ func (p *DatabaseProxyServer) handleConnection(clientConn net.Conn) {
 		clientErrCh <- err
 	}()
 
-	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

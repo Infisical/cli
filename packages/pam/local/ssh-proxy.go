@@ -176,7 +176,7 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 		gatewayErrCh <- err
 	}()
 
-	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Debug().Msgf("SSH connection closed for client: %s", clientConn.RemoteAddr().String())
 }
