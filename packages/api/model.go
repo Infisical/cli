@@ -1009,6 +1009,8 @@ type PAMSessionCredentials struct {
 	Username              string            `json:"username"`
 	Password              string            `json:"password"`
 	AuthMethod            string            `json:"authMethod,omitempty"`
+	AwsRegion             string            `json:"awsRegion,omitempty"`
+	RoleArn               string            `json:"roleArn,omitempty"`
 	PrivateKey            string            `json:"privateKey,omitempty"`
 	Certificate           string            `json:"certificate,omitempty"`
 	Url                   string            `json:"url,omitempty"`
