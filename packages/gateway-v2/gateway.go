@@ -57,6 +57,10 @@ const (
 
 const heartbeatInterval = 3 * time.Minute
 
+// Load reports are separate from the heartbeat: a heartbeat makes the platform dial back through the
+// relay and write to its database, which is far too costly to run at the cadence pool selection needs.
+const loadReportInterval = 10 * time.Second
+
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
 const PAM_INFO_OID = "1.3.6.1.4.1.12345.100.3"
@@ -144,6 +148,11 @@ type Gateway struct {
 	mongoProxies   map[string]*mongoProxyEntry
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
+
+	// Every channel reaching this gateway is accepted in handleIncomingChannel, whoever opened it,
+	// so counting there is the only place that cannot be bypassed by a new caller. The platform uses
+	// it to pick the least loaded member of a gateway pool.
+	activeChannels atomic.Int64
 }
 
 // mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
@@ -384,6 +393,36 @@ func (g *Gateway) reapIdleSessions() {
 	}
 }
 
+// reportLoad publishes the gateway's active channel count so the platform can route new work to the
+// least loaded member of a pool. Failures are not surfaced: a missed report only costs accuracy, and
+// the platform falls back to its own view when a gateway stops reporting.
+func (g *Gateway) reportLoad(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(loadReportInterval)
+		defer ticker.Stop()
+
+		var last int64 = -1
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				count := g.activeChannels.Load()
+				// Still republish an unchanged count so the platform can tell a quiet gateway from
+				// one that has stopped reporting.
+				if err := api.CallGatewayLoadReportV2(g.httpClient, api.GatewayLoadReportRequest{ActiveChannels: count}); err != nil {
+					log.Debug().Msgf("Load report failed: %v", err)
+					continue
+				}
+				if count != last {
+					log.Debug().Msgf("Reported %d active channels", count)
+					last = count
+				}
+			}
+		}
+	}()
+}
+
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
 		capabilities := map[string]any{}
@@ -575,6 +614,7 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	defer g.heartbeatMu.Unlock()
 	if !g.heartbeatStarted {
 		g.registerHeartBeat(ctx, errCh)
+		g.reportLoad(ctx)
 		g.heartbeatStarted = true
 	}
 }
@@ -883,6 +923,9 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		return
 	}
 	defer channel.Close()
+
+	g.activeChannels.Add(1)
+	defer g.activeChannels.Add(-1)
 
 	go ssh.DiscardRequests(requests)
 
