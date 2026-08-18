@@ -49,6 +49,8 @@ func TestTerminalTranscript(t *testing.T) {
 		{"multibyte rune split", []string{"caf\xc3", "\xa9 \xe2\x9c\x93\n"}, []string{"café ✓"}},
 		{"cursor moves and edits", []string{"abcdef" + esc + "[3D" + esc + "[2P\n", "ab" + esc + "[4Ccd\n"}, []string{"abcf", "ab    cd"}},
 		{"unterminated osc recovers", []string{esc + "]0;no terminator", esc + "[0mrecovered\n"}, []string{"recovered"}},
+		{"overlong line wraps instead of dropping", []string{strings.Repeat("a", maxLineRunes) + "bb\n"},
+			[]string{strings.Repeat("a", maxLineRunes), "bb"}},
 	}
 
 	for _, tt := range tests {
@@ -86,13 +88,13 @@ func (l *recordingLogger) LogSessionEvent(event session.SessionEvent) error {
 	return nil
 }
 
-func typeLine(p *SSHProxy, channel session.SessionChannelType, text string) {
-	p.bufferInput([]byte(text), "sid", channel)
-	p.bufferInput([]byte{0x0D}, "sid", channel)
+func typeLine(p *SSHProxy, ch *channelState, channel session.SessionChannelType, text string) {
+	p.bufferInput([]byte(text), "sid", channel, ch)
+	p.bufferInput([]byte{0x0D}, "sid", channel, ch)
 }
 
-func emit(p *SSHProxy, text string) {
-	p.bufferOutput([]byte(text), "sid", session.SessionChannelShell)
+func emit(p *SSHProxy, ch *channelState, text string) {
+	p.bufferOutput([]byte(text), "sid", session.SessionChannelShell, ch)
 }
 
 func TestSessionRecording(t *testing.T) {
@@ -100,42 +102,42 @@ func TestSessionRecording(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		steps func(p *SSHProxy)
+		steps func(p *SSHProxy, ch *channelState)
 		want  []string
 	}{
 		{
 			name: "echo replaces the command event",
-			steps: func(p *SSHProxy) {
-				emit(p, prompt("~"))
-				typeLine(p, shell, "ls")
-				emit(p, "ls\r\nLICENSE go\r\n"+prompt("~"))
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "ls")
+				emit(p, ch, "ls\r\nLICENSE go\r\n"+prompt("~"))
 			},
 			want: []string{"output: user@host:~$ ls", "output: LICENSE go", "output: user@host:~$"},
 		},
 		{
 			name: "tab completion counts as echoed",
-			steps: func(p *SSHProxy) {
-				emit(p, prompt("~/cli"))
-				typeLine(p, shell, "cd ..\t")
-				emit(p, "cd ../\r\n")
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~/cli"))
+				typeLine(p, ch, shell, "cd ..\t")
+				emit(p, ch, "cd ../\r\n")
 			},
 			want: []string{"output: user@host:~/cli$ cd ../"},
 		},
 		{
 			name: "paste arriving with its newline counts as echoed",
-			steps: func(p *SSHProxy) {
-				emit(p, prompt("~"))
-				p.bufferInput([]byte("cd ../cli\r"), "sid", shell)
-				emit(p, "cd ../cli\r\n")
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte("cd ../cli\r"), "sid", shell, ch)
+				emit(p, ch, "cd ../cli\r\n")
 			},
 			want: []string{"output: user@host:~$ cd ../cli"},
 		},
 		{
 			name: "unechoed input is recorded without its content",
-			steps: func(p *SSHProxy) {
-				emit(p, "[sudo] password for deploy: ")
-				typeLine(p, shell, "s3cr3t!!")
-				emit(p, "\r\nroot\r\n")
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, "[sudo] password for deploy: ")
+				typeLine(p, ch, shell, "s3cr3t!!")
+				emit(p, ch, "\r\nroot\r\n")
 			},
 			want: []string{
 				"output: [sudo] password for deploy:",
@@ -145,10 +147,10 @@ func TestSessionRecording(t *testing.T) {
 		},
 		{
 			name: "multi-line paste counts as echoed",
-			steps: func(p *SSHProxy) {
-				emit(p, prompt("~"))
-				p.bufferInput([]byte("cd cli\nls\n"), "sid", shell)
-				emit(p, "cd cli\r\n"+prompt("~/cli")+"ls\r\nLICENSE go\r\n")
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte("cd cli\nls\n"), "sid", shell, ch)
+				emit(p, ch, "cd cli\r\n"+prompt("~/cli")+"ls\r\nLICENSE go\r\n")
 			},
 			want: []string{
 				"output: user@host:~$ cd cli",
@@ -158,7 +160,7 @@ func TestSessionRecording(t *testing.T) {
 		},
 		{
 			name:  "exec channel logs its command immediately",
-			steps: func(p *SSHProxy) { typeLine(p, session.SessionChannelExec, "uname -a") },
+			steps: func(p *SSHProxy, ch *channelState) { typeLine(p, ch, session.SessionChannelExec, "uname -a") },
 			want:  []string{"input: uname -a"},
 		},
 	}
@@ -167,10 +169,11 @@ func TestSessionRecording(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := &recordingLogger{}
 			p := NewSSHProxy(SSHProxyConfig{SessionLogger: logger})
+			ch := newChannelState()
 
-			tt.steps(p)
-			p.flushOutputBuffer("sid")
-			p.flushPendingEcho("sid")
+			tt.steps(p, ch)
+			p.flushOutputBuffer("sid", ch)
+			p.flushPendingEcho("sid", ch)
 
 			got := make([]string, len(logger.events))
 			for i, e := range logger.events {
@@ -186,5 +189,47 @@ func TestSessionRecording(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConcurrentChannelsKeepSeparateTranscripts(t *testing.T) {
+	p := NewSSHProxy(SSHProxyConfig{SessionLogger: &recordingLogger{}})
+
+	var wg sync.WaitGroup
+	for range 8 {
+		ch := newChannelState()
+		wg.Go(func() {
+			for range 200 {
+				typeLine(p, ch, session.SessionChannelShell, "ls -la")
+			}
+		})
+		wg.Go(func() {
+			for range 200 {
+				emit(p, ch, prompt("~")+"ls -la\r\ntotal 0\r\n")
+				p.flushOutputBuffer("sid", ch)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+// An exec channel must not be able to turn another channel's redaction off.
+func TestExecChannelDoesNotLeakShellSecret(t *testing.T) {
+	logger := &recordingLogger{}
+	p := NewSSHProxy(SSHProxyConfig{SessionLogger: logger})
+	shellCh, execCh := newChannelState(), newChannelState()
+
+	emit(p, shellCh, "Password: ")
+	p.bufferInput([]byte("topsecret"), "sid", session.SessionChannelShell, shellCh)
+	p.bufferInput([]byte("id\r"), "sid", session.SessionChannelExec, execCh)
+	p.bufferInput([]byte{0x0D}, "sid", session.SessionChannelShell, shellCh)
+	emit(p, shellCh, "\r\n")
+	p.flushOutputBuffer("sid", shellCh)
+	p.flushPendingEcho("sid", shellCh)
+
+	for _, e := range logger.events {
+		if strings.Contains(string(e.Data), "topsecret") {
+			t.Fatalf("event %q leaked the secret typed on the shell channel", e.Data)
+		}
 	}
 }

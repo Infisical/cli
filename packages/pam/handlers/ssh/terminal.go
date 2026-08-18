@@ -35,7 +35,7 @@ func (t *terminalTranscript) Feed(data []byte) []string {
 
 		switch t.parser.Advance(b) {
 		case parser.PrintAction:
-			t.writeRune(t.parser.Rune())
+			t.writeRune(t.parser.Rune(), &lines)
 		case parser.ExecuteAction:
 			t.execute(t.parser.Control(), &lines)
 		case parser.DispatchAction:
@@ -74,7 +74,7 @@ func (t *terminalTranscript) execute(control byte, lines *[]string) {
 		t.cursor = max(t.cursor-1, 0)
 	case '\t':
 		for stop := (t.cursor/tabWidth + 1) * tabWidth; t.cursor < stop; {
-			t.writeRune(' ')
+			t.writeRune(' ', lines)
 		}
 	}
 }
@@ -118,9 +118,10 @@ func (t *terminalTranscript) commit() string {
 	return line
 }
 
-func (t *terminalTranscript) writeRune(r rune) {
+// A stream with no newline wraps at the line limit rather than dropping the rest.
+func (t *terminalTranscript) writeRune(r rune, lines *[]string) {
 	if t.cursor >= maxLineRunes {
-		return
+		*lines = appendLine(*lines, t.commit())
 	}
 	t.padTo(t.cursor)
 	if t.cursor < len(t.line) {
