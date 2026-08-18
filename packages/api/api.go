@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -848,9 +849,10 @@ func CallGatewayHeartBeatV2(httpClient *resty.Client, request GatewayHeartbeatRe
 	return nil
 }
 
-func CallGatewayLoadReportV2(httpClient *resty.Client, request GatewayLoadReportRequest) error {
+func CallGatewayLoadReportV2(ctx context.Context, httpClient *resty.Client, request GatewayLoadReportRequest) error {
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
 		Post(fmt.Sprintf("%v/v2/gateways/load", config.INFISICAL_URL))
