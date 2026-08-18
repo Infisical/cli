@@ -150,10 +150,10 @@ func (t *terminalTranscript) deleteChars(n int) {
 }
 
 func (t *terminalTranscript) insertBlanks(n int) {
-	if n = min(n, maxLineRunes-t.cursor); n <= 0 {
+	t.padTo(t.cursor)
+	if n = min(n, maxLineRunes-len(t.line)); n <= 0 {
 		return
 	}
-	t.padTo(t.cursor)
 	t.line = append(t.line, make([]rune, n)...)
 	copy(t.line[t.cursor+n:], t.line[t.cursor:])
 	t.blank(t.cursor, t.cursor+n)

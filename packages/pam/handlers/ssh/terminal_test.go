@@ -67,8 +67,14 @@ func TestTranscriptBoundsPathologicalInput(t *testing.T) {
 	tr.Feed([]byte(strings.Repeat("x", 100_000)))
 	tr.Feed([]byte(esc + "[999999999999C" + esc + "[999999999999@"))
 
-	if n := tr.PendingLen(); n > maxLineRunes {
-		t.Errorf("pending line grew to %d runes, want at most %d", n, maxLineRunes)
+	// Insert-character returned to column zero must not extend the line each time.
+	tr.Feed([]byte(strings.Repeat("a", maxLineRunes)))
+	for range 8 {
+		tr.Feed([]byte("\r" + esc + "[8192@"))
+	}
+
+	if n := len(tr.line); n > maxLineRunes {
+		t.Errorf("line grew to %d runes, want at most %d", n, maxLineRunes)
 	}
 }
 
