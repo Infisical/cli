@@ -8,7 +8,9 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -34,27 +36,42 @@ type SSHProxyConfig struct {
 type SSHProxy struct {
 	config            SSHProxyConfig
 	mutex             sync.Mutex
-	sessionData       []byte                      // Store session data for logging
-	inputBuffer       []byte                      // Buffer for input data to batch keystrokes
-	inputChannelType  session.SessionChannelType  // Channel type for buffered input
-	escapeState       int                          // 0=normal, 1=got ESC, 2=in CSI sequence
+	sessionData       []byte                     // Store session data for logging
+	inputBuffer       []byte                     // Buffer for input data to batch keystrokes
+	inputChannelType  session.SessionChannelType // Channel type for buffered input
+	inputScanner      *inputSequenceFilter       // Drops escape sequences from the input stream
+	pendingEcho       echoedCommand              // Command awaiting confirmation that the shell echoed it
+	echoBaseline      int                        // Length of the line on screen when the current command started
+	outputPending     atomic.Int64               // Rendered length of the line still on screen
 	outputMutex       sync.Mutex
-	outputBuffer      []byte                      // Buffer for output data to enable masking across chunks
-	outputChannelType session.SessionChannelType  // Channel type for buffered output
+	outputParser      *terminalTranscript        // Renders the output stream into the lines a terminal would display
+	outputChannelType session.SessionChannelType // Channel type for buffered output
 }
 
 // channelState holds per-channel state for tracking session type
 type channelState struct {
 	mutex           sync.Mutex
 	channelType     session.SessionChannelType // Type of channel (terminal, exec, sftp)
-	isBinarySession bool                        // True if this channel is SFTP/SCP binary protocol
-	sftpParser      *SFTPParser                 // Parser for SFTP protocol to extract file operations
+	isBinarySession bool                       // True if this channel is SFTP/SCP binary protocol
+	sftpParser      *SFTPParser                // Parser for SFTP protocol to extract file operations
+}
+
+func textEvent(eventType session.SessionEventType, channelType session.SessionChannelType, text string) session.SessionEvent {
+	return session.SessionEvent{
+		Timestamp:   time.Now(),
+		EventType:   eventType,
+		ChannelType: channelType,
+		Data:        []byte(text),
+		Rendered:    true,
+	}
 }
 
 // NewSSHProxy creates a new SSH proxy instance
 func NewSSHProxy(config SSHProxyConfig) *SSHProxy {
 	return &SSHProxy{
-		config: config,
+		config:       config,
+		inputScanner: newInputSequenceFilter(),
+		outputParser: newTerminalTranscript(),
 	}
 }
 
@@ -360,12 +377,8 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 							Msg("Blocked SSH exec command")
 
 						// Log the blocked exec to session recording
-						blockedEvent := session.SessionEvent{
-							Timestamp:   time.Now(),
-							EventType:   session.SessionEventInput,
-							ChannelType: session.SessionChannelExec,
-							Data:        []byte(fmt.Sprintf("$ %s\n[BLOCKED] Command not permitted\n", command)),
-						}
+						blockedEvent := textEvent(session.SessionEventInput, session.SessionChannelExec,
+							fmt.Sprintf("$ %s\n[BLOCKED] Command not permitted", command))
 						if err := p.config.SessionLogger.LogSessionEvent(blockedEvent); err != nil {
 							log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log blocked exec command")
 						}
@@ -403,24 +416,19 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						// scp -f /path = sending file FROM server
 						if strings.Contains(command, " -t ") {
 							path := extractSCPPath(command)
-							logMessage = fmt.Sprintf("Uploaded file: %s\n", path)
+							logMessage = fmt.Sprintf("Uploaded file: %s", path)
 						} else if strings.Contains(command, " -f ") {
 							path := extractSCPPath(command)
-							logMessage = fmt.Sprintf("Downloaded file: %s\n", path)
+							logMessage = fmt.Sprintf("Downloaded file: %s", path)
 						} else {
-							logMessage = fmt.Sprintf("$ %s\n", command)
+							logMessage = fmt.Sprintf("$ %s", command)
 						}
 					} else {
 						channelType = session.SessionChannelExec
-						logMessage = fmt.Sprintf("$ %s\n", command)
+						logMessage = fmt.Sprintf("$ %s", command)
 					}
 
-					event := session.SessionEvent{
-						Timestamp:   time.Now(),
-						EventType:   session.SessionEventInput,
-						ChannelType: channelType,
-						Data:        []byte(logMessage),
-					}
+					event := textEvent(session.SessionEventInput, channelType, logMessage)
 					if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 						log.Error().Err(err).
 							Str("sessionID", sessionID).
@@ -456,12 +464,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						chState.sftpParser = NewSFTPParser()
 						chState.mutex.Unlock()
 
-						event := session.SessionEvent{
-							Timestamp:   time.Now(),
-							EventType:   session.SessionEventInput,
-							ChannelType: session.SessionChannelSFTP,
-							Data:        []byte("File transfer session started\n"),
-						}
+						event := textEvent(session.SessionEventInput, session.SessionChannelSFTP, "File transfer session started")
 						if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 							log.Error().Err(err).
 								Str("sessionID", sessionID).
@@ -514,10 +517,11 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 
 	// Flush any remaining buffers on exit
 	defer func() {
-		if logInput && len(p.inputBuffer) > 0 {
+		if logInput {
 			p.flushInputBuffer(sessionID)
+			p.flushPendingEcho(sessionID)
 		}
-		if !logInput && len(p.outputBuffer) > 0 {
+		if !logInput {
 			p.flushOutputBuffer(sessionID)
 		}
 	}()
@@ -541,13 +545,8 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				operations := sftpParser.Parse(buf[:n])
 				for _, op := range operations {
 					// Log each SFTP operation
-					logMsg := FormatOperation(op) + "\n"
-					event := session.SessionEvent{
-						Timestamp:   time.Now(),
-						EventType:   session.SessionEventInput,
-						ChannelType: session.SessionChannelSFTP,
-						Data:        []byte(logMsg),
-					}
+					logMsg := FormatOperation(op)
+					event := textEvent(session.SessionEventInput, session.SessionChannelSFTP, logMsg)
 					if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 						log.Error().Err(err).
 							Str("sessionID", sessionID).
@@ -567,7 +566,6 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				if logInput {
 					p.bufferInput(buf[:n], sessionID, channelType)
 				} else {
-					// Buffer output until newline so masking patterns can match across echo chunks
 					p.bufferOutput(buf[:n], sessionID, channelType)
 				}
 			}
@@ -601,28 +599,11 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 	p.inputChannelType = channelType
 
 	for _, b := range data {
-		// Skip ANSI escape sequences (e.g., cursor position reports like ESC[11;17R)
-		// States: 0=normal, 1=got ESC, 2=in CSI sequence
-		if p.escapeState == 1 {
-			if b == '[' {
-				p.escapeState = 2 // ESC[ = CSI sequence start
-			} else {
-				p.escapeState = 0 // Two-byte escape sequence (ESC + char), done
-			}
-			continue
-		}
-		if p.escapeState == 2 {
-			// In CSI sequence: parameter bytes (0x30-0x3F) and intermediate bytes (0x20-0x2F)
-			// continue until final byte (0x40-0x7E)
-			if b >= 0x40 && b <= 0x7E {
-				p.escapeState = 0 // Final byte, sequence complete
-			}
+		if p.inputScanner.consumed(b) {
 			continue
 		}
 
 		switch b {
-		case 0x1B: // ESC - start of escape sequence
-			p.escapeState = 1
 		case 0x7F, 0x08: // DEL (backspace on most terminals) or BS
 			if len(p.inputBuffer) > 0 {
 				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
@@ -641,11 +622,13 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 				p.inputBuffer = p.inputBuffer[:len(p.inputBuffer)-1]
 			}
 		case 0x0D, 0x0A: // CR or LF - flush the buffer
-			p.inputBuffer = append(p.inputBuffer, b)
 			p.flushInputBufferUnsafe(sessionID)
 		default:
 			// Only buffer printable characters and tab
 			if b >= 0x20 || b == 0x09 {
+				if len(p.inputBuffer) == 0 {
+					p.echoBaseline = int(p.outputPending.Load())
+				}
 				p.inputBuffer = append(p.inputBuffer, b)
 			}
 			// Safety: flush if buffer gets too large
@@ -669,73 +652,76 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string) {
 		return
 	}
 
-	event := session.SessionEvent{
-		Timestamp:   time.Now(),
-		EventType:   session.SessionEventInput,
-		ChannelType: p.inputChannelType,
-		Data:        make([]byte, len(p.inputBuffer)),
-	}
-	copy(event.Data, p.inputBuffer)
+	command := string(p.inputBuffer)
+	p.inputBuffer = p.inputBuffer[:0]
 
+	if p.inputChannelType != session.SessionChannelShell {
+		p.logInputCommand(sessionID, textEvent(session.SessionEventInput, p.inputChannelType, command))
+		return
+	}
+
+	p.pendingEcho.hold(command, p.inputChannelType, p.echoBaseline)
+}
+
+// flushPendingEcho records a held command that the shell never echoed back
+func (p *SSHProxy) flushPendingEcho(sessionID string) {
+	if event, ok := p.pendingEcho.take(); ok {
+		p.logInputCommand(sessionID, event)
+	}
+}
+
+func (p *SSHProxy) logInputCommand(sessionID string, event session.SessionEvent) {
 	if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 		log.Error().Err(err).
 			Str("sessionID", sessionID).
 			Str("eventType", string(session.SessionEventInput)).
 			Msg("Failed to log terminal event")
 	}
-
-	// Clear the buffer
-	p.inputBuffer = p.inputBuffer[:0]
 }
 
-// bufferOutput accumulates output data and flushes on newline or size limit.
-// This allows session log masking patterns to match across character-by-character echo,
-// because the regex sees a full line rather than individual bytes.
+// bufferOutput renders the output stream and logs one event per displayed line
 func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType session.SessionChannelType) {
 	p.outputMutex.Lock()
 	defer p.outputMutex.Unlock()
 
 	p.outputChannelType = channelType
 
-	for _, b := range data {
-		p.outputBuffer = append(p.outputBuffer, b)
+	p.logOutputLines(sessionID, p.outputParser.Feed(data))
 
-		// Flush on newline (LF) or if buffer gets too large
-		if b == 0x0A || len(p.outputBuffer) >= 4096 {
-			p.flushOutputBufferUnsafe(sessionID)
-		}
+	pending := p.outputParser.PendingLen()
+	if pending >= maxLineRunes/2 {
+		p.logOutputLines(sessionID, p.outputParser.Flush())
+		pending = 0
 	}
+	// Read without a lock by the input goroutine, which must not stall behind the
+	// session logger's fsync just to note where a command started.
+	p.outputPending.Store(int64(pending))
 }
 
-// flushOutputBuffer flushes the output buffer with locking
+// flushOutputBuffer commits a partially rendered line
 func (p *SSHProxy) flushOutputBuffer(sessionID string) {
 	p.outputMutex.Lock()
 	defer p.outputMutex.Unlock()
-	p.flushOutputBufferUnsafe(sessionID)
+	p.logOutputLines(sessionID, p.outputParser.Flush())
+	p.outputPending.Store(0)
 }
 
-// flushOutputBufferUnsafe flushes the output buffer without locking (caller must hold lock)
-func (p *SSHProxy) flushOutputBufferUnsafe(sessionID string) {
-	if len(p.outputBuffer) == 0 {
-		return
-	}
+// logOutputLines writes one output event per rendered line (caller must hold outputMutex)
+func (p *SSHProxy) logOutputLines(sessionID string, lines []string) {
+	for _, line := range lines {
+		event := textEvent(session.SessionEventOutput, p.outputChannelType, line)
 
-	event := session.SessionEvent{
-		Timestamp:   time.Now(),
-		EventType:   session.SessionEventOutput,
-		ChannelType: p.outputChannelType,
-		Data:        make([]byte, len(p.outputBuffer)),
-	}
-	copy(event.Data, p.outputBuffer)
+		if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
+			log.Error().Err(err).
+				Str("sessionID", sessionID).
+				Str("eventType", string(session.SessionEventOutput)).
+				Msg("Failed to log terminal event")
+		}
 
-	if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
-		log.Error().Err(err).
-			Str("sessionID", sessionID).
-			Str("eventType", string(session.SessionEventOutput)).
-			Msg("Failed to log terminal event")
+		if notice, ok := p.pendingEcho.resolve(utf8.RuneCountInString(line)); ok {
+			p.logInputCommand(sessionID, notice)
+		}
 	}
-
-	p.outputBuffer = p.outputBuffer[:0]
 }
 
 // matchBlockedCommand checks if a command matches any blocked pattern.
@@ -765,9 +751,8 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 		Msg("Command blocking active for client→server proxy")
 
 	defer func() {
-		if len(p.inputBuffer) > 0 {
-			p.flushInputBuffer(sessionID)
-		}
+		p.flushInputBuffer(sessionID)
+		p.flushPendingEcho(sessionID)
 	}()
 
 	for {
@@ -788,13 +773,8 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 				if sftpParser != nil {
 					operations := sftpParser.Parse(buf[:n])
 					for _, op := range operations {
-						logMsg := FormatOperation(op) + "\n"
-						event := session.SessionEvent{
-							Timestamp:   time.Now(),
-							EventType:   session.SessionEventInput,
-							ChannelType: session.SessionChannelSFTP,
-							Data:        []byte(logMsg),
-						}
+						logMsg := FormatOperation(op)
+						event := textEvent(session.SessionEventInput, session.SessionChannelSFTP, logMsg)
 						if logErr := p.config.SessionLogger.LogSessionEvent(event); logErr != nil {
 							log.Error().Err(logErr).
 								Str("sessionID", sessionID).
@@ -830,11 +810,15 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 						p.mutex.Unlock()
 
 						if p.matchBlockedCommand(command) {
-							// BLOCKED: flush the typed command to session log, then log the block
+							// Ctrl+U below wipes the echo, so record the command directly.
+							p.flushPendingEcho(sessionID)
 							p.mutex.Lock()
-							p.inputBuffer = append(p.inputBuffer, b)
-							p.flushInputBufferUnsafe(sessionID)
+							typed := string(p.inputBuffer)
+							p.inputBuffer = p.inputBuffer[:0]
 							p.mutex.Unlock()
+							if typed != "" {
+								p.logInputCommand(sessionID, textEvent(session.SessionEventInput, channelType, typed))
+							}
 
 							// Flush pending output buffer so the echoed command appears before the blocked message
 							p.flushOutputBuffer(sessionID)
@@ -844,12 +828,7 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 							clientWriter.Write([]byte(blockedMsg))
 
 							// Log the blocked message as output so it appears in session replay
-							blockedEvent := session.SessionEvent{
-								Timestamp:   time.Now(),
-								EventType:   session.SessionEventOutput,
-								ChannelType: channelType,
-								Data:        []byte(blockedMsg),
-							}
+							blockedEvent := textEvent(session.SessionEventOutput, channelType, "[BLOCKED] Command not permitted")
 							if logErr := p.config.SessionLogger.LogSessionEvent(blockedEvent); logErr != nil {
 								log.Error().Err(logErr).Str("sessionID", sessionID).Msg("Failed to log blocked command event")
 							}
