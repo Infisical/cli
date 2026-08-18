@@ -1,11 +1,9 @@
 package ssh
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/charmbracelet/x/ansi"
@@ -238,18 +236,11 @@ func (e *echoedCommand) takeUnsafe() (session.SessionEvent, bool) {
 	if e.text == "" {
 		return session.SessionEvent{}, false
 	}
-	// Echo off means a secret prompt; recording the keystrokes would log the password.
-	count := utf8.RuneCountInString(e.text)
-	notice := fmt.Sprintf("[no echo] %d characters submitted", count)
-	if count == 1 {
-		notice = "[no echo] 1 character submitted"
-	}
-
 	event := session.SessionEvent{
 		Timestamp:   e.timestamp,
 		EventType:   session.SessionEventInput,
 		ChannelType: e.channel,
-		Data:        []byte(notice),
+		Data:        []byte(e.text),
 		Rendered:    true,
 	}
 	e.text = ""

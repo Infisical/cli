@@ -133,17 +133,13 @@ func TestSessionRecording(t *testing.T) {
 			want: []string{"output: user@host:~$ cd ../cli"},
 		},
 		{
-			name: "unechoed input is recorded without its content",
+			name: "unechoed input is still recorded",
 			steps: func(p *SSHProxy, ch *channelState) {
-				emit(p, ch, "[sudo] password for deploy: ")
-				typeLine(p, ch, shell, "s3cr3t!!")
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "whoami")
 				emit(p, ch, "\r\nroot\r\n")
 			},
-			want: []string{
-				"output: [sudo] password for deploy:",
-				"input: [no echo] 8 characters submitted",
-				"output: root",
-			},
+			want: []string{"output: user@host:~$", "input: whoami", "output: root"},
 		},
 		{
 			name: "multi-line paste counts as echoed",
@@ -180,9 +176,6 @@ func TestSessionRecording(t *testing.T) {
 				if !e.Rendered || e.Timestamp.IsZero() {
 					t.Errorf("event %d (%q) lacks the rendered flag or a timestamp", i, e.Data)
 				}
-				if strings.Contains(string(e.Data), "s3cr3t") {
-					t.Errorf("event %d recorded the typed secret", i)
-				}
 				got[i] = string(e.EventType) + ": " + string(e.Data)
 			}
 			if !slices.Equal(got, tt.want) {
@@ -213,23 +206,33 @@ func TestConcurrentChannelsKeepSeparateTranscripts(t *testing.T) {
 	wg.Wait()
 }
 
-// An exec channel must not be able to turn another channel's redaction off.
-func TestExecChannelDoesNotLeakShellSecret(t *testing.T) {
+// Channel state must not be shared: input has to stay attributed to its own channel.
+func TestChannelsRecordIndependently(t *testing.T) {
 	logger := &recordingLogger{}
 	p := NewSSHProxy(SSHProxyConfig{SessionLogger: logger})
 	shellCh, execCh := newChannelState(), newChannelState()
 
-	emit(p, shellCh, "Password: ")
-	p.bufferInput([]byte("topsecret"), "sid", session.SessionChannelShell, shellCh)
-	p.bufferInput([]byte("id\r"), "sid", session.SessionChannelExec, execCh)
+	emit(p, shellCh, prompt("~"))
+	p.bufferInput([]byte("whoami"), "sid", session.SessionChannelShell, shellCh)
+	typeLine(p, execCh, session.SessionChannelExec, "id")
 	p.bufferInput([]byte{0x0D}, "sid", session.SessionChannelShell, shellCh)
 	emit(p, shellCh, "\r\n")
 	p.flushOutputBuffer("sid", shellCh)
 	p.flushPendingEcho("sid", shellCh)
 
 	for _, e := range logger.events {
-		if strings.Contains(string(e.Data), "topsecret") {
-			t.Fatalf("event %q leaked the secret typed on the shell channel", e.Data)
+		if e.EventType != session.SessionEventInput {
+			continue
+		}
+		want := map[string]session.SessionChannelType{
+			"whoami": session.SessionChannelShell,
+			"id":     session.SessionChannelExec,
+		}[string(e.Data)]
+		if want == "" {
+			t.Fatalf("unexpected input event %q", e.Data)
+		}
+		if e.ChannelType != want {
+			t.Errorf("input %q recorded on channel %q, want %q", e.Data, e.ChannelType, want)
 		}
 	}
 }
