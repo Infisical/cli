@@ -40,3 +40,6 @@ output-options:
     - createWindowsPamResource
     - createWindowsPamAccount
     - createAwsAppConnection
+    - createPamFolder
+    - createPamAccountTemplate
+    - createKubernetesPamAccount
