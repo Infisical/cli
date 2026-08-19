@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/infisical/cli/e2e-tests/packages/client"
@@ -25,8 +24,7 @@ import (
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
-// createPamFolder and createPamTemplate mirror the helpers in the pam package for use in the relay
-// test (folder + gateway-attached template are prerequisites for creating accounts in the new model).
+// Mirrors the pam package helpers; accounts need a folder and a gateway-attached template.
 func createPamFolder(t *testing.T, ctx context.Context, c client.ClientWithResponsesInterface, name string) openapitypes.UUID {
 	resp, err := c.CreatePamFolderWithResponse(ctx, client.CreatePamFolderJSONRequestBody{Name: name})
 	require.NoError(t, err)
@@ -139,12 +137,6 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 }
 
 func TestGateway_RelayGatewayConnectivity(t *testing.T) {
-	// The redis subtest passes; kubernetes does not. Account creation now runs a connection test
-	// that probes the target over HTTPS at /api, but the mock server serves plain HTTP at
-	// /version, so it fails and the versionEndpointHit assertion no longer matches what the
-	// backend does. Needs a TLS mock server and a reworked assertion.
-	t.Skip("PAM revamp: kubernetes subtest needs a TLS mock server and a reworked assertion")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -236,55 +228,29 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	t.Run("kubernetes", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		// Create a mock HTTP server running on a random port in a goroutine
-		// The HTTP server implements a mock /version endpoint that returns dummy data
-		// and marks a variable as true when the endpoint is hit
-		var versionEndpointHit bool
-		var versionEndpointHitMu sync.Mutex
+		// The gateway's connection test does GET https://<host>:<port>/api, so the mock serves TLS.
+		var apiEndpointHit atomic.Bool
 
-		// Create a listener on a random port (port 0 means OS assigns an available port)
-		listener, err := net.Listen("tcp", ":0")
-		require.NoError(t, err)
-
-		server := &http.Server{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/version" {
-					versionEndpointHitMu.Lock()
-					versionEndpointHit = true
-					versionEndpointHitMu.Unlock()
-
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusOK)
-					// Return dummy version data
-					versionData := map[string]interface{}{
-						"version": "1.0.0",
-						"build":   "test-build",
-					}
-					json.NewEncoder(w).Encode(versionData)
-				} else {
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}),
-		}
-
-		// Start the server in a goroutine
-		go func() {
-			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-				t.Errorf("Mock HTTP server error: %v", err)
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api" {
+				w.WriteHeader(http.StatusNotFound)
+				return
 			}
-		}()
 
-		// Clean up the server when the test completes
-		t.Cleanup(func() {
-			shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
-			defer shutdownCancel()
-			server.Shutdown(shutdownCtx)
-		})
+			apiEndpointHit.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"kind":     "APIVersions",
+				"versions": []string{"v1"},
+			})
+		}))
+		server.StartTLS()
+		t.Cleanup(server.Close)
 
-		// Addr() on a wildcard listener reports [::], which the backend's connection test can't
-		// dial. Use the loopback address with the bound port.
-		serverURL := fmt.Sprintf("http://127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
-		slog.Info("Mock HTTP server started", "url", serverURL)
+		// Self-signed cert, accepted via sslRejectUnauthorized=false below.
+		serverURL := server.URL
+		slog.Info("Mock Kubernetes API server started", "url", serverURL)
 
 		folderId := createPamFolder(t, ctx, c, "k8s-folder")
 		templateId := createPamTemplate(t, ctx, c, "k8s-template", client.CreatePamAccountTemplateJSONBodyTypeKubernetes, &gatewayId)
@@ -314,7 +280,7 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		k8sRespBody, err := io.ReadAll(k8sResp.Body)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, k8sResp.StatusCode, "create k8s account: %s", string(k8sRespBody))
-		require.True(t, versionEndpointHit)
+		require.True(t, apiEndpointHit.Load(), "gateway should have probed the mock Kubernetes API at /api")
 	})
 
 	t.Run("redis", func(t *testing.T) {
