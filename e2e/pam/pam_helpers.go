@@ -54,10 +54,14 @@ type PAMTestInfra struct {
 
 type SetupPAMOption func(svc *helpers.InfisicalService, extraEnv *[]string)
 
+const RecordingBucket = "e2e-recordings"
+
 func WithLocalStack() SetupPAMOption {
 	return func(svc *helpers.InfisicalService, extraEnv *[]string) {
-		infisicalpkg.WithLocalStackService()(svc.Stack)
-		*extraEnv = append(*extraEnv, "AWS_ENDPOINT_URL=http://localstack:4566")
+		infisicalpkg.WithLocalStackService(RecordingBucket)(svc.Stack)
+		*extraEnv = append(*extraEnv,
+			"AWS_ENDPOINT_URL=http://localstack:4566",
+			fmt.Sprintf("AWS_ENDPOINT_URL_S3=http://%s:4566", infisicalpkg.LocalStackS3Endpoint))
 	}
 }
 
@@ -317,6 +321,91 @@ func CreatePamTemplate(t *testing.T, ctx context.Context, infra *PAMTestInfra, n
 	require.Equal(t, http.StatusOK, resp.StatusCode(), "create template: %s", string(resp.Body))
 	slog.Info("Created PAM template", "templateId", resp.JSON200.Template.Id, "name", name, "type", accountType)
 	return resp.JSON200.Template.Id
+}
+
+// CreateRecordingBucket creates the recording bucket in LocalStack. Runs from the host, where the
+// vhost alias does not resolve, so it addresses LocalStack path-style on the published port.
+func CreateRecordingBucket(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
+	container, err := infra.Infisical.Compose().ServiceContainer(ctx, "localstack")
+	require.NoError(t, err)
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+	port, err := container.MappedPort(ctx, "4566")
+	require.NoError(t, err)
+
+	url := fmt.Sprintf("http://%s:%s/%s", host, port.Port(), RecordingBucket)
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  60 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
+			require.NoError(t, reqErr)
+			resp, callErr := http.DefaultClient.Do(req)
+			if callErr != nil {
+				slog.Warn("Bucket creation failed, retrying...", "error", callErr)
+				return helpers.ConditionWait
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				slog.Warn("Bucket creation returned non-200, retrying...", "status", resp.StatusCode)
+				return helpers.ConditionWait
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "recording bucket creation should succeed")
+	slog.Info("Created recording bucket", "bucket", RecordingBucket)
+}
+
+// CreateAwsAppConnection creates an AWS connection holding LocalStack's dummy credentials.
+func CreateAwsAppConnection(t *testing.T, ctx context.Context, infra *PAMTestInfra) openapitypes.UUID {
+	body, err := json.Marshal(map[string]interface{}{
+		"name":   "e2e-localstack-aws",
+		"method": "access-key",
+		"credentials": map[string]string{
+			"accessKeyId":     "test",
+			"secretAccessKey": "test",
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := infra.ApiClient.CreateAwsAppConnectionWithBodyWithResponse(ctx, "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create AWS app connection: %s", string(resp.Body))
+
+	var result struct {
+		AppConnection struct {
+			Id openapitypes.UUID `json:"id"`
+		} `json:"appConnection"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body, &result))
+	slog.Info("Created AWS app connection", "connectionId", result.AppConnection.Id)
+	return result.AppConnection.Id
+}
+
+// CreateRecordingPamTemplate creates a template with aws-s3 session recording, required for account
+// types like Windows. Creation validates the S3 config with a real round trip against LocalStack.
+func CreateRecordingPamTemplate(t *testing.T, ctx context.Context, infra *PAMTestInfra, name string,
+	accountType client.CreatePamAccountTemplateJSONBodyType, connectionId openapitypes.UUID) openapitypes.UUID {
+	var created struct {
+		Template struct {
+			Id openapitypes.UUID `json:"id"`
+		} `json:"template"`
+	}
+	postJSON(t, ctx, fmt.Sprintf("%s/api/v1/pam/account-templates", infra.Infisical.ApiUrl(t)),
+		infra.ProvisionResult.Token, map[string]interface{}{
+			"name":                  name,
+			"type":                  string(accountType),
+			"gatewayId":             infra.GatewayId.String(),
+			"recordingConnectionId": connectionId.String(),
+			"settings": map[string]interface{}{
+				"recordingEnabled":        true,
+				"recordingStorageBackend": string(client.CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackendAwsS3),
+				"recordingS3Config":       map[string]interface{}{"bucket": RecordingBucket, "region": "us-east-1"},
+			},
+		}, &created)
+	slog.Info("Created recording PAM template", "templateId", created.Template.Id, "name", name)
+	return created.Template.Id
 }
 
 func LoginUser(t *testing.T, ctx context.Context, infra *PAMTestInfra) {

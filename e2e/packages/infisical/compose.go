@@ -283,10 +283,19 @@ func WithRedisService() StackOption {
 	}
 }
 
-func WithLocalStackService() StackOption {
+const LocalStackS3Endpoint = "s3.localhost.localstack.cloud"
+
+// WithLocalStackService starts LocalStack, aliased so <bucket>.s3.localhost.localstack.cloud
+// resolves for every bucket in buckets. The AWS SDK addresses buckets virtual-hosted-style and
+// has no env var to force path style, so the alias is what makes the bucket reachable.
+func WithLocalStackService(buckets ...string) StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
 			s.Project.Services = types.Services{}
+		}
+		aliases := []string{LocalStackS3Endpoint}
+		for _, b := range buckets {
+			aliases = append(aliases, fmt.Sprintf("%s.%s", b, LocalStackS3Endpoint))
 		}
 		s.Project.Services["localstack"] = types.ServiceConfig{
 			Image: "localstack/localstack:4.4@sha256:b52c16663c70b7234f217cb993a339b46686e30a1a5d9279cb5feeb2202f837c",
@@ -294,6 +303,9 @@ func WithLocalStackService() StackOption {
 			Environment: types.NewMappingWithEquals([]string{
 				"SERVICES=s3,sts",
 			}),
+			Networks: map[string]*types.ServiceNetworkConfig{
+				"default": {Aliases: aliases},
+			},
 		}
 	}
 }

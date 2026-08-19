@@ -27,8 +27,6 @@ const (
 	rdpPassword = "testpass"
 )
 
-func intPtr(i int) *int { return &i }
-
 func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Container, string, int) {
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -184,19 +182,18 @@ func expectFreeRDPFailure(t *testing.T, ctx context.Context, binary string, host
 }
 
 func TestPAM_RDP(t *testing.T) {
-	// Windows accounts need an aws-s3 recording backend, a recording connection and an S3 config on
-	// the template, which the harness can't set up yet. Drop the skip once that is wired in.
-	t.Skip("RDP e2e pending S3 recording-config wiring for the new PAM model")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infra := SetupPAMInfra(t, ctx)
+	// Windows accounts require an S3 recording config, backed here by LocalStack.
+	infra := SetupPAMInfra(t, ctx, WithLocalStack())
 	LoginUser(t, ctx, infra)
+	CreateRecordingBucket(t, ctx, infra)
+	connectionId := CreateAwsAppConnection(t, ctx, infra)
 
 	folderName := "rdp-folder"
 	folderId := CreatePamFolder(t, ctx, infra, folderName)
-	templateId := CreatePamTemplate(t, ctx, infra, "rdp-template", client.CreatePamAccountTemplateJSONBodyTypeWindows)
+	templateId := CreateRecordingPamTemplate(t, ctx, infra, "rdp-template", client.CreatePamAccountTemplateJSONBodyTypeWindows, connectionId)
 
 	rdpBinary := findFreeRDPBinary(t)
 
