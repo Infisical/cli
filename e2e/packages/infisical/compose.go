@@ -287,7 +287,7 @@ const LocalStackS3Endpoint = "s3.localhost.localstack.cloud"
 
 // WithLocalStackService starts LocalStack, aliased so <bucket>.s3.localhost.localstack.cloud
 // resolves for every bucket in buckets. The AWS SDK addresses buckets virtual-hosted-style and
-// has no env var to force path style, so the alias is what makes the bucket reachable.
+// has no env var to force path style, so the alias is what makes the bucket reachable
 func WithLocalStackService(buckets ...string) StackOption {
 	return func(s *Stack) {
 		if s.Project.Services == nil {
