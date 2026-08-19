@@ -22,7 +22,6 @@ type KubernetesProxyServer struct {
 	kubeConfigOriginalContext string
 }
 
-
 func (p *KubernetesProxyServer) SetupKubeconfig(clusterName string) error {
 	configLoader := clientcmd.NewDefaultClientConfigLoadingRules()
 	config, err := configLoader.Load()
@@ -115,7 +114,9 @@ func (p *KubernetesProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("Kubernetes proxy shutdown complete")
-		os.Exit(0)
+		if p.exitAfterShutdown() {
+			os.Exit(0)
+		}
 	})
 }
 
@@ -199,12 +200,7 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	// For Kubernetes, each kubectl command opens a separate connection.
-	// Unlike persistent protocols (SSH, databases), the gateway closing after
-	// handling a request is normal — not a session-level disconnect.
-	// So we just wait for either side to finish and return, without triggering
-	// HandleGatewayDisconnect which would shut down the entire proxy.
-	done := make(chan struct{}, 2)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
 	// Gateway → Client
 	go func() {
@@ -217,7 +213,7 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		done <- struct{}{}
+		gatewayErrCh <- err
 	}()
 
 	// Client → Gateway
@@ -231,15 +227,10 @@ func (p *KubernetesProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		done <- struct{}{}
+		clientErrCh <- err
 	}()
 
-	// Wait for either side to finish — this is a per-connection close, not a session close
-	select {
-	case <-done:
-	case <-connCtx.Done():
-		log.Info().Msg("Connection cancelled by context")
-	}
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

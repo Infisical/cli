@@ -57,7 +57,9 @@ func (p *RedisProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Info().Msg("Redis proxy shutdown complete")
-		os.Exit(0)
+		if p.exitAfterShutdown() {
+			os.Exit(0)
+		}
 	})
 }
 
@@ -171,7 +173,7 @@ func (p *RedisProxyServer) handleConnection(clientConn net.Conn) {
 		clientErrCh <- err
 	}()
 
-	p.WaitForDisconnect(gatewayErrCh, clientErrCh, connCtx)
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Info().Msgf("Connection closed for client: %s", clientConn.RemoteAddr().String())
 }

@@ -77,6 +77,15 @@ func buildBwrapArgv(spec Spec, selfExe string, argv []string, classify func(stri
 		}
 	}
 
+	// Host-control sockets. There is no packet filter here to refuse the connection, so the socket is
+	// replaced by /dev/null: the path stops being a socket and connect fails. Never --tmpfs, which
+	// aborts with ENOTDIR on anything that isn't a directory.
+	for _, p := range dedupeSorted(spec.DenySockets) {
+		if exists, _ := classify(p); exists {
+			args = append(args, "--ro-bind", "/dev/null", p)
+		}
+	}
+
 	// Read exceptions land last so no mask re-covers them. Their parent is now an empty tmpfs, which is
 	// writable, so bwrap can create the mountpoint.
 	for _, p := range exceptions {
