@@ -184,13 +184,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			credentialExpiryTime = cloudTokenMaxLifetime
 		}
 	}
-	// An RDS IAM login's password is a 15-minute token, so a connection opened late in a long session
-	// must not reuse the one cached at session start.
-	if pamConfig.ResourceType == session.ResourceTypePostgres {
-		if rdsTokenMaxLifetime := time.Now().Add(10 * time.Minute); rdsTokenMaxLifetime.Before(credentialExpiryTime) {
-			credentialExpiryTime = rdsTokenMaxLifetime
-		}
-	}
 
 	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, credentialExpiryTime)
 	if err != nil {

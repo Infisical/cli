@@ -17,6 +17,10 @@ func uploadTokenFilePath(sessionID string) string {
 	return filepath.Join(GetSessionRecordingDir(), "chunks", sessionID+".uploadtoken.enc")
 }
 
+const AwsIamAuthMethod = "aws-iam"
+
+const awsIamCredentialTTL = 10 * time.Minute
+
 type PAMCredentials struct {
 	AuthMethod            string
 	Username              string
@@ -203,10 +207,17 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		PolicyRules:           response.PolicyRules,
 	}
 
+	cacheExpiry := expiryTime
+	if credentials.AuthMethod == AwsIamAuthMethod {
+		if tokenExpiry := time.Now().Add(awsIamCredentialTTL); tokenExpiry.Before(cacheExpiry) {
+			cacheExpiry = tokenExpiry
+		}
+	}
+
 	cm.cacheMutex.Lock()
 	cm.credentialsCache[sessionId] = &cachedCredentials{
 		credentials: credentials,
-		expiresAt:   expiryTime,
+		expiresAt:   cacheExpiry,
 	}
 	cm.cacheMutex.Unlock()
 
