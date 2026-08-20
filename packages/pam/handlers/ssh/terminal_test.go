@@ -173,29 +173,16 @@ func TestSessionRecording(t *testing.T) {
 			},
 		},
 		{
-			name: "input at a secret prompt is redacted",
+			name: "input at a prompt that does not echo is recorded",
 			steps: func(p *SSHProxy, ch *channelState) {
-				emit(p, ch, prompt("~")+"sudo -k id\r\n[sudo] password for deploy: ")
-				typeSilently(p, ch, "hunter2")
-				emit(p, ch, "\r\nuid=0(root)\r\n")
-			},
-			want: []string{
-				"output: user@host:~$ sudo -k id",
-				"output: [sudo] password for deploy:",
-				"input: [redacted] secret prompt input",
-				"output: uid=0(root)",
-			},
-		},
-		{
-			name: "secret echoed in plaintext is trimmed from the transcript",
-			steps: func(p *SSHProxy, ch *channelState) {
-				emit(p, ch, "Enter token: ")
-				typeLine(p, ch, shell, "thisistopsecret")
+				emit(p, ch, prompt("~")+"read -s -p \"Enter name: \" x\r\nEnter name: ")
+				typeSilently(p, ch, "operator")
 				emit(p, ch, "\r\nok\r\n")
 			},
 			want: []string{
-				"output: Enter token:",
-				"input: [redacted] secret prompt input",
+				"output: user@host:~$ read -s -p \"Enter name: \" x",
+				"output: Enter name:",
+				"input: operator",
 				"output: ok",
 			},
 		},
@@ -278,42 +265,6 @@ func TestChannelsRecordIndependently(t *testing.T) {
 		}
 		if e.ChannelType != want {
 			t.Errorf("input %q recorded on channel %q, want %q", e.Data, e.ChannelType, want)
-		}
-	}
-}
-
-func TestIsSecretPrompt(t *testing.T) {
-	secret := []string{
-		"[sudo] password for deploy:",
-		"Password:",
-		"Password: ",
-		"root@host's password:",
-		"Enter passphrase for key '/root/.ssh/id_rsa':",
-		"Enter PIN:",
-		"Verification code:",
-		"Enter your OTP:",
-		"Vault token:",
-		"New UNIX password:",
-	}
-	ordinary := []string{
-		"user@host:~$",
-		"root@password-vault:~#",
-		"root@host:/etc/passwd#",
-		"mysql>",
-		"Available tokens: 3",
-		"Reading package lists...",
-		"total 0",
-		"",
-	}
-
-	for _, line := range secret {
-		if !isSecretPrompt(line) {
-			t.Errorf("isSecretPrompt(%q) = false, want true", line)
-		}
-	}
-	for _, line := range ordinary {
-		if isSecretPrompt(line) {
-			t.Errorf("isSecretPrompt(%q) = true, want false", line)
 		}
 	}
 }

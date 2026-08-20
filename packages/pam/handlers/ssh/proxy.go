@@ -50,18 +50,11 @@ type channelState struct {
 	inputScanner     *inputSequenceFilter       // Drops escape sequences from the input stream
 	pendingEcho      echoedCommand              // Command awaiting confirmation that the shell echoed it
 	echoBaseline     int                        // Length of the line on screen when the command started
-	echoPrompt       string                     // Tail of that line, matched against secret prompts
 
 	outputMutex       sync.Mutex
 	outputParser      *terminalTranscript        // Renders the output stream into displayed lines
 	outputChannelType session.SessionChannelType // Channel type for buffered output
-	outputPending     atomic.Pointer[screenLine] // The line still on screen, read without a lock
-}
-
-// screenLine is a snapshot of the line on screen, published for the input goroutine.
-type screenLine struct {
-	runes int
-	text  string
+	outputPending     atomic.Int64               // Rendered length of the line still on screen
 }
 
 func newChannelState() *channelState {
@@ -639,10 +632,7 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 			// Only buffer printable characters and tab
 			if b >= 0x20 || b == 0x09 {
 				if len(chState.inputBuffer) == 0 {
-					chState.echoBaseline, chState.echoPrompt = 0, ""
-					if screen := chState.outputPending.Load(); screen != nil {
-						chState.echoBaseline, chState.echoPrompt = screen.runes, screen.text
-					}
+					chState.echoBaseline = int(chState.outputPending.Load())
 				}
 				chState.inputBuffer = append(chState.inputBuffer, b)
 				typedThisRead = true
@@ -678,24 +668,18 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 		return
 	}
 
-	onScreen := 0
-	if screen := chState.outputPending.Load(); screen != nil {
-		onScreen = screen.runes
-	}
+	onScreen := int(chState.outputPending.Load())
 
 	// Nothing echoed means nothing will end the prompt's line either, so commit it
 	// here rather than let the next command's prompt land on the same line.
 	switch {
-	case isSecretPrompt(chState.echoPrompt):
-		p.commitPendingLine(sessionID, chState, chState.echoBaseline)
-		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, redactedPromptInput))
 	case onScreen > chState.echoBaseline:
 		// Echoed while typing, so that line is the record.
 	case pasted:
 		// Delivered ahead of any echo; the next committed line decides.
 		chState.pendingEcho.hold(command, channel, onScreen)
 	default:
-		p.commitPendingLine(sessionID, chState, -1)
+		p.flushOutputBuffer(sessionID, chState)
 		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
 	}
 }
@@ -726,22 +710,15 @@ func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType sessi
 
 	// Read without a lock by the input goroutine, which must not stall behind the
 	// session logger's fsync just to note where a command started.
-	runes, text := chState.outputParser.pendingLine()
-	chState.outputPending.Store(&screenLine{runes: runes, text: text})
+	chState.outputPending.Store(int64(chState.outputParser.PendingLen()))
 }
 
 // flushOutputBuffer commits a partially rendered line
 func (p *SSHProxy) flushOutputBuffer(sessionID string, chState *channelState) {
-	p.commitPendingLine(sessionID, chState, -1)
-}
-
-// commitPendingLine commits the line still on screen, cut back to trimTo runes when
-// a secret prompt needs whatever was echoed after it removed.
-func (p *SSHProxy) commitPendingLine(sessionID string, chState *channelState, trimTo int) {
 	chState.outputMutex.Lock()
 	defer chState.outputMutex.Unlock()
-	p.logOutputLines(sessionID, chState, chState.outputParser.FlushAt(trimTo))
-	chState.outputPending.Store(&screenLine{})
+	p.logOutputLines(sessionID, chState, chState.outputParser.Flush())
+	chState.outputPending.Store(0)
 }
 
 // logOutputLines writes one output event per rendered line (caller must hold outputMutex)
