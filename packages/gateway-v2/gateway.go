@@ -61,11 +61,11 @@ const heartbeatInterval = 3 * time.Minute
 // the gateway only accepts channels on it, so it runs platform-to-gateway and has no reverse path.
 // Kept off the heartbeat itself because that handler probes back through the relay and writes to the
 // platform's database, which is far too costly at the cadence pool selection needs.
-const loadReportInterval = 10 * time.Second
+const metricsReportInterval = 10 * time.Second
 
 // Must stay below the interval so a stalled endpoint cannot hold the reporting loop past the next
 // tick. Without a bound the loop would also stop noticing cancellation and shutdown would hang.
-const loadReportTimeout = 5 * time.Second
+const metricsReportTimeout = 5 * time.Second
 
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
@@ -402,15 +402,15 @@ func (g *Gateway) reapIdleSessions() {
 // reportLoad publishes the gateway's active channel count so the platform can route new work to the
 // least loaded member of a pool. Failures are not surfaced: a missed report only costs accuracy, and
 // the platform falls back to its own view when a gateway stops reporting.
-func (g *Gateway) sendLoadReport(ctx context.Context, count int64) error {
-	reqCtx, cancel := context.WithTimeout(ctx, loadReportTimeout)
+func (g *Gateway) sendMetricsReport(ctx context.Context, count int64) error {
+	reqCtx, cancel := context.WithTimeout(ctx, metricsReportTimeout)
 	defer cancel()
-	return api.CallGatewayLoadReportV2(reqCtx, g.httpClient, api.GatewayLoadReportRequest{ActiveChannels: count})
+	return api.CallGatewayMetricsReportV2(reqCtx, g.httpClient, api.GatewayMetricsReportRequest{ActiveChannels: count})
 }
 
-func (g *Gateway) reportLoad(ctx context.Context) {
+func (g *Gateway) reportMetrics(ctx context.Context) {
 	go func() {
-		ticker := time.NewTicker(loadReportInterval)
+		ticker := time.NewTicker(metricsReportInterval)
 		defer ticker.Stop()
 
 		var last int64 = -1
@@ -422,7 +422,7 @@ func (g *Gateway) reportLoad(ctx context.Context) {
 				count := g.activeChannels.Load()
 				// Still republish an unchanged count so the platform can tell a quiet gateway from
 				// one that has stopped reporting.
-				if err := g.sendLoadReport(ctx, count); err != nil {
+				if err := g.sendMetricsReport(ctx, count); err != nil {
 					log.Debug().Msgf("Load report failed: %v", err)
 					continue
 				}
@@ -626,7 +626,7 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	defer g.heartbeatMu.Unlock()
 	if !g.heartbeatStarted {
 		g.registerHeartBeat(ctx, errCh)
-		g.reportLoad(ctx)
+		g.reportMetrics(ctx)
 		g.heartbeatStarted = true
 	}
 }

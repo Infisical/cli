@@ -46,7 +46,7 @@ const (
 	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
-	operationCallGatewayLoadReportV2               = "CallGatewayLoadReportV2"
+	operationCallGatewayMetricsReportV2            = "CallGatewayMetricsReportV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
 	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
@@ -849,20 +849,20 @@ func CallGatewayHeartBeatV2(httpClient *resty.Client, request GatewayHeartbeatRe
 	return nil
 }
 
-func CallGatewayLoadReportV2(ctx context.Context, httpClient *resty.Client, request GatewayLoadReportRequest) error {
+func CallGatewayMetricsReportV2(ctx context.Context, httpClient *resty.Client, request GatewayMetricsReportRequest) error {
 	response, err := httpClient.
 		R().
 		SetContext(ctx).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v2/gateways/load", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v2/gateways/metrics", config.INFISICAL_URL))
 
 	if err != nil {
-		return NewGenericRequestError(operationCallGatewayLoadReportV2, err)
+		return NewGenericRequestError(operationCallGatewayMetricsReportV2, err)
 	}
 
 	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallGatewayLoadReportV2, response, nil)
+		return NewAPIErrorWithResponse(operationCallGatewayMetricsReportV2, response, nil)
 	}
 
 	return nil
