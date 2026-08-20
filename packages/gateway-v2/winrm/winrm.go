@@ -212,24 +212,69 @@ func pinnedServerName(caCert []byte) string {
 	return cert.Subject.CommonName
 }
 
+const (
+	winrmReceiveAction = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Receive"
+	winrmStdinEOFAttr  = `End="true"`
+)
+
+// stdinGate holds the output poll until stdin has been closed.
+//
+// Writing stdin takes two messages, the payload and then a separate one marking EOF, and PowerShell
+// stays blocked in ReadToEnd until the second arrives. The poll would otherwise take the transport
+// lock between them and wait for output that cannot exist until EOF is sent, which needs that same
+// lock. Waiting here costs nothing, because a command that reads stdin produces no output until it
+// has all of it.
+type stdinGate struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newStdinGate() *stdinGate { return &stdinGate{done: make(chan struct{})} }
+
+func (g *stdinGate) open() { g.once.Do(func() { close(g.done) }) }
+
+func (g *stdinGate) wait(ctx context.Context) {
+	select {
+	case <-g.done:
+	case <-ctx.Done():
+	}
+}
+
 // NTLM sealing is RC4 keyed by a sequence counter, and the library writes stdin and drains output
 // from separate goroutines without locking, desynchronizing the keystream ("checksum does not match").
 type serializedTransport struct {
 	winrm.Transporter
-	mu sync.Mutex
+	mu   sync.Mutex
+	ctx  context.Context
+	gate *stdinGate // nil for commands that write no stdin
 }
 
 func (t *serializedTransport) Post(client *winrm.Client, message *soap.SoapMessage) (string, error) {
+	var closesStdin bool
+	if t.gate != nil {
+		body := message.String()
+		if strings.Contains(body, winrmReceiveAction) {
+			t.gate.wait(t.ctx)
+		}
+		closesStdin = strings.Contains(body, winrmStdinEOFAttr)
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.Transporter.Post(client, message)
+	response, err := t.Transporter.Post(client, message)
+
+	// Opened on failure too, so a Send that errors cannot strand the poll behind a gate that never lifts.
+	if closesStdin {
+		t.gate.open()
+	}
+	return response, err
 }
 
 // newClient builds a WinRM client. Both modes authenticate with NTLM; they differ in how the SOAP body
 // is kept confidential. HTTP (default) uses NTLM message sealing, so the body is confidential without a
 // server certificate (default listeners require this). HTTPS relies on TLS, verifying the listener against
 // the system trust store, an optional pinned CA (self-signed listener), or skipping verification if Insecure.
-func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
+func newClient(ctx context.Context, creds Credentials, gate *stdinGate) (*winrm.Client, error) {
 	params := *winrm.DefaultParameters
 	if creds.UseHTTPS {
 		// NTLM authentication over TLS. The bounded dial caps the response read and carries the operation
@@ -253,7 +298,7 @@ func newClient(ctx context.Context, creds Credentials) (*winrm.Client, error) {
 	// one NTLM session.
 	decorate := params.TransportDecorator
 	params.TransportDecorator = func() winrm.Transporter {
-		return &serializedTransport{Transporter: decorate()}
+		return &serializedTransport{Transporter: decorate(), ctx: ctx, gate: gate}
 	}
 
 	endpoint := winrm.NewEndpoint(
@@ -349,7 +394,7 @@ func runSuppressingOutput(ctx context.Context, client *winrm.Client, script stri
 
 // Ping proves reachability and authentication without touching the filesystem.
 func Ping(ctx context.Context, creds Credentials) error {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return err
 	}
@@ -365,7 +410,7 @@ const base64ChunkSize = 2000
 // Any accessRules are applied to each delivered file so, for example, only a chosen service account can
 // read the private key.
 func DeliverFiles(ctx context.Context, creds Credentials, files []FileDelivery, accessRules []AccessRule) error {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return err
 	}
@@ -500,7 +545,7 @@ func deliverFile(ctx context.Context, client *winrm.Client, f FileDelivery, gran
 
 // RemoveFiles deletes each path if it exists. A missing file is not an error.
 func RemoveFiles(ctx context.Context, creds Credentials, paths []string) error {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return err
 	}
@@ -619,14 +664,7 @@ const noOutcomeMessage = "The command called exit or did not parse, so it report
 // the process table would expose the pkcs12 password. Base64 because PowerShell decodes stdin using
 // the host's code page. '&' not .Invoke(), which buffers output and would reorder the exit trailer.
 // Never -File -/-Command -: 5.1 reads stdin-as-source as a REPL and silently drops multi-line blocks.
-// Written before the bootstrap blocks on stdin. The output poll holds the transport lock until it
-// has something to return, and nothing can be returned until stdin arrives, which needs that same
-// lock. One byte up front breaks the standoff, so the poll releases the lock in the time PowerShell
-// takes to start rather than waiting out its operation timeout.
-const commandReadySentinel = "\x01"
-
-const commandBootstrap = `[Console]::Out.Write([char]1); [Console]::Out.Flush(); ` +
-	`$b=[Console]::In.ReadToEnd(); ` +
+const commandBootstrap = `$b=[Console]::In.ReadToEnd(); ` +
 	`$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b)); ` +
 	`& ([ScriptBlock]::Create($s))`
 
@@ -696,7 +734,7 @@ func RunCommand(
 	}
 	payload := base64.StdEncoding.EncodeToString(utf16LEBytes(buildCommandScript(command, nonce)))
 
-	client, clientErr := newClient(ctx, creds)
+	client, clientErr := newClient(ctx, creds, newStdinGate())
 	if clientErr != nil {
 		return CommandResult{}, clientErr
 	}
@@ -726,7 +764,7 @@ func RunCommand(
 	}
 
 	code, remaining, stated := takeCommandTrailer(stdout.String(), nonce)
-	result.Stdout = strings.TrimPrefix(remaining, commandReadySentinel)
+	result.Stdout = remaining
 	if !stated {
 		// Truncation drops the head, so fall back to the retained tail.
 		code, _, stated = takeCommandTrailer(string(stdoutWriter.tail), nonce)
