@@ -1,6 +1,8 @@
 package ssh
 
 import (
+	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -94,9 +96,19 @@ func (l *recordingLogger) LogSessionEvent(event session.SessionEvent) error {
 	return nil
 }
 
+// typeLine models interactive typing: the shell echoes each keystroke before Enter.
 func typeLine(p *SSHProxy, ch *channelState, channel session.SessionChannelType, text string) {
 	p.bufferInput([]byte(text), "sid", channel, ch)
+	if channel == session.SessionChannelShell {
+		emit(p, ch, text)
+	}
 	p.bufferInput([]byte{0x0D}, "sid", channel, ch)
+}
+
+// typeSilently models a prompt with echo off: nothing comes back while typing.
+func typeSilently(p *SSHProxy, ch *channelState, text string) {
+	p.bufferInput([]byte(text), "sid", session.SessionChannelShell, ch)
+	p.bufferInput([]byte{0x0D}, "sid", session.SessionChannelShell, ch)
 }
 
 func emit(p *SSHProxy, ch *channelState, text string) {
@@ -116,7 +128,7 @@ func TestSessionRecording(t *testing.T) {
 			steps: func(p *SSHProxy, ch *channelState) {
 				emit(p, ch, prompt("~"))
 				typeLine(p, ch, shell, "ls")
-				emit(p, ch, "ls\r\nLICENSE go\r\n"+prompt("~"))
+				emit(p, ch, "\r\nLICENSE go\r\n"+prompt("~"))
 			},
 			want: []string{"output: user@host:~$ ls", "output: LICENSE go", "output: user@host:~$"},
 		},
@@ -124,8 +136,8 @@ func TestSessionRecording(t *testing.T) {
 			name: "tab completion counts as echoed",
 			steps: func(p *SSHProxy, ch *channelState) {
 				emit(p, ch, prompt("~/cli"))
-				typeLine(p, ch, shell, "cd ..\t")
-				emit(p, ch, "cd ../\r\n")
+				typeLine(p, ch, shell, "cd ..")
+				emit(p, ch, "/\r\n")
 			},
 			want: []string{"output: user@host:~/cli$ cd ../"},
 		},
@@ -139,10 +151,10 @@ func TestSessionRecording(t *testing.T) {
 			want: []string{"output: user@host:~$ cd ../cli"},
 		},
 		{
-			name: "unechoed input is still recorded",
+			name: "unechoed input is recorded when it is typed",
 			steps: func(p *SSHProxy, ch *channelState) {
 				emit(p, ch, prompt("~"))
-				typeLine(p, ch, shell, "whoami")
+				typeSilently(p, ch, "whoami")
 				emit(p, ch, "\r\nroot\r\n")
 			},
 			want: []string{"output: user@host:~$", "input: whoami", "output: root"},
@@ -158,6 +170,33 @@ func TestSessionRecording(t *testing.T) {
 				"output: user@host:~$ cd cli",
 				"output: user@host:~/cli$ ls",
 				"output: LICENSE go",
+			},
+		},
+		{
+			name: "input at a secret prompt is redacted",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~")+"sudo -k id\r\n[sudo] password for deploy: ")
+				typeSilently(p, ch, "hunter2")
+				emit(p, ch, "\r\nuid=0(root)\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ sudo -k id",
+				"output: [sudo] password for deploy:",
+				"input: [redacted] secret prompt input",
+				"output: uid=0(root)",
+			},
+		},
+		{
+			name: "secret echoed in plaintext is trimmed from the transcript",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, "Enter token: ")
+				typeLine(p, ch, shell, "thisistopsecret")
+				emit(p, ch, "\r\nok\r\n")
+			},
+			want: []string{
+				"output: Enter token:",
+				"input: [redacted] secret prompt input",
+				"output: ok",
 			},
 		},
 		{
@@ -240,5 +279,93 @@ func TestChannelsRecordIndependently(t *testing.T) {
 		if e.ChannelType != want {
 			t.Errorf("input %q recorded on channel %q, want %q", e.Data, e.ChannelType, want)
 		}
+	}
+}
+
+func TestIsSecretPrompt(t *testing.T) {
+	secret := []string{
+		"[sudo] password for deploy:",
+		"Password:",
+		"Password: ",
+		"root@host's password:",
+		"Enter passphrase for key '/root/.ssh/id_rsa':",
+		"Enter PIN:",
+		"Verification code:",
+		"Enter your OTP:",
+		"Vault token:",
+		"New UNIX password:",
+	}
+	ordinary := []string{
+		"user@host:~$",
+		"root@password-vault:~#",
+		"root@host:/etc/passwd#",
+		"mysql>",
+		"Available tokens: 3",
+		"Reading package lists...",
+		"total 0",
+		"",
+	}
+
+	for _, line := range secret {
+		if !isSecretPrompt(line) {
+			t.Errorf("isSecretPrompt(%q) = false, want true", line)
+		}
+	}
+	for _, line := range ordinary {
+		if isSecretPrompt(line) {
+			t.Errorf("isSecretPrompt(%q) = true, want false", line)
+		}
+	}
+}
+
+// typedInput feeds keystrokes the way a client does, with the server's echo of
+// each chunk arriving before the next one is read.
+type typedInput struct {
+	p      *SSHProxy
+	ch     *channelState
+	chunks []string
+	i      int
+}
+
+func (r *typedInput) Read(b []byte) (int, error) {
+	if r.i > 0 {
+		emit(r.p, r.ch, r.chunks[r.i-1])
+	}
+	if r.i >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(b, r.chunks[r.i])
+	r.i++
+	return n, nil
+}
+
+// A blocked command is recorded once, by the echoed line, like any other.
+func TestBlockedCommandIsNotDuplicated(t *testing.T) {
+	logger := &recordingLogger{}
+	p := NewSSHProxy(SSHProxyConfig{
+		SessionLogger:          logger,
+		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`sudo`)},
+	})
+	ch := newChannelState()
+	ch.channelType = session.SessionChannelShell
+
+	emit(p, ch, prompt("~"))
+	src := &typedInput{p: p, ch: ch, chunks: []string{"sudo what", "\r"}}
+	if err := p.proxyClientToServerWithBlocking(src, io.Discard, io.Discard, "sid", ch); err != nil {
+		t.Fatalf("proxy returned %v", err)
+	}
+	p.flushOutputBuffer("sid", ch)
+	p.flushPendingEcho("sid", ch)
+
+	var got []string
+	for _, e := range logger.events {
+		got = append(got, string(e.EventType)+": "+string(e.Data))
+	}
+	want := []string{
+		"output: user@host:~$ sudo what",
+		"output: [BLOCKED] Command not permitted",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

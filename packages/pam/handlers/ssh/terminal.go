@@ -1,9 +1,11 @@
 package ssh
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/charmbracelet/x/ansi"
@@ -11,8 +13,9 @@ import (
 )
 
 const (
-	maxLineRunes = 8192
-	tabWidth     = 8
+	maxLineRunes    = 8192
+	tabWidth        = 8
+	promptTailRunes = 256
 )
 
 type terminalTranscript struct {
@@ -46,15 +49,26 @@ func (t *terminalTranscript) Feed(data []byte) []string {
 }
 
 func (t *terminalTranscript) Flush() []string {
+	return t.FlushAt(-1)
+}
+
+// FlushAt cuts the pending line back to n runes before committing it, dropping a
+// secret the shell echoed after the prompt. n < 0 keeps it whole.
+func (t *terminalTranscript) FlushAt(n int) []string {
+	if n >= 0 && n < len(t.line) {
+		t.line = t.line[:n]
+	}
 	return appendLine(nil, t.commit())
 }
 
-func (t *terminalTranscript) PendingLen() int {
+// pendingLine returns the length of the line on screen and its tail, capped so a
+// long line stays cheap to snapshot.
+func (t *terminalTranscript) pendingLine() (int, string) {
 	n := len(t.line)
 	for n > 0 && t.line[n-1] == ' ' {
 		n--
 	}
-	return n
+	return n, string(t.line[max(n-promptTailRunes, 0):n])
 }
 
 func isCSIState(state parser.State) bool {
@@ -209,17 +223,16 @@ func (e *echoedCommand) hold(text string, channel session.SessionChannelType, ba
 	e.text, e.timestamp, e.channel, e.baseline = text, time.Now(), channel, baseline
 }
 
-// resolve settles a held command against the first line committed after it. A
-// line longer than what was on screen when typing began was echoed, so the
-// echoed line stands in for the command; otherwise echo was off.
-func (e *echoedCommand) resolve(lineRunes int) (session.SessionEvent, bool) {
+// settle applies a held command to the first line committed after it. A longer line
+// means the shell echoed it, so that line is the record.
+func (e *echoedCommand) settle(line string) (session.SessionEvent, bool) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
 	if e.text == "" {
 		return session.SessionEvent{}, false
 	}
-	if lineRunes > e.baseline {
+	if utf8.RuneCountInString(line) > e.baseline {
 		e.text = ""
 		return session.SessionEvent{}, false
 	}
@@ -245,4 +258,29 @@ func (e *echoedCommand) takeUnsafe() (session.SessionEvent, bool) {
 	}
 	e.text = ""
 	return event, true
+}
+
+const redactedPromptInput = "[redacted] secret prompt input"
+
+// Requiring a terminator right after the keyword keeps ordinary output that merely
+// mentions one of these words from matching.
+var secretPromptPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)pass(word|phrase|code)[^:]*:$`),
+	regexp.MustCompile(`(?i)\bpin\b[^:]*:$`),
+	regexp.MustCompile(`(?i)(verification|authentication|security|access) code[^:]*:$`),
+	regexp.MustCompile(`(?i)\b(otp|2fa|mfa)\b[^:]*:$`),
+	regexp.MustCompile(`(?i)(secret|token|credential)s?[^:]*:$`),
+	regexp.MustCompile(`(?i)enter[^:]*\bkey\b[^:]*:$`),
+}
+
+// isSecretPrompt reports whether the line on screen is asking for a secret, which is
+// what distinguishes a password from a command. Echo state does not.
+func isSecretPrompt(line string) bool {
+	line = strings.TrimRight(line, " ")
+	for _, pattern := range secretPromptPatterns {
+		if pattern.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }

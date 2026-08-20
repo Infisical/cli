@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -37,9 +36,8 @@ type SSHProxy struct {
 	config SSHProxyConfig
 }
 
-// channelState holds per-channel state. A client can open channels concurrently,
-// so recording state lives here: sharing it would interleave two channels into
-// one transcript and let one channel's type decide another's redaction.
+// channelState holds per-channel state. A client can open channels concurrently, so
+// sharing recording state would interleave two channels into one transcript.
 type channelState struct {
 	mutex           sync.Mutex
 	channelType     session.SessionChannelType // Type of channel (terminal, exec, sftp)
@@ -52,11 +50,18 @@ type channelState struct {
 	inputScanner     *inputSequenceFilter       // Drops escape sequences from the input stream
 	pendingEcho      echoedCommand              // Command awaiting confirmation that the shell echoed it
 	echoBaseline     int                        // Length of the line on screen when the command started
+	echoPrompt       string                     // Tail of that line, matched against secret prompts
 
 	outputMutex       sync.Mutex
 	outputParser      *terminalTranscript        // Renders the output stream into displayed lines
 	outputChannelType session.SessionChannelType // Channel type for buffered output
-	outputPending     atomic.Int64               // Rendered length of the line still on screen
+	outputPending     atomic.Pointer[screenLine] // The line still on screen, read without a lock
+}
+
+// screenLine is a snapshot of the line on screen, published for the input goroutine.
+type screenLine struct {
+	runes int
+	text  string
 }
 
 func newChannelState() *channelState {
@@ -66,7 +71,7 @@ func newChannelState() *channelState {
 	}
 }
 
-func textEvent(eventType session.SessionEventType, channelType session.SessionChannelType, text string) session.SessionEvent {
+func (c *channelState) textEvent(eventType session.SessionEventType, channelType session.SessionChannelType, text string) session.SessionEvent {
 	return session.SessionEvent{
 		Timestamp:   time.Now(),
 		EventType:   eventType,
@@ -383,7 +388,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 							Msg("Blocked SSH exec command")
 
 						// Log the blocked exec to session recording
-						blockedEvent := textEvent(session.SessionEventInput, session.SessionChannelExec,
+						blockedEvent := chState.textEvent(session.SessionEventInput, session.SessionChannelExec,
 							fmt.Sprintf("$ %s\n[BLOCKED] Command not permitted", command))
 						if err := p.config.SessionLogger.LogSessionEvent(blockedEvent); err != nil {
 							log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log blocked exec command")
@@ -434,7 +439,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						logMessage = fmt.Sprintf("$ %s", command)
 					}
 
-					event := textEvent(session.SessionEventInput, channelType, logMessage)
+					event := chState.textEvent(session.SessionEventInput, channelType, logMessage)
 					if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 						log.Error().Err(err).
 							Str("sessionID", sessionID).
@@ -470,7 +475,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						chState.sftpParser = NewSFTPParser()
 						chState.mutex.Unlock()
 
-						event := textEvent(session.SessionEventInput, session.SessionChannelSFTP, "File transfer session started")
+						event := chState.textEvent(session.SessionEventInput, session.SessionChannelSFTP, "File transfer session started")
 						if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 							log.Error().Err(err).
 								Str("sessionID", sessionID).
@@ -552,7 +557,7 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				for _, op := range operations {
 					// Log each SFTP operation
 					logMsg := FormatOperation(op)
-					event := textEvent(session.SessionEventInput, session.SessionChannelSFTP, logMsg)
+					event := chState.textEvent(session.SessionEventInput, session.SessionChannelSFTP, logMsg)
 					if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 						log.Error().Err(err).
 							Str("sessionID", sessionID).
@@ -603,6 +608,7 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 	defer chState.inputMutex.Unlock()
 
 	chState.inputChannelType = channelType
+	typedThisRead := false
 
 	for _, b := range data {
 		if chState.inputScanner.consumed(b) {
@@ -628,18 +634,22 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 				chState.inputBuffer = chState.inputBuffer[:len(chState.inputBuffer)-1]
 			}
 		case 0x0D, 0x0A: // CR or LF - flush the buffer
-			p.flushInputBufferUnsafe(sessionID, chState)
+			p.flushInputBufferUnsafe(sessionID, chState, typedThisRead)
 		default:
 			// Only buffer printable characters and tab
 			if b >= 0x20 || b == 0x09 {
 				if len(chState.inputBuffer) == 0 {
-					chState.echoBaseline = int(chState.outputPending.Load())
+					chState.echoBaseline, chState.echoPrompt = 0, ""
+					if screen := chState.outputPending.Load(); screen != nil {
+						chState.echoBaseline, chState.echoPrompt = screen.runes, screen.text
+					}
 				}
 				chState.inputBuffer = append(chState.inputBuffer, b)
+				typedThisRead = true
 			}
 			// Safety: flush if buffer gets too large
 			if len(chState.inputBuffer) >= 1024 {
-				p.flushInputBufferUnsafe(sessionID, chState)
+				p.flushInputBufferUnsafe(sessionID, chState, typedThisRead)
 			}
 		}
 	}
@@ -649,24 +659,45 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 func (p *SSHProxy) flushInputBuffer(sessionID string, chState *channelState) {
 	chState.inputMutex.Lock()
 	defer chState.inputMutex.Unlock()
-	p.flushInputBufferUnsafe(sessionID, chState)
+	p.flushInputBufferUnsafe(sessionID, chState, false)
 }
 
-// flushInputBufferUnsafe flushes the input buffer without locking (caller must hold lock)
-func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelState) {
+// flushInputBufferUnsafe records the buffered command (caller must hold the lock).
+// pasted means the command and its Enter arrived in one read, so nothing echoed yet.
+func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelState, pasted bool) {
 	if len(chState.inputBuffer) == 0 {
 		return
 	}
 
 	command := string(chState.inputBuffer)
 	chState.inputBuffer = chState.inputBuffer[:0]
+	channel := chState.inputChannelType
 
-	if chState.inputChannelType != session.SessionChannelShell {
-		p.logInputCommand(sessionID, textEvent(session.SessionEventInput, chState.inputChannelType, command))
+	if channel != session.SessionChannelShell {
+		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
 		return
 	}
 
-	chState.pendingEcho.hold(command, chState.inputChannelType, chState.echoBaseline)
+	onScreen := 0
+	if screen := chState.outputPending.Load(); screen != nil {
+		onScreen = screen.runes
+	}
+
+	// Nothing echoed means nothing will end the prompt's line either, so commit it
+	// here rather than let the next command's prompt land on the same line.
+	switch {
+	case isSecretPrompt(chState.echoPrompt):
+		p.commitPendingLine(sessionID, chState, chState.echoBaseline)
+		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, redactedPromptInput))
+	case onScreen > chState.echoBaseline:
+		// Echoed while typing, so that line is the record.
+	case pasted:
+		// Delivered ahead of any echo; the next committed line decides.
+		chState.pendingEcho.hold(command, channel, onScreen)
+	default:
+		p.commitPendingLine(sessionID, chState, -1)
+		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
+	}
 }
 
 // flushPendingEcho records a held command that the shell never echoed back
@@ -695,22 +726,28 @@ func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType sessi
 
 	// Read without a lock by the input goroutine, which must not stall behind the
 	// session logger's fsync just to note where a command started.
-	chState.outputPending.Store(int64(chState.outputParser.PendingLen()))
+	runes, text := chState.outputParser.pendingLine()
+	chState.outputPending.Store(&screenLine{runes: runes, text: text})
 }
 
 // flushOutputBuffer commits a partially rendered line
 func (p *SSHProxy) flushOutputBuffer(sessionID string, chState *channelState) {
+	p.commitPendingLine(sessionID, chState, -1)
+}
+
+// commitPendingLine commits the line still on screen, cut back to trimTo runes when
+// a secret prompt needs whatever was echoed after it removed.
+func (p *SSHProxy) commitPendingLine(sessionID string, chState *channelState, trimTo int) {
 	chState.outputMutex.Lock()
 	defer chState.outputMutex.Unlock()
-	p.logOutputLines(sessionID, chState, chState.outputParser.Flush())
-	chState.outputPending.Store(0)
+	p.logOutputLines(sessionID, chState, chState.outputParser.FlushAt(trimTo))
+	chState.outputPending.Store(&screenLine{})
 }
 
 // logOutputLines writes one output event per rendered line (caller must hold outputMutex)
 func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines []string) {
 	for _, line := range lines {
-		event := textEvent(session.SessionEventOutput, chState.outputChannelType, line)
-
+		event := chState.textEvent(session.SessionEventOutput, chState.outputChannelType, line)
 		if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 			log.Error().Err(err).
 				Str("sessionID", sessionID).
@@ -718,8 +755,8 @@ func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines
 				Msg("Failed to log terminal event")
 		}
 
-		if notice, ok := chState.pendingEcho.resolve(utf8.RuneCountInString(line)); ok {
-			p.logInputCommand(sessionID, notice)
+		if unechoed, ok := chState.pendingEcho.settle(line); ok {
+			p.logInputCommand(sessionID, unechoed)
 		}
 	}
 }
@@ -774,7 +811,7 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 					operations := sftpParser.Parse(buf[:n])
 					for _, op := range operations {
 						logMsg := FormatOperation(op)
-						event := textEvent(session.SessionEventInput, session.SessionChannelSFTP, logMsg)
+						event := chState.textEvent(session.SessionEventInput, session.SessionChannelSFTP, logMsg)
 						if logErr := p.config.SessionLogger.LogSessionEvent(event); logErr != nil {
 							log.Error().Err(logErr).
 								Str("sessionID", sessionID).
@@ -810,17 +847,8 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 						chState.inputMutex.Unlock()
 
 						if p.matchBlockedCommand(command) {
-							// Ctrl+U below wipes the echo, so record the command directly.
-							p.flushPendingEcho(sessionID, chState)
-							chState.inputMutex.Lock()
-							typed := string(chState.inputBuffer)
-							chState.inputBuffer = chState.inputBuffer[:0]
-							chState.inputMutex.Unlock()
-							if typed != "" {
-								p.logInputCommand(sessionID, textEvent(session.SessionEventInput, channelType, typed))
-							}
-
-							// Flush pending output buffer so the echoed command appears before the blocked message
+							// Commit the echoed line before the notice so they read in order.
+							p.flushInputBuffer(sessionID, chState)
 							p.flushOutputBuffer(sessionID, chState)
 
 							// Send error message to client (red text)
@@ -828,7 +856,7 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 							clientWriter.Write([]byte(blockedMsg))
 
 							// Log the blocked message as output so it appears in session replay
-							blockedEvent := textEvent(session.SessionEventOutput, channelType, "[BLOCKED] Command not permitted")
+							blockedEvent := chState.textEvent(session.SessionEventOutput, channelType, "[BLOCKED] Command not permitted")
 							if logErr := p.config.SessionLogger.LogSessionEvent(blockedEvent); logErr != nil {
 								log.Error().Err(logErr).Str("sessionID", sessionID).Msg("Failed to log blocked command event")
 							}
