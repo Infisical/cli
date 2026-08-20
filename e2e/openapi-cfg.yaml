@@ -17,8 +17,8 @@ output-options:
     - getRelays
     - listGateways
     - createProject
-    - createKubernetesPamResource
-    - createRedisPamResource
+    - createPamFolder
+    - createPamAccountTemplate
     - deleteSecretV4
     - updateSecretV4
     - createSecretV4
@@ -32,11 +32,7 @@ output-options:
     - attachUniversalAuth
     - createUniversalAuthClientSecret
     - createCloudflareAppConnection
-    - createPostgresPamResource
     - createPostgresPamAccount
-    - createSshPamResource
     - createSshPamAccount
-    - createRedisPamAccount
-    - createWindowsPamResource
     - createWindowsPamAccount
     - createAwsAppConnection

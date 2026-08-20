@@ -97,6 +97,12 @@ const (
 	CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmSLHDSASHAKE256s CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm = "SLH-DSA-SHAKE-256s"
 )
 
+// Defines values for CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeySource.
+const (
+	Hsm       CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeySource = "hsm"
+	Infisical CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeySource = "infisical"
+)
+
 // Defines values for CreateInternalCertificateAuthorityV1JSONBodyConfigurationType.
 const (
 	Intermediate CreateInternalCertificateAuthorityV1JSONBodyConfigurationType = "intermediate"
@@ -119,6 +125,7 @@ const (
 
 // Defines values for CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed.
 const (
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedAnyPurpose      CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "any_purpose"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedClientAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "client_auth"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedCodeSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "code_signing"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowedEmailProtection CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed = "email_protection"
@@ -129,6 +136,7 @@ const (
 
 // Defines values for CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied.
 const (
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedAnyPurpose      CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "any_purpose"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedClientAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "client_auth"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedCodeSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "code_signing"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesDeniedEmailProtection CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied = "email_protection"
@@ -139,6 +147,7 @@ const (
 
 // Defines values for CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired.
 const (
+	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredAnyPurpose      CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "any_purpose"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredClientAuth      CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "client_auth"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredCodeSigning     CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "code_signing"
 	CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequiredEmailProtection CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired = "email_protection"
@@ -188,16 +197,18 @@ const (
 
 // Defines values for CreateCertificatePolicyJSONBodySansType.
 const (
-	DnsName   CreateCertificatePolicyJSONBodySansType = "dns_name"
-	Email     CreateCertificatePolicyJSONBodySansType = "email"
-	IpAddress CreateCertificatePolicyJSONBodySansType = "ip_address"
-	Uri       CreateCertificatePolicyJSONBodySansType = "uri"
+	CreateCertificatePolicyJSONBodySansTypeDnsName   CreateCertificatePolicyJSONBodySansType = "dns_name"
+	CreateCertificatePolicyJSONBodySansTypeEmail     CreateCertificatePolicyJSONBodySansType = "email"
+	CreateCertificatePolicyJSONBodySansTypeIpAddress CreateCertificatePolicyJSONBodySansType = "ip_address"
+	CreateCertificatePolicyJSONBodySansTypeUpn       CreateCertificatePolicyJSONBodySansType = "upn"
+	CreateCertificatePolicyJSONBodySansTypeUri       CreateCertificatePolicyJSONBodySansType = "uri"
 )
 
 // Defines values for CreateCertificatePolicyJSONBodySubjectType.
 const (
 	CommonName         CreateCertificatePolicyJSONBodySubjectType = "common_name"
 	Country            CreateCertificatePolicyJSONBodySubjectType = "country"
+	DomainComponent    CreateCertificatePolicyJSONBodySubjectType = "domain_component"
 	Locality           CreateCertificatePolicyJSONBodySubjectType = "locality"
 	Organization       CreateCertificatePolicyJSONBodySubjectType = "organization"
 	OrganizationalUnit CreateCertificatePolicyJSONBodySubjectType = "organizational_unit"
@@ -206,6 +217,7 @@ const (
 
 // Defines values for CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages.
 const (
+	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesAnyPurpose      CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "any_purpose"
 	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesClientAuth      CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "client_auth"
 	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesCodeSigning     CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "code_signing"
 	CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsagesEmailProtection CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages = "email_protection"
@@ -277,12 +289,13 @@ const (
 	SLHDSASHAKE256s CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm = "SLH-DSA-SHAKE-256s"
 )
 
-// Defines values for CreateCertificateProfileJSONBodyEnrollmentType.
+// Defines values for CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType.
 const (
-	Acme CreateCertificateProfileJSONBodyEnrollmentType = "acme"
-	Api  CreateCertificateProfileJSONBodyEnrollmentType = "api"
-	Est  CreateCertificateProfileJSONBodyEnrollmentType = "est"
-	Scep CreateCertificateProfileJSONBodyEnrollmentType = "scep"
+	CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesTypeDnsName   CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType = "dns_name"
+	CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesTypeEmail     CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType = "email"
+	CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesTypeIpAddress CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType = "ip_address"
+	CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesTypeUpn       CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType = "upn"
+	CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesTypeUri       CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType = "uri"
 )
 
 // Defines values for CreateCertificateProfileJSONBodyIssuerType.
@@ -291,61 +304,174 @@ const (
 	SelfSigned CreateCertificateProfileJSONBodyIssuerType = "self-signed"
 )
 
-// Defines values for CreateCertificateProfileJSONBodyScepConfigChallengeType.
+// Defines values for CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion.
 const (
-	Dynamic CreateCertificateProfileJSONBodyScepConfigChallengeType = "dynamic"
-	Static  CreateCertificateProfileJSONBodyScepConfigChallengeType = "static"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionAfSouth1     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "af-south-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApEast1      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-east-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApNortheast1 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-northeast-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApNortheast2 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-northeast-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApNortheast3 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-northeast-3"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApSouth1     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-south-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApSouth2     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-south-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApSoutheast1 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-southeast-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApSoutheast2 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-southeast-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApSoutheast3 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-southeast-3"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionApSoutheast4 CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ap-southeast-4"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionCaCentral1   CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "ca-central-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuCentral1   CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-central-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuCentral2   CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-central-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuNorth1     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-north-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuSouth1     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-south-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuSouth2     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-south-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuWest1      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-west-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuWest2      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-west-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionEuWest3      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "eu-west-3"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionMeCentral1   CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "me-central-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionMeSouth1     CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "me-south-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionSaEast1      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "sa-east-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionUsEast1      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "us-east-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionUsEast2      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "us-east-2"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionUsGovEast1   CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "us-gov-east-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionUsGovWest1   CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "us-gov-west-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionUsWest1      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "us-west-1"
+	CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegionUsWest2      CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion = "us-west-2"
+)
+
+// Defines values for CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackend.
+const (
+	CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackendAwsS3    CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackend = "aws-s3"
+	CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackendPostgres CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackend = "postgres"
+)
+
+// Defines values for CreatePamAccountTemplateJSONBodyType.
+const (
+	CreatePamAccountTemplateJSONBodyTypeAwsIam            CreatePamAccountTemplateJSONBodyType = "aws-iam"
+	CreatePamAccountTemplateJSONBodyTypeAzureCli          CreatePamAccountTemplateJSONBodyType = "azure-cli"
+	CreatePamAccountTemplateJSONBodyTypeGcpServiceAccount CreatePamAccountTemplateJSONBodyType = "gcp-service-account"
+	CreatePamAccountTemplateJSONBodyTypeKubernetes        CreatePamAccountTemplateJSONBodyType = "kubernetes"
+	CreatePamAccountTemplateJSONBodyTypeMongodb           CreatePamAccountTemplateJSONBodyType = "mongodb"
+	CreatePamAccountTemplateJSONBodyTypeMssql             CreatePamAccountTemplateJSONBodyType = "mssql"
+	CreatePamAccountTemplateJSONBodyTypeMysql             CreatePamAccountTemplateJSONBodyType = "mysql"
+	CreatePamAccountTemplateJSONBodyTypeOracledb          CreatePamAccountTemplateJSONBodyType = "oracledb"
+	CreatePamAccountTemplateJSONBodyTypePostgres          CreatePamAccountTemplateJSONBodyType = "postgres"
+	CreatePamAccountTemplateJSONBodyTypeRedis             CreatePamAccountTemplateJSONBodyType = "redis"
+	CreatePamAccountTemplateJSONBodyTypeSsh               CreatePamAccountTemplateJSONBodyType = "ssh"
+	CreatePamAccountTemplateJSONBodyTypeWindows           CreatePamAccountTemplateJSONBodyType = "windows"
+	CreatePamAccountTemplateJSONBodyTypeWindowsAd         CreatePamAccountTemplateJSONBodyType = "windows-ad"
+)
+
+// Defines values for CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion.
+const (
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionAfSouth1     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "af-south-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApEast1      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-east-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast1 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast2 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast3 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-3"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSouth1     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-south-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSouth2     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-south-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast1 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast2 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast3 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-3"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast4 CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-4"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionCaCentral1   CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ca-central-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuCentral1   CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-central-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuCentral2   CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-central-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuNorth1     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-north-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuSouth1     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-south-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuSouth2     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-south-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest1      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest2      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest3      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-3"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionMeCentral1   CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "me-central-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionMeSouth1     CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "me-south-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionSaEast1      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "sa-east-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsEast1      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-east-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsEast2      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-east-2"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsGovEast1   CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-gov-east-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsGovWest1   CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-gov-west-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsWest1      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-west-1"
+	CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsWest2      CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-west-2"
 )
 
 // Defines values for CreateSshPamAccountJSONBodyCredentials0AuthMethod.
 const (
-	CreateSshPamAccountJSONBodyCredentials0AuthMethodPassword CreateSshPamAccountJSONBodyCredentials0AuthMethod = "password"
+	Password CreateSshPamAccountJSONBodyCredentials0AuthMethod = "password"
 )
 
 // Defines values for CreateSshPamAccountJSONBodyCredentials1AuthMethod.
 const (
-	CreateSshPamAccountJSONBodyCredentials1AuthMethodPublicKey CreateSshPamAccountJSONBodyCredentials1AuthMethod = "public-key"
+	PublicKey CreateSshPamAccountJSONBodyCredentials1AuthMethod = "public-key"
 )
 
 // Defines values for CreateSshPamAccountJSONBodyCredentials2AuthMethod.
 const (
-	CreateSshPamAccountJSONBodyCredentials2AuthMethodCertificate CreateSshPamAccountJSONBodyCredentials2AuthMethod = "certificate"
+	Certificate CreateSshPamAccountJSONBodyCredentials2AuthMethod = "certificate"
 )
 
-// Defines values for CreateWindowsPamAccountJSONBodyInternalMetadataAccountType.
+// Defines values for CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion.
 const (
-	Service CreateWindowsPamAccountJSONBodyInternalMetadataAccountType = "service"
-	User    CreateWindowsPamAccountJSONBodyInternalMetadataAccountType = "user"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionAfSouth1     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "af-south-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApEast1      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-east-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast1 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast2 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast3 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-3"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSouth1     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-south-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSouth2     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-south-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast1 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast2 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast3 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-3"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast4 CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-4"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionCaCentral1   CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ca-central-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuCentral1   CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-central-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuCentral2   CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-central-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuNorth1     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-north-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuSouth1     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-south-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuSouth2     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-south-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest1      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest2      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest3      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-3"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionMeCentral1   CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "me-central-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionMeSouth1     CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "me-south-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionSaEast1      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "sa-east-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsEast1      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-east-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsEast2      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-east-2"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsGovEast1   CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-gov-east-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsGovWest1   CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-gov-west-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsWest1      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-west-1"
+	CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsWest2      CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-west-2"
 )
 
-// Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
+// Defines values for CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion.
 const (
-	ServiceAccountToken CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "service-account-token"
-)
-
-// Defines values for CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod.
-const (
-	GatewayKubernetesAuth CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod = "gateway-kubernetes-auth"
-)
-
-// Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod.
-const (
-	CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethodPassword CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod = "password"
-)
-
-// Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod.
-const (
-	CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethodPublicKey CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod = "public-key"
-)
-
-// Defines values for CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod.
-const (
-	CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethodCertificate CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod = "certificate"
-)
-
-// Defines values for CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol.
-const (
-	Rdp CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol = "rdp"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionAfSouth1     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "af-south-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApEast1      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-east-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast1 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast2 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApNortheast3 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-northeast-3"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSouth1     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-south-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSouth2     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-south-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast1 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast2 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast3 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-3"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionApSoutheast4 CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ap-southeast-4"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionCaCentral1   CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "ca-central-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuCentral1   CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-central-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuCentral2   CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-central-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuNorth1     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-north-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuSouth1     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-south-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuSouth2     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-south-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest1      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest2      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionEuWest3      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "eu-west-3"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionMeCentral1   CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "me-central-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionMeSouth1     CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "me-south-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionSaEast1      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "sa-east-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsEast1      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-east-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsEast2      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-east-2"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsGovEast1   CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-gov-east-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsGovWest1   CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-gov-west-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsWest1      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-west-1"
+	CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegionUsWest2      CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion = "us-west-2"
 )
 
 // Defines values for CreateProjectJSONBodyType.
@@ -683,9 +809,6 @@ type CreateAcmeCertificateAuthorityV1JSONBody struct {
 	// Name The name of the ACME-compatible CA Certificate Authority to create. Must be slug-friendly.
 	Name string `json:"name"`
 
-	// ProjectId The ID of the project to create the Certificate Authority in.
-	ProjectId openapi_types.UUID `json:"projectId"`
-
 	// Status The status of the ACME-compatible CA Certificate Authority.
 	Status CreateAcmeCertificateAuthorityV1JSONBodyStatus `json:"status"`
 }
@@ -725,6 +848,9 @@ type UpdateAcmeCertificateAuthorityV1JSONBody struct {
 		EabKid *string `json:"eabKid,omitempty"`
 	} `json:"configuration,omitempty"`
 
+	// Name The updated name of the ACME-compatible CA Certificate Authority. Must be slug-friendly.
+	Name *string `json:"name,omitempty"`
+
 	// Status The updated status of the ACME-compatible CA Certificate Authority.
 	Status *UpdateAcmeCertificateAuthorityV1JSONBodyStatus `json:"status,omitempty"`
 }
@@ -746,15 +872,27 @@ type CreateInternalCertificateAuthorityV1JSONBody struct {
 		// Country The country name (C) for the CA.
 		Country *string `json:"country,omitempty"`
 
-		// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is always included as the primary.
+		// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is included by default unless disabled.
 		CrlDistributionPointUrls *[]string `json:"crlDistributionPointUrls,omitempty"`
-		Dn                       *string   `json:"dn"`
+
+		// DisableManagedCrlDistributionPointUrl When set to true, the Infisical-managed CRL endpoint URL will not be embedded in certificates issued by this CA. Only custom CRL Distribution Point URLs (if any) will be included.
+		DisableManagedCrlDistributionPointUrl *bool   `json:"disableManagedCrlDistributionPointUrl,omitempty"`
+		Dn                                    *string `json:"dn"`
 
 		// FriendlyName A friendly name for the CA.
 		FriendlyName *string `json:"friendlyName,omitempty"`
 
+		// HsmConnectorId The ID of the HSM Connector to generate and store the CA's signing key in. Required when keySource is 'hsm'.
+		HsmConnectorId *openapi_types.UUID `json:"hsmConnectorId,omitempty"`
+
+		// HsmKeyLabel The label of the CA's signing key on the HSM. Not user-supplied: it is the HSM Connector's configured key name prefix followed by a per-CA label built from the CA name and a random 5-character suffix (ca-<name>-<slug>).
+		HsmKeyLabel *string `json:"hsmKeyLabel,omitempty"`
+
 		// KeyAlgorithm The type of public key algorithm and size, in bits, of the key pair for the CA; when you create an intermediate CA, you must use a key algorithm supported by the parent CA.
 		KeyAlgorithm CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+
+		// KeySource Where the CA's signing key is generated and stored. 'infisical' keeps the key in Infisical's KMS; 'hsm' generates and stores the key in the HSM reached through the specified HSM Connector.
+		KeySource *CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeySource `json:"keySource,omitempty"`
 
 		// Locality The locality name for the CA.
 		Locality *string `json:"locality,omitempty"`
@@ -786,15 +924,15 @@ type CreateInternalCertificateAuthorityV1JSONBody struct {
 	// Name The name of the Internal Certificate Authority to create. Must be slug-friendly.
 	Name string `json:"name"`
 
-	// ProjectId The ID of the project to create the Certificate Authority in.
-	ProjectId openapi_types.UUID `json:"projectId"`
-
 	// Status The status of the Internal Certificate Authority.
 	Status CreateInternalCertificateAuthorityV1JSONBodyStatus `json:"status"`
 }
 
 // CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm defines parameters for CreateInternalCertificateAuthorityV1.
 type CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm string
+
+// CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeySource defines parameters for CreateInternalCertificateAuthorityV1.
+type CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeySource string
 
 // CreateInternalCertificateAuthorityV1JSONBodyConfigurationType defines parameters for CreateInternalCertificateAuthorityV1.
 type CreateInternalCertificateAuthorityV1JSONBodyConfigurationType string
@@ -807,7 +945,7 @@ type CreateCertificatePolicyJSONBody struct {
 	Algorithms *struct {
 		KeyAlgorithm *[]string `json:"keyAlgorithm,omitempty"`
 		Signature    *[]string `json:"signature,omitempty"`
-	} `json:"algorithms,omitempty"`
+	} `json:"algorithms"`
 	BasicConstraints *struct {
 		IsCA          *CreateCertificatePolicyJSONBodyBasicConstraintsIsCA `json:"isCA,omitempty"`
 		MaxPathLength *int                                                 `json:"maxPathLength,omitempty"`
@@ -817,29 +955,28 @@ type CreateCertificatePolicyJSONBody struct {
 		Allowed  *[]CreateCertificatePolicyJSONBodyExtendedKeyUsagesAllowed  `json:"allowed,omitempty"`
 		Denied   *[]CreateCertificatePolicyJSONBodyExtendedKeyUsagesDenied   `json:"denied,omitempty"`
 		Required *[]CreateCertificatePolicyJSONBodyExtendedKeyUsagesRequired `json:"required,omitempty"`
-	} `json:"extendedKeyUsages,omitempty"`
+	} `json:"extendedKeyUsages"`
 	KeyUsages *struct {
 		Allowed  *[]CreateCertificatePolicyJSONBodyKeyUsagesAllowed  `json:"allowed,omitempty"`
 		Denied   *[]CreateCertificatePolicyJSONBodyKeyUsagesDenied   `json:"denied,omitempty"`
 		Required *[]CreateCertificatePolicyJSONBodyKeyUsagesRequired `json:"required,omitempty"`
-	} `json:"keyUsages,omitempty"`
-	Name      string `json:"name"`
-	ProjectId string `json:"projectId"`
-	Sans      *[]struct {
+	} `json:"keyUsages"`
+	Name string `json:"name"`
+	Sans *[]struct {
 		Allowed  *[]string                               `json:"allowed,omitempty"`
 		Denied   *[]string                               `json:"denied,omitempty"`
 		Required *[]string                               `json:"required,omitempty"`
 		Type     CreateCertificatePolicyJSONBodySansType `json:"type"`
-	} `json:"sans,omitempty"`
+	} `json:"sans"`
 	Subject *[]struct {
 		Allowed  *[]string                                  `json:"allowed,omitempty"`
 		Denied   *[]string                                  `json:"denied,omitempty"`
 		Required *[]string                                  `json:"required,omitempty"`
 		Type     CreateCertificatePolicyJSONBodySubjectType `json:"type"`
-	} `json:"subject,omitempty"`
+	} `json:"subject"`
 	Validity *struct {
 		Max *string `json:"max,omitempty"`
-	} `json:"validity,omitempty"`
+	} `json:"validity"`
 }
 
 // CreateCertificatePolicyJSONBodyBasicConstraintsIsCA defines parameters for CreateCertificatePolicy.
@@ -871,14 +1008,6 @@ type CreateCertificatePolicyJSONBodySubjectType string
 
 // CreateCertificateProfileJSONBody defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBody struct {
-	AcmeConfig *struct {
-		SkipDnsOwnershipVerification *bool `json:"skipDnsOwnershipVerification,omitempty"`
-		SkipEabBinding               *bool `json:"skipEabBinding,omitempty"`
-	} `json:"acmeConfig,omitempty"`
-	ApiConfig *struct {
-		AutoRenew       *bool    `json:"autoRenew,omitempty"`
-		RenewBeforeDays *float32 `json:"renewBeforeDays,omitempty"`
-	} `json:"apiConfig,omitempty"`
 	CaId                *openapi_types.UUID `json:"caId,omitempty"`
 	CertificatePolicyId openapi_types.UUID  `json:"certificatePolicyId"`
 	Defaults            *struct {
@@ -888,6 +1017,7 @@ type CreateCertificateProfileJSONBody struct {
 		} `json:"basicConstraints,omitempty"`
 		CommonName         *string                                                      `json:"commonName,omitempty"`
 		Country            *string                                                      `json:"country,omitempty"`
+		DomainComponents   *[]string                                                    `json:"domainComponents,omitempty"`
 		ExtendedKeyUsages  *[]CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages `json:"extendedKeyUsages,omitempty"`
 		KeyAlgorithm       *CreateCertificateProfileJSONBodyDefaultsKeyAlgorithm        `json:"keyAlgorithm,omitempty"`
 		KeyUsages          *[]CreateCertificateProfileJSONBodyDefaultsKeyUsages         `json:"keyUsages,omitempty"`
@@ -896,27 +1026,16 @@ type CreateCertificateProfileJSONBody struct {
 		OrganizationalUnit *string                                                      `json:"organizationalUnit,omitempty"`
 		SignatureAlgorithm *CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm  `json:"signatureAlgorithm,omitempty"`
 		State              *string                                                      `json:"state,omitempty"`
-		TtlDays            *int                                                         `json:"ttlDays,omitempty"`
+		SubjectAltNames    *[]struct {
+			Type  CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType `json:"type"`
+			Value string                                                      `json:"value"`
+		} `json:"subjectAltNames,omitempty"`
+		TtlDays *int `json:"ttlDays,omitempty"`
 	} `json:"defaults"`
-	Description    *string                                        `json:"description,omitempty"`
-	EnrollmentType CreateCertificateProfileJSONBodyEnrollmentType `json:"enrollmentType"`
-	EstConfig      *struct {
-		CaChain                      *string `json:"caChain,omitempty"`
-		DisableBootstrapCaValidation *bool   `json:"disableBootstrapCaValidation,omitempty"`
-		Passphrase                   string  `json:"passphrase"`
-	} `json:"estConfig,omitempty"`
+	Description     *string                                           `json:"description,omitempty"`
 	ExternalConfigs *CreateCertificateProfileJSONBody_ExternalConfigs `json:"externalConfigs"`
 	IssuerType      *CreateCertificateProfileJSONBodyIssuerType       `json:"issuerType,omitempty"`
-	ProjectId       string                                            `json:"projectId"`
-	ScepConfig      *struct {
-		AllowCertBasedRenewal         *bool                                                    `json:"allowCertBasedRenewal,omitempty"`
-		ChallengePassword             *string                                                  `json:"challengePassword,omitempty"`
-		ChallengeType                 *CreateCertificateProfileJSONBodyScepConfigChallengeType `json:"challengeType,omitempty"`
-		DynamicChallengeExpiryMinutes *int                                                     `json:"dynamicChallengeExpiryMinutes,omitempty"`
-		DynamicChallengeMaxPending    *int                                                     `json:"dynamicChallengeMaxPending,omitempty"`
-		IncludeCaCertInResponse       *bool                                                    `json:"includeCaCertInResponse,omitempty"`
-	} `json:"scepConfig,omitempty"`
-	Slug string `json:"slug"`
+	Slug            string                                            `json:"slug"`
 }
 
 // CreateCertificateProfileJSONBodyDefaultsExtendedKeyUsages defines parameters for CreateCertificateProfile.
@@ -931,8 +1050,8 @@ type CreateCertificateProfileJSONBodyDefaultsKeyUsages string
 // CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyDefaultsSignatureAlgorithm string
 
-// CreateCertificateProfileJSONBodyEnrollmentType defines parameters for CreateCertificateProfile.
-type CreateCertificateProfileJSONBodyEnrollmentType string
+// CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyDefaultsSubjectAltNamesType string
 
 // CreateCertificateProfileJSONBodyExternalConfigs0 defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyExternalConfigs0 struct {
@@ -941,7 +1060,10 @@ type CreateCertificateProfileJSONBodyExternalConfigs0 struct {
 }
 
 // CreateCertificateProfileJSONBodyExternalConfigs1 defines parameters for CreateCertificateProfile.
-type CreateCertificateProfileJSONBodyExternalConfigs1 = map[string]interface{}
+type CreateCertificateProfileJSONBodyExternalConfigs1 struct {
+	// Template Certificate template name for Active Directory Certificate Service
+	Template string `json:"template"`
+}
 
 // CreateCertificateProfileJSONBodyExternalConfigs2 defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyExternalConfigs2 = map[string]interface{}
@@ -958,6 +1080,12 @@ type CreateCertificateProfileJSONBodyExternalConfigs5 = map[string]interface{}
 // CreateCertificateProfileJSONBodyExternalConfigs6 defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyExternalConfigs6 = map[string]interface{}
 
+// CreateCertificateProfileJSONBodyExternalConfigs7 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs7 = map[string]interface{}
+
+// CreateCertificateProfileJSONBodyExternalConfigs8 defines parameters for CreateCertificateProfile.
+type CreateCertificateProfileJSONBodyExternalConfigs8 = map[string]interface{}
+
 // CreateCertificateProfileJSONBody_ExternalConfigs defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBody_ExternalConfigs struct {
 	union json.RawMessage
@@ -965,9 +1093,6 @@ type CreateCertificateProfileJSONBody_ExternalConfigs struct {
 
 // CreateCertificateProfileJSONBodyIssuerType defines parameters for CreateCertificateProfile.
 type CreateCertificateProfileJSONBodyIssuerType string
-
-// CreateCertificateProfileJSONBodyScepConfigChallengeType defines parameters for CreateCertificateProfile.
-type CreateCertificateProfileJSONBodyScepConfigChallengeType string
 
 // CreateMachineIdentityJSONBody defines parameters for CreateMachineIdentity.
 type CreateMachineIdentityJSONBody struct {
@@ -988,61 +1113,168 @@ type CreateMachineIdentityJSONBody struct {
 	Role *string `json:"role,omitempty"`
 }
 
-// CreatePostgresPamAccountJSONBody defines parameters for CreatePostgresPamAccount.
-type CreatePostgresPamAccountJSONBody struct {
-	Credentials struct {
-		Password string `json:"password"`
-		Username string `json:"username"`
-	} `json:"credentials"`
-	Description *string             `json:"description"`
-	FolderId    *openapi_types.UUID `json:"folderId,omitempty"`
-	Metadata    *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name       string              `json:"name"`
-	PolicyId   *openapi_types.UUID `json:"policyId"`
-	RequireMfa *bool               `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID  `json:"resourceId"`
+// CreatePamAccountTemplateJSONBody defines parameters for CreatePamAccountTemplate.
+type CreatePamAccountTemplateJSONBody struct {
+	// Description Optional description
+	Description *string `json:"description,omitempty"`
+
+	// GatewayId Default gateway ID for accounts using this template
+	GatewayId *openapi_types.UUID `json:"gatewayId,omitempty"`
+
+	// GatewayPoolId Default gateway pool ID
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+
+	// Name Name for the template
+	Name string `json:"name"`
+
+	// Policies Policy values keyed by policy type
+	Policies *map[string]interface{} `json:"policies,omitempty"`
+
+	// RecordingConnectionId Recording storage connection ID
+	RecordingConnectionId *openapi_types.UUID `json:"recordingConnectionId,omitempty"`
+
+	// Settings Template settings
+	Settings *struct {
+		// PasswordRequirements The password requirements to use when generating the new password.
+		PasswordRequirements *struct {
+			// AllowedSymbols The allowed symbols to use in the generated password (defaults to "-_.~!*").
+			AllowedSymbols *string `json:"allowedSymbols,omitempty"`
+
+			// Length The length of the password to generate.
+			Length   float32 `json:"length"`
+			Required struct {
+				// Digits The amount of digits to require in the generated password.
+				Digits float32 `json:"digits"`
+
+				// Lowercase The amount of lowercase characters to require in the generated password.
+				Lowercase float32 `json:"lowercase"`
+
+				// Symbols The amount of symbols to require in the generated password.
+				Symbols float32 `json:"symbols"`
+
+				// Uppercase The amount of uppercase characters to require in the generated password.
+				Uppercase float32 `json:"uppercase"`
+			} `json:"required"`
+		} `json:"passwordRequirements,omitempty"`
+		RecordingEnabled  *bool `json:"recordingEnabled,omitempty"`
+		RecordingS3Config *struct {
+			Bucket    string                                                          `json:"bucket"`
+			KeyPrefix *string                                                         `json:"keyPrefix,omitempty"`
+			Region    CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion `json:"region"`
+		} `json:"recordingS3Config,omitempty"`
+		RecordingStorageBackend *CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackend `json:"recordingStorageBackend,omitempty"`
+		Rotation                *struct {
+			Enabled         bool `json:"enabled"`
+			IntervalSeconds *int `json:"intervalSeconds"`
+		} `json:"rotation,omitempty"`
+		SessionLogMaskingPatterns *string `json:"sessionLogMaskingPatterns,omitempty"`
+	} `json:"settings,omitempty"`
+
+	// Type The account type this template applies to
+	Type CreatePamAccountTemplateJSONBodyType `json:"type"`
 }
 
-// CreateRedisPamAccountJSONBody defines parameters for CreateRedisPamAccount.
-type CreateRedisPamAccountJSONBody struct {
+// CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion defines parameters for CreatePamAccountTemplate.
+type CreatePamAccountTemplateJSONBodySettingsRecordingS3ConfigRegion string
+
+// CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackend defines parameters for CreatePamAccountTemplate.
+type CreatePamAccountTemplateJSONBodySettingsRecordingStorageBackend string
+
+// CreatePamAccountTemplateJSONBodyType defines parameters for CreatePamAccountTemplate.
+type CreatePamAccountTemplateJSONBodyType string
+
+// CreatePostgresPamAccountJSONBody defines parameters for CreatePostgresPamAccount.
+type CreatePostgresPamAccountJSONBody struct {
+	ConnectionDetails struct {
+		Database              string  `json:"database"`
+		Host                  string  `json:"host"`
+		Port                  float32 `json:"port"`
+		SslCertificate        *string `json:"sslCertificate,omitempty"`
+		SslEnabled            bool    `json:"sslEnabled"`
+		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
+	} `json:"connectionDetails"`
 	Credentials struct {
 		Password *string `json:"password,omitempty"`
-		Username *string `json:"username,omitempty"`
+		Username string  `json:"username"`
 	} `json:"credentials"`
-	Description *string             `json:"description"`
-	FolderId    *openapi_types.UUID `json:"folderId,omitempty"`
-	Metadata    *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name       string              `json:"name"`
-	PolicyId   *openapi_types.UUID `json:"policyId"`
-	RequireMfa *bool               `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID  `json:"resourceId"`
+
+	// Description Optional description of the account
+	Description *string `json:"description,omitempty"`
+
+	// FolderId The ID of the folder to place the account in
+	FolderId openapi_types.UUID `json:"folderId"`
+
+	// GatewayId The ID of the gateway to use
+	GatewayId *openapi_types.UUID `json:"gatewayId,omitempty"`
+
+	// GatewayPoolId The ID of the gateway pool to use
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+
+	// Name Name for the account
+	Name string `json:"name"`
+
+	// RecordingConnectionId The ID of the recording connection to use
+	RecordingConnectionId *openapi_types.UUID `json:"recordingConnectionId,omitempty"`
+
+	// SettingsOverrides Account-level template settings overrides
+	SettingsOverrides *struct {
+		RecordingS3Config *struct {
+			Bucket    string                                                                   `json:"bucket"`
+			KeyPrefix *string                                                                  `json:"keyPrefix,omitempty"`
+			Region    CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion `json:"region"`
+		} `json:"recordingS3Config,omitempty"`
+	} `json:"settingsOverrides"`
+
+	// TemplateId The ID of the account template to use
+	TemplateId openapi_types.UUID `json:"templateId"`
 }
+
+// CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion defines parameters for CreatePostgresPamAccount.
+type CreatePostgresPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion string
 
 // CreateSshPamAccountJSONBody defines parameters for CreateSshPamAccount.
 type CreateSshPamAccountJSONBody struct {
+	ConnectionDetails struct {
+		Host string  `json:"host"`
+		Port float32 `json:"port"`
+	} `json:"connectionDetails"`
 	Credentials CreateSshPamAccountJSONBody_Credentials `json:"credentials"`
-	Description *string                                 `json:"description"`
-	FolderId    *openapi_types.UUID                     `json:"folderId,omitempty"`
-	Metadata    *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name       string              `json:"name"`
-	PolicyId   *openapi_types.UUID `json:"policyId"`
-	RequireMfa *bool               `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID  `json:"resourceId"`
+
+	// Description Optional description of the account
+	Description *string `json:"description,omitempty"`
+
+	// FolderId The ID of the folder to place the account in
+	FolderId openapi_types.UUID `json:"folderId"`
+
+	// GatewayId The ID of the gateway to use
+	GatewayId *openapi_types.UUID `json:"gatewayId,omitempty"`
+
+	// GatewayPoolId The ID of the gateway pool to use
+	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
+
+	// Name Name for the account
+	Name string `json:"name"`
+
+	// RecordingConnectionId The ID of the recording connection to use
+	RecordingConnectionId *openapi_types.UUID `json:"recordingConnectionId,omitempty"`
+
+	// SettingsOverrides Account-level template settings overrides
+	SettingsOverrides *struct {
+		RecordingS3Config *struct {
+			Bucket    string                                                              `json:"bucket"`
+			KeyPrefix *string                                                             `json:"keyPrefix,omitempty"`
+			Region    CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion `json:"region"`
+		} `json:"recordingS3Config,omitempty"`
+	} `json:"settingsOverrides"`
+
+	// TemplateId The ID of the account template to use
+	TemplateId openapi_types.UUID `json:"templateId"`
 }
 
 // CreateSshPamAccountJSONBodyCredentials0 defines parameters for CreateSshPamAccount.
 type CreateSshPamAccountJSONBodyCredentials0 struct {
 	AuthMethod CreateSshPamAccountJSONBodyCredentials0AuthMethod `json:"authMethod"`
-	Password   string                                            `json:"password"`
+	Password   *string                                           `json:"password,omitempty"`
 	Username   string                                            `json:"username"`
 }
 
@@ -1052,7 +1284,7 @@ type CreateSshPamAccountJSONBodyCredentials0AuthMethod string
 // CreateSshPamAccountJSONBodyCredentials1 defines parameters for CreateSshPamAccount.
 type CreateSshPamAccountJSONBodyCredentials1 struct {
 	AuthMethod CreateSshPamAccountJSONBodyCredentials1AuthMethod `json:"authMethod"`
-	PrivateKey string                                            `json:"privateKey"`
+	PrivateKey *string                                           `json:"privateKey,omitempty"`
 	Username   string                                            `json:"username"`
 }
 
@@ -1073,203 +1305,66 @@ type CreateSshPamAccountJSONBody_Credentials struct {
 	union json.RawMessage
 }
 
+// CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion defines parameters for CreateSshPamAccount.
+type CreateSshPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion string
+
 // CreateWindowsPamAccountJSONBody defines parameters for CreateWindowsPamAccount.
 type CreateWindowsPamAccountJSONBody struct {
+	ConnectionDetails struct {
+		Host                    string  `json:"host"`
+		Port                    int     `json:"port"`
+		UseWinrmHttps           *bool   `json:"useWinrmHttps,omitempty"`
+		WinrmCaCert             *string `json:"winrmCaCert,omitempty"`
+		WinrmPort               *int    `json:"winrmPort,omitempty"`
+		WinrmRejectUnauthorized *bool   `json:"winrmRejectUnauthorized,omitempty"`
+	} `json:"connectionDetails"`
 	Credentials struct {
-		Password string `json:"password"`
-		Username string `json:"username"`
-	} `json:"credentials"`
-	Description      *string             `json:"description"`
-	FolderId         *openapi_types.UUID `json:"folderId,omitempty"`
-	InternalMetadata struct {
-		AccountType     CreateWindowsPamAccountJSONBodyInternalMetadataAccountType `json:"accountType"`
-		Enabled         *bool                                                      `json:"enabled,omitempty"`
-		LastLogon       *string                                                    `json:"lastLogon,omitempty"`
-		PasswordLastSet *string                                                    `json:"passwordLastSet,omitempty"`
-		Sid             *string                                                    `json:"sid,omitempty"`
-	} `json:"internalMetadata"`
-	Metadata *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name       string              `json:"name"`
-	PolicyId   *openapi_types.UUID `json:"policyId"`
-	RequireMfa *bool               `json:"requireMfa,omitempty"`
-	ResourceId openapi_types.UUID  `json:"resourceId"`
-}
-
-// CreateWindowsPamAccountJSONBodyInternalMetadataAccountType defines parameters for CreateWindowsPamAccount.
-type CreateWindowsPamAccountJSONBodyInternalMetadataAccountType string
-
-// CreateKubernetesPamResourceJSONBody defines parameters for CreateKubernetesPamResource.
-type CreateKubernetesPamResourceJSONBody struct {
-	ConnectionDetails struct {
-		SslCertificate        *string `json:"sslCertificate,omitempty"`
-		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-		Url                   string  `json:"url"`
-	} `json:"connectionDetails"`
-	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
-	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
-	Metadata      *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name                       string                                                          `json:"name"`
-	ProjectId                  openapi_types.UUID                                              `json:"projectId"`
-	RotationAccountCredentials *CreateKubernetesPamResourceJSONBody_RotationAccountCredentials `json:"rotationAccountCredentials"`
-}
-
-// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 defines parameters for CreateKubernetesPamResource.
-type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0 struct {
-	AuthMethod          CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod `json:"authMethod"`
-	ServiceAccountToken string                                                                   `json:"serviceAccountToken"`
-}
-
-// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod defines parameters for CreateKubernetesPamResource.
-type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials0AuthMethod string
-
-// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1 defines parameters for CreateKubernetesPamResource.
-type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1 struct {
-	AuthMethod         CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod `json:"authMethod"`
-	Namespace          string                                                                   `json:"namespace"`
-	ServiceAccountName string                                                                   `json:"serviceAccountName"`
-}
-
-// CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod defines parameters for CreateKubernetesPamResource.
-type CreateKubernetesPamResourceJSONBodyRotationAccountCredentials1AuthMethod string
-
-// CreateKubernetesPamResourceJSONBody_RotationAccountCredentials defines parameters for CreateKubernetesPamResource.
-type CreateKubernetesPamResourceJSONBody_RotationAccountCredentials struct {
-	union json.RawMessage
-}
-
-// CreatePostgresPamResourceJSONBody defines parameters for CreatePostgresPamResource.
-type CreatePostgresPamResourceJSONBody struct {
-	ConnectionDetails struct {
-		Database              string  `json:"database"`
-		Host                  string  `json:"host"`
-		Port                  float32 `json:"port"`
-		SslCertificate        *string `json:"sslCertificate,omitempty"`
-		SslEnabled            bool    `json:"sslEnabled"`
-		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-	} `json:"connectionDetails"`
-	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
-	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
-	Metadata      *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name                       string             `json:"name"`
-	ProjectId                  openapi_types.UUID `json:"projectId"`
-	RotationAccountCredentials *struct {
-		Password string `json:"password"`
-		Username string `json:"username"`
-	} `json:"rotationAccountCredentials"`
-}
-
-// CreateRedisPamResourceJSONBody defines parameters for CreateRedisPamResource.
-type CreateRedisPamResourceJSONBody struct {
-	ConnectionDetails struct {
-		Host                  string  `json:"host"`
-		Port                  float32 `json:"port"`
-		SslCertificate        *string `json:"sslCertificate,omitempty"`
-		SslEnabled            bool    `json:"sslEnabled"`
-		SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-	} `json:"connectionDetails"`
-	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
-	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
-	Metadata      *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name                       string             `json:"name"`
-	ProjectId                  openapi_types.UUID `json:"projectId"`
-	RotationAccountCredentials *struct {
 		Password *string `json:"password,omitempty"`
-		Username *string `json:"username,omitempty"`
-	} `json:"rotationAccountCredentials"`
-}
+		Username string  `json:"username"`
+	} `json:"credentials"`
 
-// CreateSshPamResourceJSONBody defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBody struct {
-	ConnectionDetails struct {
-		Host string  `json:"host"`
-		Port float32 `json:"port"`
-	} `json:"connectionDetails"`
-	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
+	// Description Optional description of the account
+	Description *string `json:"description,omitempty"`
+
+	// FolderId The ID of the folder to place the account in
+	FolderId openapi_types.UUID `json:"folderId"`
+
+	// GatewayId The ID of the gateway to use
+	GatewayId *openapi_types.UUID `json:"gatewayId,omitempty"`
+
+	// GatewayPoolId The ID of the gateway pool to use
 	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
-	Metadata      *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name                       string                                                   `json:"name"`
-	ProjectId                  openapi_types.UUID                                       `json:"projectId"`
-	RotationAccountCredentials *CreateSshPamResourceJSONBody_RotationAccountCredentials `json:"rotationAccountCredentials"`
+
+	// Name Name for the account
+	Name string `json:"name"`
+
+	// RecordingConnectionId The ID of the recording connection to use
+	RecordingConnectionId *openapi_types.UUID `json:"recordingConnectionId,omitempty"`
+
+	// SettingsOverrides Account-level template settings overrides
+	SettingsOverrides *struct {
+		RecordingS3Config *struct {
+			Bucket    string                                                                  `json:"bucket"`
+			KeyPrefix *string                                                                 `json:"keyPrefix,omitempty"`
+			Region    CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion `json:"region"`
+		} `json:"recordingS3Config,omitempty"`
+	} `json:"settingsOverrides"`
+
+	// TemplateId The ID of the account template to use
+	TemplateId openapi_types.UUID `json:"templateId"`
 }
 
-// CreateSshPamResourceJSONBodyRotationAccountCredentials0 defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBodyRotationAccountCredentials0 struct {
-	AuthMethod CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod `json:"authMethod"`
-	Password   string                                                            `json:"password"`
-	Username   string                                                            `json:"username"`
+// CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion defines parameters for CreateWindowsPamAccount.
+type CreateWindowsPamAccountJSONBodySettingsOverridesRecordingS3ConfigRegion string
+
+// CreatePamFolderJSONBody defines parameters for CreatePamFolder.
+type CreatePamFolderJSONBody struct {
+	// Description Optional description
+	Description *string `json:"description,omitempty"`
+
+	// Name Name for the folder
+	Name string `json:"name"`
 }
-
-// CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBodyRotationAccountCredentials0AuthMethod string
-
-// CreateSshPamResourceJSONBodyRotationAccountCredentials1 defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBodyRotationAccountCredentials1 struct {
-	AuthMethod CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod `json:"authMethod"`
-	PrivateKey string                                                            `json:"privateKey"`
-	Username   string                                                            `json:"username"`
-}
-
-// CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBodyRotationAccountCredentials1AuthMethod string
-
-// CreateSshPamResourceJSONBodyRotationAccountCredentials2 defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBodyRotationAccountCredentials2 struct {
-	AuthMethod CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod `json:"authMethod"`
-	Username   string                                                            `json:"username"`
-}
-
-// CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBodyRotationAccountCredentials2AuthMethod string
-
-// CreateSshPamResourceJSONBody_RotationAccountCredentials defines parameters for CreateSshPamResource.
-type CreateSshPamResourceJSONBody_RotationAccountCredentials struct {
-	union json.RawMessage
-}
-
-// CreateWindowsPamResourceJSONBody defines parameters for CreateWindowsPamResource.
-type CreateWindowsPamResourceJSONBody struct {
-	ConnectionDetails struct {
-		Hostname                string                                                    `json:"hostname"`
-		Port                    int                                                       `json:"port"`
-		Protocol                CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol `json:"protocol"`
-		UseWinrmHttps           bool                                                      `json:"useWinrmHttps"`
-		WinrmCaCert             *string                                                   `json:"winrmCaCert,omitempty"`
-		WinrmPort               int                                                       `json:"winrmPort"`
-		WinrmRejectUnauthorized bool                                                      `json:"winrmRejectUnauthorized"`
-		WinrmTlsServerName      *string                                                   `json:"winrmTlsServerName,omitempty"`
-	} `json:"connectionDetails"`
-	DomainId      *openapi_types.UUID `json:"domainId"`
-	GatewayId     *openapi_types.UUID `json:"gatewayId,omitempty"`
-	GatewayPoolId *openapi_types.UUID `json:"gatewayPoolId,omitempty"`
-	Metadata      *[]struct {
-		Key   string  `json:"key"`
-		Value *string `json:"value,omitempty"`
-	} `json:"metadata,omitempty"`
-	Name                       string             `json:"name"`
-	ProjectId                  openapi_types.UUID `json:"projectId"`
-	RotationAccountCredentials *struct {
-		Password string `json:"password"`
-		Username string `json:"username"`
-	} `json:"rotationAccountCredentials"`
-}
-
-// CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol defines parameters for CreateWindowsPamResource.
-type CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol string
 
 // CreateProjectJSONBody defines parameters for CreateProject.
 type CreateProjectJSONBody struct {
@@ -1536,11 +1631,11 @@ type CreateCertificateProfileJSONRequestBody CreateCertificateProfileJSONBody
 // CreateMachineIdentityJSONRequestBody defines body for CreateMachineIdentity for application/json ContentType.
 type CreateMachineIdentityJSONRequestBody CreateMachineIdentityJSONBody
 
+// CreatePamAccountTemplateJSONRequestBody defines body for CreatePamAccountTemplate for application/json ContentType.
+type CreatePamAccountTemplateJSONRequestBody CreatePamAccountTemplateJSONBody
+
 // CreatePostgresPamAccountJSONRequestBody defines body for CreatePostgresPamAccount for application/json ContentType.
 type CreatePostgresPamAccountJSONRequestBody CreatePostgresPamAccountJSONBody
-
-// CreateRedisPamAccountJSONRequestBody defines body for CreateRedisPamAccount for application/json ContentType.
-type CreateRedisPamAccountJSONRequestBody CreateRedisPamAccountJSONBody
 
 // CreateSshPamAccountJSONRequestBody defines body for CreateSshPamAccount for application/json ContentType.
 type CreateSshPamAccountJSONRequestBody CreateSshPamAccountJSONBody
@@ -1548,20 +1643,8 @@ type CreateSshPamAccountJSONRequestBody CreateSshPamAccountJSONBody
 // CreateWindowsPamAccountJSONRequestBody defines body for CreateWindowsPamAccount for application/json ContentType.
 type CreateWindowsPamAccountJSONRequestBody CreateWindowsPamAccountJSONBody
 
-// CreateKubernetesPamResourceJSONRequestBody defines body for CreateKubernetesPamResource for application/json ContentType.
-type CreateKubernetesPamResourceJSONRequestBody CreateKubernetesPamResourceJSONBody
-
-// CreatePostgresPamResourceJSONRequestBody defines body for CreatePostgresPamResource for application/json ContentType.
-type CreatePostgresPamResourceJSONRequestBody CreatePostgresPamResourceJSONBody
-
-// CreateRedisPamResourceJSONRequestBody defines body for CreateRedisPamResource for application/json ContentType.
-type CreateRedisPamResourceJSONRequestBody CreateRedisPamResourceJSONBody
-
-// CreateSshPamResourceJSONRequestBody defines body for CreateSshPamResource for application/json ContentType.
-type CreateSshPamResourceJSONRequestBody CreateSshPamResourceJSONBody
-
-// CreateWindowsPamResourceJSONRequestBody defines body for CreateWindowsPamResource for application/json ContentType.
-type CreateWindowsPamResourceJSONRequestBody CreateWindowsPamResourceJSONBody
+// CreatePamFolderJSONRequestBody defines body for CreatePamFolder for application/json ContentType.
+type CreatePamFolderJSONRequestBody CreatePamFolderJSONBody
 
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody CreateProjectJSONBody
@@ -1719,15 +1802,15 @@ type ClientInterface interface {
 
 	CreateMachineIdentity(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreatePamAccountTemplateWithBody request with any body
+	CreatePamAccountTemplateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreatePamAccountTemplate(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreatePostgresPamAccountWithBody request with any body
 	CreatePostgresPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreateRedisPamAccountWithBody request with any body
-	CreateRedisPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	CreateRedisPamAccount(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateSshPamAccountWithBody request with any body
 	CreateSshPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1739,30 +1822,10 @@ type ClientInterface interface {
 
 	CreateWindowsPamAccount(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CreateKubernetesPamResourceWithBody request with any body
-	CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreatePamFolderWithBody request with any body
+	CreatePamFolderWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreatePostgresPamResourceWithBody request with any body
-	CreatePostgresPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	CreatePostgresPamResource(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreateRedisPamResourceWithBody request with any body
-	CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreateSshPamResourceWithBody request with any body
-	CreateSshPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	CreateSshPamResource(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreateWindowsPamResourceWithBody request with any body
-	CreateWindowsPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	CreateWindowsPamResource(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreatePamFolder(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateProjectWithBody request with any body
 	CreateProjectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2126,6 +2189,30 @@ func (c *Client) CreateMachineIdentity(ctx context.Context, body CreateMachineId
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreatePamAccountTemplateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamAccountTemplateRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePamAccountTemplate(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamAccountTemplateRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreatePostgresPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreatePostgresPamAccountRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -2140,30 +2227,6 @@ func (c *Client) CreatePostgresPamAccountWithBody(ctx context.Context, contentTy
 
 func (c *Client) CreatePostgresPamAccount(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreatePostgresPamAccountRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateRedisPamAccountWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateRedisPamAccountRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateRedisPamAccount(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateRedisPamAccountRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2222,8 +2285,8 @@ func (c *Client) CreateWindowsPamAccount(ctx context.Context, body CreateWindows
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateKubernetesPamResourceRequestWithBody(c.Server, contentType, body)
+func (c *Client) CreatePamFolderWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamFolderRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2234,104 +2297,8 @@ func (c *Client) CreateKubernetesPamResourceWithBody(ctx context.Context, conten
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateKubernetesPamResource(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateKubernetesPamResourceRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreatePostgresPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreatePostgresPamResourceRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreatePostgresPamResource(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreatePostgresPamResourceRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateRedisPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateRedisPamResourceRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateRedisPamResource(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateRedisPamResourceRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateSshPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateSshPamResourceRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateSshPamResource(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateSshPamResourceRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateWindowsPamResourceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateWindowsPamResourceRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) CreateWindowsPamResource(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateWindowsPamResourceRequest(c.Server, body)
+func (c *Client) CreatePamFolder(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePamFolderRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3092,6 +3059,46 @@ func NewCreateMachineIdentityRequestWithBody(server string, contentType string, 
 	return req, nil
 }
 
+// NewCreatePamAccountTemplateRequest calls the generic CreatePamAccountTemplate builder with application/json body
+func NewCreatePamAccountTemplateRequest(server string, body CreatePamAccountTemplateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreatePamAccountTemplateRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreatePamAccountTemplateRequestWithBody generates requests for CreatePamAccountTemplate with any type of body
+func NewCreatePamAccountTemplateRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/pam/account-templates")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewCreatePostgresPamAccountRequest calls the generic CreatePostgresPamAccount builder with application/json body
 func NewCreatePostgresPamAccountRequest(server string, body CreatePostgresPamAccountJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -3113,46 +3120,6 @@ func NewCreatePostgresPamAccountRequestWithBody(server string, contentType strin
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/pam/accounts/postgres")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewCreateRedisPamAccountRequest calls the generic CreateRedisPamAccount builder with application/json body
-func NewCreateRedisPamAccountRequest(server string, body CreateRedisPamAccountJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateRedisPamAccountRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewCreateRedisPamAccountRequestWithBody generates requests for CreateRedisPamAccount with any type of body
-func NewCreateRedisPamAccountRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/pam/accounts/redis")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3252,19 +3219,19 @@ func NewCreateWindowsPamAccountRequestWithBody(server string, contentType string
 	return req, nil
 }
 
-// NewCreateKubernetesPamResourceRequest calls the generic CreateKubernetesPamResource builder with application/json body
-func NewCreateKubernetesPamResourceRequest(server string, body CreateKubernetesPamResourceJSONRequestBody) (*http.Request, error) {
+// NewCreatePamFolderRequest calls the generic CreatePamFolder builder with application/json body
+func NewCreatePamFolderRequest(server string, body CreatePamFolderJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewCreateKubernetesPamResourceRequestWithBody(server, "application/json", bodyReader)
+	return NewCreatePamFolderRequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewCreateKubernetesPamResourceRequestWithBody generates requests for CreateKubernetesPamResource with any type of body
-func NewCreateKubernetesPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreatePamFolderRequestWithBody generates requests for CreatePamFolder with any type of body
+func NewCreatePamFolderRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -3272,167 +3239,7 @@ func NewCreateKubernetesPamResourceRequestWithBody(server string, contentType st
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/api/v1/pam/resources/kubernetes")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewCreatePostgresPamResourceRequest calls the generic CreatePostgresPamResource builder with application/json body
-func NewCreatePostgresPamResourceRequest(server string, body CreatePostgresPamResourceJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreatePostgresPamResourceRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewCreatePostgresPamResourceRequestWithBody generates requests for CreatePostgresPamResource with any type of body
-func NewCreatePostgresPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/pam/resources/postgres")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewCreateRedisPamResourceRequest calls the generic CreateRedisPamResource builder with application/json body
-func NewCreateRedisPamResourceRequest(server string, body CreateRedisPamResourceJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateRedisPamResourceRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewCreateRedisPamResourceRequestWithBody generates requests for CreateRedisPamResource with any type of body
-func NewCreateRedisPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/pam/resources/redis")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewCreateSshPamResourceRequest calls the generic CreateSshPamResource builder with application/json body
-func NewCreateSshPamResourceRequest(server string, body CreateSshPamResourceJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateSshPamResourceRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewCreateSshPamResourceRequestWithBody generates requests for CreateSshPamResource with any type of body
-func NewCreateSshPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/pam/resources/ssh")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewCreateWindowsPamResourceRequest calls the generic CreateWindowsPamResource builder with application/json body
-func NewCreateWindowsPamResourceRequest(server string, body CreateWindowsPamResourceJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateWindowsPamResourceRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewCreateWindowsPamResourceRequestWithBody generates requests for CreateWindowsPamResource with any type of body
-func NewCreateWindowsPamResourceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/pam/resources/windows")
+	operationPath := fmt.Sprintf("/api/v1/pam/folders")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -4195,15 +4002,15 @@ type ClientWithResponsesInterface interface {
 
 	CreateMachineIdentityWithResponse(ctx context.Context, body CreateMachineIdentityJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMachineIdentityResponse, error)
 
+	// CreatePamAccountTemplateWithBodyWithResponse request with any body
+	CreatePamAccountTemplateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error)
+
+	CreatePamAccountTemplateWithResponse(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error)
+
 	// CreatePostgresPamAccountWithBodyWithResponse request with any body
 	CreatePostgresPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error)
 
 	CreatePostgresPamAccountWithResponse(ctx context.Context, body CreatePostgresPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error)
-
-	// CreateRedisPamAccountWithBodyWithResponse request with any body
-	CreateRedisPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error)
-
-	CreateRedisPamAccountWithResponse(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error)
 
 	// CreateSshPamAccountWithBodyWithResponse request with any body
 	CreateSshPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamAccountResponse, error)
@@ -4215,30 +4022,10 @@ type ClientWithResponsesInterface interface {
 
 	CreateWindowsPamAccountWithResponse(ctx context.Context, body CreateWindowsPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamAccountResponse, error)
 
-	// CreateKubernetesPamResourceWithBodyWithResponse request with any body
-	CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
+	// CreatePamFolderWithBodyWithResponse request with any body
+	CreatePamFolderWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error)
 
-	CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error)
-
-	// CreatePostgresPamResourceWithBodyWithResponse request with any body
-	CreatePostgresPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error)
-
-	CreatePostgresPamResourceWithResponse(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error)
-
-	// CreateRedisPamResourceWithBodyWithResponse request with any body
-	CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
-
-	CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error)
-
-	// CreateSshPamResourceWithBodyWithResponse request with any body
-	CreateSshPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error)
-
-	CreateSshPamResourceWithResponse(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error)
-
-	// CreateWindowsPamResourceWithBodyWithResponse request with any body
-	CreateWindowsPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error)
-
-	CreateWindowsPamResourceWithResponse(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error)
+	CreatePamFolderWithResponse(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error)
 
 	// CreateProjectWithBodyWithResponse request with any body
 	CreateProjectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
@@ -4285,12 +4072,14 @@ type AdminSignUpResponse struct {
 		Message      string `json:"message"`
 		New          string `json:"new"`
 		Organization struct {
+			AllowCrossProjectSecretSharing        *bool               `json:"allowCrossProjectSecretSharing,omitempty"`
 			AllowSecretSharingOutsideOrganization *bool               `json:"allowSecretSharingOutsideOrganization"`
 			AuthEnforced                          *bool               `json:"authEnforced"`
 			BlockDuplicateSecretSyncDestinations  *bool               `json:"blockDuplicateSecretSyncDestinations,omitempty"`
 			BypassOrgAuthEnabled                  *bool               `json:"bypassOrgAuthEnabled,omitempty"`
 			CreatedAt                             time.Time           `json:"createdAt"`
 			CustomerId                            *string             `json:"customerId"`
+			DefaultCertManagerProjectId           *string             `json:"defaultCertManagerProjectId"`
 			DefaultMembershipRole                 *string             `json:"defaultMembershipRole,omitempty"`
 			EnforceMfa                            *bool               `json:"enforceMfa,omitempty"`
 			GoogleSsoAuthEnforced                 *bool               `json:"googleSsoAuthEnforced,omitempty"`
@@ -4439,9 +4228,12 @@ type CreateAwsAppConnectionResponse struct {
 	}
 }
 type CreateAwsAppConnection200AppConnection0 struct {
-	App                          CreateAwsAppConnection200AppConnection0App    `json:"app"`
-	CreatedAt                    time.Time                                     `json:"createdAt"`
-	Credentials                  map[string]interface{}                        `json:"credentials"`
+	App         CreateAwsAppConnection200AppConnection0App `json:"app"`
+	CreatedAt   time.Time                                  `json:"createdAt"`
+	Credentials struct {
+		// StsEndpoint An optional custom endpoint URL for the AWS STS API to use when connecting with AWS.
+		StsEndpoint *string `json:"stsEndpoint,omitempty"`
+	} `json:"credentials"`
 	CredentialsHash              *string                                       `json:"credentialsHash,omitempty"`
 	Description                  *string                                       `json:"description"`
 	GatewayId                    *openapi_types.UUID                           `json:"gatewayId"`
@@ -5119,16 +4911,12 @@ type CreateAcmeCertificateAuthorityV1Response struct {
 			// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
 			DnsResolver *string `json:"dnsResolver,omitempty"`
 
-			// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
-			EabHmacKey *string `json:"eabHmacKey,omitempty"`
-
 			// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 			EabKid *string `json:"eabKid,omitempty"`
 		} `json:"configuration"`
 		EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
 		Id                   openapi_types.UUID                        `json:"id"`
 		Name                 string                                    `json:"name"`
-		ProjectId            string                                    `json:"projectId"`
 		Status               CreateAcmeCertificateAuthorityV1200Status `json:"status"`
 		Type                 CreateAcmeCertificateAuthorityV1200Type   `json:"type"`
 	}
@@ -5221,16 +5009,12 @@ type UpdateAcmeCertificateAuthorityV1Response struct {
 			// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
 			DnsResolver *string `json:"dnsResolver,omitempty"`
 
-			// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
-			EabHmacKey *string `json:"eabHmacKey,omitempty"`
-
 			// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 			EabKid *string `json:"eabKid,omitempty"`
 		} `json:"configuration"`
 		EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
 		Id                   openapi_types.UUID                        `json:"id"`
 		Name                 string                                    `json:"name"`
-		ProjectId            string                                    `json:"projectId"`
 		Status               UpdateAcmeCertificateAuthorityV1200Status `json:"status"`
 		Type                 UpdateAcmeCertificateAuthorityV1200Type   `json:"type"`
 	}
@@ -5312,15 +5096,27 @@ type CreateInternalCertificateAuthorityV1Response struct {
 			// Country The country name (C) for the CA.
 			Country *string `json:"country,omitempty"`
 
-			// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is always included as the primary.
+			// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is included by default unless disabled.
 			CrlDistributionPointUrls *[]string `json:"crlDistributionPointUrls,omitempty"`
-			Dn                       *string   `json:"dn"`
+
+			// DisableManagedCrlDistributionPointUrl When set to true, the Infisical-managed CRL endpoint URL will not be embedded in certificates issued by this CA. Only custom CRL Distribution Point URLs (if any) will be included.
+			DisableManagedCrlDistributionPointUrl *bool   `json:"disableManagedCrlDistributionPointUrl,omitempty"`
+			Dn                                    *string `json:"dn"`
 
 			// FriendlyName A friendly name for the CA.
 			FriendlyName *string `json:"friendlyName,omitempty"`
 
+			// HsmConnectorId The ID of the HSM Connector to generate and store the CA's signing key in. Required when keySource is 'hsm'.
+			HsmConnectorId *openapi_types.UUID `json:"hsmConnectorId,omitempty"`
+
+			// HsmKeyLabel The label of the CA's signing key on the HSM. Not user-supplied: it is the HSM Connector's configured key name prefix followed by a per-CA label built from the CA name and a random 5-character suffix (ca-<name>-<slug>).
+			HsmKeyLabel *string `json:"hsmKeyLabel,omitempty"`
+
 			// KeyAlgorithm The type of public key algorithm and size, in bits, of the key pair for the CA; when you create an intermediate CA, you must use a key algorithm supported by the parent CA.
 			KeyAlgorithm CreateInternalCertificateAuthorityV1200ConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+
+			// KeySource Where the CA's signing key is generated and stored. 'infisical' keeps the key in Infisical's KMS; 'hsm' generates and stores the key in the HSM reached through the specified HSM Connector.
+			KeySource *CreateInternalCertificateAuthorityV1200ConfigurationKeySource `json:"keySource,omitempty"`
 
 			// Locality The locality name for the CA.
 			Locality *string `json:"locality,omitempty"`
@@ -5351,7 +5147,6 @@ type CreateInternalCertificateAuthorityV1Response struct {
 		EnableDirectIssuance *bool                                         `json:"enableDirectIssuance,omitempty"`
 		Id                   openapi_types.UUID                            `json:"id"`
 		Name                 string                                        `json:"name"`
-		ProjectId            string                                        `json:"projectId"`
 		Status               CreateInternalCertificateAuthorityV1200Status `json:"status"`
 		Type                 CreateInternalCertificateAuthorityV1200Type   `json:"type"`
 	}
@@ -5395,6 +5190,7 @@ type CreateInternalCertificateAuthorityV1Response struct {
 	}
 }
 type CreateInternalCertificateAuthorityV1200ConfigurationKeyAlgorithm string
+type CreateInternalCertificateAuthorityV1200ConfigurationKeySource string
 type CreateInternalCertificateAuthorityV1200ConfigurationType string
 type CreateInternalCertificateAuthorityV1200Status string
 type CreateInternalCertificateAuthorityV1200Type string
@@ -5447,9 +5243,8 @@ type CreateCertificatePolicyResponse struct {
 				Denied   *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesDenied   `json:"denied,omitempty"`
 				Required *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesRequired `json:"required,omitempty"`
 			} `json:"keyUsages,omitempty"`
-			Name      string             `json:"name"`
-			ProjectId openapi_types.UUID `json:"projectId"`
-			Sans      *[]struct {
+			Name string `json:"name"`
+			Sans *[]struct {
 				Allowed  *[]string                                           `json:"allowed,omitempty"`
 				Denied   *[]string                                           `json:"denied,omitempty"`
 				Required *[]string                                           `json:"required,omitempty"`
@@ -5555,6 +5350,7 @@ type CreateCertificateProfileResponse struct {
 				} `json:"basicConstraints,omitempty"`
 				CommonName         *string                                                                   `json:"commonName,omitempty"`
 				Country            *string                                                                   `json:"country,omitempty"`
+				DomainComponents   *[]string                                                                 `json:"domainComponents,omitempty"`
 				ExtendedKeyUsages  *[]CreateCertificateProfile200CertificateProfileDefaultsExtendedKeyUsages `json:"extendedKeyUsages,omitempty"`
 				KeyAlgorithm       *CreateCertificateProfile200CertificateProfileDefaultsKeyAlgorithm        `json:"keyAlgorithm,omitempty"`
 				KeyUsages          *[]CreateCertificateProfile200CertificateProfileDefaultsKeyUsages         `json:"keyUsages,omitempty"`
@@ -5563,7 +5359,11 @@ type CreateCertificateProfileResponse struct {
 				OrganizationalUnit *string                                                                   `json:"organizationalUnit,omitempty"`
 				SignatureAlgorithm *CreateCertificateProfile200CertificateProfileDefaultsSignatureAlgorithm  `json:"signatureAlgorithm,omitempty"`
 				State              *string                                                                   `json:"state,omitempty"`
-				TtlDays            *float32                                                                  `json:"ttlDays,omitempty"`
+				SubjectAltNames    *[]struct {
+					Type  CreateCertificateProfile200CertificateProfileDefaultsSubjectAltNamesType `json:"type"`
+					Value string                                                                   `json:"value"`
+				} `json:"subjectAltNames,omitempty"`
+				TtlDays *float32 `json:"ttlDays,omitempty"`
 			} `json:"defaults"`
 			Description     *string                                                          `json:"description"`
 			EnrollmentType  string                                                           `json:"enrollmentType"`
@@ -5571,7 +5371,6 @@ type CreateCertificateProfileResponse struct {
 			ExternalConfigs *CreateCertificateProfile_200_CertificateProfile_ExternalConfigs `json:"externalConfigs"`
 			Id              openapi_types.UUID                                               `json:"id"`
 			IssuerType      *string                                                          `json:"issuerType,omitempty"`
-			ProjectId       string                                                           `json:"projectId"`
 			ScepConfigId    *openapi_types.UUID                                              `json:"scepConfigId"`
 			Slug            string                                                           `json:"slug"`
 			UpdatedAt       time.Time                                                        `json:"updatedAt"`
@@ -5620,16 +5419,22 @@ type CreateCertificateProfile200CertificateProfileDefaultsExtendedKeyUsages stri
 type CreateCertificateProfile200CertificateProfileDefaultsKeyAlgorithm string
 type CreateCertificateProfile200CertificateProfileDefaultsKeyUsages string
 type CreateCertificateProfile200CertificateProfileDefaultsSignatureAlgorithm string
+type CreateCertificateProfile200CertificateProfileDefaultsSubjectAltNamesType string
 type CreateCertificateProfile200CertificateProfileExternalConfigs0 struct {
 	// Template Certificate template name for Azure AD CS
 	Template string `json:"template"`
 }
-type CreateCertificateProfile200CertificateProfileExternalConfigs1 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs1 struct {
+	// Template Certificate template name for Active Directory Certificate Service
+	Template string `json:"template"`
+}
 type CreateCertificateProfile200CertificateProfileExternalConfigs2 = map[string]interface{}
 type CreateCertificateProfile200CertificateProfileExternalConfigs3 = map[string]interface{}
 type CreateCertificateProfile200CertificateProfileExternalConfigs4 = map[string]interface{}
 type CreateCertificateProfile200CertificateProfileExternalConfigs5 = map[string]interface{}
 type CreateCertificateProfile200CertificateProfileExternalConfigs6 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs7 = map[string]interface{}
+type CreateCertificateProfile200CertificateProfileExternalConfigs8 = map[string]interface{}
 type CreateCertificateProfile_200_CertificateProfile_ExternalConfigs struct {
 	union json.RawMessage
 }
@@ -5739,51 +5544,109 @@ func (r CreateMachineIdentityResponse) StatusCode() int {
 	return 0
 }
 
+type CreatePamAccountTemplateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		CorsProbeUrl *string `json:"corsProbeUrl"`
+		Template     struct {
+			CreatedAt             time.Time           `json:"createdAt"`
+			Description           *string             `json:"description"`
+			GatewayId             *openapi_types.UUID `json:"gatewayId"`
+			GatewayPoolId         *openapi_types.UUID `json:"gatewayPoolId"`
+			Id                    openapi_types.UUID  `json:"id"`
+			Name                  string              `json:"name"`
+			Policies              interface{}         `json:"policies"`
+			RecordingConnectionId *openapi_types.UUID `json:"recordingConnectionId"`
+			Settings              interface{}         `json:"settings"`
+			Type                  string              `json:"type"`
+			UpdatedAt             time.Time           `json:"updatedAt"`
+		} `json:"template"`
+	}
+	JSON400 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePamAccountTemplate400StatusCode `json:"statusCode"`
+	}
+	JSON401 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePamAccountTemplate401StatusCode `json:"statusCode"`
+	}
+	JSON403 *struct {
+		Details    interface{}                           `json:"details,omitempty"`
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePamAccountTemplate403StatusCode `json:"statusCode"`
+	}
+	JSON404 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePamAccountTemplate404StatusCode `json:"statusCode"`
+	}
+	JSON422 *struct {
+		Error      string                                `json:"error"`
+		Message    interface{}                           `json:"message,omitempty"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePamAccountTemplate422StatusCode `json:"statusCode"`
+	}
+	JSON500 *struct {
+		Error      string                                `json:"error"`
+		Message    string                                `json:"message"`
+		ReqId      string                                `json:"reqId"`
+		StatusCode CreatePamAccountTemplate500StatusCode `json:"statusCode"`
+	}
+}
+type CreatePamAccountTemplate400StatusCode float32
+type CreatePamAccountTemplate401StatusCode float32
+type CreatePamAccountTemplate403StatusCode float32
+type CreatePamAccountTemplate404StatusCode float32
+type CreatePamAccountTemplate422StatusCode float32
+type CreatePamAccountTemplate500StatusCode float32
+
+// Status returns HTTPResponse.Status
+func (r CreatePamAccountTemplateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePamAccountTemplateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CreatePostgresPamAccountResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Account struct {
-			CreatedAt   time.Time `json:"createdAt"`
-			Credentials struct {
-				Username string `json:"username"`
-			} `json:"credentials"`
-			Description          *string `json:"description"`
-			DiscoveryFingerprint *string `json:"discoveryFingerprint"`
-			Domain               *struct {
-				DomainType string             `json:"domainType"`
-				Id         openapi_types.UUID `json:"id"`
-				Name       string             `json:"name"`
-			} `json:"domain"`
-			DomainId                     *openapi_types.UUID `json:"domainId"`
-			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-			FolderId                     *openapi_types.UUID `json:"folderId"`
-			Id                           openapi_types.UUID  `json:"id"`
-			InternalMetadata             interface{}         `json:"internalMetadata"`
-			LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
-			LastRotationMessage          *string             `json:"lastRotationMessage"`
-			Metadata                     *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name          string                                       `json:"name"`
-			ParentType    CreatePostgresPamAccount200AccountParentType `json:"parentType"`
-			PolicyId      *openapi_types.UUID                          `json:"policyId"`
-			PolicyName    *string                                      `json:"policyName"`
-			ProjectId     string                                       `json:"projectId"`
-			RequireMfa    *bool                                        `json:"requireMfa"`
-			RequireReason *bool                                        `json:"requireReason,omitempty"`
-			Resource      *struct {
-				Id                            openapi_types.UUID `json:"id"`
-				Name                          string             `json:"name"`
-				ResourceType                  string             `json:"resourceType"`
-				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-			} `json:"resource"`
-			ResourceId     *openapi_types.UUID `json:"resourceId"`
-			RotationStatus *string             `json:"rotationStatus"`
-			UpdatedAt      time.Time           `json:"updatedAt"`
+			AccountType           string                 `json:"accountType"`
+			ConnectionDetails     map[string]interface{} `json:"connectionDetails"`
+			CreatedAt             time.Time              `json:"createdAt"`
+			Description           *string                `json:"description"`
+			FolderId              *openapi_types.UUID    `json:"folderId"`
+			FolderName            string                 `json:"folderName"`
+			GatewayId             *openapi_types.UUID    `json:"gatewayId"`
+			GatewayPoolId         *openapi_types.UUID    `json:"gatewayPoolId"`
+			Id                    openapi_types.UUID     `json:"id"`
+			Name                  string                 `json:"name"`
+			RecordingConnectionId *openapi_types.UUID    `json:"recordingConnectionId"`
+			SettingsOverrides     interface{}            `json:"settingsOverrides"`
+			TemplateId            openapi_types.UUID     `json:"templateId"`
+			TemplateName          string                 `json:"templateName"`
+			UpdatedAt             time.Time              `json:"updatedAt"`
 		} `json:"account"`
+		CorsProbeUrl *string `json:"corsProbeUrl"`
 	}
 	JSON400 *struct {
 		Details    interface{}                           `json:"details,omitempty"`
@@ -5824,7 +5687,6 @@ type CreatePostgresPamAccountResponse struct {
 		StatusCode CreatePostgresPamAccount500StatusCode `json:"statusCode"`
 	}
 }
-type CreatePostgresPamAccount200AccountParentType string
 type CreatePostgresPamAccount400StatusCode float32
 type CreatePostgresPamAccount401StatusCode float32
 type CreatePostgresPamAccount403StatusCode float32
@@ -5848,158 +5710,28 @@ func (r CreatePostgresPamAccountResponse) StatusCode() int {
 	return 0
 }
 
-type CreateRedisPamAccountResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Account struct {
-			CreatedAt   time.Time `json:"createdAt"`
-			Credentials struct {
-				Username *string `json:"username,omitempty"`
-			} `json:"credentials"`
-			Description          *string `json:"description"`
-			DiscoveryFingerprint *string `json:"discoveryFingerprint"`
-			Domain               *struct {
-				DomainType string             `json:"domainType"`
-				Id         openapi_types.UUID `json:"id"`
-				Name       string             `json:"name"`
-			} `json:"domain"`
-			DomainId                     *openapi_types.UUID `json:"domainId"`
-			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-			FolderId                     *openapi_types.UUID `json:"folderId"`
-			Id                           openapi_types.UUID  `json:"id"`
-			InternalMetadata             interface{}         `json:"internalMetadata"`
-			LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
-			LastRotationMessage          *string             `json:"lastRotationMessage"`
-			Metadata                     *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name          string                                    `json:"name"`
-			ParentType    CreateRedisPamAccount200AccountParentType `json:"parentType"`
-			PolicyId      *openapi_types.UUID                       `json:"policyId"`
-			PolicyName    *string                                   `json:"policyName"`
-			ProjectId     string                                    `json:"projectId"`
-			RequireMfa    *bool                                     `json:"requireMfa"`
-			RequireReason *bool                                     `json:"requireReason,omitempty"`
-			Resource      *struct {
-				Id                            openapi_types.UUID `json:"id"`
-				Name                          string             `json:"name"`
-				ResourceType                  string             `json:"resourceType"`
-				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-			} `json:"resource"`
-			ResourceId     *openapi_types.UUID `json:"resourceId"`
-			RotationStatus *string             `json:"rotationStatus"`
-			UpdatedAt      time.Time           `json:"updatedAt"`
-		} `json:"account"`
-	}
-	JSON400 *struct {
-		Details    interface{}                        `json:"details,omitempty"`
-		Error      string                             `json:"error"`
-		Message    string                             `json:"message"`
-		ReqId      string                             `json:"reqId"`
-		StatusCode CreateRedisPamAccount400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                             `json:"error"`
-		Message    string                             `json:"message"`
-		ReqId      string                             `json:"reqId"`
-		StatusCode CreateRedisPamAccount401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                        `json:"details,omitempty"`
-		Error      string                             `json:"error"`
-		Message    string                             `json:"message"`
-		ReqId      string                             `json:"reqId"`
-		StatusCode CreateRedisPamAccount403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                             `json:"error"`
-		Message    string                             `json:"message"`
-		ReqId      string                             `json:"reqId"`
-		StatusCode CreateRedisPamAccount404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                             `json:"error"`
-		Message    interface{}                        `json:"message,omitempty"`
-		ReqId      string                             `json:"reqId"`
-		StatusCode CreateRedisPamAccount422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                             `json:"error"`
-		Message    string                             `json:"message"`
-		ReqId      string                             `json:"reqId"`
-		StatusCode CreateRedisPamAccount500StatusCode `json:"statusCode"`
-	}
-}
-type CreateRedisPamAccount200AccountParentType string
-type CreateRedisPamAccount400StatusCode float32
-type CreateRedisPamAccount401StatusCode float32
-type CreateRedisPamAccount403StatusCode float32
-type CreateRedisPamAccount404StatusCode float32
-type CreateRedisPamAccount422StatusCode float32
-type CreateRedisPamAccount500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r CreateRedisPamAccountResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreateRedisPamAccountResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
 type CreateSshPamAccountResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Account struct {
-			CreatedAt            time.Time                                   `json:"createdAt"`
-			Credentials          CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
-			Description          *string                                     `json:"description"`
-			DiscoveryFingerprint *string                                     `json:"discoveryFingerprint"`
-			Domain               *struct {
-				DomainType string             `json:"domainType"`
-				Id         openapi_types.UUID `json:"id"`
-				Name       string             `json:"name"`
-			} `json:"domain"`
-			DomainId                     *openapi_types.UUID `json:"domainId"`
-			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-			FolderId                     *openapi_types.UUID `json:"folderId"`
-			Id                           openapi_types.UUID  `json:"id"`
-			InternalMetadata             interface{}         `json:"internalMetadata"`
-			LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
-			LastRotationMessage          *string             `json:"lastRotationMessage"`
-			Metadata                     *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name          string                                  `json:"name"`
-			ParentType    CreateSshPamAccount200AccountParentType `json:"parentType"`
-			PolicyId      *openapi_types.UUID                     `json:"policyId"`
-			PolicyName    *string                                 `json:"policyName"`
-			ProjectId     string                                  `json:"projectId"`
-			RequireMfa    *bool                                   `json:"requireMfa"`
-			RequireReason *bool                                   `json:"requireReason,omitempty"`
-			Resource      *struct {
-				Id                            openapi_types.UUID `json:"id"`
-				Name                          string             `json:"name"`
-				ResourceType                  string             `json:"resourceType"`
-				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-			} `json:"resource"`
-			ResourceId     *openapi_types.UUID `json:"resourceId"`
-			RotationStatus *string             `json:"rotationStatus"`
-			UpdatedAt      time.Time           `json:"updatedAt"`
+			AccountType           string                 `json:"accountType"`
+			ConnectionDetails     map[string]interface{} `json:"connectionDetails"`
+			CreatedAt             time.Time              `json:"createdAt"`
+			Description           *string                `json:"description"`
+			FolderId              *openapi_types.UUID    `json:"folderId"`
+			FolderName            string                 `json:"folderName"`
+			GatewayId             *openapi_types.UUID    `json:"gatewayId"`
+			GatewayPoolId         *openapi_types.UUID    `json:"gatewayPoolId"`
+			Id                    openapi_types.UUID     `json:"id"`
+			Name                  string                 `json:"name"`
+			RecordingConnectionId *openapi_types.UUID    `json:"recordingConnectionId"`
+			SettingsOverrides     interface{}            `json:"settingsOverrides"`
+			TemplateId            openapi_types.UUID     `json:"templateId"`
+			TemplateName          string                 `json:"templateName"`
+			UpdatedAt             time.Time              `json:"updatedAt"`
 		} `json:"account"`
+		CorsProbeUrl *string `json:"corsProbeUrl"`
 	}
 	JSON400 *struct {
 		Details    interface{}                      `json:"details,omitempty"`
@@ -6040,25 +5772,6 @@ type CreateSshPamAccountResponse struct {
 		StatusCode CreateSshPamAccount500StatusCode `json:"statusCode"`
 	}
 }
-type CreateSshPamAccount200AccountCredentials0 struct {
-	AuthMethod CreateSshPamAccount200AccountCredentials0AuthMethod `json:"authMethod"`
-	Username   string                                              `json:"username"`
-}
-type CreateSshPamAccount200AccountCredentials0AuthMethod string
-type CreateSshPamAccount200AccountCredentials1 struct {
-	AuthMethod CreateSshPamAccount200AccountCredentials1AuthMethod `json:"authMethod"`
-	Username   string                                              `json:"username"`
-}
-type CreateSshPamAccount200AccountCredentials1AuthMethod string
-type CreateSshPamAccount200AccountCredentials2 struct {
-	AuthMethod CreateSshPamAccount200AccountCredentials2AuthMethod `json:"authMethod"`
-	Username   string                                              `json:"username"`
-}
-type CreateSshPamAccount200AccountCredentials2AuthMethod string
-type CreateSshPamAccount_200_Account_Credentials struct {
-	union json.RawMessage
-}
-type CreateSshPamAccount200AccountParentType string
 type CreateSshPamAccount400StatusCode float32
 type CreateSshPamAccount401StatusCode float32
 type CreateSshPamAccount403StatusCode float32
@@ -6087,52 +5800,23 @@ type CreateWindowsPamAccountResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Account struct {
-			CreatedAt   time.Time `json:"createdAt"`
-			Credentials struct {
-				Username string `json:"username"`
-			} `json:"credentials"`
-			Description          *string `json:"description"`
-			DiscoveryFingerprint *string `json:"discoveryFingerprint"`
-			Domain               *struct {
-				DomainType string             `json:"domainType"`
-				Id         openapi_types.UUID `json:"id"`
-				Name       string             `json:"name"`
-			} `json:"domain"`
-			DomainId                     *openapi_types.UUID `json:"domainId"`
-			EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-			FolderId                     *openapi_types.UUID `json:"folderId"`
-			Id                           openapi_types.UUID  `json:"id"`
-			InternalMetadata             struct {
-				AccountType     CreateWindowsPamAccount200AccountInternalMetadataAccountType `json:"accountType"`
-				Enabled         *bool                                                        `json:"enabled,omitempty"`
-				LastLogon       *string                                                      `json:"lastLogon,omitempty"`
-				PasswordLastSet *string                                                      `json:"passwordLastSet,omitempty"`
-				Sid             *string                                                      `json:"sid,omitempty"`
-			} `json:"internalMetadata"`
-			LastRotatedAt       *time.Time `json:"lastRotatedAt"`
-			LastRotationMessage *string    `json:"lastRotationMessage"`
-			Metadata            *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name          string                                      `json:"name"`
-			ParentType    CreateWindowsPamAccount200AccountParentType `json:"parentType"`
-			PolicyId      *openapi_types.UUID                         `json:"policyId"`
-			PolicyName    *string                                     `json:"policyName"`
-			ProjectId     string                                      `json:"projectId"`
-			RequireMfa    *bool                                       `json:"requireMfa"`
-			RequireReason *bool                                       `json:"requireReason,omitempty"`
-			Resource      *struct {
-				Id                            openapi_types.UUID `json:"id"`
-				Name                          string             `json:"name"`
-				ResourceType                  string             `json:"resourceType"`
-				RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-			} `json:"resource"`
-			ResourceId     *openapi_types.UUID `json:"resourceId"`
-			RotationStatus *string             `json:"rotationStatus"`
-			UpdatedAt      time.Time           `json:"updatedAt"`
+			AccountType           string                 `json:"accountType"`
+			ConnectionDetails     map[string]interface{} `json:"connectionDetails"`
+			CreatedAt             time.Time              `json:"createdAt"`
+			Description           *string                `json:"description"`
+			FolderId              *openapi_types.UUID    `json:"folderId"`
+			FolderName            string                 `json:"folderName"`
+			GatewayId             *openapi_types.UUID    `json:"gatewayId"`
+			GatewayPoolId         *openapi_types.UUID    `json:"gatewayPoolId"`
+			Id                    openapi_types.UUID     `json:"id"`
+			Name                  string                 `json:"name"`
+			RecordingConnectionId *openapi_types.UUID    `json:"recordingConnectionId"`
+			SettingsOverrides     interface{}            `json:"settingsOverrides"`
+			TemplateId            openapi_types.UUID     `json:"templateId"`
+			TemplateName          string                 `json:"templateName"`
+			UpdatedAt             time.Time              `json:"updatedAt"`
 		} `json:"account"`
+		CorsProbeUrl *string `json:"corsProbeUrl"`
 	}
 	JSON400 *struct {
 		Details    interface{}                          `json:"details,omitempty"`
@@ -6173,8 +5857,6 @@ type CreateWindowsPamAccountResponse struct {
 		StatusCode CreateWindowsPamAccount500StatusCode `json:"statusCode"`
 	}
 }
-type CreateWindowsPamAccount200AccountInternalMetadataAccountType string
-type CreateWindowsPamAccount200AccountParentType string
 type CreateWindowsPamAccount400StatusCode float32
 type CreateWindowsPamAccount401StatusCode float32
 type CreateWindowsPamAccount403StatusCode float32
@@ -6198,102 +5880,66 @@ func (r CreateWindowsPamAccountResponse) StatusCode() int {
 	return 0
 }
 
-type CreateKubernetesPamResourceResponse struct {
+type CreatePamFolderResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
-		Resource struct {
-			ConnectionDetails struct {
-				SslCertificate        *string `json:"sslCertificate,omitempty"`
-				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-				Url                   string  `json:"url"`
-			} `json:"connectionDetails"`
-			CreatedAt            time.Time           `json:"createdAt"`
-			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-			DomainId             *openapi_types.UUID `json:"domainId"`
-			GatewayId            *openapi_types.UUID `json:"gatewayId"`
-			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-			Id                   openapi_types.UUID  `json:"id"`
-			Metadata             *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name                       string                                                               `json:"name"`
-			ProjectId                  string                                                               `json:"projectId"`
-			ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
-			RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-			SessionSummaryConfig       *struct {
-				AiInsightsEnabled bool                                                            `json:"aiInsightsEnabled"`
-				ConnectionId      openapi_types.UUID                                              `json:"connectionId"`
-				Model             CreateKubernetesPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-			} `json:"sessionSummaryConfig"`
-			UpdatedAt time.Time `json:"updatedAt"`
-		} `json:"resource"`
+		Folder struct {
+			CreatedAt   time.Time          `json:"createdAt"`
+			Description *string            `json:"description"`
+			Id          openapi_types.UUID `json:"id"`
+			Name        string             `json:"name"`
+			UpdatedAt   time.Time          `json:"updatedAt"`
+		} `json:"folder"`
 	}
 	JSON400 *struct {
-		Details    interface{}                              `json:"details,omitempty"`
-		Error      string                                   `json:"error"`
-		Message    string                                   `json:"message"`
-		ReqId      string                                   `json:"reqId"`
-		StatusCode CreateKubernetesPamResource400StatusCode `json:"statusCode"`
+		Details    interface{}                  `json:"details,omitempty"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode CreatePamFolder400StatusCode `json:"statusCode"`
 	}
 	JSON401 *struct {
-		Error      string                                   `json:"error"`
-		Message    string                                   `json:"message"`
-		ReqId      string                                   `json:"reqId"`
-		StatusCode CreateKubernetesPamResource401StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode CreatePamFolder401StatusCode `json:"statusCode"`
 	}
 	JSON403 *struct {
-		Details    interface{}                              `json:"details,omitempty"`
-		Error      string                                   `json:"error"`
-		Message    string                                   `json:"message"`
-		ReqId      string                                   `json:"reqId"`
-		StatusCode CreateKubernetesPamResource403StatusCode `json:"statusCode"`
+		Details    interface{}                  `json:"details,omitempty"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode CreatePamFolder403StatusCode `json:"statusCode"`
 	}
 	JSON404 *struct {
-		Error      string                                   `json:"error"`
-		Message    string                                   `json:"message"`
-		ReqId      string                                   `json:"reqId"`
-		StatusCode CreateKubernetesPamResource404StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode CreatePamFolder404StatusCode `json:"statusCode"`
 	}
 	JSON422 *struct {
-		Error      string                                   `json:"error"`
-		Message    interface{}                              `json:"message,omitempty"`
-		ReqId      string                                   `json:"reqId"`
-		StatusCode CreateKubernetesPamResource422StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    interface{}                  `json:"message,omitempty"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode CreatePamFolder422StatusCode `json:"statusCode"`
 	}
 	JSON500 *struct {
-		Error      string                                   `json:"error"`
-		Message    string                                   `json:"message"`
-		ReqId      string                                   `json:"reqId"`
-		StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
+		Error      string                       `json:"error"`
+		Message    string                       `json:"message"`
+		ReqId      string                       `json:"reqId"`
+		StatusCode CreatePamFolder500StatusCode `json:"statusCode"`
 	}
 }
-type CreateKubernetesPamResource200ResourceResourceType string
-type CreateKubernetesPamResource200ResourceRotationAccountCredentials0 struct {
-	AuthMethod CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod `json:"authMethod"`
-}
-type CreateKubernetesPamResource200ResourceRotationAccountCredentials0AuthMethod string
-type CreateKubernetesPamResource200ResourceRotationAccountCredentials1 struct {
-	AuthMethod         CreateKubernetesPamResource200ResourceRotationAccountCredentials1AuthMethod `json:"authMethod"`
-	Namespace          string                                                                      `json:"namespace"`
-	ServiceAccountName string                                                                      `json:"serviceAccountName"`
-}
-type CreateKubernetesPamResource200ResourceRotationAccountCredentials1AuthMethod string
-type CreateKubernetesPamResource_200_Resource_RotationAccountCredentials struct {
-	union json.RawMessage
-}
-type CreateKubernetesPamResource200ResourceSessionSummaryConfigModel string
-type CreateKubernetesPamResource400StatusCode float32
-type CreateKubernetesPamResource401StatusCode float32
-type CreateKubernetesPamResource403StatusCode float32
-type CreateKubernetesPamResource404StatusCode float32
-type CreateKubernetesPamResource422StatusCode float32
-type CreateKubernetesPamResource500StatusCode float32
+type CreatePamFolder400StatusCode float32
+type CreatePamFolder401StatusCode float32
+type CreatePamFolder403StatusCode float32
+type CreatePamFolder404StatusCode float32
+type CreatePamFolder422StatusCode float32
+type CreatePamFolder500StatusCode float32
 
 // Status returns HTTPResponse.Status
-func (r CreateKubernetesPamResourceResponse) Status() string {
+func (r CreatePamFolderResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -6301,429 +5947,7 @@ func (r CreateKubernetesPamResourceResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r CreateKubernetesPamResourceResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type CreatePostgresPamResourceResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Resource struct {
-			ConnectionDetails struct {
-				Database              string  `json:"database"`
-				Host                  string  `json:"host"`
-				Port                  float32 `json:"port"`
-				SslCertificate        *string `json:"sslCertificate,omitempty"`
-				SslEnabled            bool    `json:"sslEnabled"`
-				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-			} `json:"connectionDetails"`
-			CreatedAt            time.Time           `json:"createdAt"`
-			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-			DomainId             *openapi_types.UUID `json:"domainId"`
-			GatewayId            *openapi_types.UUID `json:"gatewayId"`
-			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-			Id                   openapi_types.UUID  `json:"id"`
-			Metadata             *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name                       string                                           `json:"name"`
-			ProjectId                  string                                           `json:"projectId"`
-			ResourceType               CreatePostgresPamResource200ResourceResourceType `json:"resourceType"`
-			RotationAccountCredentials *struct {
-				Username string `json:"username"`
-			} `json:"rotationAccountCredentials"`
-			SessionSummaryConfig *struct {
-				AiInsightsEnabled bool                                                          `json:"aiInsightsEnabled"`
-				ConnectionId      openapi_types.UUID                                            `json:"connectionId"`
-				Model             CreatePostgresPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-			} `json:"sessionSummaryConfig"`
-			UpdatedAt time.Time `json:"updatedAt"`
-		} `json:"resource"`
-	}
-	JSON400 *struct {
-		Details    interface{}                            `json:"details,omitempty"`
-		Error      string                                 `json:"error"`
-		Message    string                                 `json:"message"`
-		ReqId      string                                 `json:"reqId"`
-		StatusCode CreatePostgresPamResource400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                                 `json:"error"`
-		Message    string                                 `json:"message"`
-		ReqId      string                                 `json:"reqId"`
-		StatusCode CreatePostgresPamResource401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                            `json:"details,omitempty"`
-		Error      string                                 `json:"error"`
-		Message    string                                 `json:"message"`
-		ReqId      string                                 `json:"reqId"`
-		StatusCode CreatePostgresPamResource403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                                 `json:"error"`
-		Message    string                                 `json:"message"`
-		ReqId      string                                 `json:"reqId"`
-		StatusCode CreatePostgresPamResource404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                                 `json:"error"`
-		Message    interface{}                            `json:"message,omitempty"`
-		ReqId      string                                 `json:"reqId"`
-		StatusCode CreatePostgresPamResource422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                                 `json:"error"`
-		Message    string                                 `json:"message"`
-		ReqId      string                                 `json:"reqId"`
-		StatusCode CreatePostgresPamResource500StatusCode `json:"statusCode"`
-	}
-}
-type CreatePostgresPamResource200ResourceResourceType string
-type CreatePostgresPamResource200ResourceSessionSummaryConfigModel string
-type CreatePostgresPamResource400StatusCode float32
-type CreatePostgresPamResource401StatusCode float32
-type CreatePostgresPamResource403StatusCode float32
-type CreatePostgresPamResource404StatusCode float32
-type CreatePostgresPamResource422StatusCode float32
-type CreatePostgresPamResource500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r CreatePostgresPamResourceResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreatePostgresPamResourceResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type CreateRedisPamResourceResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Resource struct {
-			ConnectionDetails struct {
-				Host                  string  `json:"host"`
-				Port                  float32 `json:"port"`
-				SslCertificate        *string `json:"sslCertificate,omitempty"`
-				SslEnabled            bool    `json:"sslEnabled"`
-				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-			} `json:"connectionDetails"`
-			CreatedAt            time.Time           `json:"createdAt"`
-			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-			DomainId             *openapi_types.UUID `json:"domainId"`
-			GatewayId            *openapi_types.UUID `json:"gatewayId"`
-			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-			Id                   openapi_types.UUID  `json:"id"`
-			Metadata             *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name                       string                                        `json:"name"`
-			ProjectId                  string                                        `json:"projectId"`
-			ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
-			RotationAccountCredentials *struct {
-				Username *string `json:"username,omitempty"`
-			} `json:"rotationAccountCredentials"`
-			SessionSummaryConfig *struct {
-				AiInsightsEnabled bool                                                       `json:"aiInsightsEnabled"`
-				ConnectionId      openapi_types.UUID                                         `json:"connectionId"`
-				Model             CreateRedisPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-			} `json:"sessionSummaryConfig"`
-			UpdatedAt time.Time `json:"updatedAt"`
-		} `json:"resource"`
-	}
-	JSON400 *struct {
-		Details    interface{}                         `json:"details,omitempty"`
-		Error      string                              `json:"error"`
-		Message    string                              `json:"message"`
-		ReqId      string                              `json:"reqId"`
-		StatusCode CreateRedisPamResource400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                              `json:"error"`
-		Message    string                              `json:"message"`
-		ReqId      string                              `json:"reqId"`
-		StatusCode CreateRedisPamResource401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                         `json:"details,omitempty"`
-		Error      string                              `json:"error"`
-		Message    string                              `json:"message"`
-		ReqId      string                              `json:"reqId"`
-		StatusCode CreateRedisPamResource403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                              `json:"error"`
-		Message    string                              `json:"message"`
-		ReqId      string                              `json:"reqId"`
-		StatusCode CreateRedisPamResource404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                              `json:"error"`
-		Message    interface{}                         `json:"message,omitempty"`
-		ReqId      string                              `json:"reqId"`
-		StatusCode CreateRedisPamResource422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                              `json:"error"`
-		Message    string                              `json:"message"`
-		ReqId      string                              `json:"reqId"`
-		StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
-	}
-}
-type CreateRedisPamResource200ResourceResourceType string
-type CreateRedisPamResource200ResourceSessionSummaryConfigModel string
-type CreateRedisPamResource400StatusCode float32
-type CreateRedisPamResource401StatusCode float32
-type CreateRedisPamResource403StatusCode float32
-type CreateRedisPamResource404StatusCode float32
-type CreateRedisPamResource422StatusCode float32
-type CreateRedisPamResource500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r CreateRedisPamResourceResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreateRedisPamResourceResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type CreateSshPamResourceResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Resource struct {
-			ConnectionDetails struct {
-				Host string  `json:"host"`
-				Port float32 `json:"port"`
-			} `json:"connectionDetails"`
-			CreatedAt            time.Time           `json:"createdAt"`
-			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-			DomainId             *openapi_types.UUID `json:"domainId"`
-			GatewayId            *openapi_types.UUID `json:"gatewayId"`
-			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-			Id                   openapi_types.UUID  `json:"id"`
-			Metadata             *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name                       string                                                        `json:"name"`
-			ProjectId                  string                                                        `json:"projectId"`
-			ResourceType               CreateSshPamResource200ResourceResourceType                   `json:"resourceType"`
-			RotationAccountCredentials *CreateSshPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-			SessionSummaryConfig       *struct {
-				AiInsightsEnabled bool                                                     `json:"aiInsightsEnabled"`
-				ConnectionId      openapi_types.UUID                                       `json:"connectionId"`
-				Model             CreateSshPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-			} `json:"sessionSummaryConfig"`
-			UpdatedAt time.Time `json:"updatedAt"`
-		} `json:"resource"`
-	}
-	JSON400 *struct {
-		Details    interface{}                       `json:"details,omitempty"`
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode CreateSshPamResource400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode CreateSshPamResource401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                       `json:"details,omitempty"`
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode CreateSshPamResource403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode CreateSshPamResource404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                            `json:"error"`
-		Message    interface{}                       `json:"message,omitempty"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode CreateSshPamResource422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                            `json:"error"`
-		Message    string                            `json:"message"`
-		ReqId      string                            `json:"reqId"`
-		StatusCode CreateSshPamResource500StatusCode `json:"statusCode"`
-	}
-}
-type CreateSshPamResource200ResourceResourceType string
-type CreateSshPamResource200ResourceRotationAccountCredentials0 struct {
-	AuthMethod CreateSshPamResource200ResourceRotationAccountCredentials0AuthMethod `json:"authMethod"`
-	Username   string                                                               `json:"username"`
-}
-type CreateSshPamResource200ResourceRotationAccountCredentials0AuthMethod string
-type CreateSshPamResource200ResourceRotationAccountCredentials1 struct {
-	AuthMethod CreateSshPamResource200ResourceRotationAccountCredentials1AuthMethod `json:"authMethod"`
-	Username   string                                                               `json:"username"`
-}
-type CreateSshPamResource200ResourceRotationAccountCredentials1AuthMethod string
-type CreateSshPamResource200ResourceRotationAccountCredentials2 struct {
-	AuthMethod CreateSshPamResource200ResourceRotationAccountCredentials2AuthMethod `json:"authMethod"`
-	Username   string                                                               `json:"username"`
-}
-type CreateSshPamResource200ResourceRotationAccountCredentials2AuthMethod string
-type CreateSshPamResource_200_Resource_RotationAccountCredentials struct {
-	union json.RawMessage
-}
-type CreateSshPamResource200ResourceSessionSummaryConfigModel string
-type CreateSshPamResource400StatusCode float32
-type CreateSshPamResource401StatusCode float32
-type CreateSshPamResource403StatusCode float32
-type CreateSshPamResource404StatusCode float32
-type CreateSshPamResource422StatusCode float32
-type CreateSshPamResource500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r CreateSshPamResourceResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreateSshPamResourceResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type CreateWindowsPamResourceResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *struct {
-		Resource struct {
-			ConnectionDetails struct {
-				Hostname                string                                                       `json:"hostname"`
-				Port                    int                                                          `json:"port"`
-				Protocol                CreateWindowsPamResource200ResourceConnectionDetailsProtocol `json:"protocol"`
-				UseWinrmHttps           bool                                                         `json:"useWinrmHttps"`
-				WinrmCaCert             *string                                                      `json:"winrmCaCert,omitempty"`
-				WinrmPort               int                                                          `json:"winrmPort"`
-				WinrmRejectUnauthorized bool                                                         `json:"winrmRejectUnauthorized"`
-				WinrmTlsServerName      *string                                                      `json:"winrmTlsServerName,omitempty"`
-			} `json:"connectionDetails"`
-			CreatedAt            time.Time           `json:"createdAt"`
-			DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-			DomainId             *openapi_types.UUID `json:"domainId"`
-			GatewayId            *openapi_types.UUID `json:"gatewayId"`
-			GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-			Id                   openapi_types.UUID  `json:"id"`
-			Metadata             *[]struct {
-				Id    openapi_types.UUID `json:"id"`
-				Key   string             `json:"key"`
-				Value *string            `json:"value"`
-			} `json:"metadata,omitempty"`
-			Name                       string                                          `json:"name"`
-			ProjectId                  string                                          `json:"projectId"`
-			ResourceType               CreateWindowsPamResource200ResourceResourceType `json:"resourceType"`
-			RotationAccountCredentials *struct {
-				Username string `json:"username"`
-			} `json:"rotationAccountCredentials"`
-			SessionSummaryConfig *struct {
-				AiInsightsEnabled bool                                                         `json:"aiInsightsEnabled"`
-				ConnectionId      openapi_types.UUID                                           `json:"connectionId"`
-				Model             CreateWindowsPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-			} `json:"sessionSummaryConfig"`
-			UpdatedAt time.Time `json:"updatedAt"`
-		} `json:"resource"`
-	}
-	JSON400 *struct {
-		Details    interface{}                           `json:"details,omitempty"`
-		Error      string                                `json:"error"`
-		Message    string                                `json:"message"`
-		ReqId      string                                `json:"reqId"`
-		StatusCode CreateWindowsPamResource400StatusCode `json:"statusCode"`
-	}
-	JSON401 *struct {
-		Error      string                                `json:"error"`
-		Message    string                                `json:"message"`
-		ReqId      string                                `json:"reqId"`
-		StatusCode CreateWindowsPamResource401StatusCode `json:"statusCode"`
-	}
-	JSON403 *struct {
-		Details    interface{}                           `json:"details,omitempty"`
-		Error      string                                `json:"error"`
-		Message    string                                `json:"message"`
-		ReqId      string                                `json:"reqId"`
-		StatusCode CreateWindowsPamResource403StatusCode `json:"statusCode"`
-	}
-	JSON404 *struct {
-		Error      string                                `json:"error"`
-		Message    string                                `json:"message"`
-		ReqId      string                                `json:"reqId"`
-		StatusCode CreateWindowsPamResource404StatusCode `json:"statusCode"`
-	}
-	JSON422 *struct {
-		Error      string                                `json:"error"`
-		Message    interface{}                           `json:"message,omitempty"`
-		ReqId      string                                `json:"reqId"`
-		StatusCode CreateWindowsPamResource422StatusCode `json:"statusCode"`
-	}
-	JSON500 *struct {
-		Error      string                                `json:"error"`
-		Message    string                                `json:"message"`
-		ReqId      string                                `json:"reqId"`
-		StatusCode CreateWindowsPamResource500StatusCode `json:"statusCode"`
-	}
-}
-type CreateWindowsPamResource200ResourceConnectionDetailsProtocol string
-type CreateWindowsPamResource200ResourceResourceType string
-type CreateWindowsPamResource200ResourceSessionSummaryConfigModel string
-type CreateWindowsPamResource400StatusCode float32
-type CreateWindowsPamResource401StatusCode float32
-type CreateWindowsPamResource403StatusCode float32
-type CreateWindowsPamResource404StatusCode float32
-type CreateWindowsPamResource422StatusCode float32
-type CreateWindowsPamResource500StatusCode float32
-
-// Status returns HTTPResponse.Status
-func (r CreateWindowsPamResourceResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreateWindowsPamResourceResponse) StatusCode() int {
+func (r CreatePamFolderResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6735,13 +5959,21 @@ type CreateProjectResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *struct {
 		Project struct {
-			UnderscoreId                                string    `json:"_id"`
-			AuditLogsRetentionDays                      *float32  `json:"auditLogsRetentionDays"`
-			AutoCapitalization                          *bool     `json:"autoCapitalization"`
-			CreatedAt                                   time.Time `json:"createdAt"`
-			DefaultProduct                              *string   `json:"defaultProduct"`
-			Description                                 *string   `json:"description"`
-			EnforceEncryptedSecretManagerSecretMetadata *bool     `json:"enforceEncryptedSecretManagerSecretMetadata"`
+			UnderscoreId           string    `json:"_id"`
+			AuditLogsRetentionDays *float32  `json:"auditLogsRetentionDays"`
+			AutoCapitalization     *bool     `json:"autoCapitalization"`
+			CreatedAt              time.Time `json:"createdAt"`
+			DefaultProduct         *string   `json:"defaultProduct"`
+			DeletedEnvironments    []struct {
+				DeleteAfter   time.Time                                                `json:"deleteAfter"`
+				DeletedBy     *CreateProject_200_Project_DeletedEnvironments_DeletedBy `json:"deletedBy"`
+				Id            string                                                   `json:"id"`
+				Name          string                                                   `json:"name"`
+				Slug          string                                                   `json:"slug"`
+				SoftDeletedAt time.Time                                                `json:"softDeletedAt"`
+			} `json:"deletedEnvironments"`
+			Description                                 *string `json:"description"`
+			EnforceEncryptedSecretManagerSecretMetadata *bool   `json:"enforceEncryptedSecretManagerSecretMetadata"`
 			Environments                                []struct {
 				Id   string `json:"id"`
 				Name string `json:"name"`
@@ -6802,6 +6034,24 @@ type CreateProjectResponse struct {
 		StatusCode CreateProject500StatusCode `json:"statusCode"`
 	}
 }
+type CreateProject200ProjectDeletedEnvironmentsDeletedBy0 struct {
+	Email     *string                                                  `json:"email"`
+	FirstName *string                                                  `json:"firstName"`
+	Id        string                                                   `json:"id"`
+	LastName  *string                                                  `json:"lastName"`
+	Type      CreateProject200ProjectDeletedEnvironmentsDeletedBy0Type `json:"type"`
+	Username  *string                                                  `json:"username"`
+}
+type CreateProject200ProjectDeletedEnvironmentsDeletedBy0Type string
+type CreateProject200ProjectDeletedEnvironmentsDeletedBy1 struct {
+	Id   string                                                   `json:"id"`
+	Name string                                                   `json:"name"`
+	Type CreateProject200ProjectDeletedEnvironmentsDeletedBy1Type `json:"type"`
+}
+type CreateProject200ProjectDeletedEnvironmentsDeletedBy1Type string
+type CreateProject_200_Project_DeletedEnvironments_DeletedBy struct {
+	union json.RawMessage
+}
 type CreateProject400StatusCode float32
 type CreateProject401StatusCode float32
 type CreateProject403StatusCode float32
@@ -6837,6 +6087,7 @@ type GetRelaysResponse struct {
 		IdentityId      *openapi_types.UUID `json:"identityId"`
 		Name            string              `json:"name"`
 		OrgId           *openapi_types.UUID `json:"orgId"`
+		TokenVersion    *float32            `json:"tokenVersion,omitempty"`
 		UpdatedAt       time.Time           `json:"updatedAt"`
 	}
 	JSON400 *struct {
@@ -6905,18 +6156,19 @@ type ListGatewaysResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *[]struct {
+		Capabilities            interface{}        `json:"capabilities"`
 		ConnectedResourcesCount float32            `json:"connectedResourcesCount"`
 		CreatedAt               time.Time          `json:"createdAt"`
 		Heartbeat               *time.Time         `json:"heartbeat"`
+		HeartbeatTTL            *float32           `json:"heartbeatTTL"`
 		Id                      openapi_types.UUID `json:"id"`
 		Identity                *struct {
 			Id   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"identity"`
-		IdentityId            *openapi_types.UUID `json:"identityId"`
-		LastHealthCheckStatus *string             `json:"lastHealthCheckStatus"`
-		Name                  string              `json:"name"`
-		UpdatedAt             time.Time           `json:"updatedAt"`
+		IdentityId *openapi_types.UUID `json:"identityId"`
+		Name       string              `json:"name"`
+		UpdatedAt  time.Time           `json:"updatedAt"`
 	}
 	JSON400 *struct {
 		Details    interface{}               `json:"details,omitempty"`
@@ -7078,6 +6330,7 @@ type ListSecretsV4Response struct {
 					Key         string  `json:"key"`
 					Value       *string `json:"value,omitempty"`
 				} `json:"secretMetadata,omitempty"`
+				SecretPath               *string  `json:"secretPath,omitempty"`
 				SecretReminderNote       *string  `json:"secretReminderNote"`
 				SecretReminderRepeatDays *float32 `json:"secretReminderRepeatDays"`
 				SecretValue              string   `json:"secretValue"`
@@ -7127,6 +6380,7 @@ type ListSecretsV4Response struct {
 			Workspace string    `json:"workspace"`
 		} `json:"secrets"`
 	}
+	JSON304 *interface{}
 	JSON400 *struct {
 		Details    interface{}                `json:"details,omitempty"`
 		Error      string                     `json:"error"`
@@ -7265,6 +6519,7 @@ type DeleteSecretV42000 struct {
 type DeleteSecretV42001 struct {
 	Approval struct {
 		BypassReason          *string             `json:"bypassReason"`
+		CommitMessage         *string             `json:"commitMessage"`
 		CommitterUserId       *openapi_types.UUID `json:"committerUserId"`
 		Conflicts             interface{}         `json:"conflicts"`
 		CreatedAt             time.Time           `json:"createdAt"`
@@ -7483,6 +6738,7 @@ type UpdateSecretV42000 struct {
 type UpdateSecretV42001 struct {
 	Approval struct {
 		BypassReason          *string             `json:"bypassReason"`
+		CommitMessage         *string             `json:"commitMessage"`
 		CommitterUserId       *openapi_types.UUID `json:"committerUserId"`
 		Conflicts             interface{}         `json:"conflicts"`
 		CreatedAt             time.Time           `json:"createdAt"`
@@ -7595,6 +6851,7 @@ type CreateSecretV42000 struct {
 type CreateSecretV42001 struct {
 	Approval struct {
 		BypassReason          *string             `json:"bypassReason"`
+		CommitMessage         *string             `json:"commitMessage"`
 		CommitterUserId       *openapi_types.UUID `json:"committerUserId"`
 		Conflicts             interface{}         `json:"conflicts"`
 		CreatedAt             time.Time           `json:"createdAt"`
@@ -7862,6 +7119,23 @@ func (c *ClientWithResponses) CreateMachineIdentityWithResponse(ctx context.Cont
 	return ParseCreateMachineIdentityResponse(rsp)
 }
 
+// CreatePamAccountTemplateWithBodyWithResponse request with arbitrary body returning *CreatePamAccountTemplateResponse
+func (c *ClientWithResponses) CreatePamAccountTemplateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error) {
+	rsp, err := c.CreatePamAccountTemplateWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePamAccountTemplateResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreatePamAccountTemplateWithResponse(ctx context.Context, body CreatePamAccountTemplateJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamAccountTemplateResponse, error) {
+	rsp, err := c.CreatePamAccountTemplate(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePamAccountTemplateResponse(rsp)
+}
+
 // CreatePostgresPamAccountWithBodyWithResponse request with arbitrary body returning *CreatePostgresPamAccountResponse
 func (c *ClientWithResponses) CreatePostgresPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamAccountResponse, error) {
 	rsp, err := c.CreatePostgresPamAccountWithBody(ctx, contentType, body, reqEditors...)
@@ -7877,23 +7151,6 @@ func (c *ClientWithResponses) CreatePostgresPamAccountWithResponse(ctx context.C
 		return nil, err
 	}
 	return ParseCreatePostgresPamAccountResponse(rsp)
-}
-
-// CreateRedisPamAccountWithBodyWithResponse request with arbitrary body returning *CreateRedisPamAccountResponse
-func (c *ClientWithResponses) CreateRedisPamAccountWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error) {
-	rsp, err := c.CreateRedisPamAccountWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateRedisPamAccountResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreateRedisPamAccountWithResponse(ctx context.Context, body CreateRedisPamAccountJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamAccountResponse, error) {
-	rsp, err := c.CreateRedisPamAccount(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateRedisPamAccountResponse(rsp)
 }
 
 // CreateSshPamAccountWithBodyWithResponse request with arbitrary body returning *CreateSshPamAccountResponse
@@ -7930,89 +7187,21 @@ func (c *ClientWithResponses) CreateWindowsPamAccountWithResponse(ctx context.Co
 	return ParseCreateWindowsPamAccountResponse(rsp)
 }
 
-// CreateKubernetesPamResourceWithBodyWithResponse request with arbitrary body returning *CreateKubernetesPamResourceResponse
-func (c *ClientWithResponses) CreateKubernetesPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
-	rsp, err := c.CreateKubernetesPamResourceWithBody(ctx, contentType, body, reqEditors...)
+// CreatePamFolderWithBodyWithResponse request with arbitrary body returning *CreatePamFolderResponse
+func (c *ClientWithResponses) CreatePamFolderWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error) {
+	rsp, err := c.CreatePamFolderWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCreateKubernetesPamResourceResponse(rsp)
+	return ParseCreatePamFolderResponse(rsp)
 }
 
-func (c *ClientWithResponses) CreateKubernetesPamResourceWithResponse(ctx context.Context, body CreateKubernetesPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateKubernetesPamResourceResponse, error) {
-	rsp, err := c.CreateKubernetesPamResource(ctx, body, reqEditors...)
+func (c *ClientWithResponses) CreatePamFolderWithResponse(ctx context.Context, body CreatePamFolderJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePamFolderResponse, error) {
+	rsp, err := c.CreatePamFolder(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCreateKubernetesPamResourceResponse(rsp)
-}
-
-// CreatePostgresPamResourceWithBodyWithResponse request with arbitrary body returning *CreatePostgresPamResourceResponse
-func (c *ClientWithResponses) CreatePostgresPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error) {
-	rsp, err := c.CreatePostgresPamResourceWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreatePostgresPamResourceResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreatePostgresPamResourceWithResponse(ctx context.Context, body CreatePostgresPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePostgresPamResourceResponse, error) {
-	rsp, err := c.CreatePostgresPamResource(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreatePostgresPamResourceResponse(rsp)
-}
-
-// CreateRedisPamResourceWithBodyWithResponse request with arbitrary body returning *CreateRedisPamResourceResponse
-func (c *ClientWithResponses) CreateRedisPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error) {
-	rsp, err := c.CreateRedisPamResourceWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateRedisPamResourceResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreateRedisPamResourceWithResponse(ctx context.Context, body CreateRedisPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRedisPamResourceResponse, error) {
-	rsp, err := c.CreateRedisPamResource(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateRedisPamResourceResponse(rsp)
-}
-
-// CreateSshPamResourceWithBodyWithResponse request with arbitrary body returning *CreateSshPamResourceResponse
-func (c *ClientWithResponses) CreateSshPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error) {
-	rsp, err := c.CreateSshPamResourceWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateSshPamResourceResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreateSshPamResourceWithResponse(ctx context.Context, body CreateSshPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSshPamResourceResponse, error) {
-	rsp, err := c.CreateSshPamResource(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateSshPamResourceResponse(rsp)
-}
-
-// CreateWindowsPamResourceWithBodyWithResponse request with arbitrary body returning *CreateWindowsPamResourceResponse
-func (c *ClientWithResponses) CreateWindowsPamResourceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error) {
-	rsp, err := c.CreateWindowsPamResourceWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateWindowsPamResourceResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreateWindowsPamResourceWithResponse(ctx context.Context, body CreateWindowsPamResourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateWindowsPamResourceResponse, error) {
-	rsp, err := c.CreateWindowsPamResource(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateWindowsPamResourceResponse(rsp)
+	return ParseCreatePamFolderResponse(rsp)
 }
 
 // CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
@@ -8155,12 +7344,14 @@ func ParseAdminSignUpResponse(rsp *http.Response) (*AdminSignUpResponse, error) 
 			Message      string `json:"message"`
 			New          string `json:"new"`
 			Organization struct {
+				AllowCrossProjectSecretSharing        *bool               `json:"allowCrossProjectSecretSharing,omitempty"`
 				AllowSecretSharingOutsideOrganization *bool               `json:"allowSecretSharingOutsideOrganization"`
 				AuthEnforced                          *bool               `json:"authEnforced"`
 				BlockDuplicateSecretSyncDestinations  *bool               `json:"blockDuplicateSecretSyncDestinations,omitempty"`
 				BypassOrgAuthEnabled                  *bool               `json:"bypassOrgAuthEnabled,omitempty"`
 				CreatedAt                             time.Time           `json:"createdAt"`
 				CustomerId                            *string             `json:"customerId"`
+				DefaultCertManagerProjectId           *string             `json:"defaultCertManagerProjectId"`
 				DefaultMembershipRole                 *string             `json:"defaultMembershipRole,omitempty"`
 				EnforceMfa                            *bool               `json:"enforceMfa,omitempty"`
 				GoogleSsoAuthEnforced                 *bool               `json:"googleSsoAuthEnforced,omitempty"`
@@ -9097,16 +8288,12 @@ func ParseCreateAcmeCertificateAuthorityV1Response(rsp *http.Response) (*CreateA
 				// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
 				DnsResolver *string `json:"dnsResolver,omitempty"`
 
-				// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
-				EabHmacKey *string `json:"eabHmacKey,omitempty"`
-
 				// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 				EabKid *string `json:"eabKid,omitempty"`
 			} `json:"configuration"`
 			EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
 			Id                   openapi_types.UUID                        `json:"id"`
 			Name                 string                                    `json:"name"`
-			ProjectId            string                                    `json:"projectId"`
 			Status               CreateAcmeCertificateAuthorityV1200Status `json:"status"`
 			Type                 CreateAcmeCertificateAuthorityV1200Type   `json:"type"`
 		}
@@ -9230,16 +8417,12 @@ func ParseUpdateAcmeCertificateAuthorityV1Response(rsp *http.Response) (*UpdateA
 				// DnsResolver An optional custom DNS resolver IP address to use for verifying DNS propagation during ACME challenges. Must be a valid IP address (e.g. 8.8.8.8). When not set, the system default DNS resolver is used.
 				DnsResolver *string `json:"dnsResolver,omitempty"`
 
-				// EabHmacKey The External Account Binding (EAB) HMAC key for the ACME Certificate Authority. Required if the ACME provider uses EAB.
-				EabHmacKey *string `json:"eabHmacKey,omitempty"`
-
 				// EabKid The External Account Binding (EAB) Key ID for the ACME Certificate Authority. Required if the ACME provider uses EAB.
 				EabKid *string `json:"eabKid,omitempty"`
 			} `json:"configuration"`
 			EnableDirectIssuance *bool                                     `json:"enableDirectIssuance,omitempty"`
 			Id                   openapi_types.UUID                        `json:"id"`
 			Name                 string                                    `json:"name"`
-			ProjectId            string                                    `json:"projectId"`
 			Status               UpdateAcmeCertificateAuthorityV1200Status `json:"status"`
 			Type                 UpdateAcmeCertificateAuthorityV1200Type   `json:"type"`
 		}
@@ -9352,15 +8535,27 @@ func ParseCreateInternalCertificateAuthorityV1Response(rsp *http.Response) (*Cre
 				// Country The country name (C) for the CA.
 				Country *string `json:"country,omitempty"`
 
-				// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is always included as the primary.
+				// CrlDistributionPointUrls Additional CRL Distribution Point URLs (HTTP/HTTPS) embedded in every certificate issued by this CA. Up to 4 URLs; the Infisical-managed CRL endpoint is included by default unless disabled.
 				CrlDistributionPointUrls *[]string `json:"crlDistributionPointUrls,omitempty"`
-				Dn                       *string   `json:"dn"`
+
+				// DisableManagedCrlDistributionPointUrl When set to true, the Infisical-managed CRL endpoint URL will not be embedded in certificates issued by this CA. Only custom CRL Distribution Point URLs (if any) will be included.
+				DisableManagedCrlDistributionPointUrl *bool   `json:"disableManagedCrlDistributionPointUrl,omitempty"`
+				Dn                                    *string `json:"dn"`
 
 				// FriendlyName A friendly name for the CA.
 				FriendlyName *string `json:"friendlyName,omitempty"`
 
+				// HsmConnectorId The ID of the HSM Connector to generate and store the CA's signing key in. Required when keySource is 'hsm'.
+				HsmConnectorId *openapi_types.UUID `json:"hsmConnectorId,omitempty"`
+
+				// HsmKeyLabel The label of the CA's signing key on the HSM. Not user-supplied: it is the HSM Connector's configured key name prefix followed by a per-CA label built from the CA name and a random 5-character suffix (ca-<name>-<slug>).
+				HsmKeyLabel *string `json:"hsmKeyLabel,omitempty"`
+
 				// KeyAlgorithm The type of public key algorithm and size, in bits, of the key pair for the CA; when you create an intermediate CA, you must use a key algorithm supported by the parent CA.
 				KeyAlgorithm CreateInternalCertificateAuthorityV1200ConfigurationKeyAlgorithm `json:"keyAlgorithm"`
+
+				// KeySource Where the CA's signing key is generated and stored. 'infisical' keeps the key in Infisical's KMS; 'hsm' generates and stores the key in the HSM reached through the specified HSM Connector.
+				KeySource *CreateInternalCertificateAuthorityV1200ConfigurationKeySource `json:"keySource,omitempty"`
 
 				// Locality The locality name for the CA.
 				Locality *string `json:"locality,omitempty"`
@@ -9391,7 +8586,6 @@ func ParseCreateInternalCertificateAuthorityV1Response(rsp *http.Response) (*Cre
 			EnableDirectIssuance *bool                                         `json:"enableDirectIssuance,omitempty"`
 			Id                   openapi_types.UUID                            `json:"id"`
 			Name                 string                                        `json:"name"`
-			ProjectId            string                                        `json:"projectId"`
 			Status               CreateInternalCertificateAuthorityV1200Status `json:"status"`
 			Type                 CreateInternalCertificateAuthorityV1200Type   `json:"type"`
 		}
@@ -9517,9 +8711,8 @@ func ParseCreateCertificatePolicyResponse(rsp *http.Response) (*CreateCertificat
 					Denied   *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesDenied   `json:"denied,omitempty"`
 					Required *[]CreateCertificatePolicy200CertificatePolicyKeyUsagesRequired `json:"required,omitempty"`
 				} `json:"keyUsages,omitempty"`
-				Name      string             `json:"name"`
-				ProjectId openapi_types.UUID `json:"projectId"`
-				Sans      *[]struct {
+				Name string `json:"name"`
+				Sans *[]struct {
 					Allowed  *[]string                                           `json:"allowed,omitempty"`
 					Denied   *[]string                                           `json:"denied,omitempty"`
 					Required *[]string                                           `json:"required,omitempty"`
@@ -9650,6 +8843,7 @@ func ParseCreateCertificateProfileResponse(rsp *http.Response) (*CreateCertifica
 					} `json:"basicConstraints,omitempty"`
 					CommonName         *string                                                                   `json:"commonName,omitempty"`
 					Country            *string                                                                   `json:"country,omitempty"`
+					DomainComponents   *[]string                                                                 `json:"domainComponents,omitempty"`
 					ExtendedKeyUsages  *[]CreateCertificateProfile200CertificateProfileDefaultsExtendedKeyUsages `json:"extendedKeyUsages,omitempty"`
 					KeyAlgorithm       *CreateCertificateProfile200CertificateProfileDefaultsKeyAlgorithm        `json:"keyAlgorithm,omitempty"`
 					KeyUsages          *[]CreateCertificateProfile200CertificateProfileDefaultsKeyUsages         `json:"keyUsages,omitempty"`
@@ -9658,7 +8852,11 @@ func ParseCreateCertificateProfileResponse(rsp *http.Response) (*CreateCertifica
 					OrganizationalUnit *string                                                                   `json:"organizationalUnit,omitempty"`
 					SignatureAlgorithm *CreateCertificateProfile200CertificateProfileDefaultsSignatureAlgorithm  `json:"signatureAlgorithm,omitempty"`
 					State              *string                                                                   `json:"state,omitempty"`
-					TtlDays            *float32                                                                  `json:"ttlDays,omitempty"`
+					SubjectAltNames    *[]struct {
+						Type  CreateCertificateProfile200CertificateProfileDefaultsSubjectAltNamesType `json:"type"`
+						Value string                                                                   `json:"value"`
+					} `json:"subjectAltNames,omitempty"`
+					TtlDays *float32 `json:"ttlDays,omitempty"`
 				} `json:"defaults"`
 				Description     *string                                                          `json:"description"`
 				EnrollmentType  string                                                           `json:"enrollmentType"`
@@ -9666,7 +8864,6 @@ func ParseCreateCertificateProfileResponse(rsp *http.Response) (*CreateCertifica
 				ExternalConfigs *CreateCertificateProfile_200_CertificateProfile_ExternalConfigs `json:"externalConfigs"`
 				Id              openapi_types.UUID                                               `json:"id"`
 				IssuerType      *string                                                          `json:"issuerType,omitempty"`
-				ProjectId       string                                                           `json:"projectId"`
 				ScepConfigId    *openapi_types.UUID                                              `json:"scepConfigId"`
 				Slug            string                                                           `json:"slug"`
 				UpdatedAt       time.Time                                                        `json:"updatedAt"`
@@ -9873,6 +9070,121 @@ func ParseCreateMachineIdentityResponse(rsp *http.Response) (*CreateMachineIdent
 	return response, nil
 }
 
+// ParseCreatePamAccountTemplateResponse parses an HTTP response from a CreatePamAccountTemplateWithResponse call
+func ParseCreatePamAccountTemplateResponse(rsp *http.Response) (*CreatePamAccountTemplateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePamAccountTemplateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			CorsProbeUrl *string `json:"corsProbeUrl"`
+			Template     struct {
+				CreatedAt             time.Time           `json:"createdAt"`
+				Description           *string             `json:"description"`
+				GatewayId             *openapi_types.UUID `json:"gatewayId"`
+				GatewayPoolId         *openapi_types.UUID `json:"gatewayPoolId"`
+				Id                    openapi_types.UUID  `json:"id"`
+				Name                  string              `json:"name"`
+				Policies              interface{}         `json:"policies"`
+				RecordingConnectionId *openapi_types.UUID `json:"recordingConnectionId"`
+				Settings              interface{}         `json:"settings"`
+				Type                  string              `json:"type"`
+				UpdatedAt             time.Time           `json:"updatedAt"`
+			} `json:"template"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePamAccountTemplate400StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePamAccountTemplate401StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest struct {
+			Details    interface{}                           `json:"details,omitempty"`
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePamAccountTemplate403StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePamAccountTemplate404StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    interface{}                           `json:"message,omitempty"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePamAccountTemplate422StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest struct {
+			Error      string                                `json:"error"`
+			Message    string                                `json:"message"`
+			ReqId      string                                `json:"reqId"`
+			StatusCode CreatePamAccountTemplate500StatusCode `json:"statusCode"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreatePostgresPamAccountResponse parses an HTTP response from a CreatePostgresPamAccountWithResponse call
 func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresPamAccountResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -9890,46 +9202,23 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Account struct {
-				CreatedAt   time.Time `json:"createdAt"`
-				Credentials struct {
-					Username string `json:"username"`
-				} `json:"credentials"`
-				Description          *string `json:"description"`
-				DiscoveryFingerprint *string `json:"discoveryFingerprint"`
-				Domain               *struct {
-					DomainType string             `json:"domainType"`
-					Id         openapi_types.UUID `json:"id"`
-					Name       string             `json:"name"`
-				} `json:"domain"`
-				DomainId                     *openapi_types.UUID `json:"domainId"`
-				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-				FolderId                     *openapi_types.UUID `json:"folderId"`
-				Id                           openapi_types.UUID  `json:"id"`
-				InternalMetadata             interface{}         `json:"internalMetadata"`
-				LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
-				LastRotationMessage          *string             `json:"lastRotationMessage"`
-				Metadata                     *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name          string                                       `json:"name"`
-				ParentType    CreatePostgresPamAccount200AccountParentType `json:"parentType"`
-				PolicyId      *openapi_types.UUID                          `json:"policyId"`
-				PolicyName    *string                                      `json:"policyName"`
-				ProjectId     string                                       `json:"projectId"`
-				RequireMfa    *bool                                        `json:"requireMfa"`
-				RequireReason *bool                                        `json:"requireReason,omitempty"`
-				Resource      *struct {
-					Id                            openapi_types.UUID `json:"id"`
-					Name                          string             `json:"name"`
-					ResourceType                  string             `json:"resourceType"`
-					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-				} `json:"resource"`
-				ResourceId     *openapi_types.UUID `json:"resourceId"`
-				RotationStatus *string             `json:"rotationStatus"`
-				UpdatedAt      time.Time           `json:"updatedAt"`
+				AccountType           string                 `json:"accountType"`
+				ConnectionDetails     map[string]interface{} `json:"connectionDetails"`
+				CreatedAt             time.Time              `json:"createdAt"`
+				Description           *string                `json:"description"`
+				FolderId              *openapi_types.UUID    `json:"folderId"`
+				FolderName            string                 `json:"folderName"`
+				GatewayId             *openapi_types.UUID    `json:"gatewayId"`
+				GatewayPoolId         *openapi_types.UUID    `json:"gatewayPoolId"`
+				Id                    openapi_types.UUID     `json:"id"`
+				Name                  string                 `json:"name"`
+				RecordingConnectionId *openapi_types.UUID    `json:"recordingConnectionId"`
+				SettingsOverrides     interface{}            `json:"settingsOverrides"`
+				TemplateId            openapi_types.UUID     `json:"templateId"`
+				TemplateName          string                 `json:"templateName"`
+				UpdatedAt             time.Time              `json:"updatedAt"`
 			} `json:"account"`
+			CorsProbeUrl *string `json:"corsProbeUrl"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10015,148 +9304,6 @@ func ParseCreatePostgresPamAccountResponse(rsp *http.Response) (*CreatePostgresP
 	return response, nil
 }
 
-// ParseCreateRedisPamAccountResponse parses an HTTP response from a CreateRedisPamAccountWithResponse call
-func ParseCreateRedisPamAccountResponse(rsp *http.Response) (*CreateRedisPamAccountResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreateRedisPamAccountResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Account struct {
-				CreatedAt   time.Time `json:"createdAt"`
-				Credentials struct {
-					Username *string `json:"username,omitempty"`
-				} `json:"credentials"`
-				Description          *string `json:"description"`
-				DiscoveryFingerprint *string `json:"discoveryFingerprint"`
-				Domain               *struct {
-					DomainType string             `json:"domainType"`
-					Id         openapi_types.UUID `json:"id"`
-					Name       string             `json:"name"`
-				} `json:"domain"`
-				DomainId                     *openapi_types.UUID `json:"domainId"`
-				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-				FolderId                     *openapi_types.UUID `json:"folderId"`
-				Id                           openapi_types.UUID  `json:"id"`
-				InternalMetadata             interface{}         `json:"internalMetadata"`
-				LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
-				LastRotationMessage          *string             `json:"lastRotationMessage"`
-				Metadata                     *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name          string                                    `json:"name"`
-				ParentType    CreateRedisPamAccount200AccountParentType `json:"parentType"`
-				PolicyId      *openapi_types.UUID                       `json:"policyId"`
-				PolicyName    *string                                   `json:"policyName"`
-				ProjectId     string                                    `json:"projectId"`
-				RequireMfa    *bool                                     `json:"requireMfa"`
-				RequireReason *bool                                     `json:"requireReason,omitempty"`
-				Resource      *struct {
-					Id                            openapi_types.UUID `json:"id"`
-					Name                          string             `json:"name"`
-					ResourceType                  string             `json:"resourceType"`
-					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-				} `json:"resource"`
-				ResourceId     *openapi_types.UUID `json:"resourceId"`
-				RotationStatus *string             `json:"rotationStatus"`
-				UpdatedAt      time.Time           `json:"updatedAt"`
-			} `json:"account"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Details    interface{}                        `json:"details,omitempty"`
-			Error      string                             `json:"error"`
-			Message    string                             `json:"message"`
-			ReqId      string                             `json:"reqId"`
-			StatusCode CreateRedisPamAccount400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                             `json:"error"`
-			Message    string                             `json:"message"`
-			ReqId      string                             `json:"reqId"`
-			StatusCode CreateRedisPamAccount401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                        `json:"details,omitempty"`
-			Error      string                             `json:"error"`
-			Message    string                             `json:"message"`
-			ReqId      string                             `json:"reqId"`
-			StatusCode CreateRedisPamAccount403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                             `json:"error"`
-			Message    string                             `json:"message"`
-			ReqId      string                             `json:"reqId"`
-			StatusCode CreateRedisPamAccount404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                             `json:"error"`
-			Message    interface{}                        `json:"message,omitempty"`
-			ReqId      string                             `json:"reqId"`
-			StatusCode CreateRedisPamAccount422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                             `json:"error"`
-			Message    string                             `json:"message"`
-			ReqId      string                             `json:"reqId"`
-			StatusCode CreateRedisPamAccount500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
 // ParseCreateSshPamAccountResponse parses an HTTP response from a CreateSshPamAccountWithResponse call
 func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -10174,44 +9321,23 @@ func ParseCreateSshPamAccountResponse(rsp *http.Response) (*CreateSshPamAccountR
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Account struct {
-				CreatedAt            time.Time                                   `json:"createdAt"`
-				Credentials          CreateSshPamAccount_200_Account_Credentials `json:"credentials"`
-				Description          *string                                     `json:"description"`
-				DiscoveryFingerprint *string                                     `json:"discoveryFingerprint"`
-				Domain               *struct {
-					DomainType string             `json:"domainType"`
-					Id         openapi_types.UUID `json:"id"`
-					Name       string             `json:"name"`
-				} `json:"domain"`
-				DomainId                     *openapi_types.UUID `json:"domainId"`
-				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-				FolderId                     *openapi_types.UUID `json:"folderId"`
-				Id                           openapi_types.UUID  `json:"id"`
-				InternalMetadata             interface{}         `json:"internalMetadata"`
-				LastRotatedAt                *time.Time          `json:"lastRotatedAt"`
-				LastRotationMessage          *string             `json:"lastRotationMessage"`
-				Metadata                     *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name          string                                  `json:"name"`
-				ParentType    CreateSshPamAccount200AccountParentType `json:"parentType"`
-				PolicyId      *openapi_types.UUID                     `json:"policyId"`
-				PolicyName    *string                                 `json:"policyName"`
-				ProjectId     string                                  `json:"projectId"`
-				RequireMfa    *bool                                   `json:"requireMfa"`
-				RequireReason *bool                                   `json:"requireReason,omitempty"`
-				Resource      *struct {
-					Id                            openapi_types.UUID `json:"id"`
-					Name                          string             `json:"name"`
-					ResourceType                  string             `json:"resourceType"`
-					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-				} `json:"resource"`
-				ResourceId     *openapi_types.UUID `json:"resourceId"`
-				RotationStatus *string             `json:"rotationStatus"`
-				UpdatedAt      time.Time           `json:"updatedAt"`
+				AccountType           string                 `json:"accountType"`
+				ConnectionDetails     map[string]interface{} `json:"connectionDetails"`
+				CreatedAt             time.Time              `json:"createdAt"`
+				Description           *string                `json:"description"`
+				FolderId              *openapi_types.UUID    `json:"folderId"`
+				FolderName            string                 `json:"folderName"`
+				GatewayId             *openapi_types.UUID    `json:"gatewayId"`
+				GatewayPoolId         *openapi_types.UUID    `json:"gatewayPoolId"`
+				Id                    openapi_types.UUID     `json:"id"`
+				Name                  string                 `json:"name"`
+				RecordingConnectionId *openapi_types.UUID    `json:"recordingConnectionId"`
+				SettingsOverrides     interface{}            `json:"settingsOverrides"`
+				TemplateId            openapi_types.UUID     `json:"templateId"`
+				TemplateName          string                 `json:"templateName"`
+				UpdatedAt             time.Time              `json:"updatedAt"`
 			} `json:"account"`
+			CorsProbeUrl *string `json:"corsProbeUrl"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10314,52 +9440,23 @@ func ParseCreateWindowsPamAccountResponse(rsp *http.Response) (*CreateWindowsPam
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Account struct {
-				CreatedAt   time.Time `json:"createdAt"`
-				Credentials struct {
-					Username string `json:"username"`
-				} `json:"credentials"`
-				Description          *string `json:"description"`
-				DiscoveryFingerprint *string `json:"discoveryFingerprint"`
-				Domain               *struct {
-					DomainType string             `json:"domainType"`
-					Id         openapi_types.UUID `json:"id"`
-					Name       string             `json:"name"`
-				} `json:"domain"`
-				DomainId                     *openapi_types.UUID `json:"domainId"`
-				EncryptedLastRotationMessage interface{}         `json:"encryptedLastRotationMessage"`
-				FolderId                     *openapi_types.UUID `json:"folderId"`
-				Id                           openapi_types.UUID  `json:"id"`
-				InternalMetadata             struct {
-					AccountType     CreateWindowsPamAccount200AccountInternalMetadataAccountType `json:"accountType"`
-					Enabled         *bool                                                        `json:"enabled,omitempty"`
-					LastLogon       *string                                                      `json:"lastLogon,omitempty"`
-					PasswordLastSet *string                                                      `json:"passwordLastSet,omitempty"`
-					Sid             *string                                                      `json:"sid,omitempty"`
-				} `json:"internalMetadata"`
-				LastRotatedAt       *time.Time `json:"lastRotatedAt"`
-				LastRotationMessage *string    `json:"lastRotationMessage"`
-				Metadata            *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name          string                                      `json:"name"`
-				ParentType    CreateWindowsPamAccount200AccountParentType `json:"parentType"`
-				PolicyId      *openapi_types.UUID                         `json:"policyId"`
-				PolicyName    *string                                     `json:"policyName"`
-				ProjectId     string                                      `json:"projectId"`
-				RequireMfa    *bool                                       `json:"requireMfa"`
-				RequireReason *bool                                       `json:"requireReason,omitempty"`
-				Resource      *struct {
-					Id                            openapi_types.UUID `json:"id"`
-					Name                          string             `json:"name"`
-					ResourceType                  string             `json:"resourceType"`
-					RotationCredentialsConfigured bool               `json:"rotationCredentialsConfigured"`
-				} `json:"resource"`
-				ResourceId     *openapi_types.UUID `json:"resourceId"`
-				RotationStatus *string             `json:"rotationStatus"`
-				UpdatedAt      time.Time           `json:"updatedAt"`
+				AccountType           string                 `json:"accountType"`
+				ConnectionDetails     map[string]interface{} `json:"connectionDetails"`
+				CreatedAt             time.Time              `json:"createdAt"`
+				Description           *string                `json:"description"`
+				FolderId              *openapi_types.UUID    `json:"folderId"`
+				FolderName            string                 `json:"folderName"`
+				GatewayId             *openapi_types.UUID    `json:"gatewayId"`
+				GatewayPoolId         *openapi_types.UUID    `json:"gatewayPoolId"`
+				Id                    openapi_types.UUID     `json:"id"`
+				Name                  string                 `json:"name"`
+				RecordingConnectionId *openapi_types.UUID    `json:"recordingConnectionId"`
+				SettingsOverrides     interface{}            `json:"settingsOverrides"`
+				TemplateId            openapi_types.UUID     `json:"templateId"`
+				TemplateName          string                 `json:"templateName"`
+				UpdatedAt             time.Time              `json:"updatedAt"`
 			} `json:"account"`
+			CorsProbeUrl *string `json:"corsProbeUrl"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10445,15 +9542,15 @@ func ParseCreateWindowsPamAccountResponse(rsp *http.Response) (*CreateWindowsPam
 	return response, nil
 }
 
-// ParseCreateKubernetesPamResourceResponse parses an HTTP response from a CreateKubernetesPamResourceWithResponse call
-func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubernetesPamResourceResponse, error) {
+// ParseCreatePamFolderResponse parses an HTTP response from a CreatePamFolderWithResponse call
+func ParseCreatePamFolderResponse(rsp *http.Response) (*CreatePamFolderResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &CreateKubernetesPamResourceResponse{
+	response := &CreatePamFolderResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -10461,34 +9558,13 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
-			Resource struct {
-				ConnectionDetails struct {
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-					Url                   string  `json:"url"`
-				} `json:"connectionDetails"`
-				CreatedAt            time.Time           `json:"createdAt"`
-				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-				DomainId             *openapi_types.UUID `json:"domainId"`
-				GatewayId            *openapi_types.UUID `json:"gatewayId"`
-				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-				Id                   openapi_types.UUID  `json:"id"`
-				Metadata             *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name                       string                                                               `json:"name"`
-				ProjectId                  string                                                               `json:"projectId"`
-				ResourceType               CreateKubernetesPamResource200ResourceResourceType                   `json:"resourceType"`
-				RotationAccountCredentials *CreateKubernetesPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-				SessionSummaryConfig       *struct {
-					AiInsightsEnabled bool                                                            `json:"aiInsightsEnabled"`
-					ConnectionId      openapi_types.UUID                                              `json:"connectionId"`
-					Model             CreateKubernetesPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-				} `json:"sessionSummaryConfig"`
-				UpdatedAt time.Time `json:"updatedAt"`
-			} `json:"resource"`
+			Folder struct {
+				CreatedAt   time.Time          `json:"createdAt"`
+				Description *string            `json:"description"`
+				Id          openapi_types.UUID `json:"id"`
+				Name        string             `json:"name"`
+				UpdatedAt   time.Time          `json:"updatedAt"`
+			} `json:"folder"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10497,11 +9573,11 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {
-			Details    interface{}                              `json:"details,omitempty"`
-			Error      string                                   `json:"error"`
-			Message    string                                   `json:"message"`
-			ReqId      string                                   `json:"reqId"`
-			StatusCode CreateKubernetesPamResource400StatusCode `json:"statusCode"`
+			Details    interface{}                  `json:"details,omitempty"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode CreatePamFolder400StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10510,10 +9586,10 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest struct {
-			Error      string                                   `json:"error"`
-			Message    string                                   `json:"message"`
-			ReqId      string                                   `json:"reqId"`
-			StatusCode CreateKubernetesPamResource401StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode CreatePamFolder401StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10522,11 +9598,11 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest struct {
-			Details    interface{}                              `json:"details,omitempty"`
-			Error      string                                   `json:"error"`
-			Message    string                                   `json:"message"`
-			ReqId      string                                   `json:"reqId"`
-			StatusCode CreateKubernetesPamResource403StatusCode `json:"statusCode"`
+			Details    interface{}                  `json:"details,omitempty"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode CreatePamFolder403StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10535,10 +9611,10 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest struct {
-			Error      string                                   `json:"error"`
-			Message    string                                   `json:"message"`
-			ReqId      string                                   `json:"reqId"`
-			StatusCode CreateKubernetesPamResource404StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode CreatePamFolder404StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10547,10 +9623,10 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest struct {
-			Error      string                                   `json:"error"`
-			Message    interface{}                              `json:"message,omitempty"`
-			ReqId      string                                   `json:"reqId"`
-			StatusCode CreateKubernetesPamResource422StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    interface{}                  `json:"message,omitempty"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode CreatePamFolder422StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -10559,541 +9635,10 @@ func ParseCreateKubernetesPamResourceResponse(rsp *http.Response) (*CreateKubern
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest struct {
-			Error      string                                   `json:"error"`
-			Message    string                                   `json:"message"`
-			ReqId      string                                   `json:"reqId"`
-			StatusCode CreateKubernetesPamResource500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseCreatePostgresPamResourceResponse parses an HTTP response from a CreatePostgresPamResourceWithResponse call
-func ParseCreatePostgresPamResourceResponse(rsp *http.Response) (*CreatePostgresPamResourceResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreatePostgresPamResourceResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Resource struct {
-				ConnectionDetails struct {
-					Database              string  `json:"database"`
-					Host                  string  `json:"host"`
-					Port                  float32 `json:"port"`
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslEnabled            bool    `json:"sslEnabled"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-				} `json:"connectionDetails"`
-				CreatedAt            time.Time           `json:"createdAt"`
-				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-				DomainId             *openapi_types.UUID `json:"domainId"`
-				GatewayId            *openapi_types.UUID `json:"gatewayId"`
-				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-				Id                   openapi_types.UUID  `json:"id"`
-				Metadata             *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name                       string                                           `json:"name"`
-				ProjectId                  string                                           `json:"projectId"`
-				ResourceType               CreatePostgresPamResource200ResourceResourceType `json:"resourceType"`
-				RotationAccountCredentials *struct {
-					Username string `json:"username"`
-				} `json:"rotationAccountCredentials"`
-				SessionSummaryConfig *struct {
-					AiInsightsEnabled bool                                                          `json:"aiInsightsEnabled"`
-					ConnectionId      openapi_types.UUID                                            `json:"connectionId"`
-					Model             CreatePostgresPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-				} `json:"sessionSummaryConfig"`
-				UpdatedAt time.Time `json:"updatedAt"`
-			} `json:"resource"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Details    interface{}                            `json:"details,omitempty"`
-			Error      string                                 `json:"error"`
-			Message    string                                 `json:"message"`
-			ReqId      string                                 `json:"reqId"`
-			StatusCode CreatePostgresPamResource400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                                 `json:"error"`
-			Message    string                                 `json:"message"`
-			ReqId      string                                 `json:"reqId"`
-			StatusCode CreatePostgresPamResource401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                            `json:"details,omitempty"`
-			Error      string                                 `json:"error"`
-			Message    string                                 `json:"message"`
-			ReqId      string                                 `json:"reqId"`
-			StatusCode CreatePostgresPamResource403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                                 `json:"error"`
-			Message    string                                 `json:"message"`
-			ReqId      string                                 `json:"reqId"`
-			StatusCode CreatePostgresPamResource404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                                 `json:"error"`
-			Message    interface{}                            `json:"message,omitempty"`
-			ReqId      string                                 `json:"reqId"`
-			StatusCode CreatePostgresPamResource422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                                 `json:"error"`
-			Message    string                                 `json:"message"`
-			ReqId      string                                 `json:"reqId"`
-			StatusCode CreatePostgresPamResource500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseCreateRedisPamResourceResponse parses an HTTP response from a CreateRedisPamResourceWithResponse call
-func ParseCreateRedisPamResourceResponse(rsp *http.Response) (*CreateRedisPamResourceResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreateRedisPamResourceResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Resource struct {
-				ConnectionDetails struct {
-					Host                  string  `json:"host"`
-					Port                  float32 `json:"port"`
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslEnabled            bool    `json:"sslEnabled"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-				} `json:"connectionDetails"`
-				CreatedAt            time.Time           `json:"createdAt"`
-				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-				DomainId             *openapi_types.UUID `json:"domainId"`
-				GatewayId            *openapi_types.UUID `json:"gatewayId"`
-				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-				Id                   openapi_types.UUID  `json:"id"`
-				Metadata             *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name                       string                                        `json:"name"`
-				ProjectId                  string                                        `json:"projectId"`
-				ResourceType               CreateRedisPamResource200ResourceResourceType `json:"resourceType"`
-				RotationAccountCredentials *struct {
-					Username *string `json:"username,omitempty"`
-				} `json:"rotationAccountCredentials"`
-				SessionSummaryConfig *struct {
-					AiInsightsEnabled bool                                                       `json:"aiInsightsEnabled"`
-					ConnectionId      openapi_types.UUID                                         `json:"connectionId"`
-					Model             CreateRedisPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-				} `json:"sessionSummaryConfig"`
-				UpdatedAt time.Time `json:"updatedAt"`
-			} `json:"resource"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Details    interface{}                         `json:"details,omitempty"`
-			Error      string                              `json:"error"`
-			Message    string                              `json:"message"`
-			ReqId      string                              `json:"reqId"`
-			StatusCode CreateRedisPamResource400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                              `json:"error"`
-			Message    string                              `json:"message"`
-			ReqId      string                              `json:"reqId"`
-			StatusCode CreateRedisPamResource401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                         `json:"details,omitempty"`
-			Error      string                              `json:"error"`
-			Message    string                              `json:"message"`
-			ReqId      string                              `json:"reqId"`
-			StatusCode CreateRedisPamResource403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                              `json:"error"`
-			Message    string                              `json:"message"`
-			ReqId      string                              `json:"reqId"`
-			StatusCode CreateRedisPamResource404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                              `json:"error"`
-			Message    interface{}                         `json:"message,omitempty"`
-			ReqId      string                              `json:"reqId"`
-			StatusCode CreateRedisPamResource422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                              `json:"error"`
-			Message    string                              `json:"message"`
-			ReqId      string                              `json:"reqId"`
-			StatusCode CreateRedisPamResource500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseCreateSshPamResourceResponse parses an HTTP response from a CreateSshPamResourceWithResponse call
-func ParseCreateSshPamResourceResponse(rsp *http.Response) (*CreateSshPamResourceResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreateSshPamResourceResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Resource struct {
-				ConnectionDetails struct {
-					Host string  `json:"host"`
-					Port float32 `json:"port"`
-				} `json:"connectionDetails"`
-				CreatedAt            time.Time           `json:"createdAt"`
-				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-				DomainId             *openapi_types.UUID `json:"domainId"`
-				GatewayId            *openapi_types.UUID `json:"gatewayId"`
-				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-				Id                   openapi_types.UUID  `json:"id"`
-				Metadata             *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name                       string                                                        `json:"name"`
-				ProjectId                  string                                                        `json:"projectId"`
-				ResourceType               CreateSshPamResource200ResourceResourceType                   `json:"resourceType"`
-				RotationAccountCredentials *CreateSshPamResource_200_Resource_RotationAccountCredentials `json:"rotationAccountCredentials"`
-				SessionSummaryConfig       *struct {
-					AiInsightsEnabled bool                                                     `json:"aiInsightsEnabled"`
-					ConnectionId      openapi_types.UUID                                       `json:"connectionId"`
-					Model             CreateSshPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-				} `json:"sessionSummaryConfig"`
-				UpdatedAt time.Time `json:"updatedAt"`
-			} `json:"resource"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Details    interface{}                       `json:"details,omitempty"`
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode CreateSshPamResource400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode CreateSshPamResource401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                       `json:"details,omitempty"`
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode CreateSshPamResource403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode CreateSshPamResource404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                            `json:"error"`
-			Message    interface{}                       `json:"message,omitempty"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode CreateSshPamResource422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                            `json:"error"`
-			Message    string                            `json:"message"`
-			ReqId      string                            `json:"reqId"`
-			StatusCode CreateSshPamResource500StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseCreateWindowsPamResourceResponse parses an HTTP response from a CreateWindowsPamResourceWithResponse call
-func ParseCreateWindowsPamResourceResponse(rsp *http.Response) (*CreateWindowsPamResourceResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreateWindowsPamResourceResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Resource struct {
-				ConnectionDetails struct {
-					Hostname                string                                                       `json:"hostname"`
-					Port                    int                                                          `json:"port"`
-					Protocol                CreateWindowsPamResource200ResourceConnectionDetailsProtocol `json:"protocol"`
-					UseWinrmHttps           bool                                                         `json:"useWinrmHttps"`
-					WinrmCaCert             *string                                                      `json:"winrmCaCert,omitempty"`
-					WinrmPort               int                                                          `json:"winrmPort"`
-					WinrmRejectUnauthorized bool                                                         `json:"winrmRejectUnauthorized"`
-					WinrmTlsServerName      *string                                                      `json:"winrmTlsServerName,omitempty"`
-				} `json:"connectionDetails"`
-				CreatedAt            time.Time           `json:"createdAt"`
-				DiscoveryFingerprint *string             `json:"discoveryFingerprint"`
-				DomainId             *openapi_types.UUID `json:"domainId"`
-				GatewayId            *openapi_types.UUID `json:"gatewayId"`
-				GatewayPoolId        *openapi_types.UUID `json:"gatewayPoolId"`
-				Id                   openapi_types.UUID  `json:"id"`
-				Metadata             *[]struct {
-					Id    openapi_types.UUID `json:"id"`
-					Key   string             `json:"key"`
-					Value *string            `json:"value"`
-				} `json:"metadata,omitempty"`
-				Name                       string                                          `json:"name"`
-				ProjectId                  string                                          `json:"projectId"`
-				ResourceType               CreateWindowsPamResource200ResourceResourceType `json:"resourceType"`
-				RotationAccountCredentials *struct {
-					Username string `json:"username"`
-				} `json:"rotationAccountCredentials"`
-				SessionSummaryConfig *struct {
-					AiInsightsEnabled bool                                                         `json:"aiInsightsEnabled"`
-					ConnectionId      openapi_types.UUID                                           `json:"connectionId"`
-					Model             CreateWindowsPamResource200ResourceSessionSummaryConfigModel `json:"model"`
-				} `json:"sessionSummaryConfig"`
-				UpdatedAt time.Time `json:"updatedAt"`
-			} `json:"resource"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest struct {
-			Details    interface{}                           `json:"details,omitempty"`
-			Error      string                                `json:"error"`
-			Message    string                                `json:"message"`
-			ReqId      string                                `json:"reqId"`
-			StatusCode CreateWindowsPamResource400StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest struct {
-			Error      string                                `json:"error"`
-			Message    string                                `json:"message"`
-			ReqId      string                                `json:"reqId"`
-			StatusCode CreateWindowsPamResource401StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest struct {
-			Details    interface{}                           `json:"details,omitempty"`
-			Error      string                                `json:"error"`
-			Message    string                                `json:"message"`
-			ReqId      string                                `json:"reqId"`
-			StatusCode CreateWindowsPamResource403StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest struct {
-			Error      string                                `json:"error"`
-			Message    string                                `json:"message"`
-			ReqId      string                                `json:"reqId"`
-			StatusCode CreateWindowsPamResource404StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest struct {
-			Error      string                                `json:"error"`
-			Message    interface{}                           `json:"message,omitempty"`
-			ReqId      string                                `json:"reqId"`
-			StatusCode CreateWindowsPamResource422StatusCode `json:"statusCode"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest struct {
-			Error      string                                `json:"error"`
-			Message    string                                `json:"message"`
-			ReqId      string                                `json:"reqId"`
-			StatusCode CreateWindowsPamResource500StatusCode `json:"statusCode"`
+			Error      string                       `json:"error"`
+			Message    string                       `json:"message"`
+			ReqId      string                       `json:"reqId"`
+			StatusCode CreatePamFolder500StatusCode `json:"statusCode"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -11122,13 +9667,21 @@ func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, err
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
 			Project struct {
-				UnderscoreId                                string    `json:"_id"`
-				AuditLogsRetentionDays                      *float32  `json:"auditLogsRetentionDays"`
-				AutoCapitalization                          *bool     `json:"autoCapitalization"`
-				CreatedAt                                   time.Time `json:"createdAt"`
-				DefaultProduct                              *string   `json:"defaultProduct"`
-				Description                                 *string   `json:"description"`
-				EnforceEncryptedSecretManagerSecretMetadata *bool     `json:"enforceEncryptedSecretManagerSecretMetadata"`
+				UnderscoreId           string    `json:"_id"`
+				AuditLogsRetentionDays *float32  `json:"auditLogsRetentionDays"`
+				AutoCapitalization     *bool     `json:"autoCapitalization"`
+				CreatedAt              time.Time `json:"createdAt"`
+				DefaultProduct         *string   `json:"defaultProduct"`
+				DeletedEnvironments    []struct {
+					DeleteAfter   time.Time                                                `json:"deleteAfter"`
+					DeletedBy     *CreateProject_200_Project_DeletedEnvironments_DeletedBy `json:"deletedBy"`
+					Id            string                                                   `json:"id"`
+					Name          string                                                   `json:"name"`
+					Slug          string                                                   `json:"slug"`
+					SoftDeletedAt time.Time                                                `json:"softDeletedAt"`
+				} `json:"deletedEnvironments"`
+				Description                                 *string `json:"description"`
+				EnforceEncryptedSecretManagerSecretMetadata *bool   `json:"enforceEncryptedSecretManagerSecretMetadata"`
 				Environments                                []struct {
 					Id   string `json:"id"`
 					Name string `json:"name"`
@@ -11258,6 +9811,7 @@ func ParseGetRelaysResponse(rsp *http.Response) (*GetRelaysResponse, error) {
 			IdentityId      *openapi_types.UUID `json:"identityId"`
 			Name            string              `json:"name"`
 			OrgId           *openapi_types.UUID `json:"orgId"`
+			TokenVersion    *float32            `json:"tokenVersion,omitempty"`
 			UpdatedAt       time.Time           `json:"updatedAt"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -11360,18 +9914,19 @@ func ParseListGatewaysResponse(rsp *http.Response) (*ListGatewaysResponse, error
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest []struct {
+			Capabilities            interface{}        `json:"capabilities"`
 			ConnectedResourcesCount float32            `json:"connectedResourcesCount"`
 			CreatedAt               time.Time          `json:"createdAt"`
 			Heartbeat               *time.Time         `json:"heartbeat"`
+			HeartbeatTTL            *float32           `json:"heartbeatTTL"`
 			Id                      openapi_types.UUID `json:"id"`
 			Identity                *struct {
 				Id   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"identity"`
-			IdentityId            *openapi_types.UUID `json:"identityId"`
-			LastHealthCheckStatus *string             `json:"lastHealthCheckStatus"`
-			Name                  string              `json:"name"`
-			UpdatedAt             time.Time           `json:"updatedAt"`
+			IdentityId *openapi_types.UUID `json:"identityId"`
+			Name       string              `json:"name"`
+			UpdatedAt  time.Time           `json:"updatedAt"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -11601,6 +10156,7 @@ func ParseListSecretsV4Response(rsp *http.Response) (*ListSecretsV4Response, err
 						Key         string  `json:"key"`
 						Value       *string `json:"value,omitempty"`
 					} `json:"secretMetadata,omitempty"`
+					SecretPath               *string  `json:"secretPath,omitempty"`
 					SecretReminderNote       *string  `json:"secretReminderNote"`
 					SecretReminderRepeatDays *float32 `json:"secretReminderRepeatDays"`
 					SecretValue              string   `json:"secretValue"`
@@ -11654,6 +10210,13 @@ func ParseListSecretsV4Response(rsp *http.Response) (*ListSecretsV4Response, err
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 304:
+		var dest interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON304 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest struct {

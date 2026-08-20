@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
+	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -40,65 +39,35 @@ func startRedisContainer(t *testing.T, ctx context.Context, opts ...testcontaine
 	return container
 }
 
-func createRedisPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int, sslEnabled bool, sslCertificate *string) uuid.UUID {
-	resp, err := infra.ApiClient.CreateRedisPamResourceWithResponse(
-		ctx,
-		client.CreateRedisPamResourceJSONRequestBody{
-			ProjectId: uuid.MustParse(infra.ProjectId),
-			GatewayId: &infra.GatewayId,
-			Name:      name,
-			ConnectionDetails: struct {
-				Host                  string  `json:"host"`
-				Port                  float32 `json:"port"`
-				SslCertificate        *string `json:"sslCertificate,omitempty"`
-				SslEnabled            bool    `json:"sslEnabled"`
-				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-			}{
-				Host:                  host,
-				Port:                  float32(port),
-				SslEnabled:            sslEnabled,
-				SslCertificate:        sslCertificate,
-				SslRejectUnauthorized: false,
-			},
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode())
-	slog.Info("Created Redis PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
-	return resp.JSON200.Resource.Id
+// createRedisPamAccount creates a Redis account. A non-nil sslCertificate enables TLS.
+func createRedisPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderId, templateId openapitypes.UUID,
+	name, host string, port int, sslCertificate *string, username string, password *string) {
+	connectionDetails := map[string]interface{}{
+		"host":                  host,
+		"port":                  port,
+		"sslEnabled":            sslCertificate != nil,
+		"sslRejectUnauthorized": false,
+	}
+	if sslCertificate != nil {
+		connectionDetails["sslCertificate"] = *sslCertificate
+	}
+
+	credentials := map[string]interface{}{"username": username}
+	if password != nil {
+		credentials["password"] = *password
+	}
+
+	CreatePamAccount(t, ctx, infra, "redis", name, folderId, templateId, connectionDetails, credentials)
 }
 
-func createRedisPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceId uuid.UUID, name string, username, password *string) {
-	resp, err := infra.ApiClient.CreateRedisPamAccountWithResponse(
-		ctx,
-		client.CreateRedisPamAccountJSONRequestBody{
-			ResourceId: resourceId,
-			Name:       name,
-			Credentials: struct {
-				Password *string `json:"password,omitempty"`
-				Username *string `json:"username,omitempty"`
-			}{
-				Username: username,
-				Password: password,
-			},
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode())
-	slog.Info("Created Redis PAM account", "name", name)
-}
-
-func startRedisProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceName, accountName string) (int, *helpers.Command) {
+func startRedisProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName, accountName string) (int, *helpers.Command) {
 	freePort := helpers.GetFreePort()
 	pamCmd := helpers.Command{
 		Test:               t,
 		RunMethod:          helpers.RunMethodSubprocess,
 		DisableTempHomeDir: true,
 		Args: []string{
-			"pam", "redis", "access",
-			"--resource", resourceName,
-			"--account", accountName,
-			"--project-id", infra.ProjectId,
+			"pam", "access", fmt.Sprintf("%s/%s", folderName, accountName),
 			"--duration", "5m",
 			"--port", fmt.Sprintf("%d", freePort),
 		},
@@ -110,25 +79,25 @@ func startRedisProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, res
 	pamCmd.Start(ctx)
 	t.Cleanup(pamCmd.Stop)
 
-	// Redis proxy prints the banner to stderr (unlike the Postgres proxy which uses stdout).
+	// The banner is printed to stdout (fmt.Printf), like the other non-RDP proxies.
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: &pamCmd,
 		Condition: func() helpers.ConditionResult {
-			if strings.Contains(pamCmd.Stderr(), "Redis Proxy Session Started") {
+			if strings.Contains(pamCmd.Stdout(), "Redis Proxy Session Started") {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
 		},
 	})
 	if result != helpers.WaitSuccess {
-		pamCmd.DumpOutput()
+		infra.DumpOutput(&pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, result, "Redis proxy should start successfully")
 
 	return freePort, &pamCmd
 }
 
-func verifyRedisThroughProxy(t *testing.T, ctx context.Context, pamCmd *helpers.Command, proxyAddr, testKey, testValue string) {
+func verifyRedisThroughProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, pamCmd *helpers.Command, proxyAddr, testKey, testValue string) {
 	var rdb *redis.Client
 	connectResult := helpers.WaitFor(t, helpers.WaitForOptions{
 		EnsureCmdRunning: pamCmd,
@@ -145,6 +114,9 @@ func verifyRedisThroughProxy(t *testing.T, ctx context.Context, pamCmd *helpers.
 			return helpers.ConditionSuccess
 		},
 	})
+	if connectResult != helpers.WaitSuccess {
+		infra.DumpOutput(pamCmd)
+	}
 	require.Equal(t, helpers.WaitSuccess, connectResult, "Should connect to Redis through proxy")
 	t.Cleanup(func() { rdb.Close() })
 
@@ -210,15 +182,17 @@ func generateSelfSignedCert(t *testing.T, host, certDir string) (caPEM string) {
 }
 
 func TestPAM_Redis(t *testing.T) {
-	// TODO: Re-enable once the PAM revamp's e2e tests are updated. Temporarily
-	// skipped so it stops blocking production.
-	t.Skip("Temporarily disabled pending PAM revamp test updates")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	infra := SetupPAMInfra(t, ctx)
 	LoginUser(t, ctx, infra)
+
+	folderName := "redis-folder"
+	folderId := CreatePamFolder(t, ctx, infra, folderName)
+	templateId := CreatePamTemplate(t, ctx, infra, "redis-template", client.CreatePamAccountTemplateJSONBodyTypeRedis)
+
+	defaultUser := "default"
 
 	t.Run("no-auth", func(t *testing.T) {
 		container := startRedisContainer(t, ctx)
@@ -227,27 +201,19 @@ func TestPAM_Redis(t *testing.T) {
 		require.NoError(t, err)
 		redisPort, err := container.MappedPort(ctx, "6379")
 		require.NoError(t, err)
-		directAddr := fmt.Sprintf("%s:%d", redisHost, redisPort.Int())
 
 		// Verify Redis is accessible directly.
-		rdb := redis.NewClient(&redis.Options{Addr: directAddr})
+		rdb := redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%d", redisHost, redisPort.Int())})
 		pong, err := rdb.Ping(ctx).Result()
 		require.NoError(t, err)
 		require.Equal(t, "PONG", pong)
 		rdb.Close()
-		slog.Info("Verified Redis is accessible directly")
 
-		resourceName := "redis-noauth-resource"
-		resourceId := createRedisPamResource(t, ctx, infra, resourceName, redisHost, redisPort.Int(), false, nil)
-		createRedisPamAccount(t, ctx, infra, resourceId, "redis-noauth-account", nil, nil)
+		accountName := "redis-noauth-account"
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), nil, defaultUser, nil)
 
-		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, resourceName, "redis-noauth-account")
-		proxyAddr := fmt.Sprintf("localhost:%d", proxyPort)
-
-		testKey := "e2e-noauth-key"
-		testValue := "e2e-noauth-value"
-
-		verifyRedisThroughProxy(t, ctx, pamCmd, proxyAddr, testKey, testValue)
+		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, folderName, accountName)
+		verifyRedisThroughProxy(t, ctx, infra, pamCmd, fmt.Sprintf("localhost:%d", proxyPort), "e2e-noauth-key", "e2e-noauth-value")
 	})
 
 	t.Run("acl-user-password", func(t *testing.T) {
@@ -269,11 +235,10 @@ user %s on >%s ~* +@all -@dangerous
 		require.NoError(t, err)
 		redisPort, err := container.MappedPort(ctx, "6379")
 		require.NoError(t, err)
-		directAddr := fmt.Sprintf("%s:%d", redisHost, redisPort.Int())
 
 		// Verify Redis is accessible with ACL credentials directly.
 		rdb := redis.NewClient(&redis.Options{
-			Addr:     directAddr,
+			Addr:     fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
 			Username: aclUser,
 			Password: aclPass,
 		})
@@ -281,24 +246,17 @@ user %s on >%s ~* +@all -@dangerous
 		require.NoError(t, err)
 		require.Equal(t, "PONG", pong)
 		rdb.Close()
-		slog.Info("Verified Redis is accessible directly with ACL credentials")
 
-		resourceName := "redis-acl-resource"
-		resourceId := createRedisPamResource(t, ctx, infra, resourceName, redisHost, redisPort.Int(), false, nil)
+		accountName := "redis-acl-account"
 		username := aclUser
 		password := aclPass
-		createRedisPamAccount(t, ctx, infra, resourceId, "redis-acl-account", &username, &password)
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), nil, username, &password)
 
-		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, resourceName, "redis-acl-account")
+		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, folderName, accountName)
 		proxyAddr := fmt.Sprintf("localhost:%d", proxyPort)
+		verifyRedisThroughProxy(t, ctx, infra, pamCmd, proxyAddr, "e2e-acl-key", "e2e-acl-value")
 
-		testKey := "e2e-acl-key"
-		testValue := "e2e-acl-value"
-
-		verifyRedisThroughProxy(t, ctx, pamCmd, proxyAddr, testKey, testValue)
-
-		// Verify ACL permissions are enforced: FLUSHALL should be denied
-		// because the ACL user does not have @dangerous commands.
+		// ACL permissions are enforced: FLUSHALL is @dangerous and must be denied.
 		proxyClient := redis.NewClient(&redis.Options{Addr: proxyAddr})
 		t.Cleanup(func() { proxyClient.Close() })
 		err = proxyClient.FlushAll(ctx).Err()
@@ -312,11 +270,9 @@ user %s on >%s ~* +@all -@dangerous
 			aclPass = "pampassword"
 		)
 
-		// Generate self-signed certs at test time.
 		certDir := t.TempDir()
 		caPEM := generateSelfSignedCert(t, "localhost", certDir)
 
-		// Write a Redis config that enables TLS and sets up the ACL user.
 		redisConf := fmt.Sprintf(`tls-port 6379
 port 0
 tls-cert-file /tls/server.crt
@@ -330,7 +286,6 @@ user %s on >%s ~* +@all -@dangerous
 		confPath := filepath.Join(certDir, "redis-ssl.conf")
 		require.NoError(t, os.WriteFile(confPath, []byte(redisConf), 0644))
 
-		// Start Redis with TLS config and mounted certs.
 		container := startRedisContainer(t, ctx,
 			tcredis.WithConfigFile(confPath),
 			testcontainers.WithFiles(testcontainers.ContainerFile{
@@ -354,36 +309,26 @@ user %s on >%s ~* +@all -@dangerous
 		require.NoError(t, err)
 		redisPort, err := container.MappedPort(ctx, "6379")
 		require.NoError(t, err)
-		directAddr := fmt.Sprintf("%s:%d", redisHost, redisPort.Int())
 
 		// Verify Redis is accessible directly with TLS + ACL.
 		rdb := redis.NewClient(&redis.Options{
-			Addr:     directAddr,
-			Username: aclUser,
-			Password: aclPass,
-			TLSConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
+			Addr:      fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
+			Username:  aclUser,
+			Password:  aclPass,
+			TLSConfig: &tls.Config{InsecureSkipVerify: true},
 		})
 		pong, err := rdb.Ping(ctx).Result()
 		require.NoError(t, err)
 		require.Equal(t, "PONG", pong)
 		rdb.Close()
-		slog.Info("Verified Redis is accessible directly with TLS + ACL")
 
-		resourceName := "redis-ssl-resource"
-		resourceId := createRedisPamResource(t, ctx, infra, resourceName, redisHost, redisPort.Int(), true, &caPEM)
+		accountName := "redis-ssl-account"
 		username := aclUser
 		password := aclPass
-		createRedisPamAccount(t, ctx, infra, resourceId, "redis-ssl-account", &username, &password)
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), &caPEM, username, &password)
 
-		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, resourceName, "redis-ssl-account")
-		proxyAddr := fmt.Sprintf("localhost:%d", proxyPort)
-
-		testKey := "e2e-ssl-key"
-		testValue := "e2e-ssl-value"
-
-		verifyRedisThroughProxy(t, ctx, pamCmd, proxyAddr, testKey, testValue)
+		proxyPort, pamCmd := startRedisProxy(t, ctx, infra, folderName, accountName)
+		verifyRedisThroughProxy(t, ctx, infra, pamCmd, fmt.Sprintf("localhost:%d", proxyPort), "e2e-ssl-key", "e2e-ssl-value")
 	})
 
 	t.Run("multiple-concurrent-connections", func(t *testing.T) {
@@ -393,21 +338,11 @@ user %s on >%s ~* +@all -@dangerous
 		require.NoError(t, err)
 		redisPort, err := container.MappedPort(ctx, "6379")
 		require.NoError(t, err)
-		directAddr := fmt.Sprintf("%s:%d", redisHost, redisPort.Int())
 
-		// Verify Redis is accessible directly.
-		rdb := redis.NewClient(&redis.Options{Addr: directAddr})
-		pong, err := rdb.Ping(ctx).Result()
-		require.NoError(t, err)
-		require.Equal(t, "PONG", pong)
-		rdb.Close()
-		slog.Info("Verified Redis is accessible directly")
+		accountName := "redis-concurrent-account"
+		createRedisPamAccount(t, ctx, infra, folderId, templateId, accountName, redisHost, redisPort.Int(), nil, defaultUser, nil)
 
-		resourceName := "redis-concurrent-resource"
-		resourceId := createRedisPamResource(t, ctx, infra, resourceName, redisHost, redisPort.Int(), false, nil)
-		createRedisPamAccount(t, ctx, infra, resourceId, "redis-concurrent-account", nil, nil)
-
-		proxyPort, _ := startRedisProxy(t, ctx, infra, resourceName, "redis-concurrent-account")
+		proxyPort, _ := startRedisProxy(t, ctx, infra, folderName, accountName)
 		proxyAddr := fmt.Sprintf("localhost:%d", proxyPort)
 
 		const numClients = 5

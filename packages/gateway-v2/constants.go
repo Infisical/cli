@@ -20,8 +20,9 @@ const (
 
 	// Gateway auth-method discriminators. Used both for matching the user's --enroll-method
 	// flag value and as the `method` field on the /v3/gateways/login request body.
-	EnrollMethodAws   = "aws"
-	EnrollMethodToken = "token"
+	EnrollMethodAws        = "aws"
+	EnrollMethodKubernetes = "kubernetes"
+	EnrollMethodToken      = "token"
 )
 
 type HttpProxyAction string
