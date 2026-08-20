@@ -320,3 +320,20 @@ func TestBlockedCommandIsNotDuplicated(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// A string introducer in the keystroke stream must not swallow the command: that
+// would hide it from command blocking and from the recording.
+func TestInputFilterKeepsCommandAfterStringIntroducer(t *testing.T) {
+	for _, introducer := range []string{"]", "P", "X", "^", "_"} {
+		f := newInputSequenceFilter()
+		var kept []byte
+		for _, b := range []byte(esc + introducer + "rm -rf /\r") {
+			if !f.consumed(b) {
+				kept = append(kept, b)
+			}
+		}
+		if string(kept) != "rm -rf /\r" {
+			t.Errorf("ESC %s: kept %q, want %q", introducer, kept, "rm -rf /\r")
+		}
+	}
+}

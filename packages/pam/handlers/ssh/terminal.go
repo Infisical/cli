@@ -181,11 +181,33 @@ func newInputSequenceFilter() *inputSequenceFilter {
 }
 
 func (f *inputSequenceFilter) consumed(b byte) bool {
+	if f.parser.State() == parser.EscapeState && isStringIntroducer(b) {
+		f.parser.Reset()
+		return true
+	}
+	if isStringState(f.parser.State()) {
+		f.parser.Reset()
+	}
+
 	switch f.parser.Advance(b) {
 	case parser.PrintAction, parser.ExecuteAction:
 		return false
 	default:
 		return true
+	}
+}
+
+func isStringIntroducer(b byte) bool {
+	return b == ']' || b == 'P' || b == 'X' || b == '^' || b == '_'
+}
+
+func isStringState(state parser.State) bool {
+	switch state {
+	case parser.OscStringState, parser.DcsStringState, parser.SosStringState,
+		parser.PmStringState, parser.ApcStringState:
+		return true
+	default:
+		return false
 	}
 }
 
