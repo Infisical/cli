@@ -49,7 +49,8 @@ type SessionEvent struct {
 	Timestamp   time.Time          `json:"timestamp"`
 	EventType   SessionEventType   `json:"eventType"`
 	ChannelType SessionChannelType `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
-	Data        []byte             `json:"data"`                  // SSH: raw terminal bytes; RDP: JSON envelope (base64-marshaled)
+	Data        []byte             `json:"data"`                  // SSH: gateway-rendered text; RDP: JSON envelope (base64-marshaled)
+	Rendered    bool               `json:"rendered,omitempty"`    // Data is display-ready; absent on recordings that stored raw bytes
 	ElapsedTime float64            `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 

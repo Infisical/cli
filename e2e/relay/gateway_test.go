@@ -1,20 +1,20 @@
 package relay_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
 	openapitypes "github.com/oapi-codegen/runtime/types"
@@ -23,6 +23,25 @@ import (
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
+
+// Mirrors the pam package helpers; accounts need a folder and a gateway-attached template.
+func createPamFolder(t *testing.T, ctx context.Context, c client.ClientWithResponsesInterface, name string) openapitypes.UUID {
+	resp, err := c.CreatePamFolderWithResponse(ctx, client.CreatePamFolderJSONRequestBody{Name: name})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create folder: %s", string(resp.Body))
+	return resp.JSON200.Folder.Id
+}
+
+func createPamTemplate(t *testing.T, ctx context.Context, c client.ClientWithResponsesInterface, name string, accountType client.CreatePamAccountTemplateJSONBodyType, gatewayId *openapitypes.UUID) openapitypes.UUID {
+	resp, err := c.CreatePamAccountTemplateWithResponse(ctx, client.CreatePamAccountTemplateJSONRequestBody{
+		Name:      name,
+		Type:      accountType,
+		GatewayId: gatewayId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode(), "create template: %s", string(resp.Body))
+	return resp.JSON200.Template.Id
+}
 
 func TestGateway_RegistersAGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,11 +137,6 @@ func TestGateway_RegistersAGateway(t *testing.T) {
 }
 
 func TestGateway_RelayGatewayConnectivity(t *testing.T) {
-	// TODO: Re-enable once the PAM revamp's e2e tests are updated. This test
-	// creates PAM resources against the revamped PAM API and is temporarily
-	// skipped so it stops blocking production.
-	t.Skip("Temporarily disabled pending PAM revamp test updates")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -210,78 +224,63 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, projectResp.StatusCode(), http.StatusOK)
-	projectId := projectResp.JSON200.Project.Id
 
 	t.Run("kubernetes", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		// Create a mock HTTP server running on a random port in a goroutine
-		// The HTTP server implements a mock /version endpoint that returns dummy data
-		// and marks a variable as true when the endpoint is hit
-		var versionEndpointHit bool
-		var versionEndpointHitMu sync.Mutex
+		// The gateway's connection test does GET https://<host>:<port>/api, so the mock serves TLS.
+		var apiEndpointHit atomic.Bool
 
-		// Create a listener on a random port (port 0 means OS assigns an available port)
-		listener, err := net.Listen("tcp", ":0")
-		require.NoError(t, err)
-
-		server := &http.Server{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/version" {
-					versionEndpointHitMu.Lock()
-					versionEndpointHit = true
-					versionEndpointHitMu.Unlock()
-
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusOK)
-					// Return dummy version data
-					versionData := map[string]interface{}{
-						"version": "1.0.0",
-						"build":   "test-build",
-					}
-					json.NewEncoder(w).Encode(versionData)
-				} else {
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}),
-		}
-
-		// Start the server in a goroutine
-		go func() {
-			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-				t.Errorf("Mock HTTP server error: %v", err)
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api" {
+				w.WriteHeader(http.StatusNotFound)
+				return
 			}
-		}()
 
-		// Clean up the server when the test completes
-		t.Cleanup(func() {
-			shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
-			defer shutdownCancel()
-			server.Shutdown(shutdownCtx)
-		})
-
-		// Get the server URL
-		serverURL := fmt.Sprintf("http://%s", listener.Addr().String())
-		slog.Info("Mock HTTP server started", "url", serverURL)
-
-		k8sPamResResp, err := c.CreateKubernetesPamResourceWithResponse(
-			ctx,
-			client.CreateKubernetesPamResourceJSONRequestBody{
-				ProjectId: uuid.MustParse(projectId),
-				GatewayId: &gatewayId,
-				Name:      "k8s-resource",
-				ConnectionDetails: struct {
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-					Url                   string  `json:"url"`
-				}{
-					Url:                   serverURL,
-					SslRejectUnauthorized: false,
-				},
+			apiEndpointHit.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"kind":     "APIVersions",
+				"versions": []string{"v1"},
 			})
+		}))
+		server.StartTLS()
+		t.Cleanup(server.Close)
+
+		// Self-signed cert, accepted via sslRejectUnauthorized=false below.
+		serverURL := server.URL
+		slog.Info("Mock Kubernetes API server started", "url", serverURL)
+
+		folderId := createPamFolder(t, ctx, c, "k8s-folder")
+		templateId := createPamTemplate(t, ctx, c, "k8s-template", client.CreatePamAccountTemplateJSONBodyTypeKubernetes, &gatewayId)
+		k8sBody, err := json.Marshal(map[string]interface{}{
+			"folderId":   folderId.String(),
+			"templateId": templateId.String(),
+			"gatewayId":  gatewayId.String(),
+			"name":       "k8s-account",
+			"connectionDetails": map[string]interface{}{
+				"url":                   serverURL,
+				"sslRejectUnauthorized": false,
+			},
+			"credentials": map[string]interface{}{
+				"authMethod":          "service-account-token",
+				"serviceAccountToken": "dummy-token",
+			},
+		})
 		require.NoError(t, err)
-		require.Equal(t, k8sPamResResp.StatusCode(), http.StatusOK)
-		require.True(t, versionEndpointHit)
+		k8sURL := fmt.Sprintf("%s/api/v1/pam/accounts/kubernetes", infisical.ApiUrl(t))
+		k8sReq, err := http.NewRequestWithContext(ctx, http.MethodPost, k8sURL, bytes.NewReader(k8sBody))
+		require.NoError(t, err)
+		k8sReq.Header.Set("Authorization", "Bearer "+infisical.ProvisionResult().Token)
+		k8sReq.Header.Set("Content-Type", "application/json")
+		k8sResp, err := http.DefaultClient.Do(k8sReq)
+		require.NoError(t, err)
+		defer k8sResp.Body.Close()
+		k8sRespBody, err := io.ReadAll(k8sResp.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, k8sResp.StatusCode, "create k8s account: %s", string(k8sRespBody))
+		require.True(t, apiEndpointHit.Load(), "gateway should have probed the mock Kubernetes API at /api")
 	})
 
 	t.Run("redis", func(t *testing.T) {
@@ -320,29 +319,32 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 		require.Equal(t, "PONG", pong)
 		slog.Info("Verified Redis is accessible", "addr", connectionString)
 
-		// Create Redis PAM resource
-		redisPortFloat := float32(redisPort.Int())
-		redisPamResResp, err := c.CreateRedisPamResourceWithResponse(
-			ctx,
-			client.CreateRedisPamResourceJSONRequestBody{
-				ProjectId: uuid.MustParse(projectId),
-				GatewayId: &gatewayId,
-				Name:      "redis-resource",
-				ConnectionDetails: struct {
-					Host                  string  `json:"host"`
-					Port                  float32 `json:"port"`
-					SslCertificate        *string `json:"sslCertificate,omitempty"`
-					SslEnabled            bool    `json:"sslEnabled"`
-					SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
-				}{
-					Host:                  redisHost,
-					Port:                  redisPortFloat,
-					SslEnabled:            false,
-					SslRejectUnauthorized: false,
-				},
-			})
+		// Create Redis PAM account (no generated client method on this branch; use a raw POST).
+		folderId := createPamFolder(t, ctx, c, "redis-folder")
+		templateId := createPamTemplate(t, ctx, c, "redis-template", client.CreatePamAccountTemplateJSONBodyTypeRedis, &gatewayId)
+		redisBody, err := json.Marshal(map[string]interface{}{
+			"folderId":   folderId.String(),
+			"templateId": templateId.String(),
+			"gatewayId":  gatewayId.String(),
+			"name":       "redis-account",
+			"connectionDetails": map[string]interface{}{
+				"host":                  redisHost,
+				"port":                  redisPort.Int(),
+				"sslEnabled":            false,
+				"sslRejectUnauthorized": false,
+			},
+			"credentials": map[string]interface{}{"username": "default"},
+		})
 		require.NoError(t, err)
-		require.Equal(t, redisPamResResp.StatusCode(), http.StatusOK)
-		slog.Info("Redis PAM resource created successfully")
+		accURL := fmt.Sprintf("%s/api/v1/pam/accounts/redis", infisical.ApiUrl(t))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, accURL, bytes.NewReader(redisBody))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+infisical.ProvisionResult().Token)
+		req.Header.Set("Content-Type", "application/json")
+		redisResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer redisResp.Body.Close()
+		require.Equal(t, http.StatusOK, redisResp.StatusCode)
+		slog.Info("Redis PAM account created successfully")
 	})
 }

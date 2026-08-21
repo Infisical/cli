@@ -3,7 +3,6 @@ package pam
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,11 +14,9 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
-	"github.com/google/uuid"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
-	"github.com/jackc/pgx/v5"
+	openapitypes "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -59,138 +56,15 @@ func startRDPContainer(t *testing.T, ctx context.Context) (testcontainers.Contai
 	return ctr, host, port.Int()
 }
 
-// Inserts recording config directly into Postgres. The API route validates
-// the bucket via S3 HeadBucket using virtual-hosted-style addressing, which
-// fails in Docker because "bucket.localstack" doesn't resolve.
-func setupRecordingConfig(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
-	connectionID := createAwsAppConnection(t, ctx, infra)
-
-	dbContainer, err := infra.Infisical.Compose().ServiceContainer(ctx, "db")
-	require.NoError(t, err)
-	dbPort, err := dbContainer.MappedPort(ctx, nat.Port("5432"))
-	require.NoError(t, err)
-
-	conn, err := pgx.Connect(ctx, fmt.Sprintf("postgres://infisical:infisical@localhost:%s/infisical", dbPort.Port()))
-	require.NoError(t, err)
-	defer conn.Close(ctx)
-
-	_, err = conn.Exec(ctx, `
-		INSERT INTO pam_project_recording_configs (id, "projectId", "storageBackend", "connectionId", bucket, region)
-		VALUES ($1, $2, 'aws-s3', $3, 'e2e-unused', 'us-east-1')
-		ON CONFLICT ("projectId") DO NOTHING`,
-		uuid.New().String(), infra.ProjectId, connectionID,
-	)
-	require.NoError(t, err)
-	slog.Info("Inserted recording config", "projectId", infra.ProjectId)
-}
-
-func createAwsAppConnection(t *testing.T, ctx context.Context, infra *PAMTestInfra) string {
-	body, err := json.Marshal(map[string]interface{}{
-		"name":   "e2e-localstack-aws",
-		"method": "access-key",
-		"credentials": map[string]string{
-			"accessKeyId":     "test",
-			"secretAccessKey": "test",
-		},
-	})
-	require.NoError(t, err)
-
-	resp, err := infra.ApiClient.CreateAwsAppConnectionWithBodyWithResponse(ctx, "application/json", bytes.NewReader(body))
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode(), "create AWS app connection: %s", string(resp.Body))
-
-	var result struct {
-		AppConnection struct {
-			ID string `json:"id"`
-		} `json:"appConnection"`
-	}
-	require.NoError(t, json.Unmarshal(resp.Body, &result))
-	slog.Info("Created AWS app connection", "id", result.AppConnection.ID)
-	return result.AppConnection.ID
-}
-
-func createRDPPamResource(t *testing.T, ctx context.Context, infra *PAMTestInfra, name, host string, port int) uuid.UUID {
-	gatewayId := infra.GatewayId
-	resp, err := infra.ApiClient.CreateWindowsPamResourceWithResponse(
-		ctx,
-		client.CreateWindowsPamResourceJSONRequestBody{
-			ProjectId: uuid.MustParse(infra.ProjectId),
-			GatewayId: &gatewayId,
-			Name:      name,
-			ConnectionDetails: struct {
-				Hostname                string                                                    `json:"hostname"`
-				Port                    int                                                       `json:"port"`
-				Protocol                client.CreateWindowsPamResourceJSONBodyConnectionDetailsProtocol `json:"protocol"`
-				UseWinrmHttps           bool                                                      `json:"useWinrmHttps"`
-				WinrmCaCert             *string                                                   `json:"winrmCaCert,omitempty"`
-				WinrmPort               int                                                       `json:"winrmPort"`
-				WinrmRejectUnauthorized bool                                                      `json:"winrmRejectUnauthorized"`
-				WinrmTlsServerName      *string                                                   `json:"winrmTlsServerName,omitempty"`
-			}{
-				Hostname:                host,
-				Port:                    port,
-				Protocol:                client.Rdp,
-				WinrmPort:               5985,
-				UseWinrmHttps:           false,
-				WinrmRejectUnauthorized: false,
-			},
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode(), "create Windows resource: %s", string(resp.Body))
-	slog.Info("Created Windows PAM resource", "resourceId", resp.JSON200.Resource.Id, "name", name)
-	return resp.JSON200.Resource.Id
-}
-
-func createRDPPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceId uuid.UUID, name, username, password string) {
-	body, err := json.Marshal(map[string]interface{}{
-		"resourceId": resourceId.String(),
-		"name":       name,
-		"credentials": map[string]interface{}{
-			"username": username,
-			"password": password,
-		},
-		"internalMetadata": map[string]interface{}{
-			"accountType": "user",
-		},
-	})
-	require.NoError(t, err)
-
-	result := helpers.WaitFor(t, helpers.WaitForOptions{
-		Timeout:  90 * time.Second,
-		Interval: 3 * time.Second,
-		Condition: func() helpers.ConditionResult {
-			resp, callErr := infra.ApiClient.CreateWindowsPamAccountWithBodyWithResponse(
-				ctx, "application/json", bytes.NewReader(append([]byte(nil), body...)),
-			)
-			if callErr != nil {
-				slog.Warn("Windows PAM account creation attempt failed, retrying...", "error", callErr)
-				return helpers.ConditionWait
-			}
-			if resp.StatusCode() != http.StatusOK {
-				slog.Warn("Windows PAM account creation returned non-200, retrying...", "status", resp.StatusCode(), "body", string(resp.Body))
-				return helpers.ConditionWait
-			}
-			return helpers.ConditionSuccess
-		},
-	})
-	require.Equal(t, helpers.WaitSuccess, result, "Windows PAM account creation should succeed for %s", name)
-	slog.Info("Created Windows PAM account", "name", name)
-}
-
-func startRDPProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, resourceName, accountName, duration string, port int) (int, *helpers.Command) {
+func startRDPProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName, accountName, duration string, port int) (int, *helpers.Command) {
 	pamCmd := helpers.Command{
 		Test:               t,
 		RunMethod:          helpers.RunMethodSubprocess,
 		DisableTempHomeDir: true,
 		Args: []string{
-			"pam", "rdp", "access",
-			"--resource", resourceName,
-			"--account", accountName,
-			"--project-id", infra.ProjectId,
+			"pam", "access", fmt.Sprintf("%s/%s", folderName, accountName),
 			"--duration", duration,
 			"--port", fmt.Sprintf("%d", port),
-			"--no-launch",
 		},
 		Env: map[string]string{
 			"HOME":              infra.SharedHomeDir,
@@ -210,7 +84,7 @@ func startRDPProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, resou
 		},
 	})
 	if result != helpers.WaitSuccess {
-		pamCmd.DumpOutput()
+		infra.DumpOutput(&pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, result, "RDP proxy should start successfully")
 
@@ -308,16 +182,18 @@ func expectFreeRDPFailure(t *testing.T, ctx context.Context, binary string, host
 }
 
 func TestPAM_RDP(t *testing.T) {
-	// TODO: Re-enable once the PAM revamp's e2e tests are updated. Temporarily
-	// skipped so it stops blocking production.
-	t.Skip("Temporarily disabled pending PAM revamp test updates")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
+	// Windows accounts require an S3 recording config, backed here by LocalStack.
 	infra := SetupPAMInfra(t, ctx, WithLocalStack())
 	LoginUser(t, ctx, infra)
-	setupRecordingConfig(t, ctx, infra)
+	CreateRecordingBucket(t, ctx, infra)
+	connectionId := CreateAwsAppConnection(t, ctx, infra)
+
+	folderName := "rdp-folder"
+	folderId := CreatePamFolder(t, ctx, infra, folderName)
+	templateId := CreateRecordingPamTemplate(t, ctx, infra, "rdp-template", client.CreatePamAccountTemplateJSONBodyTypeWindows, connectionId)
 
 	rdpBinary := findFreeRDPBinary(t)
 
@@ -325,12 +201,11 @@ func TestPAM_RDP(t *testing.T) {
 		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 		slog.Info("RDP container started", "host", resourceHost, "port", rdpPort)
 
-		resourceName := "rdp-connection-resource"
-		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
-		createRDPPamAccount(t, ctx, infra, resourceId, "rdp-connection-account", rdpUser, rdpPassword)
+		accountName := "rdp-connection-account"
+		createRDPPamAccountAt(t, ctx, infra, folderId, templateId, accountName, resourceHost, rdpPort, rdpUser, rdpPassword)
 
 		proxyPort := helpers.GetFreePort()
-		startRDPProxy(t, ctx, infra, resourceName, "rdp-connection-account", "5m", proxyPort)
+		startRDPProxy(t, ctx, infra, folderName, accountName, "5m", proxyPort)
 
 		err := connectFreeRDP(t, ctx, rdpBinary, "127.0.0.1", proxyPort, "testuser", "", 10*time.Second)
 		require.NoError(t, err, "xfreerdp should connect through proxy")
@@ -340,12 +215,11 @@ func TestPAM_RDP(t *testing.T) {
 	t.Run("bad-credentials", func(t *testing.T) {
 		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 
-		resourceName := "rdp-badcreds-resource"
-		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
-		createRDPPamAccount(t, ctx, infra, resourceId, "rdp-badcreds-account", rdpUser, "wrong-password")
+		accountName := "rdp-badcreds-account"
+		createRDPPamAccountAt(t, ctx, infra, folderId, templateId, accountName, resourceHost, rdpPort, rdpUser, "wrong-password")
 
 		proxyPort := helpers.GetFreePort()
-		startRDPProxy(t, ctx, infra, resourceName, "rdp-badcreds-account", "5m", proxyPort)
+		startRDPProxy(t, ctx, infra, folderName, accountName, "5m", proxyPort)
 
 		err := expectFreeRDPFailure(t, ctx, rdpBinary, "127.0.0.1", proxyPort, "testuser", "", 60*time.Second)
 		require.Error(t, err, "xfreerdp should fail with bad credentials")
@@ -355,14 +229,13 @@ func TestPAM_RDP(t *testing.T) {
 	t.Run("unreachable-target", func(t *testing.T) {
 		ctr, resourceHost, rdpPort := startRDPContainer(t, ctx)
 
-		resourceName := "rdp-unreachable-resource"
-		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
-		createRDPPamAccount(t, ctx, infra, resourceId, "rdp-unreachable-account", rdpUser, rdpPassword)
+		accountName := "rdp-unreachable-account"
+		createRDPPamAccountAt(t, ctx, infra, folderId, templateId, accountName, resourceHost, rdpPort, rdpUser, rdpPassword)
 
 		require.NoError(t, ctr.Terminate(ctx))
 
 		proxyPort := helpers.GetFreePort()
-		startRDPProxy(t, ctx, infra, resourceName, "rdp-unreachable-account", "5m", proxyPort)
+		startRDPProxy(t, ctx, infra, folderName, accountName, "5m", proxyPort)
 
 		err := expectFreeRDPFailure(t, ctx, rdpBinary, "127.0.0.1", proxyPort, "testuser", "", 60*time.Second)
 		require.Error(t, err, "xfreerdp should fail when target is down")
@@ -372,9 +245,8 @@ func TestPAM_RDP(t *testing.T) {
 	t.Run("concurrent-connections", func(t *testing.T) {
 		_, resourceHost, rdpPort := startRDPContainer(t, ctx)
 
-		resourceName := "rdp-concurrent-resource"
-		resourceId := createRDPPamResource(t, ctx, infra, resourceName, resourceHost, rdpPort)
-		createRDPPamAccount(t, ctx, infra, resourceId, "rdp-concurrent-account", rdpUser, rdpPassword)
+		accountName := "rdp-concurrent-account"
+		createRDPPamAccountAt(t, ctx, infra, folderId, templateId, accountName, resourceHost, rdpPort, rdpUser, rdpPassword)
 
 		const numClients = 3
 		var wg sync.WaitGroup
@@ -387,7 +259,7 @@ func TestPAM_RDP(t *testing.T) {
 		proxies := make([]proxyInfo, numClients)
 		for i := 0; i < numClients; i++ {
 			port := helpers.GetFreePort()
-			startRDPProxy(t, ctx, infra, resourceName, "rdp-concurrent-account", "5m", port)
+			startRDPProxy(t, ctx, infra, folderName, accountName, "5m", port)
 			proxies[i] = proxyInfo{port: port, args: buildFreeRDPArgs(t, rdpBinary, "127.0.0.1", port, "testuser", "")}
 		}
 
@@ -405,4 +277,55 @@ func TestPAM_RDP(t *testing.T) {
 		}
 		slog.Info("All concurrent RDP connections succeeded", "numClients", numClients)
 	})
+}
+
+// createRDPPamAccountAt creates a Windows account with the given host/port.
+func createRDPPamAccountAt(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderId, templateId openapitypes.UUID, name, host string, port int, username, password string) {
+	gatewayId := infra.GatewayId
+	pw := password
+	winrmPort := 5985
+	body := client.CreateWindowsPamAccountJSONRequestBody{
+		FolderId:   folderId,
+		TemplateId: templateId,
+		GatewayId:  &gatewayId,
+		Name:       name,
+		ConnectionDetails: struct {
+			Host                    string  `json:"host"`
+			Port                    int     `json:"port"`
+			UseWinrmHttps           *bool   `json:"useWinrmHttps,omitempty"`
+			WinrmCaCert             *string `json:"winrmCaCert,omitempty"`
+			WinrmPort               *int    `json:"winrmPort,omitempty"`
+			WinrmRejectUnauthorized *bool   `json:"winrmRejectUnauthorized,omitempty"`
+		}{
+			Host:      host,
+			Port:      port,
+			WinrmPort: &winrmPort,
+		},
+		Credentials: struct {
+			Password *string `json:"password,omitempty"`
+			Username string  `json:"username"`
+		}{
+			Username: username,
+			Password: &pw,
+		},
+	}
+
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  90 * time.Second,
+		Interval: 3 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			resp, callErr := infra.ApiClient.CreateWindowsPamAccountWithResponse(ctx, body)
+			if callErr != nil {
+				slog.Warn("Windows PAM account creation attempt failed, retrying...", "error", callErr)
+				return helpers.ConditionWait
+			}
+			if resp.StatusCode() != http.StatusOK {
+				slog.Warn("Windows PAM account creation returned non-200, retrying...", "status", resp.StatusCode(), "body", string(resp.Body))
+				return helpers.ConditionWait
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Windows PAM account creation should succeed for %s", name)
+	slog.Info("Created Windows PAM account", "name", name)
 }

@@ -851,6 +851,17 @@ type AwsAuthLoginGatewayResponse struct {
 	TokenType   string `json:"tokenType"`
 }
 
+type KubernetesAuthLoginGatewayRequest struct {
+	Method    string `json:"method"`
+	GatewayID string `json:"gatewayId"`
+	JWT       string `json:"jwt"`
+}
+
+type KubernetesAuthLoginGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
 type RegisterGatewayResponse struct {
 	GatewayID string `json:"gatewayId"`
 	RelayHost string `json:"relayHost"`
