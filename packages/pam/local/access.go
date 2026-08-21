@@ -33,6 +33,7 @@ const (
 	AccountTypeAzureCli          = "azure-cli"
 	AccountTypeWindows           = "windows"
 	AccountTypeWindowsAd         = "windows-ad"
+	AccountTypeWebServer         = "web-server"
 )
 
 const approvalRequiredErrorName = "PAM_APPROVAL_REQUIRED"
@@ -118,6 +119,8 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 		startAzureAccess(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeWindows, AccountTypeWindowsAd:
 		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
+	case AccountTypeWebServer:
+		startWebServerProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	default:
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
 	}
@@ -358,6 +361,16 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 			return []string{fmt.Sprintf("redis-cli -h 127.0.0.1 -p %d", port)}
 		},
 	},
+	AccountTypeWebServer: {
+		TypeLabel:   "Web Server",
+		DefaultPort: 4040,
+		ConnectionString: func(_, _ string, port int) string {
+			return fmt.Sprintf("http://127.0.0.1:%d", port)
+		},
+		UsageExamples: func(_, _ string, port int) []string {
+			return []string{fmt.Sprintf("curl http://127.0.0.1:%d/health", port)}
+		},
+	},
 	AccountTypeSSH: {
 		TypeLabel:   "SSH",
 		DefaultPort: 22,
@@ -487,6 +500,60 @@ func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 	printDatabaseSessionInfo(config, folder, account, duration, username, database, proxy.port)
 
 	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Info().Msgf("Received signal %v, initiating graceful shutdown...", sig)
+		proxy.gracefulShutdown()
+	}()
+
+	proxy.Run()
+}
+
+func startWebServerProxy(httpClient *resty.Client, response *api.PAMAccessResponse, _ string, durationStr string, port int) {
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		util.HandleError(err, "Failed to parse duration")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &DatabaseProxyServer{
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			relayHost:              response.RelayHost,
+			relayClientCert:        response.RelayClientCertificate,
+			relayClientKey:         response.RelayClientPrivateKey,
+			relayServerCertChain:   response.RelayServerCertificateChain,
+			gatewayClientCert:      response.GatewayClientCertificate,
+			gatewayClientKey:       response.GatewayClientPrivateKey,
+			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			sessionExpiry:          time.Now().Add(duration),
+			sessionId:              response.SessionId,
+			resourceType:           response.AccountType,
+			ctx:                    ctx,
+			cancel:                 cancel,
+			shutdownCh:             make(chan struct{}),
+		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
+	}
+
+	if err := proxy.Start(port); err != nil {
+		util.HandleError(err, "Failed to start proxy server")
+		return
+	}
+
+	localURL := fmt.Sprintf("http://127.0.0.1:%d", proxy.port)
+	fmt.Printf("Web Server session ready at %s\n", localURL)
+	fmt.Printf("Example: curl %s/health\n", localURL)
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
