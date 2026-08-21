@@ -27,7 +27,7 @@ const enumerateAccountsScript = `$ErrorActionPreference='Stop'; $ProgressPrefere
 
 // EnumerateLocalAccounts lists the host's local user accounts as a JSON array.
 func EnumerateLocalAccounts(ctx context.Context, creds Credentials) (json.RawMessage, error) {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ $deps | ConvertTo-Json -Depth 5 -Compress
 
 // EnumerateDependencies lists services / scheduled tasks / IIS app pools that run as a named account.
 func EnumerateDependencies(ctx context.Context, creds Credentials) (json.RawMessage, error) {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func EnumerateDependencies(ctx context.Context, creds Credentials) (json.RawMess
 // RotateCredential resets the password of a local or domain account. The connecting credentials
 // (an administrator/rotation identity) must be authorized to change the target account's password.
 func RotateCredential(ctx context.Context, creds Credentials, kind, username, newPassword string) error {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func RotateCredential(ctx context.Context, creds Credentials, kind, username, ne
 // ValidateLocalCredential checks a local account's password via the admin's PrincipalContext.ValidateCredentials,
 // so rotation can verify it without logging in as the account (which a plain local account can't do over WinRM).
 func ValidateLocalCredential(ctx context.Context, creds Credentials, username, password string) (bool, error) {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return false, err
 	}
@@ -163,7 +163,7 @@ func ValidateLocalCredential(ctx context.Context, creds Credentials, username, p
 // SyncDependency writes a new password into a service / scheduled task / IIS app pool that runs as the
 // account, then restarts it so it re-authenticates. For scheduled tasks, name is the full task path.
 func SyncDependency(ctx context.Context, creds Credentials, depType, name, runAsUsername, newPassword string) error {
-	client, err := newClient(ctx, creds)
+	client, err := newClient(ctx, creds, nil)
 	if err != nil {
 		return err
 	}
