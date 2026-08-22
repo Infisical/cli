@@ -121,6 +121,11 @@ var exportCmd = &cobra.Command{
 				if err != nil {
 					util.HandleError(err)
 				}
+
+				if loggedInUserDetails.LoginExpired {
+					loggedInUserDetails = util.EstablishUserLoginSession()
+				}
+
 				accessToken = loggedInUserDetails.UserCredentials.JTWToken
 			}
 
