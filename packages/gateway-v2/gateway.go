@@ -57,14 +57,11 @@ const (
 
 const heartbeatInterval = 3 * time.Minute
 
-// Reported over the same direct HTTP client as the heartbeat. The relay connection cannot carry this:
-// the gateway only accepts channels on it, so it runs platform-to-gateway and has no reverse path.
-// Kept off the heartbeat itself because that handler probes back through the relay and writes to the
-// platform's database, which is far too costly at the cadence pool selection needs.
+// Kept off the heartbeat because that handler probes back through the relay and writes to the
+// platform's database, which is far too costly at this cadence.
 const metricsReportInterval = 10 * time.Second
 
-// Must stay below the interval so a stalled endpoint cannot hold the reporting loop past the next
-// tick. Without a bound the loop would also stop noticing cancellation and shutdown would hang.
+// Below the interval, so a stalled endpoint cannot hold the loop past the next tick or block shutdown.
 const metricsReportTimeout = 5 * time.Second
 
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
@@ -155,9 +152,7 @@ type Gateway struct {
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
 
-	// Every channel reaching this gateway is accepted in handleIncomingChannel, whoever opened it,
-	// so counting there is the only place that cannot be bypassed by a new caller. The platform uses
-	// it to pick the least loaded member of a gateway pool.
+	// Counted in handleIncomingChannel, the one place no caller can bypass.
 	activeChannels atomic.Int64
 }
 
@@ -399,9 +394,8 @@ func (g *Gateway) reapIdleSessions() {
 	}
 }
 
-// reportLoad publishes the gateway's active channel count so the platform can route new work to the
-// least loaded member of a pool. Failures are not surfaced: a missed report only costs accuracy, and
-// the platform falls back to its own view when a gateway stops reporting.
+// Publishes the active channel count so the platform can route to the least loaded pool member.
+// A gateway that stops reporting takes its whole pool off load-aware selection.
 func (g *Gateway) sendMetricsReport(ctx context.Context, count int64) error {
 	reqCtx, cancel := context.WithTimeout(ctx, metricsReportTimeout)
 	defer cancel()
@@ -420,8 +414,7 @@ func (g *Gateway) reportMetrics(ctx context.Context) {
 				return
 			case <-ticker.C:
 				count := g.activeChannels.Load()
-				// Still republish an unchanged count so the platform can tell a quiet gateway from
-				// one that has stopped reporting.
+				// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
 				if err := g.sendMetricsReport(ctx, count); err != nil {
 					log.Debug().Msgf("Load report failed: %v", err)
 					continue
