@@ -64,6 +64,9 @@ const metricsReportInterval = 10 * time.Second
 // Below the interval, so a stalled endpoint cannot hold the loop past the next tick or block shutdown.
 const metricsReportTimeout = 5 * time.Second
 
+const metricsReportFailuresBeforeBackoff = 5
+const metricsReportBackoff = 5 * time.Minute
+
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
 const PAM_INFO_OID = "1.3.6.1.4.1.12345.100.3"
@@ -394,35 +397,47 @@ func (g *Gateway) reapIdleSessions() {
 	}
 }
 
-// Publishes the active channel count so the platform can route to the least loaded pool member.
-// A gateway that stops reporting takes its whole pool off load-aware selection.
 func (g *Gateway) sendMetricsReport(ctx context.Context, count int64) error {
 	reqCtx, cancel := context.WithTimeout(ctx, metricsReportTimeout)
 	defer cancel()
 	return api.CallGatewayMetricsReportV2(reqCtx, g.httpClient, api.GatewayMetricsReportRequest{ActiveChannels: count})
 }
 
-func (g *Gateway) reportMetrics(ctx context.Context) {
+// A gateway that stops reporting takes its whole pool off load-aware selection.
+func (g *Gateway) startMetricsReport(ctx context.Context) {
 	go func() {
-		ticker := time.NewTicker(metricsReportInterval)
-		defer ticker.Stop()
+		delay := metricsReportInterval
+		failures := 0
 
 		var last int64 = -1
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				count := g.activeChannels.Load()
-				// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
-				if err := g.sendMetricsReport(ctx, count); err != nil {
-					log.Debug().Msgf("Load report failed: %v", err)
-					continue
+			case <-time.After(delay):
+			}
+
+			count := g.activeChannels.Load()
+			// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
+			if err := g.sendMetricsReport(ctx, count); err != nil {
+				failures++
+				if failures == metricsReportFailuresBeforeBackoff {
+					log.Warn().Err(err).Msgf("Metrics report failing; backing off to %s. Pools containing this gateway will select at random until it succeeds", metricsReportBackoff)
 				}
-				if count != last {
-					log.Debug().Msgf("Reported %d active channels", count)
-					last = count
+				if failures >= metricsReportFailuresBeforeBackoff {
+					delay = metricsReportBackoff
 				}
+				continue
+			}
+
+			if failures >= metricsReportFailuresBeforeBackoff {
+				log.Info().Msg("Metrics report recovered")
+			}
+			failures = 0
+			delay = metricsReportInterval
+			if count != last {
+				log.Debug().Msgf("Reported %d active channels", count)
+				last = count
 			}
 		}
 	}()
@@ -619,7 +634,7 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	defer g.heartbeatMu.Unlock()
 	if !g.heartbeatStarted {
 		g.registerHeartBeat(ctx, errCh)
-		g.reportMetrics(ctx)
+		g.startMetricsReport(ctx)
 		g.heartbeatStarted = true
 	}
 }
@@ -694,6 +709,9 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 		g.mu.Unlock()
 		client.Close()
 	}()
+
+	// Channels do not outlive their connection, so anything still counted is a handler that hung.
+	g.activeChannels.Store(0)
 
 	// Handle incoming channels from the server
 	channels := client.HandleChannelOpen("direct-tcpip")
@@ -921,6 +939,19 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 	return nil
 }
 
+// Floored: a handler from a previous connection must not decrement past the reset.
+func (g *Gateway) releaseChannel() {
+	for {
+		current := g.activeChannels.Load()
+		if current <= 0 {
+			return
+		}
+		if g.activeChannels.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
 func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
@@ -930,7 +961,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	defer channel.Close()
 
 	g.activeChannels.Add(1)
-	defer g.activeChannels.Add(-1)
+	defer g.releaseChannel()
 
 	go ssh.DiscardRequests(requests)
 
