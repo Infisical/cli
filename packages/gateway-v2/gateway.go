@@ -157,6 +157,8 @@ type Gateway struct {
 
 	// Counted in handleIncomingChannel, the one place no caller can bypass.
 	activeChannels atomic.Int64
+	// Bumped per relay connection, so a handler cannot release a count it did not acquire.
+	channelGeneration atomic.Int64
 }
 
 // mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
@@ -406,7 +408,8 @@ func (g *Gateway) sendMetricsReport(ctx context.Context, count int64) error {
 // A gateway that stops reporting takes its whole pool off load-aware selection.
 func (g *Gateway) startMetricsReport(ctx context.Context) {
 	go func() {
-		delay := metricsReportInterval
+		// Report immediately: until one lands the pool has nothing to compare and selects at random.
+		delay := time.Duration(0)
 		failures := 0
 
 		var last int64 = -1
@@ -416,6 +419,7 @@ func (g *Gateway) startMetricsReport(ctx context.Context) {
 				return
 			case <-time.After(delay):
 			}
+			delay = metricsReportInterval
 
 			count := g.activeChannels.Load()
 			// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
@@ -434,7 +438,6 @@ func (g *Gateway) startMetricsReport(ctx context.Context) {
 				log.Info().Msg("Metrics report recovered")
 			}
 			failures = 0
-			delay = metricsReportInterval
 			if count != last {
 				log.Debug().Msgf("Reported %d active channels", count)
 				last = count
@@ -711,6 +714,7 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 	}()
 
 	// Channels do not outlive their connection, so anything still counted is a handler that hung.
+	g.channelGeneration.Add(1)
 	g.activeChannels.Store(0)
 
 	// Handle incoming channels from the server
@@ -939,8 +943,11 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 	return nil
 }
 
-// Floored: a handler from a previous connection must not decrement past the reset.
-func (g *Gateway) releaseChannel() {
+func (g *Gateway) releaseChannel(generation int64) {
+	// A handler outliving its connection would otherwise decrement a count it never contributed to.
+	if g.channelGeneration.Load() != generation {
+		return
+	}
 	for {
 		current := g.activeChannels.Load()
 		if current <= 0 {
@@ -960,8 +967,9 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 	}
 	defer channel.Close()
 
+	generation := g.channelGeneration.Load()
 	g.activeChannels.Add(1)
-	defer g.releaseChannel()
+	defer g.releaseChannel(generation)
 
 	go ssh.DiscardRequests(requests)
 
