@@ -56,12 +56,16 @@ certificates:
         permission: "0644"
         omit-root: true
 
-  # Fetch an existing certificate by ID. Skips issuance entirely.
-  # If private-key.path is configured but the certificate has no private key
-  # (e.g. ACME-issued), a warning is logged and the file is skipped.
+  # Distribution mode: deliver a certificate that already exists in Infisical instead of issuing one,
+  # so several hosts can share it. https://infisical.com/docs/integrations/platforms/certificate-agent
   # - certificate-id: "00000000-0000-0000-0000-000000000000"
   #   lifecycle:
   #     status-check-interval: "6h"
+  #     use-latest: true # Also deliver renewals made in Infisical
+  #   post-hooks:
+  #     on-renewal:
+  #       command: "systemctl reload nginx"
+  #       timeout: 30
   #   file-output:
   #     certificate:
   #       path: "./certs/existing/certificate.crt"

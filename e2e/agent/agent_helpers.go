@@ -568,7 +568,8 @@ type agentUniversalAuthConfig struct {
 type agentCertificateConfig struct {
 	ProjectSlug     string                      `yaml:"project-slug,omitempty"`
 	ApplicationName string                      `yaml:"application-name,omitempty"`
-	ProfileName     string                      `yaml:"profile-name"`
+	ProfileName     string                      `yaml:"profile-name,omitempty"`
+	CertificateID   string                      `yaml:"certificate-id,omitempty"`
 	CSR             string                      `yaml:"csr,omitempty"`
 	CSRPath         string                      `yaml:"csr-path,omitempty"`
 	Attributes      *agentCertificateAttributes `yaml:"attributes,omitempty"`
@@ -588,8 +589,9 @@ type agentCertificateAttributes struct {
 }
 
 type agentCertificateLifecycle struct {
-	RenewBeforeExpiry   string `yaml:"renew-before-expiry"`
-	StatusCheckInterval string `yaml:"status-check-interval"`
+	RenewBeforeExpiry   string `yaml:"renew-before-expiry,omitempty"`
+	StatusCheckInterval string `yaml:"status-check-interval,omitempty"`
+	UseLatest           bool   `yaml:"use-latest,omitempty"`
 }
 
 type agentCertificateFileOutput struct {
@@ -623,6 +625,7 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			ProjectSlug:     cert.ProjectSlug,
 			ApplicationName: cert.ApplicationName,
 			ProfileName:     cert.ProfileSlug,
+			CertificateID:   cert.CertificateID,
 			CSR:             cert.CSR,
 			CSRPath:         cert.CSRPath,
 			Attributes: &agentCertificateAttributes{
@@ -637,6 +640,7 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			Lifecycle: agentCertificateLifecycle{
 				RenewBeforeExpiry:   cert.RenewBeforeExpiry,
 				StatusCheckInterval: cert.StatusCheckInterval,
+				UseLatest:           cert.UseLatest,
 			},
 			FileOutput: agentCertificateFileOutput{
 				Certificate: agentFileOutputEntry{Path: cert.CertPath, Permission: cert.CertPermission},
@@ -656,6 +660,10 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			if cert.PostHookOnFailure != "" {
 				c.PostHooks.OnFailure = &agentPostHookEntry{Command: cert.PostHookOnFailure, Timeout: 30}
 			}
+		}
+
+		if cert.CertificateID != "" {
+			c.Attributes = nil
 		}
 
 		certs = append(certs, c)
@@ -717,6 +725,8 @@ type CertificateConfigEntry struct {
 	KeyPermission       string
 	ChainPermission     string
 	PostHookOnFailure   string
+	CertificateID       string
+	UseLatest           bool
 	CSR                 string
 	CSRPath             string
 	KeyAlgorithm        string
@@ -1014,4 +1024,65 @@ func GenerateCSR(t *testing.T, commonName string) (csrPEM string, keyPEM string)
 	keyBuf := pem.EncodeToMemory(keyBlock)
 
 	return string(csrBuf), string(keyBuf)
+}
+
+func (h *CertAgentTestHelper) IssueCertificateDirectly(commonName string) string {
+	t := h.T
+
+	respBody := h.doRequestWithToken("POST", "/v1/cert-manager/certificates", map[string]interface{}{
+		"profileId": h.ProfileID,
+		"attributes": map[string]interface{}{
+			"commonName":         commonName,
+			"keyAlgorithm":       "RSA_2048",
+			"signatureAlgorithm": "RSA-SHA256",
+			"ttl":                "30d",
+		},
+	}, h.IdentityToken)
+
+	var parsed struct {
+		Certificate *struct {
+			CertificateID string `json:"certificateId"`
+		} `json:"certificate"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotNil(t, parsed.Certificate, "issue response did not include a certificate: %s", string(respBody))
+	require.NotEmpty(t, parsed.Certificate.CertificateID)
+
+	return parsed.Certificate.CertificateID
+}
+
+func (h *CertAgentTestHelper) RenewCertificateDirectly(certificateID string) string {
+	t := h.T
+
+	respBody := h.doRequestWithToken("POST", "/v1/cert-manager/certificates/"+certificateID+"/renew", map[string]interface{}{}, h.IdentityToken)
+
+	var parsed struct {
+		CertificateID string `json:"certificateId"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotEmpty(t, parsed.CertificateID, "renew response did not include a certificate id: %s", string(respBody))
+
+	return parsed.CertificateID
+}
+
+func (h *CertAgentTestHelper) RevokeCertificateDirectly(certificateID string) {
+	h.doRequestWithToken("POST", "/v1/cert-manager/certificates/"+certificateID+"/revoke", map[string]interface{}{
+		"revocationReason": "UNSPECIFIED",
+	}, h.IdentityToken)
+}
+
+func (h *CertAgentTestHelper) CertificateSerialNumber(certificateID string) string {
+	t := h.T
+
+	respBody := h.doRequestWithToken("GET", "/v1/cert-manager/certificates/"+certificateID, nil, h.IdentityToken)
+
+	var parsed struct {
+		Certificate struct {
+			SerialNumber string `json:"serialNumber"`
+		} `json:"certificate"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotEmpty(t, parsed.Certificate.SerialNumber)
+
+	return parsed.Certificate.SerialNumber
 }

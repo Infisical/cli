@@ -1169,20 +1169,22 @@ type CertificateResponse struct {
 
 type RetrieveCertificateResponse struct {
 	Certificate struct {
-		ID                string    `json:"id"`
-		CreatedAt         time.Time `json:"createdAt"`
-		UpdatedAt         time.Time `json:"updatedAt"`
-		Status            string    `json:"status"`
-		SerialNumber      string    `json:"serialNumber"`
-		CommonName        string    `json:"commonName"`
-		NotBefore         time.Time `json:"notBefore"`
-		NotAfter          time.Time `json:"notAfter"`
-		CaId              string    `json:"caId"`
-		KeyUsages         []string  `json:"keyUsages"`
-		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
-		Certificate       string    `json:"certificate,omitempty"`
-		CertificateChain  string    `json:"certificateChain,omitempty"`
-		PrivateKey        string    `json:"privateKey,omitempty"`
+		ID                         string    `json:"id"`
+		CreatedAt                  time.Time `json:"createdAt"`
+		UpdatedAt                  time.Time `json:"updatedAt"`
+		Status                     string    `json:"status"`
+		SerialNumber               string    `json:"serialNumber"`
+		CommonName                 string    `json:"commonName"`
+		NotBefore                  time.Time `json:"notBefore"`
+		NotAfter                   time.Time `json:"notAfter"`
+		CaId                       string    `json:"caId"`
+		KeyUsages                  []string  `json:"keyUsages"`
+		ExtendedKeyUsages          []string  `json:"extendedKeyUsages"`
+		Certificate                string    `json:"certificate,omitempty"`
+		CertificateChain           string    `json:"certificateChain,omitempty"`
+		PrivateKey                 string    `json:"privateKey,omitempty"`
+		RenewedByCertificateID     string    `json:"renewedByCertificateId,omitempty"`
+		LatestRenewalCertificateID string    `json:"latestRenewalCertificateId,omitempty"`
 	} `json:"certificate"`
 }
 
