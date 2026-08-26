@@ -18,9 +18,14 @@ pub fn init() {
             .unwrap_or_else(default_directive);
 
         // Targets, not EnvFilter: same syntax without the regex dependency.
-        let targets = filter.parse::<Targets>().unwrap_or_else(|_| {
+        let mut targets = filter.parse::<Targets>().unwrap_or_else(|_| {
             Targets::new().with_target("infisical_rdp_bridge", LevelFilter::INFO)
         });
+        // A bare `RUST_LOG=debug` sets the default for every target, sspi
+        // included, so cap it unless the caller named sspi themselves.
+        if !targets.iter().any(|(target, _)| target.starts_with("sspi")) {
+            targets = targets.with_target("sspi", LevelFilter::INFO);
+        }
 
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
