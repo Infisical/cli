@@ -165,6 +165,9 @@ struct BridgeEntry {
     // Set once the events channel has reported closed; subsequent polls
     // short-circuit to RDP_POLL_ENDED.
     events_ended: Mutex<bool>,
+    // Populated by wait() on failure. The status code alone can't say why a
+    // session died, so Go reads the message back via rdp_bridge_last_error.
+    last_error: Mutex<Option<String>>,
 }
 
 static HANDLES: LazyLock<Mutex<HashMap<u64, BridgeEntry>>> =
@@ -212,6 +215,7 @@ fn spawn_session(
     domain: Option<String>,
     flow: SessionFlow,
 ) -> anyhow::Result<u64> {
+    crate::logging::init();
     client_tcp.set_nonblocking(true)?;
     let cancel = CancellationToken::new();
     let cancel_for_thread = cancel.clone();
@@ -256,6 +260,7 @@ fn spawn_session(
         join: Mutex::new(Some(join)),
         events_rx: Mutex::new(Some(events_rx)),
         events_ended: Mutex::new(false),
+        last_error: Mutex::new(None),
     }))
 }
 
@@ -399,15 +404,65 @@ pub extern "C" fn rdp_bridge_wait(handle: u64) -> i32 {
             }
             Ok(Err(e)) => {
                 error!(handle, error = ?e, "rdp_bridge_wait: session failed");
+                // anyhow's alternate Display renders the full context chain,
+                // which is where the useful detail lives.
+                set_last_error(handle, format!("{e:#}"));
                 RDP_BRIDGE_SESSION_ERROR
             }
             Err(_) => {
                 error!(handle, "rdp_bridge_wait: session thread panicked");
+                set_last_error(handle, "session thread panicked".to_owned());
                 RDP_BRIDGE_THREAD_PANIC
             }
         },
         None => RDP_BRIDGE_OK,
     }
+}
+
+fn set_last_error(handle: u64, message: String) {
+    let handles = HANDLES.lock().expect("HANDLES poisoned");
+    if let Some(entry) = handles.get(&handle) {
+        *entry.last_error.lock().expect("last_error poisoned") = Some(message);
+    }
+}
+
+/// Copies the last session error into `buf` as a NUL-terminated string and
+/// returns the byte length written, excluding the NUL. Returns 0 when there is
+/// no error, and RDP_BRIDGE_BAD_ARG / RDP_BRIDGE_INVALID_HANDLE on misuse.
+/// Truncates on a UTF-8 boundary if `buf_len` is too small.
+///
+/// # Safety
+///
+/// `buf` must be writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rdp_bridge_last_error(
+    handle: u64,
+    buf: *mut c_char,
+    buf_len: usize,
+) -> i32 {
+    if buf.is_null() || buf_len == 0 {
+        return RDP_BRIDGE_BAD_ARG;
+    }
+    let handles = HANDLES.lock().expect("HANDLES poisoned");
+    let Some(entry) = handles.get(&handle) else {
+        return RDP_BRIDGE_INVALID_HANDLE;
+    };
+    let guard = entry.last_error.lock().expect("last_error poisoned");
+    let Some(message) = guard.as_deref() else {
+        unsafe { *buf = 0 };
+        return 0;
+    };
+
+    let mut end = message.len().min(buf_len - 1);
+    while end > 0 && !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    let bytes = &message.as_bytes()[..end];
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast::<u8>(), end);
+        *buf.add(end) = 0;
+    }
+    i32::try_from(end).unwrap_or(i32::MAX)
 }
 
 #[no_mangle]

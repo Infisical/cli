@@ -17,6 +17,8 @@ import (
 	"net"
 	"time"
 	"unsafe"
+
+	"github.com/rs/zerolog/log"
 )
 
 func (p *RDPProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
@@ -83,6 +85,11 @@ func (p *RDPProxy) handleConnectionWith(ctx context.Context, clientConn net.Conn
 	case err := <-waitErr:
 		if err != nil && !errors.Is(err, ErrInvalidHandle) {
 			cancelDrain()
+			log.Error().
+				Err(err).
+				Str("sessionId", p.config.SessionID).
+				Str("target", fmt.Sprintf("%s:%d", p.config.TargetHost, p.config.TargetPort)).
+				Msg("RDP bridge session failed")
 			return fmt.Errorf("rdp proxy: session: %w", err)
 		}
 		return nil
@@ -103,10 +110,31 @@ func (b *Bridge) Wait() error {
 	case C.RDP_BRIDGE_INVALID_HANDLE:
 		return ErrInvalidHandle
 	case C.RDP_BRIDGE_SESSION_ERROR, C.RDP_BRIDGE_THREAD_PANIC:
+		if msg := b.lastError(); msg != "" {
+			return fmt.Errorf("%w: %s", ErrSessionFailed, msg)
+		}
 		return ErrSessionFailed
 	default:
 		return fmt.Errorf("rdp bridge: wait returned unexpected status %d", int32(rc))
 	}
+}
+
+// lastError returns the Rust-side failure detail recorded by Wait, or "" if
+// there is none. The status code alone can't distinguish a protocol
+// negotiation failure from a target connect failure.
+func (b *Bridge) lastError() string {
+	const bufLen = 4096
+	buf := (*C.char)(C.malloc(C.size_t(bufLen)))
+	if buf == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(buf))
+
+	n := C.rdp_bridge_last_error(C.uint64_t(b.handle), buf, C.size_t(bufLen))
+	if n <= 0 {
+		return ""
+	}
+	return C.GoStringN(buf, C.int(n))
 }
 
 // Cancel is idempotent and safe from any goroutine.
