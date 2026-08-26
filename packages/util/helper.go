@@ -380,17 +380,19 @@ func ConfigContainsEmail(users []models.LoggedInUser, email string) bool {
 }
 
 func RequireLogin() {
-	// get the config file that stores the current logged in user email
+	// get the config file that stores login profiles
 	configFile, _ := GetConfigFile()
+	MigrateConfigProfiles(&configFile)
 
-	if configFile.LoggedInUserEmail == "" {
+	if ResolveProfile(configFile).Name == "" {
 		EstablishUserLoginSession()
 	}
 }
 
 func IsLoggedIn() bool {
 	configFile, _ := GetConfigFile()
-	return configFile.LoggedInUserEmail != ""
+	MigrateConfigProfiles(&configFile)
+	return ResolveProfile(configFile).Name != ""
 }
 
 func RequireServiceToken() {

@@ -77,6 +77,7 @@ const (
 	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
+	operationCallRevokeUserSession                 = "CallRevokeUserSession"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -158,6 +159,25 @@ func CallLoginV3(httpClient *resty.Client, request GetLoginV3Request) (GetLoginV
 	}
 
 	return loginV3Response, nil
+}
+
+// CallRevokeUserSession revokes a single server-side login session by its id
+// (the tokenVersionId claim carried in every session JWT).
+func CallRevokeUserSession(httpClient *resty.Client, sessionID string) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v2/users/me/sessions/%v", config.INFISICAL_URL, url.PathEscape(sessionID)))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallRevokeUserSession, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallRevokeUserSession, response, nil)
+	}
+
+	return nil
 }
 
 func CallVerifyMfaToken(httpClient *resty.Client, request VerifyMfaTokenRequest) (*VerifyMfaTokenResponse, *VerifyMfaTokenErrorResponse, error) {

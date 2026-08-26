@@ -134,14 +134,17 @@ var loginCmd = &cobra.Command{
 			}
 
 			currentLoggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
-			// if the key can't be found or there is an error getting current credentials from key ring, allow them to override
-			if err != nil && (strings.Contains(err.Error(), "we couldn't find your logged in details")) {
+			// if the key can't be found, the selected profile doesn't exist yet, or
+			// there is an error getting current credentials from key ring, allow them to override
+			if err != nil && (errors.Is(err, util.ErrProfileNotFound) || errors.Is(err, util.ErrProfileDomainMismatch) || strings.Contains(err.Error(), "we couldn't find your logged in details")) {
 				log.Debug().Err(err)
 			} else if err != nil {
 				util.HandleError(err)
 			}
 
-			if currentLoggedInUserDetails.IsUserLoggedIn && !currentLoggedInUserDetails.LoginExpired && len(currentLoggedInUserDetails.UserCredentials.PrivateKey) != 0 {
+			// When a profile is explicitly targeted (flag or env var), the login is
+			// a deliberate write to that profile; skip the add/override menu.
+			if config.INFISICAL_PROFILE_OVERRIDE == "" && currentLoggedInUserDetails.IsUserLoggedIn && !currentLoggedInUserDetails.LoginExpired && len(currentLoggedInUserDetails.UserCredentials.PrivateKey) != 0 {
 				shouldOverride, err := userLoginMenu(currentLoggedInUserDetails.UserCredentials.Email)
 				if err != nil {
 					util.HandleError(err)
@@ -227,18 +230,46 @@ var loginCmd = &cobra.Command{
 				cliDefaultLogin(&userCredentialsToBeStored, email, password, organizationId)
 			}
 
-			err = util.StoreUserCredsInKeyRing(&userCredentialsToBeStored)
+			orgID, subOrgID := util.ParseTokenOrgClaims(userCredentialsToBeStored.JTWToken)
+			orgName := util.OrgDisplayName(userCredentialsToBeStored.JTWToken, orgID, subOrgID)
+
+			existingConfig, err := util.GetMigratedConfigFile()
+			if err != nil {
+				util.HandleError(err, "Unable to read the Infisical config file")
+			}
+
+			profileName := config.INFISICAL_PROFILE_OVERRIDE
+			if profileName == "" {
+				profileName = util.DeriveProfileName(existingConfig, userCredentialsToBeStored.Email, config.INFISICAL_URL, orgID, orgName)
+			} else if err := util.ValidateProfileName(profileName); err != nil {
+				util.HandleError(err)
+			}
+
+			if existingProfile, found := util.FindProfile(existingConfig, profileName); found && existingProfile.Email != userCredentialsToBeStored.Email {
+				util.PrintWarning(fmt.Sprintf("Profile '%s' previously stored the session for %s and now stores the session for %s.", profileName, existingProfile.Email, userCredentialsToBeStored.Email))
+			}
+
+			// An explicitly targeted login (--profile flag or INFISICAL_PROFILE) is a
+			// scoped write: it must not move the global default out from under other
+			// terminals that rely on it. This also keeps expired-session renewals
+			// (which re-exec login with --profile) from stealing the default.
+			// Untargeted logins keep the familiar "last login wins" behavior.
+			makeActive := config.INFISICAL_PROFILE_OVERRIDE == ""
+
+			err = util.PersistLoginProfile(models.Profile{
+				Name:              profileName,
+				Email:             userCredentialsToBeStored.Email,
+				Domain:            config.INFISICAL_URL,
+				OrganizationID:    orgID,
+				OrganizationName:  orgName,
+				SubOrganizationID: subOrgID,
+			}, &userCredentialsToBeStored, makeActive)
 			if err != nil {
 				log.Error().Msgf("Unable to store your credentials in system vault")
 				log.Error().Msgf("\nTo trouble shoot further, read https://infisical.com/docs/cli/faq")
 				log.Debug().Err(err)
 				//return here
 				util.HandleError(err)
-			}
-
-			err = util.WriteInitalConfig(&userCredentialsToBeStored)
-			if err != nil {
-				util.HandleError(err, "Unable to write write to Infisical Config file. Please try again")
 			}
 
 			// Identify the user in PostHog and alias the anonymous machine ID
@@ -266,6 +297,17 @@ var loginCmd = &cobra.Command{
 			time.Sleep(time.Second * 1)
 			boldWhite.Printf(">>>> Welcome to Infisical!")
 			boldWhite.Printf(" You are now logged in as %v <<<< \n", userCredentialsToBeStored.Email)
+
+			if profileName != userCredentialsToBeStored.Email {
+				orgDetail := ""
+				if orgName != "" {
+					orgDetail = fmt.Sprintf(" (org %s)", orgName)
+				}
+				util.PrintlnStderr(fmt.Sprintf("Session saved to profile '%s'%s. Select it with --profile %s or INFISICAL_PROFILE=%s.", profileName, orgDetail, profileName, profileName))
+			}
+			if configAfterLogin, err := util.GetConfigFile(); err == nil && configAfterLogin.ActiveProfile != "" && configAfterLogin.ActiveProfile != profileName {
+				util.PrintlnStderr(fmt.Sprintf("Your default profile remains '%s'; terminals using it are unaffected. Run [infisical profile use %s] to make '%s' the default.", configAfterLogin.ActiveProfile, profileName, profileName))
+			}
 
 			plainBold := color.New(color.Bold)
 
