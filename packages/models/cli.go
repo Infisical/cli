@@ -7,10 +7,44 @@ type UserCredentials struct {
 	PrivateKey   string `json:"privateKey"`
 	JTWToken     string `json:"JTWToken"`
 	RefreshToken string `json:"RefreshToken"`
+	// OrgTokens caches session tokens for organizations other than the
+	// profile's default one, keyed by organization ID. Session tokens are
+	// organization-scoped, so switching organizations means exchanging the
+	// token; caching the result keeps --org cheap after its first use.
+	OrgTokens map[string]CachedOrgSession `json:"orgTokens,omitempty"`
+}
+
+// CachedOrgSession is a session token minted for a specific organization,
+// stored alongside enough metadata to match an --org selector without calling
+// the API again.
+type CachedOrgSession struct {
+	Token   string `json:"token"`
+	OrgID   string `json:"orgId"`
+	OrgName string `json:"orgName,omitempty"`
+	OrgSlug string `json:"orgSlug,omitempty"`
+}
+
+// Profile is a named login session: one account on one instance. The
+// organization is the profile's default (overridable per command with
+// --org/INFISICAL_ORG), not part of its identity. The keyring entry holding the
+// session credentials is keyed by Name; profiles migrated from the legacy
+// single-session config are named after the account email so their existing
+// email-keyed keyring entries keep working.
+type Profile struct {
+	Name   string `json:"name"`
+	Email  string `json:"email"`
+	Domain string `json:"domain"`
+	// OrganizationID is the profile's default organization.
+	OrganizationID    string `json:"organizationId,omitempty"`
+	OrganizationName  string `json:"organizationName,omitempty"`
+	SubOrganizationID string `json:"subOrganizationId,omitempty"`
 }
 
 // The file struct for Infisical config file
 type ConfigFile struct {
+	// LoggedInUserEmail, LoggedInUserDomain, and LoggedInUsers predate profiles.
+	// They are kept in sync with the active profile so older CLI versions and
+	// scripts that read them keep working.
 	LoggedInUserEmail      string         `json:"loggedInUserEmail"`
 	LoggedInUserDomain     string         `json:"LoggedInUserDomain,omitempty"`
 	LoggedInUsers          []LoggedInUser `json:"loggedInUsers,omitempty"`
@@ -24,6 +58,14 @@ type ConfigFile struct {
 	// happened on an older CLI version that predates the IdentifyUser flow,
 	// or when the email is changed via `infisical user switch`.
 	LastIdentifiedEmail string `json:"lastIdentifiedEmail,omitempty"`
+
+	// ActiveProfile is the global default profile used when no --profile flag,
+	// INFISICAL_PROFILE env var, or directory scope selects one.
+	ActiveProfile string    `json:"activeProfile,omitempty"`
+	Profiles      []Profile `json:"profiles,omitempty"`
+	// DirectoryProfiles maps an absolute directory path to the profile name
+	// that commands run inside that directory (or any subdirectory) should use.
+	DirectoryProfiles map[string]string `json:"directoryProfiles,omitempty"`
 }
 
 type LoggedInUser struct {

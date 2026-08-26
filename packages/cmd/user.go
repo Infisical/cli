@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/config"
-	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/manifoldco/promptui"
 	"github.com/posthog/posthog-go"
@@ -30,54 +29,44 @@ var userCmd = &cobra.Command{
 
 var switchCmd = &cobra.Command{
 	Use:                   "switch",
-	Short:                 "Used to switch between Infisical profiles",
+	Short:                 "Switch the default login profile (same as [infisical profile use], with a picker)",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical switch",
+	Example:               "infisical user switch",
 	Args:                  cobra.ExactArgs(0),
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		//get previous logged in profiles
-		loggedInProfiles, err := getLoggedInUsers()
-		if err != nil {
-			util.HandleError(err, "[infisical user switch]: Unable to get logged Profiles")
-		}
-
-		//prompt user
-		profile, err := LoggedInUsersPrompt(loggedInProfiles)
-		if err != nil {
-			util.HandleError(err, "[infisical user switch]: Prompt error")
-		}
-
-		//write to config file
-		configFile, err := util.GetConfigFile()
+		configFile, err := util.GetMigratedConfigFile()
 		if err != nil {
 			util.HandleError(err, "[infisical user switch]: Unable to get config file")
 		}
 
-		configFile.LoggedInUserEmail = profile
+		if len(configFile.Profiles) == 0 {
+			util.PrintErrorMessageAndExit("No login profiles found. Run [infisical login] to create one.")
+		}
 
-		//set logged in user domain
-		ok := util.ConfigContainsEmail(configFile.LoggedInUsers, profile)
-
-		if !ok {
-			//profile not in loggedInUsers
-			configFile.LoggedInUsers = append(configFile.LoggedInUsers, models.LoggedInUser{
-				Email:  profile,
-				Domain: config.INFISICAL_URL,
-			})
-			//set logged in user domain
-			configFile.LoggedInUserDomain = config.INFISICAL_URL
-
-		} else {
-			//exists, set logged in user domain
-			for _, v := range configFile.LoggedInUsers {
-				if profile == v.Email {
-					configFile.LoggedInUserDomain = v.Domain
-					break
-				}
+		labels := make([]string, len(configFile.Profiles))
+		for idx, profile := range configFile.Profiles {
+			label := fmt.Sprintf("%s (%s", profile.Name, profile.Email)
+			if profile.OrganizationName != "" {
+				label = fmt.Sprintf("%s, org %s", label, profile.OrganizationName)
 			}
+			labels[idx] = fmt.Sprintf("%s, %s)", label, util.DisplayDomain(profile.Domain))
+		}
+
+		prompt := promptui.Select{
+			Label: "Which of your Infisical profiles would you like to use",
+			Items: labels,
+			Size:  7,
+		}
+		idx, _, err := prompt.Run()
+		if err != nil {
+			util.HandleError(err, "[infisical user switch]: Prompt error")
+		}
+
+		if err := util.SetActiveProfile(&configFile, configFile.Profiles[idx].Name); err != nil {
+			util.HandleError(err, "[infisical user switch]: Unable to switch profile")
 		}
 
 		err = util.WriteConfigFile(&configFile)
@@ -85,7 +74,9 @@ var switchCmd = &cobra.Command{
 			util.HandleError(err, "")
 		}
 
-		Telemetry.CaptureEvent("cli-command:user switch", posthog.NewProperties().Set("numberOfLoggedInProfiles", len(loggedInProfiles)).Set("version", util.CLI_VERSION))
+		util.PrintlnStderr(fmt.Sprintf("Default profile is now '%s'", configFile.Profiles[idx].Name))
+
+		Telemetry.CaptureEvent("cli-command:user switch", posthog.NewProperties().Set("numberOfLoggedInProfiles", len(configFile.Profiles)).Set("version", util.CLI_VERSION))
 	},
 }
 
@@ -175,8 +166,14 @@ var updateCmd = &cobra.Command{
 }
 
 var domainCmd = &cobra.Command{
-	Use:                   "domain",
-	Short:                 "Used to update the domain of an Infisical profile",
+	Use:   "domain",
+	Short: "Point a profile at a different Infisical instance",
+	Long: `Point a profile at a different Infisical instance.
+
+Exactly the profile you pick is changed, even when other profiles share its
+account and instance. A session issued by the previous instance is not valid on
+the new one and must not be sent there, so the profile's stored credentials are
+cleared and you are asked to sign in again.`,
 	DisableFlagsInUseLine: true,
 	Example:               "infisical user update domain",
 	Args:                  cobra.ExactArgs(0),
@@ -184,22 +181,35 @@ var domainCmd = &cobra.Command{
 		util.RequireLogin()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		//prompt for profiles selection
-		loggedInProfiles, err := getLoggedInUsers()
+		configFile, err := util.GetMigratedConfigFile()
 		if err != nil {
-			util.HandleError(err, "[infisical user update domain]: Unable to get logged Profiles")
+			util.HandleError(err, "[infisical user update domain]: Unable to get config file")
+		}
+		if len(configFile.Profiles) == 0 {
+			util.PrintErrorMessageAndExit("No login profiles found. Run [infisical login] to create one.")
 		}
 
-		//prompt user
-		profile, err := LoggedInUsersPrompt(loggedInProfiles)
+		// Selecting a profile rather than an email matters: several profiles can
+		// share an email and an instance while holding different organizations,
+		// and only the chosen one should move.
+		labels := make([]string, len(configFile.Profiles))
+		for idx, profile := range configFile.Profiles {
+			labels[idx] = fmt.Sprintf("%s (%s, org %s, %s)", profile.Name, profile.Email, orgLabel(profile), util.DisplayDomain(profile.Domain))
+		}
+		prompt := promptui.Select{
+			Label: "Which profile should point at a different instance",
+			Items: labels,
+			Size:  7,
+		}
+		index, _, err := prompt.Run()
 		if err != nil {
 			util.HandleError(err, "[infisical user update domain]: Prompt error")
 		}
+		selected := configFile.Profiles[index]
 
 		domain := ""
 		domainQuery := true
 		if config.INFISICAL_URL_MANUAL_OVERRIDE != fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_EU_URL) && config.INFISICAL_URL_MANUAL_OVERRIDE != fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL) {
-
 			override, err := DomainOverridePrompt()
 			if err != nil {
 				util.HandleError(err, "[infisical user update domain]: Domain override prompt error")
@@ -209,53 +219,42 @@ var domainCmd = &cobra.Command{
 				domainQuery = false
 				domain = config.INFISICAL_URL_MANUAL_OVERRIDE
 			}
-
 		}
 
 		if domainQuery {
-			//prompt to update domain
 			domain, err = NewDomainPrompt()
 			if err != nil {
 				util.HandleError(err, "[infisical user update domain]: Prompt error")
 			}
 		}
 
-		//write to config file
-		configFile, err := util.GetConfigFile()
-		if err != nil {
-			util.HandleError(err, "[infisical user update domain]: Unable to get config file")
+		if util.AppendAPIEndpoint(domain) == util.AppendAPIEndpoint(selected.Domain) {
+			util.PrintlnStderr(fmt.Sprintf("Profile '%s' already uses %s. Nothing changed.", selected.Name, util.DisplayDomain(domain)))
+			return
 		}
 
-		//check if profile in logged in profiles
-
-		//if not add new profile loggedInUsers
-		//else update profile from loggedinUsers slice
-		ok := util.ConfigContainsEmail(configFile.LoggedInUsers, profile)
-		if !ok {
-			configFile.LoggedInUsers = append(configFile.LoggedInUsers, models.LoggedInUser{
-				Email:  profile,
-				Domain: domain,
-			})
-		} else {
-			//exists, set logged in user domain
-			for idx, v := range configFile.LoggedInUsers {
-				if profile == v.Email {
-					configFile.LoggedInUsers[idx].Domain = domain //inplace
-					break
-				}
-			}
-
-		}
-		//check if current loggedinuser is selected profile
-		//if yes set current domain to changed domain
-		if configFile.LoggedInUserEmail == profile {
-			configFile.LoggedInUserDomain = domain
+		// Remove the old session before recording the new instance, and abandon
+		// the change if it cannot be removed. Persisting the new instance while
+		// the previous session survived under this profile name would send that
+		// token to the new endpoint, which is the disclosure this clearing
+		// exists to prevent.
+		if err := util.ClearStoredSession(selected.Name); err != nil {
+			util.HandleError(err, fmt.Sprintf("Unable to clear the stored session of profile '%s'. It still points at %s, because its existing session must not be sent to %s.",
+				selected.Name, util.DisplayDomain(selected.Domain), util.DisplayDomain(domain)))
 		}
 
-		err = util.WriteConfigFile(&configFile)
-		if err != nil {
+		if !util.RepointProfileDomain(&configFile, selected.Name, domain) {
+			util.PrintlnStderr(fmt.Sprintf("Profile '%s' already uses %s. Nothing changed.", selected.Name, util.DisplayDomain(domain)))
+			return
+		}
+
+		if err := util.WriteConfigFile(&configFile); err != nil {
 			util.HandleError(err, "")
 		}
+
+		util.PrintlnStderr(fmt.Sprintf("Profile '%s' now points at %s. Its previous session was cleared, so run [infisical login --profile %s --domain %s] to sign in there.",
+			selected.Name, util.DisplayDomain(domain), selected.Name, util.DisplayDomain(domain)))
+
 		Telemetry.CaptureEvent("cli-command:user domain", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
 }
