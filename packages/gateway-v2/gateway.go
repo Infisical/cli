@@ -155,7 +155,7 @@ type Gateway struct {
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
 
-	// Counted in handleIncomingChannel, the one place no caller can bypass.
+	// Counted in the relay's channel-receive loop, which no caller can bypass.
 	activeChannels atomic.Int64
 	// Bumped per relay connection, so a handler cannot release a count it did not acquire.
 	channelGeneration atomic.Int64
@@ -714,7 +714,7 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 	}()
 
 	// Channels do not outlive their connection, so anything still counted is a handler that hung.
-	g.channelGeneration.Add(1)
+	generation := g.channelGeneration.Add(1)
 	g.activeChannels.Store(0)
 
 	// Handle incoming channels from the server
@@ -760,7 +760,9 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 				log.Info().Msg("SSH channels closed")
 				return nil
 			}
-			go g.handleIncomingChannel(newChannel)
+			// Counted here, not in the handler: its goroutine could load a later generation.
+			g.activeChannels.Add(1)
+			go g.handleIncomingChannel(newChannel, generation)
 		}
 	}
 }
@@ -959,17 +961,15 @@ func (g *Gateway) releaseChannel(generation int64) {
 	}
 }
 
-func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
+func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation int64) {
+	defer g.releaseChannel(generation)
+
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
 		log.Info().Msgf("Failed to accept channel: %v", err)
 		return
 	}
 	defer channel.Close()
-
-	generation := g.channelGeneration.Load()
-	g.activeChannels.Add(1)
-	defer g.releaseChannel(generation)
 
 	go ssh.DiscardRequests(requests)
 
