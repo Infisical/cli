@@ -165,8 +165,7 @@ struct BridgeEntry {
     // Set once the events channel has reported closed; subsequent polls
     // short-circuit to RDP_POLL_ENDED.
     events_ended: Mutex<bool>,
-    // Populated by wait() on failure. The status code alone can't say why a
-    // session died, so Go reads the message back via rdp_bridge_last_error.
+    // Set by wait() on failure; Go reads it back via rdp_bridge_last_error.
     last_error: Mutex<Option<String>>,
 }
 
@@ -404,8 +403,7 @@ pub extern "C" fn rdp_bridge_wait(handle: u64) -> i32 {
             }
             Ok(Err(e)) => {
                 error!(handle, error = ?e, "rdp_bridge_wait: session failed");
-                // anyhow's alternate Display renders the full context chain,
-                // which is where the useful detail lives.
+                // {e:#} renders the full context chain.
                 set_last_error(handle, format!("{e:#}"));
                 RDP_BRIDGE_SESSION_ERROR
             }
@@ -426,10 +424,9 @@ fn set_last_error(handle: u64, message: String) {
     }
 }
 
-/// Copies the last session error into `buf` as a NUL-terminated string and
-/// returns the byte length written, excluding the NUL. Returns 0 when there is
-/// no error, and RDP_BRIDGE_BAD_ARG / RDP_BRIDGE_INVALID_HANDLE on misuse.
-/// Truncates on a UTF-8 boundary if `buf_len` is too small.
+/// Writes the last session error into `buf` as a NUL-terminated string and
+/// returns its length excluding the NUL. 0 means no error. Truncates on a
+/// UTF-8 boundary.
 ///
 /// # Safety
 ///

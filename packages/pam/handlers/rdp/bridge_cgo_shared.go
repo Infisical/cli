@@ -119,9 +119,7 @@ func (b *Bridge) Wait() error {
 	}
 }
 
-// lastError returns the Rust-side failure detail recorded by Wait, or "" if
-// there is none. The status code alone can't distinguish a protocol
-// negotiation failure from a target connect failure.
+// lastError returns the Rust-side failure detail recorded by Wait, or "".
 func (b *Bridge) lastError() string {
 	const bufLen = 4096
 	buf := (*C.char)(C.malloc(C.size_t(bufLen)))

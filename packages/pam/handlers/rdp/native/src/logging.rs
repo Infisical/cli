@@ -1,8 +1,5 @@
-//! Tracing subscriber for the bridge. The crate is linked into the Go CLI as
-//! a staticlib, so nothing else installs a subscriber; without this every
-//! `tracing` event here and inside IronRDP is discarded before it is
-//! formatted, which is why bridge failures used to surface as a bare status
-//! code with no output.
+//! Tracing subscriber for the bridge. Linked into the Go CLI as a staticlib,
+//! so nothing else installs one and without this every event is discarded.
 
 use std::sync::Once;
 
@@ -20,9 +17,7 @@ pub fn init() {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(default_directive);
 
-        // Targets rather than EnvFilter: same `target=level,target=level`
-        // syntax, without pulling a regex engine in for span-field matching we
-        // never use.
+        // Targets, not EnvFilter: same syntax without the regex dependency.
         let targets = filter.parse::<Targets>().unwrap_or_else(|_| {
             Targets::new().with_target("infisical_rdp_bridge", LevelFilter::INFO)
         });
@@ -31,11 +26,9 @@ pub fn init() {
             .with_writer(std::io::stderr)
             .with_ansi(false)
             .with_target(true)
-            // Thread names make it obvious which half a line came from.
             .with_thread_names(true);
 
-        // try_init (not init) so a host-installed subscriber wins instead of
-        // aborting the process.
+        // try_init, not init: a host-installed subscriber should win, not panic.
         let _ = tracing_subscriber::registry()
             .with(fmt_layer)
             .with(targets)
@@ -43,15 +36,10 @@ pub fn init() {
     });
 }
 
-/// Mirrors the Go CLI's LOG_LEVEL so `LOG_LEVEL=debug infisical ...` turns on
-/// bridge and IronRDP protocol tracing without a second knob. IronRDP logs
-/// each decoded PDU at debug/trace, which is what makes strict-client
-/// negotiation failures diagnosable.
+/// Mirrors the Go CLI's LOG_LEVEL so one knob covers both sides.
 ///
-/// sspi is deliberately pinned to `info` regardless of LOG_LEVEL: it logs
-/// serialized TSCredentials, which contain the injected PAM password in
-/// cleartext, at debug and below. Enabling it has to be a deliberate
-/// `RUST_LOG=sspi=trace`, never a side effect of raising the general log level.
+/// sspi stays at `info` whatever LOG_LEVEL says: it logs the injected password
+/// in cleartext at debug and below, so enabling it must be deliberate.
 fn default_directive() -> String {
     let level = std::env::var("LOG_LEVEL")
         .unwrap_or_default()

@@ -51,10 +51,8 @@ int32_t rdp_bridge_wait(uint64_t handle);
 int32_t rdp_bridge_cancel(uint64_t handle);
 int32_t rdp_bridge_free(uint64_t handle);
 
-/* Copies the last session error into `buf` as a NUL-terminated string and
- * returns the length written, excluding the NUL. 0 means no error recorded.
- * Only meaningful after rdp_bridge_wait returned SESSION_ERROR/THREAD_PANIC.
- * Truncates on a UTF-8 boundary when `buf_len` is too small. */
+/* Writes the last session error into `buf` NUL-terminated and returns its
+ * length excluding the NUL. 0 means none. Truncates on a UTF-8 boundary. */
 int32_t rdp_bridge_last_error(uint64_t handle, char *buf, size_t buf_len);
 
 /* Poll return codes (distinct number space from the bridge status codes

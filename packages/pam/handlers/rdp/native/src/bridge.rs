@@ -88,8 +88,8 @@ async fn run_mitm_native_inner(
     );
 
     let acceptor_username = target.username.clone();
-    // One task, one current-thread runtime. Don't move a half onto its own
-    // runtime: the stream it returns is bound to that runtime's IO driver.
+    // Don't split these across runtimes: the streams they return are bound to
+    // the runtime that created them.
     let (acceptor_output, connector_output) = tokio::try_join!(
         run_acceptor_half(client_tcp, acceptor_username),
         run_connector_half(target),
@@ -641,8 +641,6 @@ async fn run_acceptor_half(
             None,
         )
         .await;
-        // Logged either way: how long the client waited before giving up is
-        // the whole question when a strict client disconnects mid-CredSSP.
         let elapsed_ms = credssp_start.elapsed().as_millis();
         match &result {
             Ok(_) => info!(elapsed_ms, "acceptor: CredSSP exchange finished"),
@@ -808,11 +806,7 @@ where
         round += 1;
         let client_state: ClientState = {
             let mut generator = sequence.process_ts_request(ts_request);
-            // sspi runs KDC discovery inline here rather than yielding it as a
-            // network request. On a current-thread runtime its DNS helper
-            // blocks the whole runtime thread (sspi dns.rs execute_future),
-            // which would stall the acceptor half sharing this thread. Timing
-            // each step is how we tell that apart from a slow peer.
+            // sspi does KDC discovery inline here and blocks the runtime thread.
             let mut step_start = Instant::now();
             let mut state = generator.start();
             log_sspi_step(round, "start", step_start.elapsed());
@@ -869,8 +863,7 @@ where
     Ok(())
 }
 
-/// A synchronous sspi step longer than this monopolizes the runtime thread
-/// and starves the acceptor half, so it is worth a louder log line.
+/// Past this, an sspi step is blocking the runtime thread, not just being slow.
 const SSPI_STEP_STALL_WARN: Duration = Duration::from_millis(250);
 
 fn log_sspi_step(round: usize, phase: &'static str, elapsed: Duration) {
@@ -888,11 +881,8 @@ type AcceptorTls = (Vec<u8>, Arc<tokio_rustls::rustls::ServerConfig>);
 
 static ACCEPTOR_TLS: OnceLock<AcceptorTls> = OnceLock::new();
 
-/// One certificate for the whole process, not one per session. mstsc opens a
-/// second connection after the user accepts the certificate dialog and compares
-/// the certificate it receives against the one it just approved; a per-session
-/// cert never matched, so it aborted the second handshake with "an unexpected
-/// server authentication certificate was received from the remote computer".
+/// Once per process, not per session: mstsc reconnects after the certificate
+/// dialog and rejects a cert that differs from the one the user approved.
 fn acceptor_tls_material() -> Result<AcceptorTls> {
     if let Some(existing) = ACCEPTOR_TLS.get() {
         return Ok(existing.clone());
@@ -901,8 +891,7 @@ fn acceptor_tls_material() -> Result<AcceptorTls> {
         generate_acceptor_cert().context("generate acceptor cert")?;
     let config =
         Arc::new(build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?);
-    // Racing sessions may both generate one; whichever lands first wins so that
-    // every session presents the same certificate.
+    // Racing sessions both generate one; the first to land wins.
     let _ = ACCEPTOR_TLS.set((public_key, config));
     Ok(ACCEPTOR_TLS
         .get()
