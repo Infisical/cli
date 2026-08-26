@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
+	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/smallnest/resp3"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -72,6 +73,11 @@ type sqlTestParams struct {
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
+	AuthMethod            string `json:"authMethod"` // mssql only: "sql-login" | "ntlm" | "kerberos"
+	Domain                string `json:"domain"`
+	Realm                 string `json:"realm"`
+	KdcAddress            string `json:"kdcAddress"`
+	Spn                   string `json:"spn"`
 }
 
 type mongoTestParams struct {
@@ -205,6 +211,23 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 
 // doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
 func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlTestParams) error {
+	// Windows-auth SQL Server logins have no SQL-managed password, so the database/sql driver path can't carry them.
+	// The session proxy already speaks NTLM and Kerberos against MSSQL, so the check reuses that handshake.
+	if params.Dialect == "mssql" && (params.AuthMethod == "ntlm" || params.AuthMethod == "kerberos") {
+		return mssqlhandler.VerifyCredential(mssqlhandler.MssqlProxyConfig{
+			TargetAddr:     net.JoinHostPort(host, strconv.Itoa(port)),
+			InjectUsername: params.Username,
+			InjectPassword: params.Password,
+			InjectDatabase: params.Database,
+			InjectDomain:   params.Domain,
+			InjectRealm:    params.Realm,
+			InjectKDCAddr:  params.KdcAddress,
+			InjectSPN:      params.Spn,
+			AuthMethod:     params.AuthMethod,
+			EnableTLS:      params.SslEnabled,
+		})
+	}
+
 	db, err := openSQLTestDB(host, port, params)
 	if err != nil {
 		return err

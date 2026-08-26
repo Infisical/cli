@@ -654,3 +654,15 @@ func (p *MssqlProxy) proxyToClient(server, client net.Conn, errCh chan error) {
 		}
 	}
 }
+
+// VerifyCredential performs the login handshake against the target and drops the connection. It reuses the same
+// auth paths a session uses, so sql-login, NTLM, and Kerberos all behave here exactly as they do for a real
+// connection. A nil error means the credential authenticated.
+func VerifyCredential(config MssqlProxyConfig) error {
+	proxy := NewMssqlProxy(config)
+	serverConn, _, err := proxy.connectAndAuthenticateToServer()
+	if err != nil {
+		return err
+	}
+	return serverConn.Close()
+}
