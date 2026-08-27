@@ -165,9 +165,7 @@ func makeTerminalRaw(fd int) (restore func(), err error) {
 	}), nil
 }
 
-// sessionWatch ends the PAM session on expiry or signal. It is armed before any network work
-// because the session exists server-side from creation, so an interrupt during connection setup
-// would otherwise leave it running until expiry.
+// sessionWatch ends the PAM session on expiry or signal.
 type sessionWatch struct {
 	mu      sync.Mutex
 	client  *ssh.Client
@@ -211,8 +209,6 @@ func watchForSessionEnd(transport *BaseProxyServer) (watch *sessionWatch, stop f
 			if watch.closeClient() {
 				return
 			}
-			// Interrupted before connecting, so no shell will unwind and end the session. Signals
-			// go back to their default handling first, so a second one is not swallowed by this.
 			signal.Stop(signals)
 			transport.NotifySessionTermination()
 			os.Exit(exitCodeForSignal(sig))
