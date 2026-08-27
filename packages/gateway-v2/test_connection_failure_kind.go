@@ -93,10 +93,10 @@ func classifyTestConnFailure(err error) testConnFailureKind {
 
 // Drivers without typed errors (SSH, Redis, MongoDB, and the MSSQL proxy handshake) only report a string.
 var authFailureSubstrings = []string{
-	"unable to authenticate",       // golang.org/x/crypto/ssh
-	"no supported methods remain",  // golang.org/x/crypto/ssh
-	"ssh: handshake failed",        // golang.org/x/crypto/ssh
-	"ntlm authentication failed",   // MSSQL proxy handshake
+	"unable to authenticate",      // golang.org/x/crypto/ssh
+	"no supported methods remain", // golang.org/x/crypto/ssh
+	"ssh: handshake failed",       // golang.org/x/crypto/ssh
+	"ntlm authentication failed",  // MSSQL proxy handshake
 	"kerberos authentication failed",
 	"authentication failed",
 	"auth failed",
@@ -104,8 +104,8 @@ var authFailureSubstrings = []string{
 	"wrong password",
 	"access denied",
 	"permission denied",
-	"wrongpassword",  // Redis
-	"noauth",         // Redis
+	"wrongpassword",                  // Redis
+	"noauth",                         // Redis
 	"invalid username-password pair", // MongoDB
 	"authentication error",
 }

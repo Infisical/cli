@@ -167,6 +167,12 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		return nil, nil, fmt.Errorf("dial server: %w", err)
 	}
 
+	return p.authenticateOverConn(serverConn)
+}
+
+// authenticateOverConn runs the PRELOGIN and login handshake over an already-dialed connection, so a caller
+// that needs to own the dial (to bound it with a context) can still reuse the same auth paths.
+func (p *MssqlProxy) authenticateOverConn(serverConn net.Conn) (net.Conn, []*TDSPacket, error) {
 	// 1. Send our PRELOGIN to server
 	encOption := uint8(EncryptNotSup)
 	if p.config.EnableTLS {
@@ -658,11 +664,28 @@ func (p *MssqlProxy) proxyToClient(server, client net.Conn, errCh chan error) {
 // VerifyCredential performs the login handshake against the target and drops the connection. It reuses the same
 // auth paths a session uses, so sql-login, NTLM, and Kerberos all behave here exactly as they do for a real
 // connection. A nil error means the credential authenticated.
-func VerifyCredential(config MssqlProxyConfig) error {
+//
+// The context bounds the whole handshake, not just the dial: a target that accepts the connection and then
+// withholds its PRELOGIN response would otherwise leave this blocked on a read after the caller gave up, and
+// retries would stack those goroutines and sockets up until the gateway ran out of them.
+func VerifyCredential(ctx context.Context, config MssqlProxyConfig) error {
+	dialer := &net.Dialer{}
+	serverConn, err := dialer.DialContext(ctx, "tcp", config.TargetAddr)
+	if err != nil {
+		return fmt.Errorf("dial server: %w", err)
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := serverConn.SetDeadline(deadline); err != nil {
+			serverConn.Close()
+			return fmt.Errorf("set handshake deadline: %w", err)
+		}
+	}
+
 	proxy := NewMssqlProxy(config)
-	serverConn, _, err := proxy.connectAndAuthenticateToServer()
+	authedConn, _, err := proxy.authenticateOverConn(serverConn)
 	if err != nil {
 		return err
 	}
-	return serverConn.Close()
+	return authedConn.Close()
 }

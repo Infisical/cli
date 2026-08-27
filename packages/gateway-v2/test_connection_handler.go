@@ -19,13 +19,13 @@ import (
 	"sync"
 	"time"
 
+	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
-	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/smallnest/resp3"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -214,7 +214,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 	// Windows-auth SQL Server logins have no SQL-managed password, so the database/sql driver path can't carry them.
 	// The session proxy already speaks NTLM and Kerberos against MSSQL, so the check reuses that handshake.
 	if params.Dialect == "mssql" && (params.AuthMethod == "ntlm" || params.AuthMethod == "kerberos") {
-		return mssqlhandler.VerifyCredential(mssqlhandler.MssqlProxyConfig{
+		return mssqlhandler.VerifyCredential(ctx, mssqlhandler.MssqlProxyConfig{
 			TargetAddr:     net.JoinHostPort(host, strconv.Itoa(port)),
 			InjectUsername: params.Username,
 			InjectPassword: params.Password,
