@@ -767,6 +767,11 @@ func startSSHShell(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 		shutdownCh:             make(chan struct{}),
 	}
 
+	// Armed before the gateway round-trip below and the dial that follows, so an interrupt during
+	// either still ends the session that StartPAMAccess already created.
+	watch, stopWatching := watchForSessionEnd(transport)
+	defer stopWatching()
+
 	if err := transport.ValidateResourceTypeSupported(); err != nil {
 		util.HandleError(err, "Gateway version outdated")
 		return
@@ -776,7 +781,7 @@ func startSSHShell(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 		util.PrintfStderr("Connecting to %s as %s (session ends in %s)...\n", strings.TrimPrefix(path, "/"), username, duration.String())
 	}
 
-	exitCode, err := RunSSHShell(transport, username, command)
+	exitCode, err := RunSSHShell(transport, watch, username, command)
 
 	transport.NotifySessionTermination()
 

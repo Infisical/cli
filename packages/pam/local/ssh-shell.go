@@ -39,15 +39,13 @@ func sanitizeSSHVersion(version string) string {
 }
 
 // RunSSHShell attaches the terminal to a shell on the target, or runs one command, and returns the remote exit code
-func RunSSHShell(transport *BaseProxyServer, username string, command []string) (int, error) {
+func RunSSHShell(transport *BaseProxyServer, watch *sessionWatch, username string, command []string) (int, error) {
 	client, err := dialSSHOverTunnel(transport, username)
 	if err != nil {
 		return 0, err
 	}
 	defer client.Close()
-
-	expired, stopWatching := watchForSessionEnd(client, transport.sessionExpiry)
-	defer stopWatching()
+	watch.attach(client)
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -63,7 +61,7 @@ func RunSSHShell(transport *BaseProxyServer, username string, command []string) 
 
 	sessionExpired := false
 	select {
-	case <-expired:
+	case <-watch.expired:
 		sessionExpired = true
 		util.PrintfStderr("\nPAM session expired.\n")
 	default:
@@ -167,33 +165,72 @@ func makeTerminalRaw(fd int) (restore func(), err error) {
 	}), nil
 }
 
-// watchForSessionEnd closes the client on expiry or signal
-func watchForSessionEnd(client *ssh.Client, expiry time.Time) (expired <-chan struct{}, stop func()) {
-	expiredCh := make(chan struct{})
+// sessionWatch ends the PAM session on expiry or signal. It is armed before any network work
+// because the session exists server-side from creation, so an interrupt during connection setup
+// would otherwise leave it running until expiry.
+type sessionWatch struct {
+	mu      sync.Mutex
+	client  *ssh.Client
+	expired chan struct{}
+}
+
+func (w *sessionWatch) attach(client *ssh.Client) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.client = client
+}
+
+// closeClient ends a connected session, reporting whether there was one to end.
+func (w *sessionWatch) closeClient() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.client == nil {
+		return false
+	}
+	w.client.Close()
+	return true
+}
+
+func watchForSessionEnd(transport *BaseProxyServer) (watch *sessionWatch, stop func()) {
+	watch = &sessionWatch{expired: make(chan struct{})}
 	done := make(chan struct{})
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		timer := time.NewTimer(time.Until(expiry))
+		timer := time.NewTimer(time.Until(transport.sessionExpiry))
 		defer timer.Stop()
 
 		select {
 		case <-timer.C:
-			close(expiredCh)
-			client.Close()
+			close(watch.expired)
+			watch.closeClient()
 		case sig := <-signals:
 			log.Debug().Msgf("Received signal %v, ending SSH session", sig)
-			client.Close()
+			if watch.closeClient() {
+				return
+			}
+			// Interrupted before connecting, so no shell will unwind and end the session. Signals
+			// go back to their default handling first, so a second one is not swallowed by this.
+			signal.Stop(signals)
+			transport.NotifySessionTermination()
+			os.Exit(exitCodeForSignal(sig))
 		case <-done:
 		}
 	}()
 
-	return expiredCh, func() {
+	return watch, func() {
 		signal.Stop(signals)
 		close(done)
 	}
+}
+
+func exitCodeForSignal(sig os.Signal) int {
+	if signum, ok := sig.(syscall.Signal); ok {
+		return 128 + int(signum)
+	}
+	return 1
 }
 
 func sshExitCode(err error, sessionExpired bool) (int, error) {
