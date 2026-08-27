@@ -4,7 +4,7 @@
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -80,7 +80,16 @@ async fn run_mitm_native_inner(
     // 0.23 needs an explicit provider when more than one is compiled in.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    info!(
+        target_host = %target.host,
+        target_port = target.port,
+        has_domain = target.domain.is_some(),
+        "bridge: starting native MITM session"
+    );
+
     let acceptor_username = target.username.clone();
+    // Don't split these across runtimes: the streams they return are bound to
+    // the runtime that created them.
     let (acceptor_output, connector_output) = tokio::try_join!(
         run_acceptor_half(client_tcp, acceptor_username),
         run_connector_half(target),
@@ -582,11 +591,7 @@ async fn run_acceptor_half(
     client_tcp: TcpStream,
     username: String,
 ) -> Result<(ErasedStream, bytes::BytesMut)> {
-    let (acceptor_public_key, _cert_der, certified_key) =
-        generate_acceptor_cert().context("generate acceptor cert")?;
-    let server_tls =
-        build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?;
-    let server_tls = Arc::new(server_tls);
+    let (acceptor_public_key, server_tls) = acceptor_tls_material()?;
 
     let acceptor_framed = ironrdp_tokio::TokioFramed::new(client_tcp);
     let expected_creds = AcceptorCredentials {
@@ -626,7 +631,8 @@ async fn run_acceptor_half(
     };
 
     if acceptor.should_perform_credssp() {
-        ironrdp_acceptor::accept_credssp(
+        let credssp_start = Instant::now();
+        let result = ironrdp_acceptor::accept_credssp(
             &mut acceptor_framed,
             &mut acceptor,
             &mut ReqwestNetworkClient::new(),
@@ -634,8 +640,13 @@ async fn run_acceptor_half(
             acceptor_public_key,
             None,
         )
-        .await
-        .context("acceptor: CredSSP")?;
+        .await;
+        let elapsed_ms = credssp_start.elapsed().as_millis();
+        match &result {
+            Ok(_) => info!(elapsed_ms, "acceptor: CredSSP exchange finished"),
+            Err(e) => warn!(elapsed_ms, error = ?e, "acceptor: CredSSP failed"),
+        }
+        result.context("acceptor: CredSSP")?;
     }
     info!("acceptor: CredSSP complete");
 
@@ -789,11 +800,16 @@ where
     .context("CredsspSequence::init")?;
 
     let mut buf = WriteBuf::new();
+    let mut round = 0usize;
 
     loop {
+        round += 1;
         let client_state: ClientState = {
             let mut generator = sequence.process_ts_request(ts_request);
+            // sspi does KDC discovery inline here and blocks the runtime thread.
+            let mut step_start = Instant::now();
             let mut state = generator.start();
+            log_sspi_step(round, "start", step_start.elapsed());
             loop {
                 match state {
                     GeneratorState::Suspended(request) => {
@@ -801,7 +817,9 @@ where
                             .send(&request)
                             .await
                             .context("CredSSP network request")?;
+                        step_start = Instant::now();
                         state = generator.resume(Ok(response));
+                        log_sspi_step(round, "resume", step_start.elapsed());
                     }
                     GeneratorState::Completed(result) => {
                         break result.map_err(|e| anyhow::anyhow!("CredSSP process: {e:?}"))?;
@@ -843,6 +861,42 @@ where
 
     connector.mark_credssp_as_done();
     Ok(())
+}
+
+/// Past this, an sspi step is blocking the runtime thread, not just being slow.
+const SSPI_STEP_STALL_WARN: Duration = Duration::from_millis(250);
+
+fn log_sspi_step(round: usize, phase: &'static str, elapsed: Duration) {
+    if elapsed >= SSPI_STEP_STALL_WARN {
+        warn!(
+            round,
+            phase,
+            elapsed_ms = elapsed.as_millis(),
+            "connector: sspi step blocked the runtime thread"
+        );
+    }
+}
+
+type AcceptorTls = (Vec<u8>, Arc<tokio_rustls::rustls::ServerConfig>);
+
+static ACCEPTOR_TLS: OnceLock<AcceptorTls> = OnceLock::new();
+
+/// Once per process, not per session: mstsc reconnects after the certificate
+/// dialog and rejects a cert that differs from the one the user approved.
+fn acceptor_tls_material() -> Result<AcceptorTls> {
+    if let Some(existing) = ACCEPTOR_TLS.get() {
+        return Ok(existing.clone());
+    }
+    let (public_key, _cert_der, certified_key) =
+        generate_acceptor_cert().context("generate acceptor cert")?;
+    let config =
+        Arc::new(build_acceptor_tls_config(certified_key).context("build acceptor TLS config")?);
+    // Racing sessions both generate one; the first to land wins.
+    let _ = ACCEPTOR_TLS.set((public_key, config));
+    Ok(ACCEPTOR_TLS
+        .get()
+        .expect("acceptor TLS material set")
+        .clone())
 }
 
 pub(crate) fn generate_acceptor_cert() -> Result<(Vec<u8>, Vec<u8>, rcgen::CertifiedKey)> {

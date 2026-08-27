@@ -4,6 +4,7 @@
 #ifndef INFISICAL_RDP_BRIDGE_H
 #define INFISICAL_RDP_BRIDGE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -49,6 +50,10 @@ int32_t rdp_bridge_start_windows_socket(
 int32_t rdp_bridge_wait(uint64_t handle);
 int32_t rdp_bridge_cancel(uint64_t handle);
 int32_t rdp_bridge_free(uint64_t handle);
+
+/* Writes the last session error into `buf` NUL-terminated and returns its
+ * length excluding the NUL. 0 means none. Truncates on a UTF-8 boundary. */
+int32_t rdp_bridge_last_error(uint64_t handle, char *buf, size_t buf_len);
 
 /* Poll return codes (distinct number space from the bridge status codes
  * above; consumed by rdp_bridge_poll_event only). */
