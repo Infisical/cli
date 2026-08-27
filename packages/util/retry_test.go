@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -438,4 +439,136 @@ func TestNoDirectRestyConstruction(t *testing.T) {
 	assert.Empty(t, offenders,
 		"these sites construct a resty client directly and so have no retry policy; "+
 			"use util.GetRestyClientWithCustomHeaders or util.GetRestyClientWithPolicy instead")
+}
+
+// newAbruptCloseServer accepts connections, reads the request, then drops the connection without
+// responding. That is the ambiguous mid-flight failure: the request was delivered, so the server may
+// already have acted on it, and only the response was lost.
+func newAbruptCloseServer(t *testing.T) (serverURL string, connections func() int32) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	var count atomic.Int32
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			count.Add(1)
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Read(make([]byte, 4096))
+			_ = conn.Close()
+		}
+	}()
+
+	return "http://" + listener.Addr().String(), count.Load
+}
+
+// deadAddress returns an address that is routable but has nothing listening, so dialing it is
+// refused at connection establishment and the request provably never reaches a server.
+func deadAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	return "http://" + addr
+}
+
+// Transport failures have to respect method safety too, but only when they are ambiguous. Treating
+// every transport error as unsafe for POST would give up the case this feature mainly exists for:
+// retrying across a backend that is briefly down.
+func TestTransportErrorMethodSafety(t *testing.T) {
+	const maxRetries = 2
+
+	t.Run("mid-flight failure does not replay POST", func(t *testing.T) {
+		serverURL, _ := newAbruptCloseServer(t)
+
+		client, attempts := newTestClient(t, testPolicy(maxRetries))
+		_, err := client.R().SetBody(`{"lease":"request"}`).Post(serverURL)
+
+		require.Error(t, err)
+		assert.Equal(t, int32(1), attempts.Load(),
+			"an ambiguous mid-flight failure must not replay a write: the server may have committed it")
+	})
+
+	t.Run("mid-flight failure does not replay PATCH", func(t *testing.T) {
+		serverURL, _ := newAbruptCloseServer(t)
+
+		client, attempts := newTestClient(t, testPolicy(maxRetries))
+		_, err := client.R().SetBody(`{}`).Patch(serverURL)
+
+		require.Error(t, err)
+		assert.Equal(t, int32(1), attempts.Load())
+	})
+
+	t.Run("mid-flight failure replays GET", func(t *testing.T) {
+		serverURL, _ := newAbruptCloseServer(t)
+
+		client, attempts := newTestClient(t, testPolicy(maxRetries))
+		_, err := client.R().Get(serverURL)
+
+		require.Error(t, err)
+		assert.Equal(t, int32(maxRetries+1), attempts.Load(),
+			"a read is idempotent, so an ambiguous failure is still safe to repeat")
+	})
+
+	t.Run("connection refused replays POST", func(t *testing.T) {
+		client, attempts := newTestClient(t, testPolicy(maxRetries))
+		_, err := client.R().SetBody(`{}`).Post(deadAddress(t))
+
+		require.Error(t, err)
+		assert.Equal(t, int32(maxRetries+1), attempts.Load(),
+			"the dial never completed, so the server cannot have seen the write")
+	})
+
+	t.Run("unresolvable host replays POST", func(t *testing.T) {
+		client, attempts := newTestClient(t, testPolicy(maxRetries))
+		_, err := client.R().SetBody(`{}`).Post("http://this-host-does-not-exist.invalid")
+
+		require.Error(t, err)
+		assert.Equal(t, int32(maxRetries+1), attempts.Load(),
+			"resolution never produced an address, so nothing was sent")
+	})
+}
+
+func TestRequestNeverReachedServer(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"connection refused", syscall.ECONNREFUSED, true},
+		{"wrapped connection refused", fmt.Errorf("post: %w", syscall.ECONNREFUSED), true},
+		{"dns failure", &net.DNSError{Err: "no such host", Name: "app.infisical.com"}, true},
+		{"dial failure", &net.OpError{Op: "dial", Err: syscall.ETIMEDOUT}, true},
+
+		// Delivered, then the connection died. The server may already have committed the write.
+		{"read failure mid-flight", &net.OpError{Op: "read", Err: syscall.ECONNRESET}, false},
+		{"write failure mid-flight", &net.OpError{Op: "write", Err: syscall.EPIPE}, false},
+		{"bare connection reset", syscall.ECONNRESET, false},
+		{"unexpected eof", io.ErrUnexpectedEOF, false},
+		{"eof", io.EOF, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, requestNeverReachedServer(test.err))
+		})
+	}
+}
+
+func TestIsIdempotentMethod(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete} {
+		assert.True(t, isIdempotentMethod(method), method)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPatch, "PROPFIND", ""} {
+		assert.False(t, isIdempotentMethod(method), method)
+	}
 }

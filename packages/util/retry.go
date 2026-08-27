@@ -155,10 +155,22 @@ func shouldRetryRequest(res *resty.Response, err error) bool {
 		return false
 	}
 
-	// A transport error means no usable response arrived. res may be nil here, so decide on the
-	// error alone and do not touch res.
+	// A transport error means no usable response arrived.
 	if err != nil {
-		return isRetryableTransportError(err)
+		if !isRetryableTransportError(err) {
+			return false
+		}
+
+		// A failure that proves the request was never delivered is safe to replay whatever the
+		// method. res is nil when resty failed in pre-request middleware, which is likewise before
+		// anything went out.
+		if res == nil || res.Request == nil || requestNeverReachedServer(err) {
+			return true
+		}
+
+		// Otherwise the connection died mid-flight and we cannot tell whether the server already
+		// committed the request, so only replay methods that are safe to repeat.
+		return isIdempotentMethod(res.Request.Method)
 	}
 
 	if res == nil {
@@ -183,12 +195,45 @@ func methodAllowsStatusRetry(method string, statusCode int) bool {
 		return true
 	}
 
+	return isIdempotentMethod(method)
+}
+
+// isIdempotentMethod reports whether sending a request more than once is equivalent to sending it
+// once, per RFC 9110 9.2.2. POST and PATCH are not, so replaying them can double-apply the write.
+func isIdempotentMethod(method string) bool {
 	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace,
+		http.MethodPut, http.MethodDelete:
 		return true
 	default: // POST, PATCH, anything unrecognised
 		return false
 	}
+}
+
+// requestNeverReachedServer reports whether a transport error proves the request was never delivered,
+// which makes replaying it safe regardless of method. Connection establishment failures qualify: if
+// the dial never completed or the name never resolved, the server cannot have acted on anything.
+//
+// Mid-flight failures deliberately do not qualify. A reset or EOF after the request was written is
+// ambiguous, because the server may have committed the write and only the response was lost. Keeping
+// this distinction is what lets the agent still retry its token-refresh POST across a backend
+// restart, which is the case a blanket "never replay POST" rule would give up.
+func requestNeverReachedServer(err error) bool {
+	// Resolution never produced an address, so nothing was sent.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	// Op is "dial" only while establishing the connection. A request already in flight reports
+	// "read" or "write" instead.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+
+	// A refused connection is always rejected at establishment time.
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // isRetryableTransportError reports whether a request failed in a way a retry could plausibly fix.
