@@ -591,7 +591,7 @@ type agentCertificateAttributes struct {
 type agentCertificateLifecycle struct {
 	RenewBeforeExpiry   string `yaml:"renew-before-expiry,omitempty"`
 	StatusCheckInterval string `yaml:"status-check-interval,omitempty"`
-	UseLatest           bool   `yaml:"use-latest,omitempty"`
+	ReplaceOnRenewals   bool   `yaml:"replace-on-renewals,omitempty"`
 }
 
 type agentCertificateFileOutput struct {
@@ -640,7 +640,7 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			Lifecycle: agentCertificateLifecycle{
 				RenewBeforeExpiry:   cert.RenewBeforeExpiry,
 				StatusCheckInterval: cert.StatusCheckInterval,
-				UseLatest:           cert.UseLatest,
+				ReplaceOnRenewals:   cert.ReplaceOnRenewals,
 			},
 			FileOutput: agentCertificateFileOutput{
 				Certificate: agentFileOutputEntry{Path: cert.CertPath, Permission: cert.CertPermission},
@@ -726,7 +726,7 @@ type CertificateConfigEntry struct {
 	ChainPermission     string
 	PostHookOnFailure   string
 	CertificateID       string
-	UseLatest           bool
+	ReplaceOnRenewals   bool
 	CSR                 string
 	CSRPath             string
 	KeyAlgorithm        string

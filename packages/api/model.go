@@ -1167,6 +1167,14 @@ type CertificateResponse struct {
 	CertificateRequestID string           `json:"certificateRequestId"`
 }
 
+type CertificateStatus string
+
+const (
+	CertificateStatusActive  CertificateStatus = "active"
+	CertificateStatusRevoked CertificateStatus = "revoked"
+	CertificateStatusExpired CertificateStatus = "expired"
+)
+
 type RetrieveCertificateResponse struct {
 	Certificate struct {
 		ID                         string    `json:"id"`

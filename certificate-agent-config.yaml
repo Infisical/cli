@@ -61,7 +61,7 @@ certificates:
   # - certificate-id: "00000000-0000-0000-0000-000000000000"
   #   lifecycle:
   #     status-check-interval: "6h"
-  #     use-latest: true # Also deliver renewals made in Infisical
+  #     replace-on-renewals: true # Also deliver renewals made in Infisical
   #   post-hooks:
   #     on-renewal:
   #       command: "systemctl reload nginx"

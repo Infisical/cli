@@ -74,7 +74,7 @@ func newCertificateServerWithRenewedBy(t *testing.T, certs map[string]certRecord
 
 func useLatestConfig(certificateID string) *AgentCertificateConfig {
 	cert := &AgentCertificateConfig{CertificateID: certificateID}
-	cert.Lifecycle.UseLatest = true
+	cert.Lifecycle.ReplaceOnRenewals = true
 	return cert
 }
 
@@ -106,7 +106,7 @@ func TestResolveCertificateToFetch_NeverRenewedCostsOneCall(t *testing.T) {
 	assert.Equal(t, []string{"cert-01"}, requests(), "a certificate that was never renewed must cost one call")
 }
 
-func TestResolveCertificateToFetch_PinnedWhenUseLatestDisabled(t *testing.T) {
+func TestResolveCertificateToFetch_PinnedWhenReplaceOnRenewalsDisabled(t *testing.T) {
 	server, requests := newCertificateServer(t, map[string]certRecord{
 		"cert-01": {latestRenewal: "cert-09"},
 		"cert-09": {},
@@ -117,7 +117,7 @@ func TestResolveCertificateToFetch_PinnedWhenUseLatestDisabled(t *testing.T) {
 	metadata, err := resolveCertificateToFetch(resty.New(), &AgentCertificateConfig{CertificateID: "cert-01"}, "cert-01")
 
 	require.NoError(t, err)
-	assert.Equal(t, "cert-01", metadata.Certificate.ID, "without use-latest the agent stays pinned")
+	assert.Equal(t, "cert-01", metadata.Certificate.ID, "without replace-on-renewals the agent stays pinned")
 	assert.Equal(t, []string{"cert-01"}, requests(), "pinned mode must not fetch the renewal")
 }
 
@@ -157,27 +157,27 @@ func TestResolveCertificateToFetch_NamesBothCertificatesWhenTheRenewalIsUnreacha
 	assert.Contains(t, err.Error(), "cert-01")
 }
 
-func TestValidateCertificateSourceConfig_UseLatestRequiresCertificateID(t *testing.T) {
+func TestValidateCertificateSourceConfig_ReplaceOnRenewalsRequiresCertificateID(t *testing.T) {
 	for _, version := range []string{AgentConfigVersionV1, AgentConfigVersionV2} {
 		t.Run(version, func(t *testing.T) {
 			cert := AgentCertificateConfig{ProjectName: "proj", ProfileName: "prof"}
 			if version == AgentConfigVersionV2 {
 				cert = AgentCertificateConfig{ApplicationName: "app", ProfileName: "prof"}
 			}
-			cert.Lifecycle.UseLatest = true
+			cert.Lifecycle.ReplaceOnRenewals = true
 
 			certs := []AgentCertificateConfig{cert}
 			err := validateCertificateSourceConfig(version, &certs)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "use-latest")
+			assert.Contains(t, err.Error(), "replace-on-renewals")
 			assert.Contains(t, err.Error(), "certificate-id")
 		})
 	}
 }
 
-func TestValidateCertificateSourceConfig_UseLatestAllowedWithCertificateID(t *testing.T) {
+func TestValidateCertificateSourceConfig_ReplaceOnRenewalsAllowedWithCertificateID(t *testing.T) {
 	cert := AgentCertificateConfig{CertificateID: "00000000-0000-0000-0000-000000000000"}
-	cert.Lifecycle.UseLatest = true
+	cert.Lifecycle.ReplaceOnRenewals = true
 
 	certs := []AgentCertificateConfig{cert}
 	require.NoError(t, validateCertificateSourceConfig(AgentConfigVersionV2, &certs))
@@ -194,7 +194,7 @@ func TestValidateCertificateSourceConfig_AcceptsRenewBeforeExpiryWithCertificate
 func TestValidateCertificateSourceConfig_StatusCheckIntervalAllowedWithCertificateID(t *testing.T) {
 	cert := AgentCertificateConfig{CertificateID: "00000000-0000-0000-0000-000000000000"}
 	cert.Lifecycle.StatusCheckInterval = "6h"
-	cert.Lifecycle.UseLatest = true
+	cert.Lifecycle.ReplaceOnRenewals = true
 
 	certs := []AgentCertificateConfig{cert}
 	require.NoError(t, validateCertificateSourceConfig(AgentConfigVersionV2, &certs))
@@ -282,7 +282,7 @@ func TestResolveCertificateToFetch_SteadyStateIsOneCall(t *testing.T) {
 
 func distributionConfigWithKeyPath(dir string) *AgentCertificateConfig {
 	cert := &AgentCertificateConfig{CertificateID: "cert-01"}
-	cert.Lifecycle.UseLatest = true
+	cert.Lifecycle.ReplaceOnRenewals = true
 	cert.FileConfig.Certificate.Path = filepath.Join(dir, "certificate.crt")
 	cert.FileConfig.PrivateKey.Path = filepath.Join(dir, "private.key")
 	return cert

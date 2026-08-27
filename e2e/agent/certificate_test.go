@@ -2201,7 +2201,7 @@ func certAgent_Distribution_FollowsServerSideRenewal(t *testing.T) {
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
 				CertificateID:       certificateID,
-				UseLatest:           true,
+				ReplaceOnRenewals:   true,
 				StatusCheckInterval: "5s",
 				CertPath:            certPath,
 				KeyPath:             keyPath,
@@ -2259,7 +2259,7 @@ func certAgent_Distribution_FollowsServerSideRenewal(t *testing.T) {
 	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
 }
 
-func certAgent_Distribution_StaysPinnedWithoutUseLatest(t *testing.T) {
+func certAgent_Distribution_StaysPinnedWithoutReplaceOnRenewals(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -2317,7 +2317,7 @@ func certAgent_Distribution_StaysPinnedWithoutUseLatest(t *testing.T) {
 	time.Sleep(20 * time.Second)
 
 	require.Equal(t, pinnedSerial, readCertificateSerial(t, certPath),
-		"Without use-latest the agent must keep serving the pinned certificate")
+		"Without replace-on-renewals the agent must keep serving the pinned certificate")
 }
 
 func certAgent_Distribution_ReportsRevokedCertificate(t *testing.T) {
@@ -2344,7 +2344,7 @@ func certAgent_Distribution_ReportsRevokedCertificate(t *testing.T) {
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
 				CertificateID:       certificateID,
-				UseLatest:           true,
+				ReplaceOnRenewals:   true,
 				StatusCheckInterval: "5s",
 				CertPath:            certPath,
 				KeyPath:             keyPath,
@@ -2377,7 +2377,7 @@ func certAgent_Distribution_ReportsRevokedCertificate(t *testing.T) {
 	require.NoFileExists(t, certPath, "A revoked certificate must not be written to disk")
 }
 
-func certAgent_Distribution_RejectsUseLatestWithoutCertificateID(t *testing.T) {
+func certAgent_Distribution_RejectsReplaceOnRenewalsWithoutCertificateID(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -2398,7 +2398,7 @@ func certAgent_Distribution_RejectsUseLatestWithoutCertificateID(t *testing.T) {
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "invalid.example.com",
 				TTL:                 "1h",
-				UseLatest:           true,
+				ReplaceOnRenewals:   true,
 				StatusCheckInterval: "5s",
 				CertPath:            certPath,
 				KeyPath:             keyPath,
@@ -2425,7 +2425,7 @@ func certAgent_Distribution_RejectsUseLatestWithoutCertificateID(t *testing.T) {
 		Timeout:  30 * time.Second,
 		Interval: 2 * time.Second,
 		Condition: func() helpers.ConditionResult {
-			if strings.Contains(cmd.Stderr(), "'lifecycle.use-latest' is only supported together with 'certificate-id'") {
+			if strings.Contains(cmd.Stderr(), "'lifecycle.replace-on-renewals' is only supported together with 'certificate-id'") {
 				return helpers.ConditionSuccess
 			}
 			if !cmd.IsRunning() {
@@ -2436,8 +2436,8 @@ func certAgent_Distribution_RejectsUseLatestWithoutCertificateID(t *testing.T) {
 	})
 
 	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
-		"Agent should reject use-latest without certificate-id. stderr:\n%s", cmd.Stderr())
-	require.Contains(t, cmd.Stderr(), "'lifecycle.use-latest' is only supported together with 'certificate-id'")
+		"Agent should reject replace-on-renewals without certificate-id. stderr:\n%s", cmd.Stderr())
+	require.Contains(t, cmd.Stderr(), "'lifecycle.replace-on-renewals' is only supported together with 'certificate-id'")
 }
 
 func certAgent_Distribution_WarnsOnRenewBeforeExpiryWithCertificateID(t *testing.T) {
@@ -2502,7 +2502,7 @@ func certAgent_Distribution_WarnsOnRenewBeforeExpiryWithCertificateID(t *testing
 
 	require.Equal(t, helpers.WaitSuccess, waitResult,
 		"Agent should warn about renew-before-expiry and keep running. stderr:\n%s", cmd.Stderr())
-	require.Contains(t, cmd.Stderr(), "use-latest", "The warning should point at the setting that does what they wanted")
+	require.Contains(t, cmd.Stderr(), "replace-on-renewals", "The warning should point at the setting that does what they wanted")
 	require.FileExists(t, certPath, "The agent must keep working, since released versions accepted this field")
 }
 
@@ -2558,9 +2558,9 @@ func TestCertAgent_InternalCA(t *testing.T) {
 	t.Run("SignatureAlgorithm", certAgent_SignatureAlgorithm)
 	t.Run("Distribution_FetchesExistingCertificate", certAgent_Distribution_FetchesExistingCertificate)
 	t.Run("Distribution_FollowsServerSideRenewal", certAgent_Distribution_FollowsServerSideRenewal)
-	t.Run("Distribution_StaysPinnedWithoutUseLatest", certAgent_Distribution_StaysPinnedWithoutUseLatest)
+	t.Run("Distribution_StaysPinnedWithoutReplaceOnRenewals", certAgent_Distribution_StaysPinnedWithoutReplaceOnRenewals)
 	t.Run("Distribution_ReportsRevokedCertificate", certAgent_Distribution_ReportsRevokedCertificate)
-	t.Run("Distribution_RejectsUseLatestWithoutCertificateID", certAgent_Distribution_RejectsUseLatestWithoutCertificateID)
+	t.Run("Distribution_RejectsReplaceOnRenewalsWithoutCertificateID", certAgent_Distribution_RejectsReplaceOnRenewalsWithoutCertificateID)
 	t.Run("Distribution_WarnsOnRenewBeforeExpiryWithCertificateID", certAgent_Distribution_WarnsOnRenewBeforeExpiryWithCertificateID)
 	t.Run("Distribution_RestartAfterRenewalRunsRenewalHook", certAgent_Distribution_RestartAfterRenewalRunsRenewalHook)
 	t.Run("Distribution_RestartWithoutChangeIsQuiet", certAgent_Distribution_RestartWithoutChangeIsQuiet)
@@ -2605,7 +2605,7 @@ func certAgent_Distribution_RestartAfterRenewalRunsRenewalHook(t *testing.T) {
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
 				CertificateID:       certificateID,
-				UseLatest:           true,
+				ReplaceOnRenewals:   true,
 				StatusCheckInterval: "5s",
 				CertPath:            certPath,
 				KeyPath:             keyPath,
@@ -2770,7 +2770,7 @@ func certAgent_Distribution_RevokedLatestKeepsCurrentCertificate(t *testing.T) {
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
 				CertificateID:       certificateID,
-				UseLatest:           true,
+				ReplaceOnRenewals:   true,
 				StatusCheckInterval: "5s",
 				CertPath:            certPath,
 				KeyPath:             keyPath,
