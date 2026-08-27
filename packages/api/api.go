@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -45,6 +46,7 @@ const (
 	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
 	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
+	operationCallGatewayMetricsReportV2            = "CallGatewayMetricsReportV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
 	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
@@ -842,6 +844,25 @@ func CallGatewayHeartBeatV2(httpClient *resty.Client, request GatewayHeartbeatRe
 
 	if response.IsError() {
 		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV2, response, nil)
+	}
+
+	return nil
+}
+
+func CallGatewayMetricsReportV2(ctx context.Context, httpClient *resty.Client, request GatewayMetricsReportRequest) error {
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/gateways/metrics", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallGatewayMetricsReportV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallGatewayMetricsReportV2, response, nil)
 	}
 
 	return nil

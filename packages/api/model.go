@@ -1084,6 +1084,10 @@ type GatewayHeartbeatRequest struct {
 	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 
+type GatewayMetricsReportRequest struct {
+	ActiveChannels int64 `json:"activeChannels"`
+}
+
 type RelayLoginRequest struct {
 	Method            string `json:"method"`
 	Token             string `json:"token,omitempty"`

@@ -57,6 +57,16 @@ const (
 
 const heartbeatInterval = 3 * time.Minute
 
+// Kept off the heartbeat because that handler probes back through the relay and writes to the
+// platform's database, which is far too costly at this cadence.
+const metricsReportInterval = 10 * time.Second
+
+// Below the interval, so a stalled endpoint cannot hold the loop past the next tick or block shutdown.
+const metricsReportTimeout = 5 * time.Second
+
+const metricsReportFailuresBeforeBackoff = 5
+const metricsReportBackoff = 5 * time.Minute
+
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
 const PAM_INFO_OID = "1.3.6.1.4.1.12345.100.3"
@@ -144,6 +154,11 @@ type Gateway struct {
 	mongoProxies   map[string]*mongoProxyEntry
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
+
+	// Counted in the relay's channel-receive loop, which no caller can bypass.
+	activeChannels atomic.Int64
+	// Bumped per relay connection, so a handler cannot release a count it did not acquire.
+	channelGeneration atomic.Int64
 }
 
 // mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
@@ -384,6 +399,53 @@ func (g *Gateway) reapIdleSessions() {
 	}
 }
 
+func (g *Gateway) sendMetricsReport(ctx context.Context, count int64) error {
+	reqCtx, cancel := context.WithTimeout(ctx, metricsReportTimeout)
+	defer cancel()
+	return api.CallGatewayMetricsReportV2(reqCtx, g.httpClient, api.GatewayMetricsReportRequest{ActiveChannels: count})
+}
+
+// A gateway that stops reporting takes its whole pool off load-aware selection.
+func (g *Gateway) startMetricsReport(ctx context.Context) {
+	go func() {
+		// Report immediately: until one lands the pool has nothing to compare and selects at random.
+		delay := time.Duration(0)
+		failures := 0
+
+		var last int64 = -1
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			delay = metricsReportInterval
+
+			count := g.activeChannels.Load()
+			// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
+			if err := g.sendMetricsReport(ctx, count); err != nil {
+				failures++
+				if failures == metricsReportFailuresBeforeBackoff {
+					log.Warn().Err(err).Msgf("Metrics report failing; backing off to %s. Pools containing this gateway will select at random until it succeeds", metricsReportBackoff)
+				}
+				if failures >= metricsReportFailuresBeforeBackoff {
+					delay = metricsReportBackoff
+				}
+				continue
+			}
+
+			if failures >= metricsReportFailuresBeforeBackoff {
+				log.Info().Msg("Metrics report recovered")
+			}
+			failures = 0
+			if count != last {
+				log.Debug().Msgf("Reported %d active channels", count)
+				last = count
+			}
+		}
+	}()
+}
+
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
 		capabilities := map[string]any{}
@@ -575,6 +637,7 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	defer g.heartbeatMu.Unlock()
 	if !g.heartbeatStarted {
 		g.registerHeartBeat(ctx, errCh)
+		g.startMetricsReport(ctx)
 		g.heartbeatStarted = true
 	}
 }
@@ -650,6 +713,10 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 		client.Close()
 	}()
 
+	// Channels do not outlive their connection, so anything still counted is a handler that hung.
+	generation := g.channelGeneration.Add(1)
+	g.activeChannels.Store(0)
+
 	// Handle incoming channels from the server
 	channels := client.HandleChannelOpen("direct-tcpip")
 	if channels == nil {
@@ -693,7 +760,9 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 				log.Info().Msg("SSH channels closed")
 				return nil
 			}
-			go g.handleIncomingChannel(newChannel)
+			// Counted here, not in the handler: its goroutine could load a later generation.
+			g.activeChannels.Add(1)
+			go g.handleIncomingChannel(newChannel, generation)
 		}
 	}
 }
@@ -876,7 +945,25 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 	return nil
 }
 
-func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
+func (g *Gateway) releaseChannel(generation int64) {
+	// A handler outliving its connection would otherwise decrement a count it never contributed to.
+	if g.channelGeneration.Load() != generation {
+		return
+	}
+	for {
+		current := g.activeChannels.Load()
+		if current <= 0 {
+			return
+		}
+		if g.activeChannels.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
+func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation int64) {
+	defer g.releaseChannel(generation)
+
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
 		log.Info().Msgf("Failed to accept channel: %v", err)
