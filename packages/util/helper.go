@@ -334,10 +334,6 @@ func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuth
 		return api.UniversalAuthLoginResponse{}, err
 	}
 
-	httpClient.SetRetryCount(10000).
-		SetRetryMaxWaitTime(20 * time.Second).
-		SetRetryWaitTime(5 * time.Second)
-
 	tokenResponse, err := api.CallUniversalAuthLogin(httpClient, api.UniversalAuthLoginRequest{ClientId: clientId, ClientSecret: clientSecret})
 	if err != nil {
 		return api.UniversalAuthLoginResponse{}, err
@@ -352,10 +348,6 @@ func RenewMachineIdentityAccessToken(accessToken string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	httpClient.SetRetryCount(10000).
-		SetRetryMaxWaitTime(20 * time.Second).
-		SetRetryWaitTime(5 * time.Second)
 
 	request := api.UniversalAuthRefreshRequest{
 		AccessToken: accessToken,

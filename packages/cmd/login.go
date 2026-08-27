@@ -638,7 +638,6 @@ func getFreshUserCredentials(email string, password string) (*api.GetLoginV3Resp
 	if err != nil {
 		return nil, err
 	}
-	httpClient.SetRetryCount(5)
 
 	loginV3Response, err := api.CallLoginV3(httpClient, api.GetLoginV3Request{
 		Email:    email,
@@ -658,7 +657,6 @@ func getFreshUserCredentialsWithSrp(email string, password string) (*api.GetLogi
 	if err != nil {
 		return nil, nil, err
 	}
-	httpClient.SetRetryCount(5)
 
 	params := srp.GetParams(4096)
 	secret1 := srp.GenKey()

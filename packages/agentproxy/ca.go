@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/go-resty/resty/v2"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 )
 
@@ -166,7 +166,11 @@ func (c *caManager) resignIntermediateLocked() error {
 	}
 	pubPem := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDer})
 
-	client := resty.New().SetAuthToken(c.token())
+	client, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return err
+	}
+	client.SetAuthToken(c.token())
 	resp, err := api.CallSignAgentProxyIntermediateCa(client, api.SignAgentProxyIntermediateCaRequest{
 		PublicKey: string(pubPem),
 	})

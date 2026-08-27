@@ -172,7 +172,11 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		Set("credentialSource", tokenSource).
 		Set("allowReadableBrokeredSecrets", allowReadableBrokered))
 
-	httpClient := resty.New().SetAuthToken(token.Token)
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		util.HandleError(err, "Failed to build the API client")
+	}
+	httpClient.SetAuthToken(token.Token)
 
 	caResp, err := api.CallGetAgentProxyCa(httpClient)
 	if err != nil {

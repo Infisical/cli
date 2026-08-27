@@ -68,7 +68,11 @@ func StartPAMAccess(accessToken, path, reason, durationStr, targetHost string, p
 	log.Info().Msgf("Starting PAM access for: %s", strings.TrimPrefix(displayPath, "/"))
 	log.Info().Msgf("Session duration: %s", durationStr)
 
-	httpClient := resty.New()
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		util.HandleError(err, "Failed to build the API client")
+		return
+	}
 	httpClient.SetAuthToken(accessToken)
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
