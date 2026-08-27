@@ -44,6 +44,9 @@ type sshExecErrorResponse struct {
 
 type sshExecErrorBody struct {
 	Message string `json:"message"`
+	// Set only by the test-connection handler, so the control plane can tell a refused credential from a
+	// target it never reached. Absent on every other RPC and on older gateways.
+	Kind string `json:"kind,omitempty"`
 }
 
 func parseSSHExecPrivateKey(privateKey, passphrase string) (ssh.Signer, error) {

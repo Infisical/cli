@@ -613,7 +613,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if testErr := runWithContext(ctx, op); testErr != nil {
-		writeRPCError(w, http.StatusBadGateway, testErr.Error())
+		writeRPCErrorWithKind(w, http.StatusBadGateway, testErr.Error(), string(classifyTestConnFailure(testErr)))
 		return
 	}
 	writeRPCJSON(w, http.StatusOK, testConnectionResponse{Result: testConnectionResult{Ok: true}})
