@@ -45,15 +45,13 @@ func ValidateInfisicalAPIConnection() (ok bool) {
 	return err == nil
 }
 
-// GetRestyClientWithCustomHeaders is the single place API clients are built. Retries are applied
-// here so request sites don't have to opt in, which means new api.Call* usage gets them for free.
-// Do not construct resty clients directly; TestNoDirectRestyConstruction enforces this.
+// GetRestyClientWithCustomHeaders is the single place API clients are built, which is what applies
+// the retry policy everywhere. Do not construct resty clients directly; TestNoDirectRestyConstruction
+// enforces this.
 func GetRestyClientWithCustomHeaders() (*resty.Client, error) {
 	return GetRestyClientWithPolicy(DefaultRetryPolicy())
 }
 
-// GetRestyClientWithPolicy builds an API client with a specific retry policy. Long-running commands
-// pass AgentRetryPolicy() to ride out an outage instead of exiting on one.
 func GetRestyClientWithPolicy(policy RetryPolicy) (*resty.Client, error) {
 	httpClient := resty.New()
 	customHeaders := os.Getenv("INFISICAL_CUSTOM_HEADERS")

@@ -1684,7 +1684,10 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 // Refreshes the existing access token
 func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
-	httpClient, err := util.GetRestyClientWithPolicy(util.AgentRetryPolicy())
+	policy := util.AgentRetryPolicy()
+	policy.ReplaySafe = true // renewal extends the presented token, so a replay cannot double-apply
+
+	httpClient, err := util.GetRestyClientWithPolicy(policy)
 	if err != nil {
 		return err
 	}

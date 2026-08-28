@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testPolicy keeps the delays negligible so the suite exercises retry decisions rather than backoff.
 func testPolicy(maxRetries int) RetryPolicy {
 	return RetryPolicy{
 		MaxRetries: maxRetries,
@@ -32,8 +32,7 @@ func testPolicy(maxRetries int) RetryPolicy {
 	}
 }
 
-// newTestClient returns a client on testPolicy plus a counter of attempts actually dispatched.
-// Counting client-side rather than in the handler also covers failures that never reach a server.
+// Attempts are counted client-side so failures that never reach a server still count.
 func newTestClient(t *testing.T, policy RetryPolicy) (*resty.Client, *atomic.Int32) {
 	t.Helper()
 
@@ -60,8 +59,6 @@ func TestRetryStatusCodes(t *testing.T) {
 		{"503 service unavailable is retried", http.StatusServiceUnavailable, maxRetries + 1},
 		{"504 gateway timeout is retried", http.StatusGatewayTimeout, maxRetries + 1},
 
-		// Permanent failures must surface on the first attempt. Retrying them multiplies the cost of
-		// a bad token or a typo and delays the error the user needs to see.
 		{"400 bad request is not retried", http.StatusBadRequest, 1},
 		{"401 unauthorized is not retried", http.StatusUnauthorized, 1},
 		{"403 forbidden is not retried", http.StatusForbidden, 1},
@@ -88,9 +85,7 @@ func TestRetryStatusCodes(t *testing.T) {
 	}
 }
 
-// POST is not safely repeatable. A 502/503/504 can mean the server did process the write and only
-// the response was lost, so replaying it risks double-applying, for instance minting a second
-// dynamic secret lease. A 429 is safe because the server states it rejected the request outright.
+// A 5xx on POST may have been committed server-side, so only 429 is safe to repeat there.
 func TestRetryMethodSafety(t *testing.T) {
 	const maxRetries = 2
 
@@ -161,22 +156,13 @@ func TestRetryDisabledWhenMaxRetriesIsZero(t *testing.T) {
 }
 
 func TestRetryOnTransportError(t *testing.T) {
-	// Bind then release a port so the address is routable but nothing is listening, which is the
-	// connection-refused case the CLI hits when an instance is down.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	deadURL := fmt.Sprintf("http://%s", listener.Addr().String())
-	require.NoError(t, listener.Close())
-
 	client, attempts := newTestClient(t, testPolicy(2))
-	_, err = client.R().Get(deadURL)
+	_, err := client.R().Get(deadAddress(t))
 
 	require.Error(t, err)
 	assert.Equal(t, int32(3), attempts.Load())
 }
 
-// A TLS trust failure is deterministic, so retrying it only delays the real error. It satisfies
-// net.Error, which is why the policy rules certificate errors out explicitly.
 func TestNoRetryOnTLSTrustFailure(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -220,7 +206,7 @@ func TestRetryHonorsRetryAfterHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// MaxDelay has to exceed Retry-After, otherwise the cap is what we would be measuring.
+	// MaxDelay must exceed the header value or the request would not be retried at all.
 	policy := RetryPolicy{MaxRetries: 2, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Second}
 	client, _ := newTestClient(t, policy)
 
@@ -247,6 +233,8 @@ func TestParseRetryAfter(t *testing.T) {
 		{"zero seconds falls back to default backoff", "0", 0, false},
 		{"negative seconds falls back to default backoff", "-5", 0, false},
 		{"unparseable value falls back to default backoff", "soon", 0, false},
+		// Uncapped, this multiplies into a negative Duration that would bypass the fail-fast.
+		{"overflowing seconds are capped", "9999999999", maxRetryAfter, true},
 	}
 
 	for _, test := range tests {
@@ -264,29 +252,41 @@ func TestParseRetryAfter(t *testing.T) {
 		assert.InDelta(t, (30 * time.Second).Seconds(), got.Seconds(), 2)
 	})
 
+	t.Run("far future http date is capped", func(t *testing.T) {
+		got, ok := parseRetryAfter(time.Now().Add(100000 * time.Hour).UTC().Format(http.TimeFormat))
+		require.True(t, ok)
+		assert.Equal(t, maxRetryAfter, got)
+	})
+
 	t.Run("past http date falls back to default backoff", func(t *testing.T) {
 		_, ok := parseRetryAfter(time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat))
 		assert.False(t, ok)
 	})
 }
 
-// A misconfigured or hostile Retry-After must not be able to park the CLI indefinitely.
-func TestRetryDelayCapsRetryAfterAtMaxDelay(t *testing.T) {
-	policy := RetryPolicy{MaxRetries: 3, BaseDelay: time.Second, MaxDelay: 10 * time.Second}
+func TestRetryDelayFallsBackWithoutHeader(t *testing.T) {
+	assert.Zero(t, retryDelay(nil), "a nil response should defer to resty's own backoff")
 
 	res := &resty.Response{RawResponse: &http.Response{Header: http.Header{}}}
-	res.RawResponse.Header.Set("Retry-After", "3600")
-
-	assert.Equal(t, policy.MaxDelay, retryDelay(res, policy))
+	assert.Zero(t, retryDelay(res), "an absent header should defer to resty's own backoff")
 }
 
-func TestRetryDelayFallsBackWithoutHeader(t *testing.T) {
-	policy := RetryPolicy{MaxRetries: 3, BaseDelay: time.Second, MaxDelay: 10 * time.Second}
+func TestRetryAfterBeyondMaxDelayFailsFast(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
 
-	assert.Zero(t, retryDelay(nil, policy), "a nil response should defer to resty's own backoff")
+	client, attempts := newTestClient(t, testPolicy(3))
 
-	res := &resty.Response{RawResponse: &http.Response{Header: http.Header{}}}
-	assert.Zero(t, retryDelay(res, policy), "an absent header should defer to resty's own backoff")
+	start := time.Now()
+	res, err := client.R().Get(server.URL)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusTooManyRequests, res.StatusCode())
+	assert.Equal(t, int32(1), attempts.Load())
+	assert.Less(t, time.Since(start), time.Second)
 }
 
 func TestIsRetryableTransportError(t *testing.T) {
@@ -296,13 +296,12 @@ func TestIsRetryableTransportError(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
+		// Bare errnos satisfy net.Error, which is what makes an explicit errno list unnecessary.
 		{"connection reset", syscall.ECONNRESET, true},
-		{"connection refused", syscall.ECONNREFUSED, true},
 		{"broken pipe", syscall.EPIPE, true},
-		{"host unreachable", syscall.EHOSTUNREACH, true},
-		{"network unreachable", syscall.ENETUNREACH, true},
 		{"dns failure", &net.DNSError{Err: "no such host", Name: "app.infisical.com"}, true},
 		{"wrapped connection reset", fmt.Errorf("posting secret: %w", syscall.ECONNRESET), true},
+		{"url-wrapped transport failure", &url.Error{Op: "Post", URL: "http://x", Err: &net.OpError{Op: "read", Err: syscall.ECONNRESET}}, true},
 
 		{"untrusted certificate authority", x509.UnknownAuthorityError{}, false},
 		{"certificate hostname mismatch", x509.HostnameError{Host: "app.infisical.com"}, false},
@@ -349,7 +348,6 @@ func TestRetryPolicyEnvOverrides(t *testing.T) {
 		assert.Equal(t, agentRetryMaxDelay, policy.MaxDelay)
 	})
 
-	// A bad value in the environment should not stop a command that would otherwise work.
 	t.Run("malformed values are ignored", func(t *testing.T) {
 		t.Setenv(INFISICAL_RETRY_BASE_DELAY_NAME, "soon")
 		t.Setenv(INFISICAL_RETRY_MAX_DELAY_NAME, "")
@@ -358,6 +356,12 @@ func TestRetryPolicyEnvOverrides(t *testing.T) {
 		policy := DefaultRetryPolicy()
 		assert.Equal(t, defaultRetryMaxRetries, policy.MaxRetries)
 		assert.Equal(t, defaultRetryBaseDelay, policy.BaseDelay)
+	})
+
+	t.Run("best-effort policy ignores env overrides", func(t *testing.T) {
+		t.Setenv(INFISICAL_RETRY_MAX_RETRIES_NAME, "50")
+
+		assert.Equal(t, 1, BestEffortRetryPolicy().MaxRetries)
 	})
 
 	t.Run("base delay is clamped to max delay", func(t *testing.T) {
@@ -371,27 +375,21 @@ func TestRetryPolicyEnvOverrides(t *testing.T) {
 	})
 }
 
-// The constructors are only a single source of truth while nothing bypasses them, and a bypass is
-// invisible in review: the client works, it just silently has no retries.
 func TestClientsAreBuiltThroughTheSharedConstructor(t *testing.T) {
 	t.Setenv(INFISICAL_RETRY_MAX_RETRIES_NAME, "")
 
 	client, err := GetRestyClientWithCustomHeaders()
 	require.NoError(t, err)
-	assert.Equal(t, defaultRetryMaxRetries, client.RetryCount,
-		"GetRestyClientWithCustomHeaders must apply the default retry policy")
+	assert.Equal(t, defaultRetryMaxRetries, client.RetryCount)
 
 	agentClient, err := GetRestyClientWithPolicy(AgentRetryPolicy())
 	require.NoError(t, err)
 	assert.Equal(t, agentRetryMaxRetries, agentClient.RetryCount)
 }
 
-// TestNoDirectRestyConstruction is the mechanism that keeps the retry policy single-sourced. A
-// direct resty.New() compiles, runs, and looks correct in review; it just silently has no retries,
-// which is exactly the bug this package exists to prevent. Add new clients via
+// A direct resty.New() compiles and works but silently has no retry policy; add new clients via
 // GetRestyClientWithCustomHeaders or GetRestyClientWithPolicy instead.
 func TestNoDirectRestyConstruction(t *testing.T) {
-	// Files allowed to construct a client directly, relative to the repo root.
 	allowed := map[string]bool{
 		filepath.Join("packages", "util", "common.go"): true,
 	}
@@ -408,7 +406,6 @@ func TestNoDirectRestyConstruction(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// Tests build throwaway clients on purpose and never talk to the real API.
 		if strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -441,9 +438,8 @@ func TestNoDirectRestyConstruction(t *testing.T) {
 			"use util.GetRestyClientWithCustomHeaders or util.GetRestyClientWithPolicy instead")
 }
 
-// newAbruptCloseServer accepts connections, reads the request, then drops the connection without
-// responding. That is the ambiguous mid-flight failure: the request was delivered, so the server may
-// already have acted on it, and only the response was lost.
+// newAbruptCloseServer simulates the ambiguous mid-flight failure: request delivered, connection
+// dropped before any response.
 func newAbruptCloseServer(t *testing.T) (serverURL string, connections func() int32) {
 	t.Helper()
 
@@ -468,8 +464,7 @@ func newAbruptCloseServer(t *testing.T) (serverURL string, connections func() in
 	return "http://" + listener.Addr().String(), count.Load
 }
 
-// deadAddress returns an address that is routable but has nothing listening, so dialing it is
-// refused at connection establishment and the request provably never reaches a server.
+// deadAddress binds then releases a port, so dialing it is refused before anything is sent.
 func deadAddress(t *testing.T) string {
 	t.Helper()
 
@@ -481,9 +476,6 @@ func deadAddress(t *testing.T) string {
 	return "http://" + addr
 }
 
-// Transport failures have to respect method safety too, but only when they are ambiguous. Treating
-// every transport error as unsafe for POST would give up the case this feature mainly exists for:
-// retrying across a backend that is briefly down.
 func TestTransportErrorMethodSafety(t *testing.T) {
 	const maxRetries = 2
 
@@ -494,8 +486,7 @@ func TestTransportErrorMethodSafety(t *testing.T) {
 		_, err := client.R().SetBody(`{"lease":"request"}`).Post(serverURL)
 
 		require.Error(t, err)
-		assert.Equal(t, int32(1), attempts.Load(),
-			"an ambiguous mid-flight failure must not replay a write: the server may have committed it")
+		assert.Equal(t, int32(1), attempts.Load())
 	})
 
 	t.Run("mid-flight failure does not replay PATCH", func(t *testing.T) {
@@ -515,8 +506,7 @@ func TestTransportErrorMethodSafety(t *testing.T) {
 		_, err := client.R().Get(serverURL)
 
 		require.Error(t, err)
-		assert.Equal(t, int32(maxRetries+1), attempts.Load(),
-			"a read is idempotent, so an ambiguous failure is still safe to repeat")
+		assert.Equal(t, int32(maxRetries+1), attempts.Load())
 	})
 
 	t.Run("connection refused replays POST", func(t *testing.T) {
@@ -524,8 +514,7 @@ func TestTransportErrorMethodSafety(t *testing.T) {
 		_, err := client.R().SetBody(`{}`).Post(deadAddress(t))
 
 		require.Error(t, err)
-		assert.Equal(t, int32(maxRetries+1), attempts.Load(),
-			"the dial never completed, so the server cannot have seen the write")
+		assert.Equal(t, int32(maxRetries+1), attempts.Load())
 	})
 
 	t.Run("unresolvable host replays POST", func(t *testing.T) {
@@ -533,8 +522,37 @@ func TestTransportErrorMethodSafety(t *testing.T) {
 		_, err := client.R().SetBody(`{}`).Post("http://this-host-does-not-exist.invalid")
 
 		require.Error(t, err)
-		assert.Equal(t, int32(maxRetries+1), attempts.Load(),
-			"resolution never produced an address, so nothing was sent")
+		assert.Equal(t, int32(maxRetries+1), attempts.Load())
+	})
+}
+
+func TestReplaySafePolicy(t *testing.T) {
+	const maxRetries = 2
+
+	replaySafe := testPolicy(maxRetries)
+	replaySafe.ReplaySafe = true
+
+	t.Run("mid-flight failure replays POST", func(t *testing.T) {
+		serverURL, _ := newAbruptCloseServer(t)
+
+		client, attempts := newTestClient(t, replaySafe)
+		_, err := client.R().SetBody(`{"accessToken":"x"}`).Post(serverURL)
+
+		require.Error(t, err)
+		assert.Equal(t, int32(maxRetries+1), attempts.Load())
+	})
+
+	t.Run("503 on POST is retried", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer server.Close()
+
+		client, attempts := newTestClient(t, replaySafe)
+		_, err := client.R().SetBody(`{}`).Post(server.URL)
+
+		require.NoError(t, err)
+		assert.Equal(t, int32(maxRetries+1), attempts.Load())
 	})
 }
 
@@ -544,15 +562,14 @@ func TestRequestNeverReachedServer(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"connection refused", syscall.ECONNREFUSED, true},
-		{"wrapped connection refused", fmt.Errorf("post: %w", syscall.ECONNREFUSED), true},
+		// Refused connections and dial timeouts arrive as OpError{Op: "dial"}, never bare errnos.
+		{"refused connection", &net.OpError{Op: "dial", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}}, true},
+		{"wrapped dial failure", fmt.Errorf("post: %w", &net.OpError{Op: "dial", Err: syscall.ETIMEDOUT}), true},
 		{"dns failure", &net.DNSError{Err: "no such host", Name: "app.infisical.com"}, true},
-		{"dial failure", &net.OpError{Op: "dial", Err: syscall.ETIMEDOUT}, true},
 
-		// Delivered, then the connection died. The server may already have committed the write.
 		{"read failure mid-flight", &net.OpError{Op: "read", Err: syscall.ECONNRESET}, false},
 		{"write failure mid-flight", &net.OpError{Op: "write", Err: syscall.EPIPE}, false},
-		{"bare connection reset", syscall.ECONNRESET, false},
+		{"bare errno lacks dial context", syscall.ECONNREFUSED, false},
 		{"unexpected eof", io.ErrUnexpectedEOF, false},
 		{"eof", io.EOF, false},
 	}
