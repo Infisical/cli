@@ -25,17 +25,32 @@ var pamCmd = &cobra.Command{
 }
 
 var pamAccessCmd = &cobra.Command{
-	Use:   "access <path>",
+	Use:   "access <path> [-- <command>]",
 	Short: "Launch a PAM session for the account at the given path",
 	Long: `Launch a PAM session for the account at the given path.
-The path format is: /folder/account-name (leading slash optional)`,
-	Example:               "infisical pam access /production/postgres-main --duration 2h",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		util.RequireLogin()
+The path format is: folder/account-name
 
+SSH accounts connect you straight to a shell on the target. Pass --proxy for a local
+proxy to point your own SSH, SCP or SFTP client at instead, or pass a command after
+'--' to run just that command and exit. Every other account type starts a local proxy
+or credential helper, which --proxy does not change.`,
+	Example: `  infisical pam access production/postgres-main --duration 2h
+  infisical pam access servers/prod-bastion
+  infisical pam access servers/prod-bastion -- systemctl status nginx
+  infisical pam access servers/prod-bastion --proxy`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
 		path := args[0]
+		var command []string
+		if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+			if dash != 1 {
+				util.PrintErrorMessageAndExit("Only one account path may be given. Put the remote command after '--', for example:\n  infisical pam access servers/prod-bastion -- uptime")
+			}
+			command = args[1:]
+		} else if len(args) > 1 {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Unexpected argument %q. To run a command on the target, put it after '--', for example:\n  infisical pam access %s -- uptime", args[1], path))
+		}
 
 		reason, err := cmd.Flags().GetString("reason")
 		if err != nil {
@@ -62,6 +77,17 @@ The path format is: /folder/account-name (leading slash optional)`,
 			util.HandleError(err, "Unable to parse target flag")
 		}
 
+		proxy, err := cmd.Flags().GetBool("proxy")
+		if err != nil {
+			util.HandleError(err, "Unable to parse proxy flag")
+		}
+
+		if proxy && len(command) > 0 {
+			util.PrintErrorMessageAndExit("--proxy starts a local proxy for your own client, so it cannot also run a command on the target. Drop one of the two.")
+		}
+
+		util.RequireLogin()
+
 		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
 		if err != nil {
 			util.HandleError(err, "Unable to get logged in user details")
@@ -72,7 +98,15 @@ The path format is: /folder/account-name (leading slash optional)`,
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		pam.StartPAMAccess(loggedInUserDetails.UserCredentials.JTWToken, path, reason, durationStr, targetHost, port)
+		pam.StartPAMAccess(loggedInUserDetails.UserCredentials.JTWToken, pam.AccessOptions{
+			Path:       path,
+			Reason:     reason,
+			Duration:   durationStr,
+			TargetHost: targetHost,
+			Port:       port,
+			Proxy:      proxy,
+			Command:    command,
+		})
 	},
 }
 
@@ -350,6 +384,7 @@ func init() {
 	pamAccessCmd.Flags().String("duration", "1h", "Duration for access session (e.g., '1h', '30m', '2h30m')")
 	pamAccessCmd.Flags().Int("port", 0, "Port for the local proxy server (0 for auto-assign)")
 	pamAccessCmd.Flags().String("target", "", "Target host to connect to (for accounts that allow multiple hosts, e.g. Windows AD)")
+	pamAccessCmd.Flags().Bool("proxy", false, "Start a local proxy to point your own client at, instead of connecting you to the target. Only SSH accounts connect directly today")
 
 	pamAgenticAccessCmd.Flags().StringArray("account", nil, "Account to expose, as folder/account. Repeatable. Defaults to every account you can launch")
 	pamAgenticAccessCmd.Flags().String("duration", "1h", "How long each PAM session may last (e.g. '1h', '30m', '2h30m')")

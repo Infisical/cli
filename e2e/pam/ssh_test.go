@@ -73,6 +73,7 @@ func runSSHSessionAndVerify(t *testing.T, ctx context.Context, infra *PAMTestInf
 		Args: []string{
 			"pam", "access", fmt.Sprintf("%s/%s", folderName, accountName),
 			"--duration", "5m",
+			"--proxy",
 			"--port", fmt.Sprintf("%d", freePort),
 		},
 		Env: map[string]string{
@@ -135,6 +136,44 @@ func runSSHSessionAndVerify(t *testing.T, ctx context.Context, infra *PAMTestInf
 	}
 	require.Equal(t, helpers.WaitSuccess, echoResult, "should run a command over the SSH proxy")
 	require.Contains(t, output, expectedOutput, "command output should contain %q", expectedOutput)
+}
+
+// runSSHCommandAndVerify runs `pam access <path> -- <command>`, which connects straight through.
+func runSSHCommandAndVerify(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName, accountName string, command []string, expectedOutput string) {
+	args := []string{
+		"pam", "access", fmt.Sprintf("%s/%s", folderName, accountName),
+		"--duration", "5m", "--",
+	}
+	pamCmd := helpers.Command{
+		Test:               t,
+		RunMethod:          helpers.RunMethodSubprocess,
+		DisableTempHomeDir: true,
+		Args:               append(args, command...),
+		Env: map[string]string{
+			"HOME":              infra.SharedHomeDir,
+			"INFISICAL_API_URL": infra.Infisical.ApiUrl(t),
+		},
+	}
+	pamCmd.Start(ctx)
+	t.Cleanup(pamCmd.Stop)
+
+	// Exits on completion, so EnsureCmdRunning would read the exit as a failure.
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  60 * time.Second,
+		Interval: time.Second,
+		Condition: func() helpers.ConditionResult {
+			if pamCmd.IsRunning() {
+				return helpers.ConditionWait
+			}
+			if pamCmd.ExitCode() != 0 {
+				pamCmd.DumpOutput()
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "running a command over SSH should succeed")
+	require.Contains(t, pamCmd.Stdout(), expectedOutput, "remote command output should contain %q", expectedOutput)
 }
 
 // configureCertAuth mirrors the real setup flow: run the dashboard's `curl <setup-url> | bash` on
@@ -230,6 +269,11 @@ func runSSHAuthTest(t *testing.T, ctx context.Context, infra *PAMTestInfra, fold
 
 	marker := fmt.Sprintf("hello-%s", method)
 	runSSHSessionAndVerify(t, ctx, infra, folderName, accountName, "echo "+marker, marker)
+
+	// Cover the direct path on one auth method rather than tripling the container count.
+	if method == "password" {
+		runSSHCommandAndVerify(t, ctx, infra, folderName, accountName, []string{"echo", "direct-" + marker}, "direct-"+marker)
+	}
 }
 
 func TestPAM_SSH(t *testing.T) {
