@@ -2,18 +2,19 @@ package gatewayv2
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
-	"strings"
 
-	"github.com/go-ldap/ldap/v3"
-	"github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5/pgconn"
-	mssql "github.com/microsoft/go-mssqldb"
+	"golang.org/x/crypto/ssh"
 )
 
-// A refused credential stops the control plane's schedule; an unreachable target keeps retrying. Only the
-// gateway holds the driver error, so the classification happens here rather than by matching strings upstream.
+// Whether the target refused the credential or we never got far enough to ask. The control plane needs these
+// apart: a refused credential stops the heartbeat schedule, while an unreachable target keeps retrying.
+//
+// A probe knows which of the two happened structurally, because it dials and then authenticates in that order,
+// so the answer is recorded as the phases run rather than recovered afterwards from a driver's error text. That
+// keeps a new account type from needing its own error codes here.
 type testConnFailureKind string
 
 const (
@@ -22,118 +23,72 @@ const (
 	failureKindUnknown   testConnFailureKind = "unknown"
 )
 
-// SQLSTATE 28xxx is "invalid authorization specification", which Postgres uses for a rejected password.
-const pgInvalidAuthorizationClass = "28"
+type probeError struct {
+	kind testConnFailureKind
+	err  error
+}
 
-func classifyTestConnFailure(err error) testConnFailureKind {
+func (e *probeError) Error() string { return e.err.Error() }
+func (e *probeError) Unwrap() error { return e.err }
+
+// connectFailure tags a failure that happened before the target could evaluate a credential.
+func connectFailure(err error) error {
 	if err == nil {
-		return failureKindUnknown
+		return nil
 	}
+	return &probeError{kind: failureKindTransport, err: err}
+}
 
+// authFailure tags a failure from the step that authenticates. A network error this late means the connection
+// died mid-exchange rather than the credential being refused, so it stays transport.
+func authFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isNetworkError(err) {
+		return &probeError{kind: failureKindTransport, err: err}
+	}
+	return &probeError{kind: failureKindAuth, err: err}
+}
+
+// sshFailure splits an SSH client error. The ssh package reports a refused credential as ServerAuthError;
+// a version or key-exchange mismatch, a rejected host key, and a hangup all fail before any credential is sent.
+func sshFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var authErr *ssh.ServerAuthError
+	if errors.As(err, &authErr) {
+		return &probeError{kind: failureKindAuth, err: err}
+	}
+	return connectFailure(err)
+}
+
+func isNetworkError(err error) bool {
 	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return failureKindTransport
+	if errors.As(err, &netErr) {
+		return true
 	}
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
-		return failureKindTransport
+		return true
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return failureKindTransport
+		return true
 	}
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return failureKindTransport
+	// The peer closing mid-exchange is the connection dying, not a credential being turned down.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
-
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		if strings.HasPrefix(pgErr.Code, pgInvalidAuthorizationClass) {
-			return failureKindAuth
-		}
-		return failureKindUnknown
-	}
-
-	var myErr *mysql.MySQLError
-	if errors.As(err, &myErr) {
-		// 1045 access denied, 1044 access denied to database, 1698 auth plugin rejected the credential.
-		switch myErr.Number {
-		case 1044, 1045, 1698:
-			return failureKindAuth
-		default:
-			return failureKindUnknown
-		}
-	}
-
-	var msErr mssql.Error
-	if errors.As(err, &msErr) {
-		// 18456 login failed, 18452 untrusted domain, 4060 cannot open database for this login.
-		switch msErr.Number {
-		case 4060, 18452, 18456:
-			return failureKindAuth
-		default:
-			return failureKindUnknown
-		}
-	}
-
-	var ldapErr *ldap.Error
-	if errors.As(err, &ldapErr) {
-		switch ldapErr.ResultCode {
-		case ldap.LDAPResultInvalidCredentials, ldap.LDAPResultInsufficientAccessRights:
-			return failureKindAuth
-		default:
-			return failureKindUnknown
-		}
-	}
-
-	return classifyTestConnFailureByMessage(err.Error())
+	return errors.Is(err, os.ErrDeadlineExceeded)
 }
 
-// Drivers without typed errors only report a string.
-var authFailureSubstrings = []string{
-	"unable to authenticate",      // golang.org/x/crypto/ssh
-	"no supported methods remain", // golang.org/x/crypto/ssh
-	"ntlm authentication failed",  // MSSQL proxy handshake
-	"kerberos authentication failed",
-	"authentication failed",
-	"auth failed",
-	"invalid password",
-	"wrong password",
-	"access denied",
-	"permission denied",
-	"wrongpassword",                  // Redis
-	"noauth",                         // Redis
-	"invalid username-password pair", // MongoDB
-	"authentication error",
-}
-
-var transportFailureSubstrings = []string{
-	"connection refused",
-	"connection reset",
-	"no such host",
-	"i/o timeout",
-	"timed out",
-	"deadline exceeded",
-	"network is unreachable",
-	"host is unreachable",
-	"broken pipe",
-	"eof",
-	// Wraps everything that fails after TCP connect, including a version or key-exchange mismatch and a peer
-	// hangup. Only reached once the auth list above has ruled out a genuine credential rejection.
-	"ssh: handshake failed",
-}
-
-func classifyTestConnFailureByMessage(message string) testConnFailureKind {
-	lowered := strings.ToLower(message)
-	for _, needle := range authFailureSubstrings {
-		if strings.Contains(lowered, needle) {
-			return failureKindAuth
-		}
-	}
-	for _, needle := range transportFailureSubstrings {
-		if strings.Contains(lowered, needle) {
-			return failureKindTransport
-		}
+// An untagged failure is one no probe attributed to a phase, which the control plane treats as unclassified.
+func classifyTestConnFailure(err error) testConnFailureKind {
+	var probeErr *probeError
+	if errors.As(err, &probeErr) {
+		return probeErr.kind
 	}
 	return failureKindUnknown
 }

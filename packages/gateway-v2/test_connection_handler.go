@@ -211,6 +211,10 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 
 // doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
 func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlTestParams) error {
+	if err := dialTarget(ctx, host, port); err != nil {
+		return connectFailure(err)
+	}
+
 	// The database/sql driver has no way to carry NTLM or Kerberos, so these reuse the proxy handshake.
 	if params.Dialect == "mssql" && (params.AuthMethod == "ntlm" || params.AuthMethod == "kerberos") {
 		var tlsConfig *tls.Config
@@ -220,7 +224,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 				return err
 			}
 		}
-		return mssqlhandler.VerifyCredential(ctx, mssqlhandler.MssqlProxyConfig{
+		return authFailure(mssqlhandler.VerifyCredential(ctx, mssqlhandler.MssqlProxyConfig{
 			TargetAddr:     net.JoinHostPort(host, strconv.Itoa(port)),
 			InjectUsername: params.Username,
 			InjectPassword: params.Password,
@@ -232,7 +236,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 			AuthMethod:     params.AuthMethod,
 			EnableTLS:      params.SslEnabled,
 			TLSConfig:      tlsConfig,
-		})
+		}))
 	}
 
 	db, err := openSQLTestDB(host, port, params)
@@ -242,7 +246,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 	defer db.Close()
 
 	var result int
-	return db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
+	return authFailure(db.QueryRowContext(ctx, "SELECT 1").Scan(&result))
 }
 
 // doMongoConnectionTest authenticates against the target MongoDB and pings it
@@ -263,13 +267,17 @@ func doMongoConnectionTest(ctx context.Context, host string, port int, params mo
 		opts.SetTLSConfig(tlsConfig)
 	}
 
+	if err := dialTarget(ctx, host, port); err != nil {
+		return connectFailure(err)
+	}
+
 	client, err := mongo.Connect(opts)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = client.Disconnect(ctx) }()
 
-	return client.Ping(ctx, nil)
+	return authFailure(client.Ping(ctx, nil))
 }
 
 // doRedisConnectionTest authenticates against the target Redis and PINGs it
@@ -289,12 +297,12 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 			return err
 		}
 		if conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsConfig); err != nil {
-			return err
+			return connectFailure(err)
 		}
 	} else {
 		var err error
 		if conn, err = dialer.DialContext(ctx, "tcp", addr); err != nil {
-			return err
+			return connectFailure(err)
 		}
 	}
 	defer conn.Close()
@@ -315,26 +323,27 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 			err = writer.WriteCommand("AUTH", params.Password)
 		}
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		reply, err := readRedisReplyLine(reader)
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		if reply != "+OK" {
-			return fmt.Errorf("redis authentication failed: %s", redisReplyErrorText(reply))
+			return authFailure(fmt.Errorf("redis authentication failed: %s", redisReplyErrorText(reply)))
 		}
 	}
 
 	if err := writer.WriteCommand("PING"); err != nil {
-		return err
+		return connectFailure(err)
 	}
 	reply, err := readRedisReplyLine(reader)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
+	// The first command after AUTH is what proves the credential took; an unauthenticated server answers NOAUTH.
 	if len(reply) > 0 && (reply[0] == '-' || reply[0] == '!') {
-		return fmt.Errorf("redis PING failed: %s", redisReplyErrorText(reply))
+		return authFailure(fmt.Errorf("redis PING failed: %s", redisReplyErrorText(reply)))
 	}
 	return nil
 }
@@ -382,12 +391,12 @@ func doLdapConnectionTest(ctx context.Context, host string, port int, params lda
 
 	conn, err := ldap.DialURL(fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, strconv.Itoa(port))), opts...)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer conn.Close()
 	conn.SetTimeout(timeout)
 
-	return conn.Bind(params.Username, params.Password)
+	return authFailure(conn.Bind(params.Username, params.Password))
 }
 
 // doKubernetesConnectionTest confirms the API server is reachable and accepts the token (401 = bad credentials)
@@ -413,12 +422,12 @@ func doKubernetesConnectionTest(ctx context.Context, host string, port int, para
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode)
+		return authFailure(fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
@@ -489,15 +498,15 @@ func kubernetesImpersonationProbe(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("kubernetes API rejected the gateway's pod token (HTTP %d)", resp.StatusCode)
+		return authFailure(fmt.Errorf("kubernetes API rejected the gateway's pod token (HTTP %d)", resp.StatusCode))
 	}
 	if resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("gateway service account cannot impersonate %s:%s (HTTP %d)", namespace, serviceAccountName, resp.StatusCode)
+		return authFailure(fmt.Errorf("gateway service account cannot impersonate %s:%s (HTTP %d)", namespace, serviceAccountName, resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
@@ -508,6 +517,12 @@ func kubernetesImpersonationProbe(
 // doTCPReachabilityTest confirms the target host:port accepts a TCP connection. It's the fallback for targets we
 // can't authenticate at rest (RDP, SSH certificate auth), so at least a bad host/port is rejected.
 func doTCPReachabilityTest(ctx context.Context, host string, port int) error {
+	return connectFailure(dialTarget(ctx, host, port))
+}
+
+// dialTarget proves the target is reachable before any protocol client runs, so that a failure after this point
+// is the target answering rather than the network, and each probe can name its phase without reading the error.
+func dialTarget(ctx context.Context, host string, port int) error {
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
@@ -524,7 +539,7 @@ func runWithContext(ctx context.Context, op func() error) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("connection test timed out")
+		return connectFailure(fmt.Errorf("connection test timed out"))
 	}
 }
 
@@ -610,7 +625,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 				Certificate: params.Certificate,
 				TimeoutMs:   env.TimeoutMs,
 			})
-			return err
+			return sshFailure(err)
 		}
 	case testConnModeTCP:
 		op = func() error { return doTCPReachabilityTest(ctx, target.host, target.port) }

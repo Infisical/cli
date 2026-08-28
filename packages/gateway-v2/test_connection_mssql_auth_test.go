@@ -8,19 +8,29 @@ import (
 	"testing"
 )
 
-func closedPort(t *testing.T) int {
+// hangupPort accepts connections and immediately closes them, so the probe's reachability dial succeeds and the
+// protocol client still fails. A closed port would be rejected before either path runs.
+func hangupPort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve port: %v", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	return port
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	return listener.Addr().(*net.TCPAddr).Port
 }
 
 func TestSQLConnectionTestRoutesWindowsAuthToProxy(t *testing.T) {
-	port := closedPort(t)
+	port := hangupPort(t)
 
 	for _, authMethod := range []string{"ntlm", "kerberos"} {
 		t.Run(authMethod, func(t *testing.T) {
@@ -35,9 +45,9 @@ func TestSQLConnectionTestRoutesWindowsAuthToProxy(t *testing.T) {
 				Spn:        "MSSQLSvc/sql.corp.example.com:" + strconv.Itoa(port),
 			})
 			if err == nil {
-				t.Fatal("expected a connection failure against a closed port")
+				t.Fatal("expected a failure against a target that hangs up")
 			}
-			if !strings.Contains(err.Error(), "dial server") {
+			if !strings.Contains(err.Error(), "server prelogin") {
 				t.Fatalf("expected the proxy handshake to run, got: %v", err)
 			}
 		})
@@ -45,7 +55,7 @@ func TestSQLConnectionTestRoutesWindowsAuthToProxy(t *testing.T) {
 }
 
 func TestSQLConnectionTestKeepsSqlLoginOnDriverPath(t *testing.T) {
-	port := closedPort(t)
+	port := hangupPort(t)
 
 	err := doSQLConnectionTest(context.Background(), "127.0.0.1", port, sqlTestParams{
 		Dialect:    "mssql",
@@ -55,9 +65,9 @@ func TestSQLConnectionTestKeepsSqlLoginOnDriverPath(t *testing.T) {
 		AuthMethod: "sql-login",
 	})
 	if err == nil {
-		t.Fatal("expected a connection failure against a closed port")
+		t.Fatal("expected a failure against a target that hangs up")
 	}
-	if strings.Contains(err.Error(), "dial server") {
+	if strings.Contains(err.Error(), "server prelogin") {
 		t.Fatalf("sql-login should stay on the driver path, got: %v", err)
 	}
 }
