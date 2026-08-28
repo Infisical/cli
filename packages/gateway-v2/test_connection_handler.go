@@ -211,9 +211,15 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 
 // doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
 func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlTestParams) error {
-	// Windows-auth SQL Server logins have no SQL-managed password, so the database/sql driver path can't carry them.
-	// The session proxy already speaks NTLM and Kerberos against MSSQL, so the check reuses that handshake.
+	// The database/sql driver has no way to carry NTLM or Kerberos, so these reuse the proxy handshake.
 	if params.Dialect == "mssql" && (params.AuthMethod == "ntlm" || params.AuthMethod == "kerberos") {
+		var tlsConfig *tls.Config
+		if params.SslEnabled {
+			var err error
+			if tlsConfig, err = buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized); err != nil {
+				return err
+			}
+		}
 		return mssqlhandler.VerifyCredential(ctx, mssqlhandler.MssqlProxyConfig{
 			TargetAddr:     net.JoinHostPort(host, strconv.Itoa(port)),
 			InjectUsername: params.Username,
@@ -225,6 +231,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 			InjectSPN:      params.Spn,
 			AuthMethod:     params.AuthMethod,
 			EnableTLS:      params.SslEnabled,
+			TLSConfig:      tlsConfig,
 		})
 	}
 

@@ -12,9 +12,8 @@ import (
 	mssql "github.com/microsoft/go-mssqldb"
 )
 
-// Whether the target refused the credential or we never got far enough to ask. The control plane needs these
-// apart: a refused credential stops the schedule, while an unreachable target keeps retrying. Only the gateway
-// holds the driver error, so the classification happens here rather than by matching strings upstream.
+// A refused credential stops the control plane's schedule; an unreachable target keeps retrying. Only the
+// gateway holds the driver error, so the classification happens here rather than by matching strings upstream.
 type testConnFailureKind string
 
 const (
@@ -31,7 +30,6 @@ func classifyTestConnFailure(err error) testConnFailureKind {
 		return failureKindUnknown
 	}
 
-	// Anything that never completed a connection is transport, whatever the protocol said afterwards.
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return failureKindTransport
@@ -91,7 +89,7 @@ func classifyTestConnFailure(err error) testConnFailureKind {
 	return classifyTestConnFailureByMessage(err.Error())
 }
 
-// Drivers without typed errors (SSH, Redis, MongoDB, and the MSSQL proxy handshake) only report a string.
+// Drivers without typed errors only report a string.
 var authFailureSubstrings = []string{
 	"unable to authenticate",      // golang.org/x/crypto/ssh
 	"no supported methods remain", // golang.org/x/crypto/ssh

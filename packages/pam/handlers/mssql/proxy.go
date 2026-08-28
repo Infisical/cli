@@ -170,8 +170,7 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 	return p.authenticateOverConn(serverConn)
 }
 
-// authenticateOverConn runs the PRELOGIN and login handshake over an already-dialed connection, so a caller
-// that needs to own the dial (to bound it with a context) can still reuse the same auth paths.
+// authenticateOverConn lets a caller own the dial (to bound it with a context) and still reuse these auth paths.
 func (p *MssqlProxy) authenticateOverConn(serverConn net.Conn) (net.Conn, []*TDSPacket, error) {
 	// 1. Send our PRELOGIN to server
 	encOption := uint8(EncryptNotSup)
@@ -661,13 +660,9 @@ func (p *MssqlProxy) proxyToClient(server, client net.Conn, errCh chan error) {
 	}
 }
 
-// VerifyCredential performs the login handshake against the target and drops the connection. It reuses the same
-// auth paths a session uses, so sql-login, NTLM, and Kerberos all behave here exactly as they do for a real
-// connection. A nil error means the credential authenticated.
-//
-// The context bounds the whole handshake, not just the dial: a target that accepts the connection and then
-// withholds its PRELOGIN response would otherwise leave this blocked on a read after the caller gave up, and
-// retries would stack those goroutines and sockets up until the gateway ran out of them.
+// VerifyCredential performs the login handshake against the target and drops the connection. A nil error means
+// the credential authenticated. The context bounds the whole handshake, not just the dial: a target that stalls
+// after accepting the connection would otherwise leak a goroutine and socket per probe.
 func VerifyCredential(ctx context.Context, config MssqlProxyConfig) error {
 	dialer := &net.Dialer{}
 	serverConn, err := dialer.DialContext(ctx, "tcp", config.TargetAddr)
