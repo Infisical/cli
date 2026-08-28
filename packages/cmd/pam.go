@@ -28,13 +28,13 @@ var pamAccessCmd = &cobra.Command{
 	Use:   "access <path> [-- <command>]",
 	Short: "Launch a PAM session for the account at the given path",
 	Long: `Launch a PAM session for the account at the given path.
-The path format is: /folder/account-name (leading slash optional)
+The path format is: folder/account-name
 
 SSH accounts connect you straight to a shell on the target. Pass --proxy for a local
 proxy to point your own SSH, SCP or SFTP client at instead, or pass a command after
 '--' to run just that command and exit. Every other account type starts a local proxy
 or credential helper, which --proxy does not change.`,
-	Example: `  infisical pam access /production/postgres-main --duration 2h
+	Example: `  infisical pam access production/postgres-main --duration 2h
   infisical pam access servers/prod-bastion
   infisical pam access servers/prod-bastion -- systemctl status nginx
   infisical pam access servers/prod-bastion --proxy`,

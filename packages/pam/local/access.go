@@ -112,6 +112,7 @@ func StartPAMAccess(accessToken string, opts AccessOptions) {
 	log.Info().Msgf("Account type: %s", pamResponse.AccountType)
 
 	if len(opts.Command) > 0 && pamResponse.AccountType != AccountTypeSSH {
+		endSession(httpClient, pamResponse.SessionId)
 		util.PrintErrorMessageAndExit(fmt.Sprintf(
 			"Commands can only be run against SSH accounts, and %s is a %s account. Drop the '--' and this command starts a local proxy for it instead.",
 			strings.TrimPrefix(displayPath, "/"), pamResponse.AccountType))
@@ -139,6 +140,7 @@ func StartPAMAccess(accessToken string, opts AccessOptions) {
 	case AccountTypeWindows, AccountTypeWindowsAd:
 		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	default:
+		endSession(httpClient, pamResponse.SessionId)
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
 	}
 }
@@ -159,6 +161,13 @@ func CreateSession(httpClient *resty.Client, path, reason, targetHost string, du
 		return nil, err
 	}
 	return &response, nil
+}
+
+// endSession releases a created session on paths that exit before a proxy or shell owns it
+func endSession(httpClient *resty.Client, sessionId string) {
+	if err := api.CallPAMSessionTermination(httpClient, sessionId); err != nil {
+		log.Debug().Err(err).Msg("Failed to end session while exiting early")
+	}
 }
 
 // NewLiveSession converts an access response into the session details a proxy dials through.
@@ -713,23 +722,20 @@ func startRDPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 func startSSHAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path string, opts AccessOptions) {
 	duration, err := time.ParseDuration(opts.Duration)
 	if err != nil {
+		endSession(httpClient, response.SessionId)
 		util.HandleError(err, "Failed to parse duration")
 		return
 	}
 
 	username, ok := response.Metadata["username"]
 	if !ok {
+		endSession(httpClient, response.SessionId)
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start SSH session")
 		return
 	}
 
 	if opts.Proxy {
 		startSSHProxy(httpClient, response, path, duration, username, opts.Port)
-		return
-	}
-
-	if opts.Port != 0 {
-		util.PrintErrorMessageAndExit("--port only applies to a local proxy. Add --proxy to start one, or drop --port to connect straight to a shell.")
 		return
 	}
 
@@ -773,6 +779,7 @@ func startSSHShell(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 	defer stopWatching()
 
 	if err := transport.ValidateResourceTypeSupported(); err != nil {
+		transport.NotifySessionTermination()
 		util.HandleError(err, "Gateway version outdated")
 		return
 	}
@@ -817,11 +824,13 @@ func startSSHProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 	}
 
 	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		proxy.NotifySessionTermination()
 		util.HandleError(err, "Gateway version outdated")
 		return
 	}
 
 	if err := proxy.Start(port); err != nil {
+		proxy.NotifySessionTermination()
 		util.HandleError(err, "Failed to start SSH proxy server")
 		return
 	}
