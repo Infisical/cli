@@ -93,7 +93,6 @@ func classifyTestConnFailure(err error) testConnFailureKind {
 var authFailureSubstrings = []string{
 	"unable to authenticate",      // golang.org/x/crypto/ssh
 	"no supported methods remain", // golang.org/x/crypto/ssh
-	"ssh: handshake failed",       // golang.org/x/crypto/ssh
 	"ntlm authentication failed",  // MSSQL proxy handshake
 	"kerberos authentication failed",
 	"authentication failed",
@@ -119,6 +118,9 @@ var transportFailureSubstrings = []string{
 	"host is unreachable",
 	"broken pipe",
 	"eof",
+	// Wraps everything that fails after TCP connect, including a version or key-exchange mismatch and a peer
+	// hangup. Only reached once the auth list above has ruled out a genuine credential rejection.
+	"ssh: handshake failed",
 }
 
 func classifyTestConnFailureByMessage(message string) testConnFailureKind {
