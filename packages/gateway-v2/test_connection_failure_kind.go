@@ -5,8 +5,6 @@ import (
 	"io"
 	"net"
 	"os"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // Whether the target refused the credential or we never got far enough to ask. The control plane needs these
@@ -49,19 +47,6 @@ func authFailure(err error) error {
 		return &probeError{kind: failureKindTransport, err: err}
 	}
 	return &probeError{kind: failureKindAuth, err: err}
-}
-
-// sshFailure splits an SSH client error. The ssh package reports a refused credential as ServerAuthError;
-// a version or key-exchange mismatch, a rejected host key, and a hangup all fail before any credential is sent.
-func sshFailure(err error) error {
-	if err == nil {
-		return nil
-	}
-	var authErr *ssh.ServerAuthError
-	if errors.As(err, &authErr) {
-		return &probeError{kind: failureKindAuth, err: err}
-	}
-	return connectFailure(err)
 }
 
 func isNetworkError(err error) bool {

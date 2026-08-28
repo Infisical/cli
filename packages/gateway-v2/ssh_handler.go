@@ -56,16 +56,28 @@ func parseSSHExecPrivateKey(privateKey, passphrase string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey([]byte(privateKey))
 }
 
-func buildSSHExecAuth(env sshExecEnvelope) ([]ssh.AuthMethod, error) {
+// buildSSHExecAuth calls onAttempt as each credential is handed to the client. The ssh package invokes these
+// callbacks only once the transport handshake succeeded and the server offered the method, so a failure with
+// onAttempt never called means no credential was ever sent and nothing can have counted toward a lockout.
+func buildSSHExecAuth(env sshExecEnvelope, onAttempt func()) ([]ssh.AuthMethod, error) {
+	if onAttempt == nil {
+		onAttempt = func() {}
+	}
 	switch env.AuthMethod {
 	case "password":
-		return []ssh.AuthMethod{ssh.Password(env.Password)}, nil
+		return []ssh.AuthMethod{ssh.PasswordCallback(func() (string, error) {
+			onAttempt()
+			return env.Password, nil
+		})}, nil
 	case "public-key":
 		signer, err := parseSSHExecPrivateKey(env.PrivateKey, env.Passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse private key: %w", err)
 		}
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
+		return []ssh.AuthMethod{ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+			onAttempt()
+			return []ssh.Signer{signer}, nil
+		})}, nil
 	case "certificate":
 		signer, err := parseSSHExecPrivateKey(env.PrivateKey, env.Passphrase)
 		if err != nil {
@@ -83,14 +95,18 @@ func buildSSHExecAuth(env sshExecEnvelope) ([]ssh.AuthMethod, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create certificate signer: %w", err)
 		}
-		return []ssh.AuthMethod{ssh.PublicKeys(certSigner)}, nil
+		return []ssh.AuthMethod{ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+			onAttempt()
+			return []ssh.Signer{certSigner}, nil
+		})}, nil
 	default:
 		return nil, fmt.Errorf("invalid auth method: %s", env.AuthMethod)
 	}
 }
 
 func doSSHExec(targetHost string, targetPort int, env sshExecEnvelope) (sshExecResult, error) {
-	authMethods, err := buildSSHExecAuth(env)
+	credentialOffered := false
+	authMethods, err := buildSSHExecAuth(env, func() { credentialOffered = true })
 	if err != nil {
 		return sshExecResult{}, err
 	}
@@ -107,7 +123,11 @@ func doSSHExec(targetHost string, targetPort int, env sshExecEnvelope) (sshExecR
 		Timeout:         timeout,
 	})
 	if err != nil {
-		return sshExecResult{}, fmt.Errorf("failed to dial target SSH server: %w", err)
+		err = fmt.Errorf("failed to dial target SSH server: %w", err)
+		if credentialOffered {
+			return sshExecResult{}, authFailure(err)
+		}
+		return sshExecResult{}, connectFailure(err)
 	}
 	defer client.Close()
 

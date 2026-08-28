@@ -625,7 +625,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 				Certificate: params.Certificate,
 				TimeoutMs:   env.TimeoutMs,
 			})
-			return sshFailure(err)
+			return err
 		}
 	case testConnModeTCP:
 		op = func() error { return doTCPReachabilityTest(ctx, target.host, target.port) }

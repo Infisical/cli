@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net"
 	"testing"
-
-	"golang.org/x/crypto/ssh"
 )
 
 func TestClassifyTestConnFailure(t *testing.T) {
@@ -51,19 +49,19 @@ func TestClassifyTestConnFailure(t *testing.T) {
 	}
 }
 
-// The ssh package wraps both a refused credential and a failed handshake in "ssh: handshake failed", so only the
-// nested ServerAuthError separates them.
-func TestSSHFailurePhases(t *testing.T) {
-	refused := fmt.Errorf("ssh: handshake failed: %w", &ssh.ServerAuthError{
-		Errors: []error{errors.New("ssh: unable to authenticate")},
-	})
-	if got := classifyTestConnFailure(sshFailure(refused)); got != failureKindAuth {
-		t.Fatalf("refused credential = %q, want %q", got, failureKindAuth)
+// A credential is only offered once the transport handshake succeeded and the server accepted the method, so
+// whether the client got that far is what separates a refused login from a handshake that never asked.
+func TestSSHPhaseDependsOnCredentialBeingOffered(t *testing.T) {
+	offered := false
+	methods, err := buildSSHExecAuth(sshExecEnvelope{AuthMethod: "password", Password: "pw"}, func() { offered = true })
+	if err != nil {
+		t.Fatalf("buildSSHExecAuth: %v", err)
 	}
-
-	kexMismatch := errors.New("ssh: handshake failed: ssh: no common algorithm for key exchange")
-	if got := classifyTestConnFailure(sshFailure(kexMismatch)); got != failureKindTransport {
-		t.Fatalf("key exchange mismatch = %q, want %q", got, failureKindTransport)
+	if len(methods) != 1 {
+		t.Fatalf("expected one auth method, got %d", len(methods))
+	}
+	if offered {
+		t.Fatal("building the auth method must not count as offering a credential")
 	}
 }
 
