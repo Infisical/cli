@@ -45,7 +45,14 @@ func ValidateInfisicalAPIConnection() (ok bool) {
 	return err == nil
 }
 
+// GetRestyClientWithCustomHeaders is the single place API clients are built, which is what applies
+// the retry policy everywhere. Do not construct resty clients directly; TestNoDirectRestyConstruction
+// enforces this.
 func GetRestyClientWithCustomHeaders() (*resty.Client, error) {
+	return GetRestyClientWithPolicy(DefaultRetryPolicy())
+}
+
+func GetRestyClientWithPolicy(policy RetryPolicy) (*resty.Client, error) {
 	httpClient := resty.New()
 	customHeaders := os.Getenv("INFISICAL_CUSTOM_HEADERS")
 	if customHeaders != "" {
@@ -56,7 +63,7 @@ func GetRestyClientWithCustomHeaders() (*resty.Client, error) {
 
 		httpClient.SetHeaders(headers)
 	}
-	return httpClient, nil
+	return applyRetryPolicy(httpClient, policy), nil
 }
 
 func GetInfisicalCustomHeadersMap() (map[string]string, error) {

@@ -1693,14 +1693,13 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 // Refreshes the existing access token
 func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
-	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	policy := util.AgentRetryPolicy()
+	policy.ReplaySafe = true // renewal extends the presented token, so a replay cannot double-apply
+
+	httpClient, err := util.GetRestyClientWithPolicy(policy)
 	if err != nil {
 		return err
 	}
-
-	httpClient.SetRetryCount(10000).
-		SetRetryMaxWaitTime(20 * time.Second).
-		SetRetryWaitTime(5 * time.Second)
 
 	response, err := api.CallMachineIdentityRefreshAccessToken(httpClient, api.UniversalAuthRefreshRequest{AccessToken: accessToken})
 	if err != nil {
