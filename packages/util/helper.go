@@ -329,10 +329,7 @@ func GetInfisicalToken(cmd *cobra.Command) (token *models.TokenDetails, err erro
 }
 
 func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuthLoginResponse, error) {
-	policy := DefaultRetryPolicy()
-	policy.ReplaySafe = true // a replayed login only mints another TTL-bound token
-
-	httpClient, err := GetRestyClientWithPolicy(policy)
+	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return api.UniversalAuthLoginResponse{}, err
 	}

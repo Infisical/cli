@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -20,6 +21,8 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -436,6 +439,38 @@ func TestNoDirectRestyConstruction(t *testing.T) {
 	assert.Empty(t, offenders,
 		"these sites construct a resty client directly and so have no retry policy; "+
 			"use util.GetRestyClientWithCustomHeaders or util.GetRestyClientWithPolicy instead")
+}
+
+// Resty's default logger writes unstructured lines straight to stderr on each failed attempt and
+// on final failure; applyRetryPolicy must route those through zerolog instead.
+func TestRestyInternalLoggingIsRoutedThroughZerolog(t *testing.T) {
+	stderrReader, stderrWriter, err := os.Pipe()
+	require.NoError(t, err)
+
+	// Resty binds os.Stderr into its default logger at construction, so the swap must happen
+	// before the client is built to catch anything bypassing the adapter.
+	originalStderr := os.Stderr
+	os.Stderr = stderrWriter
+	t.Cleanup(func() { os.Stderr = originalStderr })
+
+	var structured bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&structured)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	client, _ := newTestClient(t, testPolicy(1))
+	_, err = client.R().Get(deadAddress(t))
+	require.Error(t, err)
+
+	os.Stderr = originalStderr
+	require.NoError(t, stderrWriter.Close())
+	captured, err := io.ReadAll(stderrReader)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(captured), "RESTY",
+		"resty wrote its own unstructured log lines instead of going through zerolog")
+	assert.Contains(t, structured.String(), `"component":"resty"`,
+		"resty's internal messages should surface as structured debug events tagged with their source")
 }
 
 // newAbruptCloseServer simulates the ambiguous mid-flight failure: request delivered, connection

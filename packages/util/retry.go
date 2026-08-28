@@ -107,6 +107,8 @@ func (p RetryPolicy) withEnvOverrides() RetryPolicy {
 }
 
 func applyRetryPolicy(httpClient *resty.Client, policy RetryPolicy) *resty.Client {
+	httpClient.SetLogger(restyLogAdapter{})
+
 	if policy.MaxRetries <= 0 {
 		return httpClient
 	}
@@ -249,6 +251,24 @@ func parseRetryAfter(value string) (time.Duration, bool) {
 	}
 
 	return 0, false
+}
+
+// restyLogAdapter feeds resty's internal logging through zerolog instead of resty's default
+// unstructured stderr logger. Every severity maps to debug: on the request path resty warns per
+// failed attempt and errors once retries are exhausted, both of which retryLogger and the error
+// returned to the caller already cover.
+type restyLogAdapter struct{}
+
+func (restyLogAdapter) Errorf(format string, v ...any) {
+	log.Debug().Str("component", "resty").Msgf(format, v...)
+}
+
+func (restyLogAdapter) Warnf(format string, v ...any) {
+	log.Debug().Str("component", "resty").Msgf(format, v...)
+}
+
+func (restyLogAdapter) Debugf(format string, v ...any) {
+	log.Debug().Str("component", "resty").Msgf(format, v...)
 }
 
 // Debug level: warning on every retry would be noise for scripted use.
