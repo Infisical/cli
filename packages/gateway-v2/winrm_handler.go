@@ -113,7 +113,7 @@ type winrmErrorResponse struct {
 
 type winrmErrorBody struct {
 	Message string `json:"message"`
-	// Lets the control plane tell a rejected credential from an unreachable host. Absent on older gateways.
+	// Absent on older gateways.
 	Kind string `json:"kind,omitempty"`
 }
 

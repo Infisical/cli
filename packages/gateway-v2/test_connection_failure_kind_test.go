@@ -49,8 +49,6 @@ func TestClassifyTestConnFailure(t *testing.T) {
 	}
 }
 
-// A credential is only offered once the transport handshake succeeded and the server accepted the method, so
-// whether the client got that far is what separates a refused login from a handshake that never asked.
 func TestSSHPhaseDependsOnCredentialBeingOffered(t *testing.T) {
 	offered := false
 	methods, err := buildSSHExecAuth(sshExecEnvelope{AuthMethod: "password", Password: "pw"}, func() { offered = true })

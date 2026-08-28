@@ -44,8 +44,7 @@ type sshExecErrorResponse struct {
 
 type sshExecErrorBody struct {
 	Message string `json:"message"`
-	// Set only by the test-connection handler, so the control plane can tell a refused credential from a
-	// target it never reached. Absent on every other RPC and on older gateways.
+	// Set only by the test-connection handler; absent on every other RPC and on older gateways.
 	Kind string `json:"kind,omitempty"`
 }
 
@@ -56,9 +55,8 @@ func parseSSHExecPrivateKey(privateKey, passphrase string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey([]byte(privateKey))
 }
 
-// buildSSHExecAuth calls onAttempt as each credential is handed to the client. The ssh package invokes these
-// callbacks only once the transport handshake succeeded and the server offered the method, so a failure with
-// onAttempt never called means no credential was ever sent and nothing can have counted toward a lockout.
+// The ssh package runs these callbacks only once the server offered the method, so onAttempt firing is what
+// proves a credential was actually sent.
 func buildSSHExecAuth(env sshExecEnvelope, onAttempt func()) ([]ssh.AuthMethod, error) {
 	if onAttempt == nil {
 		onAttempt = func() {}

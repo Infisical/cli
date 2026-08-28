@@ -660,9 +660,8 @@ func (p *MssqlProxy) proxyToClient(server, client net.Conn, errCh chan error) {
 	}
 }
 
-// VerifyCredential performs the login handshake against the target and drops the connection. A nil error means
-// the credential authenticated. The context bounds the whole handshake, not just the dial: a target that stalls
-// after accepting the connection would otherwise leak a goroutine and socket per probe.
+// The context bounds the whole handshake, not just the dial: a target that stalls after accepting the
+// connection would otherwise leak a goroutine and socket per probe.
 func VerifyCredential(ctx context.Context, config MssqlProxyConfig) error {
 	dialer := &net.Dialer{}
 	serverConn, err := dialer.DialContext(ctx, "tcp", config.TargetAddr)

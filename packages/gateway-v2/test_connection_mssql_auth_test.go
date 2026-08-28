@@ -8,8 +8,7 @@ import (
 	"testing"
 )
 
-// hangupPort accepts connections and immediately closes them, so the probe's reachability dial succeeds and the
-// protocol client still fails. A closed port would be rejected before either path runs.
+// Accepts and immediately closes, so the reachability dial succeeds and the protocol client still fails.
 func hangupPort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

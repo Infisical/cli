@@ -520,8 +520,7 @@ func doTCPReachabilityTest(ctx context.Context, host string, port int) error {
 	return connectFailure(dialTarget(ctx, host, port))
 }
 
-// dialTarget proves the target is reachable before any protocol client runs, so that a failure after this point
-// is the target answering rather than the network, and each probe can name its phase without reading the error.
+// Proves the target is reachable before any protocol client runs, so a later failure is the target answering.
 func dialTarget(ctx context.Context, host string, port int) error {
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))

@@ -7,12 +7,9 @@ import (
 	"os"
 )
 
-// Whether the target refused the credential or we never got far enough to ask. The control plane needs these
-// apart: a refused credential stops the heartbeat schedule, while an unreachable target keeps retrying.
-//
-// A probe knows which of the two happened structurally, because it dials and then authenticates in that order,
-// so the answer is recorded as the phases run rather than recovered afterwards from a driver's error text. That
-// keeps a new account type from needing its own error codes here.
+// A refused credential stops the heartbeat schedule; an unreachable target keeps retrying. Probes dial and then
+// authenticate, so each tags the phase it failed in rather than the classification being read back out of the
+// driver's error text, which would need new codes for every account type.
 type testConnFailureKind string
 
 const (
@@ -29,7 +26,6 @@ type probeError struct {
 func (e *probeError) Error() string { return e.err.Error() }
 func (e *probeError) Unwrap() error { return e.err }
 
-// connectFailure tags a failure that happened before the target could evaluate a credential.
 func connectFailure(err error) error {
 	if err == nil {
 		return nil
@@ -37,8 +33,7 @@ func connectFailure(err error) error {
 	return &probeError{kind: failureKindTransport, err: err}
 }
 
-// authFailure tags a failure from the step that authenticates. A network error this late means the connection
-// died mid-exchange rather than the credential being refused, so it stays transport.
+// A network error at this point is the connection dying mid-exchange, not the credential being refused.
 func authFailure(err error) error {
 	if err == nil {
 		return nil
@@ -62,14 +57,12 @@ func isNetworkError(err error) bool {
 	if errors.As(err, &dnsErr) {
 		return true
 	}
-	// The peer closing mid-exchange is the connection dying, not a credential being turned down.
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	return errors.Is(err, os.ErrDeadlineExceeded)
 }
 
-// An untagged failure is one no probe attributed to a phase, which the control plane treats as unclassified.
 func classifyTestConnFailure(err error) testConnFailureKind {
 	var probeErr *probeError
 	if errors.As(err, &probeErr) {
