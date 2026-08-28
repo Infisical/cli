@@ -253,10 +253,8 @@ func parseRetryAfter(value string) (time.Duration, bool) {
 	return 0, false
 }
 
-// restyLogAdapter feeds resty's internal logging through zerolog instead of resty's default
-// unstructured stderr logger. Every severity maps to debug: on the request path resty warns per
-// failed attempt and errors once retries are exhausted, both of which retryLogger and the error
-// returned to the caller already cover.
+// restyLogAdapter routes resty's internal logging through zerolog. Everything maps to debug:
+// resty's request-path warnings and errors duplicate retryLogger and the returned error.
 type restyLogAdapter struct{}
 
 func (restyLogAdapter) Errorf(format string, v ...any) {
