@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	legacyServiceName = "infisical-gateway"
-	legacyConfigPath  = "/etc/infisical/gateway.conf"
-	legacyServicePath = "/etc/systemd/system/infisical-gateway.service"
-	gatewaysConfigDir = "/etc/infisical/gateways"
+	legacyServiceName  = "infisical-gateway"
+	legacyConfigPath   = "/etc/infisical/gateway.conf"
+	legacyServicePath  = "/etc/systemd/system/infisical-gateway.service"
+	gatewaysConfigDir  = "/etc/infisical/gateways"
 )
 
 func serviceFilePath(name string) string {
