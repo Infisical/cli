@@ -1,6 +1,6 @@
 module github.com/Infisical/infisical-merge
 
-go 1.25.12
+go 1.25.14
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.1
@@ -52,7 +52,7 @@ require (
 	github.com/wasilibs/go-re2 v1.10.0
 	go.mongodb.org/mongo-driver/v2 v2.5.0
 	go.mozilla.org/pkcs7 v0.9.0
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/exp v0.0.0-20250228200357-dead58393ab7
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
@@ -219,7 +219,7 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/api v0.267.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
