@@ -681,5 +681,7 @@ func VerifyCredential(ctx context.Context, config MssqlProxyConfig) error {
 	if err != nil {
 		return err
 	}
-	return authedConn.Close()
+	// The credential is already proven at this point, so a failure tearing the socket down is not the probe's verdict.
+	_ = authedConn.Close()
+	return nil
 }
