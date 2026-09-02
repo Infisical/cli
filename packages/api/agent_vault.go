@@ -24,6 +24,7 @@ type EnrollAgentVaultProxyRequest struct {
 
 type EnrollAgentVaultProxyResponse struct {
 	ProxyID     string                `json:"proxyId"`
+	Name        string                `json:"name"`
 	AccessToken string                `json:"accessToken"`
 	Config      AgentVaultProxyConfig `json:"config"`
 }
