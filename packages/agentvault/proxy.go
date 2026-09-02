@@ -168,27 +168,28 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if resolvesToBlockedAddress(hostname) {
-		http.Error(w, errPrivateBlocked.Error(), http.StatusForbidden)
-		return
-	}
-
-	// bypassHosts is evaluated first, before any interception: no certificate is minted, no credential is
-	// injected, and the unmatched-host policy never applies. That makes it the escape hatch for clients
-	// that pin certificates.
-	if ps.isBypassed(hostname, port) {
-		ps.tunnelOpaque(w, hostname, port)
-		return
-	}
-
-	// Resolve before minting: otherwise any syntactically valid Proxy-Authorization header forces
-	// unbounded key generation and leaf-cache growth.
+	// Resolve before anything that costs the proxy work on the caller's behalf - the DNS lookup below and
+	// the leaf minting further down. Otherwise any syntactically valid Proxy-Authorization header can
+	// make the proxy resolve arbitrary names and grow its certificate cache.
 	if _, err := ps.cache.get(sessionToken); err != nil {
 		if isSessionGone(err) {
 			http.Error(w, "the session is no longer valid", http.StatusForbidden)
 		} else {
 			http.Error(w, "failed to resolve the session", http.StatusBadGateway)
 		}
+		return
+	}
+
+	if resolvesToBlockedAddress(hostname) {
+		http.Error(w, errPrivateBlocked.Error(), http.StatusForbidden)
+		return
+	}
+
+	// bypassHosts is evaluated before any interception: no certificate is minted, no credential is
+	// injected, and the unmatched-host policy never applies. That makes it the escape hatch for clients
+	// that pin certificates.
+	if ps.isBypassed(hostname, port) {
+		ps.tunnelOpaque(w, hostname, port)
 		return
 	}
 
@@ -302,6 +303,16 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 	hostname, port, err := parseForwardTarget(r.URL.Host)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid target %q", r.URL.Host), http.StatusBadRequest)
+		return
+	}
+
+	// Same ordering as CONNECT: the session resolves before the proxy does a DNS lookup for the caller.
+	if _, err := ps.cache.get(sessionToken); err != nil {
+		if isSessionGone(err) {
+			http.Error(w, "the session is no longer valid", http.StatusForbidden)
+		} else {
+			http.Error(w, "failed to resolve the session", http.StatusBadGateway)
+		}
 		return
 	}
 

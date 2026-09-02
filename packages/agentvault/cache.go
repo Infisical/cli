@@ -25,7 +25,12 @@ const (
 	unreachableGraceIntervals = 5
 )
 
-// credential is the decrypted half. Its bytes are zeroed on every eviction path.
+// credential is the decrypted half.
+//
+// Bytes are deliberately not zeroed on eviction or refresh. Zeroing only defends against someone who can
+// read this process's memory, and anyone in that position is on the proxy's own box, where the proxy
+// token sits on disk and can resolve every live session's credentials directly. Zeroing in place also
+// raced with in-flight requests that still held the slice, so a refresh could send \x00 bytes upstream.
 type credential struct {
 	kind         string
 	headerName   string
@@ -33,17 +38,6 @@ type credential struct {
 	value        []byte
 	username     string
 	password     []byte
-}
-
-func (c *credential) zero() {
-	for i := range c.value {
-		c.value[i] = 0
-	}
-	for i := range c.password {
-		c.password[i] = 0
-	}
-	c.value = nil
-	c.password = nil
 }
 
 type resolvedConnection struct {
@@ -62,13 +56,6 @@ type sessionEntry struct {
 	connections []*resolvedConnection
 	lastSeen    time.Time
 	fetchedAt   time.Time
-}
-
-func (e *sessionEntry) zero() {
-	for _, conn := range e.connections {
-		conn.credential.zero()
-	}
-	e.connections = nil
 }
 
 // sessionKey is the sha256 of the token, never the token. In the shipped proxied-service cache the raw
@@ -124,7 +111,6 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 	if ok {
 		if entry.expiresAt != nil && time.Now().After(*entry.expiresAt) {
 			// Expired locally: no call needed, and none would succeed.
-			entry.zero()
 			delete(c.entries, key)
 			delete(c.tokens, key)
 			c.mu.Unlock()
@@ -178,7 +164,6 @@ func (c *sessionCache) evictIfFullLocked() {
 	if victim == "" {
 		return
 	}
-	c.entries[victim].zero()
 	delete(c.entries, victim)
 	delete(c.tokens, victim)
 }
@@ -191,13 +176,11 @@ func (c *sessionCache) refresh() {
 	now := time.Now()
 	for key, entry := range c.entries {
 		if now.Sub(entry.lastSeen) > sessionInactiveTTL {
-			entry.zero()
 			delete(c.entries, key)
 			delete(c.tokens, key)
 			continue
 		}
 		if entry.expiresAt != nil && now.After(*entry.expiresAt) {
-			entry.zero()
 			delete(c.entries, key)
 			delete(c.tokens, key)
 			continue
@@ -215,7 +198,6 @@ func (c *sessionCache) refresh() {
 
 		c.mu.Lock()
 		if entry, ok := c.entries[key]; ok {
-			entry.zero()
 			entry.sessionID = result.SessionID
 			entry.expiresAt = result.ExpiresAt
 			entry.connections = result.Connections
@@ -236,7 +218,6 @@ func (c *sessionCache) handleRefreshFailureLocked(key string, err error) {
 
 	if isSessionGone(err) {
 		log.Debug().Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
-		entry.zero()
 		delete(c.entries, key)
 		delete(c.tokens, key)
 		return
@@ -249,7 +230,6 @@ func (c *sessionCache) handleRefreshFailureLocked(key string, err error) {
 			Str("sessionId", entry.sessionID).
 			Dur("grace", grace).
 			Msg("agent-vault: could not reach Infisical within the grace window, dropping session")
-		entry.zero()
 		delete(c.entries, key)
 		delete(c.tokens, key)
 	}
@@ -258,8 +238,7 @@ func (c *sessionCache) handleRefreshFailureLocked(key string, err error) {
 func (c *sessionCache) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for key, entry := range c.entries {
-		entry.zero()
+	for key := range c.entries {
 		delete(c.entries, key)
 		delete(c.tokens, key)
 	}

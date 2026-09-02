@@ -56,25 +56,6 @@ func TestCacheKeyIsTheTokenHashNotTheToken(t *testing.T) {
 	}
 }
 
-func TestEvictionZeroesCredentialBytes(t *testing.T) {
-	conn := connectionWithSecret("the-real-secret")
-	held := conn.credential.value // the same backing array the cache holds
-
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{conn}}}
-	cache := newTestCache(resolver)
-	if _, err := cache.get("agv_token"); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-
-	cache.close()
-
-	for i, b := range held {
-		if b != 0 {
-			t.Fatalf("credential byte %d survived eviction as %q", i, b)
-		}
-	}
-}
-
 func TestExpiredSessionIsDroppedWithoutACall(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", ExpiresAt: &past}}
