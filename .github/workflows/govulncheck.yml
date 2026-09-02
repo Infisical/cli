@@ -36,6 +36,17 @@ jobs:
       #     We do not import openpgp anywhere; verify with:
       #       go list -deps ./... | grep openpgp   # (expect no output)
       #
+      # TOOLCHAIN_BLOCKED is deliberately separate from DEP_ALLOWLIST. These
+      # advisories DO have a published fix and ARE in our build graph, so they meet
+      # neither DEP_ALLOWLIST criterion. They are listed only because the fixed
+      # version needs a newer Go line than we pin. Treat them as owed work, not as
+      # accepted risk, and delete the entry the moment the pin moves.
+      #   - GO-2026-6354, GO-2026-6355: DoS on deadlocked channels in
+      #     golang.org/x/crypto/ssh, fixed in x/crypto v0.56.0, which declares
+      #     go 1.26.0 and so cannot be resolved on the 1.25 pin. v0.55.0 is the
+      #     highest release that still supports 1.25. x/crypto/ssh is imported in
+      #     seven files, so these are reachable rather than dormant.
+      #
       # Stdlib advisories are covered by the pinned 1.25.14 toolchain, so there is
       # no stdlib allowlist. A newly published stdlib advisory fails the gate;
       # fix it by raising the pin rather than by adding an exception here.
@@ -45,7 +56,12 @@ jobs:
         run: |
           DEP_ALLOWLIST="GO-2026-5932"
 
-          ALLOWLIST="$DEP_ALLOWLIST"
+          TOOLCHAIN_BLOCKED="
+            GO-2026-6354
+            GO-2026-6355
+          "
+
+          ALLOWLIST="$DEP_ALLOWLIST $TOOLCHAIN_BLOCKED"
 
           # Human-readable report (informational; govulncheck exits 3 when it
           # finds anything, so don't let that fail the step on its own).
