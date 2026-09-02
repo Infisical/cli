@@ -115,3 +115,136 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string)
 	}
 	return res, nil
 }
+
+type AgentVaultAccessBundle struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	HostPatterns []string `json:"hostPatterns"`
+}
+
+type ListAgentVaultAccessBundlesResponse struct {
+	AccessBundles []AgentVaultAccessBundle `json:"accessBundles"`
+}
+
+func CallListAgentVaultAccessBundles(httpClient *resty.Client) (ListAgentVaultAccessBundlesResponse, error) {
+	var res ListAgentVaultAccessBundlesResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/agent-vault/access-bundles", config.INFISICAL_URL))
+
+	if err != nil {
+		return ListAgentVaultAccessBundlesResponse{}, NewGenericRequestError("CallListAgentVaultAccessBundles", err)
+	}
+	if response.IsError() {
+		return ListAgentVaultAccessBundlesResponse{}, NewAPIErrorWithResponse("CallListAgentVaultAccessBundles", response, nil)
+	}
+	return res, nil
+}
+
+type CreateAgentVaultSessionRequest struct {
+	AccessBundleIDs []string `json:"accessBundleIds"`
+	TTL             string   `json:"ttl"`
+}
+
+type AgentVaultSession struct {
+	ID        string  `json:"id"`
+	Token     string  `json:"token"`
+	ExpiresAt *string `json:"expiresAt"`
+}
+
+type CreateAgentVaultSessionResponse struct {
+	Session AgentVaultSession `json:"session"`
+}
+
+func CallCreateAgentVaultSession(httpClient *resty.Client, request CreateAgentVaultSessionRequest) (CreateAgentVaultSessionResponse, error) {
+	var res CreateAgentVaultSessionResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/sessions", config.INFISICAL_URL))
+
+	if err != nil {
+		return CreateAgentVaultSessionResponse{}, NewGenericRequestError("CallCreateAgentVaultSession", err)
+	}
+	if response.IsError() {
+		return CreateAgentVaultSessionResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultSession", response, nil)
+	}
+	return res, nil
+}
+
+func CallRevokeAgentVaultSession(httpClient *resty.Client, sessionID string) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/agent-vault/sessions/%s/revoke", config.INFISICAL_URL, sessionID))
+
+	if err != nil {
+		return NewGenericRequestError("CallRevokeAgentVaultSession", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallRevokeAgentVaultSession", response, nil)
+	}
+	return nil
+}
+
+// Served by the proxy itself, not by Infisical, over plain HTTP on the proxy's own address. Unauthenticated:
+// a public certificate is public, and this is how an agent comes to trust the proxy.
+type AgentVaultProxyCaResponse struct {
+	ProxyID     string `json:"proxyId"`
+	Name        string `json:"name"`
+	Certificate string `json:"certificate"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func CallGetAgentVaultProxyCa(httpClient *resty.Client, proxyAddr string) (AgentVaultProxyCaResponse, error) {
+	var res AgentVaultProxyCaResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("http://%s/_agent-vault/ca", proxyAddr))
+
+	if err != nil {
+		return AgentVaultProxyCaResponse{}, NewGenericRequestError("CallGetAgentVaultProxyCa", err)
+	}
+	if response.IsError() {
+		return AgentVaultProxyCaResponse{}, NewAPIErrorWithResponse("CallGetAgentVaultProxyCa", response, nil)
+	}
+	return res, nil
+}
+
+type AgentVaultReachable struct {
+	Connection   string   `json:"connection"`
+	AccessBundle string   `json:"accessBundle"`
+	Hosts        []string `json:"hosts"`
+	Credential   string   `json:"credentialType"`
+}
+
+type AgentVaultWhoamiResponse struct {
+	ProxyID       string                `json:"proxyId"`
+	Name          string                `json:"name"`
+	UnmatchedHost string                `json:"unmatchedHost"`
+	Reachable     []AgentVaultReachable `json:"reachable"`
+}
+
+func CallAgentVaultWhoami(httpClient *resty.Client, proxyAddr, sessionToken string) (AgentVaultWhoamiResponse, error) {
+	var res AgentVaultWhoamiResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader(AgentVaultSessionHeader, sessionToken).
+		Get(fmt.Sprintf("http://%s/_agent-vault/whoami", proxyAddr))
+
+	if err != nil {
+		return AgentVaultWhoamiResponse{}, NewGenericRequestError("CallAgentVaultWhoami", err)
+	}
+	if response.IsError() {
+		return AgentVaultWhoamiResponse{}, NewAPIErrorWithResponse("CallAgentVaultWhoami", response, nil)
+	}
+	return res, nil
+}
