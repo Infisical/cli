@@ -113,7 +113,7 @@ The Infisical CLI is available under the [MIT License](LICENSE).
 
 ## Security
 
-Please do not file GitHub issues for security vulnerabilities. Instead, contact us at security@infisical.com.
+Please do not file GitHub issues or post on public forums for security vulnerabilities, as they are public. Report them privately through our vulnerability disclosure policy at <https://infisical.com/vulnerability-disclosure>. Scope, safe harbour and disclosure terms are all set out there. See also [SECURITY.md](./SECURITY.md).
 
 ---
 

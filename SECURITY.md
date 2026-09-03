@@ -20,7 +20,7 @@ Infisical's paid bug bounty is a separate **private, invitation-only program** c
 
 ## Supported versions
 
-Security fixes ship in the latest release. We always recommend running the latest version of the Infisical CLI.
+Security fixes ship in the latest release. Keep your Infisical CLI updated proactively so you pick them up.
 
 ## General security contact
 
