@@ -220,7 +220,7 @@ release:
   # replace_existing_artifacts (Since: v1.25, GitHub only) makes each upload
   # idempotent: on a 422 already_exists it deletes the conflicting asset and
   # retries, so re-runs work without manually clearing assets first.
-  mode: append
+  mode: keep-existing
   replace_existing_artifacts: true
 
 checksum:
