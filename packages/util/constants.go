@@ -53,6 +53,14 @@ const (
 
 	INFISICAL_GATEWAY_TOKEN_NAME_LEGACY = "TOKEN" // backwards compatibility with gateway helm chart, where token was the only supported auth method
 
+	// Selects the login profile for a single shell/invocation without changing
+	// the global default (mirrors AWS_PROFILE / OP_ACCOUNT semantics).
+	INFISICAL_PROFILE_ENV_NAME = "INFISICAL_PROFILE"
+
+	// Selects the organization for a single shell/invocation without changing
+	// the profile's default organization (mirrors kubectl's namespace scoping).
+	INFISICAL_ORG_ENV_NAME = "INFISICAL_ORG"
+
 	// Generic env variable used for auth methods that require a machine identity ID
 	INFISICAL_MACHINE_IDENTITY_ID_NAME = "INFISICAL_MACHINE_IDENTITY_ID"
 	INFISICAL_DOMAIN_ENV_NAME          = "INFISICAL_DOMAIN"
