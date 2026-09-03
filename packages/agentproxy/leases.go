@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/go-resty/resty/v2"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -99,7 +99,11 @@ func newLeaseStore(proxyToken func() string) *leaseStore {
 
 func defaultLeaseMinter(proxyToken func() string) leaseMinter {
 	return func(args leaseMintArgs) (leaseMintResult, error) {
-		client := resty.New().SetAuthToken(proxyToken())
+		client, err := util.GetRestyClientWithCustomHeaders()
+		if err != nil {
+			return leaseMintResult{}, err
+		}
+		client.SetAuthToken(proxyToken())
 		resp, err := api.CallCreateDynamicSecretLeaseV1(client, api.CreateDynamicSecretLeaseV1Request{
 			ProjectSlug:       args.projectSlug,
 			Environment:       args.environment,
@@ -116,8 +120,12 @@ func defaultLeaseMinter(proxyToken func() string) leaseMinter {
 
 func defaultLeaseRevoker(proxyToken func() string) leaseRevoker {
 	return func(leaseID, projectSlug, environment, path string) error {
-		client := resty.New().SetAuthToken(proxyToken())
-		_, err := api.CallRevokeDynamicSecretLeaseV1(client, api.RevokeDynamicSecretLeaseV1Request{
+		client, err := util.GetRestyClientWithCustomHeaders()
+		if err != nil {
+			return err
+		}
+		client.SetAuthToken(proxyToken())
+		_, err = api.CallRevokeDynamicSecretLeaseV1(client, api.RevokeDynamicSecretLeaseV1Request{
 			LeaseID:     leaseID,
 			ProjectSlug: projectSlug,
 			Environment: environment,

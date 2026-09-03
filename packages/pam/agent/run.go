@@ -54,7 +54,10 @@ type Options struct {
 
 // Run binds a proxy per account and launches the agent. It returns the child's exit code.
 func Run(opts Options) (int, error) {
-	httpClient := resty.New()
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return 1, fmt.Errorf("failed to build the API client: %w", err)
+	}
 	httpClient.SetHeader("User-Agent", api.USER_AGENT)
 
 	// Read the token per request rather than fixing it once. Sessions are created lazily and ended at

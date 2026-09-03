@@ -85,7 +85,11 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	// The single identity for the run: fetches config and secret values in the parent. The child gets none of it.
 	src := resolveDeveloperTokenSource(cmd)
 
-	httpClient := resty.New().SetAuthToken(src.token())
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		util.HandleError(err, "Failed to build the API client")
+	}
+	httpClient.SetAuthToken(src.token())
 	placeholders := fetchLocalProxiedServiceConfig(httpClient, projectID, environment, secretPath)
 
 	local := &agentproxy.LocalOptions{

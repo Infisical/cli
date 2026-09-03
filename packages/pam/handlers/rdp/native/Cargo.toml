@@ -30,6 +30,7 @@ rcgen = "0.13"
 
 anyhow = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry"] }
 
 # Bundle zlib into the .a so cross-compile linkers don't need system -lz
 # per target arch. Pulled in transitively via flate2 (winscard -> sspi).

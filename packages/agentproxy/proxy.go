@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/go-resty/resty/v2"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -175,7 +175,12 @@ func (ps *proxyServer) flushUsage() {
 	ps.usage = make(map[string]struct{})
 	ps.usageMu.Unlock()
 
-	client := resty.New().SetAuthToken(ps.opts.ProxyToken()).SetTimeout(usageReportTimeout)
+	client, err := util.GetRestyClientWithPolicy(util.BestEffortRetryPolicy())
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to build usage-reporting client; dropping batch")
+		return
+	}
+	client.SetAuthToken(ps.opts.ProxyToken()).SetTimeout(usageReportTimeout)
 	for serviceID := range snapshot {
 		if err := api.CallReportProxiedServiceUsage(client, serviceID); err != nil {
 			// Warn once: the usual cause is a missing Report Usage permission, which fails every attempt.

@@ -11,7 +11,6 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -231,7 +230,11 @@ type resolveParams struct {
 // resolveServices lists the proxied services for a scope and attaches credential values. Shared by
 // both resolvers; the differences live in resolveParams.
 func resolveServices(scope agentScope, p resolveParams) ([]*resolvedService, error) {
-	client := resty.New().SetAuthToken(p.discoveryToken)
+	client, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return nil, err
+	}
+	client.SetAuthToken(p.discoveryToken)
 	listResp, err := api.CallListProxiedServices(client, api.ListProxiedServicesRequest{
 		ProjectID:   scope.projectID,
 		Environment: scope.environment,

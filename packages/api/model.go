@@ -1084,6 +1084,10 @@ type GatewayHeartbeatRequest struct {
 	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 
+type GatewayMetricsReportRequest struct {
+	ActiveChannels int64 `json:"activeChannels"`
+}
+
 type RelayLoginRequest struct {
 	Method            string `json:"method"`
 	Token             string `json:"token,omitempty"`
@@ -1167,22 +1171,32 @@ type CertificateResponse struct {
 	CertificateRequestID string           `json:"certificateRequestId"`
 }
 
+type CertificateStatus string
+
+const (
+	CertificateStatusActive  CertificateStatus = "active"
+	CertificateStatusRevoked CertificateStatus = "revoked"
+	CertificateStatusExpired CertificateStatus = "expired"
+)
+
 type RetrieveCertificateResponse struct {
 	Certificate struct {
-		ID                string    `json:"id"`
-		CreatedAt         time.Time `json:"createdAt"`
-		UpdatedAt         time.Time `json:"updatedAt"`
-		Status            string    `json:"status"`
-		SerialNumber      string    `json:"serialNumber"`
-		CommonName        string    `json:"commonName"`
-		NotBefore         time.Time `json:"notBefore"`
-		NotAfter          time.Time `json:"notAfter"`
-		CaId              string    `json:"caId"`
-		KeyUsages         []string  `json:"keyUsages"`
-		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
-		Certificate       string    `json:"certificate,omitempty"`
-		CertificateChain  string    `json:"certificateChain,omitempty"`
-		PrivateKey        string    `json:"privateKey,omitempty"`
+		ID                         string    `json:"id"`
+		CreatedAt                  time.Time `json:"createdAt"`
+		UpdatedAt                  time.Time `json:"updatedAt"`
+		Status                     string    `json:"status"`
+		SerialNumber               string    `json:"serialNumber"`
+		CommonName                 string    `json:"commonName"`
+		NotBefore                  time.Time `json:"notBefore"`
+		NotAfter                   time.Time `json:"notAfter"`
+		CaId                       string    `json:"caId"`
+		KeyUsages                  []string  `json:"keyUsages"`
+		ExtendedKeyUsages          []string  `json:"extendedKeyUsages"`
+		Certificate                string    `json:"certificate,omitempty"`
+		CertificateChain           string    `json:"certificateChain,omitempty"`
+		PrivateKey                 string    `json:"privateKey,omitempty"`
+		RenewedByCertificateID     string    `json:"renewedByCertificateId,omitempty"`
+		LatestRenewalCertificateID string    `json:"latestRenewalCertificateId,omitempty"`
 	} `json:"certificate"`
 }
 
