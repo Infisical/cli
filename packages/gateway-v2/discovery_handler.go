@@ -180,3 +180,7 @@ func writeRPCJSON(w http.ResponseWriter, status int, payload any) {
 func writeRPCError(w http.ResponseWriter, status int, message string) {
 	writeRPCJSON(w, status, sshExecErrorResponse{Error: sshExecErrorBody{Message: message}})
 }
+
+func writeRPCErrorWithKind(w http.ResponseWriter, status int, message string, kind string) {
+	writeRPCJSON(w, status, sshExecErrorResponse{Error: sshExecErrorBody{Message: message, Kind: kind}})
+}

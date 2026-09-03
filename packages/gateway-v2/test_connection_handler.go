@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
@@ -72,6 +73,11 @@ type sqlTestParams struct {
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
+	AuthMethod            string `json:"authMethod"` // mssql only: "sql-login" | "ntlm" | "kerberos"
+	Domain                string `json:"domain"`
+	Realm                 string `json:"realm"`
+	KdcAddress            string `json:"kdcAddress"`
+	Spn                   string `json:"spn"`
 }
 
 type mongoTestParams struct {
@@ -205,14 +211,42 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 
 // doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
 func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlTestParams) error {
+	if err := dialTarget(ctx, host, port); err != nil {
+		return connectFailure(err)
+	}
+
+	// The database/sql driver has no way to carry NTLM or Kerberos, so these reuse the proxy handshake.
+	if params.Dialect == "mssql" && (params.AuthMethod == "ntlm" || params.AuthMethod == "kerberos") {
+		var tlsConfig *tls.Config
+		if params.SslEnabled {
+			var err error
+			if tlsConfig, err = buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized); err != nil {
+				return connectFailure(err)
+			}
+		}
+		return authFailure(mssqlhandler.VerifyCredential(ctx, mssqlhandler.MssqlProxyConfig{
+			TargetAddr:     net.JoinHostPort(host, strconv.Itoa(port)),
+			InjectUsername: params.Username,
+			InjectPassword: params.Password,
+			InjectDatabase: params.Database,
+			InjectDomain:   params.Domain,
+			InjectRealm:    params.Realm,
+			InjectKDCAddr:  params.KdcAddress,
+			InjectSPN:      params.Spn,
+			AuthMethod:     params.AuthMethod,
+			EnableTLS:      params.SslEnabled,
+			TLSConfig:      tlsConfig,
+		}))
+	}
+
 	db, err := openSQLTestDB(host, port, params)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer db.Close()
 
 	var result int
-	return db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
+	return authFailure(db.QueryRowContext(ctx, "SELECT 1").Scan(&result))
 }
 
 // doMongoConnectionTest authenticates against the target MongoDB and pings it
@@ -228,18 +262,22 @@ func doMongoConnectionTest(ctx context.Context, host string, port int, params mo
 	if params.SslEnabled {
 		tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		opts.SetTLSConfig(tlsConfig)
 	}
 
+	if err := dialTarget(ctx, host, port); err != nil {
+		return connectFailure(err)
+	}
+
 	client, err := mongo.Connect(opts)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer func() { _ = client.Disconnect(ctx) }()
 
-	return client.Ping(ctx, nil)
+	return authFailure(client.Ping(ctx, nil))
 }
 
 // doRedisConnectionTest authenticates against the target Redis and PINGs it
@@ -256,15 +294,15 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 	if params.SslEnabled {
 		tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		if conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsConfig); err != nil {
-			return err
+			return connectFailure(err)
 		}
 	} else {
 		var err error
 		if conn, err = dialer.DialContext(ctx, "tcp", addr); err != nil {
-			return err
+			return connectFailure(err)
 		}
 	}
 	defer conn.Close()
@@ -285,26 +323,27 @@ func doRedisConnectionTest(ctx context.Context, host string, port int, params re
 			err = writer.WriteCommand("AUTH", params.Password)
 		}
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		reply, err := readRedisReplyLine(reader)
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		if reply != "+OK" {
-			return fmt.Errorf("redis authentication failed: %s", redisReplyErrorText(reply))
+			return authFailure(fmt.Errorf("redis authentication failed: %s", redisReplyErrorText(reply)))
 		}
 	}
 
 	if err := writer.WriteCommand("PING"); err != nil {
-		return err
+		return connectFailure(err)
 	}
 	reply, err := readRedisReplyLine(reader)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
+	// The first command after AUTH is what proves the credential took; an unauthenticated server answers NOAUTH.
 	if len(reply) > 0 && (reply[0] == '-' || reply[0] == '!') {
-		return fmt.Errorf("redis PING failed: %s", redisReplyErrorText(reply))
+		return authFailure(fmt.Errorf("redis PING failed: %s", redisReplyErrorText(reply)))
 	}
 	return nil
 }
@@ -345,19 +384,19 @@ func doLdapConnectionTest(ctx context.Context, host string, port int, params lda
 		}
 		tlsConfig, err := buildTestTLSConfig(serverName, params.LdapCaCert, params.LdapRejectUnauthorized)
 		if err != nil {
-			return err
+			return connectFailure(err)
 		}
 		opts = append(opts, ldap.DialWithTLSConfig(tlsConfig))
 	}
 
 	conn, err := ldap.DialURL(fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, strconv.Itoa(port))), opts...)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer conn.Close()
 	conn.SetTimeout(timeout)
 
-	return conn.Bind(params.Username, params.Password)
+	return authFailure(conn.Bind(params.Username, params.Password))
 }
 
 // doKubernetesConnectionTest confirms the API server is reachable and accepts the token (401 = bad credentials)
@@ -368,14 +407,14 @@ func doKubernetesConnectionTest(ctx context.Context, host string, port int, para
 
 	tlsConfig, err := buildTestTLSConfig(host, params.SslCertificate, params.SslRejectUnauthorized)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
 	url := fmt.Sprintf("https://%s/api", net.JoinHostPort(host, strconv.Itoa(port)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	if params.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+params.Token)
@@ -383,15 +422,15 @@ func doKubernetesConnectionTest(ctx context.Context, host string, port int, para
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode)
+		return authFailure(fmt.Errorf("kubernetes API rejected the credentials (HTTP %d)", resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
+		return connectFailure(fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode))
 	}
 	return nil
 }
@@ -403,15 +442,15 @@ func doKubernetesGatewayAuthTest(ctx context.Context, namespace, serviceAccountN
 	apiHost := os.Getenv("KUBERNETES_SERVICE_HOST")
 	apiPort := os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")
 	if apiHost == "" || apiPort == "" {
-		return fmt.Errorf("gateway is not running inside a Kubernetes pod (KUBERNETES_SERVICE_HOST unset)")
+		return connectFailure(fmt.Errorf("gateway is not running inside a Kubernetes pod (KUBERNETES_SERVICE_HOST unset)"))
 	}
 	token, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
 	if err != nil {
-		return fmt.Errorf("gateway not running in a Kubernetes pod, unable to read pod service account token: %w", err)
+		return connectFailure(fmt.Errorf("gateway not running in a Kubernetes pod, unable to read pod service account token: %w", err))
 	}
 	caPEM, err := os.ReadFile(KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
 	if err != nil {
-		return fmt.Errorf("unable to read pod CA certificate: %w", err)
+		return connectFailure(fmt.Errorf("unable to read pod CA certificate: %w", err))
 	}
 	return kubernetesImpersonationProbe(
 		ctx,
@@ -433,7 +472,7 @@ func kubernetesImpersonationProbe(
 ) error {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return fmt.Errorf("failed to parse Kubernetes CA certificate")
+		return connectFailure(fmt.Errorf("failed to parse Kubernetes CA certificate"))
 	}
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
 
@@ -443,12 +482,12 @@ func kubernetesImpersonationProbe(
 		"spec":       map[string]string{"namespace": namespace},
 	})
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	reqURL := fmt.Sprintf("https://%s/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", apiAddr)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -459,18 +498,18 @@ func kubernetesImpersonationProbe(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return connectFailure(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("kubernetes API rejected the gateway's pod token (HTTP %d)", resp.StatusCode)
+		return authFailure(fmt.Errorf("kubernetes API rejected the gateway's pod token (HTTP %d)", resp.StatusCode))
 	}
 	if resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("gateway service account cannot impersonate %s:%s (HTTP %d)", namespace, serviceAccountName, resp.StatusCode)
+		return authFailure(fmt.Errorf("gateway service account cannot impersonate %s:%s (HTTP %d)", namespace, serviceAccountName, resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
+		return connectFailure(fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode))
 	}
 	return nil
 }
@@ -478,6 +517,11 @@ func kubernetesImpersonationProbe(
 // doTCPReachabilityTest confirms the target host:port accepts a TCP connection. It's the fallback for targets we
 // can't authenticate at rest (RDP, SSH certificate auth), so at least a bad host/port is rejected.
 func doTCPReachabilityTest(ctx context.Context, host string, port int) error {
+	return connectFailure(dialTarget(ctx, host, port))
+}
+
+// Proves the target is reachable before any protocol client runs, so a later failure is the target answering.
+func dialTarget(ctx context.Context, host string, port int) error {
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
@@ -494,7 +538,7 @@ func runWithContext(ctx context.Context, op func() error) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("connection test timed out")
+		return connectFailure(fmt.Errorf("connection test timed out"))
 	}
 }
 
@@ -590,7 +634,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if testErr := runWithContext(ctx, op); testErr != nil {
-		writeRPCError(w, http.StatusBadGateway, testErr.Error())
+		writeRPCErrorWithKind(w, http.StatusBadGateway, testErr.Error(), string(classifyTestConnFailure(testErr)))
 		return
 	}
 	writeRPCJSON(w, http.StatusOK, testConnectionResponse{Result: testConnectionResult{Ok: true}})

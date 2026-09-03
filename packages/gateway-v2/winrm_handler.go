@@ -113,6 +113,8 @@ type winrmErrorResponse struct {
 
 type winrmErrorBody struct {
 	Message string `json:"message"`
+	// Absent on older gateways.
+	Kind string `json:"kind,omitempty"`
 }
 
 const (
@@ -229,7 +231,14 @@ func wrapWinrm(fn winrmHandlerFn) http.HandlerFunc {
 			if errors.Is(err, winrm.ErrConnect) {
 				err = winrm.ErrConnect
 			}
-			writeWinrmError(w, http.StatusBadGateway, err.Error())
+			kind := "unknown"
+			switch {
+			case errors.Is(err, winrm.ErrAuth):
+				kind = "auth"
+			case errors.Is(err, winrm.ErrConnect):
+				kind = "transport"
+			}
+			writeWinrmErrorWithKind(w, http.StatusBadGateway, err.Error(), kind)
 			return
 		}
 
@@ -423,6 +432,13 @@ func handleWinrmValidateCredential(ctx context.Context, env *winrmRequestEnvelop
 		return nil, err
 	}
 	return map[string]any{"valid": valid}, nil
+}
+
+func writeWinrmErrorWithKind(w http.ResponseWriter, status int, message string, kind string) {
+	body, _ := json.Marshal(winrmErrorResponse{Error: winrmErrorBody{Message: message, Kind: kind}})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 func writeWinrmError(w http.ResponseWriter, status int, message string) {

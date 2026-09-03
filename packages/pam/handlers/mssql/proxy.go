@@ -167,6 +167,11 @@ func (p *MssqlProxy) connectAndAuthenticateToServer() (net.Conn, []*TDSPacket, e
 		return nil, nil, fmt.Errorf("dial server: %w", err)
 	}
 
+	return p.authenticateOverConn(serverConn)
+}
+
+// authenticateOverConn lets a caller own the dial (to bound it with a context) and still reuse these auth paths.
+func (p *MssqlProxy) authenticateOverConn(serverConn net.Conn) (net.Conn, []*TDSPacket, error) {
 	// 1. Send our PRELOGIN to server
 	encOption := uint8(EncryptNotSup)
 	if p.config.EnableTLS {
@@ -653,4 +658,30 @@ func (p *MssqlProxy) proxyToClient(server, client net.Conn, errCh chan error) {
 			return
 		}
 	}
+}
+
+// The context bounds the whole handshake, not just the dial: a target that stalls after accepting the
+// connection would otherwise leak a goroutine and socket per probe.
+func VerifyCredential(ctx context.Context, config MssqlProxyConfig) error {
+	dialer := &net.Dialer{}
+	serverConn, err := dialer.DialContext(ctx, "tcp", config.TargetAddr)
+	if err != nil {
+		return fmt.Errorf("dial server: %w", err)
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := serverConn.SetDeadline(deadline); err != nil {
+			serverConn.Close()
+			return fmt.Errorf("set handshake deadline: %w", err)
+		}
+	}
+
+	proxy := NewMssqlProxy(config)
+	authedConn, _, err := proxy.authenticateOverConn(serverConn)
+	if err != nil {
+		return err
+	}
+	// The credential is already proven at this point, so a failure tearing the socket down is not the probe's verdict.
+	_ = authedConn.Close()
+	return nil
 }
