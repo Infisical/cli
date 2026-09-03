@@ -171,7 +171,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Resolve before anything that costs the proxy work on the caller's behalf - the DNS lookup below and
 	// the leaf minting further down. Otherwise any syntactically valid Proxy-Authorization header can
 	// make the proxy resolve arbitrary names and grow its certificate cache.
-	if _, err := ps.cache.get(sessionToken); err != nil {
+	connections, err := ps.cache.get(sessionToken)
+	if err != nil {
 		if isSessionGone(err) {
 			http.Error(w, "the session is no longer valid", http.StatusForbidden)
 		} else {
@@ -185,10 +186,12 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// bypassHosts is evaluated before any interception: no certificate is minted, no credential is
-	// injected, and the unmatched-host policy never applies. That makes it the escape hatch for clients
-	// that pin certificates.
-	if ps.isBypassed(hostname, port) {
+	// A connection that covers this host beats the bypass list. A credential can only be attached to a
+	// connection the proxy opens, so bypassing a host someone configured a credential for would drop
+	// that credential without saying so. Bypass therefore governs only the hosts nothing else covers:
+	// there it tunnels the bytes untouched, minting no certificate and ignoring the unmatched-host
+	// policy, which is what a client that pins certificates needs.
+	if bestMatch(connections, hostname, port) == nil && ps.isBypassed(hostname, port) {
 		ps.tunnelOpaque(w, hostname, port)
 		return
 	}
