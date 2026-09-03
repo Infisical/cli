@@ -156,3 +156,62 @@ func TestBestMatchConsidersEveryPatternOnAConnection(t *testing.T) {
 		t.Errorf("the connection with the exact pattern should win, got %v", got)
 	}
 }
+
+// The rule the CONNECT path applies before deciding whether to tunnel a host untouched: a connection
+// beats the bypass list, because a credential can only be attached to a request the proxy opens.
+func TestBypassOnlyGovernsHostsNoConnectionCovers(t *testing.T) {
+	ps := &proxyServer{}
+	ps.setConfig(ProxyConfig{BypassHosts: "api.github.com, registry.npmjs.org"})
+
+	github := &resolvedConnection{name: "github", hostPatterns: parseHostPatterns("api.github.com")}
+	connections := []*resolvedConnection{github}
+
+	cases := []struct {
+		name       string
+		host       string
+		bypassed   bool
+		wantMatch  *resolvedConnection
+		wantTunnel bool
+	}{
+		{
+			name:       "covered and bypassed is opened, so its credential is still attached",
+			host:       "api.github.com",
+			bypassed:   true,
+			wantMatch:  github,
+			wantTunnel: false,
+		},
+		{
+			name:       "bypassed and covered by nothing is tunnelled untouched",
+			host:       "registry.npmjs.org",
+			bypassed:   true,
+			wantMatch:  nil,
+			wantTunnel: true,
+		},
+		{
+			name:       "neither bypassed nor covered falls through to the unmatched-host policy",
+			host:       "example.com",
+			bypassed:   false,
+			wantMatch:  nil,
+			wantTunnel: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ps.isBypassed(tc.host, "443"); got != tc.bypassed {
+				t.Fatalf("isBypassed(%q) = %v, want %v", tc.host, got, tc.bypassed)
+			}
+
+			matched := bestMatch(connections, tc.host, "443")
+			if matched != tc.wantMatch {
+				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
+			}
+
+			// Mirrors the condition in handleConnect.
+			tunnels := matched == nil && ps.isBypassed(tc.host, "443")
+			if tunnels != tc.wantTunnel {
+				t.Errorf("tunnelled untouched = %v, want %v", tunnels, tc.wantTunnel)
+			}
+		})
+	}
+}
