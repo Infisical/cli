@@ -47,7 +47,7 @@ archives:
 
 release:
   # replace_existing_artifacts so re-runs don't 422 on already-uploaded assets.
-  mode: append
+  mode: keep-existing
   replace_existing_artifacts: true
 
 checksum:
