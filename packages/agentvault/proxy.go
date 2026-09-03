@@ -171,8 +171,7 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Resolve before anything that costs the proxy work on the caller's behalf - the DNS lookup below and
 	// the leaf minting further down. Otherwise any syntactically valid Proxy-Authorization header can
 	// make the proxy resolve arbitrary names and grow its certificate cache.
-	connections, err := ps.cache.get(sessionToken)
-	if err != nil {
+	if _, err := ps.cache.get(sessionToken); err != nil {
 		if isSessionGone(err) {
 			http.Error(w, "the session is no longer valid", http.StatusForbidden)
 		} else {
@@ -186,15 +185,10 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A connection that covers this host beats the bypass list. A credential can only be attached to a
-	// connection the proxy opens, so bypassing a host someone configured a credential for would drop
-	// that credential without saying so. Bypass therefore governs only the hosts nothing else covers:
-	// there it tunnels the bytes untouched, minting no certificate and ignoring the unmatched-host
-	// policy, which is what a client that pins certificates needs.
-	if bestMatch(connections, hostname, port) == nil && ps.isBypassed(hostname, port) {
-		ps.tunnelOpaque(w, hostname, port)
-		return
-	}
+	// Every reachable host is treated the same way from here: a certificate is minted and the request is
+	// opened, whether it is covered by a connection, allowed by the unmatched-host policy, or named in
+	// the bypass list. forward() is where those three part company, and the only difference is whether a
+	// credential goes on.
 
 	leaf, err := ps.ca.mintLeaf(hostname)
 	if err != nil {
@@ -231,38 +225,6 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	_ = tlsConn.SetDeadline(time.Time{})
 
 	ps.serveTunnel(tlsConn, hostname, port, sessionToken)
-}
-
-// tunnelOpaque splices bytes without terminating TLS, for a bypassed host.
-func (ps *proxyServer) tunnelOpaque(w http.ResponseWriter, hostname, port string) {
-	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(hostname, port), tlsHandshakeTimeout)
-	if err != nil {
-		http.Error(w, "failed to reach the upstream host", http.StatusBadGateway)
-		return
-	}
-	defer upstream.Close()
-
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "connection hijacking unsupported", http.StatusInternalServerError)
-		return
-	}
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
-		return
-	}
-	defer clientConn.Close()
-
-	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
-		return
-	}
-
-	log.Debug().Str("host", hostname).Msg("agent-vault: bypassed, forwarding without interception")
-
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, clientConn); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(clientConn, upstream); done <- struct{}{} }()
-	<-done
 }
 
 func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, sessionToken string) {
@@ -396,6 +358,10 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 	matched := bestMatch(connections, hostname, port)
 
+	// The bypass list is a proxy-wide exception to deny, and this is the only thing it does. A host on it
+	// is reached the same way as any other: certificate minted, request opened, no credential attached
+	// unless a connection covers it. It saves naming every such host as a pass-through connection in a
+	// bundle, and it is set by whoever runs the proxy rather than whoever owns the bundle.
 	if matched == nil && ps.currentConfig().UnmatchedHost == UnmatchedDeny && !ps.isBypassed(hostname, port) {
 		return nil, nil, fmt.Errorf("no connection covers host %q: %w", hostname, errHostBlocked)
 	}

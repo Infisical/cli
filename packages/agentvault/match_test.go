@@ -157,60 +157,54 @@ func TestBestMatchConsidersEveryPatternOnAConnection(t *testing.T) {
 	}
 }
 
-// The rule the CONNECT path applies before deciding whether to tunnel a host untouched: a connection
-// beats the bypass list, because a credential can only be attached to a request the proxy opens.
-func TestBypassOnlyGovernsHostsNoConnectionCovers(t *testing.T) {
+// The bypass list is a proxy-wide exception to deny and nothing more: a host on it is opened and
+// forwarded like any other, and a connection still supplies the credential.
+func TestBypassIsAnExceptionToDeny(t *testing.T) {
 	ps := &proxyServer{}
-	ps.setConfig(ProxyConfig{BypassHosts: "api.github.com, registry.npmjs.org"})
+	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, api.github.com"})
 
 	github := &resolvedConnection{name: "github", hostPatterns: parseHostPatterns("api.github.com")}
 	connections := []*resolvedConnection{github}
 
 	cases := []struct {
-		name       string
-		host       string
-		bypassed   bool
-		wantMatch  *resolvedConnection
-		wantTunnel bool
+		name      string
+		host      string
+		wantMatch *resolvedConnection
+		wantBlock bool
 	}{
 		{
-			name:       "covered and bypassed is opened, so its credential is still attached",
-			host:       "api.github.com",
-			bypassed:   true,
-			wantMatch:  github,
-			wantTunnel: false,
+			name:      "bypassed and uncovered is reachable, with no credential",
+			host:      "docs.example.com",
+			wantMatch: nil,
+			wantBlock: false,
 		},
 		{
-			name:       "bypassed and covered by nothing is tunnelled untouched",
-			host:       "registry.npmjs.org",
-			bypassed:   true,
-			wantMatch:  nil,
-			wantTunnel: true,
+			name:      "covered wins, so the credential is still attached",
+			host:      "api.github.com",
+			wantMatch: github,
+			wantBlock: false,
 		},
 		{
-			name:       "neither bypassed nor covered falls through to the unmatched-host policy",
-			host:       "example.com",
-			bypassed:   false,
-			wantMatch:  nil,
-			wantTunnel: false,
+			name:      "neither is blocked under deny",
+			host:      "example.com",
+			wantMatch: nil,
+			wantBlock: true,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ps.isBypassed(tc.host, "443"); got != tc.bypassed {
-				t.Fatalf("isBypassed(%q) = %v, want %v", tc.host, got, tc.bypassed)
-			}
-
 			matched := bestMatch(connections, tc.host, "443")
 			if matched != tc.wantMatch {
 				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
 			}
 
-			// Mirrors the condition in handleConnect.
-			tunnels := matched == nil && ps.isBypassed(tc.host, "443")
-			if tunnels != tc.wantTunnel {
-				t.Errorf("tunnelled untouched = %v, want %v", tunnels, tc.wantTunnel)
+			// Mirrors the guard in forward().
+			blocked := matched == nil &&
+				ps.currentConfig().UnmatchedHost == UnmatchedDeny &&
+				!ps.isBypassed(tc.host, "443")
+			if blocked != tc.wantBlock {
+				t.Errorf("blocked = %v, want %v", blocked, tc.wantBlock)
 			}
 		})
 	}
