@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,10 +131,14 @@ func init() {
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default, colored), plain (no color), json (structured). Set NO_COLOR=1 to disable colors in console mode. Can also set via LOG_FORMAT env var.")
 	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
-	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
+	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary. Can also opt out by setting the INFISICAL_TELEMETRY_ENABLED environment variable to false.")
 	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'domain' field in .infisical.json. Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
 	RootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		// The Telemetry instance is constructed in init(), before cobra has
+		// parsed argv, so the --telemetry flag can only be applied here.
+		Telemetry.SetEnabled(resolveTelemetryEnabled(cmd))
+
 		silent, err := cmd.Flags().GetBool("silent")
 		if err != nil {
 			util.HandleError(err)
@@ -158,8 +163,35 @@ func init() {
 
 	}
 
-	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")
-	Telemetry = telemetry.NewTelemetry(isTelemetryOn)
+	// The --telemetry flag cannot be read here: argv has not been parsed yet, so
+	// GetBool would always return the registered default. Construct the instance
+	// from the environment opt-out alone and apply the flag in PersistentPreRun.
+	Telemetry = telemetry.NewTelemetry(telemetryEnabledFromEnv())
+}
+
+// telemetryEnabledFromEnv reads the INFISICAL_TELEMETRY_ENABLED environment
+// variable. Anything that does not parse as a bool (including unset) leaves
+// telemetry enabled.
+func telemetryEnabledFromEnv() bool {
+	if value := os.Getenv(util.INFISICAL_TELEMETRY_ENABLED_NAME); value != "" {
+		if enabled, err := strconv.ParseBool(value); err == nil {
+			return enabled
+		}
+	}
+	return true
+}
+
+// resolveTelemetryEnabled resolves the telemetry opt-out by precedence: an
+// explicitly set --telemetry flag wins, then the INFISICAL_TELEMETRY_ENABLED
+// environment variable, then the default (enabled). Must run after flag
+// parsing (PersistentPreRun, not init) so cmd.Flags() is reliable.
+func resolveTelemetryEnabled(cmd *cobra.Command) bool {
+	if cmd.Flags().Changed("telemetry") {
+		if enabled, err := cmd.Flags().GetBool("telemetry"); err == nil {
+			return enabled
+		}
+	}
+	return telemetryEnabledFromEnv()
 }
 
 func initLog() {
