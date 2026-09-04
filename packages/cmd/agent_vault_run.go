@@ -3,6 +3,7 @@ package cmd
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
+	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -162,8 +164,16 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 		// Go binaries such as gh and docker ignore the CA environment variables and read the system trust
 		// store, so macOS gets the keychain entry too. Declining is fine: everything else still works.
-		if runtime.GOOS == "darwin" {
-			switch installed, terr := ensureCATrusted(caPath); {
+		//
+		// Skipped where no one can answer the prompt - CI, a pipe, an SSH session with no terminal -
+		// because the dialog appears on the machine's own screen and nothing there will ever click it.
+		if runtime.GOOS == "darwin" && isatty.IsTerminal(os.Stdin.Fd()) {
+			onPrompt := func() {
+				util.PrintWarning("Adding the Agent Vault proxy's certificate authority to your login keychain, so tools that read the system trust store accept it. Approve the macOS prompt, or press Ctrl-C and re-run with --no-ca-trust to skip it.")
+			}
+			switch installed, terr := ensureAgentVaultCATrusted(caPath, onPrompt); {
+			case errors.Is(terr, errAgentVaultTrustTimedOut):
+				util.PrintWarning("The keychain prompt went unanswered, so the certificate authority was not added. The agent still runs, and tools that read the system trust store may report a certificate error. Re-run with --no-ca-trust to skip this step.")
 			case terr != nil:
 				util.PrintWarning(fmt.Sprintf("Unable to add the Agent Vault proxy CA to your login keychain (%v). Most tools will still work, but some may report a certificate error.", terr))
 			case installed:
