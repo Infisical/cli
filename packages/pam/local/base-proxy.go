@@ -29,6 +29,7 @@ import (
 // certificates for the relay and gateway hops, and when the session stops being usable.
 type LiveSession struct {
 	SessionId              string
+	DirectAddress          string
 	RelayHost              string
 	RelayClientCert        string
 	RelayClientKey         string
@@ -55,6 +56,7 @@ type SessionProvider interface {
 // BaseProxyServer contains common functionality for all local proxy types
 type BaseProxyServer struct {
 	httpClient             *resty.Client
+	directAddress          string
 	relayHost              string
 	relayClientCert        string
 	relayClientKey         string
@@ -82,6 +84,7 @@ type BaseProxyServer struct {
 func (b *BaseProxyServer) staticSession() LiveSession {
 	return LiveSession{
 		SessionId:              b.sessionId,
+		DirectAddress:          b.directAddress,
 		RelayHost:              b.relayHost,
 		RelayClientCert:        b.relayClientCert,
 		RelayClientKey:         b.relayClientKey,
@@ -126,6 +129,26 @@ func (b *BaseProxyServer) CreateRelayConnection() (net.Conn, error) {
 // createRelayConnectionWith dials the relay using an already-resolved session, so callers that must
 // not create a session (such as termination) can pass what they already hold.
 func (b *BaseProxyServer) createRelayConnectionWith(session LiveSession) (net.Conn, error) {
+	if session.DirectAddress != "" {
+		conn, err := net.DialTimeout("tcp", session.DirectAddress, 3*time.Second)
+		if err == nil {
+			return &gatewayTransportConn{Conn: conn, direct: true}, nil
+		}
+		log.Debug().Err(err).Str("address", session.DirectAddress).Msg("Direct gateway connection failed, trying relay")
+	}
+
+	return b.createRelayOnlyConnection(session)
+}
+
+type gatewayTransportConn struct {
+	net.Conn
+	direct bool
+}
+
+func (b *BaseProxyServer) createRelayOnlyConnection(session LiveSession) (net.Conn, error) {
+	if session.RelayHost == "" {
+		return nil, fmt.Errorf("direct gateway connection failed and no relay fallback is available")
+	}
 	var host string
 	var port int = 8443
 
@@ -251,6 +274,43 @@ func (b *BaseProxyServer) CreateGatewayConnection(relayConn net.Conn, alpn ALPN)
 
 // createGatewayConnectionWith performs the gateway mTLS handshake using an already-resolved session.
 func (b *BaseProxyServer) createGatewayConnectionWith(relayConn net.Conn, alpn ALPN, session LiveSession) (net.Conn, error) {
+	serverName := "localhost"
+	if transport, ok := relayConn.(*gatewayTransportConn); ok && transport.direct {
+		host, _, splitErr := net.SplitHostPort(session.DirectAddress)
+		if splitErr != nil {
+			return nil, fmt.Errorf("invalid direct gateway address: %w", splitErr)
+		}
+		serverName = host
+	}
+
+	gatewayConn, err := b.handshakeGatewayConnection(relayConn, alpn, session, serverName)
+	if err == nil {
+		return gatewayConn, nil
+	}
+	if transport, ok := relayConn.(*gatewayTransportConn); !ok || !transport.direct || session.RelayHost == "" {
+		return nil, err
+	}
+
+	_ = relayConn.Close()
+	log.Debug().Err(err).Msg("Direct gateway TLS handshake failed, trying relay")
+	relayFallback, relayErr := b.createRelayOnlyConnection(session)
+	if relayErr != nil {
+		return nil, relayErr
+	}
+	gatewayConn, relayErr = b.handshakeGatewayConnection(relayFallback, alpn, session, "localhost")
+	if relayErr != nil {
+		_ = relayFallback.Close()
+		return nil, relayErr
+	}
+	return gatewayConn, nil
+}
+
+func (b *BaseProxyServer) handshakeGatewayConnection(relayConn net.Conn, alpn ALPN, session LiveSession, serverName string) (net.Conn, error) {
+	if serverName != "localhost" {
+		_ = relayConn.SetDeadline(time.Now().Add(3 * time.Second))
+		defer relayConn.SetDeadline(time.Time{})
+	}
+
 	// Load gateway certificates
 	cert, err := tls.X509KeyPair([]byte(session.GatewayClientCert), []byte(session.GatewayClientKey))
 	if err != nil {
@@ -268,7 +328,7 @@ func (b *BaseProxyServer) createGatewayConnectionWith(relayConn net.Conn, alpn A
 		MinVersion:   tls.VersionTLS12,
 		MaxVersion:   tls.VersionTLS13,
 		NextProtos:   []string{string(alpn)},
-		ServerName:   "localhost",
+		ServerName:   serverName,
 	}
 
 	gatewayConn := tls.Client(relayConn, tlsConfig)

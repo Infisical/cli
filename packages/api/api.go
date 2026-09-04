@@ -1161,6 +1161,7 @@ func CallKubernetesAuthLoginGateway(httpClient *resty.Client, request Kubernetes
 
 func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAccessResponse, error) {
 	var pamAccessResponse PAMAccessResponse
+	request.SupportedTransports = []string{"direct", "relay"}
 	response, err := httpClient.
 		R().
 		SetResult(&pamAccessResponse).
