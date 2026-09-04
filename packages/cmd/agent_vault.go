@@ -53,6 +53,9 @@ proxy refreshes - is set in Infisical and arrives on every poll, so it has no fl
 		if err != nil {
 			util.HandleError(err, "Unable to read --port")
 		}
+		if port < 0 || port > 65535 {
+			util.HandleError(fmt.Errorf("--port must be between 0 and 65535, got %d. 0 asks for any free port", port))
+		}
 
 		logFormat, err := cmd.Flags().GetString("log-format")
 		if err != nil {
@@ -85,7 +88,7 @@ func init() {
 		fmt.Sprintf("where to keep the certificate authority and proxy token (default: %s)", defaultDataDirHelp()))
 	// Not 17322: that is the existing `secrets agent-proxy start` default, the old feature is not being
 	// removed, and both are expected to run on one box.
-	avProxyCmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on")
+	avProxyCmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
 	avProxyCmd.Flags().String("log-format", "console", "log output format: console | json")
 	avProxyCmd.Flags().String("log-file", "", "path to also write logs to")
 

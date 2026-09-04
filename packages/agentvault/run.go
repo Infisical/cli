@@ -115,9 +115,9 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 // Start is the whole `av proxy` lifecycle: enroll if needed, then serve until interrupted. An empty
 // enrollmentToken means "read the persisted state and serve".
 func Start(opts Options, enrollmentToken string) error {
-	if opts.Port == 0 {
-		opts.Port = DefaultPort
-	}
+	// Port 0 is not "unset": it is the ordinary ask for any free port, which the flag's own default of
+	// DefaultPort means an operator only gets by typing it. Substituting the default here made an unset
+	// variable in a deployment script land on the standard port instead of failing.
 	if opts.DataDir == "" {
 		dir, err := DefaultDataDir()
 		if err != nil {
@@ -177,8 +177,10 @@ func Start(opts Options, enrollmentToken string) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- front.Serve(limited) }()
 
+	// The bound port, not the requested one: they differ whenever port 0 was asked for, and that line is
+	// the only place the chosen port is reported.
 	log.Info().
-		Int("port", opts.Port).
+		Int("port", listener.Addr().(*net.TCPAddr).Port).
 		Str("proxyId", state.ProxyID).
 		Str("name", state.ProxyName).
 		Str("fingerprint", ca.Fingerprint()).
