@@ -427,14 +427,28 @@ func (fw flushingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// DNS is case-insensitive and a trailing dot names the same host, so the hostname is normalised here and
+// that one value is what everything downstream uses: the connection match, the minted leaf and its cache
+// key, the Host header and the dial. Matching normalised on its own before this, which meant the proxy
+// could broker a request under one spelling and then mint a certificate for another - a trailing dot
+// produced an invalid SAN and an opaque TLS error, and each capitalisation of one host minted and cached
+// its own certificate, so a session holder could churn the leaf cache with nothing but case.
+func normalizeHostname(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+}
+
 func parseConnectTarget(target string) (hostname, port string, err error) {
 	hostname, port, err = net.SplitHostPort(target)
 	if err == nil {
-		return hostname, port, nil
+		return normalizeHostname(hostname), port, nil
 	}
 	var addrErr *net.AddrError
 	if errors.As(err, &addrErr) && strings.Contains(addrErr.Err, "missing port") {
-		return net.SplitHostPort(target + ":443")
+		hostname, port, err = net.SplitHostPort(target + ":443")
+		if err != nil {
+			return "", "", err
+		}
+		return normalizeHostname(hostname), port, nil
 	}
 	return "", "", err
 }
@@ -442,11 +456,15 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 func parseForwardTarget(target string) (hostname, port string, err error) {
 	hostname, port, err = net.SplitHostPort(target)
 	if err == nil {
-		return hostname, port, nil
+		return normalizeHostname(hostname), port, nil
 	}
 	var addrErr *net.AddrError
 	if errors.As(err, &addrErr) && strings.Contains(addrErr.Err, "missing port") {
-		return net.SplitHostPort(target + ":80")
+		hostname, port, err = net.SplitHostPort(target + ":80")
+		if err != nil {
+			return "", "", err
+		}
+		return normalizeHostname(hostname), port, nil
 	}
 	return "", "", err
 }
