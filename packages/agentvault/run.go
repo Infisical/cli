@@ -231,7 +231,7 @@ func (ps *proxyServer) tick(st *store) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err == nil {
 		httpClient.SetAuthToken(ps.opts.ProxyToken())
-		res, hbErr := api.CallAgentVaultHeartbeat(httpClient, api.AgentVaultHeartbeatRequest{Version: util.CLI_VERSION})
+		res, hbErr := api.CallAgentVaultHeartbeat(httpClient)
 		if hbErr != nil {
 			log.Warn().Err(hbErr).Msg("agent-vault: heartbeat failed")
 		} else {

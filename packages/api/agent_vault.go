@@ -47,21 +47,16 @@ func CallEnrollAgentVaultProxy(httpClient *resty.Client, request EnrollAgentVaul
 	return res, nil
 }
 
-type AgentVaultHeartbeatRequest struct {
-	Version string `json:"version,omitempty"`
-}
-
 type AgentVaultHeartbeatResponse struct {
 	Config AgentVaultProxyConfig `json:"config"`
 }
 
-func CallAgentVaultHeartbeat(httpClient *resty.Client, request AgentVaultHeartbeatRequest) (AgentVaultHeartbeatResponse, error) {
+func CallAgentVaultHeartbeat(httpClient *resty.Client) (AgentVaultHeartbeatResponse, error) {
 	var res AgentVaultHeartbeatResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
-		SetBody(request).
 		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/heartbeat", config.INFISICAL_URL))
 
 	if err != nil {
