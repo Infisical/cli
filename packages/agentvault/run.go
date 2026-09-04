@@ -71,7 +71,7 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 // spec, so a node drain or an OOM kill would become a crashloop until a human minted a new token. A
 // *different* token still re-enrolls from scratch, which is the redeploy and rotate story, and wiping
 // the data directory takes the stored token with it — so a spent token in a spec finds nothing to
-// compare against, gets a 401, and exits with the disk untouched.
+// compare against, is refused, and exits with the disk untouched.
 //
 // One improvement on gateway's version: it compares only the stored enrollment token, so a directory
 // holding the token but no access token would skip enrollment and then fail to serve. Both are checked.
