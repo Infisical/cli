@@ -29,8 +29,10 @@ const (
 	frontReadHeaderTimeout = 30 * time.Second
 	frontIdleTimeout       = 5 * time.Minute
 
-	// Inner per-tunnel server. WriteTimeout is an absolute deadline set at request start, not an idle
-	// timer, which is why streaming dies at exactly 30 minutes — a documented, inherited gap.
+	// Inner per-tunnel server. The write timeouts are absolute deadlines set at request start, so they
+	// only bound a response that has produced nothing yet; once bytes flow, flushingWriter replaces them
+	// with a rolling idle deadline. Left generous because there is no ResponseHeaderTimeout on the
+	// upstream transport, and a slow API is not a stalled one.
 	tunnelReadHeaderTimeout = 10 * time.Second
 	tunnelReadTimeout       = 60 * time.Second
 	tunnelWriteTimeout      = 30 * time.Minute
@@ -38,6 +40,11 @@ const (
 
 	plainReadTimeout  = 60 * time.Second
 	plainWriteTimeout = 30 * time.Minute
+
+	// Refreshed on every flushed chunk, so a response lives as long as it keeps producing and a stalled
+	// one still dies. Without it the absolute write deadline cuts a healthy stream mid-flight at exactly
+	// 30 minutes, which is how SSE, MCP and log tails behave.
+	streamIdleTimeout = 5 * time.Minute
 
 	maxRequestHeaderBytes = 1 << 20
 
@@ -347,7 +354,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(flushingWriter{w}, resp.Body)
+	_, _ = io.Copy(flushingWriter{ResponseWriter: w, rc: http.NewResponseController(w)}, resp.Body)
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedConnection, error) {
@@ -412,9 +419,15 @@ func (ps *proxyServer) isBypassed(hostname, port string) bool {
 	return false
 }
 
-type flushingWriter struct{ http.ResponseWriter }
+type flushingWriter struct {
+	http.ResponseWriter
+	rc *http.ResponseController
+}
 
 func (fw flushingWriter) Write(p []byte) (int, error) {
+	// Before the write, not after: a chunk that takes a while to reach a slow client must not be racing a
+	// deadline set for the previous one.
+	_ = fw.rc.SetWriteDeadline(time.Now().Add(streamIdleTimeout))
 	n, err := fw.ResponseWriter.Write(p)
 	if flusher, ok := fw.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
