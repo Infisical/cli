@@ -77,6 +77,21 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("--ttl must be one of %s, got %q", strings.Join(agentVaultSessionTTLs, ", "), ttl))
 	}
 
+	// Both flags describe a session this command mints. Neither can reach one minted in the dashboard: its
+	// expiry was fixed when it was created, and this command never revokes a session it was handed. Keyed
+	// on whether they were typed, since both carry a default. Refused rather than warned past, because the
+	// thing the operator is asking for - a shorter-lived credential - does not happen either way.
+	if sessionToken != "" {
+		if cmd.Flags().Changed("ttl") {
+			util.HandleError(fmt.Errorf(
+				"--ttl applies to a session this command mints; the one behind --token was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle"))
+		}
+		if cmd.Flags().Changed("keep-session") {
+			util.HandleError(fmt.Errorf(
+				"--keep-session applies to a session this command mints; the one behind --token is never revoked here. Drop --keep-session, or mint here with --access-bundle"))
+		}
+	}
+
 	proxyAddr, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "proxy", []string{"INFISICAL_AGENT_VAULT_PROXY_ADDRESS"}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to read --proxy")
