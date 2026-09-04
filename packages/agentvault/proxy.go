@@ -319,10 +319,17 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		status = resp.StatusCode
 	}
 
+	// A credential leaving the machine is the one per-request fact an operator should see without asking
+	// for it: nothing else records it, now that resolve is not audited and there is no request stream.
+	// Uncovered-host traffic is volume, so it stays at debug and a default run reads as one line per
+	// credential handed out.
 	event := log.Debug()
-	if decision == decisionBlocked {
+	switch decision {
+	case decisionBrokered:
+		event = log.Info()
+	case decisionBlocked:
 		event = log.Warn()
-	} else if decision == decisionError {
+	case decisionError:
 		event = log.Error()
 	}
 	event.Str("method", r.Method).
