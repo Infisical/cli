@@ -105,6 +105,8 @@ type GatewayConfig struct {
 	ReconnectDelay   time.Duration
 	UseV3Connect     bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
 	Pkcs11ModulePath string
+	ListenAddress    string
+	BindAddress      string
 	// RelaySelector, when non-nil, is called to re-select a relay during failover.
 	// nil means relay was explicitly selected and failover is disabled.
 	RelaySelector func(httpClient *resty.Client) (string, error)
@@ -135,7 +137,7 @@ type Gateway struct {
 	pamSessionUploader *session.SessionUploader
 
 	// mTLS server components
-	tlsConfig *tls.Config
+	tlsConfig atomic.Pointer[tls.Config]
 
 	// Connection management
 	mu               sync.RWMutex
@@ -155,8 +157,8 @@ type Gateway struct {
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
 
-	// Counted in the relay's channel-receive loop, which no caller can bypass.
-	activeChannels atomic.Int64
+	activeChannels       atomic.Int64
+	directActiveChannels atomic.Int64
 	// Bumped per relay connection, so a handler cannot release a count it did not acquire.
 	channelGeneration atomic.Int64
 }
@@ -421,7 +423,7 @@ func (g *Gateway) startMetricsReport(ctx context.Context) {
 			}
 			delay = metricsReportInterval
 
-			count := g.activeChannels.Load()
+			count := g.activeChannels.Load() + g.directActiveChannels.Load()
 			// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
 			if err := g.sendMetricsReport(ctx, count); err != nil {
 				failures++
@@ -478,14 +480,13 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			defer retryTicker.Stop()
 
 			for {
+				if err := sendHeartbeat(); err == nil {
+					return
+				}
 				select {
 				case <-ctx.Done():
 					return
 				case <-retryTicker.C:
-					if err := sendHeartbeat(); err == nil {
-						// First success! Exit retry phase
-						return
-					}
 				}
 			}
 		}()
@@ -512,6 +513,28 @@ func (g *Gateway) Start(ctx context.Context) error {
 	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)
+	if err := g.registerGateway(); err != nil {
+		if g.config.RelaySelector == nil {
+			return fmt.Errorf("failed to register gateway: %v", err)
+		}
+		g.tryRelayFailover()
+		if g.getRelayName() == "" {
+			return fmt.Errorf("failed to register gateway: %v", err)
+		}
+		if retryErr := g.registerGateway(); retryErr != nil {
+			return fmt.Errorf("failed to register gateway: %v", retryErr)
+		}
+	}
+
+	if g.certificates.DirectAddress != "" {
+		if err := g.startDirectListener(ctx); err != nil {
+			return err
+		}
+		g.startHeartbeatOnce(ctx, errCh)
+		g.notifyOnce.Do(func() {
+			systemd.SdNotify(false, systemd.SdNotifyReady)
+		})
+	}
 
 	// Start certificate renewal goroutine
 	go g.startCertificateRenewal(ctx)
@@ -532,15 +555,23 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}()
 
+	if g.certificates.SSH.ClientCertificate == "" {
+		<-ctx.Done()
+		return nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
 		default:
-			if err := g.connectAndServe(ctx, errCh); err != nil {
+			if err := g.connectWithRetry(ctx, errCh); err != nil {
 				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
 				g.tryRelayFailover()
+				if registerErr := g.registerGateway(); registerErr != nil {
+					log.Warn().Msgf("Failed to refresh gateway registration: %v", registerErr)
+				}
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -648,6 +679,47 @@ func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
 	}
 
 	return g.connectWithRetry(ctx, errCh)
+}
+
+func (g *Gateway) startDirectListener(ctx context.Context) error {
+	_, advertisedPort, err := net.SplitHostPort(g.certificates.DirectAddress)
+	if err != nil {
+		return fmt.Errorf("invalid direct gateway address %q: %w", g.certificates.DirectAddress, err)
+	}
+
+	bindAddress := g.config.BindAddress
+	if bindAddress == "" {
+		bindAddress = net.JoinHostPort("", advertisedPort)
+	}
+
+	listener, err := net.Listen("tcp", bindAddress)
+	if err != nil {
+		return fmt.Errorf("failed to listen for direct gateway connections on %s: %w", bindAddress, err)
+	}
+
+	log.Info().Str("address", g.certificates.DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
+	go func() {
+		go func() {
+			<-ctx.Done()
+			_ = listener.Close()
+		}()
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				if ctx.Err() == nil {
+					log.Error().Err(acceptErr).Msg("Direct gateway listener stopped")
+				}
+				return
+			}
+			g.directActiveChannels.Add(1)
+			go func() {
+				defer g.directActiveChannels.Add(-1)
+				g.handleGatewayConnection(conn)
+			}()
+		}
+	}()
+
+	return nil
 }
 
 func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
@@ -774,12 +846,14 @@ func (g *Gateway) registerGateway() error {
 	relayName := g.getRelayName()
 	if g.config.UseV3Connect {
 		certResp, err = api.CallConnectGateway(g.httpClient, api.ConnectGatewayRequest{
-			RelayName: relayName,
+			RelayName:     relayName,
+			DirectAddress: g.config.ListenAddress,
 		})
 	} else {
 		certResp, err = api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
-			RelayName: relayName,
-			Name:      g.config.Name,
+			RelayName:     relayName,
+			DirectAddress: g.config.ListenAddress,
+			Name:          g.config.Name,
 		})
 	}
 	if err != nil {
@@ -839,7 +913,7 @@ func (g *Gateway) setupTLSConfig() error {
 		clientCAPool.AddCert(cert)
 	}
 
-	g.tlsConfig = &tls.Config{
+	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{serverCertBlock.Bytes},
@@ -851,6 +925,7 @@ func (g *Gateway) setupTLSConfig() error {
 		MinVersion: tls.VersionTLS12,
 		NextProtos: nextProtosForGateway(g.pkcs11Module != nil),
 	}
+	g.tlsConfig.Store(tlsConfig)
 
 	return nil
 }
@@ -973,20 +1048,22 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation in
 
 	go ssh.DiscardRequests(requests)
 
-	// Create mTLS server configuration
-	tlsConfig := g.tlsConfig
-	if tlsConfig == nil {
-		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
-		return
-	}
-
 	// Create a virtual connection that pipes data between SSH channel and TLS
 	virtualConn := &virtualConnection{
 		channel: channel,
 	}
+	g.handleGatewayConnection(virtualConn)
+}
 
-	// Wrap the virtual connection with TLS
-	tlsConn := tls.Server(virtualConn, tlsConfig)
+func (g *Gateway) handleGatewayConnection(conn net.Conn) {
+	tlsConfig := g.tlsConfig.Load()
+	if tlsConfig == nil {
+		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
+		_ = conn.Close()
+		return
+	}
+	defer conn.Close()
+	tlsConn := tls.Server(conn, tlsConfig)
 
 	// Perform TLS handshake
 	log.Info().Msg("Received incoming connection, starting TLS handshake")
