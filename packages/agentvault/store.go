@@ -46,8 +46,8 @@ func DefaultDataDir() (string, error) {
 
 type persistedState struct {
 	ProxyID string
-	// Server-owned, like every other setting: recorded at enrollment so `whoami` and the CA endpoint can
-	// name this proxy without a second call.
+	// Server-owned, like every other setting: recorded at enrollment so the CA endpoint can name this
+	// proxy without a second call.
 	ProxyName       string
 	AccessToken     string
 	EnrollmentToken string

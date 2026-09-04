@@ -211,35 +211,3 @@ func CallGetAgentVaultProxyCa(httpClient *resty.Client, proxyAddr string) (Agent
 	}
 	return res, nil
 }
-
-type AgentVaultReachable struct {
-	Connection   string   `json:"connection"`
-	AccessBundle string   `json:"accessBundle"`
-	Hosts        []string `json:"hosts"`
-	Credential   string   `json:"credentialType"`
-}
-
-type AgentVaultWhoamiResponse struct {
-	ProxyID       string                `json:"proxyId"`
-	Name          string                `json:"name"`
-	UnmatchedHost string                `json:"unmatchedHost"`
-	Reachable     []AgentVaultReachable `json:"reachable"`
-}
-
-func CallAgentVaultWhoami(httpClient *resty.Client, proxyAddr, sessionToken string) (AgentVaultWhoamiResponse, error) {
-	var res AgentVaultWhoamiResponse
-	response, err := httpClient.
-		R().
-		SetResult(&res).
-		SetHeader("User-Agent", USER_AGENT).
-		SetHeader(AgentVaultSessionHeader, sessionToken).
-		Get(fmt.Sprintf("http://%s/_agent-vault/whoami", proxyAddr))
-
-	if err != nil {
-		return AgentVaultWhoamiResponse{}, NewGenericRequestError("CallAgentVaultWhoami", err)
-	}
-	if response.IsError() {
-		return AgentVaultWhoamiResponse{}, NewAPIErrorWithResponse("CallAgentVaultWhoami", response, nil)
-	}
-	return res, nil
-}

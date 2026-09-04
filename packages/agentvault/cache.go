@@ -42,8 +42,8 @@ type credential struct {
 
 type resolvedConnection struct {
 	id string
-	// Carried so `whoami` and the decision log can say which access bundle a host came from. Resolve is
-	// the only place that knows it.
+	// Carried so the decision log can say which access bundle a host came from. Resolve is the only place
+	// that knows it.
 	name             string
 	accessBundleName string
 	hostPatterns     []hostPattern

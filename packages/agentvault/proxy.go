@@ -535,75 +535,10 @@ func (ps *proxyServer) serveSelfEndpoint(w http.ResponseWriter, r *http.Request)
 		})
 		return true
 
-	case "/_agent-vault/whoami":
-		ps.serveWhoami(w, r)
-		return true
 	}
 
 	http.NotFound(w, r)
 	return true
-}
-
-// serveWhoami answers "what can this session actually reach". With no request stream in v1 this is the
-// only way an operator gets that answer without reading the proxy's stdout. Host patterns and access
-// bundle names only — never a credential value.
-func (ps *proxyServer) serveWhoami(w http.ResponseWriter, r *http.Request) {
-	sessionToken := r.Header.Get("X-Infisical-Agent-Session")
-	if sessionToken == "" {
-		sessionToken, _ = requestSessionToken(r)
-	}
-	if sessionToken == "" {
-		http.Error(w, "a session token is required", http.StatusUnauthorized)
-		return
-	}
-
-	connections, err := ps.cache.get(sessionToken)
-	if err != nil {
-		if isSessionGone(err) {
-			http.Error(w, "the session is no longer valid", http.StatusForbidden)
-			return
-		}
-		http.Error(w, "failed to resolve the session", http.StatusBadGateway)
-		return
-	}
-
-	type reachable struct {
-		Connection   string   `json:"connection"`
-		AccessBundle string   `json:"accessBundle"`
-		Hosts        []string `json:"hosts"`
-		Credential   string   `json:"credentialType"`
-	}
-
-	config := ps.currentConfig()
-	out := struct {
-		ProxyID       string      `json:"proxyId"`
-		ProxyName     string      `json:"name"`
-		UnmatchedHost string      `json:"unmatchedHost"`
-		BypassHosts   string      `json:"bypassHosts"`
-		Reachable     []reachable `json:"reachable"`
-	}{
-		ProxyID:       ps.opts.ProxyID,
-		ProxyName:     ps.opts.ProxyName,
-		UnmatchedHost: config.UnmatchedHost,
-		BypassHosts:   config.BypassHosts,
-		Reachable:     make([]reachable, 0, len(connections)),
-	}
-
-	for _, conn := range connections {
-		hosts := make([]string, 0, len(conn.hostPatterns))
-		for _, pattern := range conn.hostPatterns {
-			hosts = append(hosts, net.JoinHostPort(pattern.host, pattern.port))
-		}
-		out.Reachable = append(out.Reachable, reachable{
-			Connection:   conn.name,
-			AccessBundle: conn.accessBundleName,
-			Hosts:        hosts,
-			Credential:   conn.credential.kind,
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
 }
 
 type oneShotListener struct {

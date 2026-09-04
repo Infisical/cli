@@ -22,7 +22,6 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -199,7 +198,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
 
-	printAgentVaultRunSummary(proxyClient, proxyAddr, caResp, servedFingerprint, sessionToken, minted)
+	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted)
 
 	exitCode := runAgentVaultChild(args, env)
 
@@ -347,7 +346,7 @@ func agentVaultFingerprintsEqual(a, b string) bool {
 	return normalize(a) != "" && normalize(a) == normalize(b)
 }
 
-func printAgentVaultRunSummary(proxyClient *resty.Client, proxyAddr string, ca api.AgentVaultProxyCaResponse, fingerprint, sessionToken string, minted *api.AgentVaultSession) {
+func printAgentVaultRunSummary(proxyAddr string, ca api.AgentVaultProxyCaResponse, fingerprint string, minted *api.AgentVaultSession) {
 	dim := color.HiBlackString
 	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent behind Agent Vault proxy %q at %s", ca.Name, proxyAddr))
 	fmt.Fprintln(os.Stderr, dim("proxy CA fingerprint: "+fingerprint))
@@ -359,19 +358,6 @@ func printAgentVaultRunSummary(proxyClient *resty.Client, proxyAddr string, ca a
 		fmt.Fprintln(os.Stderr, dim("session expires: "+expiry))
 	}
 
-	// Best effort: the proxy answers what this session can reach right now. Never a credential value.
-	who, err := api.CallAgentVaultWhoami(proxyClient, proxyAddr, sessionToken)
-	if err != nil {
-		log.Debug().Err(err).Msg("could not read the session's reachable hosts from the proxy")
-		return
-	}
-	if len(who.Reachable) == 0 {
-		util.PrintWarning("This session reaches no hosts: every access bundle it carries has been removed or emptied.")
-		return
-	}
-	for _, r := range who.Reachable {
-		fmt.Fprintln(os.Stderr, dim(fmt.Sprintf("reachable: %s (%s, %s)", strings.Join(r.Hosts, ", "), r.AccessBundle, r.Credential)))
-	}
 }
 
 // Starts the agent, forwards termination signals and returns its exit code, so the caller can revoke the
