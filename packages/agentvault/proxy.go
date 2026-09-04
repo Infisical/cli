@@ -310,7 +310,10 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status = decisionBlocked, http.StatusForbidden
 	case err != nil:
 		decision, status = decisionError, http.StatusBadGateway
-	case matched != nil:
+	// brokered means a credential went out, not merely that a connection matched: a pass-through
+	// connection attaches nothing, so it is forwarded like any other uncovered host. The connection and
+	// accessBundle fields below are what tell the two passthrough cases apart.
+	case matched != nil && matched.credential.kind != credentialPassthrough:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
 		status = resp.StatusCode
