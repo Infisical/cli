@@ -55,10 +55,7 @@ const (
 	maxLoggedPathLen = 2048
 )
 
-var (
-	errHostBlocked    = errors.New("host blocked by policy")
-	errPrivateBlocked = errors.New("host is in a blocked private or link-local range")
-)
+var errHostBlocked = errors.New("host blocked by policy")
 
 const (
 	decisionBrokered    = "brokered"
@@ -187,11 +184,11 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if resolvesToBlockedAddress(hostname) {
-		http.Error(w, errPrivateBlocked.Error(), http.StatusForbidden)
-		return
-	}
-
+	// Private and link-local addresses are reachable, deliberately: an internal API inside the operator's
+	// own network is a first-class destination, and a self-hosted deployment is the common case. Reaching
+	// the host's own metadata endpoint is part of what that allows, and the unmatched-host policy is what
+	// constrains it - under `deny` only configured hosts are reachable at all.
+	//
 	// Every reachable host is treated the same way from here: a certificate is minted and the request is
 	// opened, whether it is covered by a connection, allowed by the unmatched-host policy, or named in
 	// the bypass list. forward() is where those three part company, and the only difference is whether a
@@ -285,11 +282,6 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		} else {
 			http.Error(w, "failed to resolve the session", http.StatusBadGateway)
 		}
-		return
-	}
-
-	if resolvesToBlockedAddress(hostname) {
-		http.Error(w, errPrivateBlocked.Error(), http.StatusForbidden)
 		return
 	}
 
