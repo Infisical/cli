@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/Infisical/infisical-merge/packages/config"
 	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -60,6 +61,35 @@ func IsAuthMethodValid(authMethod string, allowUserAuth bool) (isValid bool, str
 	return false, ""
 }
 
+// resolveReLoginDomain decides which domain the automatic re-login child process
+// should be pinned to, or returns "" to leave the child's normal domain
+// resolution (and its interactive region prompt) untouched.
+//
+// storedDomain is LoggedInUserDomain from the config file, i.e. the instance
+// whose session just expired, so it wins. resolvedURL is config.INFISICAL_URL as
+// already resolved by the root command from --domain, INFISICAL_DOMAIN or
+// .infisical.json; it is only forwarded when it differs from the built-in US
+// default, since that default is what an unconfigured invocation looks like and
+// forwarding it would silently skip the region prompt for first-time logins.
+func resolveReLoginDomain(storedDomain string, resolvedURL string) string {
+	if storedDomain != "" {
+		return storedDomain
+	}
+	if resolvedURL != "" && resolvedURL != AppendAPIEndpoint(INFISICAL_DEFAULT_US_URL) {
+		return resolvedURL
+	}
+	return ""
+}
+
+// buildReLoginArgs returns the argv for the re-login child process.
+func buildReLoginArgs(domain string) []string {
+	args := []string{"login", "--silent"}
+	if domain != "" {
+		args = append(args, "--domain", domain)
+	}
+	return args
+}
+
 // EstablishUserLoginSession handles the login flow to either create a new session or restore an expired one.
 // It returns fresh user details if login is successful.
 func EstablishUserLoginSession() LoggedInUserDetails {
@@ -70,8 +100,18 @@ func EstablishUserLoginSession() LoggedInUserDetails {
 		PrintErrorMessageAndExit(fmt.Sprintf("Failed to determine executable path: %v", err))
 	}
 
+	// The child process resolves its own domain from scratch and would otherwise
+	// fall back to US Cloud, so forward the domain this session was using.
+	// Without this an expired EU Cloud session re-prompts for a region, opens the
+	// US login page, and on completion rewrites LoggedInUserDomain to US.
+	var storedDomain string
+	if configFile, configErr := GetConfigFile(); configErr == nil {
+		storedDomain = configFile.LoggedInUserDomain
+	}
+	domain := resolveReLoginDomain(storedDomain, config.INFISICAL_URL)
+
 	// Spawn infisical login command
-	loginCmd := exec.Command(exePath, "login", "--silent")
+	loginCmd := exec.Command(exePath, buildReLoginArgs(domain)...)
 	loginCmd.Stdin = os.Stdin
 	loginCmd.Stdout = os.Stdout
 	loginCmd.Stderr = os.Stderr
