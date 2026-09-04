@@ -254,17 +254,14 @@ func resolveAgentVaultBundleIDs(names []string, bundles []api.AgentVaultAccessBu
 	return ids, nil
 }
 
-// The child's environment: the proxy and CA-trust variables, stale proxy settings and Infisical credentials
-// stripped, and nothing from Infisical beyond the session token inside the proxy URL.
+// The child's environment: the parent's, with stale proxy settings replaced by ours and the CA-trust
+// variables added. Nothing else is removed. av run does not isolate the agent from the machine it runs
+// on - it sets variables and execs - so pruning a few names would suggest a boundary that is not there.
 func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy string) []string {
 	stale := map[string]bool{}
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
-	for _, k := range credentialEnvKeys {
-		stale[k] = true
-	}
-	stale[util.INFISICAL_TOKEN_NAME] = true
 
 	var operatorNoProxy []string
 	env := map[string]string{}

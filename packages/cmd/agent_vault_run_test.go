@@ -7,11 +7,9 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 )
 
-func TestBuildAgentVaultRunEnvPointsAtTheProxyAndStripsCredentials(t *testing.T) {
+func TestBuildAgentVaultRunEnvPointsAtTheProxy(t *testing.T) {
 	parent := []string{
 		"HOME=/home/dev",
-		"INFISICAL_TOKEN=should-not-leak",
-		"INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=should-not-leak",
 		"HTTPS_PROXY=http://stale:3128",
 		"NO_PROXY=internal.example.com",
 	}
@@ -19,11 +17,6 @@ func TestBuildAgentVaultRunEnvPointsAtTheProxyAndStripsCredentials(t *testing.T)
 
 	if env["HOME"] != "/home/dev" {
 		t.Fatalf("unrelated variables must pass through, got HOME=%q", env["HOME"])
-	}
-	for _, k := range []string{"INFISICAL_TOKEN", "INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET"} {
-		if _, ok := env[k]; ok {
-			t.Fatalf("%s must be stripped: the agent holds nothing from Infisical", k)
-		}
 	}
 	want := "http://agv_tok@10.0.1.5:17323"
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
