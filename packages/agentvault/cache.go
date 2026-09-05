@@ -21,8 +21,14 @@ const (
 
 	// How long to keep serving when Infisical is unreachable — a timeout or a 5xx, as distinct from a
 	// 401. One interval would kill every running agent on a blip; the shipped proxied-service cache
-	// serves indefinitely, which is the worse bug.
+	// serves indefinitely, which is the worse bug. Enforced on the read path as well as in the refresh
+	// loop, so an entry the loop never got back to still ages out.
 	unreachableGraceIntervals = 5
+
+	// Bounds every call the proxy makes to Infisical. The shared CLI client sets retries but no
+	// deadline, and a control plane that accepts the connection and never answers would otherwise
+	// block the poll loop on one call forever, with every session served from the cache meanwhile.
+	controlPlaneTimeout = 15 * time.Second
 )
 
 // credential is the decrypted half.
@@ -116,10 +122,17 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 			c.mu.Unlock()
 			return nil, errSessionGone
 		}
-		entry.lastSeen = time.Now()
-		conns := entry.connections
-		c.mu.Unlock()
-		return conns, nil
+		// Past the grace window the entry is a miss, not an answer: it is dropped and re-resolved
+		// below, so a stalled refresh loop cannot keep an hour-old credential in circulation.
+		if time.Since(entry.fetchedAt) > c.grace() {
+			delete(c.entries, key)
+			delete(c.tokens, key)
+		} else {
+			entry.lastSeen = time.Now()
+			conns := entry.connections
+			c.mu.Unlock()
+			return conns, nil
+		}
 	}
 	c.mu.Unlock()
 
@@ -226,7 +239,7 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	}
 
 	// Unreachable Infisical. Keep serving for a bounded window, then fail closed.
-	grace := time.Duration(unreachableGraceIntervals) * c.pollInterval()
+	grace := c.grace()
 	if time.Since(entry.fetchedAt) > grace {
 		log.Warn().
 			Str("sessionId", entry.sessionID).
@@ -235,6 +248,10 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 		delete(c.entries, key)
 		delete(c.tokens, key)
 	}
+}
+
+func (c *sessionCache) grace() time.Duration {
+	return time.Duration(unreachableGraceIntervals) * c.pollInterval()
 }
 
 func (c *sessionCache) close() {

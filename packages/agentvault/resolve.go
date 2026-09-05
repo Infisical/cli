@@ -36,7 +36,7 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 	if err != nil {
 		return nil, err
 	}
-	httpClient.SetAuthToken(r.proxyToken())
+	httpClient.SetAuthToken(r.proxyToken()).SetTimeout(controlPlaneTimeout)
 
 	res, err := api.CallResolveAgentVaultSession(httpClient, sessionToken)
 	if err != nil {

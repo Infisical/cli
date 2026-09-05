@@ -33,6 +33,7 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 	if err != nil {
 		return persistedState{}, nil, err
 	}
+	httpClient.SetTimeout(controlPlaneTimeout)
 
 	res, err := api.CallEnrollAgentVaultProxy(httpClient, api.EnrollAgentVaultProxyRequest{
 		EnrollmentToken:   enrollmentToken,
@@ -232,7 +233,7 @@ func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}) {
 func (ps *proxyServer) tick(st *store) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err == nil {
-		httpClient.SetAuthToken(ps.opts.ProxyToken())
+		httpClient.SetAuthToken(ps.opts.ProxyToken()).SetTimeout(controlPlaneTimeout)
 		res, hbErr := api.CallAgentVaultHeartbeat(httpClient)
 		if hbErr != nil {
 			log.Warn().Err(hbErr).Msg("agent-vault: heartbeat failed")

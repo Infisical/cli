@@ -138,3 +138,36 @@ func TestCacheIsBounded(t *testing.T) {
 		t.Fatal("eviction should not grow the cache")
 	}
 }
+
+// The refresh loop is the usual way an entry ages out, but a stalled loop must not keep one alive: past
+// the grace window a read treats the entry as a miss and re-resolves, and if that fails it fails.
+func TestStaleEntryIsNotServedFromTheCache(t *testing.T) {
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("old")}}}
+	cache := newTestCache(resolver)
+
+	if _, err := cache.get("agv_tok"); err != nil {
+		t.Fatalf("first get: %v", err)
+	}
+
+	key := sessionKey("agv_tok")
+	cache.mu.Lock()
+	cache.entries[key].fetchedAt = time.Now().Add(-cache.grace() - time.Second)
+	cache.mu.Unlock()
+
+	resolver.result = &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("fresh")}}
+	conns, err := cache.get("agv_tok")
+	if err != nil {
+		t.Fatalf("stale get: %v", err)
+	}
+	if resolver.calls != 2 || string(conns[0].credential.value) != "fresh" {
+		t.Fatalf("a stale entry must be re-resolved, got %d calls and %q", resolver.calls, conns[0].credential.value)
+	}
+
+	cache.mu.Lock()
+	cache.entries[key].fetchedAt = time.Now().Add(-cache.grace() - time.Second)
+	cache.mu.Unlock()
+	resolver.err = errors.New("control plane hung")
+	if _, err := cache.get("agv_tok"); err == nil {
+		t.Fatal("a stale entry that cannot be re-resolved must not be served")
+	}
+}
