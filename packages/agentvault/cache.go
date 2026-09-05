@@ -192,7 +192,7 @@ func (c *sessionCache) refresh() {
 	for key, token := range targets {
 		result, err := c.resolver.resolve(token)
 		if err != nil {
-			c.handleRefreshFailureLocked(key, err)
+			c.handleRefreshFailure(key, err)
 			continue
 		}
 
@@ -207,7 +207,7 @@ func (c *sessionCache) refresh() {
 	}
 }
 
-func (c *sessionCache) handleRefreshFailureLocked(key string, err error) {
+func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
