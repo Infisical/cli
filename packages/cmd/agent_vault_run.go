@@ -121,7 +121,10 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical av proxy' is running there", proxyAddr))
 	}
-	servedFingerprint, err := agentVaultCaFingerprint(caResp.Certificate)
+	// Only the certificate the fingerprint was taken from is trusted from here on. The response is
+	// text, and anything appended after the first certificate would otherwise be written and trusted
+	// without ever having been checked against the pin.
+	caPEM, servedFingerprint, err := agentVaultCaFingerprint(caResp.Certificate)
 	if err != nil {
 		util.HandleError(err, "The proxy served a certificate authority that could not be read")
 	}
@@ -172,7 +175,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		if err := os.MkdirAll(filepath.Dir(caFile), 0o700); err != nil {
 			util.HandleError(err, "Unable to create the directory for the certificate authority file")
 		}
-		if err := os.WriteFile(caFile, []byte(caResp.Certificate), 0o600); err != nil {
+		if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
 			util.HandleError(err, "Unable to write the certificate authority file")
 		}
 		caPath = caFile
@@ -365,15 +368,18 @@ func agentVaultProxyURL(proxyAddr, sessionToken string) string {
 	return u.String()
 }
 
-func agentVaultCaFingerprint(certificatePEM string) (string, error) {
+// Returns the first certificate re-encoded on its own, and its fingerprint, so the caller trusts
+// exactly what was checked.
+func agentVaultCaFingerprint(certificatePEM string) ([]byte, string, error) {
 	block, _ := pem.Decode([]byte(certificatePEM))
-	if block == nil {
-		return "", fmt.Errorf("the response did not contain a PEM certificate")
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, "", fmt.Errorf("the response did not contain a PEM certificate")
 	}
 	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-		return "", fmt.Errorf("the certificate could not be parsed: %w", err)
+		return nil, "", fmt.Errorf("the certificate could not be parsed: %w", err)
 	}
-	return agentvault.FingerprintOf(block.Bytes), nil
+	single := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})
+	return single, agentvault.FingerprintOf(block.Bytes), nil
 }
 
 // Tolerates the ways a fingerprint gets copied around: with or without the SHA256: prefix, colons and case.

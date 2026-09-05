@@ -1,11 +1,62 @@
 package cmd
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 )
+
+func selfSignedPEM(t *testing.T, cn string) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+// The pin is checked against the first certificate, so only that certificate may be trusted. A second
+// one appended to the response used to be written to the CA file unchecked.
+func TestOnlyThePinnedCertificateIsTrusted(t *testing.T) {
+	genuine := selfSignedPEM(t, "genuine")
+	appended := selfSignedPEM(t, "appended")
+
+	kept, fp, err := agentVaultCaFingerprint(genuine + appended)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, genuineFp, _ := agentVaultCaFingerprint(genuine)
+	if fp != genuineFp {
+		t.Fatalf("fingerprint must be of the first certificate")
+	}
+	if string(kept) != genuine {
+		t.Fatalf("only the checked certificate may be kept, got %d bytes for a %d byte certificate", len(kept), len(genuine))
+	}
+	if strings.Count(string(kept), "BEGIN CERTIFICATE") != 1 {
+		t.Fatal("exactly one certificate must be written")
+	}
+}
 
 func TestBuildAgentVaultRunEnvPointsAtTheProxy(t *testing.T) {
 	parent := []string{
