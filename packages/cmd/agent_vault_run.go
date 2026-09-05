@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -203,9 +204,19 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	exitCode := runAgentVaultChild(args, env)
 
 	if minted != nil && !keepSession {
+		// Never resolve the identity the usual way here: a run long enough to outlive the login would exit
+		// on the expiry check, or open the login wizard on a terminal nobody is watching, and either way
+		// the session it minted is left behind. There is nothing to be done about an expired login at this
+		// point, so say so and name where to clear it.
 		httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
-		if clientErr == nil {
-			httpClient.SetAuthToken(resolveAgentVaultIdentityToken(cmd))
+		token, tokenErr := revocationToken(cmd)
+		switch {
+		case clientErr != nil || tokenErr != nil:
+			util.PrintWarning(fmt.Sprintf(
+				"The agent exited but its session could not be revoked (%v). Revoke it from the Sessions page.",
+				cmp.Or(clientErr, tokenErr)))
+		default:
+			httpClient.SetAuthToken(token)
 			if revokeErr := api.CallRevokeAgentVaultSession(httpClient, minted.ID); revokeErr != nil {
 				util.PrintWarning(fmt.Sprintf("The agent exited but its session could not be revoked (%v). Revoke it from the Sessions page.", revokeErr))
 			} else {
@@ -219,6 +230,35 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 // The identity that mints: --client-id/--client-secret (or their env vars) for a machine identity, else an
 // access token in the environment, else the keyring login. --token is the session token here, so it is
 // deliberately not read as an identity.
+// The cleanup path's version of resolveAgentVaultIdentityToken: same sources, but it reports a failure
+// instead of exiting the process or prompting for a login.
+func revocationToken(cmd *cobra.Command) (string, error) {
+	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
+	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
+	if clientID != "" && clientSecret != "" {
+		loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
+		if err != nil {
+			return "", err
+		}
+		return loginResp.AccessToken, nil
+	}
+
+	for _, name := range []string{util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, util.INFISICAL_TOKEN_NAME} {
+		if token := os.Getenv(name); token != "" {
+			return token, nil
+		}
+	}
+
+	details, err := util.GetCurrentLoggedInUserDetails(true)
+	if err != nil {
+		return "", err
+	}
+	if !details.IsUserLoggedIn || details.LoginExpired || details.UserCredentials.JTWToken == "" {
+		return "", errors.New("your Infisical login is no longer valid")
+	}
+	return details.UserCredentials.JTWToken, nil
+}
+
 func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
