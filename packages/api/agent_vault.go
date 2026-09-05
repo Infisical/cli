@@ -185,29 +185,3 @@ func CallRevokeAgentVaultSession(httpClient *resty.Client, sessionID string) err
 	}
 	return nil
 }
-
-// Served by the proxy itself, not by Infisical, over plain HTTP on the proxy's own address. Unauthenticated:
-// a public certificate is public, and this is how an agent comes to trust the proxy.
-type AgentVaultProxyCaResponse struct {
-	ProxyID     string `json:"proxyId"`
-	Name        string `json:"name"`
-	Certificate string `json:"certificate"`
-	Fingerprint string `json:"fingerprint"`
-}
-
-func CallGetAgentVaultProxyCa(httpClient *resty.Client, proxyAddr string) (AgentVaultProxyCaResponse, error) {
-	var res AgentVaultProxyCaResponse
-	response, err := httpClient.
-		R().
-		SetResult(&res).
-		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("http://%s/_agent-vault/ca", proxyAddr))
-
-	if err != nil {
-		return AgentVaultProxyCaResponse{}, NewGenericRequestError("CallGetAgentVaultProxyCa", err)
-	}
-	if response.IsError() {
-		return AgentVaultProxyCaResponse{}, NewAPIErrorWithResponse("CallGetAgentVaultProxyCa", response, nil)
-	}
-	return res, nil
-}

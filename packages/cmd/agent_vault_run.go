@@ -3,9 +3,11 @@ package cmd
 import (
 	"cmp"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -20,7 +22,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
-	"github.com/go-resty/resty/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/spf13/cobra"
@@ -29,6 +30,42 @@ import (
 var agentVaultSessionTTLs = []string{"1h", "8h", "24h", "7d", "never"}
 
 const agentVaultCaFileName = "ca.pem"
+
+// Served by the proxy itself over plain HTTP on its own address, not by Infisical. Fetched with a bare
+// net/http client, as every other call to a host that is not Infisical is: the shared resty builder
+// attaches INFISICAL_CUSTOM_HEADERS, which are credentials for a gateway in front of Infisical and
+// have no business reaching the proxy host.
+var agentVaultProxyHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+type agentVaultProxyCa struct {
+	ProxyID     string `json:"proxyId"`
+	Name        string `json:"name"`
+	Certificate string `json:"certificate"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func fetchAgentVaultProxyCa(proxyAddr string) (agentVaultProxyCa, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/_agent-vault/ca", proxyAddr), nil)
+	if err != nil {
+		return agentVaultProxyCa{}, err
+	}
+	req.Header.Set("User-Agent", api.USER_AGENT)
+
+	resp, err := agentVaultProxyHTTPClient.Do(req)
+	if err != nil {
+		return agentVaultProxyCa{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return agentVaultProxyCa{}, fmt.Errorf("the proxy answered %d to the certificate request", resp.StatusCode)
+	}
+
+	var ca agentVaultProxyCa
+	if err := json.NewDecoder(resp.Body).Decode(&ca); err != nil {
+		return agentVaultProxyCa{}, fmt.Errorf("the proxy's certificate response could not be read: %w", err)
+	}
+	return ca, nil
+}
 
 var avRunCmd = &cobra.Command{
 	Use:   "run [flags] --proxy <host:port> -- [agent command]",
@@ -115,9 +152,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		caFile = filepath.Join(dataDir, agentVaultCaFileName)
 	}
 
-	// Plain HTTP to the proxy's own address, so the client is deliberately not the authenticated one.
-	proxyClient := resty.New().SetTimeout(10 * time.Second)
-	caResp, err := api.CallGetAgentVaultProxyCa(proxyClient, proxyAddr)
+	caResp, err := fetchAgentVaultProxyCa(proxyAddr)
 	if err != nil {
 		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical av proxy' is running there", proxyAddr))
 	}
@@ -392,7 +427,7 @@ func agentVaultFingerprintsEqual(a, b string) bool {
 	return normalize(a) != "" && normalize(a) == normalize(b)
 }
 
-func printAgentVaultRunSummary(proxyAddr string, ca api.AgentVaultProxyCaResponse, fingerprint string, minted *api.AgentVaultSession) {
+func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerprint string, minted *api.AgentVaultSession) {
 	dim := color.HiBlackString
 	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent behind Agent Vault proxy %q at %s", ca.Name, proxyAddr))
 	fmt.Fprintln(os.Stderr, dim("proxy CA fingerprint: "+fingerprint))
