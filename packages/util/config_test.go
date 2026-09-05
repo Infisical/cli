@@ -2,6 +2,7 @@ package util
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -70,3 +71,125 @@ func TestGetEnvDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveWorkspaceIdForMachineIdentity(t *testing.T) {
+	t.Run("explicit value wins over file", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(`{"workspaceId":"fromfile"}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+
+		got, err := ResolveWorkspaceIdForMachineIdentity("", "fromflag")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "fromflag" {
+			t.Fatalf("got %q, want fromflag", got)
+		}
+	})
+
+	t.Run("falls back to .infisical.json in cwd", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(`{"workspaceId":"fromfile"}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+
+		got, err := ResolveWorkspaceIdForMachineIdentity("", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "fromfile" {
+			t.Fatalf("got %q, want fromfile", got)
+		}
+	})
+
+	t.Run("falls back to .infisical.json in parent directory", func(t *testing.T) {
+		parent := t.TempDir()
+		if err := os.WriteFile(filepath.Join(parent, ".infisical.json"), []byte(`{"workspaceId":"fromparent"}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+		child := filepath.Join(parent, "nested", "dir")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		t.Chdir(child)
+
+		got, err := ResolveWorkspaceIdForMachineIdentity("", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "fromparent" {
+			t.Fatalf("got %q, want fromparent", got)
+		}
+	})
+
+	t.Run("uses explicit projectConfigFilePath when provided", func(t *testing.T) {
+		// cwd is empty; the file lives in a different dir passed explicitly.
+		t.Chdir(t.TempDir())
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(`{"workspaceId":"fromexplicitpath"}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+
+		got, err := ResolveWorkspaceIdForMachineIdentity(dir, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "fromexplicitpath" {
+			t.Fatalf("got %q, want fromexplicitpath", got)
+		}
+	})
+
+	t.Run("explicit path takes precedence over cwd file", func(t *testing.T) {
+		// cwd has a file with one id, the explicit path has another.
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		if err := os.WriteFile(filepath.Join(cwd, ".infisical.json"), []byte(`{"workspaceId":"fromcwd"}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(`{"workspaceId":"fromexplicitpath"}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+
+		got, err := ResolveWorkspaceIdForMachineIdentity(dir, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "fromexplicitpath" {
+			t.Fatalf("got %q, want fromexplicitpath", got)
+		}
+	})
+
+	t.Run("error when no file and no explicit value", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		_, err := ResolveWorkspaceIdForMachineIdentity("", "")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("error when explicit path file is missing", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		_, err := ResolveWorkspaceIdForMachineIdentity(t.TempDir(), "")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("error when workspaceId is empty in config file", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(`{"workspaceId":""}`), 0o600); err != nil {
+			t.Fatalf("write workspace: %v", err)
+		}
+
+		_, err := ResolveWorkspaceIdForMachineIdentity("", "")
+		if err == nil {
+			t.Fatal("expected error when workspaceId is empty, got nil")
+		}
+	})
+}
+

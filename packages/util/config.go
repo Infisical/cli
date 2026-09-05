@@ -139,6 +139,33 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 	return workspaceConfigFile, nil
 }
 
+func ResolveWorkspaceIdForMachineIdentity(projectConfigFilePath, explicitWorkspaceId string) (string, error) {
+	if explicitWorkspaceId != "" {
+		return explicitWorkspaceId, nil
+	}
+
+	var workspaceConfig models.WorkspaceConfigFile
+	if projectConfigFilePath != "" {
+		cfg, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
+		if err != nil {
+			return "", fmt.Errorf("no project id found in %s: %w", projectConfigFilePath, err)
+		}
+		workspaceConfig = cfg
+	} else {
+		cfg, err := GetWorkSpaceFromFile()
+		if err != nil {
+			return "", fmt.Errorf("no project id found in .infisical.json: %w", err)
+		}
+		workspaceConfig = cfg
+	}
+
+	if workspaceConfig.WorkspaceId == "" {
+		return "", fmt.Errorf("project id is missing in .infisical.json")
+	}
+
+	return workspaceConfig.WorkspaceId, nil
+}
+
 // FindWorkspaceConfigFile searches for a .infisical.json file in the current directory and all parent directories.
 func FindWorkspaceConfigFile() (string, error) {
 	dir, err := os.Getwd()

@@ -158,6 +158,7 @@ type GetAllFoldersParameters struct {
 	FoldersPath              string
 	InfisicalToken           string
 	UniversalAuthAccessToken string
+	ProjectConfigFilePath    string
 }
 
 type CreateFolderParameters struct {
