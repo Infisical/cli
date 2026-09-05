@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -27,12 +28,20 @@ const (
 	FormatDotEnvEval   string = "dotenv-eval"
 )
 
+const (
+	QuoteCharSingle string = "'"
+	QuoteCharDouble string = `"`
+)
+
+// POSIX portable variable name, the only shape a shell can bind a value to.
+var shellVariableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // exportCmd represents the export command
 var exportCmd = &cobra.Command{
 	Use:                   "export",
 	Short:                 "Used to export environment variables to a file",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
+	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json\ninfisical export --env=prod --dotenv-quote-char='\"' > .env",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		environmentName, _ := cmd.Flags().GetString("env")
@@ -93,6 +102,19 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		dotEnvQuoteChar, err := cmd.Flags().GetString("dotenv-quote-char")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
+		// Validated up front, before any secrets are fetched, so that a typo is
+		// reported immediately instead of after a network round trip. This runs
+		// regardless of the chosen format, so that an unusable value is never
+		// silently accepted just because the format happens to ignore it.
+		if err := validateDotEnvQuoteChar(dotEnvQuoteChar); err != nil {
+			util.HandleError(err)
+		}
+
 		request := models.GetAllSecretsParameters{
 			Environment:              environmentName,
 			TagSlugs:                 tagSlugs,
@@ -142,7 +164,7 @@ var exportCmd = &cobra.Command{
 		secrets = util.FilterSecretsByTag(secrets, tagSlugs)
 		secrets = util.SortSecretsByKeys(secrets)
 
-		output, err = formatEnvs(secrets, format)
+		output, err = formatEnvs(secrets, format, dotEnvQuoteChar)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -275,17 +297,20 @@ func init() {
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
+	exportCmd.Flags().String("dotenv-quote-char", QuoteCharSingle, `Set the character used to wrap values in the dotenv format (' or "). Double quotes let dotenv parsers interpret escape sequences such as \n. Ignored by every other format, including dotenv-export, whose values are always wrapped so they are safe to source in a shell`)
 }
 
-// Format according to the format flag
-func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string, error) {
+// Format according to the format flag. quoteChar is the character used to wrap
+// values in the dotenv format, and is ignored by every other format, including
+// dotenv-export. It is validated by the caller before any secrets are fetched.
+func formatEnvs(envs []models.SingleEnvironmentVariable, format string, quoteChar string) (string, error) {
 	switch strings.ToLower(format) {
 	case FormatDotenv:
-		return formatAsDotEnv(envs), nil
+		return formatAsDotEnv(envs, quoteChar), nil
 	case FormatDotEnvExport:
-		return formatAsDotEnvExport(envs), nil
+		return formatAsDotEnvExport(envs)
 	case FormatDotEnvEval:
-		return formatAsDotEnvEval(envs), nil
+		return formatAsDotEnvEval(envs)
 	case FormatJson:
 		return formatAsJson(envs), nil
 	case FormatCSV:
@@ -310,37 +335,80 @@ func formatAsCSV(envs []models.SingleEnvironmentVariable) string {
 }
 
 // Format environment variables as a dotenv file
-func formatAsDotEnv(envs []models.SingleEnvironmentVariable) string {
+func formatAsDotEnv(envs []models.SingleEnvironmentVariable, quoteChar string) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("%s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		dotenv += fmt.Sprintf("%s=%s\n", env.Key, quoteDotEnvValue(env, quoteChar))
 	}
 	return dotenv
 }
 
-// Format environment variables as a dotenv file with export at the beginning
-func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
-	var dotenv string
-	for _, env := range envs {
-		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+// Format environment variables as a dotenv file with export at the beginning.
+// Every line is meant to be sourced by a shell, so values are always quoted the
+// way dotenv-eval quotes them and never with the dotenv quote character: a
+// value containing that character would otherwise close the wrapping early and
+// let the rest of the value run as shell code.
+func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) (string, error) {
+	return formatAsDotEnvEval(envs)
+}
+
+// validateDotEnvQuoteChar checks that the quote character used by the dotenv
+// format is one that dotenv parsers actually understand.
+func validateDotEnvQuoteChar(quoteChar string) error {
+	if quoteChar != QuoteCharSingle && quoteChar != QuoteCharDouble {
+		return fmt.Errorf("invalid quote character: %q. Available quote characters are [%s]", quoteChar, strings.Join([]string{QuoteCharSingle, QuoteCharDouble}, ", "))
 	}
-	return dotenv
+
+	return nil
+}
+
+// quoteDotEnvValue wraps a secret value in quoteChar. The value itself is
+// written verbatim, so the quote character is the only difference between the
+// two styles.
+//
+// No backslash or quote escaping is applied, deliberately. Dotenv parsers
+// extract a value by finding the quotes that delimit it and then treat what is
+// between them as opaque; they do not generally undo escape sequences on read.
+// Escaping on write would therefore never be unescaped again, and would only
+// leave stray backslashes in the parsed value without protecting anything.
+//
+// The double quote style exists purely so that the "\n" produced by
+// escapeNewLinesIfRequired is decoded back into a real newline, which is
+// something parsers only do for double quoted values. That is the whole reason
+// to pick it over the single quote default.
+func quoteDotEnvValue(env models.SingleEnvironmentVariable, quoteChar string) string {
+	return quoteChar + escapeNewLinesIfRequired(env) + quoteChar
 }
 
 // Format environment variables for shell eval/source. Values are wrapped in
 // single quotes with POSIX escaping so the output is safe to evaluate via
 // `eval "$(infisical export --format=dotenv-eval)"` regardless of value
 // contents (newlines, single quotes, $, ", \, etc.).
-func formatAsDotEnvEval(envs []models.SingleEnvironmentVariable) string {
+//
+// Secret names are not restricted to shell variable names, so they are checked
+// against the portable syntax rather than escaped. Escaping cannot help there:
+// the name is re-parsed by `export` after quote removal, and several shapes are
+// assignments to a different variable rather than errors. `PATH=x` assigns to
+// PATH because the split is on the first `=`, and `PATH+` appends to PATH
+// because bash reads the result as `PATH+=`. A name outside the portable syntax
+// cannot be bound by a shell at all, so the whole batch is rejected instead.
+//
+// The `--` is redundant with that check and kept as a second layer, so that a
+// name starting with `-` can never be read as a flag.
+func formatAsDotEnvEval(envs []models.SingleEnvironmentVariable) (string, error) {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("export %s=%s\n", env.Key, posixShellQuote(env.Value))
+		if !shellVariableName.MatchString(env.Key) {
+			return "", fmt.Errorf("cannot export secret %q to a shell format: a shell variable name may only contain ASCII letters, digits and underscores, and may not start with a digit. Other names are either rejected by the shell or silently applied to a different variable, the way names like PATH= and PATH+ are. Rename the secret, or export it with a format other than %s and %s", env.Key, FormatDotEnvExport, FormatDotEnvEval)
+		}
+
+		dotenv += fmt.Sprintf("export -- %s=%s\n", env.Key, posixShellQuote(env.Value))
 	}
-	return dotenv
+	return dotenv, nil
 }
 
 // posixShellQuote wraps a value in single quotes and escapes any embedded
-// single quotes using the standard `'\”` sequence. Single-quoted POSIX
+// single quotes using the standard `'\''` sequence. Single-quoted POSIX
 // strings preserve every other character verbatim (including newlines,
 // backslashes, $, and "), so this is sufficient for eval/source.
 func posixShellQuote(value string) string {
