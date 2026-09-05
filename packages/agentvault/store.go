@@ -108,6 +108,16 @@ func (s *store) loadCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse the stored certificate authority: %w", err)
 	}
+
+	// The key and certificate are written as two files, so a re-enrollment interrupted between them
+	// leaves a new key beside the old certificate. Both still parse, resolveState would call the proxy
+	// enrolled, and every request would then fail to mint a leaf, which is a puzzle at the agent rather
+	// than an answer here.
+	certKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !certKey.Equal(&key.PublicKey) {
+		return nil, nil, fmt.Errorf(
+			"the certificate authority in %s does not match its private key, so an earlier re-enrollment was interrupted. Remove the directory and enroll again with a new token", s.dir)
+	}
 	return key, cert, nil
 }
 
