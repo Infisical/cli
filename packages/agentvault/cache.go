@@ -217,7 +217,9 @@ func (c *sessionCache) handleRefreshFailureLocked(key string, err error) {
 	}
 
 	if isSessionGone(err) {
-		log.Debug().Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
+		// The server's own message rides along: a revoked proxy token 401s here too, and without it every
+		// session on the proxy drops looking as though each was revoked on its own.
+		log.Debug().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
 		delete(c.entries, key)
 		delete(c.tokens, key)
 		return
