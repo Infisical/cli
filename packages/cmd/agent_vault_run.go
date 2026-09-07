@@ -78,7 +78,7 @@ nothing else from Infisical.
 
 Two ways to get a session, exactly one of them required:
 
-  --access-bundle   mint one now over the named bundles (repeatable; needs your login or a machine identity).
+  --access-bundle   mint one now over the named bundle (needs your login or a machine identity).
                     Revoked when the agent exits unless --keep-session is set.
   --session-token   run with a session token minted in the dashboard. Never revoked by this command.
 
@@ -107,6 +107,9 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 	if len(accessBundles) > 0 && sessionToken != "" {
 		util.HandleError(fmt.Errorf("--access-bundle and --session-token are two ways to get one session; pass one of them, not both"))
+	}
+	if len(accessBundles) > 1 {
+		util.HandleError(fmt.Errorf("a session carries one access bundle; pass --access-bundle once"))
 	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
@@ -326,8 +329,8 @@ func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	return details.UserCredentials.JTWToken
 }
 
-// Names to ids, in the order given: order is the session's priority order, so it is preserved. An unknown
-// name is an error that names it rather than a session silently missing a bundle.
+// Names to ids, in the order given, since the mint body keeps that order. An unknown name is an error that
+// names it rather than a session silently missing a bundle.
 func resolveAgentVaultBundleIDs(names []string, bundles []api.AgentVaultAccessBundle) ([]string, error) {
 	byName := make(map[string]string, len(bundles))
 	for _, b := range bundles {
@@ -487,7 +490,7 @@ func quoteAll(values []string) string {
 }
 
 func init() {
-	avRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over this access bundle (repeatable; order is priority order when two bundles cover one host)")
+	avRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name`")
 	avRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one")
 	avRunCmd.Flags().String("ttl", "7d", "lifetime of a minted session: 1h | 8h | 24h | 7d | never")
 	avRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
