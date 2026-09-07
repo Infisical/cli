@@ -153,9 +153,9 @@ var loginCmd = &cobra.Command{
 			}
 
 			domainFlagExplicitlySet := cmd.Flags().Changed("domain")
-			_, domainEnvName, domainFromEnv := util.GetEnvDomainSource()
+			_, domainEnvName, _ := util.GetEnvDomainSource()
 			shouldPrintInfo := !silentMode && !plainOutput
-			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet, domainFromEnv, domainEnvName, shouldPrintInfo)
+			usePresetDomain, err := usePresetDomain(presetDomain, domainFlagExplicitlySet, domainEnvName, shouldPrintInfo)
 
 			if err != nil {
 				util.HandleError(err)
@@ -453,15 +453,18 @@ func DomainOverridePrompt() (bool, error) {
 	return selectedOption == OVERRIDE, err
 }
 
-func shouldApplyPresetDomain(preconfiguredUrl string, domainExplicitlyProvided bool) bool {
-	if preconfiguredUrl == "" {
+func normalizePresetDomain(presetDomain string) string {
+	return strings.TrimSuffix(strings.Trim(strings.TrimSuffix(presetDomain, "/api"), "/"), "/api")
+}
+
+func shouldApplyPresetDomain(parsedDomain string, domainExplicitlyProvided bool) bool {
+	if parsedDomain == "" {
 		return false
 	}
 	if domainExplicitlyProvided {
 		return true
 	}
-
-	return preconfiguredUrl != util.INFISICAL_DEFAULT_US_URL && preconfiguredUrl != util.INFISICAL_DEFAULT_EU_URL
+	return parsedDomain != util.INFISICAL_DEFAULT_US_URL && parsedDomain != util.INFISICAL_DEFAULT_EU_URL
 }
 
 func presetDomainSourceLabel(domainFlagExplicitlySet bool, domainEnvName string) string {
@@ -474,18 +477,16 @@ func presetDomainSourceLabel(domainFlagExplicitlySet bool, domainEnvName string)
 	return "configuration"
 }
 
-func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, domainFromEnv bool, domainEnvName string, shouldPrintInfo bool) (bool, error) {
+func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, domainEnvName string, shouldPrintInfo bool) (bool, error) {
 	infisicalConfig, err := util.GetConfigFile()
 	if err != nil {
 		return false, fmt.Errorf("askForDomain: unable to get config file because [err=%s]", err)
 	}
 
-	preconfiguredUrl := strings.TrimSuffix(presetDomain, "/api")
-	domainExplicitlyProvided := domainFlagExplicitlySet || domainFromEnv
+	parsedDomain := normalizePresetDomain(presetDomain)
+	domainExplicitlyProvided := domainFlagExplicitlySet || domainEnvName != ""
 
-	if shouldApplyPresetDomain(preconfiguredUrl, domainExplicitlyProvided) {
-		parsedDomain := strings.TrimSuffix(strings.Trim(preconfiguredUrl, "/"), "/api")
-
+	if shouldApplyPresetDomain(parsedDomain, domainExplicitlyProvided) {
 		_, err := url.ParseRequestURI(parsedDomain)
 		if err != nil {
 			return false, errors.New(fmt.Sprintf("Invalid domain URL: '%s'", parsedDomain))
@@ -506,10 +507,10 @@ func usePresetDomain(presetDomain string, domainFlagExplicitlySet bool, domainFr
 			}
 		}
 
-		whilte := color.New(color.FgGreen)
-		boldWhite := whilte.Add(color.Bold)
-		time.Sleep(time.Second * 1)
 		if shouldPrintInfo {
+			whilte := color.New(color.FgGreen)
+			boldWhite := whilte.Add(color.Bold)
+			time.Sleep(time.Second * 1)
 			boldWhite.Printf("[INFO] Using domain '%s' from %s\n", parsedDomain, presetDomainSourceLabel(domainFlagExplicitlySet, domainEnvName))
 		}
 
