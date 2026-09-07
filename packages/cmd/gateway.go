@@ -464,19 +464,24 @@ var gatewayStartCmd = &cobra.Command{
 		listenAddress, _ := util.GetCmdFlagOrEnv(cmd, "listen-address", []string{gatewayv2.LISTEN_ADDRESS_ENV_NAME})
 
 		// Determine if relay was explicitly selected (flag or env var).
-		// If not, enable automatic failover to a different relay on connection failure.
 		explicitRelay, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
 		if explicitRelay == "" {
 			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 		}
 
+		// Failover picks a relay on its own, so it must stay off unless this gateway asked to use a
+		// relay at all. Enabling it for a direct-listen gateway would quietly hand it a relay the
+		// operator never asked for the first time registration failed.
 		var relaySelector func(httpClient *resty.Client) (string, error)
-		if explicitRelay == "" {
+		switch {
+		case explicitRelay != "":
+			log.Info().Msg("Relay explicitly selected; automatic failover is disabled")
+		case listenAddress != "":
+			log.Info().Msg("Gateway is listening for direct connections; relay failover is disabled")
+		default:
 			relaySelector = func(httpClient *resty.Client) (string, error) {
 				return util.SelectRelay(httpClient, true)
 			}
-		} else {
-			log.Info().Msg("Relay explicitly selected; automatic failover is disabled")
 		}
 		relayName := explicitRelay
 		if relayName == "" && listenAddress == "" {
