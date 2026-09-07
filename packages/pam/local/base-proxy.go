@@ -80,9 +80,10 @@ type BaseProxyServer struct {
 	// runner sets it so one proxy shutting down cannot kill the agent it launched.
 	keepProcessAlive bool
 
-	// Set once a direct dial or handshake has failed and the relay took over. Every client
-	// connection dials its own tunnel, so without this each one would pay the direct timeout again.
-	directUnavailable atomic.Bool
+	// The direct address that failed, if any. Every client connection dials its own tunnel, so
+	// without this each one would pay the direct timeout again. Keyed by address rather than a bare
+	// flag because a refreshed session can carry a new one, which deserves its own attempt.
+	failedDirectAddress atomic.Pointer[string]
 }
 
 // staticSession builds a LiveSession from the fields set at construction time.
@@ -145,10 +146,14 @@ func (b *BaseProxyServer) createRelayConnectionWith(session LiveSession) (net.Co
 	return b.createRelayOnlyConnection(session)
 }
 
-// skipDirect reports whether direct dialing has already failed for this proxy. With no relay to fall
-// back to, direct is retried regardless, since failing fast gains nothing.
+// skipDirect reports whether direct dialing has already failed for this proxy at this address. With
+// no relay to fall back to, direct is retried regardless, since failing fast gains nothing.
 func (b *BaseProxyServer) skipDirect(session LiveSession) bool {
-	return session.RelayHost != "" && b.directUnavailable.Load()
+	if session.RelayHost == "" {
+		return false
+	}
+	failed := b.failedDirectAddress.Load()
+	return failed != nil && *failed == session.DirectAddress
 }
 
 func (b *BaseProxyServer) markDirectUnavailable(session LiveSession, err error, msg string) {
@@ -156,11 +161,13 @@ func (b *BaseProxyServer) markDirectUnavailable(session LiveSession, err error, 
 		log.Debug().Err(err).Str("address", session.DirectAddress).Msg(msg)
 		return
 	}
-	if b.directUnavailable.CompareAndSwap(false, true) {
-		log.Warn().Err(err).Str("address", session.DirectAddress).Msgf("%s, using the relay for this session", msg)
+	address := session.DirectAddress
+	previous := b.failedDirectAddress.Swap(&address)
+	if previous == nil || *previous != address {
+		log.Warn().Err(err).Str("address", address).Msgf("%s, using the relay for this session", msg)
 		return
 	}
-	log.Debug().Err(err).Str("address", session.DirectAddress).Msg(msg)
+	log.Debug().Err(err).Str("address", address).Msg(msg)
 }
 
 type gatewayTransportConn struct {

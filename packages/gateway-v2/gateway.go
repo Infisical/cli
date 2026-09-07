@@ -514,6 +514,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)
+	listenerFatal := make(chan error, 1)
 	if err := g.registerGateway(); err != nil {
 		if g.config.RelaySelector == nil {
 			return fmt.Errorf("failed to register gateway: %v", err)
@@ -528,7 +529,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	if g.certs().DirectAddress != "" {
-		if err := g.startDirectListener(ctx); err != nil {
+		if err := g.startDirectListener(ctx, listenerFatal); err != nil {
 			return err
 		}
 		g.startHeartbeatOnce(ctx, errCh)
@@ -557,8 +558,12 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}()
 
 	if g.certs().SSH.ClientCertificate == "" {
-		<-ctx.Done()
-		return nil
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-listenerFatal:
+			return err
+		}
 	}
 
 	for {
@@ -566,6 +571,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
+		case err := <-listenerFatal:
+			return err
 		default:
 			if err := g.connectWithRetry(ctx, errCh); err != nil {
 				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
@@ -682,7 +689,7 @@ func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
 	return g.connectWithRetry(ctx, errCh)
 }
 
-func (g *Gateway) startDirectListener(ctx context.Context) error {
+func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) error {
 	directAddress := g.certs().DirectAddress
 	_, advertisedPort, err := net.SplitHostPort(directAddress)
 	if err != nil {
@@ -700,6 +707,7 @@ func (g *Gateway) startDirectListener(ctx context.Context) error {
 	}
 
 	log.Info().Str("address", g.certs().DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
+	pending := make(chan struct{}, maxPendingDirectHandshakes)
 	go func() {
 		go func() {
 			<-ctx.Done()
@@ -710,12 +718,30 @@ func (g *Gateway) startDirectListener(ctx context.Context) error {
 			if acceptErr != nil {
 				if ctx.Err() == nil {
 					log.Error().Err(acceptErr).Msg("Direct gateway listener stopped")
+					// Reported rather than swallowed: the gateway can no longer accept anything, and
+					// systemd has already been notified ready, so supervision has to be told.
+					select {
+					case fatal <- fmt.Errorf("direct gateway listener stopped accepting: %w", acceptErr):
+					default:
+					}
 				}
 				return
 			}
+			// Shed rather than queue. A peer holding handshakes open is the case this guards, and
+			// queueing would let it exhaust descriptors anyway.
+			select {
+			case pending <- struct{}{}:
+			default:
+				log.Warn().Str("peer", conn.RemoteAddr().String()).Msg("Too many direct gateway handshakes in flight, rejecting connection")
+				_ = conn.Close()
+				continue
+			}
 			g.directActiveChannels.Add(1)
 			go func() {
-				defer g.directActiveChannels.Add(-1)
+				defer func() {
+					g.directActiveChannels.Add(-1)
+					<-pending
+				}()
 				g.handleGatewayConnection(conn)
 			}()
 		}
@@ -1075,10 +1101,14 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn) {
 
 	// Perform TLS handshake
 	log.Info().Msg("Received incoming connection, starting TLS handshake")
+	// A peer that opens a socket and never completes the handshake would otherwise hold this
+	// goroutine forever. Cleared once authenticated, since a session has no such bound.
+	_ = tlsConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		log.Info().Msgf("TLS handshake failed: %v", err)
 		return
 	}
+	_ = tlsConn.SetDeadline(time.Time{})
 	log.Info().Msg("TLS handshake completed successfully")
 
 	// Create reader for the TLS connection

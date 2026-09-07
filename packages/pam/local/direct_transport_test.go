@@ -86,3 +86,20 @@ func TestDirectStaysEligibleForADifferentSessionWithoutARelay(t *testing.T) {
 		t.Fatal("direct must stay eligible when the session has no relay to fall back to")
 	}
 }
+
+func TestDirectRetriedWhenARefreshedSessionCarriesANewAddress(t *testing.T) {
+	server := &BaseProxyServer{}
+	session := LiveSession{DirectAddress: "127.0.0.1:1", RelayHost: "relay.invalid:8443"}
+	_, _ = server.createRelayConnectionWith(session)
+
+	if !server.skipDirect(session) {
+		t.Fatal("the address that failed should stay out of play")
+	}
+
+	// A long-lived agent proxy outlives its session. When the platform hands back a different
+	// address, one earlier failure must not keep the new one on the relay forever.
+	refreshed := LiveSession{DirectAddress: "127.0.0.1:2", RelayHost: "relay.invalid:8443"}
+	if server.skipDirect(refreshed) {
+		t.Fatal("a new direct address deserves its own attempt")
+	}
+}
