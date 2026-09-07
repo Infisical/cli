@@ -1,76 +1,83 @@
 package agentvault
 
-import (
-	"encoding/json"
-	"os"
-	"testing"
-)
+import "testing"
 
-// The fixture is the shared contract with the backend grammar
-// (backend/src/ee/services/agent-vault/agent-vault-host-pattern-fixture.json).
-type matchFixture struct {
-	Match []struct {
-		Pattern  string `json:"pattern"`
-		Host     string `json:"host"`
-		Port     string `json:"port"`
-		Expected bool   `json:"expected"`
-		Why      string `json:"why"`
-	} `json:"match"`
-	Relate []struct {
-		A        string `json:"a"`
-		B        string `json:"b"`
-		Relation string `json:"relation"`
-	} `json:"relate"`
-}
+func TestMatch(t *testing.T) {
+	cases := []struct {
+		pattern  string
+		host     string
+		port     string
+		expected bool
+		why      string
+	}{
+		{"api.github.com", "api.github.com", "443", true, "exact host, default port"},
+		{"api.github.com", "API.GitHub.com", "443", true, "case-insensitive"},
+		{"api.github.com", "api.github.com.", "443", true, "trailing dot"},
+		{"api.github.com", "api.github.com", "80", false, "portless means 443"},
+		{"api.github.com", "api.github.com", "8443", false, "443 is concrete"},
+		{"api.github.com:8443", "api.github.com", "8443", true, "explicit port"},
+		{"api.github.com", "other.github.com", "443", false, "not a sibling"},
+		{"*.github.com", "api.github.com", "443", true, "one label"},
+		{"*.github.com", "a.b.github.com", "443", false, "not any depth"},
+		{"*.github.com", "github.com", "443", false, "a label is required"},
+		{"*.github.com", "evilgithub.com", "443", false, "the dot matters"},
+		{"*.bar.foo.com", "api.foo.com", "443", false, "label counts differ"},
+		{"[::1]", "0:0:0:0:0:0:0:1", "443", true, "IPv6 expanded"},
+		{"[0:0:0:0:0:0:0:1]:8200", "::1", "8200", true, "written the long way"},
+		{"[2001:db8::1]", "2001:db8::2", "443", false, "different addresses"},
+		{"10.0.1.5:8200", "10.0.1.5", "8200", true, "IPv4 literal"},
+		{"[::ffff:192.0.2.1]", "192.0.2.1", "443", true, "IPv4-mapped IPv6"},
+		{"192.0.2.1", "::ffff:192.0.2.1", "443", true, "and the other way round"},
+		{"api.github.com, registry.npmjs.org", "registry.npmjs.org", "443", true, "a column is a set"},
+	}
 
-func loadFixture(t *testing.T) matchFixture {
-	t.Helper()
-	raw, err := os.ReadFile("testdata/host-pattern-fixture.json")
-	if err != nil {
-		t.Fatalf("reading fixture: %v", err)
-	}
-	var fixture matchFixture
-	if err := json.Unmarshal(raw, &fixture); err != nil {
-		t.Fatalf("parsing fixture: %v", err)
-	}
-	if len(fixture.Match) == 0 {
-		t.Fatal("fixture has no match cases")
-	}
-	return fixture
-}
-
-func TestMatchAgainstSharedFixture(t *testing.T) {
-	for _, tc := range loadFixture(t).Match {
-		t.Run(tc.Pattern+" vs "+tc.Host+":"+tc.Port, func(t *testing.T) {
-			patterns := parseHostPatterns(tc.Pattern)
+	for _, tc := range cases {
+		t.Run(tc.pattern+" vs "+tc.host+":"+tc.port, func(t *testing.T) {
+			patterns := parseHostPatterns(tc.pattern)
 			if len(patterns) == 0 {
-				t.Fatalf("pattern %q parsed to nothing", tc.Pattern)
+				t.Fatalf("pattern %q parsed to nothing", tc.pattern)
 			}
 
 			matched := false
 			for _, p := range patterns {
-				if ok, _ := p.match(tc.Host, tc.Port); ok {
+				if ok, _ := p.match(tc.host, tc.port); ok {
 					matched = true
 					break
 				}
 			}
-			if matched != tc.Expected {
-				t.Errorf("match(%q, %q:%q) = %v, want %v (%s)", tc.Pattern, tc.Host, tc.Port, matched, tc.Expected, tc.Why)
+			if matched != tc.expected {
+				t.Errorf("match(%q, %q:%q) = %v, want %v (%s)", tc.pattern, tc.host, tc.port, matched, tc.expected, tc.why)
 			}
 		})
 	}
 }
 
-func TestRelationsAgreeWithTheBackend(t *testing.T) {
-	for _, tc := range loadFixture(t).Relate {
-		t.Run(tc.A+" vs "+tc.B, func(t *testing.T) {
-			a := parseHostPatterns(tc.A)[0]
-			b := parseHostPatterns(tc.B)[0]
+// The relations the backend's write-time conflict rule is built on. The proxy does not enforce that
+// rule, but the two grammars have to agree on which patterns overlap.
+func TestPatternRelations(t *testing.T) {
+	cases := []struct {
+		a, b     string
+		relation string
+	}{
+		{"api.foo.com", "api.foo.com", "identical"},
+		{"api.foo.com", "api.foo.com:443", "identical"},
+		{"api.foo.com", "*.foo.com", "contained"},
+		{"*.foo.com", "api.foo.com", "contained"},
+		{"*.foo.com", "*.bar.foo.com", "disjoint"},
+		{"api.foo.com:443", "api.foo.com:8443", "disjoint"},
+		{"*.foo.com", "api.foo.com:8443", "disjoint"},
+		{"api.foo.com", "api.bar.com", "disjoint"},
+	}
 
-			switch tc.Relation {
+	for _, tc := range cases {
+		t.Run(tc.a+" vs "+tc.b, func(t *testing.T) {
+			a := parseHostPatterns(tc.a)[0]
+			b := parseHostPatterns(tc.b)[0]
+
+			switch tc.relation {
 			case "identical":
 				if a.host != b.host || a.port != b.port {
-					t.Errorf("%q and %q should normalize to the same pattern, got %+v and %+v", tc.A, tc.B, a, b)
+					t.Errorf("%q and %q should normalize to the same pattern, got %+v and %+v", tc.a, tc.b, a, b)
 				}
 			case "contained":
 				wildcard, exact := a, b
@@ -85,13 +92,13 @@ func TestRelationsAgreeWithTheBackend(t *testing.T) {
 				}
 			case "disjoint":
 				if ok, _ := a.match(b.host, b.port); ok {
-					t.Errorf("%q should not cover %q", tc.A, tc.B)
+					t.Errorf("%q should not cover %q", tc.a, tc.b)
 				}
 				if ok, _ := b.match(a.host, a.port); ok {
-					t.Errorf("%q should not cover %q", tc.B, tc.A)
+					t.Errorf("%q should not cover %q", tc.b, tc.a)
 				}
 			default:
-				t.Fatalf("unknown relation %q", tc.Relation)
+				t.Fatalf("unknown relation %q", tc.relation)
 			}
 		})
 	}
