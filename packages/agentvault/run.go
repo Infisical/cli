@@ -173,7 +173,8 @@ func Start(opts Options, enrollmentToken string) error {
 	})
 
 	stop := make(chan struct{})
-	go ps.pollLoop(st, stop)
+	fatal := make(chan error, 1)
+	go ps.pollLoop(st, stop, fatal)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- front.Serve(limited) }()
@@ -207,14 +208,54 @@ func Start(opts Options, enrollmentToken string) error {
 		_ = front.Shutdown(ctx)
 		ps.cache.close()
 		return nil
+	case err := <-fatal:
+		close(stop)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = front.Shutdown(ctx)
+		ps.cache.close()
+		return err
 	}
+}
+
+// A 401 on the heartbeat is never transient. Infisical being down is a timeout or a 502, a bug is a 500,
+// throttling is a 429, and all of those ride out the grace window and recover on their own. Only three
+// things produce a 401 here - Revoke Access bumped the token version, the proxy record was deleted, or the
+// server's signing secret changed - and none of them is fixed by waiting. Every session's resolve 401s at
+// the same time, so a proxy in this state serves nothing; exiting makes a supervisor show it as down
+// instead of a healthy-looking process that logs a warning once a poll forever. Two in a row, not one, so
+// a single odd answer in the middle of a deploy cannot take a proxy out.
+const heartbeatRejectionsBeforeExit = 2
+
+var errProxyTokenRejected = errors.New(
+	"Infisical no longer accepts this proxy's token: its access was revoked or the proxy was deleted. Enroll again with a new enrollment token from the Proxies page")
+
+func isTokenRejected(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized
 }
 
 // pollLoop is the single tick that keeps everything current: it heartbeats (which returns the settings
 // block) and refreshes every live session. Worst-case staleness for any change an administrator makes is
 // one interval, and there is no second place to invalidate.
-func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}) {
-	ps.tick(st)
+func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}, fatal chan<- error) {
+	rejections := 0
+	onTick := func() bool {
+		if ps.tick(st) {
+			rejections++
+		} else {
+			rejections = 0
+		}
+		if rejections >= heartbeatRejectionsBeforeExit {
+			fatal <- errProxyTokenRejected
+			return false
+		}
+		return true
+	}
+
+	if !onTick() {
+		return
+	}
 
 	for {
 		// Re-read the interval each time rather than using a fixed ticker: lowering it from 300 to 10
@@ -225,17 +266,21 @@ func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			ps.tick(st)
+			if !onTick() {
+				return
+			}
 		}
 	}
 }
 
-func (ps *proxyServer) tick(st *store) {
+// tick reports whether Infisical rejected the proxy's token on this heartbeat.
+func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err == nil {
 		httpClient.SetAuthToken(ps.opts.ProxyToken()).SetTimeout(controlPlaneTimeout)
 		res, hbErr := api.CallAgentVaultHeartbeat(httpClient)
 		if hbErr != nil {
+			tokenRejected = isTokenRejected(hbErr)
 			log.Warn().Err(hbErr).Msg("agent-vault: heartbeat failed")
 		} else {
 			next := ProxyConfig{
@@ -264,4 +309,5 @@ func (ps *proxyServer) tick(st *store) {
 	}
 
 	ps.cache.refresh()
+	return tokenRejected
 }
