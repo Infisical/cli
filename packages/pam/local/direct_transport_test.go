@@ -42,3 +42,47 @@ func TestCreateRelayConnectionRequiresFallbackAfterDirectFailure(t *testing.T) {
 		t.Fatal("expected direct connection failure without a relay fallback")
 	}
 }
+
+func TestDirectRetriedWhenThereIsNoRelay(t *testing.T) {
+	server := &BaseProxyServer{}
+	session := LiveSession{DirectAddress: "127.0.0.1:1"}
+
+	// Failing fast gains nothing without a fallback, so the flag must not latch and skip the only
+	// transport the session has.
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := server.createRelayConnectionWith(session); err == nil {
+			t.Fatal("expected direct connection failure without a relay fallback")
+		}
+		if server.skipDirect(session) {
+			t.Fatal("direct must stay eligible when it is the only transport")
+		}
+	}
+}
+
+func TestDirectSkippedForLaterConnectionsOnceItFails(t *testing.T) {
+	server := &BaseProxyServer{}
+	// A relay host is set so the fallback exists; it is never dialled because the relay attempt
+	// fails on the missing certificates, which is enough to prove direct was given up on.
+	session := LiveSession{DirectAddress: "127.0.0.1:1", RelayHost: "relay.invalid:8443"}
+
+	if server.skipDirect(session) {
+		t.Fatal("direct should be tried on the first connection")
+	}
+
+	_, _ = server.createRelayConnectionWith(session)
+
+	if !server.skipDirect(session) {
+		t.Fatal("a failed direct dial should take direct out of play for later connections")
+	}
+}
+
+func TestDirectStaysEligibleForADifferentSessionWithoutARelay(t *testing.T) {
+	server := &BaseProxyServer{}
+	withRelay := LiveSession{DirectAddress: "127.0.0.1:1", RelayHost: "relay.invalid:8443"}
+	_, _ = server.createRelayConnectionWith(withRelay)
+
+	// skipDirect is gated on a relay being available, so a session with none still tries direct.
+	if server.skipDirect(LiveSession{DirectAddress: "127.0.0.1:1"}) {
+		t.Fatal("direct must stay eligible when the session has no relay to fall back to")
+	}
+}

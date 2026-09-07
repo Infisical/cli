@@ -127,8 +127,9 @@ type Gateway struct {
 	sshClient  *ssh.Client
 	relayName  string // active relay name, protected by mu
 
-	// Certificate storage
-	certificates *api.RegisterGatewayResponse
+	// Certificate storage. Replaced wholesale by the certificate renewal goroutine while the connect
+	// loop and the direct listener are reading it, so reads go through certs().
+	certificates atomic.Pointer[api.RegisterGatewayResponse]
 
 	// PAM credentials manager
 	pamCredentialsManager *session.CredentialsManager
@@ -526,7 +527,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
-	if g.certificates.DirectAddress != "" {
+	if g.certs().DirectAddress != "" {
 		if err := g.startDirectListener(ctx); err != nil {
 			return err
 		}
@@ -555,7 +556,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}()
 
-	if g.certificates.SSH.ClientCertificate == "" {
+	if g.certs().SSH.ClientCertificate == "" {
 		<-ctx.Done()
 		return nil
 	}
@@ -682,9 +683,10 @@ func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
 }
 
 func (g *Gateway) startDirectListener(ctx context.Context) error {
-	_, advertisedPort, err := net.SplitHostPort(g.certificates.DirectAddress)
+	directAddress := g.certs().DirectAddress
+	_, advertisedPort, err := net.SplitHostPort(directAddress)
 	if err != nil {
-		return fmt.Errorf("invalid direct gateway address %q: %w", g.certificates.DirectAddress, err)
+		return fmt.Errorf("invalid direct gateway address %q: %w", directAddress, err)
 	}
 
 	bindAddress := g.config.BindAddress
@@ -697,7 +699,7 @@ func (g *Gateway) startDirectListener(ctx context.Context) error {
 		return fmt.Errorf("failed to listen for direct gateway connections on %s: %w", bindAddress, err)
 	}
 
-	log.Info().Str("address", g.certificates.DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
+	log.Info().Str("address", g.certs().DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
 	go func() {
 		go func() {
 			<-ctx.Done()
@@ -745,8 +747,9 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 		}
 
 		// Connect to Relay server
-		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), g.certificates.RelayHost, g.config.SSHPort, attempt, maxAttempts)
-		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
+		relayHost := g.certs().RelayHost
+		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), relayHost, g.config.SSHPort, attempt, maxAttempts)
+		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", relayHost, g.config.SSHPort), sshConfig)
 		if err != nil {
 			log.Warn().Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
 			if attempt < maxAttempts {
@@ -865,7 +868,7 @@ func (g *Gateway) registerGateway() error {
 	}
 
 	g.GatewayID = certResp.GatewayID
-	g.certificates = &certResp
+	g.certificates.Store(&certResp)
 	log.Info().Msgf("Successfully registered gateway and received certificates")
 
 	// Setup mTLS config
@@ -876,13 +879,20 @@ func (g *Gateway) registerGateway() error {
 	return nil
 }
 
+// certs returns the current certificate set. Never nil after a successful registration, which every
+// caller is reached through.
+func (g *Gateway) certs() *api.RegisterGatewayResponse {
+	return g.certificates.Load()
+}
+
 func (g *Gateway) setupTLSConfig() error {
-	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
+	certs := g.certs()
+	serverCertBlock, _ := pem.Decode([]byte(certs.PKI.ServerCertificate))
 	if serverCertBlock == nil {
 		return fmt.Errorf("failed to decode server certificate")
 	}
 
-	serverKeyBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerPrivateKey))
+	serverKeyBlock, _ := pem.Decode([]byte(certs.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
 		return fmt.Errorf("failed to decode server private key")
 	}
@@ -894,7 +904,7 @@ func (g *Gateway) setupTLSConfig() error {
 
 	clientCAPool := x509.NewCertPool()
 	var chainCerts [][]byte
-	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
+	chainData := []byte(certs.PKI.ClientCertificateChain)
 	for {
 		block, rest := pem.Decode(chainData)
 		if block == nil {
@@ -931,13 +941,14 @@ func (g *Gateway) setupTLSConfig() error {
 }
 
 func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
-	privateKey, err := ssh.ParsePrivateKey([]byte(g.certificates.SSH.ClientPrivateKey))
+	certs := g.certs()
+	privateKey, err := ssh.ParsePrivateKey([]byte(certs.SSH.ClientPrivateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH private key: %v", err)
 	}
 
 	// Parse certificate
-	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ClientCertificate))
+	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(certs.SSH.ClientCertificate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
@@ -983,7 +994,7 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 }
 
 func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
-	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ServerCAPublicKey))
+	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certs().SSH.ServerCAPublicKey))
 	if err != nil {
 		return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			return fmt.Errorf("failed to parse CA public key: %v", err)
@@ -1044,15 +1055,12 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation in
 		log.Info().Msgf("Failed to accept channel: %v", err)
 		return
 	}
-	defer channel.Close()
 
 	go ssh.DiscardRequests(requests)
 
-	// Create a virtual connection that pipes data between SSH channel and TLS
-	virtualConn := &virtualConnection{
-		channel: channel,
-	}
-	g.handleGatewayConnection(virtualConn)
+	// handleGatewayConnection closes the conn it is handed, and virtualConnection.Close closes the
+	// channel, so the channel must not be deferred closed here as well.
+	g.handleGatewayConnection(&virtualConnection{channel: channel})
 }
 
 func (g *Gateway) handleGatewayConnection(conn net.Conn) {
