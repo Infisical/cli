@@ -454,7 +454,7 @@ func DomainOverridePrompt() (bool, error) {
 }
 
 func normalizePresetDomain(presetDomain string) string {
-	return strings.TrimSuffix(strings.Trim(strings.TrimSuffix(presetDomain, "/api"), "/"), "/api")
+	return strings.TrimSuffix(strings.TrimRight(presetDomain, "/"), "/api")
 }
 
 func shouldApplyPresetDomain(parsedDomain string, domainExplicitlyProvided bool) bool {

@@ -479,15 +479,9 @@ func GetEnvDomain() (string, bool) {
 }
 
 func AppendAPIEndpoint(address string) string {
-	// if it's empty return as it is
-	// Ensure the address does not already end with "/api"
+	address = strings.TrimRight(address, "/")
 	if address == "" || strings.HasSuffix(address, "/api") {
 		return address
-	}
-
-	// Check if the address ends with a slash and append accordingly
-	if address[len(address)-1] == '/' {
-		return address + "api"
 	}
 	return address + "/api"
 }
