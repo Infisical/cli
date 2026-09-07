@@ -80,7 +80,7 @@ Two ways to get a session, exactly one of them required:
 
   --access-bundle   mint one now over the named bundles (repeatable; needs your login or a machine identity).
                     Revoked when the agent exits unless --keep-session is set.
-  --token           run with a session token minted in the dashboard. Never revoked by this command.
+  --session-token   run with a session token minted in the dashboard. Never revoked by this command.
 
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match a fingerprint from the Proxies page.
@@ -88,7 +88,7 @@ The proxy's certificate authority is fetched from the proxy on every run and tru
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
 	Example: `  infisical av run --access-bundle on-call-infrastructure --proxy 10.0.1.5:17323 -- claude
-  infisical av run --token agv_... --proxy 10.0.1.5:17323 --ca-fingerprint SHA256:9F:2C:... -- claude`,
+  infisical av run --session-token agv_... --proxy 10.0.1.5:17323 --ca-fingerprint SHA256:9F:2C:... -- claude`,
 	DisableFlagsInUseLine: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -101,12 +101,12 @@ and starts the process.`,
 
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	accessBundles, _ := cmd.Flags().GetStringArray("access-bundle")
-	sessionToken, _ := cmd.Flags().GetString("token")
+	sessionToken, _ := cmd.Flags().GetString("session-token")
 	if len(accessBundles) == 0 && sessionToken == "" {
-		util.HandleError(fmt.Errorf("a session is required; pass --access-bundle <name> to mint one, or --token <session token> from the dashboard"))
+		util.HandleError(fmt.Errorf("a session is required; pass --access-bundle <name> to mint one, or --session-token <session token> from the dashboard"))
 	}
 	if len(accessBundles) > 0 && sessionToken != "" {
-		util.HandleError(fmt.Errorf("--access-bundle and --token are two ways to get one session; pass one of them, not both"))
+		util.HandleError(fmt.Errorf("--access-bundle and --session-token are two ways to get one session; pass one of them, not both"))
 	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
@@ -121,11 +121,11 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	if sessionToken != "" {
 		if cmd.Flags().Changed("ttl") {
 			util.HandleError(fmt.Errorf(
-				"--ttl applies to a session this command mints; the one behind --token was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle"))
+				"--ttl applies to a session this command mints; the one behind --session-token was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle"))
 		}
 		if cmd.Flags().Changed("keep-session") {
 			util.HandleError(fmt.Errorf(
-				"--keep-session applies to a session this command mints; the one behind --token is never revoked here. Drop --keep-session, or mint here with --access-bundle"))
+				"--keep-session applies to a session this command mints; the one behind --session-token is never revoked here. Drop --keep-session, or mint here with --access-bundle"))
 		}
 	}
 
@@ -266,8 +266,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 }
 
 // The identity that mints: --client-id/--client-secret (or their env vars) for a machine identity, else an
-// access token in the environment, else the keyring login. --token is the session token here, so it is
-// deliberately not read as an identity.
+// access token in the environment, else the keyring login. The session token arrives as --session-token, a
+// name the root's --token handling never reads, so it is never mistaken for an identity.
 // The cleanup path's version of resolveAgentVaultIdentityToken: same sources, but it reports a failure
 // instead of exiting the process or prompting for a login.
 func revocationToken(cmd *cobra.Command) (string, error) {
@@ -488,7 +488,7 @@ func quoteAll(values []string) string {
 
 func init() {
 	avRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over this access bundle (repeatable; order is priority order when two bundles cover one host)")
-	avRunCmd.Flags().String("token", "", "run with a session token minted in the dashboard instead of minting one")
+	avRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one")
 	avRunCmd.Flags().String("ttl", "7d", "lifetime of a minted session: 1h | 8h | 24h | 7d | never")
 	avRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
 	avRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
