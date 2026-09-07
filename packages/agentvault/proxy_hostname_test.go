@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// Matching lowercased and trimmed the trailing dot on its own, while the leaf, the Host header and the
-// dial used whatever the client typed. So one host could be brokered under a spelling it was never
-// certified for.
 func TestTargetsAreNormalizedOnce(t *testing.T) {
 	cases := []struct {
 		target   string
@@ -38,8 +35,6 @@ func TestTargetsAreNormalizedOnce(t *testing.T) {
 	}
 }
 
-// Every capitalisation used to mint and cache its own certificate - a P-256 keygen and a signature
-// each - so a session holder could churn the leaf cache with case alone.
 func TestOneHostMintsOneLeafWhateverTheCase(t *testing.T) {
 	key, cert, err := generateRootCa()
 	if err != nil {

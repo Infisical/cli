@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Top-level, beside gateway / relay / pam, rather than under `secrets`. The existing
-// `infisical secrets agent-proxy` tree is a different product and is untouched.
+// Top-level, beside gateway / relay / pam: the existing `infisical secrets agent-proxy` tree is a
+// different product.
 var avCmd = &cobra.Command{
 	Use:   "av",
 	Short: "Agent Vault commands",
@@ -86,8 +86,6 @@ func init() {
 		"one-time token from Infisical, used to enroll this proxy. Not needed once enrolled")
 	avProxyCmd.Flags().String("data-dir", "",
 		fmt.Sprintf("where to keep the certificate authority and proxy token (default: %s)", defaultDataDirHelp()))
-	// Not 17322: that is the existing `secrets agent-proxy start` default, the old feature is not being
-	// removed, and both are expected to run on one box.
 	avProxyCmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
 	avProxyCmd.Flags().String("log-format", "console", "log output format: console | json")
 	avProxyCmd.Flags().String("log-file", "", "path to also write logs to")

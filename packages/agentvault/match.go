@@ -5,18 +5,12 @@ import (
 	"strings"
 )
 
-// defaultPort is what a pattern with no port means. The old proxied-service grammar left an empty port
-// matching anything, so plaintext port 80 matched and the credential went out unencrypted. Defaulting to
-// 443 closes that; an explicit port stays allowed, :80 included, because some internal APIs sit behind a
-// non-443 TLS port — so the proxy also refuses to inject on any upstream it did not reach over TLS.
+// The old proxied-service grammar left an empty port matching anything, so plaintext port 80 matched
+// and the credential went out unencrypted.
 const defaultPort = "443"
 
-// hostPattern carries no path. Paths are rejected at write time: the matcher would compare the decoded
-// path while the upstream receives the escaped one, so `/v1/safe/../../admin` and `%2f` both collect a
-// credential meant for `/v1/safe`.
-//
-// The grammar is mirrored in the backend (agent-vault-host-pattern.ts). testdata/host-pattern-fixture.json
-// is the shared contract; keep the two in sync through it, not through this comment.
+// hostPattern carries no path: paths are rejected at write time, since the matcher would compare the
+// decoded path while the upstream receives the escaped one.
 type hostPattern struct {
 	host string
 	port string
@@ -32,8 +26,6 @@ func parseHostPatterns(raw string) []hostPattern {
 
 		p := hostPattern{port: defaultPort}
 
-		// Bracketed IPv6 ([::1] or [2001:db8::1]:8443): the brackets disambiguate the port colon, and the
-		// host is stored unbracketed to match the incoming hostname, which arrives unbracketed.
 		if strings.HasPrefix(part, "[") {
 			if end := strings.Index(part, "]"); end != -1 {
 				p.host = part[1:end]
@@ -57,10 +49,6 @@ func parseHostPatterns(raw string) []hostPattern {
 	return patterns
 }
 
-// matchDetail records only what can still vary. The inherited ladder had three rungs — exact host, then
-// specific port, then longest path. Paths are gone and every pattern now has a concrete port, so the
-// middle and last rungs can never fire: exact-beats-wildcard is the only rung left, and far more traffic
-// reaches the caller-controlled tiebreak than the original design assumed.
 type matchDetail struct {
 	exactHost bool
 }
@@ -78,9 +66,8 @@ func (p hostPattern) match(host, port string) (bool, matchDetail) {
 
 	if strings.HasPrefix(patternHost, "*.") {
 		suffix := patternHost[1:]
-		// A wildcard matches exactly one extra label: api.github.com yes, a.b.github.com no. This is
-		// load-bearing rather than a syntax preference — it is what makes every pattern pair identical,
-		// contained or disjoint, and therefore what makes write-time conflict detection exact.
+		// A wildcard matches exactly one extra label. Load-bearing rather than a syntax preference: it is what
+		// makes the backend's write-time conflict rule exact.
 		if !strings.HasSuffix(host, suffix) {
 			return false, detail
 		}
@@ -102,8 +89,6 @@ func (p hostPattern) match(host, port string) (bool, matchDetail) {
 	return true, detail
 }
 
-// hostsEqual compares hosts by value when both are IP literals, so IPv6 forms like ::1 and
-// 0:0:0:0:0:0:0:1 match regardless of how the pattern was written; otherwise it is a plain compare.
 func hostsEqual(a, b string) bool {
 	if a == b {
 		return true
@@ -112,23 +97,14 @@ func hostsEqual(a, b string) bool {
 	return ipA != nil && ipB != nil && ipA.Equal(ipB)
 }
 
-// bestMatch picks the connection whose credential goes on the wire.
-//
-// The ladder is: exact host beats wildcard, then slice order. Slice order is not incidental — resolve
-// returns connections ordered by (session bundle position, connection name), and position is the order
-// the caller named their bundles at mint. Write-time validation refuses two connections in one bundle
-// that share a pattern, so the name rung should never decide anything; it is here so the matcher is
-// total rather than silently depending on the order rows came back from a database.
-//
-// There is no fallback. If the winning connection's credential comes back 401 or 403, the proxy does not
-// retry with the next match: one host, one credential, one attempt.
+// The ladder is exact host, then slice order. Slice order is access bundle position, so it is not incidental.
 func bestMatch(connections []*resolvedConnection, host, port string) *resolvedConnection {
 	var best *resolvedConnection
 	var bestDetail matchDetail
 
 	for _, conn := range connections {
-		// Every pattern on the connection is considered, not just the first that matches: a connection
-		// can carry both `*.foo.com` and `api.foo.com`, and the exact one has to be able to win.
+		// Every pattern on the connection is considered, not just the first that matches, so an exact pattern
+		// still wins over a wildcard on the same connection.
 		var connDetail matchDetail
 		matchedConn := false
 		for _, pat := range conn.hostPatterns {
@@ -144,7 +120,6 @@ func bestMatch(connections []*resolvedConnection, host, port string) *resolvedCo
 		if !matchedConn {
 			continue
 		}
-		// A tie goes to the connection already found, which is the earlier one in the slice.
 		if best == nil || connDetail.betterThan(bestDetail) {
 			best = conn
 			bestDetail = connDetail

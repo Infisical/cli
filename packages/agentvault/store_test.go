@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// saveCa writes the key and then the certificate. An interruption between the two leaves a new key
-// beside the old certificate, and both parse, so without this check the proxy would start, call itself
-// enrolled and fail to mint every leaf.
 func TestLoadCaRefusesAKeyThatDoesNotMatchTheCertificate(t *testing.T) {
 	st := newStore(t.TempDir())
 
@@ -22,7 +19,6 @@ func TestLoadCaRefusesAKeyThatDoesNotMatchTheCertificate(t *testing.T) {
 		t.Fatalf("a matching pair must load: %v", err)
 	}
 
-	// Simulate the interrupted re-enrollment: the new key lands, the new certificate never does.
 	secondKey, _, err := generateRootCa()
 	if err != nil {
 		t.Fatalf("generateRootCa: %v", err)

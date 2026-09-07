@@ -12,31 +12,18 @@ import (
 )
 
 const (
-	// A session nobody has used for this long stops being polled and is dropped.
 	sessionInactiveTTL = 10 * time.Minute
 
-	// Bounds the cache so a proxy serving many agents cannot grow it until it runs out of memory. When
-	// full, idle entries go first, then the least-recently-seen.
 	maxSessionCacheEntries = 4096
 
-	// How long to keep serving when Infisical is unreachable — a timeout or a 5xx, as distinct from a
-	// 401. One interval would kill every running agent on a blip; the shipped proxied-service cache
-	// serves indefinitely, which is the worse bug. Enforced on the read path as well as in the refresh
-	// loop, so an entry the loop never got back to still ages out.
+	// How long to keep serving when Infisical is unreachable - a timeout or a 5xx, as distinct from a 401.
 	unreachableGraceIntervals = 5
 
-	// Bounds every call the proxy makes to Infisical. The shared CLI client sets retries but no
-	// deadline, and a control plane that accepts the connection and never answers would otherwise
-	// block the poll loop on one call forever, with every session served from the cache meanwhile.
+	// The shared CLI client sets retries but no deadline, so a control plane that stalls would hang the poll loop.
 	controlPlaneTimeout = 15 * time.Second
 )
 
-// credential is the decrypted half.
-//
-// Bytes are deliberately not zeroed on eviction or refresh. Zeroing only defends against someone who can
-// read this process's memory, and anyone in that position is on the proxy's own box, where the proxy
-// token sits on disk and can resolve every live session's credentials directly. Zeroing in place also
-// raced with in-flight requests that still held the slice, so a refresh could send \x00 bytes upstream.
+// Bytes are deliberately not zeroed on eviction: the copies handed to callers make it a false promise.
 type credential struct {
 	kind         string
 	headerName   string
@@ -47,9 +34,7 @@ type credential struct {
 }
 
 type resolvedConnection struct {
-	id string
-	// Carried so the decision log can say which access bundle a host came from. Resolve is the only place
-	// that knows it.
+	id               string
 	name             string
 	accessBundleName string
 	hostPatterns     []hostPattern
@@ -64,8 +49,7 @@ type sessionEntry struct {
 	fetchedAt   time.Time
 }
 
-// sessionKey is the sha256 of the token, never the token. In the shipped proxied-service cache the raw
-// JWT is both the map key and a field on the entry, so a heap dump yields every live credential verbatim.
+// The map key is the sha256 of the token, never the token itself, so a heap dump yields no live credential.
 func sessionKey(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
@@ -81,8 +65,7 @@ type sessionCache struct {
 
 	mu      sync.Mutex
 	entries map[string]*sessionEntry
-	// Tokens are held only so the refresh loop can re-resolve; keyed by hash like everything else.
-	tokens map[string]string
+	tokens  map[string]string
 }
 
 func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration) *sessionCache {
@@ -94,16 +77,13 @@ func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration
 	}
 }
 
-// errSessionGone means drop the entry now: revoked, expired, or the session row is gone.
 var errSessionGone = errors.New("session is no longer valid")
 
 func isSessionGone(err error) bool {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
-		// 401 is revoked or expired. 404 is the session row gone (the actor was deleted) or a proxy/org
-		// mismatch. A 404 is neither a 401 nor a 5xx, so without its own arm it would fall into the
-		// unreachable-Infisical branch below and keep brokering for five more intervals — precisely the
-		// case where the proxy should stop soonest.
+		// A 404 is neither a 401 nor a 5xx, so without its own arm it would fall into the unreachable-Infisical
+		// branch and keep brokering.
 		return apiErr.StatusCode == 401 || apiErr.StatusCode == 404
 	}
 	return errors.Is(err, errSessionGone)
@@ -116,14 +96,12 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 	entry, ok := c.entries[key]
 	if ok {
 		if entry.expiresAt != nil && time.Now().After(*entry.expiresAt) {
-			// Expired locally: no call needed, and none would succeed.
 			delete(c.entries, key)
 			delete(c.tokens, key)
 			c.mu.Unlock()
 			return nil, errSessionGone
 		}
-		// Past the grace window the entry is a miss, not an answer: it is dropped and re-resolved
-		// below, so a stalled refresh loop cannot keep an hour-old credential in circulation.
+		// Past the grace window the entry is a miss, so a stalled refresh loop cannot keep an old credential alive.
 		if time.Since(entry.fetchedAt) > c.grace() {
 			delete(c.entries, key)
 			delete(c.tokens, key)
@@ -155,8 +133,6 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 	return result.Connections, nil
 }
 
-// evictIfFullLocked drops an idle entry first, and only then the least-recently-seen one, so an actively
-// used session keeps its cache while idle ones go.
 func (c *sessionCache) evictIfFullLocked() {
 	if len(c.entries) < maxSessionCacheEntries {
 		return
@@ -181,8 +157,6 @@ func (c *sessionCache) evictIfFullLocked() {
 	delete(c.tokens, victim)
 }
 
-// refresh re-resolves every live session. Called once per poll tick, so the worst-case staleness of any
-// change an administrator makes is one interval, and there is no second place to invalidate.
 func (c *sessionCache) refresh() {
 	c.mu.Lock()
 	targets := make(map[string]string, len(c.tokens))
@@ -230,15 +204,13 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	}
 
 	if isSessionGone(err) {
-		// The server's own message rides along: a revoked proxy token 401s here too, and without it every
-		// session on the proxy drops looking as though each was revoked on its own.
+		// The server's own message rides along: a revoked proxy token 401s here too.
 		log.Debug().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
 		delete(c.entries, key)
 		delete(c.tokens, key)
 		return
 	}
 
-	// Unreachable Infisical. Keep serving for a bounded window, then fail closed.
 	grace := c.grace()
 	if time.Since(entry.fetchedAt) > grace {
 		log.Warn().

@@ -7,12 +7,7 @@ import (
 )
 
 // The fixture is the shared contract with the backend grammar
-// (backend/src/ee/services/agent-vault/agent-vault-host-pattern-fixture.json). The Go copy is verbatim:
-// change the backend's and copy it across, never edit only one.
-//
-// Only the `match` and `relate` sections apply here. Rejection and normalization are the backend's job —
-// the proxy never sees a pattern that did not pass write-time validation — so those sections are read by
-// the Vitest suite alone.
+// (backend/src/ee/services/agent-vault/agent-vault-host-pattern-fixture.json).
 type matchFixture struct {
 	Match []struct {
 		Pattern  string `json:"pattern"`
@@ -66,8 +61,6 @@ func TestMatchAgainstSharedFixture(t *testing.T) {
 	}
 }
 
-// The relation section is the backend's write-time conflict rule. The proxy does not enforce it, but the
-// two grammars have to agree on which patterns overlap or the rule protects nothing at runtime.
 func TestRelationsAgreeWithTheBackend(t *testing.T) {
 	for _, tc := range loadFixture(t).Relate {
 		t.Run(tc.A+" vs "+tc.B, func(t *testing.T) {
@@ -80,7 +73,6 @@ func TestRelationsAgreeWithTheBackend(t *testing.T) {
 					t.Errorf("%q and %q should normalize to the same pattern, got %+v and %+v", tc.A, tc.B, a, b)
 				}
 			case "contained":
-				// The exact host must match the wildcard, and not the other way round.
 				wildcard, exact := a, b
 				if !isWildcard(a) {
 					wildcard, exact = b, a
@@ -110,8 +102,6 @@ func isWildcard(p hostPattern) bool {
 }
 
 func TestPortlessPatternDefaultsTo443(t *testing.T) {
-	// The whole point of the change: an unspecified port used to match anything, so plaintext 80 matched
-	// and the credential went out unencrypted.
 	p := parseHostPatterns("api.github.com")[0]
 	if p.port != defaultPort {
 		t.Fatalf("portless pattern got port %q, want %q", p.port, defaultPort)
@@ -125,8 +115,6 @@ func TestBestMatchPrefersExactOverWildcard(t *testing.T) {
 	wildcard := &resolvedConnection{name: "wildcard", hostPatterns: parseHostPatterns("*.foo.com")}
 	exact := &resolvedConnection{name: "exact", hostPatterns: parseHostPatterns("api.foo.com")}
 
-	// The exact host wins whichever order the slice is in: rung 1 sits above slice order, which is why a
-	// later access bundle's exact pattern beats an earlier one's wildcard.
 	if got := bestMatch([]*resolvedConnection{wildcard, exact}, "api.foo.com", "443"); got != exact {
 		t.Errorf("exact should win when it is second, got %v", got)
 	}
@@ -136,9 +124,6 @@ func TestBestMatchPrefersExactOverWildcard(t *testing.T) {
 }
 
 func TestBestMatchFallsBackToSliceOrder(t *testing.T) {
-	// Two identical patterns can only reach here from *different* access bundles, since write-time
-	// validation refuses them inside one. Slice order is resolve's ordering, which is bundle position:
-	// the bundle the caller named first wins.
 	first := &resolvedConnection{name: "from-first-bundle", hostPatterns: parseHostPatterns("api.foo.com")}
 	second := &resolvedConnection{name: "from-second-bundle", hostPatterns: parseHostPatterns("api.foo.com")}
 
@@ -148,7 +133,6 @@ func TestBestMatchFallsBackToSliceOrder(t *testing.T) {
 }
 
 func TestBestMatchConsidersEveryPatternOnAConnection(t *testing.T) {
-	// A connection carrying both a wildcard and an exact host must be able to win on the exact one.
 	broad := &resolvedConnection{name: "broad", hostPatterns: parseHostPatterns("*.foo.com")}
 	both := &resolvedConnection{name: "both", hostPatterns: parseHostPatterns("*.bar.com, api.foo.com")}
 
@@ -157,8 +141,6 @@ func TestBestMatchConsidersEveryPatternOnAConnection(t *testing.T) {
 	}
 }
 
-// The bypass list is a proxy-wide exception to deny and nothing more: a host on it is opened and
-// forwarded like any other, and a connection still supplies the credential.
 func TestBypassIsAnExceptionToDeny(t *testing.T) {
 	ps := &proxyServer{}
 	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, api.github.com"})
@@ -199,7 +181,6 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
 			}
 
-			// Mirrors the guard in forward().
 			blocked := matched == nil &&
 				ps.currentConfig().UnmatchedHost == UnmatchedDeny &&
 				!ps.isBypassed(tc.host, "443")

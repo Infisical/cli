@@ -36,8 +36,6 @@ func selfSignedPEM(t *testing.T, cn string) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
-// The pin is checked against the first certificate, so only that certificate may be trusted. A second
-// one appended to the response used to be written to the CA file unchecked.
 func TestOnlyThePinnedCertificateIsTrusted(t *testing.T) {
 	genuine := selfSignedPEM(t, "genuine")
 	appended := selfSignedPEM(t, "appended")

@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// The keychain prompt is a dialog on the machine's own screen. Unanswered, it used to hold av run
-// forever with nothing printed, which is what CI and an SSH session both look like.
 func TestKeychainTrustGivesUpInsteadOfWaitingForever(t *testing.T) {
 	originalTimeout, originalCommand := agentVaultTrustTimeout, agentVaultTrustCommand
 	t.Cleanup(func() { agentVaultTrustTimeout, agentVaultTrustCommand = originalTimeout, originalCommand })

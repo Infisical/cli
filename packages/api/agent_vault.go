@@ -7,8 +7,7 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-// The header carrying the session an agent is running with. A selector, not a second credential: the
-// proxy's own bearer token is what authorizes the call.
+// A selector, not a second credential: the proxy's own bearer token is what authorizes the call.
 const AgentVaultSessionHeader = "X-Infisical-Agent-Session"
 
 type AgentVaultProxyConfig struct {
@@ -86,10 +85,8 @@ type AgentVaultConnection struct {
 }
 
 type ResolveAgentVaultSessionResponse struct {
-	SessionID string `json:"sessionId"`
-	ExpiresAt string `json:"expiresAt"`
-	// Ordered by bundle position, then connection name. An empty list is a valid session whose actor has
-	// lost every access bundle, not an error.
+	SessionID   string                 `json:"sessionId"`
+	ExpiresAt   string                 `json:"expiresAt"`
 	Connections []AgentVaultConnection `json:"connections"`
 }
 

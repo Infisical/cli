@@ -17,22 +17,18 @@ import (
 )
 
 const (
-	// The shipped `secrets agent-proxy start` already defaults to 17322 and is not being removed, so a
-	// collision here would mean the second of the two to start fails to bind. Phase 4's own verification
-	// runs both on one box.
+	// Not 17322: the shipped `secrets agent-proxy start` already defaults to it, and both are expected to
+	// run on one box.
 	DefaultPort = 17323
 
 	tlsHandshakeTimeout = 10 * time.Second
 
-	// Outer ingress. No server-level Read/WriteTimeout: they would cut CONNECT hijacks and long streaming
-	// responses. Plaintext forwards are bounded per-request instead.
+	// No server-level Read/WriteTimeout: they would cut CONNECT hijacks and long streaming responses.
 	frontReadHeaderTimeout = 30 * time.Second
 	frontIdleTimeout       = 5 * time.Minute
 
-	// Inner per-tunnel server. The write timeouts are absolute deadlines set at request start, so they
-	// only bound a response that has produced nothing yet; once bytes flow, flushingWriter replaces them
-	// with a rolling idle deadline. Left generous because there is no ResponseHeaderTimeout on the
-	// upstream transport, and a slow API is not a stalled one.
+	// The write timeouts are absolute deadlines set at request start, so they bound only a response that
+	// has produced nothing yet.
 	tunnelReadHeaderTimeout = 10 * time.Second
 	tunnelReadTimeout       = 60 * time.Second
 	tunnelWriteTimeout      = 30 * time.Minute
@@ -41,15 +37,11 @@ const (
 	plainReadTimeout  = 60 * time.Second
 	plainWriteTimeout = 30 * time.Minute
 
-	// Refreshed on every flushed chunk, so a response lives as long as it keeps producing and a stalled
-	// one still dies. Without it the absolute write deadline cuts a healthy stream mid-flight at exactly
-	// 30 minutes, which is how SSE, MCP and log tails behave.
+	// Refreshed on every flushed chunk, so a response lives as long as it keeps producing.
 	streamIdleTimeout = 5 * time.Minute
 
 	maxRequestHeaderBytes = 1 << 20
 
-	// Caps simultaneous client connections so a flood of sockets cannot exhaust file descriptors or
-	// goroutines. A live tunnel holds its slot for the tunnel's lifetime.
 	maxConcurrentConns = 512
 
 	maxLoggedPathLen = 2048
@@ -64,8 +56,6 @@ const (
 	decisionError       = "error"
 )
 
-// Options is only what the server cannot know: where to bind, where to write, how to log. Traffic policy
-// comes from Infisical on every poll, so there is no --unmatched-host or --poll-interval flag.
 type Options struct {
 	Port       int
 	DataDir    string
@@ -80,11 +70,9 @@ type proxyServer struct {
 	cache     *sessionCache
 	transport http.RoundTripper
 
-	// The server-owned settings block, swapped wholesale when a heartbeat returns something different.
 	configMu sync.RWMutex
 	config   ProxyConfig
 
-	// Keeps listener saturation to one warning rather than one per accept.
 	saturationOnce sync.Once
 }
 
@@ -118,15 +106,14 @@ func newUpstreamTransport() *http.Transport {
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: tlsHandshakeTimeout,
-		// Deliberate: an h2 response has no HTTP/1.1 length framing, so re-serializing it into the
-		// tunnel would hang the client. h2-only upstreams are a documented unsupported case.
+		// Deliberate: an h2 response has no HTTP/1.1 length framing, so re-serializing it into the tunnel
+		// would hang the client.
 		ForceAttemptHTTP2: false,
 	}
 }
 
-// requestSessionToken reads the session an agent is running with off Proxy-Authorization. The token is
-// the username half of basic auth, which is what an HTTPS_PROXY URL of the form
-// http://agv_...@host:port puts there.
+// requestSessionToken reads the session token off Proxy-Authorization, whose username half is what an
+// agent's HTTPS_PROXY URL can carry.
 func requestSessionToken(r *http.Request) (string, bool) {
 	header := r.Header.Get("Proxy-Authorization")
 	if header == "" {
@@ -145,8 +132,6 @@ func writeProxyAuthChallenge(w http.ResponseWriter) {
 }
 
 func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
-	// Served before anything else and only for origin-form requests addressed to this proxy, so a
-	// proxied request for http://example.com/_agent-vault/ca still reaches example.com untouched.
 	if ps.serveSelfEndpoint(w, r) {
 		return
 	}
@@ -158,8 +143,7 @@ func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
-	// Everything that can produce an HTTP status happens before Hijack: once hijacked, no status can be
-	// sent.
+	// Everything that can produce an HTTP status happens before Hijack: once hijacked, no status can be sent.
 	sessionToken, ok := requestSessionToken(r)
 	if !ok {
 		writeProxyAuthChallenge(w)
@@ -172,9 +156,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve before anything that costs the proxy work on the caller's behalf - the DNS lookup below and
-	// the leaf minting further down. Otherwise any syntactically valid Proxy-Authorization header can
-	// make the proxy resolve arbitrary names and grow its certificate cache.
+	// Resolve before the DNS lookup below and the leaf minting further down, so an unauthenticated caller
+	// cannot make the proxy work on their behalf.
 	if _, err := ps.cache.get(sessionToken); err != nil {
 		if isSessionGone(err) {
 			http.Error(w, "the session is no longer valid", http.StatusForbidden)
@@ -185,14 +168,7 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Private and link-local addresses are reachable, deliberately: an internal API inside the operator's
-	// own network is a first-class destination, and a self-hosted deployment is the common case. Reaching
-	// the host's own metadata endpoint is part of what that allows, and the unmatched-host policy is what
-	// constrains it - under `deny` only configured hosts are reachable at all.
-	//
-	// Every reachable host is treated the same way from here: a certificate is minted and the request is
-	// opened, whether it is covered by a connection, allowed by the unmatched-host policy, or named in
-	// the bypass list. forward() is where those three part company, and the only difference is whether a
-	// credential goes on.
+	// own network is a first-class destination.
 
 	leaf, err := ps.ca.mintLeaf(hostname)
 	if err != nil {
@@ -218,8 +194,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	tlsConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{leaf},
 		MinVersion:   tls.VersionTLS12,
-		// http/1.1 only. An h2-only client fails ALPN here; that is a documented unsupported case rather
-		// than something to paper over with a silent downgrade.
+		// http/1.1 only. An h2-only client fails ALPN here, which is a documented unsupported case rather than
+		// something to paper over with a silent downgrade.
 		NextProtos: []string{"http/1.1"},
 	})
 	_ = tlsConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
@@ -251,8 +227,8 @@ func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, sessionTok
 	_ = srv.Serve(listener)
 }
 
-// Only http:// absolute-form is served. https:// is rejected so the proxy can never be used to silently
-// TLS-strip: HTTPS has to arrive as CONNECT.
+// handlePlainForward serves only http:// absolute-form. https:// is rejected so the proxy can never be
+// used to TLS-strip: HTTPS has to arrive as CONNECT.
 func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(plainReadTimeout))
@@ -275,7 +251,6 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Same ordering as CONNECT: the session resolves before the proxy does a DNS lookup for the caller.
 	if _, err := ps.cache.get(sessionToken); err != nil {
 		if isSessionGone(err) {
 			http.Error(w, "the session is no longer valid", http.StatusForbidden)
@@ -289,8 +264,7 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
-	// TRACE and TRACK make the upstream reflect the request — including the credential we just injected —
-	// back in the response body, which would hand the agent a secret it cannot fetch directly.
+	// TRACE and TRACK make the upstream reflect the injected credential back in the response body.
 	if r.Method == http.MethodTrace || r.Method == "TRACK" {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -310,19 +284,13 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status = decisionBlocked, http.StatusForbidden
 	case err != nil:
 		decision, status = decisionError, http.StatusBadGateway
-	// brokered means a credential went out, not merely that a connection matched: a pass-through
-	// connection attaches nothing, so it is forwarded like any other uncovered host. The connection and
-	// accessBundle fields below are what tell the two passthrough cases apart.
+	// brokered means a credential went out, not merely that a connection matched.
 	case matched != nil && matched.credential.kind != credentialPassthrough:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
 		status = resp.StatusCode
 	}
 
-	// A credential leaving the machine is the one per-request fact an operator should see without asking
-	// for it: nothing else records it, now that resolve is not audited and there is no request stream.
-	// Uncovered-host traffic is volume, so it stays at debug and a default run reads as one line per
-	// credential handed out.
 	event := log.Debug()
 	switch decision {
 	case decisionBrokered:
@@ -367,29 +335,22 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 	matched := bestMatch(connections, hostname, port)
 
-	// The bypass list is a proxy-wide exception to deny, and this is the only thing it does. A host on it
-	// is reached the same way as any other: certificate minted, request opened, no credential attached
-	// unless a connection covers it. It saves naming every such host as a pass-through connection in a
-	// bundle, and it is set by whoever runs the proxy rather than whoever owns the bundle.
 	if matched == nil && ps.currentConfig().UnmatchedHost == UnmatchedDeny && !ps.isBypassed(hostname, port) {
 		return nil, nil, fmt.Errorf("no connection covers host %q: %w", hostname, errHostBlocked)
 	}
 
 	req.URL.Scheme = scheme
 	req.URL.Host = net.JoinHostPort(hostname, port)
-	// Pin Host to the matched authority: the inner tunnel's Host header is agent-controlled and Go
-	// forwards it verbatim, which would let a matched CONNECT deliver the credential to another vhost.
+	// Pin Host to the matched authority: the inner tunnel's Host header is agent-controlled and Go forwards
+	// it verbatim.
 	req.Host = hostHeaderForScheme(scheme, req.URL.Host)
 	req.RequestURI = ""
 
-	// Stripped before injecting, so a client's Connection header cannot delete the credential we are
-	// about to add. The injected value always wins.
+	// Stripped before injecting, so a client's Connection header cannot delete the credential.
 	stripHopByHopHeaders(req.Header)
 
 	if matched != nil {
-		// A credential is only ever injected over TLS. The pattern grammar defaults a portless pattern to
-		// 443, but an explicit :80 is legal for an internal API, so the port alone is not the check — the
-		// scheme is.
+		// A credential is only ever injected over TLS, whatever port the pattern names.
 		if !strings.EqualFold(scheme, "https") {
 			log.Warn().
 				Str("host", hostname).
@@ -427,8 +388,7 @@ type flushingWriter struct {
 }
 
 func (fw flushingWriter) Write(p []byte) (int, error) {
-	// Before the write, not after: a chunk that takes a while to reach a slow client must not be racing a
-	// deadline set for the previous one.
+	// Before the write, not after: a chunk heading for a slow client must not race a deadline set for the previous one.
 	_ = fw.rc.SetWriteDeadline(time.Now().Add(streamIdleTimeout))
 	n, err := fw.ResponseWriter.Write(p)
 	if flusher, ok := fw.ResponseWriter.(http.Flusher); ok {
@@ -437,12 +397,8 @@ func (fw flushingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// DNS is case-insensitive and a trailing dot names the same host, so the hostname is normalised here and
-// that one value is what everything downstream uses: the connection match, the minted leaf and its cache
-// key, the Host header and the dial. Matching normalised on its own before this, which meant the proxy
-// could broker a request under one spelling and then mint a certificate for another - a trailing dot
-// produced an invalid SAN and an opaque TLS error, and each capitalisation of one host minted and cached
-// its own certificate, so a session holder could churn the leaf cache with nothing but case.
+// DNS is case-insensitive and a trailing dot names the same host, so normalise once here and use that
+// value everywhere downstream.
 func normalizeHostname(host string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 }
@@ -513,8 +469,7 @@ func parseProxyBasicAuth(header string) (username, password string, ok bool) {
 }
 
 // serveSelfEndpoint answers the proxy's own endpoints, and only for origin-form requests addressed to
-// this proxy. Getting that backwards would let the proxy shadow /_agent-vault/* on every host an agent
-// reaches — and §4.1 makes /ca load-bearing for trust, so the rule matters more, not less.
+// this proxy. Getting that backwards would let the proxy answer for a host it is proxying.
 func (ps *proxyServer) serveSelfEndpoint(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method == http.MethodConnect || r.URL.IsAbs() {
 		return false
@@ -572,8 +527,6 @@ func (l *oneShotListener) Close() error {
 
 func (l *oneShotListener) Addr() net.Addr { return l.conn.LocalAddr() }
 
-// limitListener caps concurrent connections. Accept blocks once the limit is reached, and a slot frees
-// only when a served connection closes. The original blocked silently here, so the agent just hung.
 type limitListener struct {
 	net.Listener
 	sem      chan struct{}

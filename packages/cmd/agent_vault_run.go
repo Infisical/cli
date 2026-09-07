@@ -31,10 +31,7 @@ var agentVaultSessionTTLs = []string{"1h", "8h", "24h", "7d", "never"}
 
 const agentVaultCaFileName = "ca.pem"
 
-// Served by the proxy itself over plain HTTP on its own address, not by Infisical. Fetched with a bare
-// net/http client, as every other call to a host that is not Infisical is: the shared resty builder
-// attaches INFISICAL_CUSTOM_HEADERS, which are credentials for a gateway in front of Infisical and
-// have no business reaching the proxy host.
+// Served by the proxy itself over plain HTTP, not by Infisical, so it uses a bare net/http client.
 var agentVaultProxyHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 type agentVaultProxyCa struct {
@@ -117,10 +114,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("--ttl must be one of %s, got %q", strings.Join(agentVaultSessionTTLs, ", "), ttl))
 	}
 
-	// Both flags describe a session this command mints. Neither can reach one minted in the dashboard: its
-	// expiry was fixed when it was created, and this command never revokes a session it was handed. Keyed
-	// on whether they were typed, since both carry a default. Refused rather than warned past, because the
-	// thing the operator is asking for - a shorter-lived credential - does not happen either way.
+	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
 	if sessionToken != "" {
 		if cmd.Flags().Changed("ttl") {
 			util.HandleError(fmt.Errorf(
@@ -159,9 +153,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical av proxy' is running there", proxyAddr))
 	}
-	// Only the certificate the fingerprint was taken from is trusted from here on. The response is
-	// text, and anything appended after the first certificate would otherwise be written and trusted
-	// without ever having been checked against the pin.
+	// Only the certificate the fingerprint was taken from is trusted from here on.
 	caPEM, servedFingerprint, err := agentVaultCaFingerprint(caResp.Certificate)
 	if err != nil {
 		util.HandleError(err, "The proxy served a certificate authority that could not be read")
@@ -218,11 +210,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		}
 		caPath = caFile
 
-		// Go binaries such as gh and docker ignore the CA environment variables and read the system trust
-		// store, so macOS gets the keychain entry too. Declining is fine: everything else still works.
-		//
-		// Skipped where no one can answer the prompt - CI, a pipe, an SSH session with no terminal -
-		// because the dialog appears on the machine's own screen and nothing there will ever click it.
+		// Go binaries such as gh and docker ignore the CA environment variables and read the system trust store,
+		// so macOS gets the keychain entry too.
 		if runtime.GOOS == "darwin" && isatty.IsTerminal(os.Stdin.Fd()) {
 			onPrompt := func() {
 				util.PrintWarning("Adding the Agent Vault proxy's certificate authority to your login keychain, so tools that read the system trust store accept it. Approve the macOS prompt, or press Ctrl-C and re-run with --no-ca-trust to skip it.")
@@ -245,10 +234,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	exitCode := runAgentVaultChild(args, env)
 
 	if minted != nil && !keepSession {
-		// Never resolve the identity the usual way here: a run long enough to outlive the login would exit
-		// on the expiry check, or open the login wizard on a terminal nobody is watching, and either way
-		// the session it minted is left behind. There is nothing to be done about an expired login at this
-		// point, so say so and name where to clear it.
+		// Never resolve the identity the usual way here: a long run would exit on the expiry check, or open the
+		// login wizard on a terminal nobody is watching.
 		httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
 		token, tokenErr := revocationToken(cmd)
 		switch {
@@ -268,11 +255,6 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	os.Exit(exitCode)
 }
 
-// The identity that mints: --client-id/--client-secret (or their env vars) for a machine identity, else an
-// access token in the environment, else the keyring login. The session token arrives as --session-token, a
-// name the root's --token handling never reads, so it is never mistaken for an identity.
-// The cleanup path's version of resolveAgentVaultIdentityToken: same sources, but it reports a failure
-// instead of exiting the process or prompting for a login.
 func revocationToken(cmd *cobra.Command) (string, error) {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
@@ -329,8 +311,6 @@ func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	return details.UserCredentials.JTWToken
 }
 
-// Names to ids, in the order given, since the mint body keeps that order. An unknown name is an error that
-// names it rather than a session silently missing a bundle.
 func resolveAgentVaultBundleIDs(names []string, bundles []api.AgentVaultAccessBundle) ([]string, error) {
 	byName := make(map[string]string, len(bundles))
 	for _, b := range bundles {
@@ -359,9 +339,8 @@ func resolveAgentVaultBundleIDs(names []string, bundles []api.AgentVaultAccessBu
 	return ids, nil
 }
 
-// The child's environment: the parent's, with stale proxy settings replaced by ours and the CA-trust
-// variables added. Nothing else is removed. av run does not isolate the agent from the machine it runs
-// on - it sets variables and execs - so pruning a few names would suggest a boundary that is not there.
+// The parent's environment, with stale proxy settings replaced by ours and the CA-trust variables added.
+// Nothing else is removed.
 func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy string) []string {
 	stale := map[string]bool{}
 	for _, k := range proxyEnvKeys {
@@ -399,15 +378,12 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 	return result
 }
 
-// http://<session token>@host:port. The token rides as the Proxy-Authorization username on every CONNECT,
-// in the clear on the hop to the proxy, which is the accepted trade for a proxy inside your own network.
+// The token rides as the Proxy-Authorization username on every CONNECT, in the clear on the hop to the proxy.
 func agentVaultProxyURL(proxyAddr, sessionToken string) string {
 	u := url.URL{Scheme: "http", User: url.User(sessionToken), Host: proxyAddr}
 	return u.String()
 }
 
-// Returns the first certificate re-encoded on its own, and its fingerprint, so the caller trusts
-// exactly what was checked.
 func agentVaultCaFingerprint(certificatePEM string) ([]byte, string, error) {
 	block, _ := pem.Decode([]byte(certificatePEM))
 	if block == nil || block.Type != "CERTIFICATE" {
@@ -420,7 +396,6 @@ func agentVaultCaFingerprint(certificatePEM string) ([]byte, string, error) {
 	return single, agentvault.FingerprintOf(block.Bytes), nil
 }
 
-// Tolerates the ways a fingerprint gets copied around: with or without the SHA256: prefix, colons and case.
 func agentVaultFingerprintsEqual(a, b string) bool {
 	normalize := func(s string) string {
 		s = strings.TrimSpace(s)
@@ -444,8 +419,7 @@ func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerpri
 
 }
 
-// Starts the agent, forwards termination signals and returns its exit code, so the caller can revoke the
-// session afterwards. os.Exit inside here would skip that.
+// os.Exit here would skip the session revoke.
 func runAgentVaultChild(args, env []string) int {
 	// #nosec G204 -- the command is provided directly by the operator running the CLI
 	proc := exec.Command(args[0], args[1:]...)

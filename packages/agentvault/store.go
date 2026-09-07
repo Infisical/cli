@@ -13,10 +13,6 @@ import (
 
 // The data directory persists because of the CA, not the enrollment: an agent that trusted this proxy's
 // certificate must keep trusting it across restarts.
-//
-//	ca.key    0600  the root private key
-//	ca.crt    0644  its public half, which is public
-//	proxy.conf 0600 the access token, the enrollment token that produced it, and the last settings
 const (
 	caKeyFile     = "ca.key"
 	caCertFile    = "ca.crt"
@@ -31,8 +27,6 @@ const (
 	confPollInterval    = "INFISICAL_AGENT_VAULT_POLL_INTERVAL"
 )
 
-// DefaultDataDir splits on privilege the same way gateway enrollment does: a root-run proxy is a system
-// service and writes under /etc.
 func DefaultDataDir() (string, error) {
 	if os.Geteuid() == 0 {
 		return "/etc/infisical/agent-vault", nil
@@ -45,18 +39,13 @@ func DefaultDataDir() (string, error) {
 }
 
 type persistedState struct {
-	ProxyID string
-	// Server-owned, like every other setting: recorded at enrollment so the CA endpoint can name this
-	// proxy without a second call.
+	ProxyID         string
 	ProxyName       string
 	AccessToken     string
 	EnrollmentToken string
 	Config          ProxyConfig
 }
 
-// ProxyConfig is the server-owned settings block. It is persisted so a restart during an Infisical
-// outage keeps the operator's policy: without this, a proxy configured to deny unmatched hosts would
-// come back up allowing them, at exactly the moment nobody is watching.
 type ProxyConfig struct {
 	UnmatchedHost string
 	BypassHosts   string
@@ -78,8 +67,7 @@ func (s *store) ensureDir() error {
 
 func (s *store) path(name string) string { return filepath.Join(s.dir, name) }
 
-// loadCa returns nil, nil when there is nothing stored yet, which is how a first run is told from a
-// corrupt directory.
+// Returns nil, nil when there is nothing stored yet, which is how a first run is told from a corrupt directory.
 func (s *store) loadCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	keyPEM, err := os.ReadFile(s.path(caKeyFile))
 	if os.IsNotExist(err) {
@@ -109,10 +97,8 @@ func (s *store) loadCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 		return nil, nil, fmt.Errorf("failed to parse the stored certificate authority: %w", err)
 	}
 
-	// The key and certificate are written as two files, so a re-enrollment interrupted between them
-	// leaves a new key beside the old certificate. Both still parse, resolveState would call the proxy
-	// enrolled, and every request would then fail to mint a leaf, which is a puzzle at the agent rather
-	// than an answer here.
+	// A re-enrollment interrupted between the two files leaves a new key beside the old certificate, and
+	// both parse, so the pair is checked here.
 	certKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok || !certKey.Equal(&key.PublicKey) {
 		return nil, nil, fmt.Errorf(

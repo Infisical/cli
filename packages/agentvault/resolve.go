@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	// The engine, the column, the API and the UI all say deny. The inherited constant was UnmatchedBlock;
-	// renamed here, in a file written from scratch, so packages/agentproxy is untouched.
+	// The engine, the column, the API and the UI all say deny; the inherited constant was UnmatchedBlock.
 	UnmatchedAllow = "allow"
 	UnmatchedDeny  = "deny"
 )
@@ -20,9 +19,7 @@ type resolveResult struct {
 	Connections []*resolvedConnection
 }
 
-// infisicalResolver is the one implementation of sessionResolver. It exists as a seam so the cache can
-// be tested without a server, not because a second implementation is planned — the in-process mode the
-// old proxy had is deliberately not carried over.
+// A seam so the cache can be tested without a server, not because a second implementation is expected.
 type infisicalResolver struct {
 	proxyToken func() string
 }
@@ -56,9 +53,8 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 			id:               wire.ID,
 			name:             wire.Name,
 			accessBundleName: wire.AccessBundleName,
-			// Parsed once here rather than per request.
-			hostPatterns: parseHostPatterns(wire.HostPattern),
-			credential:   toCredential(wire.Credential),
+			hostPatterns:     parseHostPatterns(wire.HostPattern),
+			credential:       toCredential(wire.Credential),
 		})
 	}
 

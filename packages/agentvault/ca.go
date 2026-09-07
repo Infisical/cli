@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	// The root outlives any deployment that will realistically not be redeployed; re-enrolling replaces it.
 	rootCaTTL = 5 * 365 * 24 * time.Hour
 
 	leafTTL             = 24 * time.Hour
@@ -27,11 +26,6 @@ const (
 )
 
 // caManager owns the proxy's own root CA and mints leaves for intercepted hosts.
-//
-// Unlike the proxied-service CA this root is self-signed and per-proxy: nothing is signed by an
-// org-wide CA, so there is no remote re-sign path and no runtime dependency on Infisical. With the
-// control plane down, a proxy still serves its own CA and an agent with a cached session still works.
-// It also caps a key compromise at the agents using this one proxy.
 type caManager struct {
 	mu       sync.Mutex
 	rootKey  *ecdsa.PrivateKey
@@ -46,8 +40,7 @@ type leafEntry struct {
 	expiration time.Time
 }
 
-// generateRootCa mints a self-signed ECDSA P-256 root. P-256 because rustls-based agents reject some
-// other curves outright.
+// P-256 because rustls-based agents reject some other curves outright.
 func generateRootCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -90,8 +83,6 @@ func newCaManager(key *ecdsa.PrivateKey, cert *x509.Certificate) *caManager {
 	return &caManager{rootKey: key, rootCert: cert, leafCache: make(map[string]*leafEntry)}
 }
 
-// RootPEM is the public half, which is public: it is served unauthenticated on the proxy's own listener
-// and is what an agent trusts.
 func (c *caManager) RootPEM() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -101,7 +92,6 @@ func (c *caManager) RootPEM() []byte {
 	return caPEM(c.rootCert)
 }
 
-// Fingerprint is the value an operator pins with, in the same form the dashboard shows.
 func (c *caManager) Fingerprint() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

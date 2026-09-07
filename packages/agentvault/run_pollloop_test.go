@@ -9,8 +9,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
-// A proxy whose heartbeat is met with 401 twice in a row exits; one whose control plane is merely down
-// (5xx) keeps polling, because that is the case the grace window exists for.
 func newPollLoopFixture(t *testing.T, heartbeatStatus int) (*proxyServer, *store) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
