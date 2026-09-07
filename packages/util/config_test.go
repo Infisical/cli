@@ -36,13 +36,14 @@ func TestGetEnvDomain(t *testing.T) {
 		domain  string // INFISICAL_DOMAIN
 		apiURL  string // INFISICAL_API_URL (legacy)
 		wantVal string
+		wantEnv string
 		wantOk  bool
 	}{
-		{"prefers INFISICAL_DOMAIN over legacy", "https://domain.infisical.com", "https://apiurl.infisical.com", "https://domain.infisical.com", true},
-		{"falls back to legacy INFISICAL_API_URL", unset, "https://apiurl.infisical.com", "https://apiurl.infisical.com", true},
-		{"blank INFISICAL_DOMAIN falls through to legacy", "  ", "https://apiurl.infisical.com", "https://apiurl.infisical.com", true},
-		{"neither set", unset, unset, "", false},
-		{"both blank are treated as unset", "  ", "  ", "", false},
+		{"prefers INFISICAL_DOMAIN over legacy", "https://domain.infisical.com", "https://apiurl.infisical.com", "https://domain.infisical.com", INFISICAL_DOMAIN_ENV_NAME, true},
+		{"falls back to legacy INFISICAL_API_URL", unset, "https://apiurl.infisical.com", "https://apiurl.infisical.com", LEGACY_INFISICAL_API_URL_ENV_NAME, true},
+		{"blank INFISICAL_DOMAIN falls through to legacy", "  ", "https://apiurl.infisical.com", "https://apiurl.infisical.com", LEGACY_INFISICAL_API_URL_ENV_NAME, true},
+		{"neither set", unset, unset, "", "", false},
+		{"both blank are treated as unset", "  ", "  ", "", "", false},
 	}
 
 	setOrUnset := func(t *testing.T, key, val string) {
@@ -66,6 +67,17 @@ func TestGetEnvDomain(t *testing.T) {
 			}
 			if got != tc.wantVal {
 				t.Errorf("value = %q, want %q", got, tc.wantVal)
+			}
+
+			gotDomain, gotEnv, gotOk := GetEnvDomainSource()
+			if gotOk != tc.wantOk {
+				t.Fatalf("GetEnvDomainSource ok = %v, want %v", gotOk, tc.wantOk)
+			}
+			if gotDomain != tc.wantVal {
+				t.Errorf("GetEnvDomainSource value = %q, want %q", gotDomain, tc.wantVal)
+			}
+			if gotEnv != tc.wantEnv {
+				t.Errorf("GetEnvDomainSource env = %q, want %q", gotEnv, tc.wantEnv)
 			}
 		})
 	}
