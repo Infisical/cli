@@ -738,11 +738,10 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 			}
 			g.directActiveChannels.Add(1)
 			go func() {
-				defer func() {
-					g.directActiveChannels.Add(-1)
-					<-pending
-				}()
-				g.handleGatewayConnection(conn)
+				defer g.directActiveChannels.Add(-1)
+				// The slot is released as soon as the handshake resolves, not when the session ends,
+				// so authenticated sessions are bounded by capacity rather than by this limit.
+				g.handleGatewayConnection(conn, func() { <-pending })
 			}()
 		}
 	}()
@@ -1086,10 +1085,24 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation in
 
 	// handleGatewayConnection closes the conn it is handed, and virtualConnection.Close closes the
 	// channel, so the channel must not be deferred closed here as well.
-	g.handleGatewayConnection(&virtualConnection{channel: channel})
+	g.handleGatewayConnection(&virtualConnection{channel: channel}, nil)
 }
 
-func (g *Gateway) handleGatewayConnection(conn net.Conn) {
+// onHandshakeSettled, when non-nil, is called once the TLS handshake has succeeded or failed. The
+// direct listener uses it to release its pre-authentication slot: holding that slot for the whole
+// session would cap concurrent authenticated sessions at the pre-auth limit.
+func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func()) {
+	settled := false
+	settle := func() {
+		if onHandshakeSettled == nil || settled {
+			return
+		}
+		settled = true
+		onHandshakeSettled()
+	}
+	// Covers every return before the handshake resolves, so a slot is never leaked.
+	defer settle()
+
 	tlsConfig := g.tlsConfig.Load()
 	if tlsConfig == nil {
 		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
@@ -1109,6 +1122,7 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn) {
 		return
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
+	settle()
 	log.Info().Msg("TLS handshake completed successfully")
 
 	// Create reader for the TLS connection
