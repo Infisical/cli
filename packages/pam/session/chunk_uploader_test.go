@@ -5,11 +5,15 @@ import (
 	"crypto/cipher"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Infisical/infisical-merge/packages/api"
 )
 
 func setupTestDir(t *testing.T) {
@@ -343,6 +347,62 @@ func TestDeletePendingChunk(t *testing.T) {
 	deletePendingChunk(sid, 0)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("chunk file should have been deleted")
+	}
+}
+
+func TestIsPermanentUploadFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"body too large is retryable after re-chunking", &api.APIError{StatusCode: http.StatusRequestEntityTooLarge}, false},
+		{"bad request", &api.APIError{StatusCode: http.StatusBadRequest}, true},
+		{"forbidden gateway", &api.APIError{StatusCode: http.StatusForbidden}, true},
+		{"session gone", &api.APIError{StatusCode: http.StatusNotFound}, true},
+		{"rate limited", &api.APIError{StatusCode: http.StatusTooManyRequests}, false},
+		{"server error", &api.APIError{StatusCode: http.StatusInternalServerError}, false},
+		{"unauthorized retries after token refresh", &api.APIError{StatusCode: http.StatusUnauthorized}, false},
+		{"network error", errors.New("dial tcp: connection refused"), false},
+		{"wrapped bad request", fmt.Errorf("chunk metadata POST failed: %w", &api.APIError{StatusCode: http.StatusBadRequest}), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPermanentUploadFailure(tc.err); got != tc.want {
+				t.Errorf("isPermanentUploadFailure() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDropIfPermanent(t *testing.T) {
+	setupTestDir(t)
+	cu := newTestChunkUploader(t, newTestCredentialsManager(t))
+
+	pc := &pendingChunk{
+		ChunkIndex:     0,
+		IV:             make([]byte, 12),
+		Ciphertext:     []byte("ct"),
+		Sha256:         make([]byte, 32),
+		StorageBackend: "postgres",
+	}
+
+	sid := "drop-permanent"
+	if err := writePendingChunk(sid, pc); err != nil {
+		t.Fatal(err)
+	}
+	cu.dropIfPermanent(sid, pc, fmt.Errorf("wrapped: %w", &api.APIError{StatusCode: http.StatusBadRequest}))
+	if _, err := os.Stat(chunkPendingFile(sid, 0)); !os.IsNotExist(err) {
+		t.Error("permanently rejected chunk should have been dropped from the queue")
+	}
+
+	sid = "keep-transient"
+	if err := writePendingChunk(sid, pc); err != nil {
+		t.Fatal(err)
+	}
+	cu.dropIfPermanent(sid, pc, &api.APIError{StatusCode: http.StatusTooManyRequests})
+	if _, err := os.Stat(chunkPendingFile(sid, 0)); err != nil {
+		t.Errorf("rate-limited chunk must stay queued for retry: %v", err)
 	}
 }
 

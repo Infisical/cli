@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -263,6 +264,41 @@ func (cu *ChunkUploader) EncryptAndQueueChunk(
 	return pc, nil
 }
 
+// Reconciliation never gives up, so a chunk that can only ever be rejected retries forever.
+func isPermanentUploadFailure(err error) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+// flushSession has already advanced past it, so keeping the file only feeds the retry loop.
+func (cu *ChunkUploader) dropIfPermanent(sessionID string, pc *pendingChunk, err error) {
+	if !isPermanentUploadFailure(err) {
+		return
+	}
+
+	entry := log.Error().
+		Err(err).
+		Str("sessionId", sessionID).
+		Int("chunkIndex", pc.ChunkIndex).
+		Int("ciphertextBytes", len(pc.Ciphertext))
+
+	if rmErr := os.Remove(chunkPendingFile(sessionID, pc.ChunkIndex)); rmErr != nil {
+		entry.AnErr("removeError", rmErr).
+			Msg("Recording chunk permanently rejected but could not be removed; it stays queued and will keep failing")
+		return
+	}
+
+	entry.Msg("Recording chunk permanently rejected by platform; dropped instead of retrying")
+}
+
 func (cu *ChunkUploader) UploadChunk(sessionID string, pc *pendingChunk) error {
 	secrets := cu.credentialsManager.GetRecordingSecrets(sessionID)
 	if secrets == nil {
@@ -281,6 +317,7 @@ func (cu *ChunkUploader) UploadChunk(sessionID string, pc *pendingChunk) error {
 			},
 		)
 		if err != nil {
+			cu.dropIfPermanent(sessionID, pc, err)
 			return fmt.Errorf("presigned PUT mint failed: %w", err)
 		}
 		if err := s3PutCiphertext(presigned.URL, pc.Ciphertext); err != nil {
@@ -305,6 +342,7 @@ func (cu *ChunkUploader) UploadChunk(sessionID string, pc *pendingChunk) error {
 	}
 
 	if err := api.CallPAMSessionChunkMetadata(cu.httpClient, sessionID, secrets.UploadToken, metadataReq); err != nil {
+		cu.dropIfPermanent(sessionID, pc, err)
 		return fmt.Errorf("chunk metadata POST failed: %w", err)
 	}
 
