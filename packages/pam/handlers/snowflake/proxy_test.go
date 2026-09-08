@@ -386,3 +386,20 @@ func TestLoginForwardsSnowflakeSessionParameters(t *testing.T) {
 
 	require.Equal(t, json.RawMessage("[]"), loginData("token", SnowflakeProxyConfig{}, nil, nil)["parameters"])
 }
+
+func TestGzippedRequestIsBoundedAfterDecompression(t *testing.T) {
+	var payload bytes.Buffer
+	writer := gzip.NewWriter(&payload)
+	_, err := writer.Write([]byte(`{"sqlText":"` + strings.Repeat("A", 4<<20) + `"}`))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.Less(t, payload.Len(), maxRequestBytes)
+
+	req := httptest.NewRequest(http.MethodPost, "/queries/v1/query-request", bytes.NewReader(payload.Bytes()))
+	req.Header.Set("Content-Encoding", "gzip")
+
+	var out struct {
+		SqlText string `json:"sqlText"`
+	}
+	require.Error(t, decodeRequest(httptest.NewRecorder(), req, &out))
+}

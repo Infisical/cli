@@ -424,5 +424,13 @@ func decompress(resp *http.Response) ([]byte, error) {
 		defer gzipReader.Close()
 		reader = gzipReader
 	}
-	return io.ReadAll(reader)
+
+	body, err := io.ReadAll(io.LimitReader(reader, maxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxResponseBytes {
+		return nil, errors.New("the Snowflake response was too large to read safely")
+	}
+	return body, nil
 }

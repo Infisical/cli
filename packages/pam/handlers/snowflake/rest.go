@@ -33,7 +33,8 @@ const (
 	queryInProgressCode      = "333333"
 	queryInProgressAsyncCode = "333334"
 
-	maxRequestBytes = 1 << 20
+	maxRequestBytes  = 1 << 20
+	maxResponseBytes = 128 << 20
 	// A ceiling on what one statement can pull into gateway memory
 	maxRows = 10000
 )
@@ -88,7 +89,8 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, out any) error {
 			return err
 		}
 		defer gzipReader.Close()
-		reader = gzipReader
+		// MaxBytesReader caps the compressed bytes
+		reader = io.LimitReader(gzipReader, maxRequestBytes)
 	}
 
 	return json.NewDecoder(reader).Decode(out)

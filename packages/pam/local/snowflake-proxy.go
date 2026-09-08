@@ -3,6 +3,7 @@ package pam
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -115,7 +116,7 @@ func jdbcExtras(database, schema, warehouse string) string {
 	extras := make([]string, 0, 3)
 	for _, pair := range [][2]string{{"db", database}, {"schema", schema}, {"warehouse", warehouse}} {
 		if pair[1] != "" {
-			extras = append(extras, pair[0]+"="+pair[1])
+			extras = append(extras, pair[0]+"="+url.QueryEscape(pair[1]))
 		}
 	}
 	if len(extras) == 0 {
