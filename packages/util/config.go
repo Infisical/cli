@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -115,6 +116,18 @@ func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
 	}
 
 	return workspaceConfigFile, nil
+}
+
+func GetDomainFromFile() (domain string, valid bool) {
+	workspaceFile, err := GetWorkSpaceFromFile()
+	if err != nil {
+		log.Debug().Msgf("GetDomainFromFile: [err=%s]", err)
+		return "", false
+	}
+
+	domain = workspaceFile.Domain
+	valid = strings.HasPrefix(domain, "http://") || strings.HasPrefix(domain, "https://")
+	return domain, valid
 }
 
 func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile, error) {

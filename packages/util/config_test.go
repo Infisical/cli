@@ -82,3 +82,33 @@ func TestGetEnvDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestGetDomainFromWorkspaceFile(t *testing.T) {
+	cases := []struct {
+		name       string
+		contents   string
+		wantDomain string
+		wantUsable bool
+	}{
+		{"https domain is usable", `{"domain":"https://eu.infisical.com"}`, "https://eu.infisical.com", true},
+		{"http domain is usable", `{"domain":"http://localhost:8080"}`, "http://localhost:8080", true},
+		{"domain with an /api suffix is usable", `{"domain":"https://eu.infisical.com/api/"}`, "https://eu.infisical.com/api/", true},
+		{"absent domain is not usable", `{"defaultEnvironment":"dev"}`, "", false},
+		{"schemeless domain is reported unusable", `{"domain":"eu.infisical.com"}`, "eu.infisical.com", false},
+		{"whitespace domain is reported unusable", `{"domain":"   "}`, "   ", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeWorkspace(t, tc.contents)
+
+			gotDomain, gotUsable := GetDomainFromFile()
+			if gotDomain != tc.wantDomain {
+				t.Errorf("domain = %q, want %q", gotDomain, tc.wantDomain)
+			}
+			if gotUsable != tc.wantUsable {
+				t.Errorf("usable = %v, want %v", gotUsable, tc.wantUsable)
+			}
+		})
+	}
+}
