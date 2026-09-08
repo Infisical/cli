@@ -112,7 +112,7 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	}
 
 	if !valid {
-		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must start with http:// or https://). It will be ignored.", cmd.ErrOrStderr())
+		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
 		return flagValue
 	}
 

@@ -92,10 +92,14 @@ func TestGetDomainFromWorkspaceFile(t *testing.T) {
 	}{
 		{"https domain is usable", `{"domain":"https://eu.infisical.com"}`, "https://eu.infisical.com", true},
 		{"http domain is usable", `{"domain":"http://localhost:8080"}`, "http://localhost:8080", true},
+		{"surrounding whitespace is trimmed", `{"domain":"  https://eu.infisical.com  "}`, "https://eu.infisical.com", true},
 		{"domain with an /api suffix is usable", `{"domain":"https://eu.infisical.com/api/"}`, "https://eu.infisical.com/api/", true},
 		{"absent domain is not usable", `{"defaultEnvironment":"dev"}`, "", false},
 		{"schemeless domain is reported unusable", `{"domain":"eu.infisical.com"}`, "eu.infisical.com", false},
-		{"whitespace domain is reported unusable", `{"domain":"   "}`, "   ", false},
+		{"scheme-only https is reported unusable", `{"domain":"https://"}`, "https://", false},
+		{"scheme-only http is reported unusable", `{"domain":"http://"}`, "http://", false},
+		{"non-http scheme is reported unusable", `{"domain":"ftp://example.com"}`, "ftp://example.com", false},
+		{"whitespace domain is reported unusable", `{"domain":"   "}`, "", false},
 	}
 
 	for _, tc := range cases {

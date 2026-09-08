@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,8 +126,11 @@ func GetDomainFromFile() (domain string, valid bool) {
 		return "", false
 	}
 
-	domain = workspaceFile.Domain
-	valid = strings.HasPrefix(domain, "http://") || strings.HasPrefix(domain, "https://")
+	domain = strings.TrimSpace(workspaceFile.Domain)
+	parsed, err := url.Parse(domain)
+	valid = err == nil &&
+		(parsed.Scheme == "http" || parsed.Scheme == "https") &&
+		parsed.Host != ""
 	return domain, valid
 }
 
