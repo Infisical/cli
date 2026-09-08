@@ -2,10 +2,11 @@ package gatewayv2
 
 import (
 	"context"
-	go_ora "github.com/sijms/go-ora/v2"
 	"net/url"
 	"strings"
 	"testing"
+
+	go_ora "github.com/sijms/go-ora/v2"
 )
 
 func TestSQLVerifyQuery(t *testing.T) {
@@ -130,7 +131,7 @@ func TestAlterPasswordStatement(t *testing.T) {
 	}
 
 	self := base
-	self.Username = "app_user"
+	self.Username = "APP_USER"
 	self.Password = "OldPw_1"
 	got, err = alterPasswordStatement(self)
 	if err != nil {
@@ -138,6 +139,17 @@ func TestAlterPasswordStatement(t *testing.T) {
 	}
 	if !strings.Contains(got, `REPLACE "OldPw_1"`) {
 		t.Fatalf("self-rotation must restate the old password: %q", got)
+	}
+
+	caseDiffers := base
+	caseDiffers.Username = "app_user"
+	caseDiffers.Password = "OldPw_1"
+	got, err = alterPasswordStatement(caseDiffers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "REPLACE") {
+		t.Fatalf("a username differing only in case is a different Oracle account: %q", got)
 	}
 
 	bad := self

@@ -58,9 +58,10 @@ func handleSQLRotateCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	timeout := sqlDefaultTimeout
 	if env.TimeoutMs > 0 {
-		timeout = time.Duration(env.TimeoutMs) * time.Millisecond
-		if timeout > sqlMaxTimeout {
+		if int64(env.TimeoutMs) > int64(sqlMaxTimeout/time.Millisecond) {
 			timeout = sqlMaxTimeout
+		} else {
+			timeout = time.Duration(env.TimeoutMs) * time.Millisecond
 		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
@@ -123,7 +124,7 @@ func alterPasswordStatement(params sqlRotateParams) (string, error) {
 
 	stmt := fmt.Sprintf(`ALTER USER "%s" IDENTIFIED BY "%s"`, params.TargetUsername, params.NewPassword)
 
-	if strings.EqualFold(params.TargetUsername, params.Username) && params.Password != "" {
+	if params.TargetUsername == params.Username && params.Password != "" {
 		if strings.Contains(params.Password, `"`) {
 			return "", fmt.Errorf("oracle password cannot contain a double quote")
 		}
