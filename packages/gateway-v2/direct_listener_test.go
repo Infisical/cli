@@ -37,9 +37,7 @@ func testTLSConfig(t *testing.T) *tls.Config {
 	}
 }
 
-// The pre-authentication slot has to be freed when the handshake resolves, not when the session
-// ends. Held for the session, a handful of long-lived clients would lock every later client out of
-// the direct listener, turning a DoS guard into the DoS.
+// Held for the session instead, a few long-lived clients would lock out every later one.
 func TestHandshakeSlotReleasedWhenHandshakeResolves(t *testing.T) {
 	g := &Gateway{}
 	g.tlsConfig.Store(testTLSConfig(t))
@@ -50,10 +48,8 @@ func TestHandshakeSlotReleasedWhenHandshakeResolves(t *testing.T) {
 
 	go g.handleGatewayConnection(server, func() { close(released) })
 
-	// No client certificate, so the handshake fails. Either outcome resolves it, which is what the
-	// slot is keyed on. The drain matters: net.Pipe is unbuffered, so a client that stops reading
-	// after its own handshake errors leaves the server blocked writing its alert, and the release
-	// would then come from the deadline instead of the failure.
+	// The drain matters: net.Pipe is unbuffered, so a client that stops reading leaves the server
+	// blocked writing its alert, and the release would come from the deadline instead.
 	go func() {
 		c := tls.Client(client, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12})
 		_ = c.Handshake()
@@ -72,8 +68,7 @@ func TestHandshakeSlotReleasedWhenHandshakeResolves(t *testing.T) {
 	}
 }
 
-// Every return before the handshake resolves still has to free the slot, or the listener leaks one
-// per connection until it stops accepting.
+// A return before the handshake resolves still has to free the slot.
 func TestHandshakeSlotReleasedWhenTLSConfigIsMissing(t *testing.T) {
 	g := &Gateway{}
 

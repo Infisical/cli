@@ -127,8 +127,7 @@ type Gateway struct {
 	sshClient  *ssh.Client
 	relayName  string // active relay name, protected by mu
 
-	// Certificate storage. Replaced wholesale by the certificate renewal goroutine while the connect
-	// loop and the direct listener are reading it, so reads go through certs().
+	// Replaced wholesale by cert renewal while other goroutines read it, so reads go through certs().
 	certificates atomic.Pointer[api.RegisterGatewayResponse]
 
 	// PAM credentials manager
@@ -718,8 +717,7 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 			if acceptErr != nil {
 				if ctx.Err() == nil {
 					log.Error().Err(acceptErr).Msg("Direct gateway listener stopped")
-					// Reported rather than swallowed: the gateway can no longer accept anything, and
-					// systemd has already been notified ready, so supervision has to be told.
+					// systemd was already told ready, so supervision has to hear about this.
 					select {
 					case fatal <- fmt.Errorf("direct gateway listener stopped accepting: %w", acceptErr):
 					default:
@@ -727,8 +725,7 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 				}
 				return
 			}
-			// Shed rather than queue. A peer holding handshakes open is the case this guards, and
-			// queueing would let it exhaust descriptors anyway.
+			// Shed rather than queue: queueing would let a slow peer exhaust descriptors anyway.
 			select {
 			case pending <- struct{}{}:
 			default:
@@ -739,8 +736,6 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 			g.directActiveChannels.Add(1)
 			go func() {
 				defer g.directActiveChannels.Add(-1)
-				// The slot is released as soon as the handshake resolves, not when the session ends,
-				// so authenticated sessions are bounded by capacity rather than by this limit.
 				g.handleGatewayConnection(conn, func() { <-pending })
 			}()
 		}
@@ -904,8 +899,6 @@ func (g *Gateway) registerGateway() error {
 	return nil
 }
 
-// certs returns the current certificate set. Never nil after a successful registration, which every
-// caller is reached through.
 func (g *Gateway) certs() *api.RegisterGatewayResponse {
 	return g.certificates.Load()
 }
@@ -1083,14 +1076,12 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation in
 
 	go ssh.DiscardRequests(requests)
 
-	// handleGatewayConnection closes the conn it is handed, and virtualConnection.Close closes the
-	// channel, so the channel must not be deferred closed here as well.
+	// handleGatewayConnection closes the conn, which closes the channel, so no defer here.
 	g.handleGatewayConnection(&virtualConnection{channel: channel}, nil)
 }
 
-// onHandshakeSettled, when non-nil, is called once the TLS handshake has succeeded or failed. The
-// direct listener uses it to release its pre-authentication slot: holding that slot for the whole
-// session would cap concurrent authenticated sessions at the pre-auth limit.
+// onHandshakeSettled fires once the handshake resolves either way. The direct listener releases its
+// pre-auth slot there, since holding it for the session would cap sessions at the pre-auth limit.
 func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func()) {
 	settled := false
 	settle := func() {
@@ -1100,7 +1091,7 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 		settled = true
 		onHandshakeSettled()
 	}
-	// Covers every return before the handshake resolves, so a slot is never leaked.
+	// Covers every return before the handshake resolves.
 	defer settle()
 
 	tlsConfig := g.tlsConfig.Load()
@@ -1114,8 +1105,7 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 
 	// Perform TLS handshake
 	log.Info().Msg("Received incoming connection, starting TLS handshake")
-	// A peer that opens a socket and never completes the handshake would otherwise hold this
-	// goroutine forever. Cleared once authenticated, since a session has no such bound.
+	// A peer that never completes the handshake would otherwise hold this goroutine forever.
 	_ = tlsConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		log.Info().Msgf("TLS handshake failed: %v", err)

@@ -23,9 +23,7 @@ const (
 	INFISICAL_HTTP_PROXY_ACTION_HEADER = "x-infisical-action"
 
 	// A direct gateway accepts connections from anyone who can route to it, so an unauthenticated
-	// peer must not be able to tie up a slot indefinitely. The handshake budget bounds one
-	// connection; the in-flight cap bounds how many can be mid-handshake at once, which is what
-	// keeps file descriptors and goroutines from being exhausted by peers that never finish.
+	// peer must not be able to tie up a slot indefinitely.
 	directHandshakeTimeout     = 10 * time.Second
 	maxPendingDirectHandshakes = 256
 

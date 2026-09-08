@@ -47,8 +47,7 @@ func TestDirectRetriedWhenThereIsNoRelay(t *testing.T) {
 	server := &BaseProxyServer{}
 	session := LiveSession{DirectAddress: "127.0.0.1:1"}
 
-	// Failing fast gains nothing without a fallback, so the flag must not latch and skip the only
-	// transport the session has.
+	// The flag must not latch and skip the only transport the session has.
 	for attempt := 0; attempt < 2; attempt++ {
 		if _, err := server.createRelayConnectionWith(session); err == nil {
 			t.Fatal("expected direct connection failure without a relay fallback")
@@ -61,8 +60,7 @@ func TestDirectRetriedWhenThereIsNoRelay(t *testing.T) {
 
 func TestDirectSkippedForLaterConnectionsOnceItFails(t *testing.T) {
 	server := &BaseProxyServer{}
-	// A relay host is set so the fallback exists; it is never dialled because the relay attempt
-	// fails on the missing certificates, which is enough to prove direct was given up on.
+	// The relay is never dialled: it fails on missing certs, which still proves direct was skipped.
 	session := LiveSession{DirectAddress: "127.0.0.1:1", RelayHost: "relay.invalid:8443"}
 
 	if server.skipDirect(session) {
@@ -96,8 +94,7 @@ func TestDirectRetriedWhenARefreshedSessionCarriesANewAddress(t *testing.T) {
 		t.Fatal("the address that failed should stay out of play")
 	}
 
-	// A long-lived agent proxy outlives its session. When the platform hands back a different
-	// address, one earlier failure must not keep the new one on the relay forever.
+	// An agent proxy outlives its session, so a new address must not inherit the old failure.
 	refreshed := LiveSession{DirectAddress: "127.0.0.1:2", RelayHost: "relay.invalid:8443"}
 	if server.skipDirect(refreshed) {
 		t.Fatal("a new direct address deserves its own attempt")

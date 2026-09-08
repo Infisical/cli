@@ -469,9 +469,7 @@ var gatewayStartCmd = &cobra.Command{
 			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 		}
 
-		// Failover picks a relay on its own, so it must stay off unless this gateway asked to use a
-		// relay at all. Enabling it for a direct-listen gateway would quietly hand it a relay the
-		// operator never asked for the first time registration failed.
+		// Failover picks a relay on its own, so a direct-listen gateway must not have it enabled.
 		var relaySelector func(httpClient *resty.Client) (string, error)
 		switch {
 		case explicitRelay != "":

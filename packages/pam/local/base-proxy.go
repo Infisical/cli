@@ -80,9 +80,8 @@ type BaseProxyServer struct {
 	// runner sets it so one proxy shutting down cannot kill the agent it launched.
 	keepProcessAlive bool
 
-	// The direct address that failed, if any. Every client connection dials its own tunnel, so
-	// without this each one would pay the direct timeout again. Keyed by address rather than a bare
-	// flag because a refreshed session can carry a new one, which deserves its own attempt.
+	// The direct address that failed, so later connections skip it. Keyed by address because a
+	// refreshed session can carry a new one.
 	failedDirectAddress atomic.Pointer[string]
 }
 
@@ -146,8 +145,7 @@ func (b *BaseProxyServer) createRelayConnectionWith(session LiveSession) (net.Co
 	return b.createRelayOnlyConnection(session)
 }
 
-// skipDirect reports whether direct dialing has already failed for this proxy at this address. With
-// no relay to fall back to, direct is retried regardless, since failing fast gains nothing.
+// With no relay to fall back to, direct is retried regardless: failing fast gains nothing.
 func (b *BaseProxyServer) skipDirect(session LiveSession) bool {
 	if session.RelayHost == "" {
 		return false
@@ -176,11 +174,8 @@ type gatewayTransportConn struct {
 }
 
 const (
-	// The gateway's server certificate carries localhost as a SAN for the relay path, where the
-	// tunnel terminates locally rather than at a named host.
-	relayServerName = "localhost"
-	// Budgets for reaching a gateway directly. Both are short so a broken direct address falls back
-	// to the relay without the user waiting on it.
+	// The relay path terminates locally, and the gateway cert carries localhost as a SAN.
+	relayServerName        = "localhost"
 	directDialTimeout      = 3 * time.Second
 	directHandshakeTimeout = 3 * time.Second
 )
@@ -349,9 +344,7 @@ func (b *BaseProxyServer) createGatewayConnectionWith(relayConn net.Conn, alpn A
 }
 
 func (b *BaseProxyServer) handshakeGatewayConnection(relayConn net.Conn, alpn ALPN, session LiveSession, serverName string, isDirect bool) (net.Conn, error) {
-	// Bound only the direct handshake, so a wedged direct address falls back to the relay quickly.
-	// Keyed off the transport rather than the server name, which is "localhost" for a gateway that
-	// legitimately advertises localhost.
+	// Keyed off the transport, not the server name, which can legitimately be "localhost".
 	if isDirect {
 		_ = relayConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
 		defer relayConn.SetDeadline(time.Time{})
