@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/manifoldco/promptui"
@@ -304,8 +305,9 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 // instructions handed to an agent are built from these, so the two cannot describe the same account
 // differently, and a fix to how one connects is a fix for both.
 type AccountConnectionDisplay struct {
-	TypeLabel   string // e.g., "PostgreSQL", "MySQL", "SQL Server"
-	DefaultPort int    // default port for this account type
+	TypeLabel        string // e.g., "PostgreSQL", "MySQL", "SQL Server"
+	DefaultPort      int    // default port for this account type
+	RequiredPassword string
 	// ConnectionString builds the connection string, and is nil for account types that have none.
 	ConnectionString func(username, database string, port int) string
 	// UsageExamples builds sample CLI commands, and is nil for account types reached without one.
@@ -367,14 +369,15 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		},
 	},
 	AccountTypeOracleDB: {
-		TypeLabel:   "Oracle",
-		DefaultPort: 1521,
+		TypeLabel:        "Oracle",
+		DefaultPort:      1521,
+		RequiredPassword: oracle.ProxyPasswordPlaceholder,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("%s@127.0.0.1:%d/%s", username, port, database)
+			return fmt.Sprintf("%s/%s@127.0.0.1:%d/%s", username, oracle.ProxyPasswordPlaceholder, port, database)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
-				fmt.Sprintf("sqlplus %s@127.0.0.1:%d/%s", username, port, database),
+				fmt.Sprintf("sqlplus %s/%s@127.0.0.1:%d/%s", username, oracle.ProxyPasswordPlaceholder, port, database),
 			}
 		},
 	},
@@ -921,7 +924,11 @@ func printDatabaseSessionInfo(config AccountConnectionDisplay, folder, account s
 	if username != "" {
 		fmt.Printf("  Username:  %s\n", username)
 	}
-	fmt.Printf("  Password:  (not required)\n")
+	if config.RequiredPassword != "" {
+		fmt.Printf("  Password:  %s\n", config.RequiredPassword)
+	} else {
+		fmt.Printf("  Password:  (not required)\n")
+	}
 	if database != "" {
 		fmt.Printf("  Database:  %s\n", database)
 	}
@@ -931,7 +938,12 @@ func printDatabaseSessionInfo(config AccountConnectionDisplay, folder, account s
 	fmt.Printf("----------------------------------------------------------------------\n")
 	fmt.Printf("\n")
 	fmt.Printf("  Use your preferred database client (CLI, GUI, or IDE) to connect\n")
-	fmt.Printf("  to 127.0.0.1:%d. No password is needed.\n", port)
+	if config.RequiredPassword != "" {
+		fmt.Printf("  to 127.0.0.1:%d. Type %s literally as the password; the Gateway\n", port, config.RequiredPassword)
+		fmt.Printf("  swaps in the real credential during login.\n")
+	} else {
+		fmt.Printf("  to 127.0.0.1:%d. No password is needed.\n", port)
+	}
 	fmt.Printf("\n")
 	if examples := config.ConnectionExamples(username, database, port); len(examples) > 0 {
 		fmt.Printf("  Example:\n")

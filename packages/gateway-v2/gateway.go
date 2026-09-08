@@ -46,6 +46,7 @@ const (
 	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
 	ForwardModeConnectionTest  ForwardMode = "CONNECTION_TEST"
 	ForwardModeWinRM           ForwardMode = "WINRM"
+	ForwardModeSQL             ForwardMode = "SQL"
 )
 
 type ActorType string
@@ -1116,6 +1117,15 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation in
 			log.Debug().Err(err).Msg("Connection-test handler ended with error")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModeSQL {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting SQL request from non-platform actor")
+			return
+		}
+		if err := serveSQLOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("SQL handler ended with error")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModeWinRM {
 		if forwardConfig.ActorType != ActorTypePlatform {
 			log.Warn().Msg("Rejecting WinRM request from non-platform actor")
@@ -1200,6 +1210,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-winrm":
 		config.Mode = ForwardModeWinRM
+		return config, nil
+
+	case "infisical-sql":
+		config.Mode = ForwardModeSQL
 		return config, nil
 
 	default:
@@ -1379,6 +1393,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-discovery",
 		"infisical-connection-test",
 		"infisical-winrm",
+		"infisical-sql",
 	}
 	if pkcs11Loaded {
 		base = append(base, "infisical-pkcs11")
