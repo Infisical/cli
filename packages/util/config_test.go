@@ -36,13 +36,14 @@ func TestGetEnvDomain(t *testing.T) {
 		domain  string // INFISICAL_DOMAIN
 		apiURL  string // INFISICAL_API_URL (legacy)
 		wantVal string
+		wantEnv string
 		wantOk  bool
 	}{
-		{"prefers INFISICAL_DOMAIN over legacy", "https://domain.infisical.com", "https://apiurl.infisical.com", "https://domain.infisical.com", true},
-		{"falls back to legacy INFISICAL_API_URL", unset, "https://apiurl.infisical.com", "https://apiurl.infisical.com", true},
-		{"blank INFISICAL_DOMAIN falls through to legacy", "  ", "https://apiurl.infisical.com", "https://apiurl.infisical.com", true},
-		{"neither set", unset, unset, "", false},
-		{"both blank are treated as unset", "  ", "  ", "", false},
+		{"prefers INFISICAL_DOMAIN over legacy", "https://domain.infisical.com", "https://apiurl.infisical.com", "https://domain.infisical.com", INFISICAL_DOMAIN_ENV_NAME, true},
+		{"falls back to legacy INFISICAL_API_URL", unset, "https://apiurl.infisical.com", "https://apiurl.infisical.com", LEGACY_INFISICAL_API_URL_ENV_NAME, true},
+		{"blank INFISICAL_DOMAIN falls through to legacy", "  ", "https://apiurl.infisical.com", "https://apiurl.infisical.com", LEGACY_INFISICAL_API_URL_ENV_NAME, true},
+		{"neither set", unset, unset, "", "", false},
+		{"both blank are treated as unset", "  ", "  ", "", "", false},
 	}
 
 	setOrUnset := func(t *testing.T, key, val string) {
@@ -66,6 +67,51 @@ func TestGetEnvDomain(t *testing.T) {
 			}
 			if got != tc.wantVal {
 				t.Errorf("value = %q, want %q", got, tc.wantVal)
+			}
+
+			gotDomain, gotEnv, gotOk := GetEnvDomainSource()
+			if gotOk != tc.wantOk {
+				t.Fatalf("GetEnvDomainSource ok = %v, want %v", gotOk, tc.wantOk)
+			}
+			if gotDomain != tc.wantVal {
+				t.Errorf("GetEnvDomainSource value = %q, want %q", gotDomain, tc.wantVal)
+			}
+			if gotEnv != tc.wantEnv {
+				t.Errorf("GetEnvDomainSource env = %q, want %q", gotEnv, tc.wantEnv)
+			}
+		})
+	}
+}
+
+func TestGetDomainFromWorkspaceFile(t *testing.T) {
+	cases := []struct {
+		name       string
+		contents   string
+		wantDomain string
+		wantUsable bool
+	}{
+		{"https domain is usable", `{"domain":"https://eu.infisical.com"}`, "https://eu.infisical.com", true},
+		{"http domain is usable", `{"domain":"http://localhost:8080"}`, "http://localhost:8080", true},
+		{"surrounding whitespace is trimmed", `{"domain":"  https://eu.infisical.com  "}`, "https://eu.infisical.com", true},
+		{"domain with an /api suffix is usable", `{"domain":"https://eu.infisical.com/api/"}`, "https://eu.infisical.com/api/", true},
+		{"absent domain is not usable", `{"defaultEnvironment":"dev"}`, "", false},
+		{"schemeless domain is reported unusable", `{"domain":"eu.infisical.com"}`, "eu.infisical.com", false},
+		{"scheme-only https is reported unusable", `{"domain":"https://"}`, "https://", false},
+		{"scheme-only http is reported unusable", `{"domain":"http://"}`, "http://", false},
+		{"non-http scheme is reported unusable", `{"domain":"ftp://example.com"}`, "ftp://example.com", false},
+		{"whitespace domain is reported unusable", `{"domain":"   "}`, "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeWorkspace(t, tc.contents)
+
+			gotDomain, gotUsable := GetDomainFromFile()
+			if gotDomain != tc.wantDomain {
+				t.Errorf("domain = %q, want %q", gotDomain, tc.wantDomain)
+			}
+			if gotUsable != tc.wantUsable {
+				t.Errorf("usable = %v, want %v", gotUsable, tc.wantUsable)
 			}
 		})
 	}

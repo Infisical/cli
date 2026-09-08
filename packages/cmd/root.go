@@ -106,14 +106,13 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 		return envDomain
 	}
 
-	workspaceConfig, err := util.GetWorkSpaceFromFile()
-	if err != nil || workspaceConfig.Domain == "" {
+	domain, valid := util.GetDomainFromFile()
+	if domain == "" {
 		return flagValue
 	}
 
-	domain := workspaceConfig.Domain
-	if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
-		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must start with http:// or https://). It will be ignored.", cmd.ErrOrStderr())
+	if !valid {
+		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
 		return flagValue
 	}
 
