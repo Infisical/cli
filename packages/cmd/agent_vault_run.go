@@ -28,8 +28,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var agentVaultSessionTTLs = []string{"1h", "8h", "24h", "7d", "never"}
-
 // The server validates names as slugs; matching that here keeps a typo a one-line message instead of a raw
 // 422 body, which is all the CLI can print for a schema rejection.
 var agentVaultBundleNameRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
@@ -120,9 +118,6 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
-	if !containsString(agentVaultSessionTTLs, ttl) {
-		util.HandleError(fmt.Errorf("--ttl must be one of %s, got %q", strings.Join(agentVaultSessionTTLs, ", "), ttl))
-	}
 
 	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
 	if sessionToken != "" {
@@ -419,19 +414,10 @@ func runAgentVaultChild(args, env []string) int {
 	return code
 }
 
-func containsString(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
-
 func init() {
 	avRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name`")
 	avRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one")
-	avRunCmd.Flags().String("ttl", "7d", "lifetime of a minted session: 1h | 8h | 24h | 7d | never")
+	avRunCmd.Flags().String("ttl", "7d", "lifetime of a minted session, a duration such as 30m, 8h or 7d, or never")
 	avRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
 	avRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
 	avRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
