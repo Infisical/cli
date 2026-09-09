@@ -4,6 +4,7 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"text/tabwriter"
 
@@ -29,11 +30,19 @@ The organization is a setting on your login profile, not a separate login. Use
 	},
 }
 
+type orgListEntry struct {
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Slug             string         `json:"slug,omitempty"`
+	Current          bool           `json:"current"`
+	SubOrganizations []orgListEntry `json:"subOrganizations,omitempty"`
+}
+
 var orgListCmd = &cobra.Command{
 	Use:                   "list",
 	Short:                 "List the organizations this profile's account can use",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical org list",
+	Example:               "infisical org list\ninfisical org list --json",
 	Args:                  cobra.NoArgs,
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
@@ -58,24 +67,17 @@ var orgListCmd = &cobra.Command{
 			currentOrgID = claimOrgID
 		}
 
-		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		fmt.Fprintln(writer, "CURRENT\tNAME\tSLUG\tID")
-
-		marker := func(id string) string {
-			if id == currentOrgID {
-				return "*"
-			}
-			return ""
-		}
+		var orgs []orgListEntry
 
 		// The sub-org aware listing carries slugs and nested organizations.
 		// Older instances may not have it, so fall back to the flat list.
 		if subOrgsResp, err := api.CallGetAllOrganizationsWithSubOrgs(httpClient); err == nil && len(subOrgsResp.Organizations) > 0 {
 			for _, org := range subOrgsResp.Organizations {
-				fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", marker(org.ID), util.SanitizeDisplay(org.Name), util.SanitizeDisplay(org.Slug), org.ID)
+				entry := orgListEntry{ID: org.ID, Name: org.Name, Slug: org.Slug, Current: org.ID == currentOrgID}
 				for _, sub := range org.SubOrganizations {
-					fmt.Fprintf(writer, "%s\t  └─ %s\t%s\t%s\n", marker(sub.ID), util.SanitizeDisplay(sub.Name), util.SanitizeDisplay(sub.Slug), sub.ID)
+					entry.SubOrganizations = append(entry.SubOrganizations, orgListEntry{ID: sub.ID, Name: sub.Name, Slug: sub.Slug, Current: sub.ID == currentOrgID})
 				}
+				orgs = append(orgs, entry)
 			}
 		} else {
 			orgResp, err := api.CallGetAllOrganizations(httpClient)
@@ -83,7 +85,37 @@ var orgListCmd = &cobra.Command{
 				util.HandleError(err, "Unable to list your organizations")
 			}
 			for _, org := range orgResp.Organizations {
-				fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", marker(org.ID), util.SanitizeDisplay(org.Name), "", org.ID)
+				orgs = append(orgs, orgListEntry{ID: org.ID, Name: org.Name, Current: org.ID == currentOrgID})
+			}
+		}
+
+		if jsonOutput, _ := cmd.Flags().GetBool("json"); jsonOutput {
+			if orgs == nil {
+				orgs = []orgListEntry{}
+			}
+			out, err := json.MarshalIndent(orgs, "", "  ")
+			if err != nil {
+				util.HandleError(err, "Unable to encode JSON")
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			Telemetry.CaptureEvent("cli-command:org list", posthog.NewProperties().Set("version", util.CLI_VERSION))
+			return
+		}
+
+		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		fmt.Fprintln(writer, "CURRENT\tNAME\tSLUG\tID")
+
+		marker := func(current bool) string {
+			if current {
+				return "*"
+			}
+			return ""
+		}
+
+		for _, org := range orgs {
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", marker(org.Current), util.SanitizeDisplay(org.Name), util.SanitizeDisplay(org.Slug), org.ID)
+			for _, sub := range org.SubOrganizations {
+				fmt.Fprintf(writer, "%s\t  └─ %s\t%s\t%s\n", marker(sub.Current), util.SanitizeDisplay(sub.Name), util.SanitizeDisplay(sub.Slug), sub.ID)
 			}
 		}
 		writer.Flush()
@@ -290,6 +322,7 @@ func selectOrganizationToken(sessionToken string, email string, orgID string) (s
 }
 
 func init() {
+	orgListCmd.Flags().Bool("json", false, "Output the organizations as JSON (id, name, slug, current, and subOrganizations per entry)")
 	orgCmd.AddCommand(orgListCmd)
 	orgCmd.AddCommand(newSetOrgCommand("switch [org]", "org switch", "Change the organization this profile uses (same as [infisical profile set-org])"))
 	RootCmd.AddCommand(orgCmd)

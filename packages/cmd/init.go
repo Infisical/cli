@@ -14,6 +14,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -24,23 +25,44 @@ var initCmd = &cobra.Command{
 	Use:                   "init",
 	Short:                 "Used to connect your local project with Infisical project",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical init",
+	Example:               "infisical init\n  infisical init --project-id <project-id>\n  infisical init --project-id <project-id> --force",
 	Args:                  cobra.ExactArgs(0),
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		if util.WorkspaceConfigFileExistsInCurrentPath() {
-			shouldOverride, err := shouldOverrideWorkspacePrompt()
-			if err != nil {
-				log.Error().Msg("Unable to parse your answer")
-				log.Debug().Err(err)
-				return
-			}
+		force, _ := cmd.Flags().GetBool("force")
+		projectID, _ := cmd.Flags().GetString("project-id")
 
-			if !shouldOverride {
-				return
+		if util.WorkspaceConfigFileExistsInCurrentPath() {
+			if force {
+				log.Info().Msg("A workspace config file already exists here; overwriting because --force was provided.")
+			} else if !isatty.IsTerminal(os.Stdin.Fd()) {
+				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). Pass --force to overwrite it.")
+			} else {
+				shouldOverride, err := shouldOverrideWorkspacePrompt()
+				if err != nil {
+					log.Error().Msg("Unable to parse your answer")
+					log.Debug().Err(err)
+					return
+				}
+
+				if !shouldOverride {
+					return
+				}
 			}
+		}
+
+		// Non-interactive path: we already know the project. Skip the org
+		// and workspace pickers and just write .infisical.json. Subsequent
+		// commands (secrets, run) will surface auth or org-scope errors if
+		// the logged-in session cannot reach this project.
+		if projectID != "" {
+			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
+				util.HandleError(err)
+			}
+			Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION).Set("nonInteractive", true))
+			return
 		}
 
 		userCreds, err := util.GetCurrentLoggedInUserDetails(true)
@@ -201,6 +223,8 @@ func offerDirectoryProfileBinding(profileName string) {
 }
 
 func init() {
+	initCmd.Flags().Bool("force", false, "Overwrite an existing .infisical.json without asking.")
+	initCmd.Flags().String("project-id", "", "Project ID to link this directory to. When set, skips the interactive org and project pickers and writes .infisical.json directly.")
 	RootCmd.AddCommand(initCmd)
 }
 
