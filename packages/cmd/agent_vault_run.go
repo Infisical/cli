@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ import (
 )
 
 var agentVaultSessionTTLs = []string{"1h", "8h", "24h", "7d", "never"}
+
+// The server validates names as slugs; matching that here keeps a typo a one-line message instead of a raw
+// 422 body, which is all the CLI can print for a schema rejection.
+var agentVaultBundleNameRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 const agentVaultCaFileName = "ca.pem"
 
@@ -108,6 +113,11 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	if len(accessBundles) > 1 {
 		util.HandleError(fmt.Errorf("a session carries one access bundle; pass --access-bundle once"))
 	}
+	for _, name := range accessBundles {
+		if !agentVaultBundleNameRe.MatchString(name) {
+			util.HandleError(fmt.Errorf("%q is not an access bundle name; names are lowercase letters, numbers and hyphens, for example 'coding-agent'", name))
+		}
+	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
 	if !containsString(agentVaultSessionTTLs, ttl) {
@@ -171,16 +181,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		}
 		httpClient.SetAuthToken(identity)
 
-		bundles, listErr := api.CallListAgentVaultAccessBundles(httpClient)
-		if listErr != nil {
-			util.HandleError(listErr, "Unable to list your Agent Vault access bundles")
-		}
-		ids, resolveErr := resolveAgentVaultBundleIDs(accessBundles, bundles.AccessBundles)
-		if resolveErr != nil {
-			util.HandleError(resolveErr)
-		}
-
-		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundleIDs: ids, TTL: ttl})
+		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl})
 		if mintErr != nil {
 			util.HandleError(mintErr, "Unable to mint an Agent Vault session")
 		}
@@ -311,34 +312,6 @@ func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	return details.UserCredentials.JTWToken
 }
 
-func resolveAgentVaultBundleIDs(names []string, bundles []api.AgentVaultAccessBundle) ([]string, error) {
-	byName := make(map[string]string, len(bundles))
-	for _, b := range bundles {
-		byName[b.Name] = b.ID
-	}
-	ids := make([]string, 0, len(names))
-	var unknown []string
-	for _, name := range names {
-		if id, ok := byName[name]; ok {
-			ids = append(ids, id)
-			continue
-		}
-		unknown = append(unknown, name)
-	}
-	if len(unknown) > 0 {
-		known := make([]string, 0, len(bundles))
-		for _, b := range bundles {
-			known = append(known, b.Name)
-		}
-		hint := "you have no access bundles; ask an Agent Vault admin to grant you one"
-		if len(known) > 0 {
-			hint = "the bundles you can reach are: " + strings.Join(known, ", ")
-		}
-		return nil, fmt.Errorf("no access bundle named %s is granted to you; %s", quoteAll(unknown), hint)
-	}
-	return ids, nil
-}
-
 // The parent's environment, with stale proxy settings replaced by ours and the CA-trust variables added.
 // Nothing else is removed.
 func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy string) []string {
@@ -453,14 +426,6 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func quoteAll(values []string) string {
-	quoted := make([]string, 0, len(values))
-	for _, v := range values {
-		quoted = append(quoted, fmt.Sprintf("%q", v))
-	}
-	return strings.Join(quoted, ", ")
 }
 
 func init() {

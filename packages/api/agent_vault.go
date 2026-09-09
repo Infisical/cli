@@ -108,36 +108,9 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string)
 	return res, nil
 }
 
-type AgentVaultAccessBundle struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	HostPatterns []string `json:"hostPatterns"`
-}
-
-type ListAgentVaultAccessBundlesResponse struct {
-	AccessBundles []AgentVaultAccessBundle `json:"accessBundles"`
-}
-
-func CallListAgentVaultAccessBundles(httpClient *resty.Client) (ListAgentVaultAccessBundlesResponse, error) {
-	var res ListAgentVaultAccessBundlesResponse
-	response, err := httpClient.
-		R().
-		SetResult(&res).
-		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/agent-vault/access-bundles", config.INFISICAL_URL))
-
-	if err != nil {
-		return ListAgentVaultAccessBundlesResponse{}, NewGenericRequestError("CallListAgentVaultAccessBundles", err)
-	}
-	if response.IsError() {
-		return ListAgentVaultAccessBundlesResponse{}, NewAPIErrorWithResponse("CallListAgentVaultAccessBundles", response, nil)
-	}
-	return res, nil
-}
-
 type CreateAgentVaultSessionRequest struct {
-	AccessBundleIDs []string `json:"accessBundleIds"`
-	TTL             string   `json:"ttl"`
+	AccessBundles []string `json:"accessBundles"`
+	TTL           string   `json:"ttl"`
 }
 
 type AgentVaultSession struct {

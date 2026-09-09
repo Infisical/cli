@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/api"
 )
 
 func selfSignedPEM(t *testing.T, cn string) string {
@@ -107,23 +106,6 @@ func TestAgentVaultFingerprintsEqualToleratesCopyFormats(t *testing.T) {
 	}
 	if agentVaultFingerprintsEqual("", served) {
 		t.Fatal("an empty pin must never match")
-	}
-}
-
-func TestResolveAgentVaultBundleIDsKeepsOrderAndNamesUnknowns(t *testing.T) {
-	bundles := []api.AgentVaultAccessBundle{{ID: "id-a", Name: "alpha"}, {ID: "id-b", Name: "beta"}}
-
-	ids, err := resolveAgentVaultBundleIDs([]string{"beta", "alpha"}, bundles)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Join(ids, ",") != "id-b,id-a" {
-		t.Fatalf("order must follow the flags, got %v", ids)
-	}
-
-	_, err = resolveAgentVaultBundleIDs([]string{"alpha", "gamma"}, bundles)
-	if err == nil || !strings.Contains(err.Error(), `"gamma"`) || !strings.Contains(err.Error(), "alpha, beta") {
-		t.Fatalf("an unknown bundle must be named alongside the reachable ones, got %v", err)
 	}
 }
 
