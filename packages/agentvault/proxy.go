@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -356,8 +357,10 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	fw := &flushingWriter{ResponseWriter: w, rc: http.NewResponseController(w)}
 	if _, copyErr := io.Copy(fw, resp.Body); copyErr != nil {
 		// Only the upstream's failure is ours to report. A write error is the agent having stopped
-		// reading, which is its own business and what the standard library also stays quiet about.
-		if fw.writeErr == nil {
+		// reading, which is its own business and what the standard library also stays quiet about. So is
+		// a cancelled context: the server cancels it when the agent hangs up, and that can reach the
+		// upstream read before the next write to the agent fails.
+		if fw.writeErr == nil && !errors.Is(copyErr, context.Canceled) {
 			log.Warn().Err(copyErr).Str("host", hostname).Msg("agent-vault: upstream stream failed part way")
 		}
 		panic(http.ErrAbortHandler)
