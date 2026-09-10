@@ -85,7 +85,7 @@ func TestSaveStateRoundTripsWithoutTempFiles(t *testing.T) {
 	if err := st.saveState(want); err != nil {
 		t.Fatalf("second save over an existing file: %v", err)
 	}
-	got, err := st.loadState()
+	got, _, err := st.loadState()
 	if err != nil {
 		t.Fatal(err)
 	}

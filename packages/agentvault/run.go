@@ -68,7 +68,7 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 // resolveState decides whether this run enrolls or resumes. Re-passing the same enrollment token that
 // already enrolled this box is a no-op.
 func resolveState(st *store, enrollmentToken string) (persistedState, *caManager, error) {
-	stored, err := st.loadState()
+	stored, confFound, err := st.loadState()
 	if err != nil {
 		return persistedState{}, nil, err
 	}
@@ -78,8 +78,9 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 		return persistedState{}, nil, err
 	}
 	hasCa := key != nil && cert != nil
+	hasToken := stored.AccessToken != ""
 
-	alreadyEnrolled := stored.AccessToken != "" && hasCa
+	alreadyEnrolled := hasToken && hasCa
 
 	if enrollmentToken != "" {
 		if alreadyEnrolled && stored.EnrollmentToken == enrollmentToken {
@@ -87,20 +88,40 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 			return stored, newCaManager(key, cert), nil
 		}
 		// Re-enrolling replaces the certificate authority, so anything holding a copy of the old one stops
-		// trusting the proxy.
-		if alreadyEnrolled {
+		// trusting the proxy. That holds whether or not the rest of the state survived beside it.
+		if hasCa {
 			log.Warn().Msg("agent-vault: enrolling with a new token replaces this proxy's certificate authority")
 		}
 		return enroll(st, enrollmentToken)
 	}
 
-	if !alreadyEnrolled {
+	// Only a directory with nothing in it is a first run. Anything else is damage, and saying "not
+	// enrolled" would send the operator for a new token, which replaces a certificate authority that may
+	// still be intact on disk.
+	switch {
+	case !confFound && !hasCa:
 		return persistedState{}, nil, errors.New(
 			"this proxy has not enrolled yet. Run it once with --enrollment-token, using the token shown when the proxy was created")
+	case hasCa && !hasToken:
+		return persistedState{}, nil, fmt.Errorf(
+			"the certificate authority in %s is intact but %s has no access token, so this proxy's state is incomplete. Restore %s from a backup to keep the certificate authority, or enroll again with a new token from the Proxies page, which replaces it and means every agent trusting the old one has to be restarted",
+			st.dir, proxyConfFile, proxyConfFile)
+	case hasToken && !hasCa:
+		return persistedState{}, nil, fmt.Errorf(
+			"%s in %s holds an access token but the certificate authority (%s, %s) is missing. Restore both files from a backup, or enroll again with a new token from the Proxies page, which issues a new certificate authority",
+			proxyConfFile, st.dir, caKeyFile, caCertFile)
+	}
+
+	if !isUnmatchedHostPolicy(stored.Config.UnmatchedHost) {
+		return persistedState{}, nil, fmt.Errorf(
+			"%s in %s has an unrecognised %s value %q; it must be %s or %s. Fix the line or restore the file from a backup",
+			proxyConfFile, st.dir, confUnmatchedHost, stored.Config.UnmatchedHost, UnmatchedAllow, UnmatchedDeny)
 	}
 
 	return stored, newCaManager(key, cert), nil
 }
+
+func isUnmatchedHostPolicy(v string) bool { return v == UnmatchedAllow || v == UnmatchedDeny }
 
 // Start enrolls if needed, then serves until interrupted. An empty enrollmentToken means
 // "read the persisted state and serve".
@@ -127,9 +148,6 @@ func Start(opts Options, enrollmentToken string) error {
 	config := state.Config
 	if config.PollInterval <= 0 {
 		config.PollInterval = 60
-	}
-	if config.UnmatchedHost == "" {
-		config.UnmatchedHost = UnmatchedAllow
 	}
 
 	ps := &proxyServer{
@@ -272,7 +290,7 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 					Msg("agent-vault: settings changed")
 
 				// Persisted so a restart during an Infisical outage keeps the operator's policy rather than coming back up allowing.
-				stored, loadErr := st.loadState()
+				stored, _, loadErr := st.loadState()
 				if loadErr == nil {
 					stored.Config = next
 					if saveErr := st.saveState(stored); saveErr != nil {

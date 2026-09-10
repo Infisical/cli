@@ -152,15 +152,14 @@ func (s *store) saveCa(key *ecdsa.PrivateKey, cert *x509.Certificate) error {
 	return nil
 }
 
-func (s *store) loadState() (persistedState, error) {
-	var state persistedState
-
+// found tells a missing file from an empty one, which is the difference between a first run and damage.
+func (s *store) loadState() (state persistedState, found bool, err error) {
 	data, err := os.ReadFile(s.path(proxyConfFile))
 	if os.IsNotExist(err) {
-		return state, nil
+		return state, false, nil
 	}
 	if err != nil {
-		return state, fmt.Errorf("failed to read %s: %w", proxyConfFile, err)
+		return state, false, fmt.Errorf("failed to read %s: %w", proxyConfFile, err)
 	}
 
 	for _, line := range strings.Split(string(data), "\n") {
@@ -187,7 +186,7 @@ func (s *store) loadState() (persistedState, error) {
 			}
 		}
 	}
-	return state, nil
+	return state, true, nil
 }
 
 func (s *store) saveState(state persistedState) error {
