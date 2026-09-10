@@ -597,21 +597,47 @@ func (l *oneShotListener) Addr() net.Addr { return l.conn.LocalAddr() }
 
 type limitListener struct {
 	net.Listener
-	sem      chan struct{}
-	onFull   func()
-	fullOnce sync.Once
+	sem       chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	onFull    func()
+	fullOnce  sync.Once
 }
 
 func newLimitListener(l net.Listener, n int, onFull func()) net.Listener {
-	return &limitListener{Listener: l, sem: make(chan struct{}, n), onFull: onFull}
+	return &limitListener{Listener: l, sem: make(chan struct{}, n), done: make(chan struct{}), onFull: onFull}
+}
+
+// Closing the listener wakes a goroutine parked in Accept but not one parked on the semaphore send, so
+// acquisition also watches done, the same shape as x/net's LimitListener.
+func (l *limitListener) acquire() bool {
+	select {
+	case l.sem <- struct{}{}:
+		return true
+	case <-l.done:
+		return false
+	default:
+	}
+	l.fullOnce.Do(l.onFull)
+	select {
+	case l.sem <- struct{}{}:
+		return true
+	case <-l.done:
+		return false
+	}
 }
 
 func (l *limitListener) Accept() (net.Conn, error) {
-	select {
-	case l.sem <- struct{}{}:
-	default:
-		l.fullOnce.Do(l.onFull)
-		l.sem <- struct{}{}
+	if !l.acquire() {
+		// The listener is closed, so the underlying Accept should fail. If it hands back a connection
+		// anyway there is no slot for it, so it is closed and the loop waits for the real error.
+		for {
+			conn, err := l.Listener.Accept()
+			if err != nil {
+				return nil, err
+			}
+			_ = conn.Close()
+		}
 	}
 
 	conn, err := l.Listener.Accept()
@@ -620,6 +646,12 @@ func (l *limitListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	return &limitConn{Conn: conn, release: func() { <-l.sem }}, nil
+}
+
+func (l *limitListener) Close() error {
+	err := l.Listener.Close()
+	l.closeOnce.Do(func() { close(l.done) })
+	return err
 }
 
 type limitConn struct {
