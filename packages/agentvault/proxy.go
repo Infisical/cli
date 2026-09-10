@@ -158,7 +158,20 @@ func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
 // cache already reports both conditions when its poll loop meets them, but the request that is
 // actually turned away said nothing, which is the one an operator is looking for. The session key is
 // the hash the cache is keyed on, so lines can be correlated without the token appearing anywhere.
+const proxyRevokedBody = "this proxy's access has been revoked"
+
 func (ps *proxyServer) denyAtGate(w http.ResponseWriter, sessionToken, hostname, port string, err error) {
+	if isProxyTokenRejected(err) {
+		log.Error().
+			Err(err).
+			Str("host", net.JoinHostPort(hostname, port)).
+			Str("sessionKey", sessionKey(sessionToken)).
+			Str("decision", decisionError).
+			Int("status", http.StatusServiceUnavailable).
+			Msg("agent-vault: refused, Infisical rejected this proxy's token")
+		http.Error(w, proxyRevokedBody, http.StatusServiceUnavailable)
+		return
+	}
 	if isSessionGone(err) {
 		log.Warn().
 			Str("host", net.JoinHostPort(hostname, port)).
@@ -315,6 +328,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	switch {
 	case errors.Is(err, errHostBlocked):
 		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
+	case isProxyTokenRejected(err):
+		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
 		decision, status, body = decisionBlocked, http.StatusForbidden, "the session is no longer valid"
 	case errors.Is(err, errSessionResolve):

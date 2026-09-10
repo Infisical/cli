@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -79,12 +80,27 @@ func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration
 
 var errSessionGone = errors.New("session is no longer valid")
 
+// The name the server puts on a 401 that is about this proxy's own token rather than the session it asked
+// about. Without it the two are the same status and the same error class.
+const proxyTokenRejectedName = "ProxyTokenRejected"
+
+func isProxyTokenRejected(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.Name == proxyTokenRejectedName
+}
+
+// A definitive refusal ends the session; only a status that can clear on its own rides the grace window.
+// A 403 or 422 today can only mean the server changed its mind about the request, never a blip, so it is
+// terminal too, as the sibling's isAuthError treats 403. A rejected proxy token is not a verdict on the
+// session, so it is reported separately, though the caller drops the entry just the same.
 func isSessionGone(err error) bool {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
-		// A 404 is neither a 401 nor a 5xx, so without its own arm it would fall into the unreachable-Infisical
-		// branch and keep brokering.
-		return apiErr.StatusCode == 401 || apiErr.StatusCode == 404
+		if isProxyTokenRejected(err) {
+			return false
+		}
+		s := apiErr.StatusCode
+		return s >= 400 && s < 500 && s != http.StatusRequestTimeout && s != http.StatusTooManyRequests
 	}
 	return errors.Is(err, errSessionGone)
 }
@@ -203,8 +219,15 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 		return
 	}
 
+	// Both drop the entry at once: a rejected proxy token is the operator's kill switch, so nothing cached
+	// may outlive it. Only the reason logged differs.
+	if isProxyTokenRejected(err) {
+		log.Warn().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: Infisical rejected this proxy's token, dropping the session")
+		delete(c.entries, key)
+		delete(c.tokens, key)
+		return
+	}
 	if isSessionGone(err) {
-		// The server's own message rides along: a revoked proxy token 401s here too.
 		log.Debug().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
 		delete(c.entries, key)
 		delete(c.tokens, key)

@@ -158,3 +158,52 @@ func TestStaleEntryIsNotServedFromTheCache(t *testing.T) {
 		t.Fatal("a stale entry that cannot be re-resolved must not be served")
 	}
 }
+
+func TestRefreshTreatsEveryDefinitiveRefusalAsTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		kept   bool
+	}{
+		{400, false}, {401, false}, {403, false}, {404, false}, {422, false},
+		{408, true}, {429, true}, {500, true}, {502, true},
+	} {
+		resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+		cache := newTestCache(resolver)
+		if _, err := cache.get("tok"); err != nil {
+			t.Fatal(err)
+		}
+		resolver.err = &api.APIError{StatusCode: tc.status}
+		cache.refresh()
+		_, kept := cache.get("tok")
+		if (kept == nil) != tc.kept {
+			t.Fatalf("status %d: credential still served = %v, want %v", tc.status, kept == nil, tc.kept)
+		}
+	}
+}
+
+func TestARejectedProxyTokenDropsTheSessionButIsNotASessionVerdict(t *testing.T) {
+	err := &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName, ErrorMessage: "Agent Vault proxy token has been revoked"}
+	if isSessionGone(err) {
+		t.Fatal("a rejected proxy token was read as the session being gone")
+	}
+	if !isProxyTokenRejected(err) {
+		t.Fatal("the named 401 was not recognised")
+	}
+
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+	cache := newTestCache(resolver)
+	if _, e := cache.get("tok"); e != nil {
+		t.Fatal(e)
+	}
+	resolver.err = err
+	cache.refresh()
+	if _, e := cache.get("tok"); e == nil {
+		t.Fatal("the credential kept flowing after the proxy's own token was rejected")
+	}
+}
+
+func TestAnUnnamed401StillEndsTheSession(t *testing.T) {
+	if !isSessionGone(&api.APIError{StatusCode: 401, Name: "UnauthorizedError", ErrorMessage: "Session revoked"}) {
+		t.Fatal("a plain 401 from an older server must still end the session")
+	}
+}

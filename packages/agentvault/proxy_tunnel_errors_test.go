@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"github.com/Infisical/infisical-merge/packages/api"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -86,5 +87,23 @@ func TestAnUpstreamFailureInsideTheTunnelKeepsTheDetailOutOfTheBody(t *testing.T
 	}
 	if !strings.Contains(logs.String(), "connection refused") {
 		t.Fatalf("the dial error was dropped instead of logged: %s", logs.String())
+	}
+}
+
+type rejectedProxyResolver struct{}
+
+func (rejectedProxyResolver) resolve(string) (*resolveResult, error) {
+	return nil, &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName, ErrorMessage: "Agent Vault proxy token has been revoked"}
+}
+
+func TestARevokedProxyTellsTheAgentTheProxyIsRevokedNotTheSession(t *testing.T) {
+	c := newTunnellingClient(t, rejectedProxyResolver{})
+	resp, err := c.Get("https://127.0.0.1:1/v1/thing")
+	if err == nil {
+		defer resp.Body.Close()
+	}
+	// The CONNECT gate refuses before any tunnel exists, so the client surfaces the proxy's status text.
+	if err == nil || !strings.Contains(err.Error(), http.StatusText(http.StatusServiceUnavailable)) {
+		t.Fatalf("expected the CONNECT to be refused with 503, got resp=%v err=%v", resp, err)
 	}
 }
