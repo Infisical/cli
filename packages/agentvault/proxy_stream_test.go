@@ -20,7 +20,7 @@ func (d *deadlineWriter) SetWriteDeadline(t time.Time) error {
 
 func TestEachStreamedChunkPushesTheWriteDeadlineOut(t *testing.T) {
 	rec := &deadlineWriter{ResponseWriter: httptest.NewRecorder()}
-	w := flushingWriter{ResponseWriter: rec, rc: http.NewResponseController(rec)}
+	w := &flushingWriter{ResponseWriter: rec, rc: http.NewResponseController(rec)}
 
 	for i := 0; i < 3; i++ {
 		if _, err := io.WriteString(w, "chunk\n"); err != nil {

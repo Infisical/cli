@@ -348,8 +348,20 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 			dst.Add(name, v)
 		}
 	}
+	// The status line is already on the wire, so a failure part way through the body cannot be reported
+	// as a status. Returning normally would have net/http finish the chunked encoding and hand the agent
+	// a well-formed truncated 200; aborting drops the connection so the agent sees a failure instead.
+	// httputil.ReverseProxy does the same for the same reason.
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(flushingWriter{ResponseWriter: w, rc: http.NewResponseController(w)}, resp.Body)
+	fw := &flushingWriter{ResponseWriter: w, rc: http.NewResponseController(w)}
+	if _, copyErr := io.Copy(fw, resp.Body); copyErr != nil {
+		// Only the upstream's failure is ours to report. A write error is the agent having stopped
+		// reading, which is its own business and what the standard library also stays quiet about.
+		if fw.writeErr == nil {
+			log.Warn().Err(copyErr).Str("host", hostname).Msg("agent-vault: upstream stream failed part way")
+		}
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedConnection, error) {
@@ -416,12 +428,18 @@ func (ps *proxyServer) isBypassed(hostname, port string) bool {
 type flushingWriter struct {
 	http.ResponseWriter
 	rc *http.ResponseController
+	// The last write failure, so a copy error can be told apart from the upstream's own. io.Copy reports
+	// one error for either side.
+	writeErr error
 }
 
-func (fw flushingWriter) Write(p []byte) (int, error) {
+func (fw *flushingWriter) Write(p []byte) (int, error) {
 	// Before the write, not after: a chunk heading for a slow client must not race a deadline set for the previous one.
 	_ = fw.rc.SetWriteDeadline(time.Now().Add(streamIdleTimeout))
 	n, err := fw.ResponseWriter.Write(p)
+	if err != nil {
+		fw.writeErr = err
+	}
 	if flusher, ok := fw.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
