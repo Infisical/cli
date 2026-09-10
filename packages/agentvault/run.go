@@ -156,7 +156,11 @@ func Start(opts Options, enrollmentToken string) error {
 		transport: newUpstreamTransport(),
 		config:    config,
 	}
-	ps.cache = newSessionCache(newInfisicalResolver(opts.ProxyToken), ps.pollInterval)
+	resolver, err := newInfisicalResolver(opts.ProxyToken)
+	if err != nil {
+		return err
+	}
+	ps.cache = newSessionCache(resolver, ps.pollInterval)
 
 	// Port 0 is not "unset": it is the ordinary ask for any free port, so it is never substituted.
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", opts.Port))
@@ -301,6 +305,6 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 		}
 	}
 
-	ps.cache.refresh()
+	ps.cache.refreshInBackground()
 	return tokenRejected
 }

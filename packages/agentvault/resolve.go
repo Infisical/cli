@@ -5,6 +5,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/go-resty/resty/v2"
 )
 
 const (
@@ -21,21 +22,23 @@ type resolveResult struct {
 
 // A seam so the cache can be tested without a server, not because a second implementation is expected.
 type infisicalResolver struct {
-	proxyToken func() string
+	client *resty.Client
 }
 
-func newInfisicalResolver(proxyToken func() string) *infisicalResolver {
-	return &infisicalResolver{proxyToken: proxyToken}
-}
-
-func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error) {
-	httpClient, err := util.GetRestyClientWithCustomHeaders()
+// One client for the life of the proxy, so resolves share a connection pool instead of paying a TLS
+// handshake each. Retries are off: a resolve runs while an agent's request waits, and a 429 means
+// "later", which the poll loop already provides once an interval. The token is fixed for the run.
+func newInfisicalResolver(proxyToken func() string) (*infisicalResolver, error) {
+	client, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
 	if err != nil {
 		return nil, err
 	}
-	httpClient.SetAuthToken(r.proxyToken()).SetTimeout(controlPlaneTimeout)
+	client.SetAuthToken(proxyToken()).SetTimeout(controlPlaneTimeout)
+	return &infisicalResolver{client: client}, nil
+}
 
-	res, err := api.CallResolveAgentVaultSession(httpClient, sessionToken)
+func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error) {
+	res, err := api.CallResolveAgentVaultSession(r.client, sessionToken)
 	if err != nil {
 		return nil, err
 	}

@@ -1,9 +1,12 @@
 package agentvault
 
 import (
+	"sync/atomic"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"golang.org/x/sync/singleflight"
 	"net/http"
 	"sync"
 	"time"
@@ -19,6 +22,8 @@ const (
 
 	// How long to keep serving when Infisical is unreachable - a timeout or a 5xx, as distinct from a 401.
 	unreachableGraceIntervals = 5
+
+	refreshParallelism = 8
 
 	// The shared CLI client sets retries but no deadline, so a control plane that stalls would hang the poll loop.
 	controlPlaneTimeout = 15 * time.Second
@@ -63,6 +68,11 @@ type sessionResolver interface {
 type sessionCache struct {
 	resolver     sessionResolver
 	pollInterval func() time.Duration
+
+	// Concurrent misses for one session share a single resolve rather than each posting to Infisical.
+	inflight singleflight.Group
+	// A refresh that outlives the poll interval must not pile a second one on top, nor hold up the heartbeat.
+	refreshing atomic.Bool
 
 	mu      sync.Mutex
 	entries map[string]*sessionEntry
@@ -130,23 +140,29 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 	}
 	c.mu.Unlock()
 
-	result, err := c.resolver.resolve(sessionToken)
+	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
+		result, err := c.resolver.resolve(sessionToken)
+		if err != nil {
+			return nil, err
+		}
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.evictIfFullLocked()
+		c.entries[key] = &sessionEntry{
+			sessionID:   result.SessionID,
+			expiresAt:   result.ExpiresAt,
+			connections: result.Connections,
+			lastSeen:    time.Now(),
+			fetchedAt:   time.Now(),
+		}
+		c.tokens[key] = sessionToken
+		return result.Connections, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.evictIfFullLocked()
-	c.entries[key] = &sessionEntry{
-		sessionID:   result.SessionID,
-		expiresAt:   result.ExpiresAt,
-		connections: result.Connections,
-		lastSeen:    time.Now(),
-		fetchedAt:   time.Now(),
-	}
-	c.tokens[key] = sessionToken
-	return result.Connections, nil
+	return resolved.([]*resolvedConnection), nil
 }
 
 func (c *sessionCache) evictIfFullLocked() {
@@ -173,6 +189,19 @@ func (c *sessionCache) evictIfFullLocked() {
 	delete(c.tokens, victim)
 }
 
+// refreshInBackground runs one refresh at a time off the caller's goroutine, so a slow control plane
+// delays neither the heartbeat nor the next tick. A tick that finds one still running skips it.
+func (c *sessionCache) refreshInBackground() {
+	if !c.refreshing.CompareAndSwap(false, true) {
+		log.Warn().Msg("agent-vault: the previous session refresh is still running, skipping this one")
+		return
+	}
+	go func() {
+		defer c.refreshing.Store(false)
+		c.refresh()
+	}()
+}
+
 func (c *sessionCache) refresh() {
 	c.mu.Lock()
 	targets := make(map[string]string, len(c.tokens))
@@ -192,21 +221,36 @@ func (c *sessionCache) refresh() {
 	}
 	c.mu.Unlock()
 
+	// Bounded rather than one at a time: twenty sessions against a slow control plane took minutes in
+	// series, long enough for later entries to age past the grace window before their turn came.
+	slots := make(chan struct{}, refreshParallelism)
+	var wg sync.WaitGroup
 	for key, token := range targets {
-		result, err := c.resolver.resolve(token)
-		if err != nil {
-			c.handleRefreshFailure(key, err)
-			continue
-		}
+		wg.Add(1)
+		slots <- struct{}{}
+		go func(key, token string) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			c.refreshOne(key, token)
+		}(key, token)
+	}
+	wg.Wait()
+}
 
-		c.mu.Lock()
-		if entry, ok := c.entries[key]; ok {
-			entry.sessionID = result.SessionID
-			entry.expiresAt = result.ExpiresAt
-			entry.connections = result.Connections
-			entry.fetchedAt = time.Now()
-		}
-		c.mu.Unlock()
+func (c *sessionCache) refreshOne(key, token string) {
+	result, err := c.resolver.resolve(token)
+	if err != nil {
+		c.handleRefreshFailure(key, err)
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.entries[key]; ok {
+		entry.sessionID = result.SessionID
+		entry.expiresAt = result.ExpiresAt
+		entry.connections = result.Connections
+		entry.fetchedAt = time.Now()
 	}
 }
 

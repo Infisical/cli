@@ -2,6 +2,8 @@ package agentvault
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,17 +11,29 @@ import (
 )
 
 type stubResolver struct {
+	mu     sync.Mutex
 	calls  int
 	result *resolveResult
 	err    error
+	delay  time.Duration
 }
 
 func (s *stubResolver) resolve(string) (*resolveResult, error) {
+	s.mu.Lock()
 	s.calls++
-	if s.err != nil {
-		return nil, s.err
+	result, err, delay := s.result, s.err, s.delay
+	s.mu.Unlock()
+	time.Sleep(delay)
+	if err != nil {
+		return nil, err
 	}
-	return s.result, nil
+	return result, nil
+}
+
+func (s *stubResolver) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 func connectionWithSecret(secret string) *resolvedConnection {
@@ -205,5 +219,61 @@ func TestARejectedProxyTokenDropsTheSessionButIsNotASessionVerdict(t *testing.T)
 func TestAnUnnamed401StillEndsTheSession(t *testing.T) {
 	if !isSessionGone(&api.APIError{StatusCode: 401, Name: "UnauthorizedError", ErrorMessage: "Session revoked"}) {
 		t.Fatal("a plain 401 from an older server must still end the session")
+	}
+}
+
+func TestConcurrentMissesForOneSessionShareOneResolve(t *testing.T) {
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1"}, delay: 100 * time.Millisecond}
+	cache := newTestCache(resolver)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := cache.get("same-token"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := resolver.callCount(); got != 1 {
+		t.Fatalf("five concurrent misses made %d resolves, want 1", got)
+	}
+}
+
+func TestRefreshRunsSessionsInParallel(t *testing.T) {
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1"}, delay: 100 * time.Millisecond}
+	cache := newTestCache(resolver)
+	for i := 0; i < refreshParallelism; i++ {
+		if _, err := cache.get(fmt.Sprintf("tok-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := time.Now()
+	cache.refresh()
+	if took := time.Since(start); took > 4*resolver.delay {
+		t.Fatalf("refreshing %d sessions took %s, which is serial; want about one round trip", refreshParallelism, took)
+	}
+}
+
+func TestOnlyOneRefreshRunsAtATime(t *testing.T) {
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1"}, delay: 200 * time.Millisecond}
+	cache := newTestCache(resolver)
+	if _, err := cache.get("tok"); err != nil {
+		t.Fatal(err)
+	}
+	before := resolver.callCount()
+
+	cache.refreshInBackground()
+	cache.refreshInBackground()
+	time.Sleep(50 * time.Millisecond)
+	if !cache.refreshing.Load() {
+		t.Fatal("the background refresh should still be running")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := resolver.callCount() - before; got != 1 {
+		t.Fatalf("two back-to-back background refreshes made %d resolves, want 1", got)
 	}
 }

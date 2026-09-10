@@ -24,7 +24,11 @@ func newPollLoopFixture(t *testing.T, heartbeatStatus int) (*proxyServer, *store
 		opts:   Options{ProxyToken: func() string { return "dead" }},
 		config: ProxyConfig{PollInterval: 1, UnmatchedHost: UnmatchedAllow},
 	}
-	ps.cache = newSessionCache(newInfisicalResolver(ps.opts.ProxyToken), ps.pollInterval)
+	resolver, err := newInfisicalResolver(ps.opts.ProxyToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps.cache = newSessionCache(resolver, ps.pollInterval)
 	return ps, newStore(t.TempDir())
 }
 
