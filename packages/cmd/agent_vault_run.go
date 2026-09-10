@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,8 +35,17 @@ var agentVaultBundleNameRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 const agentVaultCaFileName = "ca.pem"
 
-// Served by the proxy itself over plain HTTP, not by Infisical, so it uses a bare net/http client.
-var agentVaultProxyHTTPClient = &http.Client{Timeout: 10 * time.Second}
+// Served by the proxy itself over plain HTTP, not by Infisical, so it uses its own net/http client.
+// Proxy is nil rather than absent: the default transport would route this through the operator's
+// HTTP_PROXY, and the address names a machine on their own network, so it never belongs to a proxy.
+var agentVaultProxyHTTPClient = &http.Client{
+	Timeout:   10 * time.Second,
+	Transport: &http.Transport{Proxy: nil},
+}
+
+// The endpoint is unauthenticated plain HTTP, so whatever answers at that address is bounded before
+// it is read. A certificate and three short fields are a couple of kilobytes.
+const agentVaultCaResponseLimit = 1 << 20
 
 type agentVaultProxyCa struct {
 	ProxyID     string `json:"proxyId"`
@@ -61,7 +71,7 @@ func fetchAgentVaultProxyCa(proxyAddr string) (agentVaultProxyCa, error) {
 	}
 
 	var ca agentVaultProxyCa
-	if err := json.NewDecoder(resp.Body).Decode(&ca); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, agentVaultCaResponseLimit)).Decode(&ca); err != nil {
 		return agentVaultProxyCa{}, fmt.Errorf("the proxy's certificate response could not be read: %w", err)
 	}
 	return ca, nil
