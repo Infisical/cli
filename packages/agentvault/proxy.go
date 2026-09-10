@@ -468,6 +468,11 @@ func hostHeaderForScheme(scheme, target string) string {
 	if port != schemeDefault {
 		return target
 	}
+	// An IPv6 literal keeps its brackets or the header is malformed, and dropping the port is the only
+	// path that hands back a bare host. nginx answers 400 to the unbracketed form.
+	if strings.ContainsRune(host, ':') {
+		return "[" + host + "]"
+	}
 	return host
 }
 

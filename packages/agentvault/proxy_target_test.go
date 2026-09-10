@@ -33,3 +33,20 @@ func TestOrdinaryTargetsStillParse(t *testing.T) {
 		}
 	}
 }
+
+// Dropping the port for a default-port target is the only path that returns a bare host, and a bare
+// IPv6 literal is a malformed Host header: nginx answers 400 rather than routing it.
+func TestHostHeaderKeepsIPv6Brackets(t *testing.T) {
+	for _, tc := range []struct{ scheme, target, want string }{
+		{"https", "[2001:db8::1]:443", "[2001:db8::1]"},
+		{"http", "[2001:db8::1]:80", "[2001:db8::1]"},
+		{"https", "[2001:db8::1]:8443", "[2001:db8::1]:8443"},
+		{"https", "api.example.com:443", "api.example.com"},
+		{"https", "api.example.com:8443", "api.example.com:8443"},
+		{"http", "10.0.1.5:80", "10.0.1.5"},
+	} {
+		if got := hostHeaderForScheme(tc.scheme, tc.target); got != tc.want {
+			t.Errorf("hostHeaderForScheme(%q, %q) = %q, want %q", tc.scheme, tc.target, got, tc.want)
+		}
+	}
+}
