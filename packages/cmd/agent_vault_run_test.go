@@ -66,7 +66,7 @@ func TestBuildAgentVaultRunEnvPointsAtTheProxy(t *testing.T) {
 	if env["HOME"] != "/home/dev" {
 		t.Fatalf("unrelated variables must pass through, got HOME=%q", env["HOME"])
 	}
-	want := "http://agv_tok@10.0.1.5:17323"
+	want := "http://x-agent-vault:agv_tok@10.0.1.5:17323"
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
 		if env[k] != want {
 			t.Fatalf("%s = %q, want %q", k, env[k], want)
@@ -109,8 +109,9 @@ func TestAgentVaultFingerprintsEqualToleratesCopyFormats(t *testing.T) {
 	}
 }
 
-func TestAgentVaultProxyURLCarriesTheTokenAsTheUser(t *testing.T) {
-	if got := agentVaultProxyURL("10.0.1.5:17323", "agv_a/b"); got != "http://agv_a%2Fb@10.0.1.5:17323" {
+// Both halves have to be present or undici, urllib, requests and libcurl send no credentials at all.
+func TestAgentVaultProxyURLCarriesTheTokenAsThePassword(t *testing.T) {
+	if got := agentVaultProxyURL("10.0.1.5:17323", "agv_a/b"); got != "http://x-agent-vault:agv_a%2Fb@10.0.1.5:17323" {
 		t.Fatalf("unexpected proxy URL %q", got)
 	}
 }

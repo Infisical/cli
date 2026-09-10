@@ -346,9 +346,11 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 	return result
 }
 
-// The token rides as the Proxy-Authorization username on every CONNECT, in the clear on the hop to the proxy.
+// Both halves have to be filled or undici, urllib, requests and libcurl send no credentials at all and
+// every CONNECT comes back 407, while git refuses to start and asks for a password. The token is the
+// password half because tools mask that one and print the username; git names it verbatim in its errors.
 func agentVaultProxyURL(proxyAddr, sessionToken string) string {
-	u := url.URL{Scheme: "http", User: url.User(sessionToken), Host: proxyAddr}
+	u := url.URL{Scheme: "http", User: url.UserPassword(agentvault.ProxyAuthUsername, sessionToken), Host: proxyAddr}
 	return u.String()
 }
 

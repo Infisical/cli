@@ -112,18 +112,23 @@ func newUpstreamTransport() *http.Transport {
 	}
 }
 
-// requestSessionToken reads the session token off Proxy-Authorization, whose username half is what an
-// agent's HTTPS_PROXY URL can carry.
+// ProxyAuthUsername is the fixed username half of the proxy URL handed to an agent. It carries no
+// meaning: the token is the password. Clients only send Proxy-Authorization when both halves are
+// present, and the username is the half tools print rather than mask.
+const ProxyAuthUsername = "x-agent-vault"
+
+// requestSessionToken reads the session token off Proxy-Authorization, whose password half is what an
+// agent's HTTPS_PROXY URL carries. The username is ignored.
 func requestSessionToken(r *http.Request) (string, bool) {
 	header := r.Header.Get("Proxy-Authorization")
 	if header == "" {
 		return "", false
 	}
-	username, _, ok := parseProxyBasicAuth(header)
-	if !ok || username == "" {
+	_, sessionToken, ok := parseProxyBasicAuth(header)
+	if !ok || sessionToken == "" {
 		return "", false
 	}
-	return username, true
+	return sessionToken, true
 }
 
 func writeProxyAuthChallenge(w http.ResponseWriter) {
