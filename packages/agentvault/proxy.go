@@ -150,6 +150,31 @@ func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
 	ps.handlePlainForward(w, r)
 }
 
+// denyAtGate answers a request refused before the tunnel or the forward, and says so in the log. The
+// cache already reports both conditions when its poll loop meets them, but the request that is
+// actually turned away said nothing, which is the one an operator is looking for. The session key is
+// the hash the cache is keyed on, so lines can be correlated without the token appearing anywhere.
+func (ps *proxyServer) denyAtGate(w http.ResponseWriter, sessionToken, hostname, port string, err error) {
+	if isSessionGone(err) {
+		log.Warn().
+			Str("host", net.JoinHostPort(hostname, port)).
+			Str("sessionKey", sessionKey(sessionToken)).
+			Str("decision", decisionBlocked).
+			Int("status", http.StatusForbidden).
+			Msg("agent-vault: refused, the session is no longer valid")
+		http.Error(w, "the session is no longer valid", http.StatusForbidden)
+		return
+	}
+	log.Error().
+		Err(err).
+		Str("host", net.JoinHostPort(hostname, port)).
+		Str("sessionKey", sessionKey(sessionToken)).
+		Str("decision", decisionError).
+		Int("status", http.StatusBadGateway).
+		Msg("agent-vault: refused, the session could not be resolved")
+	http.Error(w, "failed to resolve the session", http.StatusBadGateway)
+}
+
 func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Everything that can produce an HTTP status happens before Hijack: once hijacked, no status can be sent.
 	sessionToken, ok := requestSessionToken(r)
@@ -167,11 +192,7 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Resolve before the DNS lookup below and the leaf minting further down, so an unauthenticated caller
 	// cannot make the proxy work on their behalf.
 	if _, err := ps.cache.get(sessionToken); err != nil {
-		if isSessionGone(err) {
-			http.Error(w, "the session is no longer valid", http.StatusForbidden)
-		} else {
-			http.Error(w, "failed to resolve the session", http.StatusBadGateway)
-		}
+		ps.denyAtGate(w, sessionToken, hostname, port, err)
 		return
 	}
 
@@ -260,11 +281,7 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 	}
 
 	if _, err := ps.cache.get(sessionToken); err != nil {
-		if isSessionGone(err) {
-			http.Error(w, "the session is no longer valid", http.StatusForbidden)
-		} else {
-			http.Error(w, "failed to resolve the session", http.StatusBadGateway)
-		}
+		ps.denyAtGate(w, sessionToken, hostname, port, err)
 		return
 	}
 
