@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/gofrs/flock"
 )
 
@@ -98,31 +99,10 @@ func writeLocalRoot(certPath, keyPath string, key *ecdsa.PrivateKey, cert *x509.
 		return err
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-	if err := writeFileAtomic(certPath, certPEM, 0o600); err != nil {
+	if err := util.WriteFileAtomic(certPath, certPEM, 0o600); err != nil {
 		return err
 	}
-	return writeFileAtomic(keyPath, keyPEM, 0o600)
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return util.WriteFileAtomic(keyPath, keyPEM, 0o600)
 }
 
 // lockDir takes an exclusive lock on a lockfile in dir; the returned func releases it. Uses gofrs/flock

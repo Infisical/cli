@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/Infisical/infisical-merge/packages/util"
 )
 
 // The data directory persists because of the CA, not the enrollment: an agent that trusted this proxy's
@@ -25,6 +27,8 @@ const (
 	confUnmatchedHost   = "INFISICAL_AGENT_VAULT_UNMATCHED_HOST"
 	confBypassHosts     = "INFISICAL_AGENT_VAULT_BYPASS_HOSTS"
 	confPollInterval    = "INFISICAL_AGENT_VAULT_POLL_INTERVAL"
+
+	probeBytes = 8 << 10
 )
 
 func DefaultDataDir() (string, error) {
@@ -63,6 +67,25 @@ func (s *store) ensureDir() error {
 		return fmt.Errorf("failed to create the data directory %q: %w", s.dir, err)
 	}
 	return nil
+}
+
+// Enrollment spends a one-time token on the server, so the directory is proved writable first. MkdirAll
+// passes on a read-only directory that already exists, and an empty file can be created on a full disk,
+// so the probe writes about as many bytes as the CA and state files will.
+func (s *store) probeWritable() error {
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(s.dir, ".probe-*")
+	if err != nil {
+		return fmt.Errorf("the data directory %q is not writable, so enrolling would spend the token with nowhere to store the result: %w", s.dir, err)
+	}
+	defer func() { _ = os.Remove(probe.Name()) }()
+	if _, err := probe.Write(make([]byte, probeBytes)); err != nil {
+		_ = probe.Close()
+		return fmt.Errorf("the data directory %q cannot take new files, so enrolling would spend the token with nowhere to store the result: %w", s.dir, err)
+	}
+	return probe.Close()
 }
 
 func (s *store) path(name string) string { return filepath.Join(s.dir, name) }
@@ -118,12 +141,12 @@ func (s *store) saveCa(key *ecdsa.PrivateKey, cert *x509.Certificate) error {
 	}
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-	if err := os.WriteFile(s.path(caKeyFile), keyPEM, 0o600); err != nil {
+	if err := util.WriteFileAtomic(s.path(caKeyFile), keyPEM, 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", caKeyFile, err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	if err := os.WriteFile(s.path(caCertFile), certPEM, 0o644); err != nil {
+	if err := util.WriteFileAtomic(s.path(caCertFile), certPEM, 0o644); err != nil {
 		return fmt.Errorf("failed to write %s: %w", caCertFile, err)
 	}
 	return nil
@@ -185,7 +208,7 @@ func (s *store) saveState(state persistedState) error {
 		fmt.Fprintf(&b, "%s=%s\n", pair[0], pair[1])
 	}
 
-	if err := os.WriteFile(s.path(proxyConfFile), []byte(b.String()), 0o600); err != nil {
+	if err := util.WriteFileAtomic(s.path(proxyConfFile), []byte(b.String()), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", proxyConfFile, err)
 	}
 	return nil

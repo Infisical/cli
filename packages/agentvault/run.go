@@ -25,6 +25,10 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 		return persistedState{}, nil, err
 	}
 
+	if err := st.probeWritable(); err != nil {
+		return persistedState{}, nil, err
+	}
+
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return persistedState{}, nil, err
