@@ -106,9 +106,12 @@ func newUpstreamTransport() *http.Transport {
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: tlsHandshakeTimeout,
-		// Deliberate: an h2 response has no HTTP/1.1 length framing, so re-serializing it into the tunnel
-		// would hang the client.
+		// HTTP/1.1 upstream, as the other two proxies do. ForceAttemptHTTP2 alone does not achieve that:
+		// with no TLS config or dialer of our own, h2 is enabled regardless and the empty map is what
+		// turns it off. One shared h2 connection per host would also fail several brokered requests
+		// together when an upstream restarts.
 		ForceAttemptHTTP2: false,
+		TLSNextProto:      map[string]func(authority string, c *tls.Conn) http.RoundTripper{},
 	}
 }
 
