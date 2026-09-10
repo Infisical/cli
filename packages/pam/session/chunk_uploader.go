@@ -264,18 +264,16 @@ func (cu *ChunkUploader) EncryptAndQueueChunk(
 	return pc, nil
 }
 
-// Reconciliation never gives up, so a chunk that can only ever be rejected retries forever.
+const uploadTokenMismatchError = "PamUploadTokenHashMismatch"
+
+// Matched on the platform's error name rather than the status, because a 404 or a
+// missing-token 400 can just be a read replica that has not caught up with a new session.
 func isPermanentUploadFailure(err error) bool {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	switch apiErr.StatusCode {
-	case http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
-		return true
-	default:
-		return false
-	}
+	return apiErr.StatusCode == http.StatusBadRequest && apiErr.Name == uploadTokenMismatchError
 }
 
 // flushSession has already advanced past it, so keeping the file only feeds the retry loop.

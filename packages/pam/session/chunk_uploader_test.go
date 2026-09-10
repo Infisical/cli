@@ -356,15 +356,16 @@ func TestIsPermanentUploadFailure(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"body too large is retryable after re-chunking", &api.APIError{StatusCode: http.StatusRequestEntityTooLarge}, false},
-		{"bad request", &api.APIError{StatusCode: http.StatusBadRequest}, true},
-		{"forbidden gateway", &api.APIError{StatusCode: http.StatusForbidden}, true},
-		{"session gone", &api.APIError{StatusCode: http.StatusNotFound}, true},
+		{"token mismatch", &api.APIError{StatusCode: http.StatusBadRequest, Name: uploadTokenMismatchError}, true},
+		{"missing token may be an unreplicated session", &api.APIError{StatusCode: http.StatusBadRequest, Name: "PamUploadTokenMissing"}, false},
+		{"session not found may be an unreplicated session", &api.APIError{StatusCode: http.StatusNotFound}, false},
+		{"forbidden gateway", &api.APIError{StatusCode: http.StatusForbidden}, false},
+		{"body too large", &api.APIError{StatusCode: http.StatusRequestEntityTooLarge}, false},
 		{"rate limited", &api.APIError{StatusCode: http.StatusTooManyRequests}, false},
 		{"server error", &api.APIError{StatusCode: http.StatusInternalServerError}, false},
 		{"unauthorized retries after token refresh", &api.APIError{StatusCode: http.StatusUnauthorized}, false},
 		{"network error", errors.New("dial tcp: connection refused"), false},
-		{"wrapped bad request", fmt.Errorf("chunk metadata POST failed: %w", &api.APIError{StatusCode: http.StatusBadRequest}), true},
+		{"wrapped token mismatch", fmt.Errorf("chunk metadata POST failed: %w", &api.APIError{StatusCode: http.StatusBadRequest, Name: uploadTokenMismatchError}), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -391,7 +392,7 @@ func TestDropIfPermanent(t *testing.T) {
 	if err := writePendingChunk(sid, pc); err != nil {
 		t.Fatal(err)
 	}
-	cu.dropIfPermanent(sid, pc, fmt.Errorf("wrapped: %w", &api.APIError{StatusCode: http.StatusBadRequest}))
+	cu.dropIfPermanent(sid, pc, fmt.Errorf("wrapped: %w", &api.APIError{StatusCode: http.StatusBadRequest, Name: uploadTokenMismatchError}))
 	if _, err := os.Stat(chunkPendingFile(sid, 0)); !os.IsNotExist(err) {
 		t.Error("permanently rejected chunk should have been dropped from the queue")
 	}
