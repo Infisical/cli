@@ -15,7 +15,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const USER_AGENT = "cli"
+// USER_AGENT carries the CLI version so the platform can tell which features a caller
+// supports. packages/util sets the version, because that is where ldflags injects it and
+// importing util from here would be an import cycle.
+var USER_AGENT = "cli"
 
 const (
 	operationCallGetRawSecretsV3                   = "CallGetRawSecretsV3"
@@ -1161,7 +1164,6 @@ func CallKubernetesAuthLoginGateway(httpClient *resty.Client, request Kubernetes
 
 func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAccessResponse, error) {
 	var pamAccessResponse PAMAccessResponse
-	request.SupportedTransports = []string{"direct", "relay"}
 	response, err := httpClient.
 		R().
 		SetResult(&pamAccessResponse).
