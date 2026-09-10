@@ -464,9 +464,9 @@ var gatewayStartCmd = &cobra.Command{
 		listenAddress, _ := util.GetCmdFlagOrEnv(cmd, "listen-address", []string{gatewayv2.LISTEN_ADDRESS_ENV_NAME})
 
 		// Determine if relay was explicitly selected (flag or env var).
-		explicitRelay, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
+		explicitRelay, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 		if explicitRelay == "" {
-			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
+			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
 		}
 
 		// Failover picks a relay on its own, so a direct-listen gateway must not have it enabled.
@@ -699,9 +699,9 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			if listenAddress == "" {
 				return util.GetRelayName(cmd, false, accessToken)
 			}
-			relayName, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
+			relayName, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 			if relayName == "" {
-				relayName, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
+				relayName, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
 			}
 			return relayName, nil
 		}
@@ -857,9 +857,8 @@ func init() {
 	gatewayCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
 	// Gateway start command flags (v2)
-	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to")
-	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to (deprecated, use --relay)")
-	_ = gatewayStartCmd.Flags().MarkDeprecated("target-relay-name", "use --relay")
+	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
@@ -890,9 +889,8 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway systemd install <name>")
-	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay")
-	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay (deprecated, use --relay)")
-	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("target-relay-name", "use --relay")
+	gatewaySystemdInstallCmd.Flags().String("relay", "", "The name of the relay (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
+	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
 	gatewaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
 	gatewaySystemdInstallCmd.Flags().String("pkcs11-module", "", "absolute path to a PKCS#11 driver (e.g. /opt/fortanix/pkcs11/fortanix_pkcs11.so). When set, the systemd service starts the gateway with the PKCS#11 driver loaded for HSM operations.")
 	gatewaySystemdInstallCmd.Flags().String("listen-address", "", "stable host:port advertised for direct gateway connections")

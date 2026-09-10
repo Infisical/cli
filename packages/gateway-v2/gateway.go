@@ -25,6 +25,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
@@ -147,6 +148,7 @@ type Gateway struct {
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
 	notifyOnce       sync.Once
+	relayDownOnce    sync.Once
 
 	// PAM session registry for active proxy connections (multiple connections per session)
 	pamSessions   map[string][]*pamSessionEntry
@@ -574,7 +576,15 @@ func (g *Gateway) Start(ctx context.Context) error {
 			return err
 		default:
 			if err := g.connectWithRetry(ctx, errCh); err != nil {
-				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				// Direct listen is already serving traffic, so a dead relay is degraded, not broken.
+				if g.hasDirectListener() {
+					g.relayDownOnce.Do(func() {
+						log.Warn().Msgf("Relay is unreachable (%v). Direct connections are unaffected; retrying the relay quietly.", err)
+					})
+					log.Debug().Msgf("Relay connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				} else {
+					log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				}
 				g.tryRelayFailover()
 				if registerErr := g.registerGateway(); registerErr != nil {
 					log.Warn().Msgf("Failed to refresh gateway registration: %v", registerErr)
@@ -744,6 +754,19 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 	return nil
 }
 
+// A relay that is down while direct listen is serving traffic is a degraded state, not a failure,
+// so its retry chatter drops to debug rather than repeating at info and error every cycle.
+func relayLog(hasDirect bool) *zerolog.Event {
+	if hasDirect {
+		return log.Debug()
+	}
+	return log.Info()
+}
+
+func (g *Gateway) hasDirectListener() bool {
+	return g.config.ListenAddress != "" || g.certs().DirectAddress != ""
+}
+
 func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
 	// With auto-failover enabled, try once then let Start() pick a new relay.
 	// With an explicit relay, retry 6 times since there's no fallback.
@@ -754,7 +777,7 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt == maxAttempts && maxAttempts > 1 {
-			log.Info().Msg("Re-registering gateway to handle potential relay IP change...")
+			relayLog(g.hasDirectListener()).Msg("Re-registering gateway to handle potential relay IP change...")
 			if err := g.registerGateway(); err != nil {
 				return fmt.Errorf("failed to re-register gateway: %v", err)
 			}
@@ -768,13 +791,13 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 
 		// Connect to Relay server
 		relayHost := g.certs().RelayHost
-		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), relayHost, g.config.SSHPort, attempt, maxAttempts)
+		relayLog(g.hasDirectListener()).Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), relayHost, g.config.SSHPort, attempt, maxAttempts)
 		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", relayHost, g.config.SSHPort), sshConfig)
 		if err != nil {
-			log.Warn().Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
+			relayLog(g.hasDirectListener()).Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
 			if attempt < maxAttempts {
 				retryDelay := time.Duration(attempt) * 2 * time.Second
-				log.Info().Msgf("Retrying in %v...", retryDelay)
+				relayLog(g.hasDirectListener()).Msgf("Retrying in %v...", retryDelay)
 				time.Sleep(retryDelay)
 				continue
 			}
