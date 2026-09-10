@@ -150,7 +150,7 @@ func TestBestMatchConsidersEveryPatternOnAConnection(t *testing.T) {
 
 func TestBypassIsAnExceptionToDeny(t *testing.T) {
 	ps := &proxyServer{}
-	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, api.github.com"})
+	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, api.github.com, pkg.example.com:8080"})
 
 	github := &resolvedConnection{name: "github", hostPatterns: parseHostPatterns("api.github.com")}
 	connections := []*resolvedConnection{github}
@@ -195,5 +195,30 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 				t.Errorf("blocked = %v, want %v", blocked, tc.wantBlock)
 			}
 		})
+	}
+}
+
+// A bypass entry carries no credential, so a bare host there means the host rather than one port of
+// it. An entry that names a port keeps meaning only that port.
+func TestBypassPortScope(t *testing.T) {
+	ps := &proxyServer{}
+	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, [::1], pkg.example.com:8080"})
+
+	for _, tc := range []struct {
+		host, port string
+		want       bool
+		why        string
+	}{
+		{"docs.example.com", "443", true, "a bare host over https"},
+		{"docs.example.com", "80", true, "and over plain http, which used to be blocked"},
+		{"docs.example.com", "9000", true, "and on any other port"},
+		{"::1", "80", true, "a bare ipv6 literal is no different"},
+		{"pkg.example.com", "8080", true, "the port that was written"},
+		{"pkg.example.com", "443", false, "naming a port still scopes the entry to it"},
+		{"other.example.com", "80", false, "a host that is not on the list"},
+	} {
+		if got := ps.isBypassed(tc.host, tc.port); got != tc.want {
+			t.Errorf("isBypassed(%q, %q) = %v, want %v: %s", tc.host, tc.port, got, tc.want, tc.why)
+		}
 	}
 }

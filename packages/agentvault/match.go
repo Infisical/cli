@@ -14,6 +14,10 @@ const defaultPort = "443"
 type hostPattern struct {
 	host string
 	port string
+	// Whether the entry named a port itself. Only the bypass list reads this: a connection without one
+	// has to stay on 443 or a credential would go out in the clear, but a bypass entry carries no
+	// credential, so a bare host there means the host rather than one port of it.
+	portWritten bool
 }
 
 func parseHostPatterns(raw string) []hostPattern {
@@ -31,6 +35,7 @@ func parseHostPatterns(raw string) []hostPattern {
 				p.host = part[1:end]
 				if rest := part[end+1:]; strings.HasPrefix(rest, ":") && rest[1:] != "" {
 					p.port = rest[1:]
+					p.portWritten = true
 				}
 				patterns = append(patterns, p)
 				continue
@@ -40,6 +45,7 @@ func parseHostPatterns(raw string) []hostPattern {
 		if idx := strings.LastIndex(part, ":"); idx != -1 {
 			if port := part[idx+1:]; port != "" {
 				p.port = port
+				p.portWritten = true
 			}
 			part = part[:idx]
 		}

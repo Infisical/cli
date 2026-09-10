@@ -400,6 +400,12 @@ func (ps *proxyServer) isBypassed(hostname, port string) bool {
 		return false
 	}
 	for _, pattern := range parseHostPatterns(raw) {
+		// A bare entry means the host on any port. The 443 default it inherits from the parser is there to
+		// keep a credential off plaintext, and a bypass entry never carries one, so plain http to a host
+		// written as a bare name would otherwise stay blocked with nothing saying why.
+		if !pattern.portWritten {
+			pattern.port = port
+		}
 		if ok, _ := pattern.match(hostname, port); ok {
 			return true
 		}
