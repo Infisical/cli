@@ -109,9 +109,34 @@ and starts the process.`,
 	Run: runAgentVaultRun,
 }
 
+// nonBlank drops values that name nothing, so a stray empty --access-bundle does not count towards
+// the one-bundle limit.
+func nonBlank(values []string) []string {
+	var kept []string
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			kept = append(kept, value)
+		}
+	}
+	return kept
+}
+
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	accessBundles, _ := cmd.Flags().GetStringArray("access-bundle")
 	sessionToken, _ := cmd.Flags().GetString("session-token")
+
+	// Whether the flag was given has to come from the flag set: pflag discards a lone empty value, so
+	// --access-bundle "" parses to an empty slice and is otherwise indistinguishable from the flag never
+	// appearing. Blanks alongside a real name are dropped here too, or the count below would report two
+	// bundles to someone who named one. Same shape as PAM's --account.
+	accessBundles = nonBlank(accessBundles)
+	if cmd.Flags().Changed("access-bundle") && len(accessBundles) == 0 {
+		util.HandleError(fmt.Errorf("--access-bundle was given but names no bundle; pass a name like 'coding-agent'"))
+	}
+	if cmd.Flags().Changed("session-token") && strings.TrimSpace(sessionToken) == "" {
+		util.HandleError(fmt.Errorf("--session-token was given but is empty; pass a session token from the dashboard"))
+	}
+
 	if len(accessBundles) == 0 && sessionToken == "" {
 		util.HandleError(fmt.Errorf("a session is required; pass --access-bundle <name> to mint one, or --session-token <session token> from the dashboard"))
 	}

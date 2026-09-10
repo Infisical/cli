@@ -130,3 +130,27 @@ func TestTrimProxySchemeIgnoresCase(t *testing.T) {
 		}
 	}
 }
+
+// pflag discards a lone empty value, so --access-bundle "" parses to an empty slice and only the flag
+// set remembers it was given. A blank alongside a real name has to go too, or the one-bundle limit
+// reports two to someone who named one.
+func TestNonBlankDropsValuesThatNameNothing(t *testing.T) {
+	for _, tc := range []struct {
+		in   []string
+		want int
+	}{
+		{nil, 0},
+		{[]string{""}, 0},
+		{[]string{"  "}, 0},
+		{[]string{"", "real"}, 1},
+		{[]string{"a", " ", "b"}, 2},
+		{[]string{" spaced "}, 1},
+	} {
+		if got := nonBlank(tc.in); len(got) != tc.want {
+			t.Errorf("nonBlank(%q) kept %d (%q), want %d", tc.in, len(got), got, tc.want)
+		}
+	}
+	if got := nonBlank([]string{" coding-agent "}); got[0] != "coding-agent" {
+		t.Errorf("surrounding space should be trimmed, got %q", got[0])
+	}
+}
