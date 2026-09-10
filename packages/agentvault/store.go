@@ -3,12 +3,11 @@ package agentvault
 import (
 	"crypto/ecdsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -16,17 +15,9 @@ import (
 // The data directory persists because of the CA, not the enrollment: an agent that trusted this proxy's
 // certificate must keep trusting it across restarts.
 const (
-	caKeyFile     = "ca.key"
-	caCertFile    = "ca.crt"
-	proxyConfFile = "proxy.conf"
-
-	confAccessToken     = "INFISICAL_AGENT_VAULT_ACCESS_TOKEN"
-	confEnrollmentToken = "INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN"
-	confProxyID         = "INFISICAL_AGENT_VAULT_PROXY_ID"
-	confProxyName       = "INFISICAL_AGENT_VAULT_PROXY_NAME"
-	confUnmatchedHost   = "INFISICAL_AGENT_VAULT_UNMATCHED_HOST"
-	confBypassHosts     = "INFISICAL_AGENT_VAULT_BYPASS_HOSTS"
-	confPollInterval    = "INFISICAL_AGENT_VAULT_POLL_INTERVAL"
+	caKeyFile      = "ca.key"
+	caCertFile     = "ca.crt"
+	proxyStateFile = "proxy.json"
 
 	probeBytes = 8 << 10
 )
@@ -42,18 +33,19 @@ func DefaultDataDir() (string, error) {
 	return filepath.Join(home, ".infisical", "agent-vault"), nil
 }
 
+// Same keys as the enroll response it was built from, so the file reads like the API did.
 type persistedState struct {
-	ProxyID         string
-	ProxyName       string
-	AccessToken     string
-	EnrollmentToken string
-	Config          ProxyConfig
+	ProxyID         string      `json:"proxyId"`
+	ProxyName       string      `json:"proxyName"`
+	AccessToken     string      `json:"accessToken"`
+	EnrollmentToken string      `json:"enrollmentToken"`
+	Config          ProxyConfig `json:"config"`
 }
 
 type ProxyConfig struct {
-	UnmatchedHost string
-	BypassHosts   string
-	PollInterval  int
+	UnmatchedHost string `json:"unmatchedHost"`
+	BypassHosts   string `json:"bypassHosts"`
+	PollInterval  int    `json:"pollInterval"`
 }
 
 type store struct {
@@ -154,37 +146,16 @@ func (s *store) saveCa(key *ecdsa.PrivateKey, cert *x509.Certificate) error {
 
 // found tells a missing file from an empty one, which is the difference between a first run and damage.
 func (s *store) loadState() (state persistedState, found bool, err error) {
-	data, err := os.ReadFile(s.path(proxyConfFile))
+	data, err := os.ReadFile(s.path(proxyStateFile))
 	if os.IsNotExist(err) {
 		return state, false, nil
 	}
 	if err != nil {
-		return state, false, fmt.Errorf("failed to read %s: %w", proxyConfFile, err)
+		return state, false, fmt.Errorf("failed to read %s: %w", proxyStateFile, err)
 	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
-		if !found {
-			continue
-		}
-		switch key {
-		case confProxyID:
-			state.ProxyID = value
-		case confProxyName:
-			state.ProxyName = value
-		case confAccessToken:
-			state.AccessToken = value
-		case confEnrollmentToken:
-			state.EnrollmentToken = value
-		case confUnmatchedHost:
-			state.Config.UnmatchedHost = value
-		case confBypassHosts:
-			state.Config.BypassHosts = value
-		case confPollInterval:
-			if parsed, convErr := strconv.Atoi(value); convErr == nil {
-				state.Config.PollInterval = parsed
-			}
-		}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return persistedState{}, true, fmt.Errorf(
+			"%s in %s is not valid JSON (%v). Restore it from a backup, or enroll again with a new token from the Proxies page, which replaces the certificate authority", proxyStateFile, s.dir, err)
 	}
 	return state, true, nil
 }
@@ -193,22 +164,12 @@ func (s *store) saveState(state persistedState) error {
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
-
-	var b strings.Builder
-	for _, pair := range [][2]string{
-		{confProxyID, state.ProxyID},
-		{confProxyName, state.ProxyName},
-		{confAccessToken, state.AccessToken},
-		{confEnrollmentToken, state.EnrollmentToken},
-		{confUnmatchedHost, state.Config.UnmatchedHost},
-		{confBypassHosts, state.Config.BypassHosts},
-		{confPollInterval, strconv.Itoa(state.Config.PollInterval)},
-	} {
-		fmt.Fprintf(&b, "%s=%s\n", pair[0], pair[1])
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
 	}
-
-	if err := util.WriteFileAtomic(s.path(proxyConfFile), []byte(b.String()), 0o600); err != nil {
-		return fmt.Errorf("failed to write %s: %w", proxyConfFile, err)
+	if err := util.WriteFileAtomic(s.path(proxyStateFile), append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", proxyStateFile, err)
 	}
 	return nil
 }

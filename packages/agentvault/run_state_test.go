@@ -9,7 +9,7 @@ import (
 
 func writeConf(t *testing.T, dir, body string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, proxyConfFile), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, proxyStateFile), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -27,7 +27,7 @@ func storeWithCa(t *testing.T) *store {
 	return st
 }
 
-const enrolledConf = "INFISICAL_AGENT_VAULT_PROXY_ID=p1\nINFISICAL_AGENT_VAULT_ACCESS_TOKEN=tok\nINFISICAL_AGENT_VAULT_UNMATCHED_HOST=deny\n"
+const enrolledConf = `{"proxyId":"p1","accessToken":"tok","config":{"unmatchedHost":"deny"}}`
 
 func TestResolveStateAnEmptyDirectoryIsAFirstRun(t *testing.T) {
 	_, _, err := resolveState(newStore(t.TempDir()), "")
@@ -38,9 +38,9 @@ func TestResolveStateAnEmptyDirectoryIsAFirstRun(t *testing.T) {
 
 func TestResolveStateAnIntactCaWithoutATokenIsNotAFirstRun(t *testing.T) {
 	for name, conf := range map[string]*string{
-		"no proxy.conf":      nil,
-		"empty proxy.conf":   ptr(""),
-		"token line missing": ptr("INFISICAL_AGENT_VAULT_PROXY_ID=p1\nINFISICAL_AGENT_VAULT_UNMATCHED_HOST=deny\n"),
+		"no proxy.json":       nil,
+		"empty object":        ptr(`{}`),
+		"token field missing": ptr(`{"proxyId":"p1","config":{"unmatchedHost":"deny"}}`),
 	} {
 		st := storeWithCa(t)
 		if conf != nil {
@@ -71,13 +71,13 @@ func TestResolveStateATokenWithoutACaNamesTheMissingFiles(t *testing.T) {
 func TestResolveStateRefusesAnUnknownPolicyInsteadOfAllowing(t *testing.T) {
 	for _, policy := range []string{"", "denny", "DENY", "true"} {
 		st := storeWithCa(t)
-		writeConf(t, st.dir, "INFISICAL_AGENT_VAULT_ACCESS_TOKEN=tok\nINFISICAL_AGENT_VAULT_UNMATCHED_HOST="+policy+"\n")
+		writeConf(t, st.dir, `{"accessToken":"tok","config":{"unmatchedHost":"`+policy+`"}}`)
 		_, _, err := resolveState(st, "")
 		if err == nil {
 			t.Fatalf("policy %q was accepted; the proxy would have come up allowing", policy)
 		}
-		if !strings.Contains(err.Error(), confUnmatchedHost) {
-			t.Fatalf("policy %q: the message does not name the line: %v", policy, err)
+		if !strings.Contains(err.Error(), "unmatchedHost") {
+			t.Fatalf("policy %q: the message does not name the field: %v", policy, err)
 		}
 	}
 }
@@ -95,3 +95,14 @@ func TestResolveStateResumesACompleteEnrollment(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestResolveStateRefusesAFileThatIsNotJSON(t *testing.T) {
+	for name, body := range map[string]string{"zero bytes": "", "old KEY=VALUE format": "INFISICAL_AGENT_VAULT_ACCESS_TOKEN=tok\n"} {
+		st := storeWithCa(t)
+		writeConf(t, st.dir, body)
+		_, _, err := resolveState(st, "")
+		if err == nil || !strings.Contains(err.Error(), "not valid JSON") || strings.Contains(err.Error(), "has not enrolled yet") {
+			t.Fatalf("%s: expected a parse error naming the file, got %v", name, err)
+		}
+	}
+}

@@ -93,7 +93,29 @@ func TestSaveStateRoundTripsWithoutTempFiles(t *testing.T) {
 		t.Fatalf("round trip changed the state:\n got %+v\nwant %+v", got, want)
 	}
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 || entries[0].Name() != proxyConfFile {
-		t.Fatalf("expected only %s in the data dir, found %v", proxyConfFile, entries)
+	if len(entries) != 1 || entries[0].Name() != proxyStateFile {
+		t.Fatalf("expected only %s in the data dir, found %v", proxyStateFile, entries)
+	}
+}
+
+func TestSaveStateKeepsALineBreakInsideAValue(t *testing.T) {
+	st := newStore(t.TempDir())
+	in := persistedState{AccessToken: "tok", Config: ProxyConfig{
+		UnmatchedHost: UnmatchedDeny,
+		BypassHosts:   "x.example.com\nunmatchedHost=allow",
+		PollInterval:  60,
+	}}
+	if err := st.saveState(in); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := st.loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Config.UnmatchedHost != UnmatchedDeny {
+		t.Fatalf("a line break in one value rewrote another: policy came back %q", out.Config.UnmatchedHost)
+	}
+	if out.Config.BypassHosts != in.Config.BypassHosts {
+		t.Fatalf("the value did not round-trip: %q", out.Config.BypassHosts)
 	}
 }
