@@ -50,6 +50,9 @@ const (
 
 var errHostBlocked = errors.New("host blocked by policy")
 
+// Wraps a resolve failure so the tunnel can tell it from an upstream failure without reading the text.
+var errSessionResolve = errors.New("failed to resolve the session")
+
 const (
 	decisionBrokered    = "brokered"
 	decisionPassthrough = "passthrough"
@@ -303,13 +306,21 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 
 	resp, matched, err := ps.forward(r, scheme, hostname, port, sessionToken)
 
+	// The body is fixed text per outcome, never err.Error(): an APIError carries the control-plane URL and
+	// request id, and a dial error names the upstream address. The detail goes on the log line below.
+	// A gone session is 403 with the same words the CONNECT gate uses, so SDKs stop rather than retry.
 	decision := decisionPassthrough
 	status := 0
+	body := ""
 	switch {
 	case errors.Is(err, errHostBlocked):
-		decision, status = decisionBlocked, http.StatusForbidden
+		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
+	case isSessionGone(err):
+		decision, status, body = decisionBlocked, http.StatusForbidden, "the session is no longer valid"
+	case errors.Is(err, errSessionResolve):
+		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:
-		decision, status = decisionError, http.StatusBadGateway
+		decision, status, body = decisionError, http.StatusBadGateway, "failed to reach the upstream"
 	// brokered means a credential went out, not merely that a connection matched.
 	case matched != nil && matched.credential.kind != credentialPassthrough:
 		decision, status = decisionBrokered, resp.StatusCode
@@ -334,10 +345,13 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	if matched != nil {
 		event = event.Str("connection", matched.name).Str("accessBundle", matched.accessBundleName)
 	}
+	if err != nil {
+		event = event.Err(err)
+	}
 	event.Msg("agent-vault: request")
 
 	if err != nil {
-		http.Error(w, err.Error(), status)
+		http.Error(w, body, status)
 		return
 	}
 	defer resp.Body.Close()
@@ -370,7 +384,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedConnection, error) {
 	connections, err := ps.cache.get(sessionToken)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve the session: %w", err)
+		return nil, nil, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
 
 	matched := bestMatch(connections, hostname, port)
