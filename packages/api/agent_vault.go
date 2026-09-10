@@ -16,32 +16,33 @@ type AgentVaultProxyConfig struct {
 	PollInterval  int    `json:"pollInterval"`
 }
 
-type EnrollAgentVaultProxyRequest struct {
-	EnrollmentToken   string `json:"enrollmentToken"`
+type LoginAgentVaultProxyRequest struct {
+	Method            string `json:"method"`
+	Token             string `json:"token"`
 	RootCaCertificate string `json:"rootCaCertificate"`
 }
 
-type EnrollAgentVaultProxyResponse struct {
+type LoginAgentVaultProxyResponse struct {
 	ProxyID     string                `json:"proxyId"`
 	Name        string                `json:"name"`
 	AccessToken string                `json:"accessToken"`
 	Config      AgentVaultProxyConfig `json:"config"`
 }
 
-func CallEnrollAgentVaultProxy(httpClient *resty.Client, request EnrollAgentVaultProxyRequest) (EnrollAgentVaultProxyResponse, error) {
-	var res EnrollAgentVaultProxyResponse
+func CallLoginAgentVaultProxy(httpClient *resty.Client, request LoginAgentVaultProxyRequest) (LoginAgentVaultProxyResponse, error) {
+	var res LoginAgentVaultProxyResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/enroll", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/login", config.INFISICAL_URL))
 
 	if err != nil {
-		return EnrollAgentVaultProxyResponse{}, NewGenericRequestError("CallEnrollAgentVaultProxy", err)
+		return LoginAgentVaultProxyResponse{}, NewGenericRequestError("CallLoginAgentVaultProxy", err)
 	}
 	if response.IsError() {
-		return EnrollAgentVaultProxyResponse{}, NewAPIErrorWithResponse("CallEnrollAgentVaultProxy", response, nil)
+		return LoginAgentVaultProxyResponse{}, NewAPIErrorWithResponse("CallLoginAgentVaultProxy", response, nil)
 	}
 	return res, nil
 }

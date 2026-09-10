@@ -35,8 +35,9 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 	}
 	httpClient.SetTimeout(controlPlaneTimeout)
 
-	res, err := api.CallEnrollAgentVaultProxy(httpClient, api.EnrollAgentVaultProxyRequest{
-		EnrollmentToken:   enrollmentToken,
+	res, err := api.CallLoginAgentVaultProxy(httpClient, api.LoginAgentVaultProxyRequest{
+		Method:            "token",
+		Token:             enrollmentToken,
 		RootCaCertificate: string(caPEM(cert)),
 	})
 	if err != nil {
