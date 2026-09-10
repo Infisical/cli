@@ -74,7 +74,7 @@ var avRunCmd = &cobra.Command{
 
 The agent's HTTP traffic is pointed at the proxy, which attaches the real credential at the network boundary.
 The process you start receives a session token, the proxy address and the proxy's certificate authority, and
-nothing else from Infisical.
+inherits the rest of your environment unchanged.
 
 Two ways to get a session, exactly one of them required:
 
