@@ -205,6 +205,35 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("the proxy at %s serves a certificate authority with fingerprint %s, not the pinned %s. Nothing was written and the agent was not started. If the proxy was re-enrolled, take the new fingerprint from the Proxies page; otherwise something else is answering at that address", proxyAddr, servedFingerprint, pinnedFingerprint))
 	}
 
+	caPath := ""
+	if !noCaTrust {
+		if err := os.MkdirAll(filepath.Dir(caFile), 0o700); err != nil {
+			util.HandleError(err, "Unable to create the directory for the certificate authority file")
+		}
+		if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+			util.HandleError(err, "Unable to write the certificate authority file")
+		}
+		caPath = caFile
+
+		// Go binaries such as gh and docker ignore the CA environment variables and read the system trust store,
+		// so macOS gets the keychain entry too.
+		if runtime.GOOS == "darwin" && isatty.IsTerminal(os.Stdin.Fd()) {
+			onPrompt := func() {
+				util.PrintWarning("Adding the Agent Vault proxy's certificate authority to your login keychain, so tools that read the system trust store accept it. Approve the macOS prompt, or press Ctrl-C and re-run with --no-ca-trust to skip it.")
+			}
+			switch installed, terr := ensureAgentVaultCATrusted(caPath, onPrompt); {
+			case errors.Is(terr, errAgentVaultTrustTimedOut):
+				util.PrintWarning("The keychain prompt went unanswered, so the certificate authority was not added. The agent still runs, and tools that read the system trust store may report a certificate error. Re-run with --no-ca-trust to skip this step.")
+			case terr != nil:
+				util.PrintWarning(fmt.Sprintf("Unable to add the Agent Vault proxy CA to your login keychain (%v). Most tools will still work, but some may report a certificate error.", terr))
+			case installed:
+				util.PrintWarning("Added the Agent Vault proxy CA to your login keychain. This is one-time per proxy and persists for future runs.")
+			}
+		}
+	}
+
+	// Minted last, once every file is written and the keychain prompt has been answered: from here to the
+	// child starting nothing may exit, or the session outlives the command with no message naming it.
 	var minted *api.AgentVaultSession
 	if len(accessBundles) > 0 {
 		identity := resolveAgentVaultIdentityToken(cmd)
@@ -233,33 +262,6 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Set("keepSession", keepSession).
 		Set("pinned", pinnedFingerprint != "").
 		Set("caTrust", !noCaTrust))
-
-	caPath := ""
-	if !noCaTrust {
-		if err := os.MkdirAll(filepath.Dir(caFile), 0o700); err != nil {
-			util.HandleError(err, "Unable to create the directory for the certificate authority file")
-		}
-		if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
-			util.HandleError(err, "Unable to write the certificate authority file")
-		}
-		caPath = caFile
-
-		// Go binaries such as gh and docker ignore the CA environment variables and read the system trust store,
-		// so macOS gets the keychain entry too.
-		if runtime.GOOS == "darwin" && isatty.IsTerminal(os.Stdin.Fd()) {
-			onPrompt := func() {
-				util.PrintWarning("Adding the Agent Vault proxy's certificate authority to your login keychain, so tools that read the system trust store accept it. Approve the macOS prompt, or press Ctrl-C and re-run with --no-ca-trust to skip it.")
-			}
-			switch installed, terr := ensureAgentVaultCATrusted(caPath, onPrompt); {
-			case errors.Is(terr, errAgentVaultTrustTimedOut):
-				util.PrintWarning("The keychain prompt went unanswered, so the certificate authority was not added. The agent still runs, and tools that read the system trust store may report a certificate error. Re-run with --no-ca-trust to skip this step.")
-			case terr != nil:
-				util.PrintWarning(fmt.Sprintf("Unable to add the Agent Vault proxy CA to your login keychain (%v). Most tools will still work, but some may report a certificate error.", terr))
-			case installed:
-				util.PrintWarning("Added the Agent Vault proxy CA to your login keychain. This is one-time per proxy and persists for future runs.")
-			}
-		}
-	}
 
 	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
 
