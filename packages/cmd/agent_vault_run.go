@@ -135,10 +135,13 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err, "Unable to read --proxy")
 	}
+	// Trimmed here as well as in the env lookup, so a flag holding only spaces gets the message below
+	// rather than a parse error about a space in the host name.
+	proxyAddr = strings.TrimSpace(proxyAddr)
 	if proxyAddr == "" {
 		util.HandleError(fmt.Errorf("the proxy address is required; pass --proxy <host:port> or set INFISICAL_AGENT_VAULT_PROXY_ADDRESS. The same proxy has a different address from every network, so there is no name to look it up by"))
 	}
-	proxyAddr = strings.TrimPrefix(strings.TrimPrefix(proxyAddr, "http://"), "https://")
+	proxyAddr = trimProxyScheme(proxyAddr)
 
 	pinnedFingerprint, _ := cmd.Flags().GetString("ca-fingerprint")
 	noCaTrust, _ := cmd.Flags().GetBool("no-ca-trust")
@@ -344,6 +347,17 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 		result = append(result, fmt.Sprintf("%s=%s", k, v))
 	}
 	return result
+}
+
+// url.Parse is no use here: the documented input is a bare host:port, which it either rejects outright
+// or reads as a scheme with an empty host. A scheme is accepted anyway because people paste one.
+func trimProxyScheme(addr string) string {
+	for _, scheme := range []string{"http://", "https://"} {
+		if len(addr) >= len(scheme) && strings.EqualFold(addr[:len(scheme)], scheme) {
+			return addr[len(scheme):]
+		}
+	}
+	return addr
 }
 
 // Both halves have to be filled or undici, urllib, requests and libcurl send no credentials at all and

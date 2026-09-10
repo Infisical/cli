@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 )
 
 func selfSignedPEM(t *testing.T, cn string) string {
@@ -113,5 +112,21 @@ func TestAgentVaultFingerprintsEqualToleratesCopyFormats(t *testing.T) {
 func TestAgentVaultProxyURLCarriesTheTokenAsThePassword(t *testing.T) {
 	if got := agentVaultProxyURL("10.0.1.5:17323", "agv_a/b"); got != "http://x-agent-vault:agv_a%2Fb@10.0.1.5:17323" {
 		t.Fatalf("unexpected proxy URL %q", got)
+	}
+}
+
+func TestTrimProxySchemeIgnoresCase(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"127.0.0.1:17323", "127.0.0.1:17323"},
+		{"http://127.0.0.1:17323", "127.0.0.1:17323"},
+		{"https://127.0.0.1:17323", "127.0.0.1:17323"},
+		{"HTTPS://127.0.0.1:17323", "127.0.0.1:17323"},
+		{"HtTp://proxy.local:17323", "proxy.local:17323"},
+		// A host that merely starts with the letters keeps them.
+		{"https-proxy.local:17323", "https-proxy.local:17323"},
+	} {
+		if got := trimProxyScheme(tc.in); got != tc.want {
+			t.Errorf("trimProxyScheme(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
