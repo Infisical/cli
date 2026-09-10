@@ -2,6 +2,7 @@ package gatewayv2
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -91,22 +92,22 @@ func TestOracleConnStringNeverLeaksPassword(t *testing.T) {
 	}
 
 	for _, form := range []string{pw, url.PathEscape(pw), url.QueryEscape(pw)} {
-		msg := redactSQLSecrets("connect failed: oracle://system:"+form+"@host:1521/FREEPDB1", pw)
+		msg := redactProbeSecrets("connect failed: oracle://system:"+form+"@host:1521/FREEPDB1", pw)
 		if strings.Contains(msg, form) {
 			t.Fatalf("redaction missed %q in %q", form, msg)
 		}
 	}
 }
 
-func TestRedactSQLSecretsRemovesCredentials(t *testing.T) {
+func TestRedactProbeSecretsRemovesCredentials(t *testing.T) {
 	long := "S3cr3t#Pw%x"
 	withSecret := "connect failed for " + long
-	if got := redactSQLSecrets(withSecret, long); strings.Contains(got, long) {
+	if got := redactProbeSecrets(withSecret, long); strings.Contains(got, long) {
 		t.Fatalf("a full-length secret must be redacted, got %q", got)
 	}
 
 	dsn := `parse "oracle://system:` + url.PathEscape("ab") + `@host:1521/FREEPDB1": bad`
-	got := redactSQLSecrets(dsn, "ab")
+	got := redactProbeSecrets(dsn, "ab")
 	if strings.Contains(got, "system:ab@") {
 		t.Fatalf("URL userinfo must be stripped even for a short secret, got %q", got)
 	}
@@ -162,7 +163,7 @@ func TestAlterPasswordStatement(t *testing.T) {
 func TestRedactionSurvivesAtSignInPassword(t *testing.T) {
 	pw := "p@ssw0rd"
 	dsn := go_ora.BuildUrl("host", 1521, "svc", "user", pw, nil)
-	got := redactSQLSecrets(`parse "`+dsn+`": bad`, pw)
+	got := redactProbeSecrets(`parse "`+dsn+`": bad`, pw)
 
 	for _, leak := range []string{pw, "ssw0rd", "p@"} {
 		if strings.Contains(got, leak) {
@@ -178,5 +179,39 @@ func TestAlterPasswordStatementRejectsNonOracleDialect(t *testing.T) {
 		if _, err := alterPasswordStatement(p); err == nil {
 			t.Fatalf("dialect %q must be rejected: the statement also parses as valid MySQL", d)
 		}
+	}
+}
+
+func TestOracleListenerErrorsClassifyAsTransport(t *testing.T) {
+	for _, msg := range []string{
+		"ORA-12514: TNS:listener does not currently know of service requested in connect descriptor",
+		"ORA-12541: TNS:no listener",
+		"ORA-12537: TNS:connection closed",
+		"ORA-01033: ORACLE initialization or shutdown in progress",
+	} {
+		err := sqlAuthFailure("oracle", errors.New(msg))
+		if got := classifyTestConnFailure(err); got != failureKindTransport {
+			t.Fatalf("%q classified as %q, want transport", msg, got)
+		}
+	}
+}
+
+func TestOracleRejectedCredentialStillClassifiesAsAuth(t *testing.T) {
+	err := sqlAuthFailure("oracle", errors.New("ORA-01017: invalid username/password; logon denied"))
+	if got := classifyTestConnFailure(err); got != failureKindAuth {
+		t.Fatalf("kind = %q, want auth", got)
+	}
+}
+
+func TestRedactionStripsUserinfoContainingAtSign(t *testing.T) {
+	got := redactProbeSecrets(`dial "mongodb://user:p@ss@host:27017/db" failed`)
+
+	for _, leak := range []string{"p@ss", "ss@host"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("userinfo with an @ was only half redacted: %s", got)
+		}
+	}
+	if !strings.Contains(got, "mongodb://******@host:27017") {
+		t.Fatalf("expected the whole userinfo redacted, got %s", got)
 	}
 }

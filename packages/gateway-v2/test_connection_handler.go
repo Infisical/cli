@@ -216,7 +216,7 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 		}
 		connStr := go_ora.BuildUrl(host, port, params.Database, params.Username, params.Password, urlOptions)
 		if _, err := configurations.ParseConfig(connStr); err != nil {
-			return nil, fmt.Errorf("failed to build Oracle connection config: %s", redactSQLSecrets(err.Error(), params.Password))
+			return nil, fmt.Errorf("failed to build Oracle connection config: %s", redactProbeSecrets(err.Error(), params.Password))
 		}
 		connector, ok := go_ora.NewConnector(connStr).(*go_ora.OracleConnector)
 		if !ok {
@@ -275,7 +275,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 	defer db.Close()
 
 	var result int
-	return authFailure(db.QueryRowContext(ctx, sqlVerifyQuery(params.Dialect)).Scan(&result))
+	return sqlAuthFailure(params.Dialect, db.QueryRowContext(ctx, sqlVerifyQuery(params.Dialect)).Scan(&result))
 }
 
 // doMongoConnectionTest authenticates against the target MongoDB and pings it
@@ -561,13 +561,17 @@ func dialTarget(ctx context.Context, host string, port int) error {
 
 // runWithContext bounds op by ctx even when the underlying driver ignores context cancellation
 func runWithContext(ctx context.Context, op func() error) error {
+	return runWithContextTimeoutMessage(ctx, op, "connection test timed out")
+}
+
+func runWithContextTimeoutMessage(ctx context.Context, op func() error, timeoutMessage string) error {
 	done := make(chan error, 1)
 	go func() { done <- op() }()
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return connectFailure(fmt.Errorf("connection test timed out"))
+		return connectFailure(errors.New(timeoutMessage))
 	}
 }
 
@@ -621,30 +625,35 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doMongoConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeRedis:
 		var params redisTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doRedisConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeLDAP:
 		var params ldapTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doLdapConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeKubernetes:
 		var params kubernetesTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Token)
 		op = func() error { return doKubernetesConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeSSH:
 		var params sshTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password, params.PrivateKey)
 		op = func() error {
 			_, err := doSSHExec(target.host, target.port, sshExecEnvelope{
 				Command:     "true",
@@ -665,15 +674,15 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if testErr := runWithContext(ctx, op); testErr != nil {
-		writeRPCErrorWithKind(w, http.StatusBadGateway, redactSQLSecrets(testErr.Error(), redactSecrets...), string(classifyTestConnFailure(testErr)))
+		writeRPCErrorWithKind(w, http.StatusBadGateway, redactProbeSecrets(testErr.Error(), redactSecrets...), string(classifyTestConnFailure(testErr)))
 		return
 	}
 	writeRPCJSON(w, http.StatusOK, testConnectionResponse{Result: testConnectionResult{Ok: true}})
 }
 
-var urlUserinfoPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^/\s@]*@`)
+var urlUserinfoPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^/\s]*@`)
 
-func redactSQLSecrets(msg string, secrets ...string) string {
+func redactProbeSecrets(msg string, secrets ...string) string {
 	for _, secret := range secrets {
 		if secret == "" {
 			continue

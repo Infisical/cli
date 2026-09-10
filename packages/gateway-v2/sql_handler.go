@@ -85,10 +85,10 @@ func handleSQLRotateCredential(w http.ResponseWriter, r *http.Request) {
 
 	target, _ := r.Context().Value(rpcTargetContextKey{}).(rpcTarget)
 
-	if err := runWithContext(ctx, func() error {
+	if err := runWithContextTimeoutMessage(ctx, func() error {
 		return doSQLRotate(ctx, target.host, target.port, params, statement)
-	}); err != nil {
-		msg := redactSQLSecrets(err.Error(), params.Password, params.NewPassword)
+	}, "the password change timed out before the target answered, and may still have been applied"); err != nil {
+		msg := redactProbeSecrets(err.Error(), params.Password, params.NewPassword)
 		writeRPCErrorWithKind(w, http.StatusBadGateway, msg, string(classifyTestConnFailure(err)))
 		return
 	}
@@ -106,7 +106,7 @@ func doSQLRotate(ctx context.Context, host string, port int, params sqlRotatePar
 	}
 	defer db.Close()
 	if _, err := db.ExecContext(ctx, statement); err != nil {
-		return authFailure(err)
+		return sqlAuthFailure(params.Dialect, err)
 	}
 	return nil
 }

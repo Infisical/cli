@@ -305,8 +305,11 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 // instructions handed to an agent are built from these, so the two cannot describe the same account
 // differently, and a fix to how one connects is a fix for both.
 type AccountConnectionDisplay struct {
-	TypeLabel        string // e.g., "PostgreSQL", "MySQL", "SQL Server"
-	DefaultPort      int    // default port for this account type
+	TypeLabel   string // e.g., "PostgreSQL", "MySQL", "SQL Server"
+	DefaultPort int    // default port for this account type
+	// RequiredPassword is the literal string a client must send in its password field, for the account types
+	// whose login protocol refuses an empty one. The proxy swaps the real credential in during login. Empty
+	// for every type that accepts no password at all.
 	RequiredPassword string
 	// ConnectionString builds the connection string, and is nil for account types that have none.
 	ConnectionString func(username, database string, port int) string
