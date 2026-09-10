@@ -206,7 +206,7 @@ func (p *SnowflakeProxy) handleQuery(l zeroLogger) http.HandlerFunc {
 				abortUpstream(r.Context(), p.upstream, l)
 			}
 			p.logStatement(statement, fmt.Sprintf("ERROR: %s", err))
-			writeFailure(w, errCodeStatement, err.Error())
+			writeUpstreamFailure(w, err)
 			return
 		}
 

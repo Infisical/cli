@@ -243,6 +243,7 @@ func (u *upstream) query(ctx context.Context, statement string, bindings json.Ra
 	if len(result.rows) > maxRows {
 		result.rows = result.rows[:maxRows]
 	}
+	result.total = parsed.Total
 	result.truncated = int64(len(result.rows)) < parsed.Total
 	result.elapsed = time.Since(started)
 	return result, nil
@@ -347,7 +348,7 @@ func (u *upstream) renew(ctx context.Context) error {
 	return nil
 }
 
-type snowflakeError struct{ code, message string }
+type snowflakeError struct{ code, sqlState, queryID, message string }
 
 func (e *snowflakeError) Error() string { return e.message }
 
@@ -409,7 +410,12 @@ func (u *upstream) send(req *http.Request) (*upstreamEnvelope, error) {
 		if message == "" {
 			message = fmt.Sprintf("Snowflake refused the request (HTTP %d)", resp.StatusCode)
 		}
-		return nil, &snowflakeError{code: envelope.Code, message: message}
+		var detail struct {
+			SQLState string `json:"sqlState"`
+			QueryID  string `json:"queryId"`
+		}
+		_ = json.Unmarshal(envelope.Data, &detail)
+		return nil, &snowflakeError{code: envelope.Code, sqlState: detail.SQLState, queryID: detail.QueryID, message: message}
 	}
 	return &envelope, nil
 }

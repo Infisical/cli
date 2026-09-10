@@ -144,7 +144,7 @@ func TestResultTranslation(t *testing.T) {
 	data := result.data()
 	require.Equal(t, result.columns, data["rowtype"])
 	require.Equal(t, [][]any{{"1", "alice"}, {"2", nil}}, data["rowset"])
-	require.Equal(t, 2, data["total"])
+	require.EqualValues(t, 2, data["total"])
 	// Snowflake's own id, so a client that cancels or looks the query up names the right one
 	require.Equal(t, "01b2-real", data["queryId"])
 	require.Equal(t, "2 row(s), 5ms", result.summary())
@@ -402,4 +402,19 @@ func TestGzippedRequestIsBoundedAfterDecompression(t *testing.T) {
 		SqlText string `json:"sqlText"`
 	}
 	require.Error(t, decodeRequest(httptest.NewRecorder(), req, &out))
+}
+
+func TestUpstreamFailureAndTotalArePreserved(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeUpstreamFailure(recorder, &snowflakeError{code: "002003", sqlState: "42S02", queryID: "q-1", message: "no such table"})
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Equal(t, "002003", body["code"])
+	require.Equal(t, "no such table", body["message"])
+	require.Equal(t, "42S02", body["data"].(map[string]any)["sqlState"])
+
+	truncated := &queryResult{rows: make([][]any, 10), total: 12000, truncated: true}
+	require.EqualValues(t, 12000, truncated.data()["total"])
+	require.Equal(t, 10, truncated.data()["returned"])
 }

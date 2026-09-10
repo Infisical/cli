@@ -645,10 +645,10 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 				Role:           params.Role,
 			})
 			if err := proxy.Connect(ctx); err != nil {
-				return err
+				return authFailure(err)
 			}
 			defer proxy.Close()
-			return proxy.Probe(ctx)
+			return authFailure(proxy.Probe(ctx))
 		}
 	case testConnModeSSH:
 		var params sshTestParams

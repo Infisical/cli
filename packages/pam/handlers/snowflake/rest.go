@@ -79,6 +79,20 @@ func writeFailure(w http.ResponseWriter, code string, message string) {
 	writeEnvelope(w, envelope{Data: map[string]any{}, Message: &message, Code: &code})
 }
 
+func writeUpstreamFailure(w http.ResponseWriter, err error) {
+	var sfErr *snowflakeError
+	if !errors.As(err, &sfErr) || sfErr.code == "" {
+		writeFailure(w, errCodeStatement, err.Error())
+		return
+	}
+	message := sfErr.message
+	writeEnvelope(w, envelope{
+		Data:    map[string]any{"sqlState": sfErr.sqlState, "queryId": sfErr.queryID},
+		Message: &message,
+		Code:    &sfErr.code,
+	})
+}
+
 // The drivers gzip every request body, so the encoding has to be honoured before parsing.
 func decodeRequest(w http.ResponseWriter, r *http.Request, out any) error {
 	var reader io.Reader = http.MaxBytesReader(w, r.Body, maxRequestBytes)
@@ -159,6 +173,7 @@ func renewData(token string) map[string]any {
 type queryResult struct {
 	columns   []column
 	rows      [][]any
+	total     int64
 	queryID   string
 	truncated bool
 	elapsed   time.Duration
@@ -174,9 +189,10 @@ func (r *queryResult) summary() string {
 
 func (r *queryResult) data() map[string]any {
 	return map[string]any{
-		"rowtype":           r.columns,
-		"rowset":            r.rows,
-		"total":             len(r.rows),
+		"rowtype": r.columns,
+		"rowset":  r.rows,
+		// total is what the statement produced; returned is what survived the row cap
+		"total":             max(r.total, int64(len(r.rows))),
 		"returned":          len(r.rows),
 		"queryId":           r.queryID,
 		"queryResultFormat": "json",
