@@ -24,6 +24,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
+	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/spf13/cobra"
@@ -33,7 +34,15 @@ import (
 // 422 body, which is all the CLI can print for a schema rejection.
 var agentVaultBundleNameRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
-const agentVaultCaFileName = "ca.pem"
+// One file per proxy, so a run against a second proxy cannot overwrite the certificate an agent that is
+// already running still trusts through its environment. The ID comes from the proxy over unauthenticated
+// HTTP, so it is checked as a UUID before it can shape a path.
+func agentVaultCaFilePath(dataDir, proxyID string) (string, error) {
+	if _, err := uuid.Parse(proxyID); err != nil {
+		return "", fmt.Errorf("the proxy reported an invalid proxy ID %q; something other than an Agent Vault proxy may be answering at that address", proxyID)
+	}
+	return filepath.Join(dataDir, "ca-"+proxyID+".pem"), nil
+}
 
 // Served by the proxy itself over plain HTTP, not by Infisical, so it uses its own net/http client.
 // Proxy is nil rather than absent: the default transport would route this through the operator's
@@ -183,18 +192,21 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	keepSession, _ := cmd.Flags().GetBool("keep-session")
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
 
+	caResp, err := fetchAgentVaultProxyCa(proxyAddr)
+	if err != nil {
+		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical av proxy' is running there", proxyAddr))
+	}
+
 	caFile, _ := cmd.Flags().GetString("ca-file")
 	if caFile == "" {
 		dataDir, dirErr := agentvault.DefaultDataDir()
 		if dirErr != nil {
 			util.HandleError(dirErr, "Unable to resolve the default data directory; pass --ca-file")
 		}
-		caFile = filepath.Join(dataDir, agentVaultCaFileName)
-	}
-
-	caResp, err := fetchAgentVaultProxyCa(proxyAddr)
-	if err != nil {
-		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical av proxy' is running there", proxyAddr))
+		caFile, err = agentVaultCaFilePath(dataDir, caResp.ProxyID)
+		if err != nil {
+			util.HandleError(err)
+		}
 	}
 	// Only the certificate the fingerprint was taken from is trusted from here on.
 	caPEM, servedFingerprint, err := agentVaultCaFingerprint(caResp.Certificate)
@@ -475,7 +487,7 @@ func init() {
 	avRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
 	avRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
 	avRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
-	avRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), agentVaultCaFileName)+")")
+	avRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), "ca-<proxy-id>.pem")+")")
 	avRunCmd.Flags().Bool("no-ca-trust", false, "skip writing the certificate authority and setting the trust variables, for a host that already trusts this proxy's CA (a pinned fingerprint is still checked)")
 	avRunCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that mints the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	avRunCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")

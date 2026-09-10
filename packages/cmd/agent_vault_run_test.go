@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +153,30 @@ func TestNonBlankDropsValuesThatNameNothing(t *testing.T) {
 	}
 	if got := nonBlank([]string{" coding-agent "}); got[0] != "coding-agent" {
 		t.Errorf("surrounding space should be trimmed, got %q", got[0])
+	}
+}
+
+func TestAgentVaultCaFilePathIsPerProxy(t *testing.T) {
+	a, err := agentVaultCaFilePath("/data", "0b1e2c1c-3f7e-4f1a-9f3e-2a1b3c4d5e6f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := agentVaultCaFilePath("/data", "7c9e6679-7425-40de-944b-e07fc1f90ae7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatalf("two proxies share one CA file: %s", a)
+	}
+	if filepath.Dir(a) != "/data" || filepath.Dir(b) != "/data" {
+		t.Fatalf("CA files left the data dir: %s, %s", a, b)
+	}
+}
+
+func TestAgentVaultCaFilePathRefusesNonUuidIds(t *testing.T) {
+	for _, id := range []string{"", "ca", "x/../../../.ssh/authorized_keys", "..\\..\\evil"} {
+		if p, err := agentVaultCaFilePath("/data", id); err == nil {
+			t.Fatalf("proxy ID %q was accepted into path %s", id, p)
+		}
 	}
 }
