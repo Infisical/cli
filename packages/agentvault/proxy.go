@@ -408,10 +408,21 @@ func normalizeHostname(host string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 }
 
+// SplitHostPort is happy with ":443", ":" and "", and an empty host means this machine to the dialer,
+// so a target naming no host would reach a service on the box the proxy runs on.
+var errNoHostInTarget = errors.New("the target names no host")
+
+func checkedTarget(hostname, port string) (string, string, error) {
+	if hostname == "" || port == "" {
+		return "", "", errNoHostInTarget
+	}
+	return normalizeHostname(hostname), port, nil
+}
+
 func parseConnectTarget(target string) (hostname, port string, err error) {
 	hostname, port, err = net.SplitHostPort(target)
 	if err == nil {
-		return normalizeHostname(hostname), port, nil
+		return checkedTarget(hostname, port)
 	}
 	var addrErr *net.AddrError
 	if errors.As(err, &addrErr) && strings.Contains(addrErr.Err, "missing port") {
@@ -419,7 +430,7 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 		if err != nil {
 			return "", "", err
 		}
-		return normalizeHostname(hostname), port, nil
+		return checkedTarget(hostname, port)
 	}
 	return "", "", err
 }
@@ -427,7 +438,7 @@ func parseConnectTarget(target string) (hostname, port string, err error) {
 func parseForwardTarget(target string) (hostname, port string, err error) {
 	hostname, port, err = net.SplitHostPort(target)
 	if err == nil {
-		return normalizeHostname(hostname), port, nil
+		return checkedTarget(hostname, port)
 	}
 	var addrErr *net.AddrError
 	if errors.As(err, &addrErr) && strings.Contains(addrErr.Err, "missing port") {
@@ -435,7 +446,7 @@ func parseForwardTarget(target string) (hostname, port string, err error) {
 		if err != nil {
 			return "", "", err
 		}
-		return normalizeHostname(hostname), port, nil
+		return checkedTarget(hostname, port)
 	}
 	return "", "", err
 }
