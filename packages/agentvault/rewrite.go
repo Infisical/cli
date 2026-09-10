@@ -3,6 +3,7 @@ package agentvault
 import (
 	"encoding/base64"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -35,7 +36,18 @@ func injectCredential(req *http.Request, cred *credential) bool {
 }
 
 // stripHopByHopHeaders also deletes Upgrade, which is why WebSocket upgrades cannot be forwarded.
+// Callers strip before injecting a credential: a Connection list naming the credential's header would
+// otherwise delete it, which is the same trap Go documents on httputil.ReverseProxy.Director.
 func stripHopByHopHeaders(header http.Header) {
+	// Connection names the headers meant for this hop alone, so read it before deleting it. Deleting it
+	// first would forward the marked header with nothing left to say it was hop-by-hop.
+	for _, values := range header.Values("Connection") {
+		for _, name := range strings.Split(values, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				header.Del(name)
+			}
+		}
+	}
 	for _, name := range []string{
 		"Connection",
 		"Proxy-Connection",
