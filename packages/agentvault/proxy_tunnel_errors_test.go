@@ -75,7 +75,9 @@ func TestAnUpstreamFailureInsideTheTunnelKeepsTheDetailOutOfTheBody(t *testing.T
 	var logs bytes.Buffer
 	restore := log.Logger
 	log.Logger = zerolog.New(&logs)
-	defer func() { log.Logger = restore }()
+	// Registered before the client, so the server's Cleanup runs first and no handler is still logging
+	// when the logger is put back.
+	t.Cleanup(func() { log.Logger = restore })
 
 	c := newTunnellingClient(t, sessionOnlyResolver{})
 	status, body := get(t, c, "https://127.0.0.1:1/v1/thing")

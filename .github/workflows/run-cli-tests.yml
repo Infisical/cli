@@ -38,6 +38,8 @@ jobs:
           go-version: "1.25.12"
       - name: Install dependencies
         run: go get .
+      - name: Race-check the Agent Vault packages
+        run: go test -race -count=1 ./packages/agentvault/ ./packages/api/
       - name: Test with the Go CLI
         env:
           CLI_TESTS_UA_CLIENT_ID: ${{ secrets.CLI_TESTS_UA_CLIENT_ID }}

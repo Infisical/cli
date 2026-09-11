@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -87,6 +86,8 @@ func TestAnUpstreamDyingMidBodyReachesTheAgentAsAFailure(t *testing.T) {
 	if _, readErr := io.ReadAll(resp.Body); readErr == nil {
 		t.Fatal("the agent read the truncated body as a complete one")
 	}
+	// Close waits for the handler to return, so the log buffer is read after its last write, not during.
+	front.Close()
 	if !bytes.Contains(logs.Bytes(), []byte("upstream stream failed part way")) {
 		t.Errorf("the upstream's failure should be logged, got %q", logs.String())
 	}
@@ -141,10 +142,8 @@ func TestAnAgentHangingUpIsNotBlamedOnTheUpstream(t *testing.T) {
 	}
 	_ = conn.Close()
 
-	// Give the handler time to notice and unwind.
-	for i := 0; i < 200 && !bytes.Contains(logs.Bytes(), []byte("upstream")); i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Close waits for the handler to notice the hang-up and unwind, so the buffer is read after its last write.
+	front.Close()
 	if bytes.Contains(logs.Bytes(), []byte("upstream stream failed part way")) {
 		t.Errorf("the agent hanging up was reported as an upstream failure: %q", logs.String())
 	}

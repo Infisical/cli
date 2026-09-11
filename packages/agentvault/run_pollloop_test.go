@@ -40,7 +40,7 @@ func TestPollLoopExitsAfterTwoRejectedHeartbeats(t *testing.T) {
 	ps, st := newPollLoopFixture(t, http.StatusUnauthorized)
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
-	go ps.pollLoop(st, stop, fatal)
+	done := runPollLoop(ps, st, stop, fatal)
 
 	select {
 	case err := <-fatal:
@@ -50,13 +50,24 @@ func TestPollLoopExitsAfterTwoRejectedHeartbeats(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("poll loop kept running after two 401 heartbeats")
 	}
+	<-done
+}
+
+// The fixture's Cleanup puts the URL global back; the loop has to have stopped reading it first.
+func runPollLoop(ps *proxyServer, st *store, stop <-chan struct{}, fatal chan<- error) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ps.pollLoop(st, stop, fatal)
+	}()
+	return done
 }
 
 func TestPollLoopKeepsRunningWhileInfisicalIsDown(t *testing.T) {
 	ps, st := newPollLoopFixture(t, http.StatusBadGateway)
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
-	go ps.pollLoop(st, stop, fatal)
+	done := runPollLoop(ps, st, stop, fatal)
 
 	select {
 	case err := <-fatal:
@@ -64,6 +75,7 @@ func TestPollLoopKeepsRunningWhileInfisicalIsDown(t *testing.T) {
 	case <-time.After(3 * time.Second):
 	}
 	close(stop)
+	<-done
 }
 
 // A settings change is written from the state the process holds. Re-reading the file first, as tick once
