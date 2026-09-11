@@ -77,7 +77,20 @@ type sessionCache struct {
 	mu      sync.Mutex
 	entries map[string]*sessionEntry
 	tokens  map[string]string
+	// A definitive refusal is remembered briefly, so an agent retrying a dead session costs one resolve per
+	// window rather than one per request. Outages and throttling are never stored here.
+	refused map[string]refusedEntry
 }
+
+type refusedEntry struct {
+	err   error
+	until time.Time
+}
+
+const (
+	refusedTTL        = 5 * time.Second
+	maxRefusedEntries = 4096
+)
 
 func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration) *sessionCache {
 	return &sessionCache{
@@ -85,7 +98,15 @@ func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration
 		pollInterval: pollInterval,
 		entries:      make(map[string]*sessionEntry),
 		tokens:       make(map[string]string),
+		refused:      make(map[string]refusedEntry),
 	}
+}
+
+func (c *sessionCache) rememberRefusalLocked(key string, err error) {
+	if len(c.refused) >= maxRefusedEntries {
+		c.refused = make(map[string]refusedEntry)
+	}
+	c.refused[key] = refusedEntry{err: err, until: time.Now().Add(refusedTTL)}
 }
 
 var errSessionGone = errors.New("session is no longer valid")
@@ -138,11 +159,23 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 			return conns, nil
 		}
 	}
+	if refused, ok := c.refused[key]; ok {
+		if time.Now().Before(refused.until) {
+			c.mu.Unlock()
+			return nil, refused.err
+		}
+		delete(c.refused, key)
+	}
 	c.mu.Unlock()
 
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
 		result, err := c.resolver.resolve(sessionToken)
 		if err != nil {
+			if isSessionGone(err) {
+				c.mu.Lock()
+				c.rememberRefusalLocked(key, err)
+				c.mu.Unlock()
+			}
 			return nil, err
 		}
 

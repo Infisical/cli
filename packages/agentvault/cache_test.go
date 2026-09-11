@@ -300,3 +300,55 @@ func TestOnlyOneRefreshRunsAtATime(t *testing.T) {
 		t.Fatalf("two back-to-back background refreshes made %d resolves, want 1", got)
 	}
 }
+
+func TestADefinitiveRefusalIsNotReResolvedEveryRequest(t *testing.T) {
+	resolver := &stubResolver{err: &api.APIError{StatusCode: 404, Name: "NotFound"}}
+	cache := newTestCache(resolver)
+
+	for i := 0; i < 20; i++ {
+		if _, err := cache.get("agv_dead"); err == nil {
+			t.Fatal("a refused session resolved")
+		}
+	}
+	if got := resolver.callCount(); got != 1 {
+		t.Fatalf("20 requests on a dead session made %d resolves, want 1", got)
+	}
+
+	// A different dead token is its own resolve: the memory is per session, not global.
+	_, _ = cache.get("agv_other_dead")
+	if got := resolver.callCount(); got != 2 {
+		t.Fatalf("a second token should resolve once more, got %d total", got)
+	}
+}
+
+func TestAnOutageIsNotRememberedAsARefusal(t *testing.T) {
+	for name, err := range map[string]error{
+		"502":     &api.APIError{StatusCode: 502},
+		"429":     &api.APIError{StatusCode: 429},
+		"timeout": errors.New("context deadline exceeded"),
+	} {
+		resolver := &stubResolver{err: err}
+		cache := newTestCache(resolver)
+		for i := 0; i < 5; i++ {
+			_, _ = cache.get("agv_tok")
+		}
+		if got := resolver.callCount(); got != 5 {
+			t.Fatalf("%s: %d resolves for 5 requests, an outage must not be cached", name, got)
+		}
+	}
+}
+
+func TestARefusalExpires(t *testing.T) {
+	resolver := &stubResolver{err: &api.APIError{StatusCode: 404}}
+	cache := newTestCache(resolver)
+	_, _ = cache.get("agv_dead")
+	cache.mu.Lock()
+	entry := cache.refused[sessionKey("agv_dead")]
+	entry.until = time.Now().Add(-time.Second)
+	cache.refused[sessionKey("agv_dead")] = entry
+	cache.mu.Unlock()
+	_, _ = cache.get("agv_dead")
+	if got := resolver.callCount(); got != 2 {
+		t.Fatalf("an expired refusal should resolve again, got %d resolves", got)
+	}
+}
