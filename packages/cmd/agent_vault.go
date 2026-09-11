@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -76,6 +78,15 @@ proxy refreshes - is set in Infisical and arrives on every poll, so it has no fl
 		if err := agentvault.Start(agentvault.Options{
 			Port:    port,
 			DataDir: dataDir,
+			OnReady: func(enrolledNow bool) {
+				Telemetry.CaptureEvent("cli-command:agent-vault proxy", posthog.NewProperties().
+					Set("version", util.CLI_VERSION).
+					Set("platform", runtime.GOOS).
+					Set("enrolledNow", enrolledNow).
+					Set("customPort", port != agentvault.DefaultPort).
+					Set("customDataDir", dataDir != "").
+					Set("logFormat", logFormat))
+			},
 		}, enrollmentToken); err != nil {
 			util.HandleError(err, "Agent Vault proxy failed")
 		}

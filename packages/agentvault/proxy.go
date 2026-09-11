@@ -66,6 +66,8 @@ type Options struct {
 	ProxyToken func() string
 	ProxyID    string
 	ProxyName  string
+
+	OnReady func(enrolledNow bool)
 }
 
 type proxyServer struct {
