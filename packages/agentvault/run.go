@@ -69,20 +69,15 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 // resolveState decides whether this run enrolls or resumes. Re-passing the same enrollment token that
 // already enrolled this box is a no-op.
 func resolveState(st *store, enrollmentToken string) (persistedState, *caManager, error) {
-	stored, confFound, err := st.loadState()
-	if err != nil {
-		return persistedState{}, nil, err
-	}
-
-	key, cert, err := st.loadCa()
-	if err != nil {
-		return persistedState{}, nil, err
-	}
-	hasCa := key != nil && cert != nil
-	hasToken := stored.AccessToken != ""
+	stored, confFound, stateErr := st.loadState()
+	key, cert, caErr := st.loadCa()
+	hasCa := caErr == nil && key != nil && cert != nil
+	hasToken := stateErr == nil && stored.AccessToken != ""
 
 	alreadyEnrolled := hasToken && hasCa
 
+	// A token is checked before the damage errors: the messages for damaged state say to enroll again
+	// with a new token, so that has to work on the same damage.
 	if enrollmentToken != "" {
 		if alreadyEnrolled && stored.EnrollmentToken == enrollmentToken {
 			log.Info().Msg("agent-vault: this enrollment token already enrolled this proxy, resuming")
@@ -90,10 +85,17 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 		}
 		// Re-enrolling replaces the certificate authority, so anything holding a copy of the old one stops
 		// trusting the proxy. That holds whether or not the rest of the state survived beside it.
-		if hasCa {
+		if hasCa || caErr != nil {
 			log.Warn().Msg("agent-vault: enrolling with a new token replaces this proxy's certificate authority")
 		}
 		return enroll(st, enrollmentToken)
+	}
+
+	if stateErr != nil {
+		return persistedState{}, nil, stateErr
+	}
+	if caErr != nil {
+		return persistedState{}, nil, caErr
 	}
 
 	// Only a directory with nothing in it is a first run. Anything else is damage, and saying "not

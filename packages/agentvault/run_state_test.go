@@ -1,10 +1,14 @@
 package agentvault
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Infisical/infisical-merge/packages/config"
 )
 
 func writeConf(t *testing.T, dir, body string) {
@@ -103,6 +107,31 @@ func TestResolveStateRefusesAFileThatIsNotJSON(t *testing.T) {
 		_, _, err := resolveState(st, "")
 		if err == nil || !strings.Contains(err.Error(), "not valid JSON") || strings.Contains(err.Error(), "has not enrolled yet") {
 			t.Fatalf("%s: expected a parse error naming the file, got %v", name, err)
+		}
+	}
+}
+
+// The damaged-state messages tell the operator to enroll again with a new token, so a token has to reach
+// the enroll path over the same damage. The stub refuses the login; what matters is which error comes back.
+func TestResolveStateATokenTakesTheEnrollPathOverDamagedState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"no"}`))
+	}))
+	t.Cleanup(srv.Close)
+	prev := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL
+	t.Cleanup(func() { config.INFISICAL_URL = prev })
+
+	for name, body := range map[string]string{"invalid JSON": "{not json", "zero bytes": ""} {
+		st := storeWithCa(t)
+		writeConf(t, st.dir, body)
+		_, _, err := resolveState(st, "avp_a_new_token")
+		if err == nil {
+			t.Fatalf("%s: the stub refused the login, so enrolling should have failed", name)
+		}
+		if strings.Contains(err.Error(), "not valid JSON") {
+			t.Fatalf("%s: the damaged file was reported before the token was tried: %v", name, err)
 		}
 	}
 }

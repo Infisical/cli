@@ -117,7 +117,7 @@ func (s *store) loadCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	certKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok || !certKey.Equal(&key.PublicKey) {
 		return nil, nil, fmt.Errorf(
-			"the certificate authority in %s does not match its private key, so an earlier re-enrollment was interrupted. Remove the directory and enroll again with a new token", s.dir)
+			"the certificate authority in %s does not match its private key, so an earlier re-enrollment was interrupted. Enroll again with a new token from the Proxies page", s.dir)
 	}
 	return key, cert, nil
 }
