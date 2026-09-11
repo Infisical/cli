@@ -39,7 +39,7 @@ type credential struct {
 	password     []byte
 }
 
-type resolvedConnection struct {
+type resolvedService struct {
 	id               string
 	name             string
 	accessBundleName string
@@ -48,11 +48,11 @@ type resolvedConnection struct {
 }
 
 type sessionEntry struct {
-	sessionID   string
-	expiresAt   *time.Time
-	connections []*resolvedConnection
-	lastSeen    time.Time
-	fetchedAt   time.Time
+	sessionID string
+	expiresAt *time.Time
+	services  []*resolvedService
+	lastSeen  time.Time
+	fetchedAt time.Time
 }
 
 // The map key is the sha256 of the token, never the token itself, so a heap dump yields no live credential.
@@ -136,7 +136,7 @@ func isSessionGone(err error) bool {
 	return errors.Is(err, errSessionGone)
 }
 
-func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
+func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -154,9 +154,9 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 			delete(c.tokens, key)
 		} else {
 			entry.lastSeen = time.Now()
-			conns := entry.connections
+			svcs := entry.services
 			c.mu.Unlock()
-			return conns, nil
+			return svcs, nil
 		}
 	}
 	if refused, ok := c.refused[key]; ok {
@@ -183,19 +183,19 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedConnection, error) {
 		defer c.mu.Unlock()
 		c.evictIfFullLocked()
 		c.entries[key] = &sessionEntry{
-			sessionID:   result.SessionID,
-			expiresAt:   result.ExpiresAt,
-			connections: result.Connections,
-			lastSeen:    time.Now(),
-			fetchedAt:   time.Now(),
+			sessionID: result.SessionID,
+			expiresAt: result.ExpiresAt,
+			services:  result.Services,
+			lastSeen:  time.Now(),
+			fetchedAt: time.Now(),
 		}
 		c.tokens[key] = sessionToken
-		return result.Connections, nil
+		return result.Services, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return resolved.([]*resolvedConnection), nil
+	return resolved.([]*resolvedService), nil
 }
 
 func (c *sessionCache) evictIfFullLocked() {
@@ -282,7 +282,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 	if entry, ok := c.entries[key]; ok {
 		entry.sessionID = result.SessionID
 		entry.expiresAt = result.ExpiresAt
-		entry.connections = result.Connections
+		entry.services = result.Services
 		entry.fetchedAt = time.Now()
 	}
 }

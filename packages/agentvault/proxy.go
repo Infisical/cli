@@ -340,7 +340,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to reach the upstream"
-	// brokered means a credential went out, not merely that a connection matched.
+	// brokered means a credential went out, not merely that a service matched.
 	case matched != nil && matched.credential.kind != credentialPassthrough:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
@@ -362,7 +362,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		Str("decision", decision).
 		Int("status", status)
 	if matched != nil {
-		event = event.Str("connection", matched.name).Str("accessBundle", matched.accessBundleName)
+		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
 	}
 	if err != nil {
 		event = event.Err(err)
@@ -401,20 +401,20 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 }
 
 // The one place the deny decision lives, so the test that covers bypass runs what forward runs.
-func (ps *proxyServer) blocksUnmatched(matched *resolvedConnection, hostname, port string) bool {
+func (ps *proxyServer) blocksUnmatched(matched *resolvedService, hostname, port string) bool {
 	return matched == nil && ps.currentConfig().UnmatchedHost == UnmatchedDeny && !ps.isBypassed(hostname, port)
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedConnection, error) {
-	connections, err := ps.cache.get(sessionToken)
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, error) {
+	services, err := ps.cache.get(sessionToken)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
 
-	matched := bestMatch(connections, hostname, port)
+	matched := bestMatch(services, hostname, port)
 
 	if ps.blocksUnmatched(matched, hostname, port) {
-		return nil, nil, fmt.Errorf("no connection covers host %q: %w", hostname, errHostBlocked)
+		return nil, nil, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
 	req.URL.Scheme = scheme
@@ -432,7 +432,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		if !strings.EqualFold(scheme, "https") {
 			log.Warn().
 				Str("host", hostname).
-				Str("connection", matched.name).
+				Str("service", matched.name).
 				Msg("agent-vault: refusing to attach a credential over plaintext http")
 			matched = nil
 		} else {
@@ -494,7 +494,7 @@ func normalizeHostname(host string) string {
 }
 
 // SplitHostPort is happy with ":443", ":" and "", and an empty host means this machine to the dialer,
-// so a target naming no host would reach a service on the box the proxy runs on.
+// so a target naming no host would reach whatever is listening on the box the proxy runs on.
 var errNoHostInTarget = errors.New("the target names no host")
 
 func checkedTarget(hostname, port string) (string, string, error) {

@@ -15,9 +15,9 @@ const (
 )
 
 type resolveResult struct {
-	SessionID   string
-	ExpiresAt   *time.Time
-	Connections []*resolvedConnection
+	SessionID string
+	ExpiresAt *time.Time
+	Services  []*resolvedService
 }
 
 // A seam so the cache can be tested without a server, not because a second implementation is expected.
@@ -50,9 +50,9 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 		}
 	}
 
-	connections := make([]*resolvedConnection, 0, len(res.Connections))
-	for _, wire := range res.Connections {
-		connections = append(connections, &resolvedConnection{
+	services := make([]*resolvedService, 0, len(res.Services))
+	for _, wire := range res.Services {
+		services = append(services, &resolvedService{
 			id:               wire.ID,
 			name:             wire.Name,
 			accessBundleName: wire.AccessBundleName,
@@ -61,7 +61,7 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 		})
 	}
 
-	return &resolveResult{SessionID: res.SessionID, ExpiresAt: expiresAt, Connections: connections}, nil
+	return &resolveResult{SessionID: res.SessionID, ExpiresAt: expiresAt, Services: services}, nil
 }
 
 func toCredential(wire api.AgentVaultCredential) credential {

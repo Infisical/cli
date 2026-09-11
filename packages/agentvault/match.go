@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// The old proxied-service grammar left an empty port matching anything, so plaintext port 80 matched
-// and the credential went out unencrypted.
+// A pattern with no port covers every port in Agent Proxy's grammar, which lets plaintext port 80
+// through with the credential attached. Defaulting to 443 keeps that from happening here.
 const defaultPort = "443"
 
 // hostPattern carries no path: paths are rejected at write time, since the matcher would compare the
@@ -14,7 +14,7 @@ const defaultPort = "443"
 type hostPattern struct {
 	host string
 	port string
-	// Whether the entry named a port itself. Only the bypass list reads this: a connection without one
+	// Whether the entry named a port itself. Only the bypass list reads this: a service without one
 	// has to stay on 443 or a credential would go out in the clear, but a bypass entry carries no
 	// credential, so a bare host there means the host rather than one port of it.
 	portWritten bool
@@ -104,31 +104,31 @@ func hostsEqual(a, b string) bool {
 }
 
 // The ladder is exact host, then slice order. Slice order is access bundle position, so it is not incidental.
-func bestMatch(connections []*resolvedConnection, host, port string) *resolvedConnection {
-	var best *resolvedConnection
+func bestMatch(services []*resolvedService, host, port string) *resolvedService {
+	var best *resolvedService
 	var bestDetail matchDetail
 
-	for _, conn := range connections {
-		// Every pattern on the connection is considered, not just the first that matches, so an exact pattern
-		// still wins over a wildcard on the same connection.
-		var connDetail matchDetail
-		matchedConn := false
-		for _, pat := range conn.hostPatterns {
+	for _, svc := range services {
+		// Every pattern on the service is considered, not just the first that matches, so an exact pattern
+		// still wins over a wildcard on the same service.
+		var svcDetail matchDetail
+		matchedSvc := false
+		for _, pat := range svc.hostPatterns {
 			matched, detail := pat.match(host, port)
 			if !matched {
 				continue
 			}
-			if !matchedConn || detail.betterThan(connDetail) {
-				connDetail = detail
-				matchedConn = true
+			if !matchedSvc || detail.betterThan(svcDetail) {
+				svcDetail = detail
+				matchedSvc = true
 			}
 		}
-		if !matchedConn {
+		if !matchedSvc {
 			continue
 		}
-		if best == nil || connDetail.betterThan(bestDetail) {
-			best = conn
-			bestDetail = connDetail
+		if best == nil || svcDetail.betterThan(bestDetail) {
+			best = svc
+			bestDetail = svcDetail
 		}
 	}
 	return best

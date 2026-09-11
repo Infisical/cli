@@ -119,32 +119,32 @@ func TestPortlessPatternDefaultsTo443(t *testing.T) {
 }
 
 func TestBestMatchPrefersExactOverWildcard(t *testing.T) {
-	wildcard := &resolvedConnection{name: "wildcard", hostPatterns: parseHostPatterns("*.foo.com")}
-	exact := &resolvedConnection{name: "exact", hostPatterns: parseHostPatterns("api.foo.com")}
+	wildcard := &resolvedService{name: "wildcard", hostPatterns: parseHostPatterns("*.foo.com")}
+	exact := &resolvedService{name: "exact", hostPatterns: parseHostPatterns("api.foo.com")}
 
-	if got := bestMatch([]*resolvedConnection{wildcard, exact}, "api.foo.com", "443"); got != exact {
+	if got := bestMatch([]*resolvedService{wildcard, exact}, "api.foo.com", "443"); got != exact {
 		t.Errorf("exact should win when it is second, got %v", got)
 	}
-	if got := bestMatch([]*resolvedConnection{exact, wildcard}, "api.foo.com", "443"); got != exact {
+	if got := bestMatch([]*resolvedService{exact, wildcard}, "api.foo.com", "443"); got != exact {
 		t.Errorf("exact should win when it is first, got %v", got)
 	}
 }
 
 func TestBestMatchFallsBackToSliceOrder(t *testing.T) {
-	first := &resolvedConnection{name: "from-first-bundle", hostPatterns: parseHostPatterns("api.foo.com")}
-	second := &resolvedConnection{name: "from-second-bundle", hostPatterns: parseHostPatterns("api.foo.com")}
+	first := &resolvedService{name: "from-first-bundle", hostPatterns: parseHostPatterns("api.foo.com")}
+	second := &resolvedService{name: "from-second-bundle", hostPatterns: parseHostPatterns("api.foo.com")}
 
-	if got := bestMatch([]*resolvedConnection{first, second}, "api.foo.com", "443"); got != first {
-		t.Errorf("the earlier connection should win, got %v", got)
+	if got := bestMatch([]*resolvedService{first, second}, "api.foo.com", "443"); got != first {
+		t.Errorf("the earlier service should win, got %v", got)
 	}
 }
 
-func TestBestMatchConsidersEveryPatternOnAConnection(t *testing.T) {
-	broad := &resolvedConnection{name: "broad", hostPatterns: parseHostPatterns("*.foo.com")}
-	both := &resolvedConnection{name: "both", hostPatterns: parseHostPatterns("*.bar.com, api.foo.com")}
+func TestBestMatchConsidersEveryPatternOnAService(t *testing.T) {
+	broad := &resolvedService{name: "broad", hostPatterns: parseHostPatterns("*.foo.com")}
+	both := &resolvedService{name: "both", hostPatterns: parseHostPatterns("*.bar.com, api.foo.com")}
 
-	if got := bestMatch([]*resolvedConnection{broad, both}, "api.foo.com", "443"); got != both {
-		t.Errorf("the connection with the exact pattern should win, got %v", got)
+	if got := bestMatch([]*resolvedService{broad, both}, "api.foo.com", "443"); got != both {
+		t.Errorf("the service with the exact pattern should win, got %v", got)
 	}
 }
 
@@ -152,13 +152,13 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 	ps := &proxyServer{}
 	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, api.github.com, pkg.example.com:8080"})
 
-	github := &resolvedConnection{name: "github", hostPatterns: parseHostPatterns("api.github.com")}
-	connections := []*resolvedConnection{github}
+	github := &resolvedService{name: "github", hostPatterns: parseHostPatterns("api.github.com")}
+	services := []*resolvedService{github}
 
 	cases := []struct {
 		name      string
 		host      string
-		wantMatch *resolvedConnection
+		wantMatch *resolvedService
 		wantBlock bool
 	}{
 		{
@@ -183,7 +183,7 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			matched := bestMatch(connections, tc.host, "443")
+			matched := bestMatch(services, tc.host, "443")
 			if matched != tc.wantMatch {
 				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
 			}

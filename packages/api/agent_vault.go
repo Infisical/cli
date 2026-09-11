@@ -77,7 +77,7 @@ type AgentVaultCredential struct {
 	Password     string `json:"password,omitempty"`
 }
 
-type AgentVaultConnection struct {
+type AgentVaultService struct {
 	ID               string               `json:"id"`
 	Name             string               `json:"name"`
 	AccessBundleName string               `json:"accessBundleName"`
@@ -86,9 +86,9 @@ type AgentVaultConnection struct {
 }
 
 type ResolveAgentVaultSessionResponse struct {
-	SessionID   string                 `json:"sessionId"`
-	ExpiresAt   string                 `json:"expiresAt"`
-	Connections []AgentVaultConnection `json:"connections"`
+	SessionID string              `json:"sessionId"`
+	ExpiresAt string              `json:"expiresAt"`
+	Services  []AgentVaultService `json:"services"`
 }
 
 func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string) (ResolveAgentVaultSessionResponse, error) {

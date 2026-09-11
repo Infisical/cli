@@ -36,10 +36,10 @@ func (s *stubResolver) callCount() int {
 	return s.calls
 }
 
-func connectionWithSecret(secret string) *resolvedConnection {
-	return &resolvedConnection{
+func serviceWithSecret(secret string) *resolvedService {
+	return &resolvedService{
 		id:           "c1",
-		name:         "conn",
+		name:         "svc",
 		hostPatterns: parseHostPatterns("api.foo.com"),
 		credential:   credential{kind: credentialBearer, value: []byte(secret)},
 	}
@@ -51,7 +51,7 @@ func newTestCache(resolver sessionResolver) *sessionCache {
 
 func TestCacheKeyIsTheTokenHashNotTheToken(t *testing.T) {
 	token := "agv_super_secret_session_token"
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 	cache := newTestCache(resolver)
 
 	if _, err := cache.get(token); err != nil {
@@ -89,7 +89,7 @@ func TestExpiredSessionIsDroppedWithoutACall(t *testing.T) {
 func TestRefreshDropsAGoneSessionImmediately(t *testing.T) {
 	for _, status := range []int{401, 404} {
 		t.Run(map[int]string{401: "revoked or expired", 404: "actor deleted or org mismatch"}[status], func(t *testing.T) {
-			resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+			resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 			cache := newTestCache(resolver)
 			if _, err := cache.get("agv_token"); err != nil {
 				t.Fatalf("get: %v", err)
@@ -106,7 +106,7 @@ func TestRefreshDropsAGoneSessionImmediately(t *testing.T) {
 }
 
 func TestRefreshKeepsServingWhileInfisicalIsUnreachable(t *testing.T) {
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 	cache := newTestCache(resolver)
 	if _, err := cache.get("agv_token"); err != nil {
 		t.Fatalf("get: %v", err)
@@ -128,7 +128,7 @@ func TestRefreshKeepsServingWhileInfisicalIsUnreachable(t *testing.T) {
 
 // The bound is held by get, which evicts one before inserting one, so it is driven through get.
 func TestCacheIsBounded(t *testing.T) {
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 	cache := newTestCache(resolver)
 
 	for i := 0; i < maxSessionCacheEntries+50; i++ {
@@ -166,7 +166,7 @@ func TestEvictionPrefersAnIdleSession(t *testing.T) {
 }
 
 func TestStaleEntryIsNotServedFromTheCache(t *testing.T) {
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("old")}}}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("old")}}}
 	cache := newTestCache(resolver)
 
 	if _, err := cache.get("agv_tok"); err != nil {
@@ -178,13 +178,13 @@ func TestStaleEntryIsNotServedFromTheCache(t *testing.T) {
 	cache.entries[key].fetchedAt = time.Now().Add(-cache.grace() - time.Second)
 	cache.mu.Unlock()
 
-	resolver.result = &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("fresh")}}
-	conns, err := cache.get("agv_tok")
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("fresh")}}
+	svcs, err := cache.get("agv_tok")
 	if err != nil {
 		t.Fatalf("stale get: %v", err)
 	}
-	if resolver.calls != 2 || string(conns[0].credential.value) != "fresh" {
-		t.Fatalf("a stale entry must be re-resolved, got %d calls and %q", resolver.calls, conns[0].credential.value)
+	if resolver.calls != 2 || string(svcs[0].credential.value) != "fresh" {
+		t.Fatalf("a stale entry must be re-resolved, got %d calls and %q", resolver.calls, svcs[0].credential.value)
 	}
 
 	cache.mu.Lock()
@@ -204,7 +204,7 @@ func TestRefreshTreatsEveryDefinitiveRefusalAsTerminal(t *testing.T) {
 		{400, false}, {401, false}, {403, false}, {404, false}, {422, false},
 		{408, true}, {429, true}, {500, true}, {502, true},
 	} {
-		resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+		resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 		cache := newTestCache(resolver)
 		if _, err := cache.get("tok"); err != nil {
 			t.Fatal(err)
@@ -227,7 +227,7 @@ func TestARejectedProxyTokenDropsTheSessionButIsNotASessionVerdict(t *testing.T)
 		t.Fatal("the named 401 was not recognised")
 	}
 
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 	cache := newTestCache(resolver)
 	if _, e := cache.get("tok"); e != nil {
 		t.Fatal(e)
