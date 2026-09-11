@@ -23,6 +23,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/rdp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -61,6 +62,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeOracledb,
 		session.ResourceTypeGcpServiceAccount,
 		session.ResourceTypeAzureCli,
+		session.ResourceTypeSnowflake,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -516,6 +518,38 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("serviceAccountEmail", credentials.ServiceAccountEmail).
 			Msg("Starting GCP Service Account PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeSnowflake:
+		var blockedCommands []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			blockedCommands = compilePolicyPatterns(credentials.PolicyRules.CommandBlocking, pamConfig.SessionId, "command-blocking")
+		}
+
+		proxy := snowflake.NewSnowflakeProxy(snowflake.SnowflakeProxyConfig{
+			Account:         credentials.Account,
+			Username:        credentials.Username,
+			AuthMethod:      credentials.AuthMethod,
+			Password:        credentials.Password,
+			Token:           credentials.Token,
+			PrivateKey:      credentials.PrivateKey,
+			PrivateKeyPass:  credentials.PrivateKeyPassphrase,
+			Warehouse:       credentials.Warehouse,
+			Database:        credentials.Database,
+			Schema:          credentials.Schema,
+			Role:            credentials.Role,
+			SessionID:       pamConfig.SessionId,
+			SessionLogger:   sessionLogger,
+			BlockedCommands: blockedCommands,
+		})
+		if err := proxy.Connect(ctx); err != nil {
+			return err
+		}
+		defer proxy.Close()
+
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("account", credentials.Account).
+			Msg("Starting Snowflake PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeAzureCli:
 		azureConfig := azure.AzureProxyConfig{

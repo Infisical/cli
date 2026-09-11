@@ -1037,6 +1037,11 @@ type PAMSessionCredentials struct {
 	Token                 string            `json:"token,omitempty"`
 	Tokens                map[string]string `json:"tokens,omitempty"`
 	ServiceAccountEmail   string            `json:"serviceAccountEmail,omitempty"`
+	Account               string            `json:"account,omitempty"`
+	Warehouse             string            `json:"warehouse,omitempty"`
+	Schema                string            `json:"schema,omitempty"`
+	Role                  string            `json:"role,omitempty"`
+	PrivateKeyPassphrase  string            `json:"privateKeyPassphrase,omitempty"`
 }
 
 type MFASessionStatus string

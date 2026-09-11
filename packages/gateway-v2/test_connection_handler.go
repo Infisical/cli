@@ -20,6 +20,7 @@ import (
 	"time"
 
 	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
+	snowflakehandler "github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
@@ -55,6 +56,7 @@ const (
 	testConnModeLDAP       = "ldap"
 	testConnModeKubernetes = "kubernetes"
 	testConnModeSSH        = "ssh"
+	testConnModeSnowflake  = "snowflake"
 	testConnModeTCP        = "tcp"
 )
 
@@ -95,6 +97,20 @@ type redisTestParams struct {
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
+}
+
+type snowflakeTestParams struct {
+	Account              string `json:"account"`
+	AuthMethod           string `json:"authMethod"`
+	Username             string `json:"username"`
+	Password             string `json:"password"`
+	Token                string `json:"token"`
+	PrivateKey           string `json:"privateKey"`
+	PrivateKeyPassphrase string `json:"privateKeyPassphrase"`
+	Warehouse            string `json:"warehouse"`
+	Database             string `json:"database"`
+	Schema               string `json:"schema"`
+	Role                 string `json:"role"`
 }
 
 type ldapTestParams struct {
@@ -609,6 +625,31 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		op = func() error { return doKubernetesConnectionTest(ctx, target.host, target.port, params) }
+	case testConnModeSnowflake:
+		var params snowflakeTestParams
+		if !decode(&params) {
+			return
+		}
+		op = func() error {
+			proxy := snowflakehandler.NewSnowflakeProxy(snowflakehandler.SnowflakeProxyConfig{
+				Account:        params.Account,
+				Username:       params.Username,
+				AuthMethod:     params.AuthMethod,
+				Password:       params.Password,
+				Token:          params.Token,
+				PrivateKey:     params.PrivateKey,
+				PrivateKeyPass: params.PrivateKeyPassphrase,
+				Warehouse:      params.Warehouse,
+				Database:       params.Database,
+				Schema:         params.Schema,
+				Role:           params.Role,
+			})
+			if err := proxy.Connect(ctx); err != nil {
+				return authFailure(err)
+			}
+			defer proxy.Close()
+			return authFailure(proxy.Probe(ctx))
+		}
 	case testConnModeSSH:
 		var params sshTestParams
 		if !decode(&params) {
