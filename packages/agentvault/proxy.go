@@ -396,6 +396,11 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	}
 }
 
+// The one place the deny decision lives, so the test that covers bypass runs what forward runs.
+func (ps *proxyServer) blocksUnmatched(matched *resolvedConnection, hostname, port string) bool {
+	return matched == nil && ps.currentConfig().UnmatchedHost == UnmatchedDeny && !ps.isBypassed(hostname, port)
+}
+
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedConnection, error) {
 	connections, err := ps.cache.get(sessionToken)
 	if err != nil {
@@ -404,7 +409,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 	matched := bestMatch(connections, hostname, port)
 
-	if matched == nil && ps.currentConfig().UnmatchedHost == UnmatchedDeny && !ps.isBypassed(hostname, port) {
+	if ps.blocksUnmatched(matched, hostname, port) {
 		return nil, nil, fmt.Errorf("no connection covers host %q: %w", hostname, errHostBlocked)
 	}
 

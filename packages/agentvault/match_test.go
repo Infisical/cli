@@ -188,10 +188,7 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
 			}
 
-			blocked := matched == nil &&
-				ps.currentConfig().UnmatchedHost == UnmatchedDeny &&
-				!ps.isBypassed(tc.host, "443")
-			if blocked != tc.wantBlock {
+			if blocked := ps.blocksUnmatched(matched, tc.host, "443"); blocked != tc.wantBlock {
 				t.Errorf("blocked = %v, want %v", blocked, tc.wantBlock)
 			}
 		})
