@@ -505,7 +505,7 @@ func runAgentVaultChild(args, env []string) int {
 func init() {
 	avRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name`")
 	avRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one")
-	avRunCmd.Flags().String("ttl", "7d", "lifetime of a minted session, a duration such as 30m, 8h or 7d, or never")
+	avRunCmd.Flags().String("ttl", "7d", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	avRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
 	avRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
 	avRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
