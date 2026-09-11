@@ -126,19 +126,42 @@ func TestRefreshKeepsServingWhileInfisicalIsUnreachable(t *testing.T) {
 	}
 }
 
+// The bound is held by get, which evicts one before inserting one, so it is driven through get.
 func TestCacheIsBounded(t *testing.T) {
 	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Connections: []*resolvedConnection{connectionWithSecret("v")}}}
 	cache := newTestCache(resolver)
 
 	for i := 0; i < maxSessionCacheEntries+50; i++ {
-		cache.entries[sessionKey(string(rune(i))+"pad")] = &sessionEntry{lastSeen: time.Now()}
+		if _, err := cache.get(fmt.Sprintf("agv_%d", i)); err != nil {
+			t.Fatalf("get %d: %v", i, err)
+		}
 	}
+
+	if len(cache.entries) != maxSessionCacheEntries {
+		t.Fatalf("cache holds %d entries, want the cap of %d", len(cache.entries), maxSessionCacheEntries)
+	}
+	if len(cache.tokens) != maxSessionCacheEntries {
+		t.Fatalf("token map holds %d entries, want %d", len(cache.tokens), maxSessionCacheEntries)
+	}
+}
+
+func TestEvictionPrefersAnIdleSession(t *testing.T) {
+	cache := newTestCache(&stubResolver{})
+	for i := 0; i < maxSessionCacheEntries; i++ {
+		cache.entries[sessionKey(fmt.Sprintf("k%d", i))] = &sessionEntry{lastSeen: time.Now()}
+	}
+	idle := sessionKey("idle")
+	cache.entries[idle] = &sessionEntry{lastSeen: time.Now().Add(-(sessionInactiveTTL + time.Minute))}
+
 	cache.mu.Lock()
 	cache.evictIfFullLocked()
 	cache.mu.Unlock()
 
-	if len(cache.entries) > maxSessionCacheEntries+50 {
-		t.Fatal("eviction should not grow the cache")
+	if _, ok := cache.entries[idle]; ok {
+		t.Fatal("the idle session survived and an active one was evicted instead")
+	}
+	if len(cache.entries) != maxSessionCacheEntries {
+		t.Fatalf("cache holds %d entries after eviction, want %d", len(cache.entries), maxSessionCacheEntries)
 	}
 }
 
