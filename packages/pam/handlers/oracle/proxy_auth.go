@@ -151,8 +151,6 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	use32Bit := acceptVersion >= 315
 	log.Info().Str("sessionID", p.config.SessionID).Uint16("acceptVersion", acceptVersion).Bool("use32Bit", use32Bit).Msg("Proxy: ACCEPT forwarded")
 
-
-
 	p1Payload, err := proxyUntilAuthRequest(clientConn, upstreamConn, use32Bit, p.config.SessionID)
 	if err != nil {
 		return fmt.Errorf("pre-auth proxy: %w", err)
@@ -254,7 +252,7 @@ var oracleUpstreamCiphers = []uint16{
 }
 
 // TLS 1.0–1.2 only: Oracle TCPS has no TLS-1.3 restart mechanism; RDS negotiates down to 1.0.
-func buildOracleTLSConfig(base *tls.Config, host string) *tls.Config {
+func BuildTLSConfig(base *tls.Config, host string) *tls.Config {
 	cfg := base.Clone()
 	if cfg.ServerName == "" {
 		cfg.ServerName = host
@@ -282,7 +280,7 @@ func dialUpstreamRaw(ctx context.Context, cfg OracleProxyConfig) (rawConn net.Co
 		rawConn.Close()
 		return nil, nil, fmt.Errorf("upstream TLS requested but no TLSConfig provided")
 	}
-	tlsCfg := buildOracleTLSConfig(cfg.TLSConfig, host)
+	tlsCfg := BuildTLSConfig(cfg.TLSConfig, host)
 	tc := tls.Client(rawConn, tlsCfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		rawConn.Close()
@@ -311,7 +309,7 @@ func upgradeToTLS(ctx context.Context, rawConn net.Conn, cfg OracleProxyConfig) 
 	if err != nil {
 		return nil, fmt.Errorf("invalid target addr: %w", err)
 	}
-	tlsCfg := buildOracleTLSConfig(cfg.TLSConfig, host)
+	tlsCfg := BuildTLSConfig(cfg.TLSConfig, host)
 	tc := tls.Client(rawConn, tlsCfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("upstream TLS handshake: %w", err)

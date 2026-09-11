@@ -8,24 +8,29 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
+	oraclehandler "github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
+	go_ora "github.com/sijms/go-ora/v2"
+	"github.com/sijms/go-ora/v2/configurations"
 	"github.com/smallnest/resp3"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -66,7 +71,7 @@ type testConnectionEnvelope struct {
 }
 
 type sqlTestParams struct {
-	Dialect               string `json:"dialect"` // "postgres" | "mysql" | "mssql"
+	Dialect               string `json:"dialect"` // "postgres" | "mysql" | "mssql" | "oracle"
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Database              string `json:"database"`
@@ -204,9 +209,33 @@ func openSQLTestDB(host string, port int, params sqlTestParams) (*sql.DB, error)
 			config.TLSConfig = tlsConfig
 		}
 		return sql.OpenDB(mssql.NewConnectorConfig(config)), nil
+	case "oracle":
+		urlOptions := map[string]string{}
+		if params.SslEnabled {
+			urlOptions["SSL"] = "TRUE"
+		}
+		connStr := go_ora.BuildUrl(host, port, params.Database, params.Username, params.Password, urlOptions)
+		if _, err := configurations.ParseConfig(connStr); err != nil {
+			return nil, fmt.Errorf("failed to build Oracle connection config: %s", redactProbeSecrets(err.Error(), params.Password))
+		}
+		connector, ok := go_ora.NewConnector(connStr).(*go_ora.OracleConnector)
+		if !ok {
+			return nil, errors.New("unexpected Oracle connector type")
+		}
+		if tlsConfig != nil {
+			connector.WithTLSConfig(oraclehandler.BuildTLSConfig(tlsConfig, host))
+		}
+		return sql.OpenDB(connector), nil
 	default:
 		return nil, fmt.Errorf("unsupported SQL dialect: %q", params.Dialect)
 	}
+}
+
+func sqlVerifyQuery(dialect string) string {
+	if dialect == "oracle" {
+		return "SELECT 1 FROM DUAL"
+	}
+	return "SELECT 1"
 }
 
 // doSQLConnectionTest authenticates against the target SQL server and runs a trivial query
@@ -246,7 +275,7 @@ func doSQLConnectionTest(ctx context.Context, host string, port int, params sqlT
 	defer db.Close()
 
 	var result int
-	return authFailure(db.QueryRowContext(ctx, "SELECT 1").Scan(&result))
+	return sqlAuthFailure(params.Dialect, db.QueryRowContext(ctx, sqlVerifyQuery(params.Dialect)).Scan(&result))
 }
 
 // doMongoConnectionTest authenticates against the target MongoDB and pings it
@@ -532,13 +561,17 @@ func dialTarget(ctx context.Context, host string, port int) error {
 
 // runWithContext bounds op by ctx even when the underlying driver ignores context cancellation
 func runWithContext(ctx context.Context, op func() error) error {
+	return runWithContextTimeoutMessage(ctx, op, "connection test timed out")
+}
+
+func runWithContextTimeoutMessage(ctx context.Context, op func() error, timeoutMessage string) error {
 	done := make(chan error, 1)
 	go func() { done <- op() }()
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return connectFailure(fmt.Errorf("connection test timed out"))
+		return connectFailure(errors.New(timeoutMessage))
 	}
 }
 
@@ -578,42 +611,49 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var op func() error
+	var redactSecrets []string
 	switch env.Mode {
 	case testConnModeSQL:
 		var params sqlTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doSQLConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeMongoDB:
 		var params mongoTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doMongoConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeRedis:
 		var params redisTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doRedisConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeLDAP:
 		var params ldapTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password)
 		op = func() error { return doLdapConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeKubernetes:
 		var params kubernetesTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Token)
 		op = func() error { return doKubernetesConnectionTest(ctx, target.host, target.port, params) }
 	case testConnModeSSH:
 		var params sshTestParams
 		if !decode(&params) {
 			return
 		}
+		redactSecrets = append(redactSecrets, params.Password, params.PrivateKey)
 		op = func() error {
 			_, err := doSSHExec(target.host, target.port, sshExecEnvelope{
 				Command:     "true",
@@ -634,8 +674,22 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if testErr := runWithContext(ctx, op); testErr != nil {
-		writeRPCErrorWithKind(w, http.StatusBadGateway, testErr.Error(), string(classifyTestConnFailure(testErr)))
+		writeRPCErrorWithKind(w, http.StatusBadGateway, redactProbeSecrets(testErr.Error(), redactSecrets...), string(classifyTestConnFailure(testErr)))
 		return
 	}
 	writeRPCJSON(w, http.StatusOK, testConnectionResponse{Result: testConnectionResult{Ok: true}})
+}
+
+var urlUserinfoPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^/\s]*@`)
+
+func redactProbeSecrets(msg string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		for _, form := range []string{secret, url.PathEscape(secret), url.QueryEscape(secret)} {
+			msg = strings.ReplaceAll(msg, form, "******")
+		}
+	}
+	return urlUserinfoPattern.ReplaceAllString(msg, "${1}******@")
 }
