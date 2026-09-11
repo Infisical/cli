@@ -25,6 +25,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
@@ -105,6 +106,8 @@ type GatewayConfig struct {
 	ReconnectDelay   time.Duration
 	UseV3Connect     bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
 	Pkcs11ModulePath string
+	ListenAddress    string
+	BindAddress      string
 	// RelaySelector, when non-nil, is called to re-select a relay during failover.
 	// nil means relay was explicitly selected and failover is disabled.
 	RelaySelector func(httpClient *resty.Client) (string, error)
@@ -125,8 +128,8 @@ type Gateway struct {
 	sshClient  *ssh.Client
 	relayName  string // active relay name, protected by mu
 
-	// Certificate storage
-	certificates *api.RegisterGatewayResponse
+	// Replaced wholesale by cert renewal while other goroutines read it, so reads go through certs().
+	certificates atomic.Pointer[api.RegisterGatewayResponse]
 
 	// PAM credentials manager
 	pamCredentialsManager *session.CredentialsManager
@@ -135,7 +138,7 @@ type Gateway struct {
 	pamSessionUploader *session.SessionUploader
 
 	// mTLS server components
-	tlsConfig *tls.Config
+	tlsConfig atomic.Pointer[tls.Config]
 
 	// Connection management
 	mu               sync.RWMutex
@@ -145,6 +148,10 @@ type Gateway struct {
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
 	notifyOnce       sync.Once
+	relayDownOnce    sync.Once
+	// Set when the direct listener is actually bound, so log routing cannot claim a listener
+	// the server never granted.
+	directListening atomic.Bool
 
 	// PAM session registry for active proxy connections (multiple connections per session)
 	pamSessions   map[string][]*pamSessionEntry
@@ -155,8 +162,8 @@ type Gateway struct {
 	mongoProxiesMu sync.Mutex
 	pkcs11Module   Pkcs11Module
 
-	// Counted in the relay's channel-receive loop, which no caller can bypass.
-	activeChannels atomic.Int64
+	activeChannels       atomic.Int64
+	directActiveChannels atomic.Int64
 	// Bumped per relay connection, so a handler cannot release a count it did not acquire.
 	channelGeneration atomic.Int64
 }
@@ -421,7 +428,7 @@ func (g *Gateway) startMetricsReport(ctx context.Context) {
 			}
 			delay = metricsReportInterval
 
-			count := g.activeChannels.Load()
+			count := g.activeChannels.Load() + g.directActiveChannels.Load()
 			// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
 			if err := g.sendMetricsReport(ctx, count); err != nil {
 				failures++
@@ -478,14 +485,13 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			defer retryTicker.Stop()
 
 			for {
+				if err := sendHeartbeat(); err == nil {
+					return
+				}
 				select {
 				case <-ctx.Done():
 					return
 				case <-retryTicker.C:
-					if err := sendHeartbeat(); err == nil {
-						// First success! Exit retry phase
-						return
-					}
 				}
 			}
 		}()
@@ -512,6 +518,34 @@ func (g *Gateway) Start(ctx context.Context) error {
 	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)
+	listenerFatal := make(chan error, 1)
+	if err := g.registerGateway(); err != nil {
+		if g.config.RelaySelector == nil {
+			return fmt.Errorf("failed to register gateway: %v", err)
+		}
+		g.tryRelayFailover()
+		if g.getRelayName() == "" {
+			return fmt.Errorf("failed to register gateway: %v", err)
+		}
+		if retryErr := g.registerGateway(); retryErr != nil {
+			return fmt.Errorf("failed to register gateway: %v", retryErr)
+		}
+	}
+
+	if g.config.ListenAddress != "" && g.certs().DirectAddress == "" {
+		return fmt.Errorf(
+			"this Infisical instance did not accept --listen-address, so it does not support direct gateway connections. Upgrade the instance, or start the gateway with --target-relay-name instead")
+	}
+
+	if g.certs().DirectAddress != "" {
+		if err := g.startDirectListener(ctx, listenerFatal); err != nil {
+			return err
+		}
+		g.startHeartbeatOnce(ctx, errCh)
+		g.notifyOnce.Do(func() {
+			systemd.SdNotify(false, systemd.SdNotifyReady)
+		})
+	}
 
 	// Start certificate renewal goroutine
 	go g.startCertificateRenewal(ctx)
@@ -532,18 +566,54 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}()
 
+	if g.certs().SSH.ClientCertificate == "" {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-listenerFatal:
+			return err
+		}
+	}
+
+	// The relay loop blocks for the life of the connection, so it runs alongside the listener
+	// rather than ahead of it, and whichever fails first returns.
+	relayLoopErr := make(chan error, 1)
+	go func() { relayLoopErr <- g.runRelayLoop(ctx, errCh) }()
+
+	select {
+	case <-ctx.Done():
+		log.Info().Msgf("Gateway stopped by context cancellation")
+		return nil
+	case err := <-listenerFatal:
+		return err
+	case err := <-relayLoopErr:
+		return err
+	}
+}
+
+func (g *Gateway) runRelayLoop(ctx context.Context, errCh chan error) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
 		default:
-			if err := g.connectAndServe(ctx, errCh); err != nil {
-				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+			if err := g.connectWithRetry(ctx, errCh); err != nil {
+				// Direct listen is already serving traffic, so a dead relay is degraded, not broken.
+				if g.hasDirectListener() {
+					g.relayDownOnce.Do(func() {
+						log.Warn().Msgf("Relay is unreachable (%v). Direct connections are unaffected; retrying the relay quietly.", err)
+					})
+					log.Debug().Msgf("Relay connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				} else {
+					log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				}
 				g.tryRelayFailover()
+				if registerErr := g.registerGateway(); registerErr != nil {
+					log.Warn().Msgf("Failed to refresh gateway registration: %v", registerErr)
+				}
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil
 				case <-time.After(g.config.ReconnectDelay):
 					continue
 				}
@@ -552,7 +622,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			log.Info().Msgf("Connection closed, reconnecting in 10 seconds...")
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil
 			case <-time.After(10 * time.Second):
 				continue
 			}
@@ -642,12 +712,79 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	}
 }
 
-func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
-	if err := g.registerGateway(); err != nil {
-		return fmt.Errorf("failed to register gateway: %v", err)
+func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) error {
+	directAddress := g.certs().DirectAddress
+	_, advertisedPort, err := net.SplitHostPort(directAddress)
+	if err != nil {
+		return fmt.Errorf("invalid direct gateway address %q: %w", directAddress, err)
 	}
 
-	return g.connectWithRetry(ctx, errCh)
+	bindAddress := g.config.BindAddress
+	if bindAddress == "" {
+		bindAddress = net.JoinHostPort("", advertisedPort)
+	} else if _, bindPort, splitErr := net.SplitHostPort(bindAddress); splitErr == nil && bindPort != advertisedPort {
+		// Legitimate behind a load balancer that remaps the port, and a silent outage otherwise.
+		log.Warn().Msgf(
+			"Listening on port %s but registered with Infisical as port %s. Connections will fail unless something forwards %s to %s.",
+			bindPort, advertisedPort, advertisedPort, bindPort)
+	}
+
+	listener, err := net.Listen("tcp", bindAddress)
+	if err != nil {
+		return fmt.Errorf("failed to listen for direct gateway connections on %s: %w", bindAddress, err)
+	}
+
+	g.directListening.Store(true)
+	log.Info().Str("address", g.certs().DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
+	pending := make(chan struct{}, maxPendingDirectHandshakes)
+	go func() {
+		go func() {
+			<-ctx.Done()
+			_ = listener.Close()
+		}()
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				if ctx.Err() == nil {
+					log.Error().Err(acceptErr).Msg("Direct gateway listener stopped")
+					// systemd was already told ready, so supervision has to hear about this.
+					select {
+					case fatal <- fmt.Errorf("direct gateway listener stopped accepting: %w", acceptErr):
+					default:
+					}
+				}
+				return
+			}
+			// Shed rather than queue: queueing would let a slow peer exhaust descriptors anyway.
+			select {
+			case pending <- struct{}{}:
+			default:
+				log.Warn().Str("peer", conn.RemoteAddr().String()).Msg("Too many direct gateway handshakes in flight, rejecting connection")
+				_ = conn.Close()
+				continue
+			}
+			g.directActiveChannels.Add(1)
+			go func() {
+				defer g.directActiveChannels.Add(-1)
+				g.handleGatewayConnection(conn, func() { <-pending })
+			}()
+		}
+	}()
+
+	return nil
+}
+
+// A relay that is down while direct listen is serving traffic is a degraded state, not a failure,
+// so its retry chatter drops to debug rather than repeating at info and error every cycle.
+func relayLog(hasDirect bool) *zerolog.Event {
+	if hasDirect {
+		return log.Debug()
+	}
+	return log.Info()
+}
+
+func (g *Gateway) hasDirectListener() bool {
+	return g.directListening.Load()
 }
 
 func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
@@ -660,7 +797,7 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt == maxAttempts && maxAttempts > 1 {
-			log.Info().Msg("Re-registering gateway to handle potential relay IP change...")
+			relayLog(g.hasDirectListener()).Msg("Re-registering gateway to handle potential relay IP change...")
 			if err := g.registerGateway(); err != nil {
 				return fmt.Errorf("failed to re-register gateway: %v", err)
 			}
@@ -673,13 +810,18 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 		}
 
 		// Connect to Relay server
-		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), g.certificates.RelayHost, g.config.SSHPort, attempt, maxAttempts)
-		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
+		relayHost := g.certs().RelayHost
+		if relayHost == "" {
+			// Dialing ":port" would reach this machine rather than a relay.
+			return fmt.Errorf("gateway has no relay host to connect to")
+		}
+		relayLog(g.hasDirectListener()).Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), relayHost, g.config.SSHPort, attempt, maxAttempts)
+		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", relayHost, g.config.SSHPort), sshConfig)
 		if err != nil {
-			log.Warn().Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
+			relayLog(g.hasDirectListener()).Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
 			if attempt < maxAttempts {
 				retryDelay := time.Duration(attempt) * 2 * time.Second
-				log.Info().Msgf("Retrying in %v...", retryDelay)
+				relayLog(g.hasDirectListener()).Msgf("Retrying in %v...", retryDelay)
 				time.Sleep(retryDelay)
 				continue
 			}
@@ -774,12 +916,14 @@ func (g *Gateway) registerGateway() error {
 	relayName := g.getRelayName()
 	if g.config.UseV3Connect {
 		certResp, err = api.CallConnectGateway(g.httpClient, api.ConnectGatewayRequest{
-			RelayName: relayName,
+			RelayName:     relayName,
+			DirectAddress: g.config.ListenAddress,
 		})
 	} else {
 		certResp, err = api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
-			RelayName: relayName,
-			Name:      g.config.Name,
+			RelayName:     relayName,
+			DirectAddress: g.config.ListenAddress,
+			Name:          g.config.Name,
 		})
 	}
 	if err != nil {
@@ -791,7 +935,7 @@ func (g *Gateway) registerGateway() error {
 	}
 
 	g.GatewayID = certResp.GatewayID
-	g.certificates = &certResp
+	g.certificates.Store(&certResp)
 	log.Info().Msgf("Successfully registered gateway and received certificates")
 
 	// Setup mTLS config
@@ -802,13 +946,18 @@ func (g *Gateway) registerGateway() error {
 	return nil
 }
 
+func (g *Gateway) certs() *api.RegisterGatewayResponse {
+	return g.certificates.Load()
+}
+
 func (g *Gateway) setupTLSConfig() error {
-	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
+	certs := g.certs()
+	serverCertBlock, _ := pem.Decode([]byte(certs.PKI.ServerCertificate))
 	if serverCertBlock == nil {
 		return fmt.Errorf("failed to decode server certificate")
 	}
 
-	serverKeyBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerPrivateKey))
+	serverKeyBlock, _ := pem.Decode([]byte(certs.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
 		return fmt.Errorf("failed to decode server private key")
 	}
@@ -820,7 +969,7 @@ func (g *Gateway) setupTLSConfig() error {
 
 	clientCAPool := x509.NewCertPool()
 	var chainCerts [][]byte
-	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
+	chainData := []byte(certs.PKI.ClientCertificateChain)
 	for {
 		block, rest := pem.Decode(chainData)
 		if block == nil {
@@ -839,7 +988,7 @@ func (g *Gateway) setupTLSConfig() error {
 		clientCAPool.AddCert(cert)
 	}
 
-	g.tlsConfig = &tls.Config{
+	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{serverCertBlock.Bytes},
@@ -851,18 +1000,20 @@ func (g *Gateway) setupTLSConfig() error {
 		MinVersion: tls.VersionTLS12,
 		NextProtos: nextProtosForGateway(g.pkcs11Module != nil),
 	}
+	g.tlsConfig.Store(tlsConfig)
 
 	return nil
 }
 
 func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
-	privateKey, err := ssh.ParsePrivateKey([]byte(g.certificates.SSH.ClientPrivateKey))
+	certs := g.certs()
+	privateKey, err := ssh.ParsePrivateKey([]byte(certs.SSH.ClientPrivateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH private key: %v", err)
 	}
 
 	// Parse certificate
-	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ClientCertificate))
+	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(certs.SSH.ClientCertificate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
@@ -908,7 +1059,7 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 }
 
 func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
-	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ServerCAPublicKey))
+	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certs().SSH.ServerCAPublicKey))
 	if err != nil {
 		return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			return fmt.Errorf("failed to parse CA public key: %v", err)
@@ -969,31 +1120,46 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation in
 		log.Info().Msgf("Failed to accept channel: %v", err)
 		return
 	}
-	defer channel.Close()
 
 	go ssh.DiscardRequests(requests)
 
-	// Create mTLS server configuration
-	tlsConfig := g.tlsConfig
+	// handleGatewayConnection closes the conn, which closes the channel, so no defer here.
+	g.handleGatewayConnection(&virtualConnection{channel: channel}, nil)
+}
+
+// onHandshakeSettled fires once the handshake resolves either way. The direct listener releases its
+// pre-auth slot there, since holding it for the session would cap sessions at the pre-auth limit.
+func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func()) {
+	settled := false
+	settle := func() {
+		if onHandshakeSettled == nil || settled {
+			return
+		}
+		settled = true
+		onHandshakeSettled()
+	}
+	// Covers every return before the handshake resolves.
+	defer settle()
+
+	tlsConfig := g.tlsConfig.Load()
 	if tlsConfig == nil {
 		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
+		_ = conn.Close()
 		return
 	}
-
-	// Create a virtual connection that pipes data between SSH channel and TLS
-	virtualConn := &virtualConnection{
-		channel: channel,
-	}
-
-	// Wrap the virtual connection with TLS
-	tlsConn := tls.Server(virtualConn, tlsConfig)
+	defer conn.Close()
+	tlsConn := tls.Server(conn, tlsConfig)
 
 	// Perform TLS handshake
 	log.Info().Msg("Received incoming connection, starting TLS handshake")
+	// A peer that never completes the handshake would otherwise hold this goroutine forever.
+	_ = tlsConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		log.Info().Msgf("TLS handshake failed: %v", err)
 		return
 	}
+	_ = tlsConn.SetDeadline(time.Time{})
+	settle()
 	log.Info().Msg("TLS handshake completed successfully")
 
 	// Create reader for the TLS connection
@@ -1321,6 +1487,8 @@ func (vc *virtualConnection) RemoteAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
 }
 
+// SSH channels have no deadlines, so the handshake timeout is inert on relay connections.
+// Implementing it here would impose that timeout on every relay channel.
 func (vc *virtualConnection) SetDeadline(t time.Time) error {
 	return nil
 }

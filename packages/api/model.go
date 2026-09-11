@@ -821,12 +821,14 @@ type Relay struct {
 type GetRelaysResponse []Relay
 
 type RegisterGatewayRequest struct {
-	RelayName string `json:"relayName,omitempty"`
-	Name      string `json:"name,omitempty"`
+	RelayName     string `json:"relayName,omitempty"`
+	DirectAddress string `json:"directAddress,omitempty"`
+	Name          string `json:"name,omitempty"`
 }
 
 type ConnectGatewayRequest struct {
-	RelayName string `json:"relayName,omitempty"`
+	RelayName     string `json:"relayName,omitempty"`
+	DirectAddress string `json:"directAddress,omitempty"`
 }
 
 type EnrollGatewayRequest struct {
@@ -863,9 +865,10 @@ type KubernetesAuthLoginGatewayResponse struct {
 }
 
 type RegisterGatewayResponse struct {
-	GatewayID string `json:"gatewayId"`
-	RelayHost string `json:"relayHost"`
-	PKI       struct {
+	GatewayID     string `json:"gatewayId"`
+	DirectAddress string `json:"directAddress,omitempty"`
+	RelayHost     string `json:"relayHost,omitempty"`
+	PKI           struct {
 		ServerCertificate      string `json:"serverCertificate"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
 		ClientCertificateChain string `json:"clientCertificateChain"`
@@ -898,6 +901,7 @@ type PAMAccessResponse struct {
 	AccountType                   string            `json:"accountType"`
 	ResourceType                  string            `json:"resourceType"`
 	RelayHost                     string            `json:"relayHost"`
+	DirectAddress                 string            `json:"directAddress,omitempty"`
 	RelayClientCertificate        string            `json:"relayClientCertificate"`
 	RelayClientPrivateKey         string            `json:"relayClientPrivateKey"`
 	RelayServerCertificateChain   string            `json:"relayServerCertificateChain"`

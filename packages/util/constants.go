@@ -1,5 +1,11 @@
 package util
 
+import (
+	"fmt"
+
+	"github.com/Infisical/infisical-merge/packages/api"
+)
+
 const (
 	CONFIG_FILE_NAME                           = "infisical-config.json"
 	CONFIG_FOLDER_NAME                         = ".infisical"
@@ -82,3 +88,7 @@ const (
 var (
 	CLI_VERSION = "devel"
 )
+
+func init() {
+	api.USER_AGENT = fmt.Sprintf("cli/%s", CLI_VERSION)
+}

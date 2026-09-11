@@ -461,28 +461,36 @@ var gatewayStartCmd = &cobra.Command{
 			util.HandleError(errors.New("no access token found"))
 		}
 
-		relayName, err := util.GetRelayName(cmd, false, accessToken.Load().(string))
-		if err != nil {
-			util.HandleError(err, "unable to get relay name")
-		}
+		listenAddress, _ := util.GetCmdFlagOrEnv(cmd, "listen-address", []string{gatewayv2.LISTEN_ADDRESS_ENV_NAME})
 
 		// Determine if relay was explicitly selected (flag or env var).
-		// If not, enable automatic failover to a different relay on connection failure.
 		explicitRelay, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
 		if explicitRelay == "" {
-			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{"INFISICAL_RELAY_NAME"}, "")
+			explicitRelay, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
 		}
 
+		// Failover picks a relay on its own, so a direct-listen gateway must not have it enabled.
 		var relaySelector func(httpClient *resty.Client) (string, error)
-		if explicitRelay == "" {
+		switch {
+		case explicitRelay != "":
+			log.Info().Msg("Relay explicitly selected; automatic failover is disabled")
+		case listenAddress != "":
+			log.Info().Msg("Gateway is listening for direct connections; relay failover is disabled")
+		default:
 			relaySelector = func(httpClient *resty.Client) (string, error) {
 				return util.SelectRelay(httpClient, true)
 			}
-		} else {
-			log.Info().Msg("Relay explicitly selected; automatic failover is disabled")
+		}
+		relayName := explicitRelay
+		if relayName == "" && listenAddress == "" {
+			relayName, err = util.GetRelayName(cmd, false, accessToken.Load().(string))
+			if err != nil {
+				util.HandleError(err, "unable to get relay name")
+			}
 		}
 
 		pkcs11ModulePath, _ := util.GetCmdFlagOrEnv(cmd, "pkcs11-module", []string{gatewayv2.INFISICAL_PKCS11_MODULE_ENV_NAME})
+		bindAddress, _ := util.GetCmdFlagOrEnv(cmd, "bind", []string{gatewayv2.BIND_ADDRESS_ENV_NAME})
 
 		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
 			Name:             gatewayName,
@@ -490,6 +498,8 @@ var gatewayStartCmd = &cobra.Command{
 			ReconnectDelay:   10 * time.Second,
 			UseV3Connect:     runningWithStoredToken,
 			Pkcs11ModulePath: pkcs11ModulePath,
+			ListenAddress:    listenAddress,
+			BindAddress:      bindAddress,
 			RelaySelector:    relaySelector,
 		})
 
@@ -683,6 +693,18 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 		if pkcs11ModulePath != "" && !filepath.IsAbs(pkcs11ModulePath) {
 			util.HandleError(fmt.Errorf("--pkcs11-module must be an absolute path (got %q)", pkcs11ModulePath))
 		}
+		listenAddress, _ := util.GetCmdFlagOrEnv(cmd, "listen-address", []string{gatewayv2.LISTEN_ADDRESS_ENV_NAME})
+		bindAddress, _ := util.GetCmdFlagOrEnv(cmd, "bind", []string{gatewayv2.BIND_ADDRESS_ENV_NAME})
+		resolveRelayName := func(accessToken string) (string, error) {
+			if listenAddress == "" {
+				return util.GetRelayName(cmd, false, accessToken)
+			}
+			relayName, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "target-relay-name", nil, "")
+			if relayName == "" {
+				relayName, _ = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay", []string{gatewayv2.RELAY_NAME_ENV_NAME}, "")
+			}
+			return relayName, nil
+		}
 
 		var installedServiceName string
 
@@ -693,7 +715,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(errors.New("--token is required when --enroll-method=token"))
 			}
 
-			relayName, _ := util.GetRelayName(cmd, false, "")
+			relayName, _ := resolveRelayName("")
 
 			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
 			if clientErr != nil {
@@ -709,7 +731,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			}
 
 			// Install systemd service using the long-lived access token
-			svcName, installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, serviceLogFile, pkcs11ModulePath)
+			svcName, installErr := gatewayv2.InstallEnrolledGatewaySystemdService(enrollResp.AccessToken, domain, gatewayName, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
 			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
@@ -723,9 +745,9 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(errors.New("--gateway-id is required when --enroll-method=aws"))
 			}
 
-			relayName, _ := util.GetRelayName(cmd, false, "")
+			relayName, _ := resolveRelayName("")
 
-			svcName, installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, serviceLogFile, pkcs11ModulePath)
+			svcName, installErr := gatewayv2.InstallAwsAuthGatewaySystemdService(gatewayID, domain, gatewayName, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
 			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
@@ -741,12 +763,12 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(errors.New("Token not found"))
 			}
 
-			relayName, relayErr := util.GetRelayName(cmd, false, token.Token)
+			relayName, relayErr := resolveRelayName(token.Token)
 			if relayErr != nil {
 				util.HandleError(relayErr, "unable to get relay name")
 			}
 
-			svcName, installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, serviceLogFile, pkcs11ModulePath)
+			svcName, installErr := gatewayv2.InstallGatewaySystemdService(token.Token, domain, gatewayName, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
 			if installErr != nil {
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
@@ -853,6 +875,8 @@ func init() {
 	gatewayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 	gatewayStartCmd.Flags().String("pam-session-recording-path", "", "directory path for PAM session recordings (defaults to /var/lib/infisical/session_recordings)")
 	gatewayStartCmd.Flags().String("pkcs11-module", "", "absolute path to a PKCS#11 driver (e.g. /opt/fortanix/pkcs11/fortanix_pkcs11.so). When set, the gateway loads the driver and serves HSM operations through it.")
+	gatewayStartCmd.Flags().String("listen-address", "", "stable host:port advertised for direct gateway connections")
+	gatewayStartCmd.Flags().String("bind", "", "local host:port to bind for a direct gateway (defaults to all interfaces on the configured direct port)")
 
 	// Legacy install command flags (v1)
 	gatewayInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
@@ -869,6 +893,8 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("target-relay-name", "", "The name of the relay")
 	gatewaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/gateway.log. If not provided, logs will not be written to a file.")
 	gatewaySystemdInstallCmd.Flags().String("pkcs11-module", "", "absolute path to a PKCS#11 driver (e.g. /opt/fortanix/pkcs11/fortanix_pkcs11.so). When set, the systemd service starts the gateway with the PKCS#11 driver loaded for HSM operations.")
+	gatewaySystemdInstallCmd.Flags().String("listen-address", "", "stable host:port advertised for direct gateway connections")
+	gatewaySystemdInstallCmd.Flags().String("bind", "", "local host:port to bind for a direct gateway (defaults to all interfaces on the configured direct port)")
 
 	// Gateway relay command flags
 	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")
