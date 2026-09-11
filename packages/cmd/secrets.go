@@ -853,7 +853,7 @@ func init() {
 	secretsSetCmd.Flags().Bool("show-values", false, "reveal secret values in the output table instead of masking them")
 	util.AddOutputFlagsToCmd(secretsSetCmd, "The output to format the secrets in.")
 
-	secretsDeleteCmd.Flags().String("type", "personal", "the type of secret to delete: personal or shared  (default: personal)")
+	secretsDeleteCmd.Flags().String("type", util.SECRET_TYPE_SHARED, "the type of secret to delete: personal or shared")
 	secretsDeleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsDeleteCmd.Flags().String("projectId", "", "manually set the projectId to delete secrets from when using machine identity based auth")
 	secretsDeleteCmd.Flags().String("path", "/", "get secrets within a folder path")
