@@ -1,11 +1,15 @@
 package agentvault
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
@@ -60,4 +64,55 @@ func TestPollLoopKeepsRunningWhileInfisicalIsDown(t *testing.T) {
 	case <-time.After(3 * time.Second):
 	}
 	close(stop)
+}
+
+// A settings change is written from the state the process holds. Re-reading the file first, as tick once
+// did, found nothing when the file was missing at that instant and wrote it back without the token.
+func TestTickPersistsSettingsFromMemoryWhenTheFileIsGone(t *testing.T) {
+	body, err := json.Marshal(api.AgentVaultHeartbeatResponse{
+		Config: api.AgentVaultProxyConfig{UnmatchedHost: UnmatchedDeny, PollInterval: 30},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	prev := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL
+	t.Cleanup(func() { config.INFISICAL_URL = prev })
+
+	st := newStore(t.TempDir())
+	loaded := persistedState{ProxyID: "p1", AccessToken: "tok", Config: ProxyConfig{UnmatchedHost: UnmatchedAllow, PollInterval: 60}}
+	if err := st.saveState(loaded); err != nil {
+		t.Fatal(err)
+	}
+	ps := &proxyServer{
+		opts:      Options{ProxyToken: func() string { return "tok" }},
+		config:    loaded.Config,
+		persisted: loaded,
+	}
+	resolver, err := newInfisicalResolver(ps.opts.ProxyToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps.cache = newSessionCache(resolver, ps.pollInterval)
+
+	if err := os.Remove(filepath.Join(st.dir, proxyStateFile)); err != nil {
+		t.Fatal(err)
+	}
+	ps.tick(st)
+
+	back, found, err := st.loadState()
+	if err != nil || !found {
+		t.Fatalf("state not written back: found=%v err=%v", found, err)
+	}
+	if back.AccessToken != "tok" || back.ProxyID != "p1" {
+		t.Fatalf("the token or proxy id was lost: %+v", back)
+	}
+	if back.Config.UnmatchedHost != UnmatchedDeny || back.Config.PollInterval != 30 {
+		t.Fatalf("the new settings were not persisted: %+v", back.Config)
+	}
 }

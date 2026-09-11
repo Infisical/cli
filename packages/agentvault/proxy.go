@@ -77,6 +77,10 @@ type proxyServer struct {
 	configMu sync.RWMutex
 	config   ProxyConfig
 
+	// What Start loaded, so a settings change is persisted from memory. A re-read at that instant could find
+	// the file gone and write it back without the token. Only tick touches it after Start.
+	persisted persistedState
+
 	saturationOnce sync.Once
 }
 

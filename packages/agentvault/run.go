@@ -156,6 +156,7 @@ func Start(opts Options, enrollmentToken string) error {
 		ca:        ca,
 		transport: newUpstreamTransport(),
 		config:    config,
+		persisted: state,
 	}
 	resolver, err := newInfisicalResolver(opts.ProxyToken)
 	if err != nil {
@@ -295,12 +296,9 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 					Msg("agent-vault: settings changed")
 
 				// Persisted so a restart during an Infisical outage keeps the operator's policy rather than coming back up allowing.
-				stored, _, loadErr := st.loadState()
-				if loadErr == nil {
-					stored.Config = next
-					if saveErr := st.saveState(stored); saveErr != nil {
-						log.Warn().Err(saveErr).Msg("agent-vault: failed to persist the new settings")
-					}
+				ps.persisted.Config = next
+				if saveErr := st.saveState(ps.persisted); saveErr != nil {
+					log.Warn().Err(saveErr).Msg("agent-vault: failed to persist the new settings")
 				}
 			}
 		}
