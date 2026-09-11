@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -186,6 +188,9 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("the proxy address is required; pass --proxy <host:port> or set INFISICAL_AGENT_VAULT_PROXY_ADDRESS. The same proxy has a different address from every network, so there is no name to look it up by"))
 	}
 	proxyAddr = trimProxyScheme(proxyAddr)
+	if err := validateProxyAddr(proxyAddr); err != nil {
+		util.HandleError(err)
+	}
 
 	pinnedFingerprint, _ := cmd.Flags().GetString("ca-fingerprint")
 	noCaTrust, _ := cmd.Flags().GetBool("no-ca-trust")
@@ -405,6 +410,19 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 
 // url.Parse is no use here: the documented input is a bare host:port, which it either rejects outright
 // or reads as a scheme with an empty host. A scheme is accepted anyway because people paste one.
+// The address goes into the agent's proxy URL with the session token as the password, so anything that is
+// not a bare host and port reaches the agent as a malformed URL, and curl prints that URL, token included.
+func validateProxyAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || strings.ContainsAny(host, " \t/?#@") {
+		return fmt.Errorf("--proxy must be host:port, such as 10.0.1.5:17323, got %q", addr)
+	}
+	if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("--proxy must name a port between 1 and 65535, got %q", addr)
+	}
+	return nil
+}
+
 func trimProxyScheme(addr string) string {
 	for _, scheme := range []string{"http://", "https://"} {
 		if len(addr) >= len(scheme) && strings.EqualFold(addr[:len(scheme)], scheme) {

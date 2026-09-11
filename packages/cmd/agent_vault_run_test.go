@@ -180,3 +180,21 @@ func TestAgentVaultCaFilePathRefusesNonUuidIds(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateProxyAddr(t *testing.T) {
+	for _, addr := range []string{"10.0.1.5:17323", "proxy.internal:17323", "localhost:17323", "[2001:db8::1]:17323"} {
+		if err := validateProxyAddr(addr); err != nil {
+			t.Errorf("%q should be accepted: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{
+		"10.0.1.5", "2001:db8::1", "[2001:db8::1]", // no port
+		":17323", "10.0.1.5:", "", // no host, no port
+		"user:pw@host:17323", "socks5://10.0.1.5:1080", "10.0.1.5:17323:extra",
+		"10.0.1.5:17323/path", "10.0.1.5:abc", "10.0.1.5:99999", "10.0.1.5:0", "exa mple.com:17323",
+	} {
+		if err := validateProxyAddr(addr); err == nil {
+			t.Errorf("%q should be refused", addr)
+		}
+	}
+}
