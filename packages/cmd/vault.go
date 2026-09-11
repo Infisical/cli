@@ -55,8 +55,15 @@ var vaultSetCmd = &cobra.Command{
 				return
 			}
 
+			// Sessions stored in the previous backend are unreachable after the
+			// switch, so drop all login state and require a fresh login.
 			configFile.VaultBackendType = wantedVaultTypeName
 			configFile.LoggedInUserEmail = ""
+			configFile.LoggedInUserDomain = ""
+			configFile.LoggedInUsers = nil
+			configFile.ActiveProfile = ""
+			configFile.Profiles = nil
+			configFile.DirectoryProfiles = nil
 			configFile.VaultBackendPassphrase = base64.StdEncoding.EncodeToString([]byte(util.GenerateRandomString(10)))
 
 			err = util.WriteConfigFile(&configFile)
