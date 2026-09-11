@@ -82,7 +82,7 @@ type BaseProxyServer struct {
 
 	// The direct address that failed, so later connections skip it. Keyed by address because a
 	// refreshed session can carry a new one.
-	failedDirectAddress atomic.Pointer[string]
+	failedDirect atomic.Pointer[directFailure]
 }
 
 // staticSession builds a LiveSession from the fields set at construction time.
@@ -145,13 +145,20 @@ func (b *BaseProxyServer) createRelayConnectionWith(session LiveSession) (net.Co
 	return b.createRelayOnlyConnection(session)
 }
 
+// A failure is remembered per address and expires, so a transient blip cannot pin a long-lived
+// proxy to the relay for the rest of its life.
+type directFailure struct {
+	address    string
+	retryAfter time.Time
+}
+
 // With no relay to fall back to, direct is retried regardless: failing fast gains nothing.
 func (b *BaseProxyServer) skipDirect(session LiveSession) bool {
 	if session.RelayHost == "" {
 		return false
 	}
-	failed := b.failedDirectAddress.Load()
-	return failed != nil && *failed == session.DirectAddress
+	failed := b.failedDirect.Load()
+	return failed != nil && failed.address == session.DirectAddress && time.Now().Before(failed.retryAfter)
 }
 
 func (b *BaseProxyServer) markDirectUnavailable(session LiveSession, err error, msg string) {
@@ -159,13 +166,13 @@ func (b *BaseProxyServer) markDirectUnavailable(session LiveSession, err error, 
 		log.Debug().Err(err).Str("address", session.DirectAddress).Msg(msg)
 		return
 	}
-	address := session.DirectAddress
-	previous := b.failedDirectAddress.Swap(&address)
-	if previous == nil || *previous != address {
-		log.Warn().Err(err).Str("address", address).Msgf("%s, using the relay for this session", msg)
+	failure := &directFailure{address: session.DirectAddress, retryAfter: time.Now().Add(directRetryInterval)}
+	previous := b.failedDirect.Swap(failure)
+	if previous == nil || previous.address != failure.address || time.Now().After(previous.retryAfter) {
+		log.Warn().Err(err).Str("address", failure.address).Msgf("%s, using the relay until it recovers", msg)
 		return
 	}
-	log.Debug().Err(err).Str("address", address).Msg(msg)
+	log.Debug().Err(err).Str("address", failure.address).Msg(msg)
 }
 
 type gatewayTransportConn struct {
@@ -175,8 +182,10 @@ type gatewayTransportConn struct {
 
 const (
 	// The relay path terminates locally, and the gateway cert carries localhost as a SAN.
-	relayServerName        = "localhost"
-	directDialTimeout      = 3 * time.Second
+	relayServerName   = "localhost"
+	directDialTimeout = 3 * time.Second
+	// How long a failed direct address stays demoted before it is tried again.
+	directRetryInterval    = 60 * time.Second
 	directHandshakeTimeout = 3 * time.Second
 )
 

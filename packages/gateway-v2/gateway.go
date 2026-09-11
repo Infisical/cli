@@ -149,6 +149,9 @@ type Gateway struct {
 	heartbeatMu      sync.Mutex
 	notifyOnce       sync.Once
 	relayDownOnce    sync.Once
+	// Set when the direct listener is actually bound, so log routing cannot claim a listener
+	// the server never granted.
+	directListening atomic.Bool
 
 	// PAM session registry for active proxy connections (multiple connections per session)
 	pamSessions   map[string][]*pamSessionEntry
@@ -529,6 +532,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
+	if g.config.ListenAddress != "" && g.certs().DirectAddress == "" {
+		return fmt.Errorf(
+			"this Infisical instance did not accept --listen-address, so it does not support direct gateway connections. Upgrade the instance, or start the gateway with --target-relay-name instead")
+	}
+
 	if g.certs().DirectAddress != "" {
 		if err := g.startDirectListener(ctx, listenerFatal); err != nil {
 			return err
@@ -567,13 +575,27 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
+	// The relay loop blocks for the life of the connection, so it runs alongside the listener
+	// rather than ahead of it, and whichever fails first returns.
+	relayLoopErr := make(chan error, 1)
+	go func() { relayLoopErr <- g.runRelayLoop(ctx, errCh) }()
+
+	select {
+	case <-ctx.Done():
+		log.Info().Msgf("Gateway stopped by context cancellation")
+		return nil
+	case err := <-listenerFatal:
+		return err
+	case err := <-relayLoopErr:
+		return err
+	}
+}
+
+func (g *Gateway) runRelayLoop(ctx context.Context, errCh chan error) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
-		case err := <-listenerFatal:
-			return err
 		default:
 			if err := g.connectWithRetry(ctx, errCh); err != nil {
 				// Direct listen is already serving traffic, so a dead relay is degraded, not broken.
@@ -591,7 +613,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 				}
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil
 				case <-time.After(g.config.ReconnectDelay):
 					continue
 				}
@@ -600,7 +622,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			log.Info().Msgf("Connection closed, reconnecting in 10 seconds...")
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil
 			case <-time.After(10 * time.Second):
 				continue
 			}
@@ -690,14 +712,6 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	}
 }
 
-func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
-	if err := g.registerGateway(); err != nil {
-		return fmt.Errorf("failed to register gateway: %v", err)
-	}
-
-	return g.connectWithRetry(ctx, errCh)
-}
-
 func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) error {
 	directAddress := g.certs().DirectAddress
 	_, advertisedPort, err := net.SplitHostPort(directAddress)
@@ -708,6 +722,11 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 	bindAddress := g.config.BindAddress
 	if bindAddress == "" {
 		bindAddress = net.JoinHostPort("", advertisedPort)
+	} else if _, bindPort, splitErr := net.SplitHostPort(bindAddress); splitErr == nil && bindPort != advertisedPort {
+		// Legitimate behind a load balancer that remaps the port, and a silent outage otherwise.
+		log.Warn().Msgf(
+			"Listening on port %s but registered with Infisical as port %s. Connections will fail unless something forwards %s to %s.",
+			bindPort, advertisedPort, advertisedPort, bindPort)
 	}
 
 	listener, err := net.Listen("tcp", bindAddress)
@@ -715,6 +734,7 @@ func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) e
 		return fmt.Errorf("failed to listen for direct gateway connections on %s: %w", bindAddress, err)
 	}
 
+	g.directListening.Store(true)
 	log.Info().Str("address", g.certs().DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
 	pending := make(chan struct{}, maxPendingDirectHandshakes)
 	go func() {
@@ -764,7 +784,7 @@ func relayLog(hasDirect bool) *zerolog.Event {
 }
 
 func (g *Gateway) hasDirectListener() bool {
-	return g.config.ListenAddress != "" || g.certs().DirectAddress != ""
+	return g.directListening.Load()
 }
 
 func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
@@ -791,6 +811,10 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 
 		// Connect to Relay server
 		relayHost := g.certs().RelayHost
+		if relayHost == "" {
+			// Dialing ":port" would reach this machine rather than a relay.
+			return fmt.Errorf("gateway has no relay host to connect to")
+		}
 		relayLog(g.hasDirectListener()).Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), relayHost, g.config.SSHPort, attempt, maxAttempts)
 		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", relayHost, g.config.SSHPort), sshConfig)
 		if err != nil {
@@ -1463,6 +1487,8 @@ func (vc *virtualConnection) RemoteAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
 }
 
+// SSH channels have no deadlines, so the handshake timeout is inert on relay connections.
+// Implementing it here would impose that timeout on every relay channel.
 func (vc *virtualConnection) SetDeadline(t time.Time) error {
 	return nil
 }

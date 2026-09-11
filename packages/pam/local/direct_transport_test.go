@@ -3,6 +3,7 @@ package pam
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 func TestCreateRelayConnectionUsesDirectAddress(t *testing.T) {
@@ -98,5 +99,23 @@ func TestDirectRetriedWhenARefreshedSessionCarriesANewAddress(t *testing.T) {
 	refreshed := LiveSession{DirectAddress: "127.0.0.1:2", RelayHost: "relay.invalid:8443"}
 	if server.skipDirect(refreshed) {
 		t.Fatal("a new direct address deserves its own attempt")
+	}
+}
+
+func TestDirectRetriedOnceTheFailureWindowExpires(t *testing.T) {
+	server := &BaseProxyServer{}
+	session := LiveSession{DirectAddress: "127.0.0.1:1", RelayHost: "relay.invalid:8443"}
+
+	_, _ = server.createRelayConnectionWith(session)
+	if !server.skipDirect(session) {
+		t.Fatal("a failed direct dial should demote the address")
+	}
+
+	// An agent proxy can outlive the outage, so the demotion has to expire rather than latch.
+	expired := &directFailure{address: session.DirectAddress, retryAfter: time.Now().Add(-time.Second)}
+	server.failedDirect.Store(expired)
+
+	if server.skipDirect(session) {
+		t.Fatal("direct should be retried once the failure window has passed")
 	}
 }
