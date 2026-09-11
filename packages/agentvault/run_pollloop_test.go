@@ -116,3 +116,36 @@ func TestTickPersistsSettingsFromMemoryWhenTheFileIsGone(t *testing.T) {
 		t.Fatalf("the new settings were not persisted: %+v", back.Config)
 	}
 }
+
+func TestTickKeepsTheCurrentSettingsWhenTheHeartbeatCarriesNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	prev := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL
+	t.Cleanup(func() { config.INFISICAL_URL = prev })
+
+	st := newStore(t.TempDir())
+	loaded := persistedState{ProxyID: "p1", AccessToken: "tok", Config: ProxyConfig{UnmatchedHost: UnmatchedDeny, PollInterval: 10}}
+	if err := st.saveState(loaded); err != nil {
+		t.Fatal(err)
+	}
+	ps := &proxyServer{opts: Options{ProxyToken: func() string { return "tok" }}, config: loaded.Config, persisted: loaded}
+	resolver, err := newInfisicalResolver(ps.opts.ProxyToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps.cache = newSessionCache(resolver, ps.pollInterval)
+
+	ps.tick(st)
+
+	if got := ps.currentConfig(); got != loaded.Config {
+		t.Fatalf("a heartbeat with no settings changed the config to %+v", got)
+	}
+	back, _, _ := st.loadState()
+	if back.Config != loaded.Config {
+		t.Fatalf("a heartbeat with no settings was persisted: %+v", back.Config)
+	}
+}
