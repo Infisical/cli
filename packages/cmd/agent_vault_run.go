@@ -208,6 +208,11 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 			util.HandleError(err)
 		}
 	}
+	// The path goes into the agent's environment, and the agent resolves it against its own working directory.
+	caFile, err = filepath.Abs(caFile)
+	if err != nil {
+		util.HandleError(err, "Unable to resolve --ca-file to an absolute path")
+	}
 	// Only the certificate the fingerprint was taken from is trusted from here on.
 	caPEM, servedFingerprint, err := agentVaultCaFingerprint(caResp.Certificate)
 	if err != nil {
