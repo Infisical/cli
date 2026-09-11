@@ -20,7 +20,7 @@ func TestRequestSessionTokenReadsThePasswordHalf(t *testing.T) {
 	for _, tc := range []struct {
 		name, user, pass, want string
 	}{
-		{"the shape av run hands out", ProxyAuthUsername, "agv_tok", "agv_tok"},
+		{"the shape agent-vault run hands out", ProxyAuthUsername, "agv_tok", "agv_tok"},
 		{"a token carrying a colon", ProxyAuthUsername, "agv_a:b", "agv_a:b"},
 		{"the username is ignored", "someone-else", "agv_tok", "agv_tok"},
 	} {

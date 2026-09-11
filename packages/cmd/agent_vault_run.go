@@ -88,7 +88,7 @@ func fetchAgentVaultProxyCa(proxyAddr string) (agentVaultProxyCa, error) {
 	return ca, nil
 }
 
-var avRunCmd = &cobra.Command{
+var agentVaultRunCmd = &cobra.Command{
 	Use:   "run [flags] --proxy <host:port> -- [agent command]",
 	Short: "Launch an agent that holds no credentials, routed through an Agent Vault proxy",
 	Long: `Launch an agent that holds no credentials, routed through an Agent Vault proxy.
@@ -108,8 +108,8 @@ The proxy's certificate authority is fetched from the proxy on every run and tru
 
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
-	Example: `  infisical av run --access-bundle on-call-infrastructure --proxy 10.0.1.5:17323 -- claude
-  infisical av run --session-token agv_... --proxy 10.0.1.5:17323 --ca-fingerprint SHA256:9F:2C:... -- claude`,
+	Example: `  infisical agent-vault run --access-bundle on-call-infrastructure --proxy 10.0.1.5:17323 -- claude
+  infisical agent-vault run --session-token agv_... --proxy 10.0.1.5:17323 --ca-fingerprint SHA256:9F:2C:... -- claude`,
 	DisableFlagsInUseLine: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -199,7 +199,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	caResp, err := fetchAgentVaultProxyCa(proxyAddr)
 	if err != nil {
-		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical av proxy' is running there", proxyAddr))
+		util.HandleError(err, fmt.Sprintf("Unable to reach the Agent Vault proxy at %s. Check the address and that 'infisical agent-vault proxy' is running there", proxyAddr))
 	}
 
 	caFile, _ := cmd.Flags().GetString("ca-file")
@@ -275,7 +275,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
 	}
 
-	Telemetry.CaptureEvent("cli-command:av run", posthog.NewProperties().
+	Telemetry.CaptureEvent("cli-command:agent-vault run", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("platform", runtime.GOOS).
@@ -503,17 +503,17 @@ func runAgentVaultChild(args, env []string) int {
 }
 
 func init() {
-	avRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name`")
-	avRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one")
-	avRunCmd.Flags().String("ttl", "7d", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
-	avRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
-	avRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
-	avRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
-	avRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
-	avRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), "ca-<proxy-id>.pem")+")")
-	avRunCmd.Flags().Bool("no-ca-trust", false, "skip writing the certificate authority and setting the trust variables, for a host that already trusts this proxy's CA (a pinned fingerprint is still checked)")
-	avRunCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that mints the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
-	avRunCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
+	agentVaultRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name`")
+	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one")
+	agentVaultRunCmd.Flags().String("ttl", "7d", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
+	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
+	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
+	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
+	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
+	agentVaultRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), "ca-<proxy-id>.pem")+")")
+	agentVaultRunCmd.Flags().Bool("no-ca-trust", false, "skip writing the certificate authority and setting the trust variables, for a host that already trusts this proxy's CA (a pinned fingerprint is still checked)")
+	agentVaultRunCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that mints the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
+	agentVaultRunCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 
-	avCmd.AddCommand(avRunCmd)
+	agentVaultCmd.AddCommand(agentVaultRunCmd)
 }

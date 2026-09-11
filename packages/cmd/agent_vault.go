@@ -12,13 +12,14 @@ import (
 
 // Top-level, beside gateway / relay / pam: the existing `infisical secrets agent-proxy` tree is a
 // different product.
-var avCmd = &cobra.Command{
-	Use:   "av",
-	Short: "Agent Vault commands",
-	Long:  "Run agents that hold no credentials, with a proxy that attaches them at the network boundary",
+var agentVaultCmd = &cobra.Command{
+	Use:     "agent-vault",
+	Aliases: []string{"av"},
+	Short:   "Agent Vault commands",
+	Long:    "Run agents that hold no credentials, with a proxy that attaches them at the network boundary",
 }
 
-var avProxyCmd = &cobra.Command{
+var agentVaultProxyCmd = &cobra.Command{
 	Use:   "proxy",
 	Short: "Run an Agent Vault proxy",
 	Long: `Run an Agent Vault proxy.
@@ -28,12 +29,12 @@ so the agent never holds a secret.
 
 Enroll once with the token shown when the proxy was created, then run it with no token to serve:
 
-  infisical av proxy --enrollment-token avp_...
-  infisical av proxy
+  infisical agent-vault proxy --enrollment-token avp_...
+  infisical agent-vault proxy
 
 Traffic policy - which hosts bypass interception, what happens to an unmatched host, and how often the
 proxy refreshes - is set in Infisical and arrives on every poll, so it has no flags here.`,
-	Example:               "infisical av proxy --enrollment-token avp_7k2mf...",
+	Example:               "infisical agent-vault proxy --enrollment-token avp_7k2mf...",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -82,16 +83,16 @@ proxy refreshes - is set in Infisical and arrives on every poll, so it has no fl
 }
 
 func init() {
-	avProxyCmd.Flags().String("enrollment-token", "",
+	agentVaultProxyCmd.Flags().String("enrollment-token", "",
 		"one-time token from Infisical, used to enroll this proxy. Not needed once enrolled")
-	avProxyCmd.Flags().String("data-dir", "",
+	agentVaultProxyCmd.Flags().String("data-dir", "",
 		fmt.Sprintf("where to keep the certificate authority and proxy token (default: %s)", defaultDataDirHelp()))
-	avProxyCmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
-	avProxyCmd.Flags().String("log-format", "console", "log output format: console | json")
-	avProxyCmd.Flags().String("log-file", "", "path to also write logs to")
+	agentVaultProxyCmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
+	agentVaultProxyCmd.Flags().String("log-format", "console", "log output format: console | json")
+	agentVaultProxyCmd.Flags().String("log-file", "", "path to also write logs to")
 
-	avCmd.AddCommand(avProxyCmd)
-	RootCmd.AddCommand(avCmd)
+	agentVaultCmd.AddCommand(agentVaultProxyCmd)
+	RootCmd.AddCommand(agentVaultCmd)
 }
 
 func defaultDataDirHelp() string {
