@@ -481,7 +481,7 @@ func (fw *flushingWriter) Write(p []byte) (int, error) {
 // DNS is case-insensitive and a trailing dot names the same host, so normalise once here and use that
 // value everywhere downstream.
 func normalizeHostname(host string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return strings.ToLower(strings.TrimRight(strings.TrimSpace(host), "."))
 }
 
 // SplitHostPort is happy with ":443", ":" and "", and an empty host means this machine to the dialer,
@@ -489,10 +489,12 @@ func normalizeHostname(host string) string {
 var errNoHostInTarget = errors.New("the target names no host")
 
 func checkedTarget(hostname, port string) (string, string, error) {
+	// Normalised first: a host of only dots is non-empty until the trailing dots come off.
+	hostname = normalizeHostname(hostname)
 	if hostname == "" || port == "" {
 		return "", "", errNoHostInTarget
 	}
-	return normalizeHostname(hostname), port, nil
+	return hostname, port, nil
 }
 
 func parseConnectTarget(target string) (hostname, port string, err error) {

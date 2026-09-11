@@ -5,7 +5,7 @@ import "testing"
 // SplitHostPort accepts a target with no host, and an empty host is this machine to the dialer, so
 // without these guards CONNECT :443 mints a leaf for an empty name and reaches a local service.
 func TestTargetsWithoutAHostAreRefused(t *testing.T) {
-	for _, target := range []string{":443", ":18080", ":", "", "[]:443"} {
+	for _, target := range []string{":443", ":18080", ":", "", "[]:443", ".", ".:18080", "..", "...:443"} {
 		if _, _, err := parseConnectTarget(target); err == nil {
 			t.Errorf("parseConnectTarget(%q) was accepted", target)
 		}
