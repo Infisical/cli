@@ -86,6 +86,22 @@ func TestResolveStateRefusesAnUnknownPolicyInsteadOfAllowing(t *testing.T) {
 	}
 }
 
+// Re-running with the same enrollment token takes its own branch out of resolveState, which used to
+// return the stored state without checking the policy in it. A state file written before the
+// trafficPolicy rename decodes to "", and "" blocks nothing, so that path could bring a restricted
+// proxy up reaching every host.
+func TestResolveStateRefusesAnUnknownPolicyOnTheEnrollmentTokenResume(t *testing.T) {
+	st := storeWithCa(t)
+	writeConf(t, st.dir, `{"proxyId":"p1","accessToken":"tok","enrollmentToken":"avp_tok","config":{"unmatchedHost":"deny"}}`)
+	_, _, _, err := resolveState(st, "avp_tok")
+	if err == nil {
+		t.Fatal("a pre-rename state file was accepted on the token resume path; the proxy would have come up allowing")
+	}
+	if !strings.Contains(err.Error(), "trafficPolicy") {
+		t.Fatalf("the message does not name the field: %v", err)
+	}
+}
+
 func TestResolveStateResumesACompleteEnrollment(t *testing.T) {
 	st := storeWithCa(t)
 	writeConf(t, st.dir, enrolledConf)

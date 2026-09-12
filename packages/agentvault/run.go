@@ -86,6 +86,9 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 	// with a new token, so that has to work on the same damage.
 	if enrollmentToken != "" {
 		if alreadyEnrolled && stored.EnrollmentToken == enrollmentToken {
+			if err := checkStoredPolicy(st, stored); err != nil {
+				return persistedState{}, nil, false, err
+			}
 			log.Info().Msg("agent-vault: this enrollment token already enrolled this proxy, resuming")
 			return stored, newCaManager(key, cert), false, nil
 		}
@@ -122,13 +125,23 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 			proxyStateFile, st.dir, caKeyFile, caCertFile)
 	}
 
-	if !isTrafficPolicy(stored.Config.TrafficPolicy) {
-		return persistedState{}, nil, false, fmt.Errorf(
-			"%s in %s has an unrecognised trafficPolicy value %q; it must be %s or %s. If the file predates the trafficPolicy rename, enroll again with a new token from the Proxies page",
-			proxyStateFile, st.dir, stored.Config.TrafficPolicy, TrafficPolicyAnyHost, TrafficPolicyBundleHosts)
+	if err := checkStoredPolicy(st, stored); err != nil {
+		return persistedState{}, nil, false, err
 	}
 
 	return stored, newCaManager(key, cert), false, nil
+}
+
+// Every path that serves persisted state runs this. A file whose policy does not parse must never reach
+// the proxy: blocksOffBundle compares against TrafficPolicyBundleHosts, so an empty value blocks nothing
+// and a proxy the operator restricted would come up reaching everything.
+func checkStoredPolicy(st *store, stored persistedState) error {
+	if isTrafficPolicy(stored.Config.TrafficPolicy) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s in %s has an unrecognised trafficPolicy value %q; it must be %s or %s. If the file predates the trafficPolicy rename, enroll again with a new token from the Proxies page",
+		proxyStateFile, st.dir, stored.Config.TrafficPolicy, TrafficPolicyAnyHost, TrafficPolicyBundleHosts)
 }
 
 func isTrafficPolicy(v string) bool {
