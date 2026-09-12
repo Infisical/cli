@@ -11,8 +11,8 @@ import (
 const AgentVaultSessionHeader = "X-Infisical-Agent-Session"
 
 type AgentVaultProxyConfig struct {
-	UnmatchedHost string `json:"unmatchedHost"`
-	BypassHosts   string `json:"bypassHosts"`
+	TrafficPolicy string `json:"trafficPolicy"`
+	AllowedHosts  string `json:"allowedHosts"`
 	PollInterval  int    `json:"pollInterval"`
 }
 

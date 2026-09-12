@@ -31,7 +31,7 @@ func storeWithCa(t *testing.T) *store {
 	return st
 }
 
-const enrolledConf = `{"proxyId":"p1","accessToken":"tok","config":{"unmatchedHost":"deny"}}`
+const enrolledConf = `{"proxyId":"p1","accessToken":"tok","config":{"trafficPolicy":"bundle-hosts"}}`
 
 func TestResolveStateAnEmptyDirectoryIsAFirstRun(t *testing.T) {
 	_, _, _, err := resolveState(newStore(t.TempDir()), "")
@@ -44,7 +44,7 @@ func TestResolveStateAnIntactCaWithoutATokenIsNotAFirstRun(t *testing.T) {
 	for name, conf := range map[string]*string{
 		"no proxy.json":       nil,
 		"empty object":        ptr(`{}`),
-		"token field missing": ptr(`{"proxyId":"p1","config":{"unmatchedHost":"deny"}}`),
+		"token field missing": ptr(`{"proxyId":"p1","config":{"trafficPolicy":"bundle-hosts"}}`),
 	} {
 		st := storeWithCa(t)
 		if conf != nil {
@@ -73,14 +73,14 @@ func TestResolveStateATokenWithoutACaNamesTheMissingFiles(t *testing.T) {
 }
 
 func TestResolveStateRefusesAnUnknownPolicyInsteadOfAllowing(t *testing.T) {
-	for _, policy := range []string{"", "denny", "DENY", "true"} {
+	for _, policy := range []string{"", "bundle-host", "BUNDLE-HOSTS", "deny", "true"} {
 		st := storeWithCa(t)
-		writeConf(t, st.dir, `{"accessToken":"tok","config":{"unmatchedHost":"`+policy+`"}}`)
+		writeConf(t, st.dir, `{"accessToken":"tok","config":{"trafficPolicy":"`+policy+`"}}`)
 		_, _, _, err := resolveState(st, "")
 		if err == nil {
 			t.Fatalf("policy %q was accepted; the proxy would have come up allowing", policy)
 		}
-		if !strings.Contains(err.Error(), "unmatchedHost") {
+		if !strings.Contains(err.Error(), "trafficPolicy") {
 			t.Fatalf("policy %q: the message does not name the field: %v", policy, err)
 		}
 	}
@@ -93,7 +93,7 @@ func TestResolveStateResumesACompleteEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AccessToken != "tok" || state.Config.UnmatchedHost != UnmatchedDeny || ca == nil {
+	if state.AccessToken != "tok" || state.Config.TrafficPolicy != TrafficPolicyBundleHosts || ca == nil {
 		t.Fatalf("resumed state is wrong: %+v", state)
 	}
 }

@@ -32,7 +32,7 @@ func newTunnellingClient(t *testing.T, rs sessionResolver) *http.Client {
 		t.Fatal(err)
 	}
 	ps := &proxyServer{transport: newUpstreamTransport(), ca: newCaManager(key, cert)}
-	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedAllow})
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
 	ps.cache = newSessionCache(rs, ps.pollInterval)
 	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
 	t.Cleanup(front.Close)

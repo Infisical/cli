@@ -43,8 +43,8 @@ type persistedState struct {
 }
 
 type ProxyConfig struct {
-	UnmatchedHost string `json:"unmatchedHost"`
-	BypassHosts   string `json:"bypassHosts"`
+	TrafficPolicy string `json:"trafficPolicy"`
+	AllowedHosts  string `json:"allowedHosts"`
 	PollInterval  int    `json:"pollInterval"`
 }
 

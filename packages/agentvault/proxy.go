@@ -402,9 +402,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	}
 }
 
-// The one place the deny decision lives, so the test that covers bypass runs what forward runs.
-func (ps *proxyServer) blocksUnmatched(matched *resolvedService, hostname, port string) bool {
-	return matched == nil && ps.currentConfig().UnmatchedHost == UnmatchedDeny && !ps.isBypassed(hostname, port)
+// The one place the block decision lives, so the test that covers exceptions runs what forward runs.
+func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port string) bool {
+	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, error) {
@@ -415,7 +415,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 	matched := bestMatch(services, hostname, port)
 
-	if ps.blocksUnmatched(matched, hostname, port) {
+	if ps.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
@@ -449,14 +449,14 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	return resp, matched, nil
 }
 
-func (ps *proxyServer) isBypassed(hostname, port string) bool {
-	raw := ps.currentConfig().BypassHosts
+func (ps *proxyServer) isAllowedHost(hostname, port string) bool {
+	raw := ps.currentConfig().AllowedHosts
 	if raw == "" {
 		return false
 	}
 	for _, pattern := range parseHostPatterns(raw) {
 		// A bare entry means the host on any port. The 443 default it inherits from the parser is there to
-		// keep a credential off plaintext, and a bypass entry never carries one, so plain http to a host
+		// keep a credential off plaintext, and an exception never carries one, so plain http to a host
 		// written as a bare name would otherwise stay blocked with nothing saying why.
 		if !pattern.portWritten {
 			pattern.port = port

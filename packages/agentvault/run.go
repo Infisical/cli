@@ -45,14 +45,14 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 	}
 
 	config := ProxyConfig{
-		UnmatchedHost: res.Config.UnmatchedHost,
-		BypassHosts:   res.Config.BypassHosts,
+		TrafficPolicy: res.Config.TrafficPolicy,
+		AllowedHosts:  res.Config.AllowedHosts,
 		PollInterval:  res.Config.PollInterval,
 	}
 	if !usableProxyConfig(config) {
 		return persistedState{}, nil, fmt.Errorf(
-			"the enrollment response carried no usable proxy settings (unmatchedHost %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place",
-			config.UnmatchedHost, config.PollInterval)
+			"the enrollment response carried no usable proxy settings (trafficPolicy %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place",
+			config.TrafficPolicy, config.PollInterval)
 	}
 	state := persistedState{
 		ProxyID:         res.ProxyID,
@@ -122,21 +122,23 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 			proxyStateFile, st.dir, caKeyFile, caCertFile)
 	}
 
-	if !isUnmatchedHostPolicy(stored.Config.UnmatchedHost) {
+	if !isTrafficPolicy(stored.Config.TrafficPolicy) {
 		return persistedState{}, nil, false, fmt.Errorf(
-			"%s in %s has an unrecognised unmatchedHost value %q; it must be %s or %s. Fix the value or restore the file from a backup",
-			proxyStateFile, st.dir, stored.Config.UnmatchedHost, UnmatchedAllow, UnmatchedDeny)
+			"%s in %s has an unrecognised trafficPolicy value %q; it must be %s or %s. If the file predates the trafficPolicy rename, enroll again with a new token from the Proxies page",
+			proxyStateFile, st.dir, stored.Config.TrafficPolicy, TrafficPolicyAnyHost, TrafficPolicyBundleHosts)
 	}
 
 	return stored, newCaManager(key, cert), false, nil
 }
 
-func isUnmatchedHostPolicy(v string) bool { return v == UnmatchedAllow || v == UnmatchedDeny }
+func isTrafficPolicy(v string) bool {
+	return v == TrafficPolicyAnyHost || v == TrafficPolicyBundleHosts
+}
 
 // A 200 with no config in it, from a captive portal or a health page answering in Infisical's place,
-// decodes to the zero value. Applying that turns deny into "" and the poll interval into 0.
+// decodes to the zero value. Applying that turns the policy into "" and the poll interval into 0.
 func usableProxyConfig(c ProxyConfig) bool {
-	return isUnmatchedHostPolicy(c.UnmatchedHost) && c.PollInterval > 0
+	return isTrafficPolicy(c.TrafficPolicy) && c.PollInterval > 0
 }
 
 // Start enrolls if needed, then serves until interrupted. An empty enrollmentToken means
@@ -302,19 +304,19 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 			log.Warn().Err(hbErr).Msg("agent-vault: heartbeat failed")
 		} else {
 			next := ProxyConfig{
-				UnmatchedHost: res.Config.UnmatchedHost,
-				BypassHosts:   res.Config.BypassHosts,
+				TrafficPolicy: res.Config.TrafficPolicy,
+				AllowedHosts:  res.Config.AllowedHosts,
 				PollInterval:  res.Config.PollInterval,
 			}
 			if !usableProxyConfig(next) {
 				log.Warn().
-					Str("unmatchedHost", next.UnmatchedHost).
+					Str("trafficPolicy", next.TrafficPolicy).
 					Int("pollInterval", next.PollInterval).
 					Msg("agent-vault: heartbeat returned no usable settings, keeping the current ones")
 			} else if ps.setConfig(next) {
 				log.Info().
-					Str("unmatchedHost", next.UnmatchedHost).
-					Str("bypassHosts", next.BypassHosts).
+					Str("trafficPolicy", next.TrafficPolicy).
+					Str("allowedHosts", next.AllowedHosts).
 					Int("pollInterval", next.PollInterval).
 					Msg("agent-vault: settings changed")
 

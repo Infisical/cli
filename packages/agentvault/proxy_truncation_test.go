@@ -50,7 +50,7 @@ func newTruncatingUpstream(t *testing.T) string {
 func newProxyForForwarding(t *testing.T) *httptest.Server {
 	t.Helper()
 	ps := &proxyServer{transport: newUpstreamTransport()}
-	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedAllow})
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
 	ps.cache = newSessionCache(sessionOnlyResolver{}, ps.pollInterval)
 	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
 	t.Cleanup(front.Close)

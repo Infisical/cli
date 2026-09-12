@@ -148,9 +148,9 @@ func TestBestMatchConsidersEveryPatternOnAService(t *testing.T) {
 	}
 }
 
-func TestBypassIsAnExceptionToDeny(t *testing.T) {
+func TestExceptionOverridesBundleHostsPolicy(t *testing.T) {
 	ps := &proxyServer{}
-	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, api.github.com, pkg.example.com:8080"})
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, AllowedHosts: "docs.example.com, api.github.com, pkg.example.com:8080"})
 
 	github := &resolvedService{name: "github", hostPatterns: parseHostPatterns("api.github.com")}
 	services := []*resolvedService{github}
@@ -162,7 +162,7 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 		wantBlock bool
 	}{
 		{
-			name:      "bypassed and uncovered is reachable, with no credential",
+			name:      "an exception that no service covers is reachable, with no credential",
 			host:      "docs.example.com",
 			wantMatch: nil,
 			wantBlock: false,
@@ -174,7 +174,7 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 			wantBlock: false,
 		},
 		{
-			name:      "neither is blocked under deny",
+			name:      "neither is blocked under bundle-hosts",
 			host:      "example.com",
 			wantMatch: nil,
 			wantBlock: true,
@@ -188,18 +188,18 @@ func TestBypassIsAnExceptionToDeny(t *testing.T) {
 				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
 			}
 
-			if blocked := ps.blocksUnmatched(matched, tc.host, "443"); blocked != tc.wantBlock {
+			if blocked := ps.blocksOffBundle(matched, tc.host, "443"); blocked != tc.wantBlock {
 				t.Errorf("blocked = %v, want %v", blocked, tc.wantBlock)
 			}
 		})
 	}
 }
 
-// A bypass entry carries no credential, so a bare host there means the host rather than one port of
+// An exception carries no credential, so a bare host there means the host rather than one port of
 // it. An entry that names a port keeps meaning only that port.
-func TestBypassPortScope(t *testing.T) {
+func TestExceptionPortScope(t *testing.T) {
 	ps := &proxyServer{}
-	ps.setConfig(ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "docs.example.com, [::1], pkg.example.com:8080"})
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, AllowedHosts: "docs.example.com, [::1], pkg.example.com:8080"})
 
 	for _, tc := range []struct {
 		host, port string
@@ -214,8 +214,8 @@ func TestBypassPortScope(t *testing.T) {
 		{"pkg.example.com", "443", false, "naming a port still scopes the entry to it"},
 		{"other.example.com", "80", false, "a host that is not on the list"},
 	} {
-		if got := ps.isBypassed(tc.host, tc.port); got != tc.want {
-			t.Errorf("isBypassed(%q, %q) = %v, want %v: %s", tc.host, tc.port, got, tc.want, tc.why)
+		if got := ps.isAllowedHost(tc.host, tc.port); got != tc.want {
+			t.Errorf("isAllowedHost(%q, %q) = %v, want %v: %s", tc.host, tc.port, got, tc.want, tc.why)
 		}
 	}
 }

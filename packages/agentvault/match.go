@@ -14,8 +14,8 @@ const defaultPort = "443"
 type hostPattern struct {
 	host string
 	port string
-	// Whether the entry named a port itself. Only the bypass list reads this: a service without one
-	// has to stay on 443 or a credential would go out in the clear, but a bypass entry carries no
+	// Whether the entry named a port itself. Only the exception list reads this: a service without one
+	// has to stay on 443 or a credential would go out in the clear, but an exception carries no
 	// credential, so a bare host there means the host rather than one port of it.
 	portWritten bool
 }

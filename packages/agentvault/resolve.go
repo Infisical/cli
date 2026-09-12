@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	// The engine, the column, the API and the UI all say deny; the inherited constant was UnmatchedBlock.
-	UnmatchedAllow = "allow"
-	UnmatchedDeny  = "deny"
+	// The column, the API and the UI all use these two words, so the proxy compares them verbatim.
+	TrafficPolicyAnyHost     = "any-host"
+	TrafficPolicyBundleHosts = "bundle-hosts"
 )
 
 type resolveResult struct {

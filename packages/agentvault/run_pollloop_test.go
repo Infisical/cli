@@ -26,7 +26,7 @@ func newPollLoopFixture(t *testing.T, heartbeatStatus int) (*proxyServer, *store
 
 	ps := &proxyServer{
 		opts:   Options{ProxyToken: func() string { return "dead" }},
-		config: ProxyConfig{PollInterval: 1, UnmatchedHost: UnmatchedAllow},
+		config: ProxyConfig{PollInterval: 1, TrafficPolicy: TrafficPolicyAnyHost},
 	}
 	resolver, err := newInfisicalResolver(ps.opts.ProxyToken)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestPollLoopKeepsRunningWhileInfisicalIsDown(t *testing.T) {
 // did, found nothing when the file was missing at that instant and wrote it back without the token.
 func TestTickPersistsSettingsFromMemoryWhenTheFileIsGone(t *testing.T) {
 	body, err := json.Marshal(api.AgentVaultHeartbeatResponse{
-		Config: api.AgentVaultProxyConfig{UnmatchedHost: UnmatchedDeny, PollInterval: 30},
+		Config: api.AgentVaultProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, PollInterval: 30},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestTickPersistsSettingsFromMemoryWhenTheFileIsGone(t *testing.T) {
 	t.Cleanup(func() { config.INFISICAL_URL = prev })
 
 	st := newStore(t.TempDir())
-	loaded := persistedState{ProxyID: "p1", AccessToken: "tok", Config: ProxyConfig{UnmatchedHost: UnmatchedAllow, PollInterval: 60}}
+	loaded := persistedState{ProxyID: "p1", AccessToken: "tok", Config: ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost, PollInterval: 60}}
 	if err := st.saveState(loaded); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestTickPersistsSettingsFromMemoryWhenTheFileIsGone(t *testing.T) {
 	if back.AccessToken != "tok" || back.ProxyID != "p1" {
 		t.Fatalf("the token or proxy id was lost: %+v", back)
 	}
-	if back.Config.UnmatchedHost != UnmatchedDeny || back.Config.PollInterval != 30 {
+	if back.Config.TrafficPolicy != TrafficPolicyBundleHosts || back.Config.PollInterval != 30 {
 		t.Fatalf("the new settings were not persisted: %+v", back.Config)
 	}
 }
@@ -140,7 +140,7 @@ func TestTickKeepsTheCurrentSettingsWhenTheHeartbeatCarriesNone(t *testing.T) {
 	t.Cleanup(func() { config.INFISICAL_URL = prev })
 
 	st := newStore(t.TempDir())
-	loaded := persistedState{ProxyID: "p1", AccessToken: "tok", Config: ProxyConfig{UnmatchedHost: UnmatchedDeny, PollInterval: 10}}
+	loaded := persistedState{ProxyID: "p1", AccessToken: "tok", Config: ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, PollInterval: 10}}
 	if err := st.saveState(loaded); err != nil {
 		t.Fatal(err)
 	}

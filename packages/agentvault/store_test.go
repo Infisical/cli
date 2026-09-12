@@ -77,7 +77,7 @@ func TestSaveStateRoundTripsWithoutTempFiles(t *testing.T) {
 	st := newStore(dir)
 	want := persistedState{
 		ProxyID: "p1", ProxyName: "edge", AccessToken: "tok", EnrollmentToken: "enroll",
-		Config: ProxyConfig{UnmatchedHost: UnmatchedDeny, BypassHosts: "a.example.com", PollInterval: 30},
+		Config: ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, AllowedHosts: "a.example.com", PollInterval: 30},
 	}
 	if err := st.saveState(want); err != nil {
 		t.Fatal(err)
@@ -101,8 +101,8 @@ func TestSaveStateRoundTripsWithoutTempFiles(t *testing.T) {
 func TestSaveStateKeepsALineBreakInsideAValue(t *testing.T) {
 	st := newStore(t.TempDir())
 	in := persistedState{AccessToken: "tok", Config: ProxyConfig{
-		UnmatchedHost: UnmatchedDeny,
-		BypassHosts:   "x.example.com\nunmatchedHost=allow",
+		TrafficPolicy: TrafficPolicyBundleHosts,
+		AllowedHosts:  "x.example.com\ntrafficPolicy=any-host",
 		PollInterval:  60,
 	}}
 	if err := st.saveState(in); err != nil {
@@ -112,10 +112,10 @@ func TestSaveStateKeepsALineBreakInsideAValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Config.UnmatchedHost != UnmatchedDeny {
-		t.Fatalf("a line break in one value rewrote another: policy came back %q", out.Config.UnmatchedHost)
+	if out.Config.TrafficPolicy != TrafficPolicyBundleHosts {
+		t.Fatalf("a line break in one value rewrote another: policy came back %q", out.Config.TrafficPolicy)
 	}
-	if out.Config.BypassHosts != in.Config.BypassHosts {
-		t.Fatalf("the value did not round-trip: %q", out.Config.BypassHosts)
+	if out.Config.AllowedHosts != in.Config.AllowedHosts {
+		t.Fatalf("the value did not round-trip: %q", out.Config.AllowedHosts)
 	}
 }
