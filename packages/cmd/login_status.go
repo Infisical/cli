@@ -261,18 +261,23 @@ type loginStatusJSONOutput struct {
 }
 
 type loginStatusSessionJSON struct {
-	PrincipalType   string                       `json:"principalType,omitempty"`
-	Status          string                       `json:"status,omitempty"`
-	Domain          string                       `json:"domain,omitempty"`
-	Email           string                       `json:"email,omitempty"`
-	UserID          string                       `json:"userId,omitempty"`
-	AuthMethod      string                       `json:"authMethod,omitempty"`
-	TokenSource     string                       `json:"tokenSource,omitempty"`
-	Identity        *loginStatusIdentityJSON     `json:"identity,omitempty"`
-	Token           *loginStatusTokenJSON        `json:"token,omitempty"`
-	Organization    *string                      `json:"organization,omitempty"`
-	SubOrganization *string                      `json:"subOrganization,omitempty"`
-	Verification    *loginStatusVerificationJSON `json:"verification,omitempty"`
+	PrincipalType string `json:"principalType,omitempty"`
+	Status        string `json:"status,omitempty"`
+	Domain        string `json:"domain,omitempty"`
+	// Profile and ProfileSource describe which login profile the user session
+	// came from and how it was selected (flag, env var, directory, default).
+	Profile          string                       `json:"profile,omitempty"`
+	ProfileSource    string                       `json:"profileSource,omitempty"`
+	Email            string                       `json:"email,omitempty"`
+	UserID           string                       `json:"userId,omitempty"`
+	AuthMethod       string                       `json:"authMethod,omitempty"`
+	TokenSource      string                       `json:"tokenSource,omitempty"`
+	Identity         *loginStatusIdentityJSON     `json:"identity,omitempty"`
+	Token            *loginStatusTokenJSON        `json:"token,omitempty"`
+	Organization     *string                      `json:"organization,omitempty"`
+	OrganizationName string                       `json:"organizationName,omitempty"`
+	SubOrganization  *string                      `json:"subOrganization,omitempty"`
+	Verification     *loginStatusVerificationJSON `json:"verification,omitempty"`
 }
 
 type loginStatusTokenJSON struct {
@@ -310,6 +315,9 @@ func buildSessionJSON(ctx loginStatusContext) loginStatusSessionJSON {
 	switch ctx.kind {
 	case principalKindUser:
 		session.Email = ctx.loggedInUser.UserCredentials.Email
+		session.Profile = ctx.loggedInUser.ProfileName
+		session.ProfileSource = ctx.loggedInUser.ProfileSource
+		session.OrganizationName = ctx.loggedInUser.OrganizationName
 		if ctx.claimsErr != nil {
 			return session
 		}
@@ -385,6 +393,9 @@ func renderHuman(ctx loginStatusContext) {
 	if ctx.domain != "" {
 		printStatusItem("Domain", ctx.domain)
 	}
+	if ctx.kind == principalKindUser && ctx.loggedInUser.ProfileName != "" {
+		printStatusItem("Profile", profileLine(ctx.loggedInUser))
+	}
 	if method := authMethodLabel(ctx); method != "" {
 		printStatusItem("Auth method", method)
 	}
@@ -403,8 +414,11 @@ func renderHuman(ctx loginStatusContext) {
 	if org := organizationLineFor(ctx); org != "" {
 		printStatusItem("Organization", org)
 	}
+	if ctx.kind == principalKindUser && ctx.loggedInUser.OrganizationSource != "" && ctx.loggedInUser.OrganizationSource != util.OrgSourceProfileDefault {
+		printStatusItem("Organization via", ctx.loggedInUser.OrganizationSource)
+	}
 	if ctx.kind == principalKindUser && ctx.claimsErr == nil && ctx.claims.SubOrganizationID != "" {
-		printStatusItem("Sub-organization", ctx.claims.SubOrganizationID)
+		printStatusItem("Sub-organization", subOrganizationLineFor(ctx))
 	}
 
 	if status != statusAuthenticated {
@@ -471,14 +485,43 @@ func tokenSourceLabel(ctx loginStatusContext) string {
 	return ""
 }
 
+// profileLine renders the profile a user session came from and how it was
+// selected, e.g. "globex (via --profile flag)".
+func profileLine(details util.LoggedInUserDetails) string {
+	if details.ProfileSource == "" {
+		return details.ProfileName
+	}
+	return fmt.Sprintf("%s (via %s)", details.ProfileName, details.ProfileSource)
+}
+
+// userOrgNames splits the organization name the profile recorded into the
+// root and sub-organization parts that match the token's organizationId and
+// subOrganizationId claims. The token only carries ids; the profile knows the
+// names, as "Parent / Child" when the session is scoped to a sub-organization.
+func userOrgNames(ctx loginStatusContext) (rootName string, subName string) {
+	return splitScopedOrgNames(ctx.loggedInUser.OrganizationName, ctx.claims.SubOrganizationID != "")
+}
+
 func organizationLineFor(ctx loginStatusContext) string {
 	switch ctx.kind {
 	case principalKindUser:
-		return orgStatusLine(ctx.claims.OrganizationID, ctx.claimsErr)
+		line := orgStatusLine(ctx.claims.OrganizationID, ctx.claimsErr)
+		if rootName, _ := userOrgNames(ctx); ctx.claimsErr == nil && ctx.claims.OrganizationID != "" && rootName != "" {
+			line = fmt.Sprintf("%s (%s)", rootName, line)
+		}
+		return line
 	case principalKindMachineIdentity:
 		return orgStatusLine(ctx.claims.OrgID, ctx.claimsErr)
 	}
 	return ""
+}
+
+func subOrganizationLineFor(ctx loginStatusContext) string {
+	line := ctx.claims.SubOrganizationID
+	if _, subName := userOrgNames(ctx); subName != "" {
+		line = fmt.Sprintf("%s (%s)", subName, line)
+	}
+	return line
 }
 
 func tokenStatusLine(claims loginTokenClaims, claimsErr error) string {

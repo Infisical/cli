@@ -48,6 +48,9 @@ var resetCmd = &cobra.Command{
 		}
 		for _, profile := range configFile.Profiles {
 			keyringKeys[profile.Name] = true
+			for _, ref := range profile.OrgSessions {
+				keyringKeys[util.OrgSessionKeyringKey(profile.Name, ref.OrgID)] = true
+			}
 		}
 
 		// delete from keyring

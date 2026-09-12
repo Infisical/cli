@@ -3,6 +3,7 @@ package util
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -30,50 +31,72 @@ type LogoutResult struct {
 	LocalErr error
 }
 
+// profileTokens loads every session token stored for a profile: its own and
+// the cached organization-scoped ones listed in its index. ok is false when the
+// profile has no stored session at all.
+func profileTokens(profile models.Profile) (tokens []string, ok bool) {
+	creds, err := GetUserCredsFromKeyRing(profile.Name)
+	if err != nil {
+		return nil, false
+	}
+	if creds.JTWToken != "" {
+		tokens = append(tokens, creds.JTWToken)
+	}
+	for _, ref := range profile.OrgSessions {
+		if token, found := GetOrgSessionToken(profile.Name, ref.OrgID); found {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens, true
+}
+
 // collectSessionIDs returns every distinct server-side session id represented
-// by a profile's stored credentials, including organization-scoped tokens.
-func collectSessionIDs(creds models.UserCredentials) []string {
+// by the given tokens.
+func collectSessionIDs(tokens []string) []string {
 	seen := map[string]bool{}
 	ids := []string{}
-
-	add := func(token string) {
+	for _, token := range tokens {
 		if id := ParseTokenSessionID(token); id != "" && !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
 		}
 	}
-
-	add(creds.JTWToken)
-	for _, cached := range creds.OrgTokens {
-		add(cached.Token)
-	}
-
 	return ids
 }
 
-// liveToken returns a session token that is still valid, preferring the
-// profile's own. An organization token cached later can outlive it, and
-// revocation needs some live token to authenticate with.
-func liveToken(creds models.UserCredentials) string {
-	if creds.JTWToken != "" && !IsJWTExpired(creds.JTWToken) {
-		return creds.JTWToken
-	}
-	for _, cached := range creds.OrgTokens {
-		if cached.Token != "" && !IsJWTExpired(cached.Token) {
-			return cached.Token
+// liveToken returns the first token that is still valid. Tokens are ordered
+// with the profile's own first; an organization token cached later can outlive
+// it, and revocation needs some live token to authenticate with.
+func liveToken(tokens []string) string {
+	for _, token := range tokens {
+		if token != "" && !IsJWTExpired(token) {
+			return token
 		}
 	}
 	return ""
 }
 
-// ClearStoredSession removes a profile's stored credentials. An entry that is
-// already absent counts as success, since the goal is that nothing remains.
-func ClearStoredSession(profileName string) error {
-	err := DeleteValueInKeyring(profileName)
-	if err == nil || errors.Is(err, keyring.ErrNotFound) {
-		return nil
+// IsKeyringEntryAbsent reports whether a keyring delete or read failed only
+// because the entry does not exist. The system keyrings report
+// keyring.ErrNotFound; the encrypted file backend surfaces the missing file.
+func IsKeyringEntryAbsent(err error) bool {
+	return errors.Is(err, keyring.ErrNotFound) || errors.Is(err, os.ErrNotExist)
+}
+
+// ClearStoredSession removes a profile's stored credentials, including its
+// cached organization sessions. Entries that are already absent count as
+// success, since the goal is that nothing remains.
+func ClearStoredSession(profile models.Profile) error {
+	var firstErr error
+	if err := DeleteValueInKeyring(profile.Name); err != nil && !IsKeyringEntryAbsent(err) {
+		firstErr = err
 	}
-	return err
+	for _, ref := range profile.OrgSessions {
+		if err := DeleteOrgSessionToken(profile.Name, ref.OrgID); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // RevokeSession ends a server-side session by id, authenticating with a token
@@ -108,11 +131,11 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 		if targets[profile.Name] {
 			continue
 		}
-		creds, err := GetUserCredsFromKeyRing(profile.Name)
-		if err != nil {
+		tokens, ok := profileTokens(profile)
+		if !ok {
 			continue
 		}
-		for _, id := range collectSessionIDs(creds) {
+		for _, id := range collectSessionIDs(tokens) {
 			retained[id] = profile.Name
 		}
 	}
@@ -121,8 +144,13 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 	for _, name := range targetNames {
 		result := LogoutResult{ProfileName: name}
 
-		creds, err := GetUserCredsFromKeyRing(name)
-		if err != nil {
+		profile, found := FindProfile(configFile, name)
+		if !found {
+			profile = models.Profile{Name: name}
+		}
+
+		tokens, ok := profileTokens(profile)
+		if !ok {
 			results = append(results, result)
 			continue
 		}
@@ -133,8 +161,8 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 			// profile's own token would skip revocation while a cached
 			// organization token was still usable, leaving it live on the
 			// server after the local copy was deleted.
-			authToken := liveToken(creds)
-			for _, sessionID := range collectSessionIDs(creds) {
+			authToken := liveToken(tokens)
+			for _, sessionID := range collectSessionIDs(tokens) {
 				if owner, shared := retained[sessionID]; shared {
 					result.SharedWith = owner
 					continue
@@ -152,7 +180,7 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 			}
 		}
 
-		if err := DeleteValueInKeyring(name); err != nil {
+		if err := ClearStoredSession(profile); err != nil {
 			result.LocalErr = err
 			log.Debug().Err(err).Str("profile", name).Msg("unable to remove stored credentials")
 		}
@@ -164,16 +192,16 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 }
 
 // SessionStatus describes whether a profile currently holds usable credentials.
-func SessionStatus(profileName string) string {
-	creds, err := GetUserCredsFromKeyRing(profileName)
+func SessionStatus(profile models.Profile) string {
+	creds, err := GetUserCredsFromKeyRing(profile.Name)
 	if err != nil {
 		return "none"
 	}
 	if IsJWTExpired(creds.JTWToken) {
 		return "expired"
 	}
-	if len(creds.OrgTokens) > 0 {
-		return fmt.Sprintf("active (+%d org)", len(creds.OrgTokens))
+	if cached := len(profile.OrgSessions); cached > 0 {
+		return fmt.Sprintf("active (+%d org)", cached)
 	}
 	return "active"
 }

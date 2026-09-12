@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	infisicalSdk "github.com/infisical/go-sdk"
 	"github.com/rs/zerolog/log"
@@ -71,15 +70,7 @@ func EstablishUserLoginSession() LoggedInUserDetails {
 		PrintErrorMessageAndExit(fmt.Sprintf("Failed to determine executable path: %v", err))
 	}
 
-	loginArgs := []string{"login", "--silent"}
-	// Target the profile this invocation resolved to, so the refreshed session
-	// lands in the same profile (and on its instance) instead of the default one.
-	if resolved, profile, _ := ResolveActiveProfileDetails(); resolved.Name != "" {
-		loginArgs = append(loginArgs, "--profile", resolved.Name)
-		if profile.Domain != "" {
-			loginArgs = append(loginArgs, "--domain", strings.TrimSuffix(profile.Domain, "/api"))
-		}
-	}
+	loginArgs := LoginRenewalArgs(ResolveActiveProfileDetails())
 
 	// Spawn infisical login command
 	loginCmd := exec.Command(exePath, loginArgs...)

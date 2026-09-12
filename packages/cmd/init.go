@@ -62,8 +62,15 @@ var initCmd = &cobra.Command{
 		// for this command), so don't ask again. Only fall back to the picker
 		// when the profile has no organization recorded, which happens for
 		// sessions migrated from a CLI that predates profiles.
+		//
+		// OrganizationID is the organization the session acts in. For a session
+		// scoped to a sub-organization that is the sub-organization, which is
+		// also where its projects are filed, not the root from the token.
 		selectedOrgID := userCreds.OrganizationID
 		var selectedSubOrgName *string
+		if parent, own := util.SplitOrgDisplayName(userCreds.OrganizationName); parent != "" {
+			selectedSubOrgName = &own
+		}
 
 		if selectedOrgID == "" {
 			pickedOrgID, pickedSubOrgName, err := pickOrganization(httpClient, "Which Infisical organization would you like to select a project from?", userCreds.UserCredentials.Email)
@@ -85,12 +92,14 @@ var initCmd = &cobra.Command{
 			if orgID == "" {
 				orgID = pickedOrgID
 			}
-			selectedOrgID = orgID
+			orgInfo := util.DescribeSessionOrg(newSessionToken, orgID, subOrgID)
 
 			updatedProfile := userCreds.Profile
 			updatedProfile.OrganizationID = orgID
 			updatedProfile.SubOrganizationID = subOrgID
-			updatedProfile.OrganizationName = util.OrgDisplayName(newSessionToken, orgID, subOrgID)
+			updatedProfile.OrganizationName = orgInfo.DisplayName()
+			updatedProfile.OrganizationSlug = orgInfo.Slug
+			selectedOrgID = updatedProfile.ScopedOrganizationID()
 
 			// Only move the global default when this invocation was using it; a
 			// terminal pinned via env var, flag, or directory scope must not switch
@@ -107,17 +116,23 @@ var initCmd = &cobra.Command{
 			if orgDisplay == "" {
 				orgDisplay = selectedOrgID
 			}
-			util.PrintlnStderr(fmt.Sprintf("Using organization %s from profile '%s'. Pass --org to pick a different one.", orgDisplay, userCreds.ProfileName))
 
-			// An --org override is per command, so a project linked under it would
-			// not resolve on later runs that use the profile's default.
-			if userCreds.OrganizationSource != util.OrgSourceProfileDefault && userCreds.Profile.OrganizationID != "" && userCreds.OrganizationID != userCreds.Profile.OrganizationID {
+			// An --org override is per command, so a project linked under it
+			// would not resolve on later runs that use the profile's default.
+			// That would surface later as an unrelated-looking "project not
+			// found", and a warning here can be silenced, so refuse and point
+			// at the two ways to make the organization stick.
+			if userCreds.OrganizationSource != util.OrgSourceProfileDefault && userCreds.Profile.OrganizationID != "" && userCreds.OrganizationID != userCreds.Profile.ScopedOrganizationID() {
 				profileOrg := userCreds.Profile.OrganizationName
 				if profileOrg == "" {
-					profileOrg = userCreds.Profile.OrganizationID
+					profileOrg = userCreds.Profile.ScopedOrganizationID()
 				}
-				util.PrintWarning(fmt.Sprintf("Profile '%s' defaults to organization %s, so later commands here will not find this project unless you pass --org again. Run [infisical profile set-org %s] to make it the default.", userCreds.ProfileName, profileOrg, orgDisplay))
+				util.PrintErrorMessageAndExit(
+					fmt.Sprintf("Profile '%s' defaults to organization %s, so a project linked here under %s (selected via %s) would not be found by later commands unless they also pass --org.", userCreds.ProfileName, profileOrg, orgDisplay, userCreds.OrganizationSource),
+					fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile new <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
 			}
+
+			util.PrintlnStderr(fmt.Sprintf("Using organization %s from profile '%s'. Pass --org to pick a different one.", orgDisplay, userCreds.ProfileName))
 		}
 
 		workspaceResponse, err := api.CallGetAllWorkSpacesUserBelongsTo(httpClient)
