@@ -250,10 +250,17 @@ func shouldDisableColor() bool {
 	return false
 }
 
+// A value the flag does not name is refused rather than quietly treated as console: --log-format JSON
+// in a unit file would otherwise put human-readable lines into a log pipeline with nothing to say why.
 func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
-	var stream io.Writer = os.Stderr
-	if format != "json" {
+	var stream io.Writer
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "json":
+		stream = os.Stderr
+	case "console", "":
 		stream = GetLoggerConfig(os.Stderr, !isatty.IsTerminal(os.Stderr.Fd()))
+	default:
+		return nil, fmt.Errorf("--log-format must be console or json, got %q", format)
 	}
 
 	if filePath == "" {

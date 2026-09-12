@@ -44,6 +44,10 @@ func ForwardTerminationSignals(cmd *exec.Cmd) (stop func()) {
 
 // WaitExitCode maps Wait's error to the child's exit code. ok is false when the error is not an exit
 // status at all (never started, or wait itself failed); the code is then 1 for the caller to report.
+// A child killed by a signal has no exit status of its own, so it reports 128 plus the signal, which
+// is the convention a shell reports and what every caller here hands to os.Exit. ExitStatus alone is
+// -1 there, which the shell shows as 255 whatever the signal was. Signaled is false on Windows, so
+// in practice this is the Unix branch.
 func WaitExitCode(err error) (code int, ok bool) {
 	if err == nil {
 		return 0, true
@@ -51,6 +55,9 @@ func WaitExitCode(err error) (code int, ok bool) {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if ws, wsOk := exitErr.Sys().(syscall.WaitStatus); wsOk {
+			if ws.Signaled() {
+				return 128 + int(ws.Signal()), true
+			}
 			return ws.ExitStatus(), true
 		}
 	}
