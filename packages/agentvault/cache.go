@@ -120,18 +120,17 @@ func isProxyTokenRejected(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Name == proxyTokenRejectedName
 }
 
-// A definitive refusal ends the session; only a status that can clear on its own rides the grace window.
-// A 403 or 422 today can only mean the server changed its mind about the request, never a blip, so it is
-// terminal too, as the sibling's isAuthError treats 403. A rejected proxy token is not a verdict on the
-// session, so it is reported separately, though the caller drops the entry just the same.
+// Resolve answers 200, 401 or 404 by contract, and 401 with a name when the proxy's own token is the
+// problem. Only those two statuses are a verdict on the session; anything else from a 4xx is a proxy-side
+// fault or a middlebox, and the heartbeat classifier reads a 4xx the same way, so the two agree. A
+// rejected proxy token is not a verdict on the session and is reported separately.
 func isSessionGone(err error) bool {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
 		if isProxyTokenRejected(err) {
 			return false
 		}
-		s := apiErr.StatusCode
-		return s >= 400 && s < 500 && s != http.StatusRequestTimeout && s != http.StatusTooManyRequests
+		return apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusNotFound
 	}
 	return errors.Is(err, errSessionGone)
 }
@@ -171,7 +170,9 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
 		result, err := c.resolver.resolve(sessionToken)
 		if err != nil {
-			if isSessionGone(err) {
+			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but
+			// until then every agent request would otherwise cost a resolve.
+			if isSessionGone(err) || isProxyTokenRejected(err) {
 				c.mu.Lock()
 				c.rememberRefusalLocked(key, err)
 				c.mu.Unlock()

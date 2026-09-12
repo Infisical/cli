@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -243,27 +244,60 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tlsConn := tls.Server(clientConn, &tls.Config{
+	// Node's fetch tunnels http:// targets too and speaks plaintext inside, where every other client sends
+	// absolute-form. A tunnel is opaque bytes to an ordinary proxy, so that works everywhere else; here the
+	// first byte decides: a TLS record starts with 0x16, anything else is plain HTTP and takes the same path
+	// as absolute-form, which already refuses to attach a credential over plaintext.
+	buffered := newBufferedConn(clientConn)
+	_ = clientConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
+	first, err := buffered.reader.Peek(1)
+	if err != nil {
+		return
+	}
+	if first[0] != tlsRecordTypeHandshake {
+		_ = clientConn.SetDeadline(time.Time{})
+		ps.serveTunnel(buffered, "http", hostname, port, sessionToken)
+		return
+	}
+
+	tlsConn := tls.Server(buffered, &tls.Config{
 		Certificates: []tls.Certificate{leaf},
 		MinVersion:   tls.VersionTLS12,
 		// http/1.1 only. An h2-only client fails ALPN here, which is a documented unsupported case rather than
 		// something to paper over with a silent downgrade.
 		NextProtos: []string{"http/1.1"},
 	})
-	_ = tlsConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
+		log.Debug().Err(err).Str("host", net.JoinHostPort(hostname, port)).Msg("agent-vault: tunnel TLS handshake failed")
 		return
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
 
-	ps.serveTunnel(tlsConn, hostname, port, sessionToken)
+	ps.serveTunnel(tlsConn, "https", hostname, port, sessionToken)
 }
 
-func (ps *proxyServer) serveTunnel(tlsConn *tls.Conn, hostname, port, sessionToken string) {
-	listener := newOneShotListener(tlsConn)
+const tlsRecordTypeHandshake = 0x16
+
+// bufferedConn lets the first byte be peeked and then handed on, to tls.Server or to the plain HTTP
+// server, without the byte being consumed.
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func newBufferedConn(c net.Conn) *bufferedConn {
+	return &bufferedConn{Conn: c, reader: bufio.NewReader(c)}
+}
+
+func (b *bufferedConn) Read(p []byte) (int, error) { return b.reader.Read(p) }
+
+// The scheme is the tunnel's, not the inner request's: a credential is only ever attached on https, and
+// the target host comes from the CONNECT line so an agent cannot address one host through a tunnel to another.
+func (ps *proxyServer) serveTunnel(conn net.Conn, scheme, hostname, port, sessionToken string) {
+	listener := newOneShotListener(conn)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ps.forwardHTTP(w, r, "https", hostname, port, sessionToken)
+			ps.forwardHTTP(w, r, scheme, hostname, port, sessionToken)
 		}),
 		ReadHeaderTimeout: tunnelReadHeaderTimeout,
 		ReadTimeout:       tunnelReadTimeout,
@@ -499,11 +533,32 @@ func normalizeHostname(host string) string {
 // so a target naming no host would reach whatever is listening on the box the proxy runs on.
 var errNoHostInTarget = errors.New("the target names no host")
 
+// DNS limits. Every hostname that can resolve fits them; one that does not is either a typo or an attempt
+// to grow a leaf certificate, which embeds the name, to the size of the request header cap. IP literals
+// have their own grammar and are exempt. Nothing about the characters is checked, so underscores and
+// single-label names keep working.
+const (
+	maxHostnameBytes = 253
+	maxLabelBytes    = 63
+)
+
+var errHostTooLong = errors.New("the target host is longer than a DNS name can be")
+
 func checkedTarget(hostname, port string) (string, string, error) {
 	// Normalised first: a host of only dots is non-empty until the trailing dots come off.
 	hostname = normalizeHostname(hostname)
 	if hostname == "" || port == "" {
 		return "", "", errNoHostInTarget
+	}
+	if net.ParseIP(hostname) == nil {
+		if len(hostname) > maxHostnameBytes {
+			return "", "", errHostTooLong
+		}
+		for _, label := range strings.Split(hostname, ".") {
+			if len(label) > maxLabelBytes {
+				return "", "", errHostTooLong
+			}
+		}
 	}
 	return hostname, port, nil
 }

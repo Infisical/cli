@@ -193,6 +193,11 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 
 	pinnedFingerprint, _ := cmd.Flags().GetString("ca-fingerprint")
+	// An empty pin would otherwise run unpinned in silence, and "$AV_PIN" with the variable unset is how
+	// the unattended runs the pin exists for would produce one.
+	if cmd.Flags().Changed("ca-fingerprint") && strings.TrimSpace(pinnedFingerprint) == "" {
+		util.HandleError(fmt.Errorf("--ca-fingerprint was passed with no value. Give it the fingerprint from the Proxies page, or drop the flag to run without a pin"))
+	}
 	noCaTrust, _ := cmd.Flags().GetBool("no-ca-trust")
 	keepSession, _ := cmd.Flags().GetBool("keep-session")
 	extraNoProxy, _ := cmd.Flags().GetString("no-proxy")
@@ -413,8 +418,11 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 // The address goes into the agent's proxy URL with the session token as the password, so anything that is
 // not a bare host and port reaches the agent as a malformed URL, and curl prints that URL, token included.
 func validateProxyAddr(addr string) error {
+	if strings.ContainsAny(addr, "/?#") {
+		return fmt.Errorf("--proxy must be host:port with nothing after the port, such as 10.0.1.5:17323, got %q", addr)
+	}
 	host, port, err := net.SplitHostPort(addr)
-	if err != nil || host == "" || strings.ContainsAny(host, " \t/?#@") {
+	if err != nil || host == "" || strings.ContainsAny(host, " \t@") {
 		return fmt.Errorf("--proxy must be host:port, such as 10.0.1.5:17323, got %q", addr)
 	}
 	if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {

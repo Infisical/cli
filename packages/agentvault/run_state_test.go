@@ -151,3 +151,17 @@ func TestResolveStateATokenTakesTheEnrollPathOverDamagedState(t *testing.T) {
 		}
 	}
 }
+
+// A file holding settings but no token, with no CA beside it, fell through every arm and started the proxy
+// with a nil certificate authority.
+func TestResolveStateRefusesSettingsWithNoTokenAndNoCa(t *testing.T) {
+	st := newStore(t.TempDir())
+	writeConf(t, st.dir, `{"config":{"trafficPolicy":"bundle-hosts","pollInterval":60}}`)
+	_, ca, _, err := resolveState(st, "")
+	if err == nil {
+		t.Fatalf("settings-only state resolved; the proxy would start with fingerprint %q", ca.Fingerprint())
+	}
+	if !strings.Contains(err.Error(), "no access token") || !strings.Contains(err.Error(), "certificate authority") {
+		t.Fatalf("the message should name both missing halves: %v", err)
+	}
+}

@@ -196,12 +196,15 @@ func TestStaleEntryIsNotServedFromTheCache(t *testing.T) {
 	}
 }
 
-func TestRefreshTreatsEveryDefinitiveRefusalAsTerminal(t *testing.T) {
+// Only the statuses resolve answers by contract end a session. A 400, 403 or 422 cannot come from resolve
+// itself, so it is a proxy-side fault or a middlebox and rides the grace window like an outage.
+func TestRefreshTreatsOnlyTheContractRefusalsAsTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		status int
 		kept   bool
 	}{
-		{400, false}, {401, false}, {403, false}, {404, false}, {422, false},
+		{401, false}, {404, false},
+		{400, true}, {403, true}, {405, true}, {407, true}, {422, true},
 		{408, true}, {429, true}, {500, true}, {502, true},
 	} {
 		resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
@@ -323,9 +326,10 @@ func TestADefinitiveRefusalIsNotReResolvedEveryRequest(t *testing.T) {
 
 func TestAnOutageIsNotRememberedAsARefusal(t *testing.T) {
 	for name, err := range map[string]error{
-		"502":     &api.APIError{StatusCode: 502},
-		"429":     &api.APIError{StatusCode: 429},
-		"timeout": errors.New("context deadline exceeded"),
+		"502":           &api.APIError{StatusCode: 502},
+		"429":           &api.APIError{StatusCode: 429},
+		"middlebox 403": &api.APIError{StatusCode: 403},
+		"timeout":       errors.New("context deadline exceeded"),
 	} {
 		resolver := &stubResolver{err: err}
 		cache := newTestCache(resolver)
@@ -350,5 +354,16 @@ func TestARefusalExpires(t *testing.T) {
 	_, _ = cache.get("agv_dead")
 	if got := resolver.callCount(); got != 2 {
 		t.Fatalf("an expired refusal should resolve again, got %d resolves", got)
+	}
+}
+
+func TestARejectedProxyTokenIsNotReResolvedEveryRequest(t *testing.T) {
+	resolver := &stubResolver{err: &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName}}
+	cache := newTestCache(resolver)
+	for i := 0; i < 20; i++ {
+		_, _ = cache.get("agv_tok")
+	}
+	if got := resolver.callCount(); got != 1 {
+		t.Fatalf("20 requests against a revoked proxy made %d resolves, want 1", got)
 	}
 }

@@ -198,3 +198,12 @@ func TestValidateProxyAddr(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateProxyAddrNamesWhatFollowsThePort(t *testing.T) {
+	for _, addr := range []string{"10.0.1.5:17323/path", "10.0.1.5:17323?x=1", "10.0.1.5:17323#frag"} {
+		err := validateProxyAddr(addr)
+		if err == nil || !strings.Contains(err.Error(), "nothing after the port") {
+			t.Errorf("%q: want the trailing-path message, got %v", addr, err)
+		}
+	}
+}

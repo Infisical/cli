@@ -51,7 +51,7 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 	}
 	if !usableProxyConfig(config) {
 		return persistedState{}, nil, fmt.Errorf(
-			"the enrollment response carried no usable proxy settings (trafficPolicy %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place",
+			"the enrollment response carried no usable proxy settings (trafficPolicy %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place. The enrollment token has been used, so take a new one from the Proxies page before trying again",
 			config.TrafficPolicy, config.PollInterval)
 	}
 	state := persistedState{
@@ -115,6 +115,12 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 	case !confFound && !hasCa:
 		return persistedState{}, nil, false, errors.New(
 			"this proxy has not enrolled yet. Run it once with --enrollment-token, using the token shown when the proxy was created")
+	case !hasToken && !hasCa:
+		// Settings alone: proxy.json is there but holds no token, and there is no certificate authority. Without
+		// this arm the state fell through and the proxy came up with a nil CA and an empty fingerprint.
+		return persistedState{}, nil, false, fmt.Errorf(
+			"%s in %s has no access token and there is no certificate authority beside it, so this proxy was never fully enrolled. Enroll with a new token from the Proxies page",
+			proxyStateFile, st.dir)
 	case hasCa && !hasToken:
 		return persistedState{}, nil, false, fmt.Errorf(
 			"the certificate authority in %s is intact but %s has no access token, so this proxy's state is incomplete. Restore %s from a backup to keep the certificate authority, or enroll again with a new token from the Proxies page, which replaces it and means every agent trusting the old one has to be restarted",
