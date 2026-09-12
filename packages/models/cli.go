@@ -7,19 +7,18 @@ type UserCredentials struct {
 	PrivateKey   string `json:"privateKey"`
 	JTWToken     string `json:"JTWToken"`
 	RefreshToken string `json:"RefreshToken"`
-	// OrgTokens caches session tokens for organizations other than the
-	// profile's default one, keyed by organization ID. Session tokens are
-	// organization-scoped, so switching organizations means exchanging the
-	// token; caching the result keeps --org cheap after its first use.
-	OrgTokens map[string]CachedOrgSession `json:"orgTokens,omitempty"`
 }
 
-// CachedOrgSession is a session token minted for a specific organization,
-// stored alongside enough metadata to match an --org selector without calling
-// the API again.
-type CachedOrgSession struct {
-	Token   string `json:"token"`
-	OrgID   string `json:"orgId"`
+// OrgSessionRef records an organization-scoped session cached for a profile
+// after an --org/INFISICAL_ORG exchange. Only metadata lives here, enough to
+// match a later selector by id, slug, or name without listing organizations.
+// The token itself is a separate keyring entry (see util.OrgSessionKeyringKey),
+// so the profile's main credential entry never grows: platform keyrings cap a
+// single entry at a few kilobytes, which two or three extra session tokens
+// would exceed.
+type OrgSessionRef struct {
+	OrgID string `json:"orgId"`
+	// OrgName is the display name, "Parent / Child" for a sub-organization.
 	OrgName string `json:"orgName,omitempty"`
 	OrgSlug string `json:"orgSlug,omitempty"`
 }
@@ -34,10 +33,33 @@ type Profile struct {
 	Name   string `json:"name"`
 	Email  string `json:"email"`
 	Domain string `json:"domain"`
-	// OrganizationID is the profile's default organization.
-	OrganizationID    string `json:"organizationId,omitempty"`
-	OrganizationName  string `json:"organizationName,omitempty"`
+	// OrganizationID is the root organization of the profile's default
+	// session (the JWT organizationId claim). When the session is scoped to a
+	// sub-organization, SubOrganizationID names it and is the organization the
+	// session actually acts in; use ScopedOrganizationID for that.
+	OrganizationID string `json:"organizationId,omitempty"`
+	// OrganizationName is the display name of the scoped organization,
+	// "Parent / Child" for a sub-organization.
+	OrganizationName string `json:"organizationName,omitempty"`
+	// OrganizationSlug is the slug of the scoped organization, so --org by slug
+	// resolves locally. Empty for profiles written before it was recorded or by
+	// instances without the sub-organization aware listing.
+	OrganizationSlug  string `json:"organizationSlug,omitempty"`
 	SubOrganizationID string `json:"subOrganizationId,omitempty"`
+	// OrgSessions indexes the organization-scoped sessions cached for this
+	// profile by --org/INFISICAL_ORG. See OrgSessionRef.
+	OrgSessions []OrgSessionRef `json:"orgSessions,omitempty"`
+}
+
+// ScopedOrganizationID returns the organization the profile's session acts in:
+// the sub-organization when scoped to one, otherwise the root organization.
+// Projects and API permissions belong to this organization, not the root, so
+// callers filtering or comparing organizations must use it.
+func (p Profile) ScopedOrganizationID() string {
+	if p.SubOrganizationID != "" {
+		return p.SubOrganizationID
+	}
+	return p.OrganizationID
 }
 
 // The file struct for Infisical config file

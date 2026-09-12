@@ -50,7 +50,16 @@ type ResolvedProfile struct {
 	ShadowedScopeDir string
 }
 
+// MaxProfileNameLength bounds user-typed profile names. Names double as
+// keyring keys, and platform keyrings cap the size of one entry (about 4 KB on
+// macOS for key and value together), so an overlong name could make storing
+// the session fail after the login itself succeeded.
+const MaxProfileNameLength = 64
+
 func ValidateProfileName(name string) error {
+	if len(name) > MaxProfileNameLength {
+		return fmt.Errorf("invalid profile name: %d characters is too long, use at most %d", len(name), MaxProfileNameLength)
+	}
 	if !profileNamePattern.MatchString(name) {
 		return fmt.Errorf("invalid profile name '%s': use letters, digits, and the characters @ . _ + - (must start with a letter or digit)", name)
 	}
@@ -220,9 +229,34 @@ const (
 	orgMatchID   = 3
 )
 
+// orgDisplaySeparator joins a parent organization and a sub-organization in
+// display names, as in "Acme / Research".
+const orgDisplaySeparator = " / "
+
+// JoinOrgDisplayName renders a sub-organization as "Parent / Child". With no
+// parent the name is returned as-is.
+func JoinOrgDisplayName(parent, own string) string {
+	if parent == "" {
+		return own
+	}
+	return parent + orgDisplaySeparator + own
+}
+
+// SplitOrgDisplayName is the inverse of JoinOrgDisplayName. A plain name comes
+// back with an empty parent.
+func SplitOrgDisplayName(display string) (parent, own string) {
+	idx := strings.LastIndex(display, orgDisplaySeparator)
+	if idx < 0 {
+		return "", display
+	}
+	return display[:idx], display[idx+len(orgDisplaySeparator):]
+}
+
 // OrgMatchTier reports how strongly a selector matches an organization, using
 // the tiers above. Slug and name comparisons are case-insensitive so
-// `--org globex` matches an organization named "Globex".
+// `--org globex` matches an organization named "Globex". name may be a display
+// name of the form "Parent / Child", in which case the sub-organization also
+// matches on its own name, so `--org research` finds "Acme / Research".
 func OrgMatchTier(selector, id, slug, name string) int {
 	if selector == "" {
 		return orgMatchNone
@@ -233,8 +267,13 @@ func OrgMatchTier(selector, id, slug, name string) int {
 	if slug != "" && strings.EqualFold(selector, slug) {
 		return orgMatchSlug
 	}
-	if name != "" && strings.EqualFold(selector, name) {
-		return orgMatchName
+	if name != "" {
+		if strings.EqualFold(selector, name) {
+			return orgMatchName
+		}
+		if _, own := SplitOrgDisplayName(name); own != name && strings.EqualFold(selector, own) {
+			return orgMatchName
+		}
 	}
 	return orgMatchNone
 }
@@ -248,12 +287,10 @@ func OrgMatchesSelector(selector, id, slug, name string) bool {
 
 // ResolvedOrg is an organization selector resolved against the account.
 type ResolvedOrg struct {
-	ID   string
+	ID string
+	// Name is the display name, "Parent / Child" for a sub-organization.
 	Name string
 	Slug string
-	// matchName is the bare name to match selectors against. Sub-organizations
-	// display as "Parent / Child" but should still match on their own name.
-	matchName string
 }
 
 // ResolveOrgSelector turns an --org/INFISICAL_ORG selector (ID, slug, or name)
@@ -277,7 +314,7 @@ func ResolveOrgSelector(sessionToken string, selector string) (ResolvedOrg, erro
 		for _, org := range subOrgsResp.Organizations {
 			candidates = append(candidates, ResolvedOrg{ID: org.ID, Name: org.Name, Slug: org.Slug})
 			for _, sub := range org.SubOrganizations {
-				candidates = append(candidates, ResolvedOrg{ID: sub.ID, Name: fmt.Sprintf("%s / %s", org.Name, sub.Name), Slug: sub.Slug, matchName: sub.Name})
+				candidates = append(candidates, ResolvedOrg{ID: sub.ID, Name: JoinOrgDisplayName(org.Name, sub.Name), Slug: sub.Slug})
 			}
 		}
 	}
@@ -294,11 +331,7 @@ func ResolveOrgSelector(sessionToken string, selector string) (ResolvedOrg, erro
 	bestTier := orgMatchNone
 	ambiguous := false
 	for _, candidate := range candidates {
-		matchable := candidate.matchName
-		if matchable == "" {
-			matchable = candidate.Name
-		}
-		tier := OrgMatchTier(selector, candidate.ID, candidate.Slug, matchable)
+		tier := OrgMatchTier(selector, candidate.ID, candidate.Slug, candidate.Name)
 		switch {
 		case tier > bestTier:
 			best, bestTier, ambiguous = candidate, tier, false
@@ -315,6 +348,102 @@ func ResolveOrgSelector(sessionToken string, selector string) (ResolvedOrg, erro
 	}
 
 	return best, nil
+}
+
+// KnownOrgMatch is an organization the profile already knows about: its own
+// default organization or a cached organization session.
+type KnownOrgMatch struct {
+	OrgID   string
+	OrgName string
+	OrgSlug string
+	// IsProfileDefault is true when the match is the profile's own
+	// organization, which needs no exchange at all.
+	IsProfileDefault bool
+}
+
+// MatchKnownOrg resolves an --org/INFISICAL_ORG selector against what the
+// profile already knows, so repeated use of the same organization makes no
+// API calls: the profile's default organization and every cached organization
+// session are compared by id, slug, and name, and the strongest match wins. A
+// tie between two different organizations at the strongest tier is not a
+// match, so the server-side listing, which reports the ambiguity, decides.
+func MatchKnownOrg(profile models.Profile, selector string) (KnownOrgMatch, bool) {
+	best := KnownOrgMatch{}
+	bestTier := orgMatchNone
+	ambiguous := false
+
+	consider := func(candidate KnownOrgMatch) {
+		tier := OrgMatchTier(selector, candidate.OrgID, candidate.OrgSlug, candidate.OrgName)
+		switch {
+		case tier > bestTier:
+			best, bestTier, ambiguous = candidate, tier, false
+		case tier == bestTier && tier != orgMatchNone && candidate.OrgID != best.OrgID:
+			ambiguous = true
+		}
+	}
+
+	if scopedID := profile.ScopedOrganizationID(); scopedID != "" {
+		consider(KnownOrgMatch{OrgID: scopedID, OrgName: profile.OrganizationName, OrgSlug: profile.OrganizationSlug, IsProfileDefault: true})
+	}
+	for _, ref := range profile.OrgSessions {
+		consider(KnownOrgMatch{OrgID: ref.OrgID, OrgName: ref.OrgName, OrgSlug: ref.OrgSlug})
+	}
+
+	if bestTier == orgMatchNone || ambiguous {
+		return KnownOrgMatch{}, false
+	}
+	return best, true
+}
+
+// OrgSessionKeyringKey is the keyring entry holding the session token cached
+// for one organization under a profile. Profile names cannot contain ':' (see
+// ValidateProfileName; emails do not either), so the key cannot collide with a
+// profile's own entry.
+func OrgSessionKeyringKey(profileName string, orgID string) string {
+	return "org-session:" + profileName + ":" + orgID
+}
+
+// RecordOrgSession adds or refreshes the index entry for a cached organization
+// session on the profile, in memory.
+func RecordOrgSession(profile *models.Profile, ref models.OrgSessionRef) {
+	for idx := range profile.OrgSessions {
+		if profile.OrgSessions[idx].OrgID == ref.OrgID {
+			profile.OrgSessions[idx] = ref
+			return
+		}
+	}
+	profile.OrgSessions = append(profile.OrgSessions, ref)
+}
+
+// RemoveOrgSession drops the index entry for an organization, in memory, and
+// reports whether one existed. The caller deletes the keyring entry.
+func RemoveOrgSession(profile *models.Profile, orgID string) bool {
+	for idx, ref := range profile.OrgSessions {
+		if ref.OrgID == orgID {
+			profile.OrgSessions = append(profile.OrgSessions[:idx], profile.OrgSessions[idx+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateStoredProfile applies mutate to the named profile in the config file
+// and saves it. The file is reloaded first, so only that profile changes and
+// edits made by other commands in the meantime are kept.
+func UpdateStoredProfile(name string, mutate func(profile *models.Profile)) error {
+	configFile, err := GetMigratedConfigFile()
+	if err != nil {
+		return err
+	}
+	idx := findProfileIndex(configFile.Profiles, name)
+	if idx < 0 {
+		return fmt.Errorf("profile '%s' does not exist", name)
+	}
+	mutate(&configFile.Profiles[idx])
+	if configFile.ActiveProfile == name {
+		syncLegacyLoginFields(&configFile, configFile.Profiles[idx])
+	}
+	return WriteConfigFile(&configFile)
 }
 
 // ResolveProfile determines which profile this invocation should use:
@@ -508,7 +637,9 @@ func RepointProfileDomain(configFile *models.ConfigFile, profileName string, new
 	configFile.Profiles[idx].Domain = newDomain
 	configFile.Profiles[idx].OrganizationID = ""
 	configFile.Profiles[idx].OrganizationName = ""
+	configFile.Profiles[idx].OrganizationSlug = ""
 	configFile.Profiles[idx].SubOrganizationID = ""
+	configFile.Profiles[idx].OrgSessions = nil
 
 	stillOnPreviousDomain := false
 	for _, profile := range configFile.Profiles {
@@ -532,6 +663,35 @@ func RepointProfileDomain(configFile *models.ConfigFile, profileName string, new
 	}
 
 	return true
+}
+
+// RenameProfile changes a profile's name everywhere the config refers to it:
+// the entry itself, the default-profile pointer, and directory bindings. The
+// legacy fields are re-synced, since they are only published for profiles
+// named after their email. The caller moves the keyring entries, which are
+// keyed by name.
+func RenameProfile(configFile *models.ConfigFile, oldName string, newName string) error {
+	if oldName == newName {
+		return fmt.Errorf("profile is already named '%s'", oldName)
+	}
+	idx := findProfileIndex(configFile.Profiles, oldName)
+	if idx < 0 {
+		return fmt.Errorf("profile '%s' does not exist", oldName)
+	}
+	if findProfileIndex(configFile.Profiles, newName) >= 0 {
+		return fmt.Errorf("profile '%s' already exists", newName)
+	}
+
+	configFile.Profiles[idx].Name = newName
+	for dir, name := range configFile.DirectoryProfiles {
+		if name == oldName {
+			configFile.DirectoryProfiles[dir] = newName
+		}
+	}
+	if configFile.ActiveProfile == oldName {
+		return SetActiveProfile(configFile, newName)
+	}
+	return nil
 }
 
 // RemoveProfile deletes the profile, any directory bindings pointing at it,
@@ -582,10 +742,18 @@ func RemoveProfile(configFile *models.ConfigFile, name string) bool {
 // DeriveProfileName picks the profile name for a login session when the user
 // did not name one explicitly. Rules, in order: reuse the profile that already
 // holds this account+instance+organization; adopt a pre-profile (migrated)
-// entry for the same account+instance whose organization is still unknown; use
-// the bare email when free; otherwise suffix with the organization so a second
-// organization never overwrites the first.
-func DeriveProfileName(configFile models.ConfigFile, email string, domain string, orgID string, orgName string) string {
+// entry for the same account+instance whose organization is still unknown;
+// otherwise name the profile after the account and organization, as in
+// "scott@example.com--acme-x4k2", so the organization is visible without
+// listing and a second organization never overwrites the first. The suffix is
+// the organization slug, which is stable and already URL-safe; instances that
+// report no slugs fall back to the slugified name, then to a prefix of the id.
+// Only with no organization information at all is the bare email used.
+//
+// Names that are not the bare email leave the legacy loggedInUserEmail pointer
+// unset (see syncLegacyLoginFields), so a CLI build that predates profiles
+// asks for a fresh login rather than loading another profile's session.
+func DeriveProfileName(configFile models.ConfigFile, email string, domain string, orgID string, orgName string, orgSlug string) string {
 	for _, profile := range configFile.Profiles {
 		if profile.Email == email && profile.Domain == domain && profile.OrganizationID == orgID {
 			return profile.Name
@@ -597,11 +765,10 @@ func DeriveProfileName(configFile models.ConfigFile, email string, domain string
 		}
 	}
 
-	if findProfileIndex(configFile.Profiles, email) < 0 {
-		return email
+	suffix := slugifyProfileSuffix(orgSlug)
+	if suffix == "" {
+		suffix = slugifyProfileSuffix(orgName)
 	}
-
-	suffix := slugifyProfileSuffix(orgName)
 	if suffix == "" {
 		if len(orgID) >= 8 {
 			suffix = orgID[:8]
@@ -609,11 +776,11 @@ func DeriveProfileName(configFile models.ConfigFile, email string, domain string
 			suffix = orgID
 		}
 	}
-	if suffix == "" {
-		suffix = "2"
-	}
 
-	base := fmt.Sprintf("%s--%s", email, suffix)
+	base := email
+	if suffix != "" {
+		base = fmt.Sprintf("%s--%s", email, suffix)
+	}
 	candidate := base
 	for i := 2; findProfileIndex(configFile.Profiles, candidate) >= 0; i++ {
 		candidate = fmt.Sprintf("%s-%d", base, i)
@@ -647,8 +814,8 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 	// Deliberately no name validation here: derived names are raw account
 	// emails (which may contain any RFC-legal character) and have always been
 	// valid keyring keys. Rejecting them would block login entirely. Name
-	// validation applies only where users type a name (--profile, --save-as),
-	// at the command layer.
+	// validation applies only where users type a name (--profile, profile new,
+	// profile rename), at the command layer.
 	if err := StoreUserCredsInKeyRing(profile.Name, userCred); err != nil {
 		return err
 	}
@@ -687,6 +854,28 @@ func ResolveActiveProfileDetails() (resolved ResolvedProfile, profile models.Pro
 	return resolved, profile, found
 }
 
+// LoginRenewalArgs builds the arguments for re-running login to restore the
+// session of the profile this invocation resolved to. An existing profile is
+// signed back in to with --profile, which keeps its account, instance, and
+// organization; a profile that was selected but never created (a pinned
+// terminal or bound directory pointing at it) is created with --save-as, so
+// the selection starts working. The instance is passed explicitly as well so
+// the login never has to ask.
+func LoginRenewalArgs(resolved ResolvedProfile, profile models.Profile, found bool) []string {
+	args := []string{"login", "--silent"}
+	if resolved.Name == "" {
+		return args
+	}
+	if !found {
+		return append(args, "--save-as", resolved.Name)
+	}
+	args = append(args, "--profile", resolved.Name)
+	if profile.Domain != "" {
+		args = append(args, "--domain", DisplayDomain(profile.Domain))
+	}
+	return args
+}
+
 type userTokenOrgClaims struct {
 	OrganizationID    string `json:"organizationId"`
 	SubOrganizationID string `json:"subOrganizationId"`
@@ -718,56 +907,81 @@ func ParseTokenSessionID(token string) string {
 	return claims.TokenVersionID
 }
 
-// FetchOrganizationName resolves an organization's display name with the given
-// session token. Best effort: returns "" on any error so callers can fall back
-// to showing the ID.
-func FetchOrganizationName(jwtToken string, orgID string) string {
-	if orgID == "" || jwtToken == "" {
-		return ""
+// OrgInfo describes one organization the account can use.
+type OrgInfo struct {
+	ID   string
+	Name string
+	Slug string
+	// ParentName is set for a sub-organization.
+	ParentName string
+}
+
+// DisplayName renders the organization for humans, "Parent / Child" for a
+// sub-organization, so a session inside "Acme / Research" is not reported as
+// plain "Acme", which would be indistinguishable from the root organization.
+func (o OrgInfo) DisplayName() string {
+	return JoinOrgDisplayName(o.ParentName, o.Name)
+}
+
+// LookupOrganization finds an organization, root or sub, by id with the given
+// session token. Best effort: found is false on any error, so callers can fall
+// back to showing the id. The sub-organization aware listing is preferred
+// because it carries slugs and nested organizations; instances without it fall
+// back to the flat list, which has names only.
+func LookupOrganization(sessionToken string, orgID string) (OrgInfo, bool) {
+	if orgID == "" || sessionToken == "" {
+		return OrgInfo{}, false
 	}
 
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
-		return ""
+		return OrgInfo{}, false
 	}
-	httpClient.SetAuthToken(jwtToken)
+	httpClient.SetAuthToken(sessionToken)
 
-	if orgResp, err := api.CallGetAllOrganizations(httpClient); err == nil {
-		for _, org := range orgResp.Organizations {
-			if org.ID == orgID {
-				return org.Name
-			}
-		}
-	}
-
-	// The ID may belong to a sub-organization, which the flat list omits.
 	if subOrgsResp, err := api.CallGetAllOrganizationsWithSubOrgs(httpClient); err == nil {
 		for _, org := range subOrgsResp.Organizations {
 			if org.ID == orgID {
-				return org.Name
+				return OrgInfo{ID: org.ID, Name: org.Name, Slug: org.Slug}, true
 			}
 			for _, sub := range org.SubOrganizations {
 				if sub.ID == orgID {
-					return fmt.Sprintf("%s / %s", org.Name, sub.Name)
+					return OrgInfo{ID: sub.ID, Name: sub.Name, Slug: sub.Slug, ParentName: org.Name}, true
 				}
 			}
 		}
 	}
 
-	return ""
-}
-
-// OrgDisplayName resolves the human-readable organization for a session. When
-// the session is scoped to a sub-organization the sub-organization is used, so
-// a session inside "Acme / Research" is not reported as plain "Acme", which
-// would be indistinguishable from one scoped to the root organization.
-func OrgDisplayName(sessionToken string, orgID string, subOrgID string) string {
-	if subOrgID != "" {
-		if name := FetchOrganizationName(sessionToken, subOrgID); name != "" {
-			return SanitizeDisplay(name)
+	if orgResp, err := api.CallGetAllOrganizations(httpClient); err == nil {
+		for _, org := range orgResp.Organizations {
+			if org.ID == orgID {
+				return OrgInfo{ID: org.ID, Name: org.Name}, true
+			}
 		}
 	}
-	return SanitizeDisplay(FetchOrganizationName(sessionToken, orgID))
+
+	return OrgInfo{}, false
+}
+
+// DescribeSessionOrg describes the organization a session acts in, given the
+// organizationId and subOrganizationId claims of its token: the
+// sub-organization when there is one, otherwise the root. Names are sanitized
+// for display. When the lookup fails only the id is set, so callers can still
+// show something.
+func DescribeSessionOrg(sessionToken string, orgID string, subOrgID string) OrgInfo {
+	scopedID := orgID
+	if subOrgID != "" {
+		scopedID = subOrgID
+	}
+
+	info, found := LookupOrganization(sessionToken, scopedID)
+	if !found {
+		return OrgInfo{ID: scopedID}
+	}
+	info.Name = SanitizeDisplay(info.Name)
+	info.Slug = SanitizeDisplay(info.Slug)
+	info.ParentName = SanitizeDisplay(info.ParentName)
+	return info
 }
 
 // DisplayDomain renders a stored domain (which includes the /api suffix) the

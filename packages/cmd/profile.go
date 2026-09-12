@@ -28,8 +28,10 @@ A profile is one login: an account on one instance, plus the organization it
 uses by default. Selecting a profile selects all three, so switching tenants
 never means logging in again.
 
-Create the first one with [infisical login], and one per extra organization
-with [infisical profile new].
+Create the first one with [infisical login], one per extra organization with
+[infisical profile new], and one per extra account or instance with
+[infisical login --save-as <name>]. Sign back in to an existing profile with
+[infisical login --profile <name>].
 
 Which profile a command uses is decided in this order:
   1. --profile on the command
@@ -56,13 +58,55 @@ func shellOutputIsCaptured() bool {
 
 // requireShellCapture stops a shell-mutating command that was run bare, and
 // shows the form that actually works, rather than reporting a success that did
-// not happen.
-func requireShellCapture(invocation string) {
+// not happen. manualHint covers shells that cannot evaluate the statement.
+func requireShellCapture(invocation string, manualHint string) {
 	if shellOutputIsCaptured() {
 		return
 	}
-	util.PrintlnStderr(fmt.Sprintf("This command works by printing a shell statement, so it only takes effect when the shell reads it:\n\n    eval \"$(%s)\"\n\nNothing has been changed. Tip: add a shell alias if you use this often.", invocation))
+	util.PrintlnStderr(fmt.Sprintf("This command works by printing a shell statement, so it only takes effect when the shell reads it:\n\n    eval \"$(%s)\"\n\nNothing has been changed. Tip: add a shell alias if you use this often.\n%s", invocation, manualHint))
 	os.Exit(1)
+}
+
+// manualPinHint explains how to select a profile without eval: PowerShell and
+// cmd.exe cannot evaluate the printed statement, and in scripts or CI setting
+// the variable directly is the reliable choice.
+func manualPinHint(profileName string) string {
+	env := util.INFISICAL_PROFILE_ENV_NAME
+	return fmt.Sprintf("Without eval, set the variable yourself: in PowerShell run [$env:%s = %s], in cmd.exe [set %s=%s], and in scripts or CI export %s=%s (or pass --profile %s) before running commands.",
+		env, util.ShellQuote(profileName), env, profileName, env, profileName, profileName)
+}
+
+// manualUnpinHint is the counterpart of manualPinHint for removing a pin.
+func manualUnpinHint() string {
+	env := util.INFISICAL_PROFILE_ENV_NAME
+	return fmt.Sprintf("Without eval, clear the variable yourself: in PowerShell run [Remove-Item Env:%s], in cmd.exe [set %s=], and in scripts unset %s.", env, env, env)
+}
+
+// splitScopedOrgNames attributes a recorded organization display name to the
+// root and sub-organization ids of a session. Sub-organization sessions record
+// "Parent / Child"; a name that is not split cannot be attributed to either id
+// with confidence, so nothing is returned for it.
+func splitScopedOrgNames(displayName string, scopedToSubOrg bool) (rootName string, subName string) {
+	parent, own := util.SplitOrgDisplayName(displayName)
+	if !scopedToSubOrg {
+		return own, ""
+	}
+	if parent == "" {
+		return "", ""
+	}
+	return parent, own
+}
+
+// labelWithID renders "Name (id)", falling back to whichever part is known.
+func labelWithID(name string, id string) string {
+	switch {
+	case name != "" && id != "":
+		return fmt.Sprintf("%s (%s)", name, id)
+	case name != "":
+		return name
+	default:
+		return id
+	}
 }
 
 // orgLabel renders a profile's default organization for humans.
@@ -124,7 +168,7 @@ var profileListCmd = &cobra.Command{
 			}
 
 			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", marker, util.SanitizeDisplay(profile.Name), util.SanitizeDisplay(profile.Email),
-				util.SanitizeDisplay(organization), util.SessionStatus(profile.Name), util.SanitizeDisplay(util.DisplayDomain(profile.Domain)), scopesDisplay)
+				util.SanitizeDisplay(organization), util.SessionStatus(profile), util.SanitizeDisplay(util.DisplayDomain(profile.Domain)), scopesDisplay)
 		}
 		writer.Flush()
 
@@ -166,7 +210,7 @@ var profileCurrentCmd = &cobra.Command{
 		}
 
 		if !found {
-			util.PrintlnStdout("Status: profile does not exist. Run [infisical login --profile " + resolved.Name + "] to create it.")
+			util.PrintlnStdout("Status: profile does not exist. Run [infisical login --save-as " + resolved.Name + "] to create it.")
 			return
 		}
 
@@ -174,12 +218,8 @@ var profileCurrentCmd = &cobra.Command{
 
 		// The organization is a setting on the profile, so report it here too,
 		// along with an override when one is in effect for this command.
-		organization := profile.OrganizationName
-		if organization != "" && profile.OrganizationID != "" {
-			organization = fmt.Sprintf("%s (%s)", organization, profile.OrganizationID)
-		} else if organization == "" {
-			organization = profile.OrganizationID
-		}
+		rootName, subName := splitScopedOrgNames(profile.OrganizationName, profile.SubOrganizationID != "")
+		organization := labelWithID(rootName, profile.OrganizationID)
 
 		orgSelector, orgSource := util.GetOrgOverride()
 		if orgSelector != "" {
@@ -193,7 +233,7 @@ var profileCurrentCmd = &cobra.Command{
 			util.PrintlnStdout("Organization via:", util.OrgSourceProfileDefault)
 		}
 		if profile.SubOrganizationID != "" {
-			util.PrintlnStdout("Sub-organization id:", profile.SubOrganizationID)
+			util.PrintlnStdout("Sub-organization:", labelWithID(subName, profile.SubOrganizationID))
 		}
 		util.PrintlnStdout("Domain:", util.DisplayDomain(profile.Domain))
 
@@ -216,7 +256,7 @@ start using it in this terminal (run the command through eval), or --use to
 make it the default for the machine.
 
 To add a different account, or an account on another instance, use
-[infisical login --profile <name>] instead.`,
+[infisical login --save-as <name>] instead.`,
 	DisableFlagsInUseLine: true,
 	Example:               "infisical profile new client-b --org globex\neval \"$(infisical profile new client-b --org globex --pin)\"\ninfisical profile new client-b --org globex --use",
 	Args:                  cobra.ExactArgs(1),
@@ -280,13 +320,11 @@ To add a different account, or an account on another instance, use
 		}
 
 		orgID, subOrgID := util.ParseTokenOrgClaims(sessionToken)
-		orgName := util.OrgDisplayName(sessionToken, orgID, subOrgID)
+		orgInfo := util.DescribeSessionOrg(sessionToken, orgID, subOrgID)
+		orgName := orgInfo.DisplayName()
 
 		credentials := details.UserCredentials
 		credentials.JTWToken = sessionToken
-		// Cached organization tokens belong to the profile they were minted
-		// under; a new profile starts with an empty cache.
-		credentials.OrgTokens = nil
 
 		domain := details.Profile.Domain
 		if domain == "" {
@@ -294,13 +332,16 @@ To add a different account, or an account on another instance, use
 		}
 
 		// Creating a profile does not take over the machine default unless asked,
-		// since other terminals may be relying on it.
+		// since other terminals may be relying on it. Organization sessions
+		// cached by --org belong to the profile they were minted under, so the
+		// new profile starts without any.
 		err = util.PersistLoginProfile(models.Profile{
 			Name:              profileName,
 			Email:             details.UserCredentials.Email,
 			Domain:            domain,
 			OrganizationID:    orgID,
 			OrganizationName:  orgName,
+			OrganizationSlug:  orgInfo.Slug,
 			SubOrganizationID: subOrgID,
 		}, &credentials, useAsDefault)
 		if err != nil {
@@ -330,7 +371,7 @@ To add a different account, or an account on another instance, use
 		case pinTookEffect:
 			util.PrintlnStderr("This terminal is pinned to it. Other terminals and the default profile are unaffected.")
 		case pinTerminal:
-			util.PrintWarning(fmt.Sprintf("--pin had no effect because the shell did not read the output. Pin this terminal with [eval \"$(infisical profile pin %s)\"].", profileName))
+			util.PrintWarning(fmt.Sprintf("--pin had no effect because the shell did not read the output. Pin this terminal with [eval \"$(infisical profile pin %s)\"]. %s", profileName, manualPinHint(profileName)))
 		default:
 			util.PrintlnStderr(fmt.Sprintf("Start using it here with [eval \"$(infisical profile pin %s)\"], in a directory with [infisical profile bind %s], or everywhere with [infisical profile use %s].", profileName, profileName, profileName))
 		}
@@ -387,7 +428,16 @@ the shell you are in:
 
 Only this terminal is affected. The default profile and every other terminal
 keep whatever they were using, which is what makes it possible to work in
-several organizations at once. Undo with [infisical profile unpin].`,
+several organizations at once. Undo with [infisical profile unpin].
+
+The statement is written for POSIX shells such as bash and zsh. PowerShell
+cannot evaluate it, so set the variable directly there:
+
+  $env:INFISICAL_PROFILE = 'globex'
+
+In scripts and CI, set INFISICAL_PROFILE (or pass --profile) instead of calling
+pin: with output redirected the statement is only printed, and nothing changes
+until a shell evaluates it.`,
 	DisableFlagsInUseLine: true,
 	Example:               "eval \"$(infisical profile pin globex)\"",
 	Args:                  cobra.ExactArgs(1),
@@ -404,11 +454,13 @@ several organizations at once. Undo with [infisical profile unpin].`,
 			util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' does not exist. Run [infisical profile list] to see available profiles.", profileName))
 		}
 
-		requireShellCapture(fmt.Sprintf("infisical profile pin %s", profileName))
+		requireShellCapture(fmt.Sprintf("infisical profile pin %s", profileName), manualPinHint(profileName))
 
-		// stdout carries only the export so the output stays eval-safe.
+		// stdout carries only the export so the output stays eval-safe. The
+		// output being captured does not prove a shell evaluated it (it could be
+		// a file or a pipe), so say what happens rather than claiming success.
 		util.PrintlnStdout(fmt.Sprintf("export %s=%s", util.INFISICAL_PROFILE_ENV_NAME, util.ShellQuote(profileName)))
-		util.PrintlnStderr(fmt.Sprintf("Pinned this terminal to profile '%s' (%s, org %s). Other terminals and the default profile are unaffected.", profileName, profile.Email, orgLabel(profile)))
+		util.PrintlnStderr(fmt.Sprintf("Profile '%s' (%s, org %s) is pinned in this terminal once the shell evaluates the printed export. Other terminals and the default profile are unaffected.", profileName, profile.Email, orgLabel(profile)))
 
 		Telemetry.CaptureEvent("cli-command:profile pin", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
@@ -422,15 +474,18 @@ directory or the default profile.
 
 Prints an unset statement, so run it through eval:
 
-  eval "$(infisical profile unpin)"`,
+  eval "$(infisical profile unpin)"
+
+In PowerShell, which cannot evaluate it, run [Remove-Item Env:INFISICAL_PROFILE]
+instead.`,
 	DisableFlagsInUseLine: true,
 	Example:               "eval \"$(infisical profile unpin)\"",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		requireShellCapture("infisical profile unpin")
+		requireShellCapture("infisical profile unpin", manualUnpinHint())
 
 		util.PrintlnStdout(fmt.Sprintf("unset %s", util.INFISICAL_PROFILE_ENV_NAME))
-		util.PrintlnStderr("Removed this terminal's profile pin. It now follows a bound directory, or the default profile.")
+		util.PrintlnStderr("This terminal's profile pin is removed once the shell evaluates the printed statement. It then follows a bound directory, or the default profile.")
 
 		Telemetry.CaptureEvent("cli-command:profile unpin", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
@@ -572,6 +627,67 @@ inside a bound tree undoes that binding.`,
 	},
 }
 
+var profileRenameCmd = &cobra.Command{
+	Use:   "rename [name] [new-name]",
+	Short: "Rename a profile",
+	Long: `Rename a profile.
+
+Everything that refers to the profile follows the new name: its stored session,
+the default-profile setting, and directory bindings. Terminals pinned to the old
+name with [infisical profile pin] keep pointing at it and need pinning again.`,
+	DisableFlagsInUseLine: true,
+	Example:               "infisical profile rename scott@example.com--globex globex",
+	Args:                  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		oldName, newName := args[0], args[1]
+		if err := util.ValidateProfileName(newName); err != nil {
+			util.HandleError(err)
+		}
+
+		configFile, err := util.GetMigratedConfigFile()
+		if err != nil {
+			util.HandleError(err, "Unable to read the Infisical config file")
+		}
+		profile, found := util.FindProfile(configFile, oldName)
+		if !found {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' does not exist. Run [infisical profile list] to see available profiles.", oldName))
+		}
+		if _, exists := util.FindProfile(configFile, newName); exists {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' already exists. Pick another name.", newName))
+		}
+
+		// Keyring entries are keyed by name, so copy them under the new name
+		// first and remove the old ones only once the config is saved. If
+		// anything in between fails the old profile is left intact.
+		renamed := profile
+		renamed.Name = newName
+		if err := util.CopyStoredSession(profile, newName); err != nil {
+			util.HandleError(err, "Unable to store the session under the new name")
+		}
+		if err := util.RenameProfile(&configFile, oldName, newName); err != nil {
+			_ = util.ClearStoredSession(renamed)
+			util.HandleError(err)
+		}
+		if err := util.WriteConfigFile(&configFile); err != nil {
+			_ = util.ClearStoredSession(renamed)
+			util.HandleError(err, "Unable to save the Infisical config file")
+		}
+		if err := util.ClearStoredSession(profile); err != nil {
+			util.PrintWarning(fmt.Sprintf("Renamed, but the session stored under the old name could not be removed [err=%s].", err))
+		}
+
+		util.PrintlnStderr(fmt.Sprintf("Renamed profile '%s' to '%s'.", oldName, newName))
+		if profile.Name == profile.Email {
+			util.PrintlnStderr("Older CLI versions only recognize profiles named after their email, so they will ask you to log in again.")
+		}
+		if os.Getenv(util.INFISICAL_PROFILE_ENV_NAME) == oldName {
+			util.PrintlnStderr(fmt.Sprintf("This terminal is pinned to the old name. Run [eval \"$(infisical profile pin %s)\"] to pin it again.", newName))
+		}
+
+		Telemetry.CaptureEvent("cli-command:profile rename", posthog.NewProperties().Set("version", util.CLI_VERSION))
+	},
+}
+
 var profileDeleteCmd = &cobra.Command{
 	Use:                   "delete [name]",
 	Short:                 "Delete a profile and its stored session credentials",
@@ -637,6 +753,7 @@ func init() {
 	profileCmd.AddCommand(profileUnpinCmd)
 	profileCmd.AddCommand(profileBindCmd)
 	profileCmd.AddCommand(profileUnbindCmd)
+	profileCmd.AddCommand(profileRenameCmd)
 	profileCmd.AddCommand(profileDeleteCmd)
 	RootCmd.AddCommand(profileCmd)
 }

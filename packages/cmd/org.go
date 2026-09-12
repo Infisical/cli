@@ -10,6 +10,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/posthog/posthog-go"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -46,8 +47,14 @@ var orgListCmd = &cobra.Command{
 		}
 		httpClient.SetAuthToken(details.UserCredentials.JTWToken)
 
+		// The token's own claims say what it is scoped to. A sub-organization
+		// session carries the root in organizationId and the sub-organization
+		// in subOrganizationId, and acts in the latter, so that is the one to
+		// mark as current.
 		currentOrgID := details.OrganizationID
-		if claimOrgID, _ := util.ParseTokenOrgClaims(details.UserCredentials.JTWToken); claimOrgID != "" {
+		if claimOrgID, claimSubOrgID := util.ParseTokenOrgClaims(details.UserCredentials.JTWToken); claimSubOrgID != "" {
+			currentOrgID = claimSubOrgID
+		} else if claimOrgID != "" {
 			currentOrgID = claimOrgID
 		}
 
@@ -167,12 +174,22 @@ func runSetOrg(cmd *cobra.Command, args []string) {
 	if orgID == "" {
 		orgID = selectedOrgID
 	}
-	orgName := util.OrgDisplayName(newSessionToken, orgID, subOrgID)
+	orgInfo := util.DescribeSessionOrg(newSessionToken, orgID, subOrgID)
+	orgName := orgInfo.DisplayName()
 
 	profile := details.Profile
 	profile.OrganizationID = orgID
 	profile.OrganizationName = orgName
+	profile.OrganizationSlug = orgInfo.Slug
 	profile.SubOrganizationID = subOrgID
+
+	// A session cached for this organization by --org is redundant now that it
+	// is the profile's own, so drop it together with its keyring entry.
+	if util.RemoveOrgSession(&profile, profile.ScopedOrganizationID()) {
+		if err := util.DeleteOrgSessionToken(profile.Name, profile.ScopedOrganizationID()); err != nil {
+			log.Debug().Err(err).Msg("unable to remove the now redundant cached organization session")
+		}
+	}
 
 	credentials := details.UserCredentials
 	credentials.JTWToken = newSessionToken
@@ -228,7 +245,7 @@ func selectOrganizationToken(sessionToken string, email string, orgID string) (s
 
 	if tokenResponse.MfaEnabled {
 		i := 1
-		for i < 6 {
+		for i <= mfaMaxAttempts {
 			mfaVerifyCode := askForMFACode(tokenResponse.MfaMethod)
 
 			httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -245,9 +262,9 @@ func selectOrganizationToken(sessionToken string, email string, orgID string) (s
 				return "", requestError
 			} else if mfaErrorResponse != nil {
 				if mfaErrorResponse.Context.Code == "mfa_invalid" {
-					msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
+					msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", mfaMaxAttempts-i)
 					util.PrintlnStderr(msg)
-					if i == 5 {
+					if i == mfaMaxAttempts {
 						util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
 						break
 					}

@@ -143,66 +143,6 @@ func topLevelCommandName(cmd *cobra.Command) string {
 	return current.Name()
 }
 
-// printActiveProfileNotice surfaces which profile a command will use when the
-// selection came from somewhere non-obvious: the --profile flag, the
-// INFISICAL_PROFILE env var, or a directory scope. Single-profile setups and
-// plain default-profile usage stay quiet.
-func printActiveProfileNotice(cmd *cobra.Command, silent bool) {
-	if silent || isStructuredOutputRequested(cmd) || profileNoticeExemptCommands[topLevelCommandName(cmd)] {
-		return
-	}
-
-	orgSelector, orgSource := util.GetOrgOverride()
-
-	resolved, profile, _ := util.ResolveActiveProfileDetails()
-	if resolved.Name == "" {
-		return
-	}
-	// Quiet when nothing non-obvious happened: the default profile and no
-	// organization override.
-	if resolved.Source == util.ProfileSourceDefault && orgSelector == "" {
-		return
-	}
-
-	// A provided token supersedes the login session; the token warning above
-	// already covers that case.
-	if token, err := util.GetInfisicalToken(cmd); err == nil && token != nil {
-		return
-	}
-
-	orgName := profile.OrganizationName
-	if orgName == "" {
-		orgName = profile.OrganizationID
-	}
-	if orgSelector != "" {
-		orgName = orgSelector
-	}
-
-	detail := ""
-	if orgName != "" {
-		detail = fmt.Sprintf(" (org %s)", orgName)
-	}
-
-	via := resolved.Source
-	if resolved.ScopeDir != "" {
-		via = fmt.Sprintf("%s %s", via, resolved.ScopeDir)
-	}
-	if orgSelector != "" {
-		if resolved.Source == util.ProfileSourceDefault {
-			via = orgSource
-		} else {
-			via = fmt.Sprintf("%s, org via %s", via, orgSource)
-		}
-	}
-
-	shadowed := ""
-	if resolved.ShadowedName != "" {
-		shadowed = fmt.Sprintf(", overriding this directory's binding to '%s'", resolved.ShadowedName)
-	}
-
-	fmt.Fprintf(cmd.ErrOrStderr(), "Using profile '%s'%s via %s%s\n", util.SanitizeDisplay(resolved.Name), util.SanitizeDisplay(detail), via, util.SanitizeDisplay(shadowed))
-}
-
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
@@ -265,7 +205,13 @@ func init() {
 			}
 		}
 
-		printActiveProfileNotice(cmd, silent)
+		// The "Using profile ..." notice is printed by the session loader the
+		// first time a command actually uses a login session, so commands that
+		// never do (scan, agent, gateway, ...) stay quiet even in a pinned
+		// terminal. Profile-management commands print their own outcome.
+		if !silent && !isStructuredOutputRequested(cmd) && !profileNoticeExemptCommands[topLevelCommandName(cmd)] {
+			util.EnableProfileNotice(cmd.ErrOrStderr())
+		}
 	}
 
 	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")

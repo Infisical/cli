@@ -468,3 +468,71 @@ func makeUnsignedJWT(t *testing.T, claims map[string]any) string {
 	enc := base64.RawURLEncoding
 	return enc.EncodeToString(headerJSON) + "." + enc.EncodeToString(payloadJSON) + "."
 }
+
+func TestBuildSessionJSON_UserIncludesProfile(t *testing.T) {
+	ctx := loginStatusContext{
+		kind: principalKindUser,
+		loggedInUser: util.LoggedInUserDetails{
+			ProfileName:      "globex",
+			ProfileSource:    util.ProfileSourceFlag,
+			OrganizationName: "Globex",
+		},
+	}
+
+	session := buildSessionJSON(ctx)
+	if session.Profile != "globex" || session.ProfileSource != util.ProfileSourceFlag {
+		t.Fatalf("profile fields missing from JSON: %+v", session)
+	}
+	if session.OrganizationName != "Globex" {
+		t.Fatalf("organization name missing from JSON: %+v", session)
+	}
+
+	machine := buildSessionJSON(loginStatusContext{kind: principalKindMachineIdentity})
+	if machine.Profile != "" || machine.ProfileSource != "" {
+		t.Fatalf("machine identity sessions have no profile: %+v", machine)
+	}
+}
+
+func TestProfileLine(t *testing.T) {
+	withSource := profileLine(util.LoggedInUserDetails{ProfileName: "globex", ProfileSource: util.ProfileSourceEnv})
+	if withSource != "globex (via INFISICAL_PROFILE environment variable)" {
+		t.Fatalf("unexpected profile line %q", withSource)
+	}
+	if got := profileLine(util.LoggedInUserDetails{ProfileName: "globex"}); got != "globex" {
+		t.Fatalf("expected the bare name without a source, got %q", got)
+	}
+}
+
+func TestUserOrgNames(t *testing.T) {
+	root := loginStatusContext{
+		kind:         principalKindUser,
+		loggedInUser: util.LoggedInUserDetails{OrganizationName: "Acme"},
+		claims:       loginTokenClaims{OrganizationID: "root-1"},
+	}
+	if rootName, subName := userOrgNames(root); rootName != "Acme" || subName != "" {
+		t.Fatalf("root session: got %q, %q", rootName, subName)
+	}
+
+	sub := loginStatusContext{
+		kind:         principalKindUser,
+		loggedInUser: util.LoggedInUserDetails{OrganizationName: "Acme / Research"},
+		claims:       loginTokenClaims{OrganizationID: "root-1", SubOrganizationID: "sub-1"},
+	}
+	if rootName, subName := userOrgNames(sub); rootName != "Acme" || subName != "Research" {
+		t.Fatalf("sub-organization session: got %q, %q", rootName, subName)
+	}
+	if got := organizationLineFor(sub); got != "Acme (root-1)" {
+		t.Fatalf("organization line = %q", got)
+	}
+	if got := subOrganizationLineFor(sub); got != "Research (sub-1)" {
+		t.Fatalf("sub-organization line = %q", got)
+	}
+
+	// A sub-organization session whose recorded name is not split cannot be
+	// attributed to either id, so only the ids are shown.
+	unsplit := sub
+	unsplit.loggedInUser.OrganizationName = "Research"
+	if got := organizationLineFor(unsplit); got != "root-1" {
+		t.Fatalf("organization line without a split name = %q", got)
+	}
+}

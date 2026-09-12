@@ -238,7 +238,7 @@ cleared and you are asked to sign in again.`,
 		// the previous session survived under this profile name would send that
 		// token to the new endpoint, which is the disclosure this clearing
 		// exists to prevent.
-		if err := util.ClearStoredSession(selected.Name); err != nil {
+		if err := util.ClearStoredSession(selected); err != nil {
 			util.HandleError(err, fmt.Sprintf("Unable to clear the stored session of profile '%s'. It still points at %s, because its existing session must not be sent to %s.",
 				selected.Name, util.DisplayDomain(selected.Domain), util.DisplayDomain(domain)))
 		}
@@ -271,34 +271,6 @@ func init() {
 	RootCmd.AddCommand(userCmd)
 }
 
-// This returns all logged in user emails from the config file.
-// If none, it returns the current logged in user in a slice
-func getLoggedInUsers() ([]string, error) {
-	loggedInProfiles := []string{}
-
-	if util.ConfigFileExists() {
-		configFile, err := util.GetConfigFile()
-		if err != nil {
-			return loggedInProfiles, err
-		}
-
-		//get logged in profiles
-		//
-		if len(configFile.LoggedInUsers) > 0 {
-			for _, v := range configFile.LoggedInUsers {
-				loggedInProfiles = append(loggedInProfiles, v.Email)
-			}
-		} else {
-
-			loggedInProfiles = append(loggedInProfiles, configFile.LoggedInUserEmail)
-		}
-		return loggedInProfiles, nil
-	} else {
-		//empty
-		return loggedInProfiles, errors.New("couldn't retrieve config file")
-	}
-}
-
 func NewDomainPrompt() (string, error) {
 	urlValidation := func(input string) error {
 		_, err := url.ParseRequestURI(input)
@@ -321,18 +293,4 @@ func NewDomainPrompt() (string, error) {
 	}
 
 	return util.AppendAPIEndpoint(domain), nil
-}
-
-func LoggedInUsersPrompt(profiles []string) (string, error) {
-	prompt := promptui.Select{Label: "Which of your Infisical profiles would you like to use",
-		Items: profiles,
-		Size:  7,
-	}
-
-	idx, _, err := prompt.Run()
-	if err != nil {
-		return "", err
-	}
-
-	return profiles[idx], nil
 }

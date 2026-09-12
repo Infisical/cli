@@ -80,6 +80,59 @@ func StoreUserCredsInKeyRing(keyName string, userCred *models.UserCredentials) e
 	return err
 }
 
+// StoreOrgSessionToken caches a session token minted for one organization in
+// its own keyring entry. See models.OrgSessionRef for why it is kept apart from
+// the profile's main credentials.
+func StoreOrgSessionToken(profileName string, orgID string, token string) error {
+	return SetValueInKeyring(OrgSessionKeyringKey(profileName, orgID), token)
+}
+
+// GetOrgSessionToken loads a cached organization session token. ok is false
+// when no entry exists or it cannot be read.
+func GetOrgSessionToken(profileName string, orgID string) (token string, ok bool) {
+	token, err := GetValueInKeyring(OrgSessionKeyringKey(profileName, orgID))
+	if err != nil || token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+// DeleteOrgSessionToken removes a cached organization session token. A missing
+// entry counts as success.
+func DeleteOrgSessionToken(profileName string, orgID string) error {
+	err := DeleteValueInKeyring(OrgSessionKeyringKey(profileName, orgID))
+	if err == nil || IsKeyringEntryAbsent(err) {
+		return nil
+	}
+	return err
+}
+
+// CopyStoredSession stores a copy of a profile's credentials, including its
+// cached organization sessions, under another profile name. A profile with no
+// stored session copies nothing. Rename uses it, then clears the old entries.
+func CopyStoredSession(profile models.Profile, newName string) error {
+	creds, err := GetUserCredsFromKeyRing(profile.Name)
+	if err != nil {
+		if strings.Contains(err.Error(), "credentials not found in system keyring") {
+			return nil
+		}
+		return err
+	}
+	if err := StoreUserCredsInKeyRing(newName, &creds); err != nil {
+		return err
+	}
+	for _, ref := range profile.OrgSessions {
+		token, ok := GetOrgSessionToken(profile.Name, ref.OrgID)
+		if !ok {
+			continue
+		}
+		if err := StoreOrgSessionToken(newName, ref.OrgID, token); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func GetUserCredsFromKeyRing(keyName string) (credentials models.UserCredentials, err error) {
 	credentialsValue, err := GetValueInKeyring(keyName)
 	if err != nil {
@@ -120,7 +173,7 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 	profile, profileFound := FindProfile(configFile, resolved.Name)
 	if !profileFound {
 		if resolved.Source != ProfileSourceDefault {
-			return LoggedInUserDetails{}, fmt.Errorf("%w: profile '%s' (selected via %s) does not exist. Run [infisical profile list] to see available profiles, or [infisical login --profile %s] to create it", ErrProfileNotFound, resolved.Name, resolved.Source, resolved.Name)
+			return LoggedInUserDetails{}, fmt.Errorf("%w: profile '%s' (selected via %s) does not exist. Run [infisical profile list] to see available profiles, or [infisical login --save-as %s] to create it", ErrProfileNotFound, resolved.Name, resolved.Source, resolved.Name)
 		}
 		// Unmigrated legacy state: treat the email as an implicit profile.
 		profile = models.Profile{Name: resolved.Name, Email: resolved.Name, Domain: configFile.LoggedInUserDomain}
@@ -164,13 +217,16 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 	isAuthenticated := !IsJWTExpired(userCreds.JTWToken)
 
 	details := LoggedInUserDetails{
-		IsUserLoggedIn:     true, // was logged in
-		LoginExpired:       !isAuthenticated,
-		ProfileName:        profile.Name,
-		ProfileSource:      resolved.Source,
-		Profile:            profile,
-		UserCredentials:    userCreds,
-		OrganizationID:     profile.OrganizationID,
+		IsUserLoggedIn:  true, // was logged in
+		LoginExpired:    !isAuthenticated,
+		ProfileName:     profile.Name,
+		ProfileSource:   resolved.Source,
+		Profile:         profile,
+		UserCredentials: userCreds,
+		// A session scoped to a sub-organization acts in that sub-organization,
+		// which is where its projects and permissions live, so that is the
+		// organization reported here rather than the root from the token.
+		OrganizationID:     profile.ScopedOrganizationID(),
 		OrganizationName:   profile.OrganizationName,
 		OrganizationSource: OrgSourceProfileDefault,
 	}
@@ -185,6 +241,13 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 		}
 	}
 
+	// This is the point where a command actually uses the session, so it is
+	// where the "Using profile ..." notice belongs. An expired session is about
+	// to be renewed, and the renewal loads it again, so stay quiet until then.
+	if setConfigVariables && !details.LoginExpired {
+		printProfileNotice(resolved, details)
+	}
+
 	return details, nil
 }
 
@@ -193,75 +256,74 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 func applyOrgOverride(details *LoggedInUserDetails, selector string, selectorSource string) error {
 	profile := details.Profile
 
-	// Already on the requested organization: nothing to do, and no API calls.
-	// Only an id match is trusted here, since a name or slug could belong to a
-	// different organization and would skip the exchange wrongly.
-	if OrgMatchTier(selector, profile.OrganizationID, "", "") == orgMatchID {
-		details.OrganizationSource = selectorSource
-		return nil
-	}
-
-	// A previously minted token for this organization avoids both the lookup
-	// and the exchange. Pick the strongest match rather than the first, so a
-	// cached entry matching only by name cannot shadow one matching by id.
-	bestCached := models.CachedOrgSession{}
-	bestTier := 0
-	for _, cached := range details.UserCredentials.OrgTokens {
-		tier := OrgMatchTier(selector, cached.OrgID, cached.OrgSlug, cached.OrgName)
-		if tier > bestTier && !IsJWTExpired(cached.Token) {
-			bestCached, bestTier = cached, tier
+	// What the profile already knows resolves most selectors with no API call:
+	// its own organization needs no exchange, and a cached organization
+	// session only needs its token read back.
+	var target ResolvedOrg
+	if known, ok := MatchKnownOrg(profile, selector); ok {
+		if known.IsProfileDefault {
+			details.OrganizationSource = selectorSource
+			return nil
 		}
+		if token, ok := GetOrgSessionToken(profile.Name, known.OrgID); ok && !IsJWTExpired(token) {
+			details.UserCredentials.JTWToken = token
+			details.OrganizationID = known.OrgID
+			details.OrganizationName = known.OrgName
+			details.OrganizationSource = selectorSource
+			return nil
+		}
+		// The cached token is gone or expired, but the organization is known,
+		// so skip the listing and go straight to a fresh exchange.
+		target = ResolvedOrg{ID: known.OrgID, Name: known.OrgName, Slug: known.OrgSlug}
+	} else {
+		resolved, err := ResolveOrgSelector(details.UserCredentials.JTWToken, selector)
+		if err != nil {
+			return err
+		}
+		target = resolved
 	}
-	if bestTier != 0 {
-		details.UserCredentials.JTWToken = bestCached.Token
-		details.OrganizationID = bestCached.OrgID
-		details.OrganizationName = bestCached.OrgName
+
+	if target.ID == profile.ScopedOrganizationID() {
+		// The selector named the profile's own organization in a way it could
+		// not match locally, usually a slug recorded as empty by an older
+		// build. Remember the slug so the next run needs no listing.
+		details.OrganizationName = target.Name
 		details.OrganizationSource = selectorSource
+		if target.Slug != "" && profile.OrganizationSlug == "" {
+			if err := UpdateStoredProfile(profile.Name, func(p *models.Profile) { p.OrganizationSlug = target.Slug }); err != nil {
+				log.Debug().Err(err).Msg("unable to record the organization slug on the profile")
+			}
+		}
 		return nil
 	}
 
-	resolvedOrg, err := ResolveOrgSelector(details.UserCredentials.JTWToken, selector)
-	if err != nil {
-		return err
-	}
-
-	if resolvedOrg.ID == profile.OrganizationID {
-		details.OrganizationName = resolvedOrg.Name
-		details.OrganizationSource = selectorSource
-		return nil
-	}
-
-	orgToken, err := ExchangeSessionForOrganization(details.UserCredentials.JTWToken, resolvedOrg.ID)
+	orgToken, err := ExchangeSessionForOrganization(details.UserCredentials.JTWToken, target.ID)
 	if err != nil {
 		if errors.Is(err, ErrOrgSwitchNeedsMFA) {
-			return fmt.Errorf("organization '%s' requires MFA, which cannot be completed with %s. Run [infisical profile set-org %s --profile %s] once to verify and cache the session", resolvedOrg.Name, selectorSource, selector, profile.Name)
+			return fmt.Errorf("organization '%s' requires MFA, which cannot be completed with %s. Run [infisical profile set-org %s --profile %s] once to verify and cache the session", target.Name, selectorSource, selector, profile.Name)
 		}
-		return fmt.Errorf("unable to scope your session to organization '%s' [err=%s]", resolvedOrg.Name, err)
+		return fmt.Errorf("unable to scope your session to organization '%s' [err=%s]", target.Name, err)
 	}
 
-	if details.UserCredentials.OrgTokens == nil {
-		details.UserCredentials.OrgTokens = map[string]models.CachedOrgSession{}
-	}
-	details.UserCredentials.OrgTokens[resolvedOrg.ID] = models.CachedOrgSession{
-		Token:   orgToken,
-		OrgID:   resolvedOrg.ID,
-		OrgName: resolvedOrg.Name,
-		OrgSlug: resolvedOrg.Slug,
-	}
-
-	// Persist the new cache entry while leaving the profile's own session token
-	// alone: --org retargets a single command, so writing the organization
-	// token as the profile's primary one would silently repoint the profile.
-	if err := StoreUserCredsInKeyRing(profile.Name, &details.UserCredentials); err != nil {
-		// The in-memory token is still usable; caching it is best effort.
+	// Cache the token in its own keyring entry and index it on the profile, so
+	// later runs skip both the listing and the exchange. The profile's own
+	// session token is left alone: --org retargets a single command, and
+	// writing the organization token as the primary one would silently repoint
+	// the profile. Both writes are best effort; this run already holds the
+	// token in memory.
+	if err := StoreOrgSessionToken(profile.Name, target.ID, orgToken); err != nil {
 		log.Debug().Err(err).Msg("unable to cache organization-scoped session token")
+	} else {
+		ref := models.OrgSessionRef{OrgID: target.ID, OrgName: target.Name, OrgSlug: target.Slug}
+		if err := UpdateStoredProfile(profile.Name, func(p *models.Profile) { RecordOrgSession(p, ref) }); err != nil {
+			log.Debug().Err(err).Msg("unable to index the cached organization session on the profile")
+		}
 	}
 
 	// Only this invocation runs against the organization-scoped token.
 	details.UserCredentials.JTWToken = orgToken
-
-	details.OrganizationID = resolvedOrg.ID
-	details.OrganizationName = resolvedOrg.Name
+	details.OrganizationID = target.ID
+	details.OrganizationName = target.Name
 	details.OrganizationSource = selectorSource
 	return nil
 }
