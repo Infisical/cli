@@ -409,6 +409,9 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
+	// The agent's session is the one in the proxy URL. An inherited token is either that same secret a
+	// second time or, on an --access-bundle run, the one this command just said it was ignoring.
+	stale[agentVaultSessionTokenEnv] = true
 
 	var operatorNoProxy []string
 	env := map[string]string{}

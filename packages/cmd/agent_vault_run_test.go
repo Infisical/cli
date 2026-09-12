@@ -278,3 +278,21 @@ func TestResolveAgentVaultSessionTokenWithNeitherSourceIsEmpty(t *testing.T) {
 		t.Errorf("want no token, got %q fromFlag=%v", token, fromFlag)
 	}
 }
+
+func TestBuildAgentVaultRunEnvDropsTheSessionTokenVariable(t *testing.T) {
+	parent := []string{agentVaultSessionTokenEnv + "=agv_stale", "PATH=/usr/bin"}
+
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_minted", "", "")
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, agentVaultSessionTokenEnv+"=") {
+			t.Fatalf("the agent must not inherit a session token the proxy URL did not give it, got %q", kv)
+		}
+		if strings.Contains(kv, "agv_stale") {
+			t.Fatalf("a stale token reached the agent through %q", kv)
+		}
+	}
+	if !strings.Contains(strings.Join(env, " "), "agv_minted") {
+		t.Error("the minted session should still reach the agent in the proxy URL")
+	}
+}
