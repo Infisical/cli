@@ -79,6 +79,12 @@ func newUpstream(config SnowflakeProxyConfig) *upstream {
 	}
 }
 
+func (u *upstream) close() {
+	if transport, ok := u.client.Transport.(*http.Transport); ok {
+		transport.CloseIdleConnections()
+	}
+}
+
 func (u *upstream) login(ctx context.Context) error {
 	data := map[string]any{
 		"CLIENT_APP_ID":      "Go",
@@ -110,8 +116,10 @@ func (u *upstream) login(ctx context.Context) error {
 		data["AUTHENTICATOR"] = "PROGRAMMATIC_ACCESS_TOKEN"
 		data["TOKEN"] = u.config.Token
 		data["PASSWORD"] = u.config.Token
-	default:
+	case AuthMethodPassword:
 		data["PASSWORD"] = u.config.Password
+	default:
+		return fmt.Errorf("unsupported Snowflake authentication method %q", u.config.AuthMethod)
 	}
 
 	params := url.Values{}

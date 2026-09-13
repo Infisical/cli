@@ -418,3 +418,12 @@ func TestUpstreamFailureAndTotalArePreserved(t *testing.T) {
 	require.EqualValues(t, 12000, truncated.data()["total"])
 	require.Equal(t, 10, truncated.data()["returned"])
 }
+
+// An unknown auth method must fail rather than quietly attempting a password login
+func TestLoginRejectsAnUnknownAuthMethod(t *testing.T) {
+	client := newUpstream(SnowflakeProxyConfig{Account: "acme-test", AuthMethod: "saml"})
+
+	err := client.login(t.Context())
+
+	require.ErrorContains(t, err, "unsupported Snowflake authentication method")
+}

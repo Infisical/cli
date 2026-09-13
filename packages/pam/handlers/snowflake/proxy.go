@@ -37,8 +37,9 @@ type SnowflakeProxyConfig struct {
 }
 
 const (
-	AuthMethodKeyPair = "key-pair"
-	AuthMethodToken   = "programmatic-access-token"
+	AuthMethodKeyPair  = "key-pair"
+	AuthMethodToken    = "programmatic-access-token"
+	AuthMethodPassword = "password"
 
 	loginTimeout = 30 * time.Second
 
@@ -63,6 +64,7 @@ func (p *SnowflakeProxy) Connect(ctx context.Context) error {
 	defer cancel()
 
 	if err := client.login(loginCtx); err != nil {
+		client.close()
 		return err
 	}
 
@@ -100,6 +102,8 @@ func (p *SnowflakeProxy) Close() {
 	if err := p.upstream.logout(ctx); err != nil {
 		log.Debug().Err(err).Str("sessionId", p.config.SessionID).Msg("Failed to close the Snowflake session")
 	}
+
+	p.upstream.close()
 }
 
 func (p *SnowflakeProxy) HandleConnection(ctx context.Context, clientConn net.Conn) error {
