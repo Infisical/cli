@@ -4,7 +4,6 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -135,7 +134,7 @@ var initCmd = &cobra.Command{
 			util.HandleError(err)
 		}
 
-		err = writeWorkspaceFile(filteredWorkspaces[index])
+		err = writeWorkspaceFile(filteredWorkspaces[index], selectedOrgID)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -211,17 +210,13 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	return subItems[subIndex].ID, &selectedSubOrgName, nil
 }
 
-func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
+func writeWorkspaceFile(selectedWorkspace models.Workspace, organizationId string) error {
 	workspaceFileToSave := models.WorkspaceConfigFile{
-		WorkspaceId: selectedWorkspace.ID,
+		WorkspaceId:    selectedWorkspace.ID,
+		OrganizationId: organizationId,
 	}
 
-	marshalledWorkspaceFile, err := json.MarshalIndent(workspaceFileToSave, "", "    ")
-	if err != nil {
-		return err
-	}
-
-	err = util.WriteToFile(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
+	err := util.WriteWorkspaceConfigToPath(workspaceFileToSave, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	if err != nil {
 		return err
 	}
