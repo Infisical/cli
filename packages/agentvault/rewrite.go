@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -73,18 +74,30 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		}
 		real := string(sub.value)
 
-		if sub.surfaces[surfacePath] && strings.Contains(req.URL.Path, sub.placeholder) {
-			if v, ok := replaceWithinLimit(req.URL.Path, sub.placeholder, real, maxBodyRewriteSize); ok {
-				req.URL.Path = v
-				// Clearing RawPath makes Go re-encode the path from Path, which can change the byte form of
-				// other escaped segments.
-				req.URL.RawPath = ""
-				changed[surfacePath] = true
+		// Swapped in the escaped path and written back escaped, so every other segment keeps the byte form
+		// the agent sent. Rewriting the decoded Path and clearing RawPath (which is what Agent Proxy does)
+		// makes Go re-derive the wire path, and its encoder does not re-escape '/' or '+': a GitLab project
+		// addressed as `group%2Fproject` would arrive as two segments, pointing at a different resource.
+		if sub.surfaces[surfacePath] {
+			escaped := req.URL.EscapedPath()
+			if strings.Contains(escaped, sub.placeholder) {
+				// The replacement is escaped too, or a secret containing '/' or '?' would itself reshape the URL.
+				if v, ok := replaceWithinLimit(escaped, sub.placeholder, url.PathEscape(real), maxBodyRewriteSize); ok {
+					if decoded, err := url.PathUnescape(v); err == nil {
+						// Both halves: Path is what the policy re-check and any later reader see, RawPath is
+						// what goes on the wire. Go uses RawPath only when it agrees with Path.
+						req.URL.Path = decoded
+						req.URL.RawPath = v
+						changed[surfacePath] = true
+					}
+				}
 			}
 		}
 
+		// Escaped, because RawQuery goes on the wire verbatim. A base64 key containing '+' would otherwise
+		// arrive as a space, and one containing '&' would split into a second parameter.
 		if sub.surfaces[surfaceQuery] && strings.Contains(req.URL.RawQuery, sub.placeholder) {
-			if v, ok := replaceWithinLimit(req.URL.RawQuery, sub.placeholder, real, maxBodyRewriteSize); ok {
+			if v, ok := replaceWithinLimit(req.URL.RawQuery, sub.placeholder, url.QueryEscape(real), maxBodyRewriteSize); ok {
 				req.URL.RawQuery = v
 				changed[surfaceQuery] = true
 			}
