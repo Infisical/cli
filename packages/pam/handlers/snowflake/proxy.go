@@ -32,6 +32,7 @@ type SnowflakeProxyConfig struct {
 	Role           string
 
 	SessionID       string
+	SessionExpiry   time.Time
 	SessionLogger   session.SessionLogger
 	BlockedCommands []*regexp.Regexp
 }
@@ -68,7 +69,13 @@ func (p *SnowflakeProxy) Connect(ctx context.Context) error {
 		return err
 	}
 
-	p.upstream, p.token, p.sessionCtx, p.parameters = client, sessionToken(p.config), client.sessionCtx, client.parameters
+	token, err := sessionToken(p.config)
+	if err != nil {
+		client.close()
+		return err
+	}
+
+	p.upstream, p.token, p.sessionCtx, p.parameters = client, token, client.sessionCtx, client.parameters
 	return nil
 }
 

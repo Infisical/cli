@@ -50,7 +50,9 @@ func newTestProxy(t *testing.T, blocked ...string) (*SnowflakeProxy, *recordingL
 		SessionLogger:   logger,
 		BlockedCommands: patterns,
 	})
-	proxy.token = sessionToken(proxy.config)
+	token, err := sessionToken(proxy.config)
+	require.NoError(t, err)
+	proxy.token = token
 
 	return proxy, logger
 }
@@ -369,12 +371,32 @@ func TestQueryPollsAnInProgressResult(t *testing.T) {
 }
 
 // Each client connection gets its own proxy, so a token minted by one must be accepted by the next
-func TestSessionTokenIsStableAcrossConnections(t *testing.T) {
-	config := SnowflakeProxyConfig{SessionID: "session-1", PrivateKey: "key-material"}
+func TestSessionTokenIsStableAcrossConnectionsAndIndependentOfCredentials(t *testing.T) {
+	expiry := time.Now().Add(time.Hour)
+	config := SnowflakeProxyConfig{SessionID: "session-1", Password: "hunter2", SessionExpiry: expiry}
 
-	require.Equal(t, sessionToken(config), sessionToken(config))
-	require.NotEqual(t, sessionToken(config), sessionToken(SnowflakeProxyConfig{SessionID: "session-2", PrivateKey: "key-material"}))
-	require.NotEqual(t, sessionToken(config), sessionToken(SnowflakeProxyConfig{SessionID: "session-1", PrivateKey: "other"}))
+	first, err := sessionToken(config)
+	require.NoError(t, err)
+	again, err := sessionToken(SnowflakeProxyConfig{SessionID: "session-1", Password: "different", SessionExpiry: expiry})
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+	require.NotContains(t, first, "hunter2")
+
+	other, err := sessionToken(SnowflakeProxyConfig{SessionID: "session-2", SessionExpiry: expiry})
+	require.NoError(t, err)
+	require.NotEqual(t, first, other)
+}
+
+// An expired session's secret must not linger in the gateway once the session is over
+func TestSessionSecretsAreSweptOnceExpired(t *testing.T) {
+	_, err := sessionToken(SnowflakeProxyConfig{SessionID: "stale", SessionExpiry: time.Now().Add(-time.Minute)})
+	require.NoError(t, err)
+
+	_, err = sessionToken(SnowflakeProxyConfig{SessionID: "fresh", SessionExpiry: time.Now().Add(time.Hour)})
+	require.NoError(t, err)
+
+	_, present := sessionSecrets.Load("stale")
+	require.False(t, present)
 }
 
 // The JDBC driver reads AUTOCOMMIT off the login response and panics when it is missing

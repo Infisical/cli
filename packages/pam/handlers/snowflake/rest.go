@@ -2,7 +2,7 @@ package snowflake
 
 import (
 	"compress/gzip"
-	"crypto/hmac"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -123,12 +123,36 @@ func snowflakeTransport() *http.Transport {
 	}
 }
 
-// Every client connection opens its own tunnel and so its own proxy, so this is derived from the
-// session rather than random
-func sessionToken(config SnowflakeProxyConfig) string {
-	mac := hmac.New(sha256.New, []byte(config.PrivateKey+config.Token+config.Password))
-	mac.Write([]byte(config.SessionID))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+type sessionSecret struct {
+	value   string
+	expires time.Time
+}
+
+// Every client connection opens its own tunnel and so its own proxy, so the token has to be shared across them
+var sessionSecrets sync.Map
+
+func sessionToken(config SnowflakeProxyConfig) (string, error) {
+	now := time.Now()
+	sessionSecrets.Range(func(key, value any) bool {
+		if secret, ok := value.(sessionSecret); ok && secret.expires.Before(now) {
+			sessionSecrets.Delete(key)
+		}
+		return true
+	})
+
+	if existing, ok := sessionSecrets.Load(config.SessionID); ok {
+		return existing.(sessionSecret).value, nil
+	}
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("could not generate a session token: %w", err)
+	}
+	stored, _ := sessionSecrets.LoadOrStore(config.SessionID, sessionSecret{
+		value:   base64.RawURLEncoding.EncodeToString(raw),
+		expires: config.SessionExpiry,
+	})
+	return stored.(sessionSecret).value, nil
 }
 
 // Clients read session parameters such as AUTOCOMMIT off this response and some panic when they are

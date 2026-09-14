@@ -538,6 +538,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Schema:          credentials.Schema,
 			Role:            credentials.Role,
 			SessionID:       pamConfig.SessionId,
+			SessionExpiry:   pamConfig.ExpiryTime,
 			SessionLogger:   sessionLogger,
 			BlockedCommands: blockedCommands,
 		})
