@@ -27,6 +27,7 @@ const (
 	AccountTypeMongoDB           = "mongodb"
 	AccountTypeOracleDB          = "oracledb"
 	AccountTypeRedis             = "redis"
+	AccountTypeSnowflake         = "snowflake"
 	AccountTypeKubernetes        = "kubernetes"
 	AccountTypeAwsIam            = "aws-iam"
 	AccountTypeGcpServiceAccount = "gcp-service-account"
@@ -133,6 +134,8 @@ func StartPAMAccess(accessToken string, opts AccessOptions) {
 		startSSHAccess(httpClient, &pamResponse, displayPath, opts)
 	case AccountTypeRedis:
 		startRedisProxy(httpClient, &pamResponse, displayPath, durationStr, port)
+	case AccountTypeSnowflake:
+		startSnowflakeProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeKubernetes:
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:

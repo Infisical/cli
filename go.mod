@@ -50,6 +50,7 @@ require (
 	github.com/spf13/viper v1.8.1
 	github.com/stretchr/testify v1.11.1
 	github.com/wasilibs/go-re2 v1.10.0
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78
 	go.mongodb.org/mongo-driver/v2 v2.5.0
 	go.mozilla.org/pkcs7 v0.9.0
 	golang.org/x/crypto v0.55.0
@@ -203,7 +204,6 @@ require (
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xtgo/uuid v0.0.0-20140804021211-a0b114877d4c // indirect
-	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	go.mongodb.org/mongo-driver v1.17.9 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

@@ -171,3 +171,21 @@ func TestParseSessionFilename_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// A type missing from the pattern parses as a legacy filename, folding the type into the session ID
+func TestParseSessionFilename_CoversEveryResourceType(t *testing.T) {
+	for _, resourceType := range allResourceTypes {
+		filename := "pam_session_abc-123_" + resourceType + "_expires_1700000000.enc"
+
+		info, err := ParseSessionFilename(filename)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", resourceType, err)
+		}
+		if info.SessionID != "abc-123" {
+			t.Errorf("%s: session ID = %q, want abc-123", resourceType, info.SessionID)
+		}
+		if info.ResourceType != resourceType {
+			t.Errorf("%s: resource type = %q", resourceType, info.ResourceType)
+		}
+	}
+}
