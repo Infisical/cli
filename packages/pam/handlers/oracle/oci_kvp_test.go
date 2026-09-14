@@ -215,3 +215,43 @@ func TestTranslatePhase1ResponseOCIRejectsAPayloadWithoutTheVerifier(t *testing.
 		t.Fatal("expected an error when AUTH_SESSKEY and AUTH_VFR_DATA are absent")
 	}
 }
+
+func TestPbkdf2CountRejectsAnImplausibleWorkFactor(t *testing.T) {
+	if _, err := pbkdf2Count("2000000000", defaultPbkdf2VGenCount, maxPbkdf2VGenCount); err == nil {
+		t.Fatal("a work factor that would occupy a CPU for minutes must be refused")
+	}
+	if _, err := pbkdf2Count("-1", defaultPbkdf2VGenCount, maxPbkdf2VGenCount); err == nil {
+		t.Fatal("a negative work factor must be refused, not silently weaken the derivation")
+	}
+}
+
+func TestPbkdf2CountAcceptsRealOracleValues(t *testing.T) {
+	for _, tc := range []struct {
+		raw      string
+		fallback int
+		limit    int
+		want     int
+	}{
+		{"4096", defaultPbkdf2VGenCount, maxPbkdf2VGenCount, 4096},
+		{"3", defaultPbkdf2SDerCount, maxPbkdf2SDerCount, 3},
+		{"", defaultPbkdf2VGenCount, maxPbkdf2VGenCount, defaultPbkdf2VGenCount},
+		{"0", defaultPbkdf2VGenCount, maxPbkdf2VGenCount, defaultPbkdf2VGenCount},
+		{"not-a-number", defaultPbkdf2SDerCount, maxPbkdf2SDerCount, defaultPbkdf2SDerCount},
+	} {
+		got, err := pbkdf2Count(tc.raw, tc.fallback, tc.limit)
+		if err != nil || got != tc.want {
+			t.Fatalf("pbkdf2Count(%q) = %d, %v; want %d", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
+func TestTranslatePhase1ResponseRefusesAHostileWorkFactor(t *testing.T) {
+	payload := ociFixture(t, ociPhaseOneResponse)
+	hostile, err := ociSetValue(payload, "AUTH_PBKDF2_VGEN_COUNT", "2000000000")
+	if err != nil {
+		t.Skipf("fixture carries no VGEN count to tamper with: %v", err)
+	}
+	if _, _, err := translatePhase1ResponseInPlace(hostile, "WebPw_1234"); err == nil {
+		t.Fatal("a hostile work factor must fail the session instead of deriving the key")
+	}
+}

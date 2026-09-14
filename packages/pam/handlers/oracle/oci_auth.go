@@ -36,6 +36,27 @@ func (c authKVPCodec) valueOrEmpty(payload []byte, key string) string {
 	return value
 }
 
+const (
+	defaultPbkdf2VGenCount = 4096
+	defaultPbkdf2SDerCount = 3
+	maxPbkdf2VGenCount     = 1_000_000
+	maxPbkdf2SDerCount     = 1_000
+)
+
+func pbkdf2Count(raw string, fallback, limit int) (int, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n == 0 {
+		return fallback, nil
+	}
+	if n < 0 || n > limit {
+		return 0, fmt.Errorf("target requested a PBKDF2 work factor of %d, outside the supported range 1 to %d", n, limit)
+	}
+	return n, nil
+}
+
 func translatePhase1ResponseInPlace(payload []byte, realPassword string) (*ProxyAuthState, []byte, error) {
 	c, cerr := codecFor(payload)
 	if cerr != nil {
@@ -51,13 +72,13 @@ func translatePhase1ResponseInPlace(payload []byte, realPassword string) (*Proxy
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode salt: %w", err)
 	}
-	vGen, _ := strconv.Atoi(c.valueOrEmpty(payload, "AUTH_PBKDF2_VGEN_COUNT"))
-	if vGen == 0 {
-		vGen = 4096
+	vGen, err := pbkdf2Count(c.valueOrEmpty(payload, "AUTH_PBKDF2_VGEN_COUNT"), defaultPbkdf2VGenCount, maxPbkdf2VGenCount)
+	if err != nil {
+		return nil, nil, err
 	}
-	sDer, _ := strconv.Atoi(c.valueOrEmpty(payload, "AUTH_PBKDF2_SDER_COUNT"))
-	if sDer == 0 {
-		sDer = 3
+	sDer, err := pbkdf2Count(c.valueOrEmpty(payload, "AUTH_PBKDF2_SDER_COUNT"), defaultPbkdf2SDerCount, maxPbkdf2SDerCount)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	realKey, _, err := deriveServerKey(realPassword, salt, vGen)
