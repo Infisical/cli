@@ -123,7 +123,7 @@ func TestAlterPasswordStatement(t *testing.T) {
 	delegated := base
 	delegated.Username = "ROTATOR"
 	delegated.Password = "RotPw_1"
-	got, err := alterPasswordStatement(delegated)
+	got, err := alterPasswordStatement(delegated, delegated.TargetUsername, delegated.Username, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestAlterPasswordStatement(t *testing.T) {
 	self := base
 	self.Username = "APP_USER"
 	self.Password = "OldPw_1"
-	got, err = alterPasswordStatement(self)
+	got, err = alterPasswordStatement(self, self.TargetUsername, self.Username, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestAlterPasswordStatement(t *testing.T) {
 	caseDiffers := base
 	caseDiffers.Username = "app_user"
 	caseDiffers.Password = "OldPw_1"
-	got, err = alterPasswordStatement(caseDiffers)
+	got, err = alterPasswordStatement(caseDiffers, caseDiffers.TargetUsername, caseDiffers.Username, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestAlterPasswordStatement(t *testing.T) {
 
 	bad := self
 	bad.TargetUsername = `BAD"NAME`
-	if _, err := alterPasswordStatement(bad); err == nil {
+	if _, err := alterPasswordStatement(bad, bad.TargetUsername, bad.Username, true); err == nil {
 		t.Fatal("a username containing a double quote must be rejected")
 	}
 }
@@ -176,7 +176,7 @@ func TestAlterPasswordStatementRejectsNonOracleDialect(t *testing.T) {
 	for _, d := range []string{"", "mysql", "postgres"} {
 		p := sqlRotateParams{TargetUsername: "app", NewPassword: "NewPw_1"}
 		p.Dialect = d
-		if _, err := alterPasswordStatement(p); err == nil {
+		if _, err := alterPasswordStatement(p, p.TargetUsername, p.Username, true); err == nil {
 			t.Fatalf("dialect %q must be rejected: the statement also parses as valid MySQL", d)
 		}
 	}
@@ -213,5 +213,41 @@ func TestRedactionStripsUserinfoContainingAtSign(t *testing.T) {
 	}
 	if !strings.Contains(got, "mongodb://******@host:27017") {
 		t.Fatalf("expected the whole userinfo redacted, got %s", got)
+	}
+}
+
+func TestAlterPasswordStatementUsesTheNameOracleStores(t *testing.T) {
+	p := sqlRotateParams{TargetUsername: "webtest", NewPassword: "NewPw_123"}
+	p.Dialect = "oracle"
+	p.Username = "webtest"
+	p.Password = "OldPw_1"
+
+	got, err := alterPasswordStatement(p, "WEBTEST", "WEBTEST", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `ALTER USER "WEBTEST"`) {
+		t.Fatalf("statement must name the stored spelling: %q", got)
+	}
+	if !strings.Contains(got, `REPLACE "OldPw_1"`) {
+		t.Fatalf("self-rotation must keep REPLACE once both names resolve to the same account: %q", got)
+	}
+}
+
+func TestAlterPasswordStatementKeepsCaseDistinctAccountsApart(t *testing.T) {
+	p := sqlRotateParams{TargetUsername: "app_user", NewPassword: "NewPw_123"}
+	p.Dialect = "oracle"
+	p.Username = "APP_USER"
+	p.Password = "OldPw_1"
+
+	got, err := alterPasswordStatement(p, "app_user", "APP_USER", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `ALTER USER "app_user"`) {
+		t.Fatalf("a genuinely lowercase account must stay quoted lowercase: %q", got)
+	}
+	if strings.Contains(got, "REPLACE") {
+		t.Fatalf("two accounts differing only in case are not the same account: %q", got)
 	}
 }

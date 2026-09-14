@@ -6,10 +6,10 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -151,7 +151,7 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	use32Bit := acceptVersion >= 315
 	log.Info().Str("sessionID", p.config.SessionID).Uint16("acceptVersion", acceptVersion).Bool("use32Bit", use32Bit).Msg("Proxy: ACCEPT forwarded")
 
-	p1Payload, err := proxyUntilAuthRequest(clientConn, upstreamConn, use32Bit, p.config.SessionID)
+	p1Payload, p1DataFlag, err := proxyUntilAuthRequest(clientConn, upstreamConn, use32Bit, p.config.SessionID)
 	if err != nil {
 		return fmt.Errorf("pre-auth proxy: %w", err)
 	}
@@ -159,48 +159,50 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 
 	p1Forward := p1Payload
 	if p.config.InjectUsername != "" {
-		rewritten, rerr := rewritePhase1User(p1Payload, p.config.InjectUsername)
-		if rerr != nil {
-			return fmt.Errorf("rewrite phase 1 username: %w", rerr)
+		rewritten, applied := rewriteBundledUsername(p1Payload, AuthSubOpPhaseOne, p.config.InjectUsername)
+		if !applied {
+			log.Warn().Str("sessionID", p.config.SessionID).Msg("Proxy: this client encodes the auth request in a layout the proxy cannot rewrite; the username it sent is forwarded as is and Oracle rejects it unless it names the account")
 		}
 		p1Forward = rewritten
 	}
-	if err := writeDataPayload(upstreamConn, p1Forward, use32Bit); err != nil {
+	if err := writeDataPacket(upstreamConn, &DataPacket{DataFlag: p1DataFlag, Payload: p1Forward}, use32Bit); err != nil {
 		return fmt.Errorf("forward phase 1 request: %w", err)
 	}
 
-	p1RespUpstream, err := readDataPayload(upstreamConn, use32Bit)
+	p1RespPkt, err := readDataPacket(upstreamConn, use32Bit)
 	if err != nil {
 		return fmt.Errorf("read upstream phase 1 response: %w", err)
 	}
-	state, p1RespTranslated, err := translatePhase1Response(p1RespUpstream, p.config.InjectPassword)
+	p1RespUpstream := p1RespPkt.Payload
+	state, p1RespTranslated, err := translatePhase1ResponseInPlace(p1RespUpstream, p.config.InjectPassword)
 	if err != nil {
 		_ = WriteErrorToClient(clientConn, ORA1017InvalidCredentials, "ORA-01017: invalid username/password; logon denied", use32Bit)
 		return fmt.Errorf("translate phase 1 response: %w", err)
 	}
-	if err := writeDataPayload(clientConn, p1RespTranslated, use32Bit); err != nil {
+	if err := writeDataPacket(clientConn, &DataPacket{DataFlag: p1RespPkt.DataFlag, Payload: p1RespTranslated}, use32Bit); err != nil {
 		return fmt.Errorf("write translated phase 1 response: %w", err)
 	}
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-1 response translated and forwarded")
 
-	p2ReqClient, err := readDataPayload(clientConn, use32Bit)
+	p2ReqPkt, err := readDataPacket(clientConn, use32Bit)
 	if err != nil {
 		return fmt.Errorf("read client phase 2 request: %w", err)
 	}
-	p2ReqTranslated, err := translatePhase2Request(p2ReqClient, state, p.config.InjectPassword)
+	p2ReqClient := p2ReqPkt.Payload
+	p2ReqTranslated, err := translatePhase2RequestInPlace(p2ReqClient, state, p.config.InjectPassword)
 	if err != nil {
 		_ = WriteErrorToClient(clientConn, ORA1017InvalidCredentials, "ORA-01017: invalid username/password; logon denied", use32Bit)
 		return fmt.Errorf("translate phase 2 request: %w", err)
 	}
 	// Oracle cross-checks phase-2 username against phase-1.
 	if p.config.InjectUsername != "" {
-		rewritten, rerr := rewritePhase2User(p2ReqTranslated, p.config.InjectUsername)
-		if rerr != nil {
-			return fmt.Errorf("rewrite phase 2 username: %w", rerr)
+		rewritten, applied := rewriteBundledUsername(p2ReqTranslated, AuthSubOpPhaseTwo, p.config.InjectUsername)
+		if !applied {
+			log.Warn().Str("sessionID", p.config.SessionID).Msg("Proxy: this client encodes the auth request in a layout the proxy cannot rewrite; the username it sent is forwarded as is and Oracle rejects it unless it names the account")
 		}
 		p2ReqTranslated = rewritten
 	}
-	if err := writeDataPayload(upstreamConn, p2ReqTranslated, use32Bit); err != nil {
+	if err := writeDataPacket(upstreamConn, &DataPacket{DataFlag: p2ReqPkt.DataFlag, Payload: p2ReqTranslated}, use32Bit); err != nil {
 		return fmt.Errorf("forward phase 2 request: %w", err)
 	}
 	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 request translated and forwarded")
@@ -317,15 +319,22 @@ func upgradeToTLS(ctx context.Context, rawConn net.Conn, cfg OracleProxyConfig) 
 	return tc, nil
 }
 
-func proxyUntilAuthRequest(client, upstream net.Conn, use32Bit bool, sessionID string) ([]byte, error) {
+const upstreamExitGrace = 2 * time.Second
+
+var errAuthRequestHasNoUsername = errors.New("auth request carries no username")
+
+func proxyUntilAuthRequest(client, upstream net.Conn, use32Bit bool, sessionID string) ([]byte, uint16, error) {
 	type result struct {
-		payload []byte
-		err     error
+		payload  []byte
+		dataFlag uint16
+		err      error
 	}
 	done := make(chan result, 2)
 	stop := make(chan struct{})
+	upstreamExited := make(chan struct{})
 
 	go func() {
+		defer close(upstreamExited)
 		for {
 			select {
 			case <-stop:
@@ -369,10 +378,9 @@ func proxyUntilAuthRequest(client, upstream net.Conn, use32Bit bool, sessionID s
 			pktType := PacketTypeOf(pkt)
 			if pktType == PacketTypeData {
 				payload, perr := extractDataPayload(pkt)
-				if perr == nil && len(payload) >= 2 &&
-					payload[0] == TTCMsgAuthRequest && payload[1] == AuthSubOpPhaseOne {
+				if perr == nil && ociContainsAuthRequest(payload, AuthSubOpPhaseOne) {
 					select {
-					case done <- result{payload: payload}:
+					case done <- result{payload: payload, dataFlag: binary.BigEndian.Uint16(pkt[8:])}:
 					default:
 					}
 					return
@@ -392,17 +400,17 @@ func proxyUntilAuthRequest(client, upstream net.Conn, use32Bit bool, sessionID s
 	res := <-done
 	close(stop)
 	// Unblock the other goroutine so it doesn't steal the phase-1 response.
-	if uc, ok := upstream.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = uc.SetReadDeadline(time.Now().Add(-1 * time.Second))
+	_ = upstream.SetReadDeadline(time.Now().Add(-1 * time.Second))
+	select {
+	case <-upstreamExited:
+	case <-time.After(upstreamExitGrace):
+		log.Warn().Str("sessionID", sessionID).Msg("Proxy pre-auth: upstream reader did not exit in time")
 	}
-	time.Sleep(50 * time.Millisecond)
-	if uc, ok := upstream.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = uc.SetReadDeadline(time.Time{})
-	}
+	_ = upstream.SetReadDeadline(time.Time{})
 	if res.err != nil {
-		return nil, res.err
+		return nil, 0, res.err
 	}
-	return res.payload, nil
+	return res.payload, res.dataFlag, nil
 }
 
 func extractDataPayload(pkt []byte) ([]byte, error) {
@@ -429,23 +437,30 @@ func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) 
 	if sub != expectedSubOp {
 		return nil, fmt.Errorf("unexpected sub-op 0x%02X (want 0x%02X)", sub, expectedSubOp)
 	}
-	if _, err := r.GetByte(); err != nil {
+	framing, err := r.GetByte()
+	if err != nil {
 		return nil, err
 	}
+	if framing != 0 {
+		if _, err := r.GetByte(); err != nil {
+			return nil, err
+		}
+	}
 
+	hasUserPos := r.Pos()
 	hasUser, err := r.GetByte()
 	if err != nil {
 		return nil, err
 	}
 	if hasUser != 1 {
-		return payload, nil
+		return nil, errAuthRequestHasNoUsername
 	}
 	origUserLen, err := r.GetInt(4, true, true)
 	if err != nil {
 		return nil, fmt.Errorf("userLen: %w", err)
 	}
-	if origUserLen <= 0 {
-		return payload, nil
+	if origUserLen <= 0 || origUserLen > 128 {
+		return nil, fmt.Errorf("auth request declares a username length of %d", origUserLen)
 	}
 
 	middleStart := r.Pos()
@@ -487,7 +502,7 @@ func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) 
 	newUserLen := len(newUserBytes)
 
 	out := make([]byte, 0, len(payload)+16)
-	out = append(out, payload[:3]...)
+	out = append(out, payload[:hasUserPos]...)
 	out = append(out, 0x01)
 	lb := NewTTCBuilder()
 	lb.PutInt(int64(newUserLen), 4, true, true)
@@ -533,14 +548,6 @@ func rewriteConnectServiceName(pkt []byte, newName string) []byte {
 	return out
 }
 
-func rewritePhase1User(payload []byte, newUser string) ([]byte, error) {
-	return rewriteAuthRequestUser(payload, AuthSubOpPhaseOne, newUser)
-}
-
-func rewritePhase2User(payload []byte, newUser string) ([]byte, error) {
-	return rewriteAuthRequestUser(payload, AuthSubOpPhaseTwo, newUser)
-}
-
 type ProxyAuthState struct {
 	Salt            []byte
 	Pbkdf2CSKSalt   string
@@ -549,130 +556,6 @@ type ProxyAuthState struct {
 	RealKey         []byte
 	PlaceholderKey  []byte
 	ServerSessKey   []byte
-}
-
-func translatePhase1Response(payload []byte, realPassword string) (*ProxyAuthState, []byte, error) {
-	kvs, trailer, err := parseAuthRespKVPList(payload)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse upstream phase 1: %w", err)
-	}
-
-	var eSessKey, vfrData, cskSalt, vGenStr, sDerStr string
-	for _, kv := range kvs {
-		switch kv.Key {
-		case "AUTH_SESSKEY":
-			eSessKey = kv.Value
-		case "AUTH_VFR_DATA":
-			vfrData = kv.Value
-		case "AUTH_PBKDF2_CSK_SALT":
-			cskSalt = kv.Value
-		case "AUTH_PBKDF2_VGEN_COUNT":
-			vGenStr = kv.Value
-		case "AUTH_PBKDF2_SDER_COUNT":
-			sDerStr = kv.Value
-		}
-	}
-	if eSessKey == "" || vfrData == "" {
-		return nil, nil, fmt.Errorf("upstream phase 1 missing AUTH_SESSKEY or AUTH_VFR_DATA")
-	}
-	salt, err := hex.DecodeString(vfrData)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode salt: %w", err)
-	}
-	vGen, _ := strconv.Atoi(vGenStr)
-	if vGen == 0 {
-		vGen = 4096
-	}
-	sDer, _ := strconv.Atoi(sDerStr)
-	if sDer == 0 {
-		sDer = 3
-	}
-
-	realKey, _, err := deriveServerKey(realPassword, salt, vGen)
-	if err != nil {
-		return nil, nil, fmt.Errorf("derive real key: %w", err)
-	}
-	placeholderKey, _, err := deriveServerKey(ProxyPasswordPlaceholder, salt, vGen)
-	if err != nil {
-		return nil, nil, fmt.Errorf("derive placeholder key: %w", err)
-	}
-
-	serverSessKey, err := decryptSessionKey(false, realKey, eSessKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decrypt upstream server session key: %w", err)
-	}
-	newESessKey, err := encryptSessionKey(false, placeholderKey, serverSessKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("re-encrypt server session key: %w", err)
-	}
-
-	for i := range kvs {
-		if kvs[i].Key == "AUTH_SESSKEY" {
-			kvs[i].Value = newESessKey
-			break
-		}
-	}
-
-	rebuilt := rebuildAuthRespPayload(kvs, trailer)
-
-	state := &ProxyAuthState{
-		Salt:            salt,
-		Pbkdf2CSKSalt:   cskSalt,
-		Pbkdf2VGenCount: vGen,
-		Pbkdf2SDerCount: sDer,
-		RealKey:         realKey,
-		PlaceholderKey:  placeholderKey,
-		ServerSessKey:   serverSessKey,
-	}
-	return state, rebuilt, nil
-}
-
-func translatePhase2Request(payload []byte, state *ProxyAuthState, realPassword string) ([]byte, error) {
-	p2, err := ParseAuthPhaseTwo(payload)
-	if err != nil {
-		return nil, fmt.Errorf("parse client phase 2: %w", err)
-	}
-
-	if p2.EClientSessKey == "" || p2.EPassword == "" {
-		return nil, fmt.Errorf("client phase 2 missing AUTH_SESSKEY or AUTH_PASSWORD")
-	}
-
-	clientSessKey, err := decryptSessionKey(false, state.PlaceholderKey, p2.EClientSessKey)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt client session key: %w", err)
-	}
-	if len(clientSessKey) != len(state.ServerSessKey) {
-		return nil, fmt.Errorf("client session key length mismatch: got %d want %d", len(clientSessKey), len(state.ServerSessKey))
-	}
-	newEClientSessKey, err := encryptSessionKey(false, state.RealKey, clientSessKey)
-	if err != nil {
-		return nil, fmt.Errorf("re-encrypt client session key: %w", err)
-	}
-
-	// encKey derives from session keys + CSK salt, not the password.
-	encKey, err := deriveProxyPasswordEncKey(clientSessKey, state.ServerSessKey, state.Pbkdf2CSKSalt, state.Pbkdf2SDerCount)
-	if err != nil {
-		return nil, fmt.Errorf("derive enc key: %w", err)
-	}
-	// Verify the client used the placeholder password. Wrong password would also
-	// fail cryptographically in phase 1 (ORA-17452), but this gives a clearer error.
-	decoded, err := decryptSessionKey(true, encKey, p2.EPassword)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt client password: %w", err)
-	}
-	if len(decoded) <= 16 || string(decoded[16:]) != ProxyPasswordPlaceholder {
-		return nil, fmt.Errorf("password mismatch")
-	}
-	newEPassword, err := encryptPassword([]byte(realPassword), encKey, true)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt real password: %w", err)
-	}
-
-	rebuilt, err := rebuildPhase2Request(payload, newEClientSessKey, newEPassword)
-	if err != nil {
-		return nil, fmt.Errorf("rebuild phase 2: %w", err)
-	}
-	return rebuilt, nil
 }
 
 func deriveProxyPasswordEncKey(clientSessKey, serverSessKey []byte, pbkdf2CSKSaltHex string, sderCount int) ([]byte, error) {
@@ -694,135 +577,4 @@ type parsedKVP struct {
 	Key   string
 	Value string
 	Flag  int
-}
-
-func parseAuthRespKVPList(payload []byte) (kvs []parsedKVP, trailer []byte, err error) {
-	r := NewTTCReader(payload)
-	op, err := r.GetByte()
-	if err != nil {
-		return nil, nil, err
-	}
-	if op != 0x08 {
-		return nil, nil, fmt.Errorf("expected auth response opcode 0x08, got 0x%02X", op)
-	}
-	dictLen, err := r.GetInt(4, true, true)
-	if err != nil {
-		return nil, nil, fmt.Errorf("dict len: %w", err)
-	}
-	for i := 0; i < dictLen; i++ {
-		keyLen, err := r.GetInt(4, true, true)
-		if err != nil {
-			return nil, nil, fmt.Errorf("kvp %d key len: %w", i, err)
-		}
-		var keyBytes []byte
-		if keyLen > 0 {
-			keyBytes, err = r.GetClr()
-			if err != nil {
-				return nil, nil, fmt.Errorf("kvp %d key: %w", i, err)
-			}
-			if len(keyBytes) > keyLen {
-				keyBytes = keyBytes[:keyLen]
-			}
-		}
-		valLen, err := r.GetInt(4, true, true)
-		if err != nil {
-			return nil, nil, fmt.Errorf("kvp %d val len: %w", i, err)
-		}
-		var valBytes []byte
-		if valLen > 0 {
-			valBytes, err = r.GetClr()
-			if err != nil {
-				return nil, nil, fmt.Errorf("kvp %d val: %w", i, err)
-			}
-			if len(valBytes) > valLen {
-				valBytes = valBytes[:valLen]
-			}
-		}
-		flag, err := r.GetInt(4, true, true)
-		if err != nil {
-			return nil, nil, fmt.Errorf("kvp %d flag: %w", i, err)
-		}
-		kvs = append(kvs, parsedKVP{
-			Key:   string(bytes.TrimRight(keyBytes, "\x00")),
-			Value: string(valBytes),
-			Flag:  flag,
-		})
-	}
-	trailer = make([]byte, r.Remaining())
-	rem, _ := r.GetBytes(r.Remaining())
-	copy(trailer, rem)
-	return kvs, trailer, nil
-}
-
-func rebuildAuthRespPayload(kvs []parsedKVP, trailer []byte) []byte {
-	b := NewTTCBuilder()
-	b.PutBytes(0x08)
-	b.PutUint(uint64(len(kvs)), 4, true, true)
-	for _, kv := range kvs {
-		b.PutKeyValString(kv.Key, kv.Value, uint32(kv.Flag))
-	}
-	b.PutBytes(trailer...)
-	return b.Bytes()
-}
-
-func rebuildPhase2Request(payload []byte, newESessKey, newEPassword string) ([]byte, error) {
-	out := make([]byte, 0, len(payload)+128)
-	out = append(out, payload...)
-
-	out, err := replaceKVPValue(out, "AUTH_SESSKEY", newESessKey)
-	if err != nil {
-		return nil, fmt.Errorf("replace AUTH_SESSKEY: %w", err)
-	}
-	out, err = replaceKVPValue(out, "AUTH_PASSWORD", newEPassword)
-	if err != nil {
-		return nil, fmt.Errorf("replace AUTH_PASSWORD: %w", err)
-	}
-	return out, nil
-}
-
-func replaceKVPValue(payload []byte, key, newValue string) ([]byte, error) {
-	keyBytes := []byte(key)
-	idx := bytes.Index(payload, keyBytes)
-	if idx < 0 {
-		return nil, fmt.Errorf("key %q not found", key)
-	}
-	pos := idx + len(keyBytes)
-	if pos >= len(payload) {
-		return nil, fmt.Errorf("truncated after key")
-	}
-	vSizeByte := payload[pos]
-	pos++
-	var vLen int
-	if vSizeByte == 0 {
-		vLen = 0
-	} else if int(vSizeByte) <= 8 {
-		for i := 0; i < int(vSizeByte); i++ {
-			vLen = (vLen << 8) | int(payload[pos+i])
-		}
-		pos += int(vSizeByte)
-	} else {
-		return nil, fmt.Errorf("invalid val_len size byte %d", vSizeByte)
-	}
-	if vLen > 0 {
-		if pos >= len(payload) || int(payload[pos]) != vLen {
-			return nil, fmt.Errorf("CLR length byte mismatch for %q: got %d want %d", key, payload[pos], vLen)
-		}
-		pos++
-		valBodyStart := pos
-		valBodyEnd := valBodyStart + vLen
-		// PutClr handles chunked 0xFE form for values > 0xFC bytes.
-		newVal := []byte(newValue)
-		vb := NewTTCBuilder()
-		vb.PutUint(uint64(len(newVal)), 4, true, true)
-		vb.PutClr(newVal)
-		newValSection := vb.Bytes()
-		oldStart := idx + len(keyBytes)
-		oldEnd := valBodyEnd
-		out := make([]byte, 0, len(payload)+len(newValSection))
-		out = append(out, payload[:oldStart]...)
-		out = append(out, newValSection...)
-		out = append(out, payload[oldEnd:]...)
-		return out, nil
-	}
-	return payload, fmt.Errorf("unexpected empty value for %q", key)
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,8 +78,7 @@ func handleSQLRotateCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	statement, err := alterPasswordStatement(params)
-	if err != nil {
+	if err := validateOracleRotateParams(params); err != nil {
 		writeRPCError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -86,7 +86,7 @@ func handleSQLRotateCredential(w http.ResponseWriter, r *http.Request) {
 	target, _ := r.Context().Value(rpcTargetContextKey{}).(rpcTarget)
 
 	if err := runWithContextTimeoutMessage(ctx, func() error {
-		return doSQLRotate(ctx, target.host, target.port, params, statement)
+		return doSQLRotate(ctx, target.host, target.port, params)
 	}, "the password change timed out before the target answered, and may still have been applied"); err != nil {
 		msg := redactProbeSecrets(err.Error(), params.Password, params.NewPassword)
 		writeRPCErrorWithKind(w, http.StatusBadGateway, msg, string(classifyTestConnFailure(err)))
@@ -95,7 +95,7 @@ func handleSQLRotateCredential(w http.ResponseWriter, r *http.Request) {
 	writeRPCJSON(w, http.StatusOK, testConnectionResponse{Result: testConnectionResult{Ok: true}})
 }
 
-func doSQLRotate(ctx context.Context, host string, port int, params sqlRotateParams, statement string) error {
+func doSQLRotate(ctx context.Context, host string, port int, params sqlRotateParams) error {
 	if err := dialTarget(ctx, host, port); err != nil {
 		return connectFailure(err)
 	}
@@ -105,30 +105,97 @@ func doSQLRotate(ctx context.Context, host string, port int, params sqlRotatePar
 		return connectFailure(err)
 	}
 	defer db.Close()
+
+	targetUsername, exact, err := resolveOracleUsername(ctx, db, params.TargetUsername)
+	if err != nil {
+		return err
+	}
+	sessionUsername, err := sessionOracleUsername(ctx, db)
+	if err != nil {
+		return sqlAuthFailure(params.Dialect, err)
+	}
+
+	statement, err := alterPasswordStatement(params, targetUsername, sessionUsername, exact)
+	if err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, statement); err != nil {
 		return sqlAuthFailure(params.Dialect, err)
 	}
 	return nil
 }
 
-func alterPasswordStatement(params sqlRotateParams) (string, error) {
+func validateOracleRotateParams(params sqlRotateParams) error {
 	if params.Dialect != "oracle" {
-		return "", fmt.Errorf("credential rotation over this transport is not supported for dialect %q", params.Dialect)
+		return fmt.Errorf("credential rotation over this transport is not supported for dialect %q", params.Dialect)
 	}
-
-	for label, v := range map[string]string{"username": params.TargetUsername, "password": params.NewPassword} {
+	for label, v := range map[string]string{"username": params.TargetUsername, "password": params.NewPassword, "current password": params.Password} {
 		if strings.Contains(v, `"`) {
-			return "", fmt.Errorf("oracle %s cannot contain a double quote", label)
+			return fmt.Errorf("oracle %s cannot contain a double quote", label)
 		}
 	}
+	return nil
+}
 
-	stmt := fmt.Sprintf(`ALTER USER "%s" IDENTIFIED BY "%s"`, params.TargetUsername, params.NewPassword)
+func alterPasswordStatement(params sqlRotateParams, targetUsername, sessionUsername string, exact bool) (string, error) {
+	if err := validateOracleRotateParams(params); err != nil {
+		return "", err
+	}
+	if strings.Contains(targetUsername, `"`) {
+		return "", fmt.Errorf("oracle username cannot contain a double quote")
+	}
 
-	if params.TargetUsername == params.Username && params.Password != "" {
+	stmt := fmt.Sprintf(`ALTER USER "%s" IDENTIFIED BY "%s"`, targetUsername, params.NewPassword)
+
+	sameAccount := targetUsername == sessionUsername
+	if !exact {
+		sameAccount = strings.EqualFold(targetUsername, sessionUsername)
+	}
+	if sameAccount && params.Password != "" {
 		if strings.Contains(params.Password, `"`) {
 			return "", fmt.Errorf("oracle password cannot contain a double quote")
 		}
 		stmt += fmt.Sprintf(` REPLACE "%s"`, params.Password)
 	}
 	return stmt, nil
+}
+
+func resolveOracleUsername(ctx context.Context, db *sql.DB, name string) (resolved string, exact bool, err error) {
+	rows, qerr := db.QueryContext(ctx, `SELECT username FROM all_users WHERE UPPER(username) = UPPER(:1)`, name)
+	if qerr != nil {
+		return name, false, nil
+	}
+	defer rows.Close()
+
+	var matches []string
+	for rows.Next() {
+		var found string
+		if serr := rows.Scan(&found); serr != nil {
+			return name, false, nil
+		}
+		if found == name {
+			return name, true, nil
+		}
+		matches = append(matches, found)
+	}
+	if rerr := rows.Err(); rerr != nil {
+		return name, false, nil
+	}
+
+	switch len(matches) {
+	case 0:
+		return name, false, nil
+	case 1:
+		return matches[0], true, nil
+	default:
+		return "", false, fmt.Errorf("%q matches more than one Oracle user (%s); enter it exactly as Oracle stores it", name, strings.Join(matches, ", "))
+	}
+}
+
+func sessionOracleUsername(ctx context.Context, db *sql.DB) (string, error) {
+	var user string
+	if err := db.QueryRowContext(ctx, `SELECT USER FROM DUAL`).Scan(&user); err != nil {
+		return "", err
+	}
+	return user, nil
 }
