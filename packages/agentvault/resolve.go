@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -53,11 +54,15 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 	services := make([]*resolvedService, 0, len(res.Services))
 	for _, wire := range res.Services {
 		services = append(services, &resolvedService{
-			id:               wire.ID,
-			name:             wire.Name,
-			accessBundleName: wire.AccessBundleName,
-			hostPatterns:     parseHostPatterns(wire.HostPattern),
-			credential:       toCredential(wire.Credential),
+			id:                  wire.ID,
+			name:                wire.Name,
+			accessBundleName:    wire.AccessBundleName,
+			hostPatterns:        parseHostPatterns(wire.HostPattern),
+			allowedMethods:      toMethodSet(wire.AllowedMethods),
+			allowedPathPrefixes: toPathPrefixes(wire.AllowedPathPrefixes),
+			credential:          toCredential(wire.Credential),
+			headers:             toHeaders(wire.Headers),
+			substitutions:       toSubstitutions(wire.Substitutions),
 		})
 	}
 
@@ -82,4 +87,70 @@ func toCredential(wire api.AgentVaultCredential) credential {
 	default:
 		return credential{kind: credentialPassthrough}
 	}
+}
+
+// A nil slice stays a nil map, which allowsMethod reads as "every method". An empty list from the server
+// would be a restriction allowing nothing, so it is kept distinct rather than folded into nil.
+func toMethodSet(methods []string) map[string]bool {
+	if methods == nil {
+		return nil
+	}
+	set := make(map[string]bool, len(methods))
+	for _, method := range methods {
+		set[strings.ToUpper(strings.TrimSpace(method))] = true
+	}
+	return set
+}
+
+// Normalised the same way the backend stores them, so a trailing slash cannot make a prefix unmatchable.
+//
+// Fails closed like toMethodSet: nil means unrestricted, and anything else means restricted, including a
+// list the server sent with nothing usable in it. Dropping to a zero-length slice there would read as
+// unrestricted at every call site, which is the opposite of what a restriction that arrived empty means.
+func toPathPrefixes(prefixes []string) []string {
+	if prefixes == nil {
+		return nil
+	}
+	out := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		if prefix != "/" {
+			prefix = strings.TrimRight(prefix, "/")
+		}
+		out = append(out, prefix)
+	}
+	if len(out) == 0 {
+		// A prefix no request can match, so a restriction the server sent empty allows nothing.
+		return []string{"\x00"}
+	}
+	return out
+}
+
+func toHeaders(wire []api.AgentVaultHeader) []customHeader {
+	if len(wire) == 0 {
+		return nil
+	}
+	headers := make([]customHeader, 0, len(wire))
+	for _, h := range wire {
+		headers = append(headers, customHeader{name: h.Name, prefix: h.Prefix, value: []byte(h.Value)})
+	}
+	return headers
+}
+
+func toSubstitutions(wire []api.AgentVaultSubstitution) []substitution {
+	if len(wire) == 0 {
+		return nil
+	}
+	subs := make([]substitution, 0, len(wire))
+	for _, s := range wire {
+		surfaces := make(map[string]bool, len(s.Surfaces))
+		for _, surface := range s.Surfaces {
+			surfaces[surface] = true
+		}
+		subs = append(subs, substitution{placeholder: s.Placeholder, surfaces: surfaces, value: []byte(s.Value)})
+	}
+	return subs
 }

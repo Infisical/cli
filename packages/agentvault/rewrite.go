@@ -1,15 +1,27 @@
 package agentvault
 
 import (
+	"bytes"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
 	credentialBearer      = "bearer"
 	credentialBasic       = "basic"
 	credentialPassthrough = "passthrough"
+
+	surfacePath   = "path"
+	surfaceQuery  = "query"
+	surfaceHeader = "header"
+	surfaceBody   = "body"
+
+	maxBodyRewriteSize = 10 * 1024 * 1024
 )
 
 // injectCredential overwrites an existing header on the agent's request, silently and deliberately.
@@ -33,6 +45,169 @@ func injectCredential(req *http.Request, cred *credential) bool {
 	default:
 		return false
 	}
+}
+
+// injectHeaders writes the service's custom headers, after the credential, so a header whose name collides
+// with the credential's would overwrite it. The backend refuses that pairing on write for exactly this
+// reason; nothing here can detect it, because by this point both are just names.
+func injectHeaders(req *http.Request, headers []customHeader) bool {
+	for _, header := range headers {
+		value := string(header.value)
+		if header.prefix != "" {
+			value = header.prefix + " " + value
+		}
+		req.Header.Set(header.name, value)
+	}
+	return len(headers) > 0
+}
+
+// applySubstitutions swaps each placeholder for its real value across the surfaces the service names.
+// Ported from the agent proxy (packages/agentproxy/rewrite.go), with one deliberate change: a body it
+// cannot rewrite is logged rather than skipped in silence, because the request then goes upstream with the
+// placeholder still in it and the agent only ever sees a third-party 401.
+func applySubstitutions(req *http.Request, serviceName string, subs []substitution) []string {
+	changed := map[string]bool{}
+	for _, sub := range subs {
+		if len(sub.placeholder) == 0 {
+			continue
+		}
+		real := string(sub.value)
+
+		if sub.surfaces[surfacePath] && strings.Contains(req.URL.Path, sub.placeholder) {
+			if v, ok := replaceWithinLimit(req.URL.Path, sub.placeholder, real, maxBodyRewriteSize); ok {
+				req.URL.Path = v
+				// Clearing RawPath makes Go re-encode the path from Path, which can change the byte form of
+				// other escaped segments.
+				req.URL.RawPath = ""
+				changed[surfacePath] = true
+			}
+		}
+
+		if sub.surfaces[surfaceQuery] && strings.Contains(req.URL.RawQuery, sub.placeholder) {
+			if v, ok := replaceWithinLimit(req.URL.RawQuery, sub.placeholder, real, maxBodyRewriteSize); ok {
+				req.URL.RawQuery = v
+				changed[surfaceQuery] = true
+			}
+		}
+
+		if sub.surfaces[surfaceHeader] {
+			for name, values := range req.Header {
+				for i, v := range values {
+					if !strings.Contains(v, sub.placeholder) {
+						continue
+					}
+					if replaced, ok := replaceWithinLimit(v, sub.placeholder, real, maxBodyRewriteSize); ok {
+						req.Header[name][i] = replaced
+						changed[surfaceHeader] = true
+					}
+				}
+			}
+		}
+	}
+
+	if bodySubstitutions(subs) && req.Body != nil {
+		if applyBodySubstitutions(req, serviceName, subs) {
+			changed[surfaceBody] = true
+		}
+	}
+
+	surfaces := make([]string, 0, len(changed))
+	for _, surface := range []string{surfacePath, surfaceQuery, surfaceHeader, surfaceBody} {
+		if changed[surface] {
+			surfaces = append(surfaces, surface)
+		}
+	}
+	return surfaces
+}
+
+func bodySubstitutions(subs []substitution) bool {
+	for _, sub := range subs {
+		if sub.surfaces[surfaceBody] {
+			return true
+		}
+	}
+	return false
+}
+
+// The body is only ever read when some substitution names it, so a service without one keeps streaming
+// exactly as before.
+func applyBodySubstitutions(req *http.Request, serviceName string, subs []substitution) bool {
+	if req.Body == http.NoBody || req.ContentLength == 0 {
+		return false
+	}
+	if enc := req.Header.Get("Content-Encoding"); enc != "" {
+		log.Warn().
+			Str("service", serviceName).
+			Str("contentEncoding", enc).
+			Msg("agent-vault: body substitution skipped on an encoded body; the placeholder is going upstream unchanged")
+		return false
+	}
+
+	body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
+	if err != nil {
+		// The stream is already part-consumed, so the original length is no longer true. Left alone,
+		// http.Transport refuses the request outright and the agent gets a 502 rather than the unchanged
+		// body this path promises.
+		_ = req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		log.Warn().Err(err).Str("service", serviceName).
+			Msg("agent-vault: could not read the whole request body for substitution; forwarding what was read, with the placeholder unchanged")
+		return false
+	}
+	if len(body) > maxBodyRewriteSize {
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), req.Body))
+		log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
+			Msg("agent-vault: body larger than the substitution limit; the placeholder is going upstream unchanged")
+		return false
+	}
+	_ = req.Body.Close()
+
+	rewritten := body
+	replaced := false
+	for _, sub := range subs {
+		if !sub.surfaces[surfaceBody] || len(sub.placeholder) == 0 {
+			continue
+		}
+		count := bytes.Count(rewritten, []byte(sub.placeholder))
+		if count == 0 {
+			continue
+		}
+		// Forward unchanged when expanding the placeholder would push the body past the cap.
+		if len(rewritten)+count*(len(sub.value)-len(sub.placeholder)) > maxBodyRewriteSize {
+			log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
+				Msg("agent-vault: substituted body would exceed the limit; the placeholder is going upstream unchanged")
+			continue
+		}
+		rewritten = bytes.ReplaceAll(rewritten, []byte(sub.placeholder), sub.value)
+		replaced = true
+	}
+
+	if len(rewritten) == 0 {
+		// A NopCloser over an empty reader reads to net/http as "length unknown", which turns a bodyless
+		// POST into a chunked request. Signing schemes and some gateways reject that.
+		req.Body = http.NoBody
+	} else {
+		req.Body = io.NopCloser(bytes.NewReader(rewritten))
+	}
+	req.ContentLength = int64(len(rewritten))
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	return replaced
+}
+
+// replaceWithinLimit substitutes every occurrence of old in s, but only when the expanded result stays
+// within limit bytes; otherwise it returns the input unchanged. This stops a short placeholder mapped to a
+// long secret from ballooning proxy memory, since ReplaceAll allocates by the expansion ratio.
+func replaceWithinLimit(s, old, replacement string, limit int) (string, bool) {
+	count := strings.Count(s, old)
+	if count == 0 {
+		return s, true
+	}
+	if len(s)+count*(len(replacement)-len(old)) > limit {
+		return s, false
+	}
+	return strings.ReplaceAll(s, old, replacement), true
 }
 
 // stripHopByHopHeaders also deletes Upgrade, which is why WebSocket upgrades cannot be forwarded.
