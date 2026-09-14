@@ -28,6 +28,7 @@ const (
 	AccountTypeMongoDB           = "mongodb"
 	AccountTypeOracleDB          = "oracledb"
 	AccountTypeRedis             = "redis"
+	AccountTypeSnowflake         = "snowflake"
 	AccountTypeKubernetes        = "kubernetes"
 	AccountTypeAwsIam            = "aws-iam"
 	AccountTypeGcpServiceAccount = "gcp-service-account"
@@ -134,6 +135,8 @@ func StartPAMAccess(accessToken string, opts AccessOptions) {
 		startSSHAccess(httpClient, &pamResponse, displayPath, opts)
 	case AccountTypeRedis:
 		startRedisProxy(httpClient, &pamResponse, displayPath, durationStr, port)
+	case AccountTypeSnowflake:
+		startSnowflakeProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeKubernetes:
 		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 	case AccountTypeAwsIam:
@@ -179,6 +182,7 @@ func endSession(httpClient *resty.Client, sessionId string) {
 func NewLiveSession(response *api.PAMAccessResponse, expiry time.Time) LiveSession {
 	return LiveSession{
 		SessionId:              response.SessionId,
+		DirectAddress:          response.DirectAddress,
 		RelayHost:              response.RelayHost,
 		RelayClientCert:        response.RelayClientCertificate,
 		RelayClientKey:         response.RelayClientPrivateKey,
@@ -492,6 +496,7 @@ func startDatabaseProxy(httpClient *resty.Client, response *api.PAMAccessRespons
 	proxy := &DatabaseProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,
@@ -550,6 +555,7 @@ func startRedisProxy(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	proxy := &RedisProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,
@@ -652,6 +658,7 @@ func startRDPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 	proxy := &RDPProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,
@@ -768,6 +775,7 @@ func startSSHShell(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 
 	transport := &BaseProxyServer{
 		httpClient:             httpClient,
+		directAddress:          response.DirectAddress,
 		relayHost:              response.RelayHost,
 		relayClientCert:        response.RelayClientCertificate,
 		relayClientKey:         response.RelayClientPrivateKey,
@@ -817,6 +825,7 @@ func startSSHProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 	proxy := &SSHProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,
@@ -976,6 +985,7 @@ func startKubernetesProxy(httpClient *resty.Client, response *api.PAMAccessRespo
 	proxy := &KubernetesProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,

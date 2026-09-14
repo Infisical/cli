@@ -325,6 +325,7 @@ func startGCPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 	proxy := &GCPProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,

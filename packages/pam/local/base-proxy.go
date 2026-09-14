@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -29,6 +30,7 @@ import (
 // certificates for the relay and gateway hops, and when the session stops being usable.
 type LiveSession struct {
 	SessionId              string
+	DirectAddress          string
 	RelayHost              string
 	RelayClientCert        string
 	RelayClientKey         string
@@ -55,6 +57,7 @@ type SessionProvider interface {
 // BaseProxyServer contains common functionality for all local proxy types
 type BaseProxyServer struct {
 	httpClient             *resty.Client
+	directAddress          string
 	relayHost              string
 	relayClientCert        string
 	relayClientKey         string
@@ -76,12 +79,17 @@ type BaseProxyServer struct {
 	// keepProcessAlive suppresses the os.Exit(0) at the end of graceful shutdown. The agent
 	// runner sets it so one proxy shutting down cannot kill the agent it launched.
 	keepProcessAlive bool
+
+	// The direct address that failed, so later connections skip it. Keyed by address because a
+	// refreshed session can carry a new one.
+	failedDirect atomic.Pointer[directFailure]
 }
 
 // staticSession builds a LiveSession from the fields set at construction time.
 func (b *BaseProxyServer) staticSession() LiveSession {
 	return LiveSession{
 		SessionId:              b.sessionId,
+		DirectAddress:          b.directAddress,
 		RelayHost:              b.relayHost,
 		RelayClientCert:        b.relayClientCert,
 		RelayClientKey:         b.relayClientKey,
@@ -126,6 +134,65 @@ func (b *BaseProxyServer) CreateRelayConnection() (net.Conn, error) {
 // createRelayConnectionWith dials the relay using an already-resolved session, so callers that must
 // not create a session (such as termination) can pass what they already hold.
 func (b *BaseProxyServer) createRelayConnectionWith(session LiveSession) (net.Conn, error) {
+	if session.DirectAddress != "" && !b.skipDirect(session) {
+		conn, err := net.DialTimeout("tcp", session.DirectAddress, directDialTimeout)
+		if err == nil {
+			return &gatewayTransportConn{Conn: conn, direct: true}, nil
+		}
+		b.markDirectUnavailable(session, err, "Direct gateway connection failed")
+	}
+
+	return b.createRelayOnlyConnection(session)
+}
+
+// A failure is remembered per address and expires, so a transient blip cannot pin a long-lived
+// proxy to the relay for the rest of its life.
+type directFailure struct {
+	address    string
+	retryAfter time.Time
+}
+
+// With no relay to fall back to, direct is retried regardless: failing fast gains nothing.
+func (b *BaseProxyServer) skipDirect(session LiveSession) bool {
+	if session.RelayHost == "" {
+		return false
+	}
+	failed := b.failedDirect.Load()
+	return failed != nil && failed.address == session.DirectAddress && time.Now().Before(failed.retryAfter)
+}
+
+func (b *BaseProxyServer) markDirectUnavailable(session LiveSession, err error, msg string) {
+	if session.RelayHost == "" {
+		log.Debug().Err(err).Str("address", session.DirectAddress).Msg(msg)
+		return
+	}
+	failure := &directFailure{address: session.DirectAddress, retryAfter: time.Now().Add(directRetryInterval)}
+	previous := b.failedDirect.Swap(failure)
+	if previous == nil || previous.address != failure.address || time.Now().After(previous.retryAfter) {
+		log.Warn().Err(err).Str("address", failure.address).Msgf("%s, using the relay until it recovers", msg)
+		return
+	}
+	log.Debug().Err(err).Str("address", failure.address).Msg(msg)
+}
+
+type gatewayTransportConn struct {
+	net.Conn
+	direct bool
+}
+
+const (
+	// The relay path terminates locally, and the gateway cert carries localhost as a SAN.
+	relayServerName   = "localhost"
+	directDialTimeout = 3 * time.Second
+	// How long a failed direct address stays demoted before it is tried again.
+	directRetryInterval    = 60 * time.Second
+	directHandshakeTimeout = 3 * time.Second
+)
+
+func (b *BaseProxyServer) createRelayOnlyConnection(session LiveSession) (net.Conn, error) {
+	if session.RelayHost == "" {
+		return nil, fmt.Errorf("direct gateway connection failed and no relay fallback is available")
+	}
 	var host string
 	var port int = 8443
 
@@ -251,6 +318,47 @@ func (b *BaseProxyServer) CreateGatewayConnection(relayConn net.Conn, alpn ALPN)
 
 // createGatewayConnectionWith performs the gateway mTLS handshake using an already-resolved session.
 func (b *BaseProxyServer) createGatewayConnectionWith(relayConn net.Conn, alpn ALPN, session LiveSession) (net.Conn, error) {
+	transport, isDirect := relayConn.(*gatewayTransportConn)
+	isDirect = isDirect && transport.direct
+
+	serverName := relayServerName
+	if isDirect {
+		host, _, splitErr := net.SplitHostPort(session.DirectAddress)
+		if splitErr != nil {
+			return nil, fmt.Errorf("invalid direct gateway address: %w", splitErr)
+		}
+		serverName = host
+	}
+
+	gatewayConn, err := b.handshakeGatewayConnection(relayConn, alpn, session, serverName, isDirect)
+	if err == nil {
+		return gatewayConn, nil
+	}
+	if !isDirect || session.RelayHost == "" {
+		return nil, err
+	}
+
+	_ = relayConn.Close()
+	b.markDirectUnavailable(session, err, "Direct gateway TLS handshake failed")
+	relayFallback, relayErr := b.createRelayOnlyConnection(session)
+	if relayErr != nil {
+		return nil, relayErr
+	}
+	gatewayConn, relayErr = b.handshakeGatewayConnection(relayFallback, alpn, session, relayServerName, false)
+	if relayErr != nil {
+		_ = relayFallback.Close()
+		return nil, relayErr
+	}
+	return gatewayConn, nil
+}
+
+func (b *BaseProxyServer) handshakeGatewayConnection(relayConn net.Conn, alpn ALPN, session LiveSession, serverName string, isDirect bool) (net.Conn, error) {
+	// Keyed off the transport, not the server name, which can legitimately be "localhost".
+	if isDirect {
+		_ = relayConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
+		defer relayConn.SetDeadline(time.Time{})
+	}
+
 	// Load gateway certificates
 	cert, err := tls.X509KeyPair([]byte(session.GatewayClientCert), []byte(session.GatewayClientKey))
 	if err != nil {
@@ -268,7 +376,7 @@ func (b *BaseProxyServer) createGatewayConnectionWith(relayConn net.Conn, alpn A
 		MinVersion:   tls.VersionTLS12,
 		MaxVersion:   tls.VersionTLS13,
 		NextProtos:   []string{string(alpn)},
-		ServerName:   "localhost",
+		ServerName:   serverName,
 	}
 
 	gatewayConn := tls.Client(relayConn, tlsConfig)

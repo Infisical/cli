@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	legacyServiceName  = "infisical-gateway"
-	legacyConfigPath   = "/etc/infisical/gateway.conf"
-	legacyServicePath  = "/etc/systemd/system/infisical-gateway.service"
-	gatewaysConfigDir  = "/etc/infisical/gateways"
+	legacyServiceName = "infisical-gateway"
+	legacyConfigPath  = "/etc/infisical/gateway.conf"
+	legacyServicePath = "/etc/systemd/system/infisical-gateway.service"
+	gatewaysConfigDir = "/etc/infisical/gateways"
 )
 
 func serviceFilePath(name string) string {
@@ -76,7 +76,7 @@ func resolveInstallPaths(name string) (installResult, error) {
 	}, nil
 }
 
-func InstallGatewaySystemdService(token string, domain string, name string, relayName string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
+func InstallGatewaySystemdService(token string, domain string, name string, relayName string, listenAddress string, bindAddress string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return "", nil
@@ -106,6 +106,12 @@ func InstallGatewaySystemdService(token string, domain string, name string, rela
 	}
 	if relayName != "" {
 		configContent += fmt.Sprintf("%s=%s\n", RELAY_NAME_ENV_NAME, relayName)
+	}
+	if listenAddress != "" {
+		configContent += fmt.Sprintf("%s=%s\n", LISTEN_ADDRESS_ENV_NAME, listenAddress)
+	}
+	if bindAddress != "" {
+		configContent += fmt.Sprintf("%s=%s\n", BIND_ADDRESS_ENV_NAME, bindAddress)
 	}
 	if pkcs11ModulePath != "" {
 		configContent += fmt.Sprintf("%s=%s\n", INFISICAL_PKCS11_MODULE_ENV_NAME, pkcs11ModulePath)
@@ -142,7 +148,7 @@ func InstallGatewaySystemdService(token string, domain string, name string, rela
 // InstallEnrolledGatewaySystemdService installs the systemd service for a gateway that was
 // enrolled via the enrollment token flow. It writes the long-lived gateway access token
 // (not a machine identity token) into the environment file.
-func InstallEnrolledGatewaySystemdService(accessToken string, domain string, name string, relayName string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
+func InstallEnrolledGatewaySystemdService(accessToken string, domain string, name string, relayName string, listenAddress string, bindAddress string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return "", nil
@@ -171,6 +177,12 @@ func InstallEnrolledGatewaySystemdService(accessToken string, domain string, nam
 	}
 	if relayName != "" {
 		configContent += fmt.Sprintf("%s=%s\n", RELAY_NAME_ENV_NAME, relayName)
+	}
+	if listenAddress != "" {
+		configContent += fmt.Sprintf("%s=%s\n", LISTEN_ADDRESS_ENV_NAME, listenAddress)
+	}
+	if bindAddress != "" {
+		configContent += fmt.Sprintf("%s=%s\n", BIND_ADDRESS_ENV_NAME, bindAddress)
 	}
 	if pkcs11ModulePath != "" {
 		configContent += fmt.Sprintf("%s=%s\n", INFISICAL_PKCS11_MODULE_ENV_NAME, pkcs11ModulePath)
@@ -209,7 +221,7 @@ func InstallEnrolledGatewaySystemdService(accessToken string, domain string, nam
 // fresh STS-signed login on each service start using whatever AWS credentials it can resolve
 // (instance role, env vars, shared profile). We just persist the gateway id, domain, and name
 // so `gateway start` can re-authenticate.
-func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name string, relayName string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
+func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name string, relayName string, listenAddress string, bindAddress string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return "", nil
@@ -239,6 +251,12 @@ func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name s
 	}
 	if relayName != "" {
 		configContent += fmt.Sprintf("%s=%s\n", RELAY_NAME_ENV_NAME, relayName)
+	}
+	if listenAddress != "" {
+		configContent += fmt.Sprintf("%s=%s\n", LISTEN_ADDRESS_ENV_NAME, listenAddress)
+	}
+	if bindAddress != "" {
+		configContent += fmt.Sprintf("%s=%s\n", BIND_ADDRESS_ENV_NAME, bindAddress)
 	}
 	if pkcs11ModulePath != "" {
 		configContent += fmt.Sprintf("%s=%s\n", INFISICAL_PKCS11_MODULE_ENV_NAME, pkcs11ModulePath)

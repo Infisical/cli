@@ -106,14 +106,13 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 		return envDomain
 	}
 
-	workspaceConfig, err := util.GetWorkSpaceFromFile()
-	if err != nil || workspaceConfig.Domain == "" {
+	domain, valid := util.GetDomainFromFile()
+	if domain == "" {
 		return flagValue
 	}
 
-	domain := workspaceConfig.Domain
-	if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
-		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must start with http:// or https://). It will be ignored.", cmd.ErrOrStderr())
+	if !valid {
+		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
 		return flagValue
 	}
 
@@ -251,10 +250,17 @@ func shouldDisableColor() bool {
 	return false
 }
 
+// A value the flag does not name is refused rather than quietly treated as console: --log-format JSON
+// in a unit file would otherwise put human-readable lines into a log pipeline with nothing to say why.
 func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
-	var stream io.Writer = os.Stderr
-	if format != "json" {
+	var stream io.Writer
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "json":
+		stream = os.Stderr
+	case "console", "":
 		stream = GetLoggerConfig(os.Stderr, !isatty.IsTerminal(os.Stderr.Fd()))
+	default:
+		return nil, fmt.Errorf("--log-format must be console or json, got %q", format)
 	}
 
 	if filePath == "" {

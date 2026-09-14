@@ -248,6 +248,7 @@ func startAzureAccess(httpClient *resty.Client, response *api.PAMAccessResponse,
 	proxy := &AzureProxyServer{
 		BaseProxyServer: BaseProxyServer{
 			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
 			relayHost:              response.RelayHost,
 			relayClientCert:        response.RelayClientCertificate,
 			relayClientKey:         response.RelayClientPrivateKey,
