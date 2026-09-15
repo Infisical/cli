@@ -59,6 +59,7 @@ const (
 	operationCallEnrollGateway                     = "CallEnrollGateway"
 	operationCallAwsAuthLoginGateway               = "CallAwsAuthLoginGateway"
 	operationCallKubernetesAuthLoginGateway        = "CallKubernetesAuthLoginGateway"
+	operationCallGcpAuthLoginGateway               = "CallGcpAuthLoginGateway"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMListAccessibleAccounts         = "CallPAMListAccessibleAccounts"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
@@ -1157,6 +1158,26 @@ func CallKubernetesAuthLoginGateway(httpClient *resty.Client, request Kubernetes
 
 	if response.IsError() {
 		return KubernetesAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallKubernetesAuthLoginGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallGcpAuthLoginGateway(httpClient *resty.Client, request GcpAuthLoginGatewayRequest) (GcpAuthLoginGatewayResponse, error) {
+	var resBody GcpAuthLoginGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return GcpAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallGcpAuthLoginGateway, err)
+	}
+
+	if response.IsError() {
+		return GcpAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallGcpAuthLoginGateway, response, nil)
 	}
 
 	return resBody, nil

@@ -864,6 +864,17 @@ type KubernetesAuthLoginGatewayResponse struct {
 	TokenType   string `json:"tokenType"`
 }
 
+type GcpAuthLoginGatewayRequest struct {
+	Method    string `json:"method"`
+	GatewayID string `json:"gatewayId"`
+	JWT       string `json:"jwt"`
+}
+
+type GcpAuthLoginGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
 type RegisterGatewayResponse struct {
 	GatewayID     string `json:"gatewayId"`
 	DirectAddress string `json:"directAddress,omitempty"`
