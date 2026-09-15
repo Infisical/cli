@@ -81,6 +81,23 @@ yay -S infisical-bin
 
 Download binaries from [GitHub Releases](https://github.com/Infisical/cli/releases).
 
+## Shell Completions
+
+The CLI can generate autocompletion scripts for bash, zsh, fish, and PowerShell via `infisical completion [shell]`. For example, to enable completions for the current session:
+
+```bash
+# bash
+source <(infisical completion bash)
+
+# zsh
+infisical completion zsh > "${fpath[1]}/_infisical"
+
+# fish
+infisical completion fish | source
+```
+
+Run `infisical completion --help` for shell-specific installation instructions (e.g. persisting completions across sessions).
+
 ## Documentation
 
 - **[CLI Overview](https://infisical.com/docs/cli/overview)** - Complete installation and setup guide
