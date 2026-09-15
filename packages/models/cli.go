@@ -110,6 +110,7 @@ type Workspace struct {
 
 type WorkspaceConfigFile struct {
 	WorkspaceId                   string            `json:"workspaceId"`
+	OrganizationId                string            `json:"organizationId,omitempty"`
 	DefaultEnvironment            string            `json:"defaultEnvironment"`
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 	DefaultSecretPath             string            `json:"defaultSecretPath,omitempty"`
@@ -137,6 +138,7 @@ type GetAllSecretsParameters struct {
 	EnvironmentPassedViaFlag bool
 	InfisicalToken           string
 	UniversalAuthAccessToken string
+	OrganizationId           string
 	TagSlugs                 string
 	WorkspaceId              string
 	SecretsPath              string
