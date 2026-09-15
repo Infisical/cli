@@ -151,10 +151,10 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 	if req.Body == http.NoBody || req.ContentLength == 0 {
 		return false
 	}
-	if enc := req.Header.Get("Content-Encoding"); enc != "" {
+	if req.Header.Get("Content-Encoding") != "" {
 		log.Warn().
 			Str("service", serviceName).
-			Str("contentEncoding", enc).
+			Bool("hasContentEncoding", true).
 			Msg("agent-vault: body substitution skipped on an encoded body; the placeholder is going upstream unchanged")
 		return false
 	}
