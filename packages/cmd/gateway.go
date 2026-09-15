@@ -233,14 +233,15 @@ var gatewayStartCmd = &cobra.Command{
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 		// Fall back to env var for systemd-managed runs where flags aren't set.
 		if enrollMethod == "" {
-			enrollMethod = os.Getenv("INFISICAL_GATEWAY_ENROLL_METHOD")
+			enrollMethod = os.Getenv(gatewayv2.ENROLL_METHOD_ENV_NAME)
 		}
 		if enrollMethod != "" &&
 			enrollMethod != gatewayv2.EnrollMethodToken &&
 			enrollMethod != gatewayv2.EnrollMethodAws &&
+			enrollMethod != gatewayv2.EnrollMethodGcp &&
 			enrollMethod != gatewayv2.EnrollMethodKubernetes {
-			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid enroll method: %s. Valid values are '%s', '%s', and '%s'",
-				enrollMethod, gatewayv2.EnrollMethodToken, gatewayv2.EnrollMethodAws, gatewayv2.EnrollMethodKubernetes))
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid enroll method: %s. Valid values are '%s', '%s', '%s', and '%s'",
+				enrollMethod, gatewayv2.EnrollMethodToken, gatewayv2.EnrollMethodAws, gatewayv2.EnrollMethodGcp, gatewayv2.EnrollMethodKubernetes))
 		}
 		var alreadyEnrolled bool
 		var enrolledAccessToken string // set during fresh enrollment, used directly to avoid env var interference
@@ -305,6 +306,56 @@ var gatewayStartCmd = &cobra.Command{
 			}
 
 			log.Info().Msgf("Gateway authenticated via AWS Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
+			log.Info().Msg("Starting gateway...")
+		}
+
+		// --- GCP Auth path ---
+		if enrollMethod == gatewayv2.EnrollMethodGcp {
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				gatewayID = os.Getenv(gatewayv2.INFISICAL_GATEWAY_ID_KEY)
+			}
+			if gatewayID == "" {
+				stored, _ := gatewayv2.LoadStoredGatewayID(gatewayName)
+				gatewayID = stored
+			}
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=gcp"))
+			}
+
+			gcpAuthType, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "gcp-auth-type", []string{gatewayv2.GCP_AUTH_TYPE_ENV_NAME}, gatewayv2.GcpAuthTypeGce)
+			if gcpAuthType != gatewayv2.GcpAuthTypeGce && gcpAuthType != gatewayv2.GcpAuthTypeIam {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid gcp auth type: %s. Valid values are '%s' and '%s'",
+					gcpAuthType, gatewayv2.GcpAuthTypeGce, gatewayv2.GcpAuthTypeIam))
+			}
+
+			serviceAccountKeyPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+
+			httpClient, err := util.GetRestyClientWithCustomHeaders()
+			if err != nil {
+				util.HandleError(err, "unable to create HTTP client")
+			}
+
+			log.Info().Msgf("Authenticating gateway via GCP Auth (%s)...", gcpAuthType)
+			accessTokenStr, err := gatewayv2.LoginGatewayWithGcp(cmd.Context(), httpClient, gatewayID, gcpAuthType, serviceAccountKeyPath)
+			if err != nil {
+				util.HandleError(err, "GCP Auth login failed")
+			}
+
+			enrolledAccessToken = accessTokenStr
+			alreadyEnrolled = true
+
+			// No SaveAccessToken here: a fresh JWT is minted on every start, so an on-disk copy
+			// would only ever be stale.
+			if err := gatewayv2.SaveGatewayID(gatewayName, gatewayID); err != nil {
+				util.HandleError(err, "failed to save gateway id to config")
+			}
+
+			if err := gatewayv2.SaveDomain(gatewayName, config.INFISICAL_URL); err != nil {
+				util.HandleError(err, "failed to save domain to config")
+			}
+
+			log.Info().Msgf("Gateway authenticated via GCP Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
 			log.Info().Msg("Starting gateway...")
 		}
 
@@ -401,6 +452,7 @@ var gatewayStartCmd = &cobra.Command{
 
 		isResourceAuth := enrollMethod == gatewayv2.EnrollMethodToken ||
 			enrollMethod == gatewayv2.EnrollMethodAws ||
+			enrollMethod == gatewayv2.EnrollMethodGcp ||
 			enrollMethod == gatewayv2.EnrollMethodKubernetes
 
 		// Only use the stored token when no explicit identity credentials are provided.
@@ -752,6 +804,29 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
 			installedServiceName = svcName
+		} else if enrollMethod == gatewayv2.EnrollMethodGcp {
+			// --- GCP Auth path ---
+			// As with AWS, the login happens on each service start rather than at install time.
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=gcp"))
+			}
+
+			gcpAuthType, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "gcp-auth-type", []string{gatewayv2.GCP_AUTH_TYPE_ENV_NAME}, gatewayv2.GcpAuthTypeGce)
+			if gcpAuthType != gatewayv2.GcpAuthTypeGce && gcpAuthType != gatewayv2.GcpAuthTypeIam {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid gcp auth type: %s. Valid values are '%s' and '%s'",
+					gcpAuthType, gatewayv2.GcpAuthTypeGce, gatewayv2.GcpAuthTypeIam))
+			}
+
+			serviceAccountKeyPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+
+			relayName, _ := resolveRelayName("")
+
+			svcName, installErr := gatewayv2.InstallGcpAuthGatewaySystemdService(gatewayID, gcpAuthType, serviceAccountKeyPath, domain, gatewayName, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
+			if installErr != nil {
+				util.HandleError(installErr, "Unable to install systemd service")
+			}
+			installedServiceName = svcName
 		} else {
 			// --- Machine identity token path ---
 			token, tokenErr := util.GetInfisicalToken(cmd)
@@ -862,9 +937,10 @@ func init() {
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, kubernetes]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id. when set to 'kubernetes', authenticates with the pod's service account token using --gateway-id")
-	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws or --enroll-method=kubernetes)")
-	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token, --enroll-method=aws, or --enroll-method=kubernetes)")
+	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, gcp, kubernetes]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id. when set to 'gcp', authenticates with a GCP identity token using --gateway-id. when set to 'kubernetes', authenticates with the pod's service account token using --gateway-id")
+	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws, --enroll-method=gcp or --enroll-method=kubernetes)")
+	gatewayStartCmd.Flags().String("gcp-auth-type", "", "how the gateway proves its GCP identity when --enroll-method=gcp [gce, iam]. 'gce' reads an identity token from the instance metadata server, which covers Compute Engine VMs and GKE workload identity. 'iam' signs a JWT through the IAM Credentials API. defaults to gce")
+	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token, --enroll-method=aws, --enroll-method=gcp, or --enroll-method=kubernetes)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
 	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
@@ -884,8 +960,10 @@ func init() {
 
 	// Systemd install command flags (v2)
 	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id). 'kubernetes' is not available here: in-cluster gateways are not managed by systemd")
-	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, gcp]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id). when set to 'gcp', it authenticates with a GCP identity token on each service start (requires --gateway-id). 'kubernetes' is not available here: in-cluster gateways are not managed by systemd")
+	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws or --enroll-method=gcp)")
+	gatewaySystemdInstallCmd.Flags().String("gcp-auth-type", "", "how the gateway proves its GCP identity when --enroll-method=gcp [gce, iam]. defaults to gce")
+	gatewaySystemdInstallCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway systemd install <name>")
