@@ -2,6 +2,8 @@ package agentvault
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -51,6 +53,47 @@ func TestInjectCustomHeaders(t *testing.T) {
 			t.Fatalf("X-Org-Id = %q", got)
 		}
 	})
+}
+
+// Dies mid-upload, the way a client that goes away does: some bytes, then an error.
+type halfBody struct {
+	data  []byte
+	n     int
+	limit int
+}
+
+func (b *halfBody) Read(p []byte) (int, error) {
+	if b.n >= b.limit {
+		return 0, errors.New("unexpected EOF")
+	}
+	c := copy(p, b.data[b.n:b.limit])
+	b.n += c
+	return c, nil
+}
+
+func (b *halfBody) Close() error { return nil }
+
+// Correcting the length here would hand the upstream a well-formed shorter request it cannot tell from a
+// complete one. Leaving the two disagreeing is what makes http.Transport refuse to send anything.
+func TestABrokenUploadIsNotForwardedTruncated(t *testing.T) {
+	full := strings.Repeat("A", 500) + "__PAT__" + strings.Repeat("B", 500)
+	req, _ := http.NewRequest("POST", "https://api.github.com/x", nil)
+	req.Body = &halfBody{data: []byte(full), limit: 300}
+	req.ContentLength = int64(len(full))
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(full)))
+
+	applyBodySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)})
+
+	if req.ContentLength != int64(len(full)) {
+		t.Fatalf("ContentLength = %d, want the declared %d so the transport refuses", req.ContentLength, len(full))
+	}
+	if got := req.Header.Get("Content-Length"); got != fmt.Sprintf("%d", len(full)) {
+		t.Fatalf("Content-Length header = %q, want the declared length", got)
+	}
+	sent, _ := io.ReadAll(req.Body)
+	if len(sent) >= len(full) {
+		t.Fatalf("body = %d bytes, expected only the part that was read", len(sent))
+	}
 }
 
 func TestApplySubstitutions(t *testing.T) {

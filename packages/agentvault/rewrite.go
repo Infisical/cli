@@ -173,15 +173,15 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 
 	body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
 	if err != nil {
-		// The stream is already part-consumed, so the original length is no longer true. Left alone,
-		// http.Transport refuses the request outright and the agent gets a 502 rather than the unchanged
-		// body this path promises.
+		// Deliberately not correcting ContentLength to what was actually read. The declared length and the
+		// bytes now disagree, so http.Transport refuses the request and nothing reaches the upstream. Making
+		// them agree would hand the upstream a well-formed shorter request it cannot tell from a complete
+		// one, turning a broken upload into a partial write nobody can take back. A 502 the agent may not
+		// even be alive to see is the better end of that trade.
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
-		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		log.Warn().Err(err).Str("service", serviceName).
-			Msg("agent-vault: could not read the whole request body for substitution; forwarding what was read, with the placeholder unchanged")
+		log.Warn().Err(err).Str("service", serviceName).Int("bytesRead", len(body)).
+			Msg("agent-vault: could not read the whole request body for substitution; refusing to forward a truncated one")
 		return false
 	}
 	if len(body) > maxBodyRewriteSize {
