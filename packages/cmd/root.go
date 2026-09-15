@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -35,6 +36,10 @@ var RootCmd = &cobra.Command{
 	CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
 	Version:           util.CLI_VERSION,
 }
+
+// getCurrentLoggedInUserDetails is a seam for testing the saved-session warning
+// without reading the platform keyring.
+var getCurrentLoggedInUserDetails = util.GetCurrentLoggedInUserDetails
 
 // rootCmdStderrWriter is a writer wrapper that dynamically reads from RootCmd.ErrOrStderr()
 // on each write. This allows the logger to automatically use RootCmd's stderr even if it's
@@ -83,6 +88,42 @@ func isStructuredOutputRequested(cmd *cobra.Command) bool {
 		}
 	}
 	return false
+}
+
+// shouldReadSavedSession reports whether this invocation needs the local user
+// session. Machine-authenticated and silent commands do not need it.
+func shouldReadSavedSession(silent, hasExplicitToken, hasExplicitUniversalAuthCredentials bool) bool {
+	return !silent && !hasExplicitToken && !hasExplicitUniversalAuthCredentials
+}
+
+func hasExplicitUniversalAuthCredentials(cmd *cobra.Command) bool {
+	if cmd.Name() != "login" {
+		return false
+	}
+
+	method, err := cmd.Flags().GetString("method")
+	if err != nil || method != string(util.AuthStrategy.UNIVERSAL_AUTH) {
+		return false
+	}
+
+	clientID, err := util.GetCmdFlagOrEnv(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME})
+	if err != nil || clientID == "" {
+		return false
+	}
+
+	clientSecret, err := util.GetCmdFlagOrEnv(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME})
+	return err == nil && clientSecret != ""
+}
+
+func warnIfTokenOverridesSavedSession(cmd *cobra.Command, silent bool, token *models.TokenDetails, hasUniversalAuthCredentials bool) {
+	if !shouldReadSavedSession(silent, token != nil, hasUniversalAuthCredentials) {
+		return
+	}
+
+	loggedInDetails, err := getCurrentLoggedInUserDetails(false)
+	if err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired && token != nil {
+		util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
+	}
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -145,15 +186,11 @@ func init() {
 			util.DisplayPackageRepoMigrationNoticeWithWriter(silent, cmd.ErrOrStderr())
 		}
 
-		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
-
-		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
-			token, err := util.GetInfisicalToken(cmd)
-
-			if err == nil && token != nil {
-				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
-			}
+		token, err := util.GetInfisicalToken(cmd)
+		if err != nil {
+			token = nil
 		}
+		warnIfTokenOverridesSavedSession(cmd, silent, token, hasExplicitUniversalAuthCredentials(cmd))
 
 	}
 
