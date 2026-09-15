@@ -104,6 +104,8 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 		p.config.InjectPassword,
 		p.config.InjectDatabase,
 		func(conn *client.Conn) error {
+			conn.UnsetCapability(mysql.CLIENT_LOCAL_FILES)
+
 			if p.config.EnableTLS {
 				if p.config.TLSConfig == nil {
 					return fmt.Errorf("TLS configuration is required when TLS is enabled")
@@ -116,8 +118,6 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
-
-	conn.UnsetCapability(mysql.CLIENT_LOCAL_FILES)
 
 	return conn, nil
 }
