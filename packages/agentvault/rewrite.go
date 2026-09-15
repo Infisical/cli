@@ -48,9 +48,9 @@ func injectCredential(req *http.Request, cred *credential) bool {
 	}
 }
 
-// injectHeaders writes the service's custom headers, after the credential, so a header whose name collides
-// with the credential's would overwrite it. The backend refuses that pairing on write for exactly this
-// reason; nothing here can detect it, because by this point both are just names.
+// injectHeaders writes the service's custom headers, before the credential, so one whose name collides with
+// the credential's loses to it rather than replacing the real token. A pass-through service injects no
+// credential at all, which is why setting Authorization as a custom header on one still works.
 func injectHeaders(req *http.Request, headers []customHeader) bool {
 	for _, header := range headers {
 		value := string(header.value)
@@ -80,9 +80,17 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		// addressed as `group%2Fproject` would arrive as two segments, pointing at a different resource.
 		if sub.surfaces[surfacePath] {
 			escaped := req.URL.EscapedPath()
-			if strings.Contains(escaped, sub.placeholder) {
+			// EscapedPath re-encodes the whole path whenever what the agent sent is not already valid
+			// encoding, so a `{{TOKEN}}` on the wire reads here as `%7B%7BTOKEN%7D%7D`. Looking only for the
+			// form the author typed would leave those placeholders on the wire, and the agent would see
+			// nothing but a third-party 404.
+			needle := sub.placeholder
+			if !strings.Contains(escaped, needle) {
+				needle = escapedPathForm(sub.placeholder)
+			}
+			if strings.Contains(escaped, needle) {
 				// The replacement is escaped too, or a secret containing '/' or '?' would itself reshape the URL.
-				if v, ok := replaceWithinLimit(escaped, sub.placeholder, url.PathEscape(real), maxBodyRewriteSize); ok {
+				if v, ok := replaceWithinLimit(escaped, needle, url.PathEscape(real), maxBodyRewriteSize); ok {
 					if decoded, err := url.PathUnescape(v); err == nil {
 						// Both halves: Path is what the policy re-check and any later reader see, RawPath is
 						// what goes on the wire. Go uses RawPath only when it agrees with Path.
@@ -131,6 +139,13 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		}
 	}
 	return surfaces
+}
+
+// escapedPathForm is the placeholder as EscapedPath would render it: the same encoder, reached the same way.
+// The leading '/' keeps url.URL's `Path == "*"` special case out of it, and the path encoder leaves a slash
+// alone, so trimming it back off is exact.
+func escapedPathForm(placeholder string) string {
+	return strings.TrimPrefix((&url.URL{Path: "/" + placeholder}).EscapedPath(), "/")
 }
 
 func bodySubstitutions(subs []substitution) bool {

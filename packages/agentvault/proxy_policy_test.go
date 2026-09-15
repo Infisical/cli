@@ -246,7 +246,7 @@ func TestSubstitutionsReachTheUpstream(t *testing.T) {
 func TestABlockedSubstitutedPathNeverEchoesTheSecret(t *testing.T) {
 	// The re-check happens after the real value is in the path, so the refusal must not quote the path:
 	// the 403 body goes back to the agent and the same text goes to the proxy log.
-	secret := "s3cr3t%val"
+	secret := "../s3cr3tadmin"
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
 			subOn("__PAT__", secret, surfacePath),
@@ -274,6 +274,81 @@ func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
 	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/repos/__PAT__", host), "")
 	if status != http.StatusForbidden {
 		t.Fatalf("a substitution that escapes the prefix should be refused, got %d: %s", status, body)
+	}
+}
+
+func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
+	// applySubstitutions escapes the value so it cannot add a segment, and that escape must not then read
+	// as the ambiguity it was written to prevent: a GitLab project is addressed as `group%2Fproject`.
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, []string{"/api/v4/projects"}, nil, []substitution{
+			subOn("__PROJ__", "mygroup/myproject", surfacePath),
+		})
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/api/v4/projects/__PROJ__/pipelines", host), "")
+	if status != http.StatusOK {
+		t.Fatalf("expected a 200, got %d: %s", status, body)
+	}
+	if got := decodeEcho(t, strings.TrimSpace(body)); got.Path != "/api/v4/projects/mygroup%2Fmyproject/pipelines" {
+		t.Fatalf("upstream path = %q", got.Path)
+	}
+}
+
+// The backend refuses this pairing on write, so reaching it means a service saved before that check or a
+// write that raced it. Either way the real token has to survive.
+func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
+	cases := []struct {
+		name       string
+		cred       credential
+		headers    []customHeader
+		wantHeader string
+		want       string
+	}{
+		{
+			name:       "the default Authorization, collided case-insensitively",
+			cred:       credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("real-token")},
+			headers:    []customHeader{{name: "authorization", value: []byte("spoofed")}},
+			wantHeader: "Authorization",
+			want:       "Bearer real-token",
+		},
+		{
+			name:       "a credential on its own header name",
+			cred:       credential{kind: credentialBearer, headerName: "X-Org-Id", value: []byte("real-token")},
+			headers:    []customHeader{{name: "X-Org-Id", value: []byte("spoofed")}},
+			wantHeader: "X-Org-Id",
+			want:       "real-token",
+		},
+		{
+			// Pass-through injects no credential, so a custom Authorization header is the whole point.
+			name:       "pass-through leaves the custom header alone",
+			cred:       credential{kind: credentialPassthrough},
+			headers:    []customHeader{{name: "Authorization", prefix: "Bearer", value: []byte("custom")}},
+			wantHeader: "Authorization",
+			want:       "Bearer custom",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, host := newPolicyFixture(t, func(h string) *resolvedService {
+				svc := policyService(h, nil, nil, tc.headers, nil)
+				svc.credential = tc.cred
+				return svc
+			})
+
+			status, body := do(t, client, "GET", fmt.Sprintf("https://%s/x", host), "")
+			if status != http.StatusOK {
+				t.Fatalf("got %d: %s", status, body)
+			}
+			got := decodeEcho(t, strings.TrimSpace(body))
+			if v := got.Headers[tc.wantHeader]; len(v) != 1 || v[0] != tc.want {
+				t.Fatalf("%s = %v, want %q", tc.wantHeader, v, tc.want)
+			}
+			if strings.Contains(body, "spoofed") {
+				t.Fatalf("the custom header replaced the credential: %s", body)
+			}
+		})
 	}
 }
 

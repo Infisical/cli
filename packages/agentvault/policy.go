@@ -65,6 +65,29 @@ func pathAllowed(escaped string, prefixes []string) bool {
 	if isAmbiguousPath(escaped) {
 		return false
 	}
+	return matchesPrefix(escaped, prefixes)
+}
+
+// pathAllowedAfterSubstitution judges a path the proxy itself part-wrote, so it cannot use the rule above.
+// applySubstitutions percent-escapes the value precisely so a secret containing '/' cannot add a segment,
+// and that escape is the '%2F' isAmbiguousPath refuses: judged by pathAllowed, a GitLab project addressed
+// as `group%2Fproject` would 403 against a prefix that plainly covers it.
+//
+// The prefix comparison is unchanged and still byte-exact, which is what keeps the substituted span after
+// the prefix: a placeholder sitting inside the prefix region rewrites those bytes and fails the comparison.
+// That leaves traversal as the only way out of an allowed prefix, so it is the only thing still refused,
+// and it is judged on the decoded path because an upstream that decodes '%2F' before routing is exactly
+// the reader `..%2F..%2Fadmin` is written for.
+func pathAllowedAfterSubstitution(escaped, decoded string, prefixes []string) bool {
+	for _, segment := range strings.Split(decoded, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return matchesPrefix(escaped, prefixes)
+}
+
+func matchesPrefix(escaped string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if prefix == "/" {
 			return true

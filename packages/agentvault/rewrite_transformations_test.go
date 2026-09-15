@@ -65,6 +65,18 @@ func TestApplySubstitutions(t *testing.T) {
 		}
 	})
 
+	// Go escapes '{' in a path, so EscapedPath carries the placeholder in a form the author never typed.
+	t.Run("path, placeholder Go re-encodes", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "https://gitlab.com/api/v4/projects/{{PROJECT}}/pipelines", nil)
+		surfaces := applySubstitutions(req, "gitlab", []substitution{subOn("{{PROJECT}}", "group/project", surfacePath)})
+		if len(surfaces) != 1 || surfaces[0] != surfacePath {
+			t.Fatalf("surfaces = %v", surfaces)
+		}
+		if got := req.URL.RequestURI(); got != "/api/v4/projects/group%2Fproject/pipelines" {
+			t.Fatalf("wire path = %q", got)
+		}
+	})
+
 	t.Run("query", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/x?key=__TOKEN__", nil)
 		applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfaceQuery)})

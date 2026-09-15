@@ -495,11 +495,14 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 				Msg("agent-vault: refusing to attach a credential over plaintext http")
 			matched = nil
 		} else {
-			// Substitutions run before the credential so an injected real value can never itself be rewritten,
-			// and custom headers last so they are not clobbered by it.
+			// Substitutions run first so an injected real value can never itself be rewritten. The credential
+			// goes last and wins: a custom header naming the credential's own header would otherwise replace
+			// the real token with the custom value, and the agent would get a 401 nothing in the service
+			// explains. The backend refuses that pairing on write, so this is the floor under it rather than
+			// the only guard.
 			outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
-			outcome.brokered = injectCredential(req, &matched.credential)
-			if injectHeaders(req, matched.headers) {
+			outcome.brokered = injectHeaders(req, matched.headers)
+			if injectCredential(req, &matched.credential) {
 				outcome.brokered = true
 			}
 			if len(outcome.substituted) > 0 {
@@ -509,7 +512,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 			// A path-surface substitution rewrites the path after the check above, so a restricted service
 			// re-checks what actually goes on the wire.
 			if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
-				if !pathAllowed(requestPath(req), matched.allowedPathPrefixes) {
+				if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
 					// The path now carries the real credential, so it must not reach the body or the log.
 					// Every other refusal in this file is fixed text for the same reason.
 					return nil, matched, outcome, fmt.Errorf(
