@@ -77,7 +77,7 @@ type AgentVaultCredential struct {
 	Password     string `json:"password,omitempty"`
 }
 
-type AgentVaultHeader struct {
+type AgentVaultCustomHeader struct {
 	Name   string `json:"name"`
 	Prefix string `json:"prefix,omitempty"`
 	Value  string `json:"value"`
@@ -98,7 +98,7 @@ type AgentVaultService struct {
 	AllowedMethods      []string                 `json:"allowedMethods"`
 	AllowedPathPrefixes []string                 `json:"allowedPathPrefixes"`
 	Credential          AgentVaultCredential     `json:"credential"`
-	Headers             []AgentVaultHeader       `json:"headers"`
+	CustomHeaders       []AgentVaultCustomHeader `json:"customHeaders"`
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 }
 

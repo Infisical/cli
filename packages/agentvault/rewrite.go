@@ -48,18 +48,18 @@ func injectCredential(req *http.Request, cred *credential) bool {
 	}
 }
 
-// injectHeaders writes the service's custom headers, before the credential, so one whose name collides with
+// injectCustomHeaders writes the service's custom headers, before the credential, so one whose name collides with
 // the credential's loses to it rather than replacing the real token. A pass-through service injects no
 // credential at all, which is why setting Authorization as a custom header on one still works.
-func injectHeaders(req *http.Request, headers []customHeader) bool {
-	for _, header := range headers {
+func injectCustomHeaders(req *http.Request, customHeaders []customHeader) bool {
+	for _, header := range customHeaders {
 		value := string(header.value)
 		if header.prefix != "" {
 			value = header.prefix + " " + value
 		}
 		req.Header.Set(header.name, value)
 	}
-	return len(headers) > 0
+	return len(customHeaders) > 0
 }
 
 // applySubstitutions swaps each placeholder for its real value across the surfaces the service names.

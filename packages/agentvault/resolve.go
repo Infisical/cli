@@ -61,7 +61,7 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 			allowedMethods:      toMethodSet(wire.AllowedMethods),
 			allowedPathPrefixes: toPathPrefixes(wire.AllowedPathPrefixes),
 			credential:          toCredential(wire.Credential),
-			headers:             toHeaders(wire.Headers),
+			customHeaders:       toCustomHeaders(wire.CustomHeaders),
 			substitutions:       toSubstitutions(wire.Substitutions),
 		})
 	}
@@ -129,15 +129,15 @@ func toPathPrefixes(prefixes []string) []string {
 	return out
 }
 
-func toHeaders(wire []api.AgentVaultHeader) []customHeader {
+func toCustomHeaders(wire []api.AgentVaultCustomHeader) []customHeader {
 	if len(wire) == 0 {
 		return nil
 	}
-	headers := make([]customHeader, 0, len(wire))
+	customHeaders := make([]customHeader, 0, len(wire))
 	for _, h := range wire {
-		headers = append(headers, customHeader{name: h.Name, prefix: h.Prefix, value: []byte(h.Value)})
+		customHeaders = append(customHeaders, customHeader{name: h.Name, prefix: h.Prefix, value: []byte(h.Value)})
 	}
-	return headers
+	return customHeaders
 }
 
 func toSubstitutions(wire []api.AgentVaultSubstitution) []substitution {

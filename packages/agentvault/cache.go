@@ -60,7 +60,7 @@ type resolvedService struct {
 	allowedMethods      map[string]bool
 	allowedPathPrefixes []string
 	credential          credential
-	headers             []customHeader
+	customHeaders       []customHeader
 	substitutions       []substitution
 }
 

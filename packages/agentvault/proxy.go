@@ -501,7 +501,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 			// explains. The backend refuses that pairing on write, so this is the floor under it rather than
 			// the only guard.
 			outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
-			outcome.brokered = injectHeaders(req, matched.headers)
+			outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
 			if injectCredential(req, &matched.credential) {
 				outcome.brokered = true
 			}

@@ -92,7 +92,7 @@ func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*
 	return client, host
 }
 
-func policyService(host string, methods, prefixes []string, headers []customHeader, subs []substitution) *resolvedService {
+func policyService(host string, methods, prefixes []string, customHeaders []customHeader, subs []substitution) *resolvedService {
 	return &resolvedService{
 		name:                "github",
 		accessBundleName:    "bundle",
@@ -100,7 +100,7 @@ func policyService(host string, methods, prefixes []string, headers []customHead
 		allowedMethods:      toMethodSet(methods),
 		allowedPathPrefixes: toPathPrefixes(prefixes),
 		credential:          credential{kind: credentialPassthrough},
-		headers:             headers,
+		customHeaders:       customHeaders,
 		substitutions:       subs,
 	}
 }
@@ -299,40 +299,40 @@ func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
 // write that raced it. Either way the real token has to survive.
 func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
 	cases := []struct {
-		name       string
-		cred       credential
-		headers    []customHeader
-		wantHeader string
-		want       string
+		name          string
+		cred          credential
+		customHeaders []customHeader
+		wantHeader    string
+		want          string
 	}{
 		{
-			name:       "the default Authorization, collided case-insensitively",
-			cred:       credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("real-token")},
-			headers:    []customHeader{{name: "authorization", value: []byte("spoofed")}},
-			wantHeader: "Authorization",
-			want:       "Bearer real-token",
+			name:          "the default Authorization, collided case-insensitively",
+			cred:          credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("real-token")},
+			customHeaders: []customHeader{{name: "authorization", value: []byte("spoofed")}},
+			wantHeader:    "Authorization",
+			want:          "Bearer real-token",
 		},
 		{
-			name:       "a credential on its own header name",
-			cred:       credential{kind: credentialBearer, headerName: "X-Org-Id", value: []byte("real-token")},
-			headers:    []customHeader{{name: "X-Org-Id", value: []byte("spoofed")}},
-			wantHeader: "X-Org-Id",
-			want:       "real-token",
+			name:          "a credential on its own header name",
+			cred:          credential{kind: credentialBearer, headerName: "X-Org-Id", value: []byte("real-token")},
+			customHeaders: []customHeader{{name: "X-Org-Id", value: []byte("spoofed")}},
+			wantHeader:    "X-Org-Id",
+			want:          "real-token",
 		},
 		{
 			// Pass-through injects no credential, so a custom Authorization header is the whole point.
-			name:       "pass-through leaves the custom header alone",
-			cred:       credential{kind: credentialPassthrough},
-			headers:    []customHeader{{name: "Authorization", prefix: "Bearer", value: []byte("custom")}},
-			wantHeader: "Authorization",
-			want:       "Bearer custom",
+			name:          "pass-through leaves the custom header alone",
+			cred:          credential{kind: credentialPassthrough},
+			customHeaders: []customHeader{{name: "Authorization", prefix: "Bearer", value: []byte("custom")}},
+			wantHeader:    "Authorization",
+			want:          "Bearer custom",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client, host := newPolicyFixture(t, func(h string) *resolvedService {
-				svc := policyService(h, nil, nil, tc.headers, nil)
+				svc := policyService(h, nil, nil, tc.customHeaders, nil)
 				svc.credential = tc.cred
 				return svc
 			})

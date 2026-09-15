@@ -17,10 +17,10 @@ func subOn(placeholder, value string, surfaces ...string) substitution {
 	return substitution{placeholder: placeholder, surfaces: set, value: []byte(value)}
 }
 
-func TestInjectHeaders(t *testing.T) {
+func TestInjectCustomHeaders(t *testing.T) {
 	t.Run("writes name, prefix and value", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
-		injectHeaders(req, []customHeader{
+		injectCustomHeaders(req, []customHeader{
 			{name: "X-Org-Id", prefix: "", value: []byte("acme")},
 			{name: "X-Api-Ver", prefix: "v", value: []byte("2")},
 		})
@@ -35,7 +35,7 @@ func TestInjectHeaders(t *testing.T) {
 	t.Run("overwrites whatever the agent sent", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
 		req.Header.Set("X-Org-Id", "spoofed")
-		injectHeaders(req, []customHeader{{name: "X-Org-Id", value: []byte("acme")}})
+		injectCustomHeaders(req, []customHeader{{name: "X-Org-Id", value: []byte("acme")}})
 		if got := req.Header.Get("X-Org-Id"); got != "acme" {
 			t.Fatalf("X-Org-Id = %q", got)
 		}
@@ -46,7 +46,7 @@ func TestInjectHeaders(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
 		req.Header.Set("Connection", "X-Org-Id")
 		stripHopByHopHeaders(req.Header)
-		injectHeaders(req, []customHeader{{name: "X-Org-Id", value: []byte("acme")}})
+		injectCustomHeaders(req, []customHeader{{name: "X-Org-Id", value: []byte("acme")}})
 		if got := req.Header.Get("X-Org-Id"); got != "acme" {
 			t.Fatalf("X-Org-Id = %q", got)
 		}
