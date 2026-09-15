@@ -357,7 +357,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
 	}
 
-	resp, matched, err := ps.forward(r, scheme, hostname, port, sessionToken)
+	resp, matched, outcome, err := ps.forward(r, scheme, hostname, port, sessionToken)
 
 	// The body is fixed text per outcome, never err.Error(): an APIError carries the control-plane URL and
 	// request id, and a dial error names the upstream address. The detail goes on the log line below.
@@ -366,7 +366,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	status := 0
 	body := ""
 	switch {
-	case errors.Is(err, errHostBlocked):
+	case errors.Is(err, errHostBlocked), errors.Is(err, errPolicyBlocked):
 		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
@@ -376,8 +376,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to reach the upstream"
-	// brokered means a credential went out, not merely that a service matched.
-	case matched != nil && matched.credential.kind != credentialPassthrough:
+	case outcome.brokered:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
 		status = resp.StatusCode
@@ -399,6 +398,11 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		Int("status", status)
 	if matched != nil {
 		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
+	}
+	// The logged path is always the agent's, so without this a substitution that matched nothing reads
+	// exactly like one that fired.
+	if len(outcome.substituted) > 0 {
+		event = event.Strs("substituted", outcome.substituted)
 	}
 	if err != nil {
 		event = event.Err(err)
@@ -441,16 +445,29 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, error) {
+type forwardOutcome struct {
+	brokered    bool
+	substituted []string
+}
+
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
+	var outcome forwardOutcome
+
 	services, err := ps.cache.get(sessionToken)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", errSessionResolve, err)
+		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
 
 	matched := bestMatch(services, hostname, port)
 
 	if ps.blocksOffBundle(matched, hostname, port) {
-		return nil, nil, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
+		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
+	}
+
+	if matched != nil {
+		if err := checkServicePolicy(matched, req); err != nil {
+			return nil, matched, outcome, err
+		}
 	}
 
 	req.URL.Scheme = scheme
@@ -472,15 +489,43 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 				Msg("agent-vault: refusing to attach a credential over plaintext http")
 			matched = nil
 		} else {
-			injectCredential(req, &matched.credential)
+			// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
+			// so a custom header naming the credential's own header loses rather than replacing the token.
+			outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
+			outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
+			if injectCredential(req, &matched.credential) {
+				outcome.brokered = true
+			}
+			if len(outcome.substituted) > 0 {
+				outcome.brokered = true
+			}
+
+			if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
+				if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
+					// The path now carries the real credential, so it must not reach the body or the log.
+					return nil, matched, outcome, fmt.Errorf(
+						"service %q does not allow the path this request substitutes to: %w",
+						matched.name, errPolicyBlocked,
+					)
+				}
+			}
 		}
 	}
 
 	resp, err := ps.transport.RoundTrip(req)
 	if err != nil {
-		return nil, matched, err
+		return nil, matched, outcome, err
 	}
-	return resp, matched, nil
+	return resp, matched, outcome, nil
+}
+
+func containsSurface(surfaces []string, target string) bool {
+	for _, surface := range surfaces {
+		if surface == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (ps *proxyServer) isAllowedHost(hostname, port string) bool {

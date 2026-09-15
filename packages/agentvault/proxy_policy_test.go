@@ -1,0 +1,414 @@
+package agentvault
+
+import (
+	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+)
+
+type echoed struct {
+	Method  string              `json:"method"`
+	Path    string              `json:"path"`
+	Query   string              `json:"query"`
+	Headers map[string][]string `json:"headers"`
+	Body    string              `json:"body"`
+}
+
+type fixedResolver struct{ services []*resolvedService }
+
+func (r fixedResolver) resolve(string) (*resolveResult, error) {
+	return &resolveResult{SessionID: "s1", Services: r.services}, nil
+}
+
+// The whole path an agent's request takes: CONNECT, TLS terminated by the proxy's own CA, policy and
+// injection applied, then forwarded to a real upstream that echoes what it got. The upstream is addressed as
+// 127.0.0.1 so both TLS legs verify against httptest's certificate and mintLeaf's IP SAN.
+func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*http.Client, string) {
+	t.Helper()
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(echoed{
+			Method:  r.Method,
+			Path:    r.URL.EscapedPath(),
+			Query:   r.URL.RawQuery,
+			Headers: r.Header,
+			Body:    string(body),
+		})
+	}))
+	t.Cleanup(upstream.Close)
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := "127.0.0.1:" + upstreamURL.Port()
+
+	upstreamPool := x509.NewCertPool()
+	upstreamPool.AddCert(upstream.Certificate())
+
+	key, cert, err := generateRootCa()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transport := newUpstreamTransport()
+	transport.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
+
+	ps := &proxyServer{transport: transport, ca: newCaManager(key, cert)}
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
+	ps.cache = newSessionCache(fixedResolver{services: []*resolvedService{build(host)}}, ps.pollInterval)
+
+	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
+	t.Cleanup(front.Close)
+
+	clientPool := x509.NewCertPool()
+	clientPool.AddCert(cert)
+	proxyURL, _ := url.Parse(front.URL)
+	proxyURL.User = url.UserPassword(ProxyAuthUsername, "agv_tok")
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy:           http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{RootCAs: clientPool},
+		},
+	}
+	return client, host
+}
+
+func policyService(host string, methods, prefixes []string, customHeaders []customHeader, subs []substitution) *resolvedService {
+	return &resolvedService{
+		name:                "github",
+		accessBundleName:    "bundle",
+		hostPatterns:        parseHostPatterns(host),
+		allowedMethods:      toMethodSet(methods),
+		allowedPathPrefixes: toPathPrefixes(prefixes),
+		credential:          credential{kind: credentialPassthrough},
+		customHeaders:       customHeaders,
+		substitutions:       subs,
+	}
+}
+
+func do(t *testing.T, c *http.Client, method, target, body string) (int, string) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, target, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, strings.TrimSpace(string(payload))
+}
+
+func decodeEcho(t *testing.T, payload string) echoed {
+	t.Helper()
+	var got echoed
+	if err := json.Unmarshal([]byte(payload), &got); err != nil {
+		t.Fatalf("upstream did not echo JSON (%v): %s", err, payload)
+	}
+	return got
+}
+
+func TestMethodPolicyThroughTheTunnel(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, []string{"GET"}, nil, nil, nil)
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/anything", host), "")
+	if status != http.StatusOK {
+		t.Fatalf("GET should reach the upstream, got %d: %s", status, body)
+	}
+	if got := decodeEcho(t, body); got.Method != "GET" {
+		t.Fatalf("upstream saw %q", got.Method)
+	}
+
+	status, body = do(t, client, "POST", fmt.Sprintf("https://%s/anything", host), "x")
+	if status != http.StatusForbidden {
+		t.Fatalf("POST should be refused, got %d: %s", status, body)
+	}
+	if !strings.Contains(body, `service "github" does not allow POST`) {
+		t.Fatalf("unhelpful 403 body: %q", body)
+	}
+}
+
+func TestPathPolicyThroughTheTunnel(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, []string{"/repos"}, nil, nil)
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/repos/octo/hello", host), "")
+	if status != http.StatusOK {
+		t.Fatalf("an allowed path should reach the upstream, got %d: %s", status, body)
+	}
+
+	for _, path := range []string{"/repositories", "/admin", "/repos/%2e%2e/admin"} {
+		status, body = do(t, client, "GET", fmt.Sprintf("https://%s%s", host, path), "")
+		if status != http.StatusForbidden {
+			t.Fatalf("%s should be refused, got %d: %s", path, status, body)
+		}
+		if !strings.Contains(body, "blocked by service policy") {
+			t.Fatalf("%s: unhelpful 403 body: %q", path, body)
+		}
+	}
+}
+
+func TestCustomHeadersReachTheUpstream(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, nil, []customHeader{
+			{name: "X-Org-Id", value: []byte("acme")},
+			{name: "X-Api-Ver", prefix: "v", value: []byte("2")},
+		}, nil)
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/x", host), "")
+	if status != http.StatusOK {
+		t.Fatalf("got %d: %s", status, body)
+	}
+	got := decodeEcho(t, body)
+	if v := got.Headers["X-Org-Id"]; len(v) != 1 || v[0] != "acme" {
+		t.Fatalf("X-Org-Id = %v", v)
+	}
+	if v := got.Headers["X-Api-Ver"]; len(v) != 1 || v[0] != "v 2" {
+		t.Fatalf("X-Api-Ver = %v", v)
+	}
+}
+
+func TestSubstitutionsReachTheUpstream(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, nil, nil, []substitution{
+			subOn("__PAT__", "real-token", surfacePath, surfaceQuery, surfaceHeader, surfaceBody),
+		})
+	})
+
+	req, err := http.NewRequest(
+		"POST",
+		fmt.Sprintf("https://%s/repos/__PAT__/x?key=__PAT__", host),
+		strings.NewReader(`{"token":"__PAT__"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Key", "Bearer __PAT__")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d: %s", resp.StatusCode, payload)
+	}
+
+	got := decodeEcho(t, strings.TrimSpace(string(payload)))
+	if got.Path != "/repos/real-token/x" {
+		t.Fatalf("path = %q", got.Path)
+	}
+	if got.Query != "key=real-token" {
+		t.Fatalf("query = %q", got.Query)
+	}
+	if v := got.Headers["X-Key"]; len(v) != 1 || v[0] != "Bearer real-token" {
+		t.Fatalf("X-Key = %v", v)
+	}
+	if got.Body != `{"token":"real-token"}` {
+		t.Fatalf("body = %q", got.Body)
+	}
+	if strings.Contains(string(payload), "__PAT__") {
+		t.Fatalf("a placeholder survived to the upstream: %s", payload)
+	}
+}
+
+func TestABlockedSubstitutedPathNeverEchoesTheSecret(t *testing.T) {
+	secret := "../s3cr3tadmin"
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
+			subOn("__PAT__", secret, surfacePath),
+		})
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/repos/__PAT__", host), "")
+	if status != http.StatusForbidden {
+		t.Fatalf("expected a 403, got %d: %s", status, body)
+	}
+	if strings.Contains(body, "s3cr3t") {
+		t.Fatalf("the 403 body handed the injected secret back to the agent: %q", body)
+	}
+}
+
+func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
+			subOn("__PAT__", "../admin", surfacePath),
+		})
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/repos/__PAT__", host), "")
+	if status != http.StatusForbidden {
+		t.Fatalf("a substitution that escapes the prefix should be refused, got %d: %s", status, body)
+	}
+}
+
+func TestASubstitutedValueCannotWalkOutOfItsPrefix(t *testing.T) {
+	for _, secret := range []string{`\admin`, `;x`, `/admin`} {
+		t.Run(secret, func(t *testing.T) {
+			client, host := newPolicyFixture(t, func(h string) *resolvedService {
+				return policyService(h, nil, []string{"/repos"}, nil, []substitution{
+					subOn("__P__", secret, surfacePath),
+				})
+			})
+
+			status, body := do(t, client, "GET", fmt.Sprintf("https://%s/repos/..__P__/admin", host), "")
+			if status != http.StatusForbidden {
+				t.Fatalf("expected a 403, got %d: %s", status, body)
+			}
+		})
+	}
+}
+
+func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, []string{"/api/v4/projects"}, nil, []substitution{
+			subOn("__PROJ__", "mygroup/myproject", surfacePath),
+		})
+	})
+
+	status, body := do(t, client, "GET", fmt.Sprintf("https://%s/api/v4/projects/__PROJ__/pipelines", host), "")
+	if status != http.StatusOK {
+		t.Fatalf("expected a 200, got %d: %s", status, body)
+	}
+	if got := decodeEcho(t, strings.TrimSpace(body)); got.Path != "/api/v4/projects/mygroup%2Fmyproject/pipelines" {
+		t.Fatalf("upstream path = %q", got.Path)
+	}
+}
+
+func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
+	cases := []struct {
+		name          string
+		cred          credential
+		customHeaders []customHeader
+		wantHeader    string
+		want          string
+	}{
+		{
+			name:          "the default Authorization, collided case-insensitively",
+			cred:          credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("real-token")},
+			customHeaders: []customHeader{{name: "authorization", value: []byte("spoofed")}},
+			wantHeader:    "Authorization",
+			want:          "Bearer real-token",
+		},
+		{
+			name:          "a credential on its own header name",
+			cred:          credential{kind: credentialBearer, headerName: "X-Org-Id", value: []byte("real-token")},
+			customHeaders: []customHeader{{name: "X-Org-Id", value: []byte("spoofed")}},
+			wantHeader:    "X-Org-Id",
+			want:          "real-token",
+		},
+		{
+			name:          "pass-through leaves the custom header alone",
+			cred:          credential{kind: credentialPassthrough},
+			customHeaders: []customHeader{{name: "Authorization", prefix: "Bearer", value: []byte("custom")}},
+			wantHeader:    "Authorization",
+			want:          "Bearer custom",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, host := newPolicyFixture(t, func(h string) *resolvedService {
+				svc := policyService(h, nil, nil, tc.customHeaders, nil)
+				svc.credential = tc.cred
+				return svc
+			})
+
+			status, body := do(t, client, "GET", fmt.Sprintf("https://%s/x", host), "")
+			if status != http.StatusOK {
+				t.Fatalf("got %d: %s", status, body)
+			}
+			got := decodeEcho(t, strings.TrimSpace(body))
+			if v := got.Headers[tc.wantHeader]; len(v) != 1 || v[0] != tc.want {
+				t.Fatalf("%s = %v, want %q", tc.wantHeader, v, tc.want)
+			}
+			if strings.Contains(body, "spoofed") {
+				t.Fatalf("the custom header replaced the credential: %s", body)
+			}
+		})
+	}
+}
+
+func TestTheLogSaysWhichSurfacesWereSubstituted(t *testing.T) {
+	type line struct {
+		Path        string   `json:"path"`
+		Decision    string   `json:"decision"`
+		Substituted []string `json:"substituted"`
+	}
+
+	capture := func(t *testing.T, target string) line {
+		t.Helper()
+		client, host := newPolicyFixture(t, func(h string) *resolvedService {
+			return policyService(h, nil, nil, nil, []substitution{
+				subOn("__PAT__", "real-token", surfacePath, surfaceHeader),
+			})
+		})
+
+		var buf bytes.Buffer
+		restore := log.Logger
+		log.Logger = zerolog.New(&buf)
+		defer func() { log.Logger = restore }()
+
+		if status, body := do(t, client, "GET", fmt.Sprintf("https://%s%s", host, target), ""); status != http.StatusOK {
+			t.Fatalf("got %d: %s", status, body)
+		}
+
+		var got line
+		for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			var candidate line
+			if json.Unmarshal([]byte(raw), &candidate) == nil && candidate.Decision != "" {
+				got = candidate
+			}
+		}
+		if got.Decision == "" {
+			t.Fatalf("no request line logged: %s", buf.String())
+		}
+		return got
+	}
+
+	t.Run("a substitution that fired names its surfaces", func(t *testing.T) {
+		got := capture(t, "/repos/__PAT__/x")
+		if len(got.Substituted) != 1 || got.Substituted[0] != surfacePath {
+			t.Fatalf("substituted = %v, want [path]", got.Substituted)
+		}
+		if got.Path != "/repos/__PAT__/x" {
+			t.Fatalf("path = %q", got.Path)
+		}
+		if strings.Contains(got.Path, "real-token") {
+			t.Fatalf("the log leaked the substituted value: %q", got.Path)
+		}
+	})
+
+	t.Run("a substitution that matched nothing says nothing", func(t *testing.T) {
+		got := capture(t, "/repos/no-placeholder-here")
+		if len(got.Substituted) != 0 {
+			t.Fatalf("substituted = %v, want empty", got.Substituted)
+		}
+	})
+}
