@@ -277,6 +277,25 @@ func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
 	}
 }
 
+// `..` alone is not the only way out of a prefix: some upstreams read ';' and '\\' as separators, so a
+// value glued onto an agent-supplied `..` walks up there while reading as an ordinary segment to a splitter.
+func TestASubstitutedValueCannotWalkOutOfItsPrefix(t *testing.T) {
+	for _, secret := range []string{`\admin`, `;x`, `/admin`} {
+		t.Run(secret, func(t *testing.T) {
+			client, host := newPolicyFixture(t, func(h string) *resolvedService {
+				return policyService(h, nil, []string{"/repos"}, nil, []substitution{
+					subOn("__P__", secret, surfacePath),
+				})
+			})
+
+			status, body := do(t, client, "GET", fmt.Sprintf("https://%s/repos/..__P__/admin", host), "")
+			if status != http.StatusForbidden {
+				t.Fatalf("expected a 403, got %d: %s", status, body)
+			}
+		})
+	}
+}
+
 func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
 	// applySubstitutions escapes the value so it cannot add a segment, and that escape must not then read
 	// as the ambiguity it was written to prevent: a GitLab project is addressed as `group%2Fproject`.

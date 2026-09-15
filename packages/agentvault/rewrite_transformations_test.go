@@ -55,6 +55,28 @@ func TestInjectCustomHeaders(t *testing.T) {
 	})
 }
 
+// Fails the test if anything reads it.
+type unreadableBody struct{ t *testing.T }
+
+func (b *unreadableBody) Read([]byte) (int, error) {
+	b.t.Fatal("body was read even though the declared length is over the limit")
+	return 0, nil
+}
+
+func (b *unreadableBody) Close() error { return nil }
+
+// Reading first and measuring afterwards means every oversize request costs the cap in memory before it is
+// refused, which with the connection limit is several gigabytes an agent can make the proxy hold.
+func TestAnOversizedDeclaredBodyIsNeverRead(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://api.github.com/x", nil)
+	req.Body = &unreadableBody{t: t}
+	req.ContentLength = maxBodyRewriteSize + 1
+
+	if applyBodySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)}) {
+		t.Fatal("reported a substitution on a body it should not have touched")
+	}
+}
+
 // Dies mid-upload, the way a client that goes away does: some bytes, then an error.
 type halfBody struct {
 	data  []byte

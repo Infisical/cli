@@ -75,10 +75,20 @@ func pathAllowed(escaped string, prefixes []string) bool {
 //
 // The prefix comparison is unchanged and still byte-exact, which is what keeps the substituted span after
 // the prefix: a placeholder sitting inside the prefix region rewrites those bytes and fails the comparison.
-// That leaves traversal as the only way out of an allowed prefix, so it is the only thing still refused,
-// and it is judged on the decoded path because an upstream that decodes '%2F' before routing is exactly
-// the reader `..%2F..%2Fadmin` is written for.
+// That leaves traversal as the only way out of an allowed prefix, so traversal is what is still refused,
+// judged on the decoded path because an upstream that decodes '%2F' before routing is exactly the reader
+// `..%2F..%2Fadmin` is written for.
+//
+// Traversal is not only a bare `..` segment. ';' and '\' are refused here for the same reason
+// isAmbiguousPath refuses them: Tomcat and Jetty strip `;params` per segment and IIS reads '\' as a
+// separator, so `..;x` and `..\admin` both walk up on some upstream while reading as an ordinary segment
+// to a splitter. The escape-shape checks isAmbiguousPath also runs are deliberately not repeated, since
+// the substituted span is percent-escaped by applySubstitutions and it is the decoded meaning that matters
+// here; running them on the decoded form would refuse a secret merely containing a '%'.
 func pathAllowedAfterSubstitution(escaped, decoded string, prefixes []string) bool {
+	if strings.ContainsAny(decoded, ";\\") {
+		return false
+	}
 	for _, segment := range strings.Split(decoded, "/") {
 		if segment == "." || segment == ".." {
 			return false

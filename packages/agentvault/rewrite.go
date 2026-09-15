@@ -170,6 +170,15 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 			Msg("agent-vault: body substitution skipped on an encoded body; the placeholder is going upstream unchanged")
 		return false
 	}
+	// Judged before reading, so a body that already says it is too big costs no memory at all. The check
+	// below still has to stand on its own: a chunked request declares -1, and a declared length is the
+	// client's claim rather than a fact.
+	if req.ContentLength > maxBodyRewriteSize {
+		log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
+			Int64("declaredBytes", req.ContentLength).
+			Msg("agent-vault: body larger than the substitution limit; the placeholder is going upstream unchanged")
+		return false
+	}
 
 	body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
 	if err != nil {
