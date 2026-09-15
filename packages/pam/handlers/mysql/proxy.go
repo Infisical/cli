@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
+
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
-	"net"
 )
 
 // TODO: DRY with psql?
@@ -115,5 +116,8 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
+
+	conn.UnsetCapability(mysql.CLIENT_LOCAL_FILES)
+
 	return conn, nil
 }
