@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -819,6 +820,20 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			}
 
 			serviceAccountKeyPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			if serviceAccountKeyPath != "" {
+				// The unit runs with InaccessibleDirectories=/home and no working directory, so a key
+				// under a home directory or given relatively installs fine and then fails to open on
+				// every service start.
+				if !filepath.IsAbs(serviceAccountKeyPath) {
+					util.HandleError(fmt.Errorf("--service-account-key-file-path must be an absolute path (got %q)", serviceAccountKeyPath))
+				}
+				if strings.HasPrefix(serviceAccountKeyPath, "/home/") {
+					util.HandleError(fmt.Errorf("--service-account-key-file-path must not be under /home: the systemd service cannot read it there. Move the key somewhere like /etc/infisical (got %q)", serviceAccountKeyPath))
+				}
+				if _, statErr := os.Stat(serviceAccountKeyPath); statErr != nil {
+					util.HandleError(fmt.Errorf("GCP service account key not found at %q: %w", serviceAccountKeyPath, statErr))
+				}
+			}
 
 			relayName, _ := resolveRelayName("")
 

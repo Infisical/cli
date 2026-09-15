@@ -20,6 +20,7 @@ const (
 	gcpMetadataIdentityURL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
 	gcpMetadataEmailURL    = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
 	gcpMetadataTimeout     = 10 * time.Second
+	gcpIamTokenLifetime    = 5 * time.Minute
 )
 
 // LoginGatewayWithGcp proves the gateway's GCP identity to Infisical and exchanges the proof for a
@@ -91,7 +92,15 @@ func signGcpServiceAccountJwt(ctx context.Context, audience string, serviceAccou
 		return "", err
 	}
 
-	payload, err := json.Marshal(map[string]string{"sub": clientEmail, "aud": audience})
+	// A signed JWT with no expiry stays a valid proof forever, so a captured login request could be
+	// replayed indefinitely. The backend refuses a token without a bounded expiry.
+	now := time.Now()
+	payload, err := json.Marshal(map[string]any{
+		"sub": clientEmail,
+		"aud": audience,
+		"iat": now.Unix(),
+		"exp": now.Add(gcpIamTokenLifetime).Unix(),
+	})
 	if err != nil {
 		return "", fmt.Errorf("unable to build the GCP JWT payload: %w", err)
 	}
