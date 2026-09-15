@@ -12,6 +12,10 @@ import (
 )
 
 const (
+	minPrintableByte        = 0x20
+	maxPrintableByte        = 0x7E
+	maxTrailingNonPrintable = 2
+
 	ttcFuncOALL8   = 0x5E
 	ttcFuncOCOMMIT = 0x0E
 	ttcFuncORLLBK  = 0x0F
@@ -21,6 +25,7 @@ const (
 type pendingQuery struct {
 	sql       string
 	timestamp time.Time
+	extractor *QueryExtractor
 }
 
 // Best-effort SQL extraction from the byte stream.
@@ -28,38 +33,85 @@ type QueryExtractor struct {
 	logger    session.SessionLogger
 	sessionID string
 	direction string
-	ch        chan []byte
-	stopCh    chan struct{}
-	wg        sync.WaitGroup
 	use32Bit  bool
 	pair      *pairState
+}
+
+type taggedChunk struct {
+	extractor *QueryExtractor
+	data      []byte
 }
 
 type pairState struct {
 	mu      sync.Mutex
 	pending *pendingQuery
+	ch      chan taggedChunk
+	stopCh  chan struct{}
+	stopOne sync.Once
+	wg      sync.WaitGroup
 }
 
 func NewQueryExtractorPair(logger session.SessionLogger, sessionID string, use32Bit bool) (clientToUpstream, upstreamToClient *QueryExtractor) {
-	p := &pairState{}
+	p := &pairState{
+		ch:     make(chan taggedChunk, 128),
+		stopCh: make(chan struct{}),
+	}
 	clientToUpstream = newExtractor(logger, sessionID, "client->upstream", use32Bit, p)
 	upstreamToClient = newExtractor(logger, sessionID, "upstream->client", use32Bit, p)
+	p.wg.Add(1)
+	go p.loop()
 	return
 }
 
+func (p *pairState) loop() {
+	defer p.wg.Done()
+	buffers := map[*QueryExtractor]*bytes.Buffer{}
+	for {
+		select {
+		case <-p.stopCh:
+			for {
+				select {
+				case chunk := <-p.ch:
+					p.consume(buffers, chunk)
+				default:
+					p.flushPending()
+					return
+				}
+			}
+		case chunk := <-p.ch:
+			p.consume(buffers, chunk)
+		}
+	}
+}
+
+func (p *pairState) consume(buffers map[*QueryExtractor]*bytes.Buffer, chunk taggedChunk) {
+	buf, ok := buffers[chunk.extractor]
+	if !ok {
+		buf = &bytes.Buffer{}
+		buffers[chunk.extractor] = buf
+	}
+	buf.Write(chunk.data)
+	chunk.extractor.drain(buf)
+}
+
+func (p *pairState) flushPending() {
+	p.mu.Lock()
+	pending := p.pending
+	p.pending = nil
+	p.mu.Unlock()
+	if pending != nil && pending.extractor != nil {
+		pending.extractor.writeEntry(pending, sessionOutcomeUnknown)
+	}
+}
+
 func newExtractor(logger session.SessionLogger, sessionID, direction string, use32Bit bool, pair *pairState) *QueryExtractor {
-	e := &QueryExtractor{
+	return &QueryExtractor{
 		logger:    logger,
 		sessionID: sessionID,
 		direction: direction,
-		ch:        make(chan []byte, 64),
-		stopCh:    make(chan struct{}),
 		use32Bit:  use32Bit,
 		pair:      pair,
 	}
-	e.wg.Add(1)
-	go e.loop()
-	return e
 }
 
 func (e *QueryExtractor) Feed(data []byte) {
@@ -69,29 +121,14 @@ func (e *QueryExtractor) Feed(data []byte) {
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	select {
-	case e.ch <- cp:
+	case e.pair.ch <- taggedChunk{extractor: e, data: cp}:
 	default:
 	}
 }
 
 func (e *QueryExtractor) Stop() {
-	close(e.stopCh)
-	e.wg.Wait()
-}
-
-func (e *QueryExtractor) loop() {
-	defer e.wg.Done()
-	var buffer bytes.Buffer
-
-	for {
-		select {
-		case <-e.stopCh:
-			return
-		case chunk := <-e.ch:
-			buffer.Write(chunk)
-			e.drain(&buffer)
-		}
-	}
+	e.pair.stopOne.Do(func() { close(e.pair.stopCh) })
+	e.pair.wg.Wait()
 }
 
 func (e *QueryExtractor) drain(buf *bytes.Buffer) {
@@ -146,9 +183,7 @@ func (e *QueryExtractor) handleClientRequest(payload []byte) {
 	if idx := findBytePair(payload, ttcMsgFunction, ttcFuncOALL8); idx >= 0 {
 		r := NewTTCReader(payload[idx+2:])
 		if sqlText := tryExtractSQL(r); sqlText != "" {
-			e.pair.mu.Lock()
-			e.pair.pending = &pendingQuery{sql: sqlText, timestamp: time.Now()}
-			e.pair.mu.Unlock()
+			e.startPending(sqlText)
 		}
 		return
 	}
@@ -172,9 +207,7 @@ func findBytePair(data []byte, b1, b2 byte) int {
 }
 
 func (e *QueryExtractor) recordLiteral(sql string) {
-	e.pair.mu.Lock()
-	e.pair.pending = &pendingQuery{sql: sql, timestamp: time.Now()}
-	e.pair.mu.Unlock()
+	e.startPending(sql)
 }
 
 // tryExtractSQL uses a longest-printable-run heuristic because OALL8 headers
@@ -188,7 +221,21 @@ func tryExtractSQL(r *TTCReader) string {
 	if err != nil {
 		return ""
 	}
-	return longestPrintableRun(buf)
+	return trimLengthPrefix(longestPrintableRun(buf))
+}
+
+func trimLengthPrefix(run string) string {
+	if len(run) < 2 {
+		return run
+	}
+	declared := int(run[0])
+	if declared < minPrintableByte || declared > maxPrintableByte {
+		return run
+	}
+	if declared < len(run)-1 || declared > len(run)+maxTrailingNonPrintable {
+		return run
+	}
+	return run[1:]
 }
 
 func longestPrintableRun(data []byte) string {
@@ -215,7 +262,17 @@ func longestPrintableRun(data []byte) string {
 	return string(data[bestStart : bestStart+bestLen])
 }
 
+const (
+	sessionOutcomeOK      = "OK"
+	sessionOutcomeUnknown = "UNKNOWN"
+	oraNoDataFound        = 1403
+)
+
 func (e *QueryExtractor) handleServerResponse(payload []byte) {
+	outcome := extractResponseOutcome(payload)
+	if outcome == sessionOutcomeUnknown {
+		return
+	}
 	e.pair.mu.Lock()
 	pending := e.pair.pending
 	e.pair.pending = nil
@@ -223,54 +280,49 @@ func (e *QueryExtractor) handleServerResponse(payload []byte) {
 	if pending == nil {
 		return
 	}
-	output := extractResponseOutcome(payload)
+	e.writeEntry(pending, outcome)
+}
+
+func (e *QueryExtractor) writeEntry(pending *pendingQuery, outcome string) {
 	err := e.logger.LogEntry(session.SessionLogEntry{
 		Timestamp: pending.timestamp,
 		Input:     pending.sql,
-		Output:    output,
+		Output:    outcome,
 	})
 	if err != nil {
 		log.Debug().Err(err).Str("sessionID", e.sessionID).Msg("session log entry dropped")
 	}
 }
 
-func extractResponseOutcome(payload []byte) string {
-	r := NewTTCReader(payload)
-	for r.Remaining() > 0 {
-		op, err := r.GetByte()
-		if err != nil {
-			break
-		}
-		if op == 0x04 {
-			for i := 0; i < 3; i++ {
-				if _, err := r.GetInt(4, true, true); err != nil {
-					return "OK"
-				}
-			}
-			code, err := r.GetInt(4, true, true)
-			if err != nil || code == 0 {
-				return "OK"
-			}
-			return ora(code)
-		}
+func (e *QueryExtractor) startPending(sql string) {
+	e.pair.mu.Lock()
+	previous := e.pair.pending
+	e.pair.pending = &pendingQuery{sql: sql, timestamp: time.Now(), extractor: e}
+	e.pair.mu.Unlock()
+	if previous != nil {
+		e.writeEntry(previous, sessionOutcomeUnknown)
 	}
-	return ""
 }
 
-func ora(code int) string {
-	switch code {
-	case 0:
-		return "OK"
-	case 1:
-		return "ERROR: ORA-00001: unique constraint violated"
-	case 900:
-		return "ERROR: ORA-00900: invalid SQL statement"
-	case 942:
-		return "ERROR: ORA-00942: table or view does not exist"
-	case 1017:
-		return "ERROR: ORA-01017: invalid username/password"
-	case 28000:
-		return "ERROR: ORA-28000: the account is locked"
+func extractResponseOutcome(payload []byte) string {
+	summary, ok := parseCallSummary(payload)
+	if !ok {
+		summary, ok = oracleErrorFromFramedText(payload)
 	}
-	return fmt.Sprintf("ERROR: ORA-%05d", code)
+	if !ok {
+		if bytes.Contains(payload, oraMessagePrefix) {
+			return sessionOutcomeUnknown
+		}
+		if ociSummaryReportsSuccess(payload) || endOfCallStatusPresent(payload) {
+			return sessionOutcomeOK
+		}
+		return sessionOutcomeUnknown
+	}
+	if summary.retCode == 0 || summary.retCode == oraNoDataFound {
+		return sessionOutcomeOK
+	}
+	if summary.message == "" {
+		return fmt.Sprintf("ERROR: ORA-%05d", summary.retCode)
+	}
+	return "ERROR: " + summary.message
 }
