@@ -43,7 +43,6 @@ func TestMethodPolicy(t *testing.T) {
 		if !errors.Is(err, errPolicyBlocked) {
 			t.Fatalf("POST should be blocked, got %v", err)
 		}
-		// The body is err.Error(), so the service and the method both have to be in it.
 		if !strings.Contains(err.Error(), `service "github" does not allow POST`) {
 			t.Fatalf("unhelpful message: %q", err.Error())
 		}
@@ -71,7 +70,6 @@ func TestPathPolicy(t *testing.T) {
 		})
 	}
 
-	// Each of these reads as inside /repos to a naive prefix check but resolves elsewhere on some upstream.
 	blocked := []string{
 		"/repositories",
 		"/repo",
@@ -92,7 +90,6 @@ func TestPathPolicy(t *testing.T) {
 	for _, path := range blocked {
 		t.Run("blocks "+path, func(t *testing.T) {
 			req := requestTo(t, "GET", "/placeholder")
-			// Set the target verbatim so Go's URL parsing cannot normalise the case away before we see it.
 			req.URL.Path = ""
 			req.URL.RawPath = ""
 			req.URL.Opaque = ""
@@ -124,7 +121,6 @@ func TestPathPolicy(t *testing.T) {
 		}
 	})
 
-	// The boundary holds at any depth, not only against the first segment.
 	t.Run("a deeper prefix still matches whole segments only", func(t *testing.T) {
 		deep := serviceWithPolicy(nil, []string{"/repos/octo"})
 		if err := checkServicePolicy(deep, requestTo(t, "GET", "/repos/octo/hello")); err != nil {
@@ -161,7 +157,6 @@ func TestPathPolicy(t *testing.T) {
 
 func TestControlByteEscapesAreRefused(t *testing.T) {
 	svc := serviceWithPolicy(nil, []string{"/repos"})
-	// An upstream that truncates at NUL reads this as /repos/.. and resolves outside the prefix.
 	for _, path := range []string{"/repos/..%00/admin", "/repos/%00../admin", "/repos/x%09y", "/repos/x%7f"} {
 		t.Run(path, func(t *testing.T) {
 			if err := checkServicePolicy(svc, requestTo(t, "GET", path)); !errors.Is(err, errPolicyBlocked) {
@@ -184,7 +179,6 @@ func TestWireMappingFailsClosed(t *testing.T) {
 			t.Fatalf("an empty method list must restrict, got %v", methods)
 		}
 
-		// A list whose entries are all blank must not collapse to "unrestricted".
 		prefixes := toPathPrefixes([]string{"  "})
 		if len(prefixes) == 0 {
 			t.Fatal("an empty path prefix list must restrict, not fall through to unrestricted")
@@ -231,7 +225,6 @@ func TestNonAsciiPathsAreJudgedByUtf8Validity(t *testing.T) {
 }
 
 func TestAnExplicitRootPrefixMatchesEverythingAnUnrestrictedServiceWould(t *testing.T) {
-	// Setting "/" must mean the same as setting no prefix at all.
 	root := serviceWithPolicy(nil, []string{"/"})
 	open := serviceWithPolicy(nil, nil)
 

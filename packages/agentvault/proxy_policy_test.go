@@ -233,14 +233,12 @@ func TestSubstitutionsReachTheUpstream(t *testing.T) {
 	if got.Body != `{"token":"real-token"}` {
 		t.Fatalf("body = %q", got.Body)
 	}
-	// The placeholder must be gone from every surface, not merely replaced in the ones we checked.
 	if strings.Contains(string(payload), "__PAT__") {
 		t.Fatalf("a placeholder survived to the upstream: %s", payload)
 	}
 }
 
 func TestABlockedSubstitutedPathNeverEchoesTheSecret(t *testing.T) {
-	// The 403 body goes back to the agent and the same text goes to the proxy log.
 	secret := "../s3cr3tadmin"
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
@@ -258,7 +256,6 @@ func TestABlockedSubstitutedPathNeverEchoesTheSecret(t *testing.T) {
 }
 
 func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
-	// The path is authorised before substitution, so a traversal must not smuggle the request out after it.
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
 			subOn("__PAT__", "../admin", surfacePath),
@@ -271,7 +268,6 @@ func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
 	}
 }
 
-// Some upstreams read ';' and '\\' as separators, so a value glued onto an agent-supplied `..` walks up.
 func TestASubstitutedValueCannotWalkOutOfItsPrefix(t *testing.T) {
 	for _, secret := range []string{`\admin`, `;x`, `/admin`} {
 		t.Run(secret, func(t *testing.T) {
@@ -290,7 +286,6 @@ func TestASubstitutedValueCannotWalkOutOfItsPrefix(t *testing.T) {
 }
 
 func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
-	// The escape that stops a value adding a segment must not then read as the ambiguity it prevents.
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/api/v4/projects"}, nil, []substitution{
 			subOn("__PROJ__", "mygroup/myproject", surfacePath),
@@ -306,7 +301,6 @@ func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
 	}
 }
 
-// The backend refuses this pairing on write, so reaching it means a stale service. The token has to survive.
 func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -330,7 +324,6 @@ func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
 			want:          "real-token",
 		},
 		{
-			// Pass-through injects no credential, so a custom Authorization header is the whole point.
 			name:          "pass-through leaves the custom header alone",
 			cred:          credential{kind: credentialPassthrough},
 			customHeaders: []customHeader{{name: "Authorization", prefix: "Bearer", value: []byte("custom")}},
@@ -363,7 +356,6 @@ func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
 }
 
 func TestTheLogSaysWhichSurfacesWereSubstituted(t *testing.T) {
-	// The logged path is always the agent's own, so without this field a miss reads like a hit.
 	type line struct {
 		Path        string   `json:"path"`
 		Decision    string   `json:"decision"`
@@ -405,7 +397,6 @@ func TestTheLogSaysWhichSurfacesWereSubstituted(t *testing.T) {
 		if len(got.Substituted) != 1 || got.Substituted[0] != surfacePath {
 			t.Fatalf("substituted = %v, want [path]", got.Substituted)
 		}
-		// The agent's own placeholder, never the value it was swapped for.
 		if got.Path != "/repos/__PAT__/x" {
 			t.Fatalf("path = %q", got.Path)
 		}

@@ -24,7 +24,6 @@ func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	return nil
 }
 
-// A nil map is every method. Folding both sides means a client sending "get" is judged on GET.
 func (s *resolvedService) allowsMethod(method string) bool {
 	if s.allowedMethods == nil {
 		return true
@@ -32,7 +31,6 @@ func (s *resolvedService) allowsMethod(method string) bool {
 	return s.allowedMethods[strings.ToUpper(method)]
 }
 
-// EscapedPath is what goes on the wire, so this judges what the upstream will receive.
 func requestPath(req *http.Request) string {
 	path := req.URL.EscapedPath()
 	if path == "" {
@@ -85,7 +83,6 @@ func matchesPrefix(escaped string, prefixes []string) bool {
 		if !strings.HasPrefix(escaped, prefix) {
 			continue
 		}
-		// Whole segments only, so /repos does not cover /repositories.
 		if rest := escaped[len(prefix):]; rest == "" || rest[0] == '/' {
 			return true
 		}
@@ -124,7 +121,6 @@ func hasUnsafeEscape(escaped string) bool {
 			continue
 		}
 		if i+2 >= len(escaped) {
-			// A truncated escape is not something we can judge either.
 			return true
 		}
 		hi, hiOk := unhex(escaped[i+1])

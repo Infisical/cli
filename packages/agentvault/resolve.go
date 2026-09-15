@@ -89,8 +89,6 @@ func toCredential(wire api.AgentVaultCredential) credential {
 	}
 }
 
-// A nil slice stays a nil map, which allowsMethod reads as "every method". An empty list from the server
-// would be a restriction allowing nothing, so it is kept distinct rather than folded into nil.
 func toMethodSet(methods []string) map[string]bool {
 	if methods == nil {
 		return nil

@@ -445,7 +445,6 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
 }
 
-// `brokered` is wider than "a credential went out": custom headers or substitutions count too.
 type forwardOutcome struct {
 	brokered    bool
 	substituted []string
@@ -465,7 +464,6 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
-	// Above the plaintext refusal below, so a rule holds on http:// too.
 	if matched != nil {
 		if err := checkServicePolicy(matched, req); err != nil {
 			return nil, matched, outcome, err
@@ -502,7 +500,6 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 				outcome.brokered = true
 			}
 
-			// The substitution above rewrote the path, so re-check what actually goes on the wire.
 			if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
 				if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
 					// The path now carries the real credential, so it must not reach the body or the log.

@@ -25,7 +25,6 @@ const (
 	maxBodyRewriteSize = 10 * 1024 * 1024
 )
 
-// injectCredential overwrites an existing header on the agent's request, silently and deliberately.
 func injectCredential(req *http.Request, cred *credential) bool {
 	switch cred.kind {
 	case credentialBearer:
@@ -83,7 +82,6 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 				needle = escapedPathForm(sub.placeholder)
 			}
 			if strings.Contains(escaped, needle) {
-				// The replacement is escaped too, or a secret containing '/' or '?' would itself reshape the URL.
 				if v, ok := replaceWithinLimit(escaped, needle, url.PathEscape(real), maxBodyRewriteSize); ok {
 					if decoded, err := url.PathUnescape(v); err == nil {
 						// Go uses RawPath only when it agrees with Path, so both are written.
@@ -149,7 +147,6 @@ func bodySubstitutions(subs []substitution) bool {
 	return false
 }
 
-// Only read when a substitution names the body, so every other service keeps streaming.
 func applyBodySubstitutions(req *http.Request, serviceName string, subs []substitution) bool {
 	if req.Body == http.NoBody || req.ContentLength == 0 {
 		return false
@@ -199,7 +196,6 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 		if count == 0 {
 			continue
 		}
-		// Forward unchanged when expanding the placeholder would push the body past the cap.
 		if len(rewritten)+count*(len(sub.value)-len(sub.placeholder)) > maxBodyRewriteSize {
 			log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
 				Msg("agent-vault: substituted body would exceed the limit; the placeholder is going upstream unchanged")

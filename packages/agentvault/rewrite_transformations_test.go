@@ -43,7 +43,6 @@ func TestInjectCustomHeaders(t *testing.T) {
 		}
 	})
 
-	// Same trap injectCredential documents: a Connection list naming the header would delete it.
 	t.Run("a Connection header cannot delete an injected custom header", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
 		req.Header.Set("Connection", "X-Org-Id")
@@ -55,7 +54,6 @@ func TestInjectCustomHeaders(t *testing.T) {
 	})
 }
 
-// Fails the test if anything reads it.
 type unreadableBody struct{ t *testing.T }
 
 func (b *unreadableBody) Read([]byte) (int, error) {
@@ -65,7 +63,6 @@ func (b *unreadableBody) Read([]byte) (int, error) {
 
 func (b *unreadableBody) Close() error { return nil }
 
-// Measuring after reading would cost the cap in memory per request before refusing it.
 func TestAnOversizedDeclaredBodyIsNeverRead(t *testing.T) {
 	req, _ := http.NewRequest("POST", "https://api.github.com/x", nil)
 	req.Body = &unreadableBody{t: t}
@@ -76,7 +73,6 @@ func TestAnOversizedDeclaredBodyIsNeverRead(t *testing.T) {
 	}
 }
 
-// Dies mid-upload, the way a client that goes away does: some bytes, then an error.
 type halfBody struct {
 	data  []byte
 	n     int
@@ -94,7 +90,6 @@ func (b *halfBody) Read(p []byte) (int, error) {
 
 func (b *halfBody) Close() error { return nil }
 
-// Correcting the length would hand the upstream a shorter request it cannot tell from a complete one.
 func TestABrokenUploadIsNotForwardedTruncated(t *testing.T) {
 	full := strings.Repeat("A", 500) + "__PAT__" + strings.Repeat("B", 500)
 	req, _ := http.NewRequest("POST", "https://api.github.com/x", nil)
@@ -128,7 +123,6 @@ func TestApplySubstitutions(t *testing.T) {
 		}
 	})
 
-	// Go escapes '{' in a path, so EscapedPath carries the placeholder in a form the author never typed.
 	t.Run("path, placeholder Go re-encodes", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://gitlab.com/api/v4/projects/{{PROJECT}}/pipelines", nil)
 		surfaces := applySubstitutions(req, "gitlab", []substitution{subOn("{{PROJECT}}", "group/project", surfacePath)})
@@ -237,7 +231,6 @@ func TestApplySubstitutions(t *testing.T) {
 }
 
 func TestAPathSubstitutionLeavesTheRestOfThePathAlone(t *testing.T) {
-	// GitLab addresses a project as group%2Fproject: one name containing a slash, not two segments.
 	for _, tc := range []struct{ name, target, wantURI string }{
 		{
 			"an encoded slash survives",
@@ -282,7 +275,6 @@ func TestAPathSubstitutionLeavesTheRestOfThePathAlone(t *testing.T) {
 }
 
 func TestAQuerySubstitutionEscapesTheValue(t *testing.T) {
-	// secretValueSchema allows '+', '&' and spaces, and RawQuery goes on the wire verbatim.
 	for _, tc := range []struct{ name, secret, wantKey string }{
 		{"a base64 key with a plus", "aB+cD/eF==", "aB+cD/eF=="},
 		{"a value with a space", "has space", "has space"},
