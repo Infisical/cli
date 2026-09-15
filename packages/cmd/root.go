@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Infisical/infisical-merge/packages/config"
-	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -37,7 +36,7 @@ var RootCmd = &cobra.Command{
 	Version:           util.CLI_VERSION,
 }
 
-// getCurrentLoggedInUserDetails is a seam for testing the saved-session warning
+// getCurrentLoggedInUserDetails is a seam for testing root pre-run behavior
 // without reading the platform keyring.
 var getCurrentLoggedInUserDetails = util.GetCurrentLoggedInUserDetails
 
@@ -115,17 +114,6 @@ func hasExplicitUniversalAuthCredentials(cmd *cobra.Command) bool {
 	return err == nil && clientSecret != ""
 }
 
-func warnIfTokenOverridesSavedSession(cmd *cobra.Command, silent bool, token *models.TokenDetails, hasUniversalAuthCredentials bool) {
-	if !shouldReadSavedSession(silent, token != nil, hasUniversalAuthCredentials) {
-		return
-	}
-
-	loggedInDetails, err := getCurrentLoggedInUserDetails(false)
-	if err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired && token != nil {
-		util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
-	}
-}
-
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the RootCmd.
 func Execute() {
@@ -190,7 +178,9 @@ func init() {
 		if err != nil {
 			token = nil
 		}
-		warnIfTokenOverridesSavedSession(cmd, silent, token, hasExplicitUniversalAuthCredentials(cmd))
+		if shouldReadSavedSession(silent, token != nil, hasExplicitUniversalAuthCredentials(cmd)) {
+			_, _ = getCurrentLoggedInUserDetails(false)
+		}
 
 	}
 
