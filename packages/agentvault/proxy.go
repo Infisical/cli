@@ -376,8 +376,6 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to reach the upstream"
-	// brokered means something was attached or rewritten, not merely that a service matched. A pass-through
-	// service carrying custom headers or substitutions counts.
 	case outcome.brokered:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
@@ -401,8 +399,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	if matched != nil {
 		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
 	}
-	// Names the surfaces a placeholder was actually swapped in. Without it a substitution that matched
-	// nothing is indistinguishable from one that did: the logged path is the agent's either way.
+	// The logged path is always the agent's, so without this a substitution that matched nothing reads
+	// exactly like one that fired.
 	if len(outcome.substituted) > 0 {
 		event = event.Strs("substituted", outcome.substituted)
 	}
@@ -447,8 +445,7 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
 }
 
-// What forward did to the request, for the log line. `brokered` is wider than "a credential went out": a
-// pass-through service carrying custom headers or substitutions is still brokering something.
+// `brokered` is wider than "a credential went out": custom headers or substitutions count too.
 type forwardOutcome struct {
 	brokered    bool
 	substituted []string
@@ -468,8 +465,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
-	// Judged on the request as it arrived, and above the plaintext refusal below, so a method or path rule
-	// holds on http:// too rather than only where a credential would have been attached.
+	// Above the plaintext refusal below, so a rule holds on http:// too.
 	if matched != nil {
 		if err := checkServicePolicy(matched, req); err != nil {
 			return nil, matched, outcome, err
@@ -495,11 +491,8 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 				Msg("agent-vault: refusing to attach a credential over plaintext http")
 			matched = nil
 		} else {
-			// Substitutions run first so an injected real value can never itself be rewritten. The credential
-			// goes last and wins: a custom header naming the credential's own header would otherwise replace
-			// the real token with the custom value, and the agent would get a 401 nothing in the service
-			// explains. The backend refuses that pairing on write, so this is the floor under it rather than
-			// the only guard.
+			// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
+			// so a custom header naming the credential's own header loses rather than replacing the token.
 			outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
 			outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
 			if injectCredential(req, &matched.credential) {
@@ -509,12 +502,10 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 				outcome.brokered = true
 			}
 
-			// A path-surface substitution rewrites the path after the check above, so a restricted service
-			// re-checks what actually goes on the wire.
+			// The substitution above rewrote the path, so re-check what actually goes on the wire.
 			if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
 				if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
 					// The path now carries the real credential, so it must not reach the body or the log.
-					// Every other refusal in this file is fixed text for the same reason.
 					return nil, matched, outcome, fmt.Errorf(
 						"service %q does not allow the path this request substitutes to: %w",
 						matched.name, errPolicyBlocked,

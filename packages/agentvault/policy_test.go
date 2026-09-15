@@ -161,8 +161,7 @@ func TestPathPolicy(t *testing.T) {
 
 func TestControlByteEscapesAreRefused(t *testing.T) {
 	svc := serviceWithPolicy(nil, []string{"/repos"})
-	// ..%00 is the null-truncation traversal: an upstream that decodes then truncates at NUL, or strips
-	// control bytes before normalising, reads this as /repos/.. and resolves outside the prefix.
+	// An upstream that truncates at NUL reads this as /repos/.. and resolves outside the prefix.
 	for _, path := range []string{"/repos/..%00/admin", "/repos/%00../admin", "/repos/x%09y", "/repos/x%7f"} {
 		t.Run(path, func(t *testing.T) {
 			if err := checkServicePolicy(svc, requestTo(t, "GET", path)); !errors.Is(err, errPolicyBlocked) {
@@ -200,7 +199,6 @@ func TestWireMappingFailsClosed(t *testing.T) {
 func TestNonAsciiPathsAreJudgedByUtf8Validity(t *testing.T) {
 	svc := serviceWithPolicy(nil, []string{"/repos"})
 
-	// Correctly encoded UTF-8 is an ordinary path: é, 日本語, and an emoji all reach the upstream.
 	allowed := []string{
 		"/repos/owner/repo/contents/caf%C3%A9.md",
 		"/repos/%E6%97%A5%E6%9C%AC%E8%AA%9E",
@@ -215,8 +213,7 @@ func TestNonAsciiPathsAreJudgedByUtf8Validity(t *testing.T) {
 		})
 	}
 
-	// Overlong and malformed sequences stay blocked: %c0%ae is an overlong '.', which some servers
-	// normalise as a traversal segment.
+	// %c0%ae is an overlong '.', which some servers normalise as a traversal segment.
 	blocked := []string{
 		"/repos/%c0%ae%c0%ae/admin",
 		"/repos/%c0%af",
@@ -234,8 +231,7 @@ func TestNonAsciiPathsAreJudgedByUtf8Validity(t *testing.T) {
 }
 
 func TestAnExplicitRootPrefixMatchesEverythingAnUnrestrictedServiceWould(t *testing.T) {
-	// Setting "/" should mean the same as setting no prefix at all, which was not true while every
-	// high byte was refused outright.
+	// Setting "/" must mean the same as setting no prefix at all.
 	root := serviceWithPolicy(nil, []string{"/"})
 	open := serviceWithPolicy(nil, nil)
 

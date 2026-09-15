@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// What the upstream actually received, so the assertions are about the wire rather than our own structs.
 type echoed struct {
 	Method  string              `json:"method"`
 	Path    string              `json:"path"`
@@ -32,11 +31,9 @@ func (r fixedResolver) resolve(string) (*resolveResult, error) {
 	return &resolveResult{SessionID: "s1", Services: r.services}, nil
 }
 
-// Stands up the whole path an agent's request takes: CONNECT to the proxy, TLS terminated by the proxy's
-// own CA, policy and injection applied, then forwarded over TLS to a real upstream that echoes what it got.
-// The upstream is addressed as 127.0.0.1, which is what httptest's certificate carries and what mintLeaf
-// puts in an IP SAN, so both TLS legs verify and the CONNECT target the proxy dials is the upstream itself.
-// Returns the client and the service's host, ready to build a URL from.
+// The whole path an agent's request takes: CONNECT, TLS terminated by the proxy's own CA, policy and
+// injection applied, then forwarded to a real upstream that echoes what it got. The upstream is addressed as
+// 127.0.0.1 so both TLS legs verify against httptest's certificate and mintLeaf's IP SAN.
 func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*http.Client, string) {
 	t.Helper()
 
@@ -68,7 +65,6 @@ func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*
 	}
 
 	transport := newUpstreamTransport()
-	// The proxy has to trust the httptest upstream's self-signed certificate to reach it.
 	transport.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
 
 	ps := &proxyServer{transport: transport, ca: newCaManager(key, cert)}
@@ -244,8 +240,7 @@ func TestSubstitutionsReachTheUpstream(t *testing.T) {
 }
 
 func TestABlockedSubstitutedPathNeverEchoesTheSecret(t *testing.T) {
-	// The re-check happens after the real value is in the path, so the refusal must not quote the path:
-	// the 403 body goes back to the agent and the same text goes to the proxy log.
+	// The 403 body goes back to the agent and the same text goes to the proxy log.
 	secret := "../s3cr3tadmin"
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
@@ -263,8 +258,7 @@ func TestABlockedSubstitutedPathNeverEchoesTheSecret(t *testing.T) {
 }
 
 func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
-	// The path is authorised before substitution, so a value containing a traversal must not smuggle the
-	// request out of its prefix afterwards.
+	// The path is authorised before substitution, so a traversal must not smuggle the request out after it.
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/repos"}, nil, []substitution{
 			subOn("__PAT__", "../admin", surfacePath),
@@ -277,8 +271,7 @@ func TestAPathSubstitutionIsRecheckedAgainstThePolicy(t *testing.T) {
 	}
 }
 
-// `..` alone is not the only way out of a prefix: some upstreams read ';' and '\\' as separators, so a
-// value glued onto an agent-supplied `..` walks up there while reading as an ordinary segment to a splitter.
+// Some upstreams read ';' and '\\' as separators, so a value glued onto an agent-supplied `..` walks up.
 func TestASubstitutedValueCannotWalkOutOfItsPrefix(t *testing.T) {
 	for _, secret := range []string{`\admin`, `;x`, `/admin`} {
 		t.Run(secret, func(t *testing.T) {
@@ -297,8 +290,7 @@ func TestASubstitutedValueCannotWalkOutOfItsPrefix(t *testing.T) {
 }
 
 func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
-	// applySubstitutions escapes the value so it cannot add a segment, and that escape must not then read
-	// as the ambiguity it was written to prevent: a GitLab project is addressed as `group%2Fproject`.
+	// The escape that stops a value adding a segment must not then read as the ambiguity it prevents.
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, []string{"/api/v4/projects"}, nil, []substitution{
 			subOn("__PROJ__", "mygroup/myproject", surfacePath),
@@ -314,8 +306,7 @@ func TestAPathSubstitutionMayCarryASlashUnderAPrefix(t *testing.T) {
 	}
 }
 
-// The backend refuses this pairing on write, so reaching it means a service saved before that check or a
-// write that raced it. Either way the real token has to survive.
+// The backend refuses this pairing on write, so reaching it means a stale service. The token has to survive.
 func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -372,8 +363,7 @@ func TestACustomHeaderCannotReplaceTheCredential(t *testing.T) {
 }
 
 func TestTheLogSaysWhichSurfacesWereSubstituted(t *testing.T) {
-	// The logged path is always the agent's own, placeholder and all, so without this field a
-	// substitution that matched nothing reads exactly like one that fired.
+	// The logged path is always the agent's own, so without this field a miss reads like a hit.
 	type line struct {
 		Path        string   `json:"path"`
 		Decision    string   `json:"decision"`

@@ -8,13 +8,9 @@ import (
 	"unicode/utf8"
 )
 
-// errPolicyBlocked is the sentinel for a service's own method and path rules, distinct from errHostBlocked,
-// which is the proxy-wide traffic policy. Both render as a 403 whose body is err.Error().
 var errPolicyBlocked = errors.New("blocked by service policy")
 
-// checkServicePolicy runs on the request exactly as it arrived, before anything rewrites it, and before the
-// plaintext refusal that nils a match: a restriction has to hold on http:// too, not only where a credential
-// would have been attached.
+// Runs before the plaintext refusal that nils a match, so a restriction holds on http:// too.
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	if !svc.allowsMethod(req.Method) {
 		return fmt.Errorf("service %q does not allow %s: %w", svc.name, req.Method, errPolicyBlocked)
@@ -28,8 +24,7 @@ func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	return nil
 }
 
-// A nil map is every method. The set is built upper-case, and the comparison folds the request's method the
-// same way, so a client sending "get" is judged on GET rather than silently blocked.
+// A nil map is every method. Folding both sides means a client sending "get" is judged on GET.
 func (s *resolvedService) allowsMethod(method string) bool {
 	if s.allowedMethods == nil {
 		return true
@@ -37,8 +32,7 @@ func (s *resolvedService) allowsMethod(method string) bool {
 	return s.allowedMethods[strings.ToUpper(method)]
 }
 
-// EscapedPath is byte-for-byte what Request.write puts on the wire (RequestURI() returns it, and forward only
-// rewrites Scheme, Host and RequestURI), so this judges exactly what the upstream will receive.
+// EscapedPath is what goes on the wire, so this judges what the upstream will receive.
 func requestPath(req *http.Request) string {
 	path := req.URL.EscapedPath()
 	if path == "" {
@@ -58,9 +52,8 @@ func truncatePath(path string) string {
 	return path
 }
 
-// pathAllowed never decodes. Anything whose meaning would depend on how the upstream normalises it is refused
-// outright, so the prefix comparison below is a plain byte comparison and the filter can only ever allow a
-// path every reader agrees on. Prefixes carry none of these characters by grammar.
+// Never decodes: anything whose meaning depends on the upstream's normalisation is refused outright, so the
+// comparison below is a plain byte comparison.
 func pathAllowed(escaped string, prefixes []string) bool {
 	if isAmbiguousPath(escaped) {
 		return false
@@ -68,23 +61,10 @@ func pathAllowed(escaped string, prefixes []string) bool {
 	return matchesPrefix(escaped, prefixes)
 }
 
-// pathAllowedAfterSubstitution judges a path the proxy itself part-wrote, so it cannot use the rule above.
-// applySubstitutions percent-escapes the value precisely so a secret containing '/' cannot add a segment,
-// and that escape is the '%2F' isAmbiguousPath refuses: judged by pathAllowed, a GitLab project addressed
-// as `group%2Fproject` would 403 against a prefix that plainly covers it.
-//
-// The prefix comparison is unchanged and still byte-exact, which is what keeps the substituted span after
-// the prefix: a placeholder sitting inside the prefix region rewrites those bytes and fails the comparison.
-// That leaves traversal as the only way out of an allowed prefix, so traversal is what is still refused,
-// judged on the decoded path because an upstream that decodes '%2F' before routing is exactly the reader
-// `..%2F..%2Fadmin` is written for.
-//
-// Traversal is not only a bare `..` segment. ';' and '\' are refused here for the same reason
-// isAmbiguousPath refuses them: Tomcat and Jetty strip `;params` per segment and IIS reads '\' as a
-// separator, so `..;x` and `..\admin` both walk up on some upstream while reading as an ordinary segment
-// to a splitter. The escape-shape checks isAmbiguousPath also runs are deliberately not repeated, since
-// the substituted span is percent-escaped by applySubstitutions and it is the decoded meaning that matters
-// here; running them on the decoded form would refuse a secret merely containing a '%'.
+// The path here is part-written by us: applySubstitutions escapes the value so it cannot add a segment, and
+// pathAllowed would refuse that very '%2F'. Only traversal can leave an allowed prefix, so only traversal is
+// refused, judged on the decoded path because that is what an upstream decoding '%2F' will route on. ';' and
+// '\' count as traversal here for the reason isAmbiguousPath gives.
 func pathAllowedAfterSubstitution(escaped, decoded string, prefixes []string) bool {
 	if strings.ContainsAny(decoded, ";\\") {
 		return false
@@ -114,9 +94,8 @@ func matchesPrefix(escaped string, prefixes []string) bool {
 }
 
 func isAmbiguousPath(escaped string) bool {
-	// ';' because Tomcat, Jetty and Spring strip ;params per segment before normalising, so /repos/..;/admin
-	// resolves to /admin upstream while reading as an ordinary segment here. '\' because Go treats it as a
-	// path byte and IIS and .NET read it as a separator.
+	// Tomcat and Spring strip ;params before normalising, so /repos/..;/admin resolves to /admin upstream
+	// while reading as an ordinary segment here. IIS reads '\' as a separator.
 	if strings.ContainsAny(escaped, ";\\") {
 		return true
 	}
@@ -128,20 +107,13 @@ func isAmbiguousPath(escaped string) bool {
 			return true
 		}
 	}
-	// An empty segment: /a//b normalises differently per server. A leading // is covered too; it could only
-	// ever fail the prefix comparison anyway, but judging it here keeps the rule one sentence.
+	// /a//b normalises differently per server.
 	return strings.Contains(escaped, "//")
 }
 
-// Judges the percent-escapes in a path. An escape is unsafe when it decodes to a separator, a dot, a
-// control byte, or to a byte sequence that is not valid UTF-8.
-//
-// The UTF-8 check is what lets a real non-ASCII path through while still refusing the attack it protects
-// against. `%c3%a9` is a correctly encoded 'é' and decodes to one rune; `%c0%ae` is an overlong encoding
-// of '.', which Go decodes to RuneError and some servers read as a dot. Rejecting every byte >= 0x80
-// would catch the second but also break every API that carries a filename or a user string in its path.
-// The rest (%2e, %2f, %5c, the double-encoded %252e, and the null-truncation ..%00) fall out of the
-// decoded-byte switch. %20 still works.
+// The UTF-8 check is what lets a real non-ASCII path through while still refusing the attack: `%c0%ae` is
+// an overlong '.', which some servers read as a dot, while `%c3%a9` is a legitimate 'é'. Refusing every
+// byte >= 0x80 would catch the first and break every API carrying a filename in its path.
 func hasUnsafeEscape(escaped string) bool {
 	decoded := make([]byte, 0, len(escaped))
 	sawEscape := false
@@ -173,8 +145,7 @@ func hasUnsafeEscape(escaped string) bool {
 		i += 2
 	}
 
-	// Only escaped input can carry an overlong or truncated sequence; an unescaped path is whatever the
-	// client put on the wire and is compared byte for byte anyway.
+	// Only escaped input can carry an overlong sequence.
 	return sawEscape && !utf8.Valid(decoded)
 }
 
