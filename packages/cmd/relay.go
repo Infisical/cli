@@ -337,8 +337,13 @@ var relaySystemdInstallCmd = &cobra.Command{
 			}
 
 			enrollToken, flagErr := cmd.Flags().GetString("token")
+			if flagErr == nil && enrollToken == "" {
+				// Fall back to INFISICAL_RELAY_ENROLLMENT_TOKEN (not INFISICAL_TOKEN) so the
+				// token stays out of argv/process listings in automated installs.
+				enrollToken = os.Getenv(relay.INFISICAL_RELAY_ENROLLMENT_TOKEN_KEY)
+			}
 			if flagErr != nil || enrollToken == "" {
-				util.HandleError(errors.New("--token is required when --enroll-method=token"))
+				util.HandleError(fmt.Errorf("--token flag or %s env is required when --enroll-method=token", relay.INFISICAL_RELAY_ENROLLMENT_TOKEN_KEY))
 			}
 
 			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
@@ -502,7 +507,7 @@ func init() {
 	relayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
 	// systemd install command flags
-	relaySystemdInstallCmd.Flags().String("token", "", "enrollment token for authenticating with Infisical")
+	relaySystemdInstallCmd.Flags().String("token", "", "enrollment token for authenticating with Infisical (or set INFISICAL_RELAY_ENROLLMENT_TOKEN)")
 	relaySystemdInstallCmd.Flags().String("enroll-method", "", "relay auth method [token, aws]")
 	relaySystemdInstallCmd.Flags().String("relay-id", "", "relay id (required when --enroll-method=aws)")
 	relaySystemdInstallCmd.Flags().String("log-file", "", "path to write service logs (e.g. /var/log/infisical/relay.log)")
