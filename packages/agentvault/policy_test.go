@@ -124,6 +124,17 @@ func TestPathPolicy(t *testing.T) {
 		}
 	})
 
+	// The boundary holds at any depth, not only against the first segment.
+	t.Run("a deeper prefix still matches whole segments only", func(t *testing.T) {
+		deep := serviceWithPolicy(nil, []string{"/repos/octo"})
+		if err := checkServicePolicy(deep, requestTo(t, "GET", "/repos/octo/hello")); err != nil {
+			t.Fatalf("/repos/octo should cover /repos/octo/hello: %v", err)
+		}
+		if err := checkServicePolicy(deep, requestTo(t, "GET", "/repos/octopus")); err == nil {
+			t.Fatal("/repos/octo should not cover /repos/octopus")
+		}
+	})
+
 	t.Run("prefix / matches everything", func(t *testing.T) {
 		root := serviceWithPolicy(nil, []string{"/"})
 		if err := checkServicePolicy(root, requestTo(t, "GET", "/anything/at/all")); err != nil {
