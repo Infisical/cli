@@ -165,7 +165,9 @@ func translatePhase2RequestInPlace(payload []byte, state *ProxyAuthState, realPa
 	return rebuilt, nil
 }
 
-func indexOfAuthRequest(payload []byte, expectedSubOp byte) int {
+const authRequestProbeUser = "PROBE"
+
+func indexOfAuthRequestMatching(payload []byte, expectedSubOp byte, accepts func([]byte) bool) int {
 	firstKey := bytes.Index(payload, []byte("AUTH_"))
 	if firstKey < 0 {
 		return -1
@@ -178,11 +180,26 @@ func indexOfAuthRequest(payload []byte, expectedSubOp byte) int {
 		if first < 0 {
 			first = offset
 		}
-		if _, err := rewriteAuthRequestUser(payload[offset:], expectedSubOp, "PROBE"); err == nil {
+		if accepts != nil && accepts(payload[offset:]) {
 			return offset
 		}
 	}
 	return first
+}
+
+func indexOfAuthRequest(payload []byte, expectedSubOp byte) int {
+	thin := func(b []byte) bool {
+		_, err := rewriteAuthRequestUser(b, expectedSubOp, authRequestProbeUser)
+		return err == nil
+	}
+	if offset := indexOfAuthRequestMatching(payload, expectedSubOp, thin); offset >= 0 && thin(payload[offset:]) {
+		return offset
+	}
+	oci := func(b []byte) bool {
+		_, err := ociRewriteAuthRequestUser(b, authRequestProbeUser)
+		return err == nil
+	}
+	return indexOfAuthRequestMatching(payload, expectedSubOp, oci)
 }
 
 func ociContainsAuthRequest(payload []byte, expectedSubOp byte) bool {
@@ -195,6 +212,9 @@ func rewriteBundledUsername(payload []byte, expectedSubOp byte, newUser string) 
 		return payload, false
 	}
 	rewritten, err := rewriteAuthRequestUser(payload[offset:], expectedSubOp, newUser)
+	if err != nil {
+		rewritten, err = ociRewriteAuthRequestUser(payload[offset:], newUser)
+	}
 	if err != nil {
 		return payload, false
 	}

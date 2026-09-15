@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -163,6 +165,7 @@ func alterPasswordStatement(params sqlRotateParams, targetUsername, sessionUsern
 func resolveOracleUsername(ctx context.Context, db *sql.DB, name string) (resolved string, exact bool, err error) {
 	rows, qerr := db.QueryContext(ctx, `SELECT username FROM all_users WHERE UPPER(username) = UPPER(:1)`, name)
 	if qerr != nil {
+		log.Warn().Err(qerr).Str("username", name).Msg("oracle: could not look up the stored username, using it as provided")
 		return name, false, nil
 	}
 	defer rows.Close()
@@ -171,6 +174,7 @@ func resolveOracleUsername(ctx context.Context, db *sql.DB, name string) (resolv
 	for rows.Next() {
 		var found string
 		if serr := rows.Scan(&found); serr != nil {
+			log.Warn().Err(serr).Str("username", name).Msg("oracle: could not read the username lookup result, using it as provided")
 			return name, false, nil
 		}
 		if found == name {
@@ -179,12 +183,13 @@ func resolveOracleUsername(ctx context.Context, db *sql.DB, name string) (resolv
 		matches = append(matches, found)
 	}
 	if rerr := rows.Err(); rerr != nil {
+		log.Warn().Err(rerr).Str("username", name).Msg("oracle: username lookup did not complete, using it as provided")
 		return name, false, nil
 	}
 
 	switch len(matches) {
 	case 0:
-		return name, false, nil
+		return "", false, fmt.Errorf("oracle user %q does not exist", name)
 	case 1:
 		return matches[0], true, nil
 	default:

@@ -161,7 +161,8 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	if p.config.InjectUsername != "" {
 		rewritten, applied := rewriteBundledUsername(p1Payload, AuthSubOpPhaseOne, p.config.InjectUsername)
 		if !applied {
-			log.Warn().Str("sessionID", p.config.SessionID).Msg("Proxy: this client encodes the auth request in a layout the proxy cannot rewrite; the username it sent is forwarded as is and Oracle rejects it unless it names the account")
+			_ = WriteErrorToClient(clientConn, ORA1017InvalidCredentials, "ORA-01017: invalid username/password; logon denied", use32Bit)
+			return fmt.Errorf("cannot substitute the account username into the phase 1 request: this client encodes it in a layout the proxy does not support")
 		}
 		p1Forward = rewritten
 	}
@@ -198,7 +199,8 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	if p.config.InjectUsername != "" {
 		rewritten, applied := rewriteBundledUsername(p2ReqTranslated, AuthSubOpPhaseTwo, p.config.InjectUsername)
 		if !applied {
-			log.Warn().Str("sessionID", p.config.SessionID).Msg("Proxy: this client encodes the auth request in a layout the proxy cannot rewrite; the username it sent is forwarded as is and Oracle rejects it unless it names the account")
+			_ = WriteErrorToClient(clientConn, ORA1017InvalidCredentials, "ORA-01017: invalid username/password; logon denied", use32Bit)
+			return fmt.Errorf("cannot substitute the account username into the phase 2 request: this client encodes it in a layout the proxy does not support")
 		}
 		p2ReqTranslated = rewritten
 	}
@@ -215,7 +217,11 @@ func (p *OracleProxy) handleConnectionProxied(ctx context.Context, clientConn ne
 	if _, err := clientConn.Write(p2RespRaw); err != nil {
 		return fmt.Errorf("forward phase 2 response: %w", err)
 	}
-	log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response forwarded; client authenticated")
+	if phaseTwoAccepted(p2RespRaw, use32Bit) {
+		log.Info().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response forwarded; client authenticated")
+	} else {
+		log.Warn().Str("sessionID", p.config.SessionID).Msg("Proxy: phase-2 response forwarded; Oracle did not accept the logon")
+	}
 
 	state = nil
 
@@ -421,7 +427,31 @@ func extractDataPayload(pkt []byte) ([]byte, error) {
 	return pkt[headerLen:], nil
 }
 
+const maxAuthRequestUserKVPGap = 8
+
+func phaseTwoAccepted(raw []byte, use32BitLen bool) bool {
+	if PacketTypeOf(raw) != PacketTypeData {
+		return false
+	}
+	pkt, err := ParseDataPacket(raw, use32BitLen)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(pkt.Payload, []byte("AUTH_SESSION_ID"))
+}
+
 func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) ([]byte, error) {
+	rewritten, err := rewriteAuthRequestUserWithFraming(payload, expectedSubOp, newUser, true)
+	if err == nil {
+		return rewritten, nil
+	}
+	if alt, altErr := rewriteAuthRequestUserWithFraming(payload, expectedSubOp, newUser, false); altErr == nil {
+		return alt, nil
+	}
+	return nil, err
+}
+
+func rewriteAuthRequestUserWithFraming(payload []byte, expectedSubOp byte, newUser string, consumeExtraFraming bool) ([]byte, error) {
 	r := NewTTCReader(payload)
 	op, err := r.GetByte()
 	if err != nil {
@@ -441,7 +471,7 @@ func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) 
 	if err != nil {
 		return nil, err
 	}
-	if framing != 0 {
+	if framing != 0 && consumeExtraFraming {
 		if _, err := r.GetByte(); err != nil {
 			return nil, err
 		}
@@ -493,10 +523,21 @@ func rewriteAuthRequestUser(payload []byte, expectedSubOp byte, newUser string) 
 			return nil, fmt.Errorf("consume user CLR length: %w", err)
 		}
 	}
-	if _, err := r.GetBytes(origUserLen); err != nil {
+	userBytes, err := r.GetBytes(origUserLen)
+	if err != nil {
 		return nil, fmt.Errorf("user bytes: %w", err)
 	}
+	for _, b := range userBytes {
+		if b < 0x20 || b >= 0x7F {
+			return nil, fmt.Errorf("auth request username contains a non-printable byte")
+		}
+	}
 	userEnd := r.Pos()
+
+	gap := bytes.Index(payload[userEnd:], []byte("AUTH_"))
+	if gap < 0 || gap > maxAuthRequestUserKVPGap {
+		return nil, fmt.Errorf("auth request username is not followed by a key-value section")
+	}
 
 	newUserBytes := []byte(newUser)
 	newUserLen := len(newUserBytes)

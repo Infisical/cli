@@ -8,6 +8,7 @@ import (
 const (
 	TTCMsgAuthRequest = 0x03
 	TTCMsgError       = 0x04
+	TTCMsgStatus      = 0x09
 )
 
 const (

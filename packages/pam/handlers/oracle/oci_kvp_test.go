@@ -1,6 +1,7 @@
 package oracle
 
 import (
+	"bytes"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -253,5 +254,70 @@ func TestTranslatePhase1ResponseRefusesAHostileWorkFactor(t *testing.T) {
 	}
 	if _, _, err := translatePhase1ResponseInPlace(hostile, "WebPw_1234"); err == nil {
 		t.Fatal("a hostile work factor must fail the session instead of deriving the key")
+	}
+}
+
+func TestOCIAuthRequestUsernameIsRewritten(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hex   string
+		subOp byte
+	}{
+		{"phase one bundle", ociPhaseOneBundle, AuthSubOpPhaseOne},
+		{"phase two request", ociPhaseTwoRequest, AuthSubOpPhaseTwo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := ociFixture(t, tc.hex)
+			for _, newUser := range []string{"X", "SYSTEM", "APPDEMO", "A_VERY_LONG_ORACLE_USERNAME_HERE"} {
+				rewritten, applied := rewriteBundledUsername(payload, tc.subOp, newUser)
+				if !applied {
+					t.Fatalf("%q was not substituted into the %s", newUser, tc.name)
+				}
+				if bytes.Contains(rewritten, []byte("WEBTEST")) {
+					t.Fatalf("%q left the original username in the request", newUser)
+				}
+				if !bytes.Contains(rewritten, []byte(newUser)) {
+					t.Fatalf("%q does not appear in the rewritten request", newUser)
+				}
+				off := indexOfAuthRequest(rewritten, tc.subOp)
+				if off < 0 {
+					t.Fatal("rewritten request is no longer recognisable")
+				}
+				lenPos, userLen, err := ociLocateUsername(rewritten[off:])
+				if err != nil || userLen != len(newUser) {
+					t.Fatalf("rewritten length is %d (err %v), want %d", userLen, err, len(newUser))
+				}
+				capAt, cerr := ociLocateUsernameCapacity(rewritten[off:], userLen, lenPos)
+				if cerr != nil {
+					t.Fatalf("capacity was not kept consistent with the new username: %v (capAt %d)", cerr, capAt)
+				}
+			}
+		})
+	}
+}
+
+func TestThinAuthRequestUsernameSurvivesBothFramings(t *testing.T) {
+	pythonStyle := append([]byte{TTCMsgAuthRequest, AuthSubOpPhaseOne, 0x01, 0x01, 0x01, 0x07,
+		0x01, 0x01, 0x01, 0x01, 0x05, 0x01, 0x01, 0x07}, []byte("APPDEMO")...)
+	pythonStyle = append(pythonStyle, 0x01, 0x0d, 0x0d)
+	pythonStyle = append(pythonStyle, []byte("AUTH_TERMINAL")...)
+
+	rewritten, err := rewriteAuthRequestUser(pythonStyle, AuthSubOpPhaseOne, "WEBTEST")
+	if err != nil {
+		t.Fatalf("the python-oracledb framing was not handled: %v", err)
+	}
+	if !bytes.Contains(rewritten, []byte("WEBTEST")) || bytes.Contains(rewritten, []byte("APPDEMO")) {
+		t.Fatal("the username was not substituted in the python-oracledb framing")
+	}
+	if !bytes.Contains(rewritten, []byte("AUTH_TERMINAL")) {
+		t.Fatal("the rewrite damaged the key-value section")
+	}
+}
+
+func TestAuthRequestRewriteRefusesAStrayMatch(t *testing.T) {
+	junk := append([]byte{TTCMsgAuthRequest, AuthSubOpPhaseOne, 0x00, 0x01, 0x01, 0x04},
+		[]byte("\x00\x00\x00\x00noKVPsectionfollows")...)
+	if _, err := rewriteAuthRequestUser(junk, AuthSubOpPhaseOne, "WEBTEST"); err == nil {
+		t.Fatal("a payload with no key-value section must not be accepted as an auth request")
 	}
 }
