@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 )
 
 // A refused credential stops the heartbeat schedule; an unreachable target keeps retrying. Probes dial and then
@@ -42,6 +43,25 @@ func authFailure(err error) error {
 		return &probeError{kind: failureKindTransport, err: err}
 	}
 	return &probeError{kind: failureKindAuth, err: err}
+}
+
+var oracleTransportErrorCodes = []string{
+	"ORA-12514",
+	"ORA-12541",
+	"ORA-12537",
+	"ORA-01033",
+}
+
+func sqlAuthFailure(dialect string, err error) error {
+	if err != nil && dialect == "oracle" {
+		message := err.Error()
+		for _, code := range oracleTransportErrorCodes {
+			if strings.Contains(message, code) {
+				return connectFailure(err)
+			}
+		}
+	}
+	return authFailure(err)
 }
 
 func isNetworkError(err error) bool {
