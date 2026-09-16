@@ -142,7 +142,6 @@ func init() {
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
-			util.DisplayPackageRepoMigrationNoticeWithWriter(silent, cmd.ErrOrStderr())
 		}
 
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
