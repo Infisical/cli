@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"encoding/base64"
 	"sort"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -20,7 +22,11 @@ type resolveResult struct {
 	SessionID string
 	ExpiresAt *time.Time
 	Services  []*resolvedService
+	// nil when logging is off for this session.
+	Activity *activityGrant
 }
+
+const activityKeyBytes = 32
 
 // A seam so the cache can be tested without a server, not because a second implementation is expected.
 type infisicalResolver struct {
@@ -39,8 +45,10 @@ func newInfisicalResolver(proxyToken func() string) (*infisicalResolver, error) 
 	return &infisicalResolver{client: client}, nil
 }
 
-func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error) {
-	res, err := api.CallResolveAgentVaultSession(r.client, sessionToken)
+func (r *infisicalResolver) resolve(sessionToken string, held *activityGrant) (*resolveResult, error) {
+	res, err := api.CallResolveAgentVaultSession(r.client, sessionToken, api.ResolveAgentVaultSessionRequest{
+		HasActivityKey: held != nil,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +75,44 @@ func (r *infisicalResolver) resolve(sessionToken string) (*resolveResult, error)
 		})
 	}
 
-	return &resolveResult{SessionID: res.SessionID, ExpiresAt: expiresAt, Services: services}, nil
+	return &resolveResult{
+		SessionID: res.SessionID,
+		ExpiresAt: expiresAt,
+		Services:  services,
+		Activity:  toActivityGrant(res.SessionID, res.Activity, held),
+	}, nil
+}
+
+// toActivityGrant decides what the proxy records under after a poll.
+//
+// The key is sent exactly once per session. When we told the server we already hold it, the response
+// carries no key and the cached one is carried forward; clearing it here instead would silently stop all
+// logging after the very first poll. After any cache eviction the grant and the flag are dropped
+// together, so the next resolve asks for the key again and this self-heals.
+func toActivityGrant(sessionID string, wire api.AgentVaultActivityGrant, held *activityGrant) *activityGrant {
+	if !wire.Enabled {
+		return nil
+	}
+	if wire.ProjectID == "" {
+		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: activity is enabled but no project was named, not recording")
+		return nil
+	}
+
+	if wire.SessionKey == "" {
+		if held != nil {
+			return &activityGrant{sessionID: sessionID, projectID: wire.ProjectID, key: held.key}
+		}
+		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: activity is enabled but no key was sent, not recording")
+		return nil
+	}
+
+	key, err := base64.StdEncoding.DecodeString(wire.SessionKey)
+	if err != nil || len(key) != activityKeyBytes {
+		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: the activity key Infisical sent is unusable, not recording")
+		return nil
+	}
+
+	return &activityGrant{sessionID: sessionID, projectID: wire.ProjectID, key: key}
 }
 
 func toCredential(wire api.AgentVaultCredential) credential {

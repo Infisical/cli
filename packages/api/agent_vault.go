@@ -102,19 +102,34 @@ type AgentVaultService struct {
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 }
 
-type ResolveAgentVaultSessionResponse struct {
-	SessionID string              `json:"sessionId"`
-	ExpiresAt string              `json:"expiresAt"`
-	Services  []AgentVaultService `json:"services"`
+// AgentVaultActivityGrant is what a session needs in order to have its activity recorded. SessionKey is
+// sent exactly once per session: the proxy reports that it already holds one and Infisical skips the
+// unwrap, which is a KMS round trip, on every poll after the first.
+type AgentVaultActivityGrant struct {
+	Enabled    bool   `json:"enabled"`
+	SessionKey string `json:"sessionKey"`
+	ProjectID  string `json:"projectId"`
 }
 
-func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string) (ResolveAgentVaultSessionResponse, error) {
+type ResolveAgentVaultSessionRequest struct {
+	HasActivityKey bool `json:"hasActivityKey"`
+}
+
+type ResolveAgentVaultSessionResponse struct {
+	SessionID string                  `json:"sessionId"`
+	ExpiresAt string                  `json:"expiresAt"`
+	Services  []AgentVaultService     `json:"services"`
+	Activity  AgentVaultActivityGrant `json:"activity"`
+}
+
+func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string, request ResolveAgentVaultSessionRequest) (ResolveAgentVaultSessionResponse, error) {
 	var res ResolveAgentVaultSessionResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetHeader(AgentVaultSessionHeader, sessionToken).
+		SetBody(request).
 		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/resolve", config.INFISICAL_URL))
 
 	if err != nil {
@@ -122,6 +137,45 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string)
 	}
 	if response.IsError() {
 		return ResolveAgentVaultSessionResponse{}, NewAPIErrorWithResponse("CallResolveAgentVaultSession", response, nil)
+	}
+	return res, nil
+}
+
+// CreateAgentVaultActivityChunkRequest is the metadata for one sealed chunk. The ciphertext itself never
+// passes through Infisical: the response carries a presigned URL to PUT it straight to the customer's
+// bucket. Re-sending the same ChunkID is idempotent, which is what makes a failed upload safe to retry.
+type CreateAgentVaultActivityChunkRequest struct {
+	ChunkID         string `json:"chunkId"`
+	StartedAt       string `json:"startedAt"`
+	EndedAt         string `json:"endedAt"`
+	FirstSeq        uint64 `json:"firstSeq"`
+	LastSeq         uint64 `json:"lastSeq"`
+	RecordCount     int    `json:"recordCount"`
+	DroppedCount    uint64 `json:"droppedCount"`
+	CiphertextBytes int    `json:"ciphertextBytes"`
+	IV              string `json:"iv"`
+}
+
+type CreateAgentVaultActivityChunkResponse struct {
+	ChunkID          string `json:"chunkId"`
+	UploadURL        string `json:"uploadUrl"`
+	ExpiresInSeconds int    `json:"expiresInSeconds"`
+}
+
+func CallCreateAgentVaultActivityChunk(httpClient *resty.Client, sessionID string, request CreateAgentVaultActivityChunkRequest) (CreateAgentVaultActivityChunkResponse, error) {
+	var res CreateAgentVaultActivityChunkResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/sessions/%s/activity/chunks", config.INFISICAL_URL, sessionID))
+
+	if err != nil {
+		return CreateAgentVaultActivityChunkResponse{}, NewGenericRequestError("CallCreateAgentVaultActivityChunk", err)
+	}
+	if response.IsError() {
+		return CreateAgentVaultActivityChunkResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultActivityChunk", response, nil)
 	}
 	return res, nil
 }

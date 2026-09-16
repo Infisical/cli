@@ -75,6 +75,7 @@ type proxyServer struct {
 	opts      Options
 	ca        *caManager
 	cache     *sessionCache
+	activity  *activityLog
 	transport http.RoundTripper
 
 	configMu sync.RWMutex
@@ -420,6 +421,25 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	}
 	event.Msg("agent-vault: request")
 
+	// reqPath is the agent's own path, taken before forward ran, so a substitution that put a real
+	// credential into the path never reaches the activity log.
+	if outcome.activity != nil {
+		var service, bundle *string
+		if matched != nil {
+			service, bundle = &matched.name, &matched.accessBundleName
+		}
+		ps.activity.record(outcome.activity, activityRecord{
+			Method:       r.Method,
+			Host:         hostname,
+			Port:         port,
+			Path:         reqPath,
+			Status:       status,
+			Decision:     decision,
+			Service:      service,
+			AccessBundle: bundle,
+		})
+	}
+
 	if err != nil {
 		http.Error(w, body, status)
 		return
@@ -459,15 +479,20 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 type forwardOutcome struct {
 	brokered    bool
 	substituted []string
+	// Set as soon as the session resolves, so every path after that carries it, a refusal included: an
+	// agent reaching a host or a path it may not is the most security-relevant line the activity log can
+	// hold. A session that fails to resolve has nothing to attribute a record to, and leaves it nil.
+	activity *activityGrant
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
 	var outcome forwardOutcome
 
-	services, err := ps.cache.get(sessionToken)
+	services, grant, err := ps.cache.lookup(sessionToken)
 	if err != nil {
 		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
+	outcome.activity = grant
 
 	// TRACE and TRACK make the upstream reflect the injected credential back in the response body. Upper
 	// -cased like allowsMethod already was, or a lowercase "trace" walks past. Refused here rather than in

@@ -26,7 +26,7 @@ func TestAResolveDoesNotRetryA429WhileTheAgentWaits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolver.resolve("tok"); err == nil {
+	if _, err := resolver.resolve("tok", nil); err == nil {
 		t.Fatal("a 429 resolved successfully")
 	}
 	if got := atomic.LoadInt64(&hits); got != 1 {

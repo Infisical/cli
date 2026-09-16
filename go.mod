@@ -43,6 +43,7 @@ require (
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/roff v0.1.0
 	github.com/oiweiwei/go-msrpc v1.5.1
+	github.com/oklog/ulid v1.3.1
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/pkg/errors v0.9.1
@@ -190,7 +191,6 @@ require (
 	github.com/oiweiwei/go-oem v1.0.0 // indirect
 	github.com/oiweiwei/go-smb2.fork v1.0.1 // indirect
 	github.com/oiweiwei/gokrb5.fork/v9 v9.0.6 // indirect
-	github.com/oklog/ulid v1.3.1 // indirect
 	github.com/onsi/ginkgo/v2 v2.22.2 // indirect
 	github.com/onsi/gomega v1.36.2 // indirect
 	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect

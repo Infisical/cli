@@ -27,7 +27,7 @@ type echoed struct {
 
 type fixedResolver struct{ services []*resolvedService }
 
-func (r fixedResolver) resolve(string) (*resolveResult, error) {
+func (r fixedResolver) resolve(string, *activityGrant) (*resolveResult, error) {
 	return &resolveResult{SessionID: "s1", Services: r.services}, nil
 }
 

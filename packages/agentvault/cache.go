@@ -68,6 +68,8 @@ type sessionEntry struct {
 	sessionID string
 	expiresAt *time.Time
 	services  []*resolvedService
+	// nil when activity logging is off for this session, which is the whole of the disabled path.
+	activity  *activityGrant
 	lastSeen  time.Time
 	fetchedAt time.Time
 }
@@ -79,7 +81,9 @@ func sessionKey(token string) string {
 }
 
 type sessionResolver interface {
-	resolve(sessionToken string) (*resolveResult, error)
+	// held is the activity grant the caller already has, or nil. Passing it lets the server skip
+	// re-sending a key that never changes.
+	resolve(sessionToken string, held *activityGrant) (*resolveResult, error)
 }
 
 type sessionCache struct {
@@ -152,7 +156,20 @@ func isSessionGone(err error) bool {
 	return errors.Is(err, errSessionGone)
 }
 
+// get keeps the two CONNECT gates, which care only about validity, free of the activity plumbing.
 func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
+	services, _, err := c.lookup(sessionToken)
+	return services, err
+}
+
+type cacheLookup struct {
+	services []*resolvedService
+	activity *activityGrant
+}
+
+// lookup resolves a session token to what the request path needs: the services to match against, and the
+// grant to record under. Both come from one cache entry, so the request handler never resolves.
+func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *activityGrant, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -162,7 +179,7 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 			delete(c.entries, key)
 			delete(c.tokens, key)
 			c.mu.Unlock()
-			return nil, errSessionGone
+			return nil, nil, errSessionGone
 		}
 		// Past the grace window the entry is a miss, so a stalled refresh loop cannot keep an old credential alive.
 		if time.Since(entry.fetchedAt) > c.grace() {
@@ -170,22 +187,23 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 			delete(c.tokens, key)
 		} else {
 			entry.lastSeen = time.Now()
-			svcs := entry.services
+			svcs, grant := entry.services, entry.activity
 			c.mu.Unlock()
-			return svcs, nil
+			return svcs, grant, nil
 		}
 	}
 	if refused, ok := c.refused[key]; ok {
 		if time.Now().Before(refused.until) {
 			c.mu.Unlock()
-			return nil, refused.err
+			return nil, nil, refused.err
 		}
 		delete(c.refused, key)
 	}
 	c.mu.Unlock()
 
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
-		result, err := c.resolver.resolve(sessionToken)
+		// No cached entry, so no cached key either: ask for one.
+		result, err := c.resolver.resolve(sessionToken, nil)
 		if err != nil {
 			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but
 			// until then every agent request would otherwise cost a resolve.
@@ -204,16 +222,18 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 			sessionID: result.SessionID,
 			expiresAt: result.ExpiresAt,
 			services:  result.Services,
+			activity:  result.Activity,
 			lastSeen:  time.Now(),
 			fetchedAt: time.Now(),
 		}
 		c.tokens[key] = sessionToken
-		return result.Services, nil
+		return cacheLookup{services: result.Services, activity: result.Activity}, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resolved.([]*resolvedService), nil
+	out := resolved.(cacheLookup)
+	return out.services, out.activity, nil
 }
 
 func (c *sessionCache) evictIfFullLocked() {
@@ -289,7 +309,15 @@ func (c *sessionCache) refresh() {
 }
 
 func (c *sessionCache) refreshOne(key, token string) {
-	result, err := c.resolver.resolve(token)
+	// Tell the server whether we already hold this session's key, so it can skip the unwrap.
+	c.mu.Lock()
+	var held *activityGrant
+	if entry, ok := c.entries[key]; ok {
+		held = entry.activity
+	}
+	c.mu.Unlock()
+
+	result, err := c.resolver.resolve(token, held)
 	if err != nil {
 		c.handleRefreshFailure(key, err)
 		return
@@ -301,6 +329,8 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.sessionID = result.SessionID
 		entry.expiresAt = result.ExpiresAt
 		entry.services = result.Services
+		// A backend flip lands within one poll, in either direction.
+		entry.activity = result.Activity
 		entry.fetchedAt = time.Now()
 	}
 }

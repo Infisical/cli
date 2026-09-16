@@ -203,6 +203,12 @@ func Start(opts Options, enrollmentToken string) error {
 	}
 	ps.cache = newSessionCache(resolver, ps.pollInterval)
 
+	shipper, err := newActivityShipper(opts.ProxyToken)
+	if err != nil {
+		return err
+	}
+	ps.activity = newActivityLog(state.ProxyID, shipper)
+
 	// Port 0 is not "unset": it is the ordinary ask for any free port, so it is never substituted.
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", opts.Port))
 	if err != nil {
@@ -225,6 +231,7 @@ func Start(opts Options, enrollmentToken string) error {
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
 	go ps.pollLoop(st, stop, fatal)
+	go ps.activity.run(stop)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- front.Serve(limited) }()
@@ -244,6 +251,9 @@ func Start(opts Options, enrollmentToken string) error {
 	select {
 	case err := <-serveErr:
 		close(stop)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ps.activity.close(ctx)
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -255,6 +265,9 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		// After the front door is closed, so no record can arrive mid-flush, and before the cache is
+		// cleared, since the keys the final seal needs live on its entries.
+		ps.activity.close(ctx)
 		ps.cache.close()
 		return nil
 	case err := <-fatal:
@@ -262,6 +275,7 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.activity.close(ctx)
 		ps.cache.close()
 		return err
 	}
