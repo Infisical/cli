@@ -36,8 +36,6 @@ const (
 	EnrollMethodKubernetes = "kubernetes"
 	EnrollMethodToken      = "token"
 
-	// How the gateway proves its GCP identity: an instance metadata ID token, or a JWT the
-	// service account signs through the IAM Credentials API.
 	GcpAuthTypeGce = "gce"
 	GcpAuthTypeIam = "iam"
 )

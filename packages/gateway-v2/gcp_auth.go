@@ -23,9 +23,8 @@ const (
 	gcpIamTokenLifetime    = 5 * time.Minute
 )
 
-// LoginGatewayWithGcp proves the gateway's GCP identity to Infisical and exchanges the proof for a
-// GATEWAY_ACCESS_TOKEN. Both token types carry the gateway ID as their audience, so a token minted
-// for one gateway cannot authenticate as another.
+// LoginGatewayWithGcp exchanges a GCP identity proof for a GATEWAY_ACCESS_TOKEN. Both token types
+// carry the gateway ID as their audience.
 func LoginGatewayWithGcp(ctx context.Context, httpClient *resty.Client, gatewayID string, authType string, serviceAccountKeyPath string) (string, error) {
 	if gatewayID == "" {
 		return "", errors.New("--gateway-id is required when --enroll-method=gcp")
@@ -92,8 +91,7 @@ func signGcpServiceAccountJwt(ctx context.Context, audience string, serviceAccou
 		return "", err
 	}
 
-	// A signed JWT with no expiry stays a valid proof forever, so a captured login request could be
-	// replayed indefinitely. The backend refuses a token without a bounded expiry.
+	// Without an expiry the proof is replayable forever; the backend refuses one.
 	now := time.Now()
 	payload, err := json.Marshal(map[string]any{
 		"sub": clientEmail,

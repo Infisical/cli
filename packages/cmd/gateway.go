@@ -346,8 +346,6 @@ var gatewayStartCmd = &cobra.Command{
 			enrolledAccessToken = accessTokenStr
 			alreadyEnrolled = true
 
-			// No SaveAccessToken here: a fresh JWT is minted on every start, so an on-disk copy
-			// would only ever be stale.
 			if err := gatewayv2.SaveGatewayID(gatewayName, gatewayID); err != nil {
 				util.HandleError(err, "failed to save gateway id to config")
 			}
@@ -807,7 +805,6 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 			installedServiceName = svcName
 		} else if enrollMethod == gatewayv2.EnrollMethodGcp {
 			// --- GCP Auth path ---
-			// As with AWS, the login happens on each service start rather than at install time.
 			gatewayID, _ := cmd.Flags().GetString("gateway-id")
 			if gatewayID == "" {
 				util.HandleError(errors.New("--gateway-id is required when --enroll-method=gcp"))
@@ -821,9 +818,7 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 
 			serviceAccountKeyPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
 			if serviceAccountKeyPath != "" {
-				// The unit runs with InaccessibleDirectories=/home and no working directory, so a key
-				// under a home directory or given relatively installs fine and then fails to open on
-				// every service start.
+				// The unit sets InaccessibleDirectories=/home with no working directory.
 				if !filepath.IsAbs(serviceAccountKeyPath) {
 					util.HandleError(fmt.Errorf("--service-account-key-file-path must be an absolute path (got %q)", serviceAccountKeyPath))
 				}
