@@ -346,12 +346,6 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
-	// TRACE and TRACK make the upstream reflect the injected credential back in the response body.
-	if r.Method == http.MethodTrace || r.Method == "TRACK" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	reqPath := r.URL.EscapedPath()
 	if len(reqPath) > maxLoggedPathLen {
 		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
@@ -456,6 +450,13 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	services, err := ps.cache.get(sessionToken)
 	if err != nil {
 		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
+	}
+
+	// TRACE and TRACK make the upstream reflect the injected credential back in the response body. Upper
+	// -cased like allowsMethod already was, or a lowercase "trace" walks past. Refused here rather than in
+	// the handler so it is logged like every other refusal.
+	if method := strings.ToUpper(req.Method); method == http.MethodTrace || method == "TRACK" {
+		return nil, nil, outcome, fmt.Errorf("method %s echoes headers back: %w", method, errPolicyBlocked)
 	}
 
 	matched := bestMatch(services, hostname, port)

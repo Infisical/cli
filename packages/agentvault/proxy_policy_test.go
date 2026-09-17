@@ -412,3 +412,20 @@ func TestTheLogSaysWhichSurfacesWereSubstituted(t *testing.T) {
 		}
 	})
 }
+
+func TestAnEchoingMethodIsRefusedWhateverItsCase(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, nil, nil, nil)
+	})
+
+	// Unrestricted on methods, so only the echo guard can refuse these. Go sends the method verbatim.
+	for _, method := range []string{"TRACE", "trace", "TRACK", "track"} {
+		status, body := do(t, client, method, fmt.Sprintf("https://%s/anything", host), "")
+		if status != http.StatusForbidden {
+			t.Fatalf("%s should be refused, got %d: %s", method, status, body)
+		}
+		if !strings.Contains(body, "echoes headers back") {
+			t.Fatalf("%s: unhelpful body %q", method, body)
+		}
+	}
+}
