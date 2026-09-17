@@ -1,7 +1,6 @@
 package masking
 
 import (
-	_ "embed"
 	"sort"
 	"strings"
 	"sync"
@@ -11,9 +10,6 @@ import (
 	"github.com/Infisical/infisical-merge/detect"
 	"github.com/Infisical/infisical-merge/detect/config"
 )
-
-//go:embed pam-rules.toml
-var pamRules string
 
 var (
 	detectorOnce sync.Once
@@ -29,8 +25,7 @@ func sharedDetector() (*detect.Detector, error) {
 		v := viper.New()
 		v.SetConfigType("toml")
 
-		// Both documents are [[rules]] arrays, so concatenating appends ours to the defaults.
-		if detectorErr = v.ReadConfig(strings.NewReader(config.DefaultConfig + "\n" + pamRules)); detectorErr != nil {
+		if detectorErr = v.ReadConfig(strings.NewReader(config.DefaultConfig)); detectorErr != nil {
 			return
 		}
 
