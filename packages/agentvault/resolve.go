@@ -112,11 +112,12 @@ func toPathPrefixes(prefixes []string) []string {
 	out := make([]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
 		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			continue
-		}
 		if prefix != "/" {
 			prefix = strings.TrimRight(prefix, "/")
+		}
+		// After the trim, so an all-slashes prefix cannot arrive here as "" and match every path.
+		if prefix == "" {
+			continue
 		}
 		out = append(out, prefix)
 	}

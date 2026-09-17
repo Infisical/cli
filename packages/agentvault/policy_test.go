@@ -179,13 +179,16 @@ func TestWireMappingFailsClosed(t *testing.T) {
 			t.Fatalf("an empty method list must restrict, got %v", methods)
 		}
 
-		prefixes := toPathPrefixes([]string{"  "})
-		if len(prefixes) == 0 {
-			t.Fatal("an empty path prefix list must restrict, not fall through to unrestricted")
-		}
-		svc := &resolvedService{name: "s", allowedPathPrefixes: prefixes}
-		if err := checkServicePolicy(svc, requestTo(t, "GET", "/anything")); !errors.Is(err, errPolicyBlocked) {
-			t.Fatalf("expected a block, got %v", err)
+		// "//" trims to "" the same way "  " does, so both have to reach the fail-closed guard.
+		for _, empty := range []string{"  ", "//", "///"} {
+			prefixes := toPathPrefixes([]string{empty})
+			if len(prefixes) == 0 {
+				t.Fatalf("%q must restrict, not fall through to unrestricted", empty)
+			}
+			svc := &resolvedService{name: "s", allowedPathPrefixes: prefixes}
+			if err := checkServicePolicy(svc, requestTo(t, "GET", "/anything")); !errors.Is(err, errPolicyBlocked) {
+				t.Fatalf("%q: expected a block, got %v", empty, err)
+			}
 		}
 	})
 }
