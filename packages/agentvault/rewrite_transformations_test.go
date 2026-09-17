@@ -319,10 +319,12 @@ func TestAPathSubstitutionLeavesTheRestOfThePathAlone(t *testing.T) {
 }
 
 func TestAQuerySubstitutionEscapesTheValue(t *testing.T) {
-	for _, tc := range []struct{ name, secret, wantKey string }{
-		{"a base64 key with a plus", "aB+cD/eF==", "aB+cD/eF=="},
-		{"a value with a space", "has space", "has space"},
-		{"a value with an ampersand", "a&page=99", "a&page=99"},
+	// wantRaw is asserted as well as wantKey: ParseQuery turns '+' back into a space, so a value escaped as
+	// form data rather than per RFC 3986 reads correctly here while going out wrong on the wire.
+	for _, tc := range []struct{ name, secret, wantKey, wantRaw string }{
+		{"a base64 key with a plus", "aB+cD/eF==", "aB+cD/eF==", "key=aB%2BcD%2FeF%3D%3D&page=2"},
+		{"a value with a space", "has space", "has space", "key=has%20space&page=2"},
+		{"a value with an ampersand", "a&page=99", "a&page=99", "key=a%26page%3D99&page=2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, _ := http.NewRequest("GET", "https://api.example.com/x?key=__PAT__&page=2", nil)
@@ -338,6 +340,45 @@ func TestAQuerySubstitutionEscapesTheValue(t *testing.T) {
 			if got := parsed.Get("page"); got != "2" {
 				t.Fatalf("the substitution disturbed another parameter: page=%q", got)
 			}
+			if req.URL.RawQuery != tc.wantRaw {
+				t.Fatalf("wire query = %q, want %q", req.URL.RawQuery, tc.wantRaw)
+			}
 		})
+	}
+}
+
+func TestAnEncodedPlaceholderMatchesWhateverCaseItsEscapesUse(t *testing.T) {
+	for _, tc := range []struct{ name, url, wantURI string }{
+		{"typed", "https://api.example.com/x/{{PAT}}", "/x/SECRET"},
+		{"upper escapes", "https://api.example.com/x/%7B%7BPAT%7D%7D", "/x/SECRET"},
+		{"lower escapes", "https://api.example.com/x/%7b%7bPAT%7d%7d", "/x/SECRET"},
+		{"query typed", "https://api.example.com/x?k={{PAT}}", "/x?k=SECRET"},
+		{"query upper", "https://api.example.com/x?k=%7B%7BPAT%7D%7D", "/x?k=SECRET"},
+		{"query lower", "https://api.example.com/x?k=%7b%7bPAT%7d%7d", "/x?k=SECRET"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			surface := surfacePath
+			if strings.Contains(tc.url, "?") {
+				surface = surfaceQuery
+			}
+			req, _ := http.NewRequest("GET", tc.url, nil)
+			applySubstitutions(req, "svc", []substitution{subOn("{{PAT}}", "SECRET", surface)})
+			if got := req.URL.RequestURI(); got != tc.wantURI {
+				t.Fatalf("wire = %q, want %q", got, tc.wantURI)
+			}
+		})
+	}
+}
+
+func TestTheExpansionLimitHoldsWithoutOverflowing(t *testing.T) {
+	if _, ok := replaceWithinLimit("aaaa", "a", strings.Repeat("x", 10), 12); ok {
+		t.Fatal("an expansion past the limit should be refused")
+	}
+	if got, ok := replaceWithinLimit("ab", "a", "xy", 12); !ok || got != "xyb" {
+		t.Fatalf("an expansion within the limit should apply, got %q ok=%v", got, ok)
+	}
+	// Shrinking never needs the limit, and must not be refused by the division branch.
+	if got, ok := replaceWithinLimit("aaaa", "aa", "b", 12); !ok || got != "bb" {
+		t.Fatalf("a shrinking replacement should apply, got %q ok=%v", got, ok)
 	}
 }

@@ -69,6 +69,7 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 			continue
 		}
 		real := string(sub.value)
+		before := len(changed)
 
 		// Swapped in the escaped path so every other segment keeps the byte form the agent sent. Rewriting the
 		// decoded Path makes Go re-derive the wire path without re-escaping '/', and `group%2Fproject` would
@@ -79,7 +80,11 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 			// `{{TOKEN}}` reads here as `%7B%7BTOKEN%7D%7D` and matching only the typed form would miss it.
 			needle := sub.placeholder
 			if !strings.Contains(escaped, needle) {
+				// Percent-escapes carry no required case and clients differ, so the fallback matches against
+				// upper-cased escapes. Rewriting them is free here: substituting changes the URL anyway, so a
+				// request the agent signed itself could never have used this surface.
 				needle = escapedPathForm(sub.placeholder)
+				escaped = upperPercentEscapes(escaped)
 			}
 			if strings.Contains(escaped, needle) {
 				if v, ok := replaceWithinLimit(escaped, needle, url.PathEscape(real), maxBodyRewriteSize); ok {
@@ -100,12 +105,14 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 			// placeholder first, so `{{TOKEN}}` arrives as `%7B%7BTOKEN%7D%7D`. The path surface already
 			// falls back this way; without it the placeholder reaches the third party and the 401 that
 			// comes back says nothing about why.
+			rawQuery := req.URL.RawQuery
 			needle := sub.placeholder
-			if !strings.Contains(req.URL.RawQuery, needle) {
-				needle = url.QueryEscape(sub.placeholder)
+			if !strings.Contains(rawQuery, needle) {
+				needle = queryEscapedForm(sub.placeholder)
+				rawQuery = upperPercentEscapes(rawQuery)
 			}
-			if strings.Contains(req.URL.RawQuery, needle) {
-				if v, ok := replaceWithinLimit(req.URL.RawQuery, needle, url.QueryEscape(real), maxBodyRewriteSize); ok {
+			if strings.Contains(rawQuery, needle) {
+				if v, ok := replaceWithinLimit(rawQuery, needle, queryValueEscape(real), maxBodyRewriteSize); ok {
 					req.URL.RawQuery = v
 					changed[surfaceQuery] = true
 				}
@@ -124,6 +131,16 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 					}
 				}
 			}
+		}
+
+		// The body is rewritten after this loop, so a substitution that reaches it is judged there. Anything
+		// else that matched nothing sent its placeholder upstream, and the third party's 401 says nothing
+		// about why.
+		if !sub.surfaces[surfaceBody] && len(changed) == before {
+			log.Warn().
+				Str("service", serviceName).
+				Str("placeholder", sub.placeholder).
+				Msg("agent-vault: a substitution matched nothing in the request")
 		}
 	}
 
@@ -144,6 +161,41 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 
 // The placeholder as EscapedPath would render it. The leading '/' keeps url.URL's `Path == "*"` case out of
 // it, and the encoder leaves a slash alone, so trimming it back off is exact.
+// QueryEscape is form encoding, where a space becomes '+'. Anything reading the raw query per RFC 3986,
+// SigV4 signing among them, takes that as a literal plus. Every other special is already %XX by then, so
+// the only '+' left to rewrite is a space.
+func queryValueEscape(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
+}
+
+func queryEscapedForm(placeholder string) string {
+	return queryValueEscape(placeholder)
+}
+
+// Percent-escapes are case-insensitive, so matching is done against a copy with the hex digits upper-cased.
+// Same length as the input, so nothing else about the string moves.
+func upperPercentEscapes(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	b := []byte(s)
+	for i := 0; i+2 < len(b); i++ {
+		if b[i] != '%' {
+			continue
+		}
+		b[i+1] = upperHexDigit(b[i+1])
+		b[i+2] = upperHexDigit(b[i+2])
+	}
+	return string(b)
+}
+
+func upperHexDigit(c byte) byte {
+	if c >= 'a' && c <= 'f' {
+		return c - 'a' + 'A'
+	}
+	return c
+}
+
 func escapedPathForm(placeholder string) string {
 	return strings.TrimPrefix((&url.URL{Path: "/" + placeholder}).EscapedPath(), "/")
 }
@@ -234,7 +286,15 @@ func replaceWithinLimit(s, old, replacement string, limit int) (string, bool) {
 	if count == 0 {
 		return s, true
 	}
-	if len(s)+count*(len(replacement)-len(old)) > limit {
+	delta := len(replacement) - len(old)
+	if delta > 0 {
+		// Division rather than count*delta, which overflows int on the 386 and armv6 builds and wraps to a
+		// negative, answering "small enough" for something that then fails to allocate.
+		room := limit - len(s)
+		if room < 0 || count > room/delta {
+			return s, false
+		}
+	} else if len(s)+count*delta > limit {
 		return s, false
 	}
 	return strings.ReplaceAll(s, old, replacement), true
