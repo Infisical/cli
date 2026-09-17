@@ -107,6 +107,41 @@ func TestReplacesClientCredentialsWithTheAccountsOwn(t *testing.T) {
 	require.Empty(t, captured.query.Get("password"))
 }
 
+func TestStripsTheRoleParameterThatWouldActivateARoleWithoutAStatement(t *testing.T) {
+	var captured capturedRequest
+	handler, _, closeUpstream := newTestProxy(t, capturingUpstream(&captured, nil))
+	defer closeUpstream()
+
+	handler.ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/?role=privileged&query=SELECT+1", http.NoBody))
+
+	require.Empty(t, captured.query.Get("role"))
+	require.Equal(t, "SELECT 1", captured.query.Get("query"))
+}
+
+func TestRefusesAPathOutsideTheQueryEndpoint(t *testing.T) {
+	reached := false
+	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	})
+	defer closeUpstream()
+
+	// An SQL-backed custom handler can be mounted at any path, and its statement is never in the request
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/custom_handler", http.NoBody))
+
+	require.False(t, reached)
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "not available here")
+
+	// The endpoints a driver actually needs still pass
+	for _, path := range []string{"/", "/ping"} {
+		reached = false
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, http.NoBody))
+		require.True(t, reached, path)
+	}
+}
+
 func TestReplacesWhateverDatabaseTheClientAsksFor(t *testing.T) {
 	var captured capturedRequest
 	handler, _, closeUpstream := newTestProxy(t, capturingUpstream(&captured, nil))

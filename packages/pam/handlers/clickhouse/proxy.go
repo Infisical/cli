@@ -76,6 +76,10 @@ var strippedAuthHeaders = []string{
 
 var strippedAuthParams = []string{"user", "password"}
 
+var strippedExecutionParams = []string{"role"}
+
+var allowedPaths = map[string]bool{"/": true, "/ping": true}
+
 type ClickHouseProxy struct {
 	config  ClickHouseProxyConfig
 	reverse *httputil.ReverseProxy
@@ -152,6 +156,13 @@ func (p *ClickHouseProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowedPaths[r.URL.Path] {
+			l.Info().Str("path", r.URL.Path).Msg("Refused a path outside the query endpoint")
+			writeClickHouseError(w, http.StatusNotFound, codeNotImplemented,
+				fmt.Sprintf("This session serves ClickHouse's query endpoint, so %q is not available here.", r.URL.Path))
+			return
+		}
+
 		statement, body, err := p.inspect(r)
 		if err != nil {
 			writeClickHouseError(w, http.StatusBadRequest, codeNotImplemented, err.Error())
@@ -283,7 +294,7 @@ func (p *ClickHouseProxy) director(req *http.Request) {
 	req.Host = p.config.TargetAddr
 
 	query := req.URL.Query()
-	for _, param := range strippedAuthParams {
+	for _, param := range append(append([]string{}, strippedAuthParams...), strippedExecutionParams...) {
 		query.Del(param)
 	}
 	if p.config.Database != "" {
