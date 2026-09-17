@@ -330,7 +330,12 @@ var gatewayStartCmd = &cobra.Command{
 					gcpAuthType, gatewayv2.GcpAuthTypeGce, gatewayv2.GcpAuthTypeIam))
 			}
 
-			serviceAccountKeyPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			var serviceAccountKeyPath string
+			if gcpAuthType == gatewayv2.GcpAuthTypeIam {
+				serviceAccountKeyPath, _ = util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			} else if keyPath, _ := cmd.Flags().GetString("service-account-key-file-path"); keyPath != "" {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--service-account-key-file-path only applies to --gcp-auth-type=%s", gatewayv2.GcpAuthTypeIam))
+			}
 
 			httpClient, err := util.GetRestyClientWithCustomHeaders()
 			if err != nil {
@@ -816,14 +821,22 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 					gcpAuthType, gatewayv2.GcpAuthTypeGce, gatewayv2.GcpAuthTypeIam))
 			}
 
-			serviceAccountKeyPath, _ := util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			var serviceAccountKeyPath string
+			if gcpAuthType == gatewayv2.GcpAuthTypeIam {
+				serviceAccountKeyPath, _ = util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			} else if keyPath, _ := cmd.Flags().GetString("service-account-key-file-path"); keyPath != "" {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--service-account-key-file-path only applies to --gcp-auth-type=%s", gatewayv2.GcpAuthTypeIam))
+			}
 			if serviceAccountKeyPath != "" {
 				// The unit sets InaccessibleDirectories=/home with no working directory.
 				if !filepath.IsAbs(serviceAccountKeyPath) {
 					util.HandleError(fmt.Errorf("--service-account-key-file-path must be an absolute path (got %q)", serviceAccountKeyPath))
 				}
-				if strings.HasPrefix(serviceAccountKeyPath, "/home/") {
-					util.HandleError(fmt.Errorf("--service-account-key-file-path must not be under /home: the systemd service cannot read it there. Move the key somewhere like /etc/infisical (got %q)", serviceAccountKeyPath))
+				cleaned := filepath.Clean(serviceAccountKeyPath)
+				for _, dir := range []string{"/home/", "/tmp/"} {
+					if strings.HasPrefix(cleaned, dir) {
+						util.HandleError(fmt.Errorf("--service-account-key-file-path must not be under %s: the systemd service cannot read it there. Move the key somewhere like /etc/infisical (got %q)", strings.TrimSuffix(dir, "/"), serviceAccountKeyPath))
+					}
 				}
 				if _, statErr := os.Stat(serviceAccountKeyPath); statErr != nil {
 					util.HandleError(fmt.Errorf("GCP service account key not found at %q: %w", serviceAccountKeyPath, statErr))
