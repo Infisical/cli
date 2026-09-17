@@ -481,6 +481,10 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// Stripped before injecting, so a client's Connection header cannot delete the credential.
 	stripHopByHopHeaders(req.Header)
 
+	if matched != nil && matched.allowedMethods != nil {
+		stripMethodOverrideHeaders(req.Header)
+	}
+
 	if matched != nil {
 		// A credential is only ever injected over TLS, whatever port the pattern names.
 		if !strings.EqualFold(scheme, "https") {
