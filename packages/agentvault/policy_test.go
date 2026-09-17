@@ -61,7 +61,9 @@ func TestMethodPolicy(t *testing.T) {
 func TestPathPolicy(t *testing.T) {
 	svc := serviceWithPolicy(nil, []string{"/repos"})
 
-	allowed := []string{"/repos", "/repos/", "/repos/octo/hello", "/repos/a%20b"}
+	allowed := []string{
+		"/repos/my%20repo",
+		"/repos/...name", "/repos", "/repos/", "/repos/octo/hello", "/repos/a%20b"}
 	for _, path := range allowed {
 		t.Run("allows "+path, func(t *testing.T) {
 			if err := checkServicePolicy(svc, requestTo(t, "GET", path)); err != nil {
@@ -86,6 +88,11 @@ func TestPathPolicy(t *testing.T) {
 		"/repos;x/y",
 		"/repos/%2fadmin",
 		"/repos%5cx",
+		// Windows and IIS drop a trailing space or dot, so each of these lands as ".." upstream.
+		"/repos/..%20/admin",
+		"/repos/.. /admin",
+		"/repos/..../admin",
+		"/repos/.%20./admin",
 	}
 	for _, path := range blocked {
 		t.Run("blocks "+path, func(t *testing.T) {

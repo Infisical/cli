@@ -100,7 +100,7 @@ func isAmbiguousPath(escaped string) bool {
 		return true
 	}
 	for _, segment := range strings.Split(escaped, "/") {
-		if segment == "." || segment == ".." {
+		if isDotSegment(decodeBenignEscapes(segment)) {
 			return true
 		}
 	}
@@ -143,6 +143,44 @@ func hasUnsafeEscape(escaped string) bool {
 
 	// Only escaped input can carry an overlong sequence.
 	return sawEscape && !utf8.Valid(decoded)
+}
+
+// Runs after hasUnsafeEscape, so every escape still standing decodes to something harmless. Only the
+// decoded form tells us whether a segment is all dots and spaces: "..%20" is not, ".. " is.
+func decodeBenignEscapes(segment string) string {
+	if !strings.Contains(segment, "%") {
+		return segment
+	}
+	out := make([]byte, 0, len(segment))
+	for i := 0; i < len(segment); i++ {
+		if segment[i] != '%' || i+2 >= len(segment) {
+			out = append(out, segment[i])
+			continue
+		}
+		hi, hiOk := unhex(segment[i+1])
+		lo, loOk := unhex(segment[i+2])
+		if !hiOk || !loOk {
+			out = append(out, segment[i])
+			continue
+		}
+		out = append(out, hi<<4|lo)
+		i += 2
+	}
+	return string(out)
+}
+
+// Windows and IIS strip trailing dots and spaces from a segment, so anything built only from those reads
+// as "." or ".." once it lands.
+func isDotSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for i := 0; i < len(segment); i++ {
+		if segment[i] != '.' && segment[i] != ' ' {
+			return false
+		}
+	}
+	return true
 }
 
 func unhex(c byte) (byte, bool) {
