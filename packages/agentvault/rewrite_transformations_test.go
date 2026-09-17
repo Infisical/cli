@@ -253,6 +253,27 @@ func TestAPlaceholderPrefixingAnotherStillSendsItsOwnSecret(t *testing.T) {
 	}
 }
 
+// A client building the query from parameters percent-encodes the placeholder first, so both forms have to
+// be matched. Underscore-style placeholders are never encoded and stand as the control.
+func TestAQuerySubstitutionMatchesTheEncodedPlaceholderToo(t *testing.T) {
+	cases := []struct {
+		placeholder string
+		wire        string
+	}{
+		{"__PAT__", "__PAT__"},
+		{"{{PAT}}", "{{PAT}}"},
+		{"{{PAT}}", "%7B%7BPAT%7D%7D"},
+	}
+
+	for _, c := range cases {
+		req := requestTo(t, "GET", "/v1?key="+c.wire)
+		applySubstitutions(req, "svc", []substitution{subOn(c.placeholder, "SECRET", surfaceQuery)})
+		if got := req.URL.RawQuery; got != "key=SECRET" {
+			t.Errorf("placeholder %q sent as %q: query = %q, want key=SECRET", c.placeholder, c.wire, got)
+		}
+	}
+}
+
 func TestAPathSubstitutionLeavesTheRestOfThePathAlone(t *testing.T) {
 	for _, tc := range []struct{ name, target, wantURI string }{
 		{

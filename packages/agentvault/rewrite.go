@@ -95,10 +95,20 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 
 		// Escaped, because RawQuery goes on the wire verbatim. A base64 key containing '+' would otherwise
 		// arrive as a space, and one containing '&' would split into a second parameter.
-		if sub.surfaces[surfaceQuery] && strings.Contains(req.URL.RawQuery, sub.placeholder) {
-			if v, ok := replaceWithinLimit(req.URL.RawQuery, sub.placeholder, url.QueryEscape(real), maxBodyRewriteSize); ok {
-				req.URL.RawQuery = v
-				changed[surfaceQuery] = true
+		if sub.surfaces[surfaceQuery] {
+			// A client that builds the query from parameters rather than a string percent-encodes the
+			// placeholder first, so `{{TOKEN}}` arrives as `%7B%7BTOKEN%7D%7D`. The path surface already
+			// falls back this way; without it the placeholder reaches the third party and the 401 that
+			// comes back says nothing about why.
+			needle := sub.placeholder
+			if !strings.Contains(req.URL.RawQuery, needle) {
+				needle = url.QueryEscape(sub.placeholder)
+			}
+			if strings.Contains(req.URL.RawQuery, needle) {
+				if v, ok := replaceWithinLimit(req.URL.RawQuery, needle, url.QueryEscape(real), maxBodyRewriteSize); ok {
+					req.URL.RawQuery = v
+					changed[surfaceQuery] = true
+				}
 			}
 		}
 
