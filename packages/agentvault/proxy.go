@@ -347,10 +347,20 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
-	reqPath := r.URL.EscapedPath()
-	if len(reqPath) > maxLoggedPathLen {
-		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
+	// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive
+	// as a request-target with no leading slash. handlePlainForward refuses the shape already; the tunnel
+	// reaches this handler directly, so the refusal belongs here where both doors meet.
+	if r.URL.Opaque != "" {
+		http.Error(w, "the request target must be a path; opaque forms are not forwarded", http.StatusBadRequest)
+		return
 	}
+
+	// Before anything reads the path: the policy check, the substitutions and the forward all have to see
+	// the bytes the agent sent, not the ones Go rebuilds.
+	normalizeRequestTarget(r.URL)
+
+	// requestPath rather than EscapedPath, so a brokered request is never recorded with a blank path.
+	reqPath := truncatePath(requestPath(r))
 
 	resp, matched, outcome, err := ps.forward(r, scheme, hostname, port, sessionToken)
 
@@ -363,6 +373,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	switch {
 	case errors.Is(err, errHostBlocked), errors.Is(err, errPolicyBlocked):
 		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
+	case errors.Is(err, errBodyUnreadable):
+		// The agent's upload broke, so this is its request to retry rather than an upstream or policy failure.
+		decision, status, body = decisionBlocked, http.StatusBadRequest, err.Error()
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
@@ -492,7 +505,11 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	if matched != nil {
 		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
 		// so a custom header naming the credential's own header loses rather than replacing the token.
-		outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
+		substituted, err := applySubstitutions(req, matched.name, matched.substitutions)
+		outcome.substituted = substituted
+		if err != nil {
+			return nil, matched, outcome, err
+		}
 		outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
 		if injectCredential(req, &matched.credential) {
 			outcome.brokered = true

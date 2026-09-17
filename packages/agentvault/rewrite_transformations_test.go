@@ -70,7 +70,8 @@ func TestAnOversizedDeclaredBodyIsNeverRead(t *testing.T) {
 	req.Body = &unreadableBody{t: t}
 	req.ContentLength = maxBodyRewriteSize + 1
 
-	if applyBodySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)}) {
+	replaced, _ := applyBodySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)})
+	if replaced {
 		t.Fatal("reported a substitution on a body it should not have touched")
 	}
 }
@@ -99,10 +100,13 @@ func TestABrokenUploadIsNotForwardedTruncated(t *testing.T) {
 	req.ContentLength = int64(len(full))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(full)))
 
-	applyBodySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)})
+	_, err := applyBodySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)})
 
+	if !errors.Is(err, errBodyUnreadable) {
+		t.Fatalf("err = %v, want errBodyUnreadable; a partial body must not reach the upstream", err)
+	}
 	if req.ContentLength != int64(len(full)) {
-		t.Fatalf("ContentLength = %d, want the declared %d so the transport refuses", req.ContentLength, len(full))
+		t.Fatalf("ContentLength = %d, want the declared %d left alone", req.ContentLength, len(full))
 	}
 	if got := req.Header.Get("Content-Length"); got != fmt.Sprintf("%d", len(full)) {
 		t.Fatalf("Content-Length header = %q, want the declared length", got)
@@ -116,7 +120,7 @@ func TestABrokenUploadIsNotForwardedTruncated(t *testing.T) {
 func TestApplySubstitutions(t *testing.T) {
 	t.Run("path", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/repos/__TOKEN__/x", nil)
-		surfaces := applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfacePath)})
+		surfaces, _ := applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfacePath)})
 		if req.URL.Path != "/repos/real/x" {
 			t.Fatalf("path = %q", req.URL.Path)
 		}
@@ -127,7 +131,7 @@ func TestApplySubstitutions(t *testing.T) {
 
 	t.Run("path, placeholder Go re-encodes", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://gitlab.com/api/v4/projects/{{PROJECT}}/pipelines", nil)
-		surfaces := applySubstitutions(req, "gitlab", []substitution{subOn("{{PROJECT}}", "group/project", surfacePath)})
+		surfaces, _ := applySubstitutions(req, "gitlab", []substitution{subOn("{{PROJECT}}", "group/project", surfacePath)})
 		if len(surfaces) != 1 || surfaces[0] != surfacePath {
 			t.Fatalf("surfaces = %v", surfaces)
 		}
@@ -183,7 +187,7 @@ func TestApplySubstitutions(t *testing.T) {
 		body := `{"token":"__TOKEN__"}`
 		req, _ := http.NewRequest("POST", "https://api.github.com/x", strings.NewReader(body))
 		req.Header.Set("Content-Encoding", "gzip")
-		surfaces := applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfaceBody)})
+		surfaces, _ := applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfaceBody)})
 		got, _ := io.ReadAll(req.Body)
 		if string(got) != body {
 			t.Fatalf("body should be untouched, got %q", got)
@@ -206,7 +210,7 @@ func TestApplySubstitutions(t *testing.T) {
 	t.Run("a body with no placeholder in it is untouched", func(t *testing.T) {
 		body := `{"a":"b"}`
 		req, _ := http.NewRequest("POST", "https://api.github.com/x", strings.NewReader(body))
-		surfaces := applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfaceBody)})
+		surfaces, _ := applySubstitutions(req, "github", []substitution{subOn("__TOKEN__", "real", surfaceBody)})
 		got, _ := io.ReadAll(req.Body)
 		if string(got) != body {
 			t.Fatalf("body = %q", got)
@@ -380,5 +384,62 @@ func TestTheExpansionLimitHoldsWithoutOverflowing(t *testing.T) {
 	// Shrinking never needs the limit, and must not be refused by the division branch.
 	if got, ok := replaceWithinLimit("aaaa", "aa", "b", 12); !ok || got != "bb" {
 		t.Fatalf("a shrinking replacement should apply, got %q ok=%v", got, ok)
+	}
+}
+
+// Reads a prefix, then fails, the way a dropped upload does.
+type truncatingBody struct {
+	head string
+	n    int
+}
+
+func (b *truncatingBody) Read(p []byte) (int, error) {
+	if b.n < len(b.head) {
+		n := copy(p, b.head[b.n:])
+		b.n += n
+		return n, nil
+	}
+	return 0, errors.New("connection reset mid-body")
+}
+
+func (b *truncatingBody) Close() error { return nil }
+
+// The safety net used to be "leave ContentLength disagreeing so http.Transport refuses". A chunked upload
+// declares -1, so there was nothing to leave wrong and the upstream received a partial request with the
+// credential on it, answering 200 to something the agent never finished sending.
+func TestABodyThatCannotBeReadWholeIsRefusedWhateverTheEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		contentLength int64
+	}{
+		{"declared length", 1007},
+		{"chunked", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest("POST", "https://api.github.com/x", nil)
+			req.Body = &truncatingBody{head: "only the first few bytes"}
+			req.ContentLength = tc.contentLength
+
+			_, err := applySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfaceBody)})
+			if !errors.Is(err, errBodyUnreadable) {
+				t.Fatalf("err = %v, want errBodyUnreadable", err)
+			}
+		})
+	}
+}
+
+// The path is rewritten before the body is read, so a refusal still has to record that the credential was
+// written into the request.
+func TestSurfacesAlreadySubstitutedSurviveABodyFailure(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://api.github.com/repos/__PAT__/x", nil)
+	req.Body = &truncatingBody{head: "only the first few bytes"}
+	req.ContentLength = -1
+
+	surfaces, err := applySubstitutions(req, "github", []substitution{subOn("__PAT__", "real", surfacePath, surfaceBody)})
+	if !errors.Is(err, errBodyUnreadable) {
+		t.Fatalf("err = %v, want errBodyUnreadable", err)
+	}
+	if len(surfaces) == 0 || surfaces[0] != surfacePath {
+		t.Errorf("surfaces = %v, want the path substitution recorded", surfaces)
 	}
 }

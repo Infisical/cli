@@ -4,11 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 )
 
 var errPolicyBlocked = errors.New("blocked by service policy")
+
+// The agent's own upload broke part way. Not a policy refusal and not an upstream failure, so it carries its
+// own status rather than landing in either of theirs.
+var errBodyUnreadable = errors.New("could not read the request body")
 
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	if !svc.allowsMethod(req.Method) {
@@ -38,10 +43,68 @@ func stripMethodOverrideHeaders(header http.Header) {
 	}
 }
 
+// Whether Go would escape a byte appearing unescaped in a path. Derived from the standard library rather
+// than transcribed from it: the table behind encodePath is generated, so a copy would be one Go release
+// away from disagreeing with the rebuild this guards against.
+var pathByteNeedsEscape = func() (table [256]bool) {
+	for b := 0; b < 256; b++ {
+		raw := string([]byte{byte(b)})
+		table[b] = (&url.URL{Path: raw}).EscapedPath() != raw
+	}
+	return table
+}()
+
+// EscapedPath falls back to rebuilding the path from its decoded form whenever RawPath is not valid
+// encoding, and one literal '{' is enough. The rebuild turns '%2F' into a real '/', so hasUnsafeEscape
+// never sees the escape it exists to refuse and the upstream receives a path the agent did not send.
+// Escaping those bytes ourselves keeps RawPath valid, so EscapedPath returns it untouched. The wire form is
+// unchanged either way: Go was already sending '%7B'.
+func normalizeRequestTarget(u *url.URL) {
+	if u.RawPath == "" || u.EscapedPath() == u.RawPath {
+		return
+	}
+	escaped := escapeInvalidPathBytes(u.RawPath)
+	decoded, err := url.PathUnescape(escaped)
+	if err != nil {
+		return
+	}
+	u.Path = decoded
+	u.RawPath = escaped
+}
+
+// A '%' opening a valid triple is carried through, so an escape the agent wrote is never escaped twice. A
+// malformed one cannot arrive: ParseRequestURI rejects it and the server answers 400 before the handler.
+func escapeInvalidPathBytes(raw string) string {
+	var out strings.Builder
+	out.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c == '%' && i+2 < len(raw) {
+			if _, hiOk := unhex(raw[i+1]); hiOk {
+				if _, loOk := unhex(raw[i+2]); loOk {
+					out.WriteString(raw[i : i+3])
+					i += 2
+					continue
+				}
+			}
+		}
+		if pathByteNeedsEscape[c] {
+			const hexDigits = "0123456789ABCDEF"
+			out.WriteByte('%')
+			out.WriteByte(hexDigits[c>>4])
+			out.WriteByte(hexDigits[c&0x0f])
+			continue
+		}
+		out.WriteByte(c)
+	}
+	return out.String()
+}
+
 func requestPath(req *http.Request) string {
 	path := req.URL.EscapedPath()
 	if path == "" {
-		// OPTIONS * arrives as "*" and is left alone; a genuinely empty path is the root.
+		// forwardHTTP refuses an opaque target before this runs, so the branch is a floor under that check
+		// rather than a shape expected here. A genuinely empty path is the root.
 		if req.URL.Opaque != "" {
 			return req.URL.Opaque
 		}
@@ -66,12 +129,27 @@ func pathAllowed(escaped string, prefixes []string) bool {
 	return matchesPrefix(escaped, prefixes)
 }
 
-// The path here is part-written by us: applySubstitutions escapes the value so it cannot add a segment, and
-// pathAllowed would refuse that very '%2F'. Only traversal can leave an allowed prefix, so only traversal is
-// refused, judged on the decoded path because that is what an upstream decoding '%2F' will route on. ';' and
-// '\' count as traversal here for the reason isAmbiguousPath gives.
+// Deliberately not isAmbiguousPath. The path here is part-written by us: applySubstitutions escapes the
+// value so it cannot add a segment, and isAmbiguousPath refuses that very '%2F', so a secret like
+// 'org/repo' would be rejected on its own escaping. Judged on the decoded path instead, which is both what
+// an upstream decoding '%2F' will route on and the form our own escaping is invisible in. Everything below
+// is a shape a substituted value could introduce; the agent's half of the path has already been through
+// isAmbiguousPath on arrival.
 func pathAllowedAfterSubstitution(escaped, decoded string, prefixes []string) bool {
 	if strings.ContainsAny(decoded, ";\\") {
+		return false
+	}
+	// Normalises differently per server, and an empty value substituted mid-path is how it arises here.
+	if strings.Contains(decoded, "//") {
+		return false
+	}
+	for i := 0; i < len(decoded); i++ {
+		if decoded[i] < 0x20 || decoded[i] == 0x7f {
+			return false
+		}
+	}
+	// '%c0%ae' is an overlong '.', which some servers read as a dot and route on.
+	if !utf8.ValidString(decoded) {
 		return false
 	}
 	for _, segment := range strings.Split(decoded, "/") {

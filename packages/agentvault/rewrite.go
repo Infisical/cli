@@ -62,7 +62,7 @@ func injectCustomHeaders(req *http.Request, customHeaders []customHeader) bool {
 
 // A body it cannot rewrite is logged rather than skipped in silence: the placeholder goes upstream and the
 // agent would otherwise see only a third-party 401.
-func applySubstitutions(req *http.Request, serviceName string, subs []substitution) []string {
+func applySubstitutions(req *http.Request, serviceName string, subs []substitution) ([]string, error) {
 	changed := map[string]bool{}
 	for _, sub := range subs {
 		if len(sub.placeholder) == 0 {
@@ -76,8 +76,8 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		// arrive as two segments pointing at a different resource.
 		if sub.surfaces[surfacePath] {
 			escaped := req.URL.EscapedPath()
-			// EscapedPath re-encodes the whole path when what the agent sent is not already valid encoding, so
-			// `{{TOKEN}}` reads here as `%7B%7BTOKEN%7D%7D` and matching only the typed form would miss it.
+			// normalizeRequestTarget has already escaped whatever Go would have objected to, so a `{{TOKEN}}`
+			// on the wire reads here as `%7B%7BTOKEN%7D%7D` and matching only the typed form would miss it.
 			needle := sub.placeholder
 			if !strings.Contains(escaped, needle) {
 				// Percent-escapes carry no required case and clients differ, so the fallback matches against
@@ -144,10 +144,16 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		}
 	}
 
+	// The path, query and header surfaces are already rewritten by now, so a body that cannot be read has to
+	// hand back what fired alongside the error. The request is refused, but the record still has to say the
+	// credential was written into it.
+	var bodyErr error
 	if bodySubstitutions(subs) && req.Body != nil {
-		if applyBodySubstitutions(req, serviceName, subs) {
+		replaced, err := applyBodySubstitutions(req, serviceName, subs)
+		if replaced {
 			changed[surfaceBody] = true
 		}
+		bodyErr = err
 	}
 
 	surfaces := make([]string, 0, len(changed))
@@ -156,7 +162,7 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 			surfaces = append(surfaces, surface)
 		}
 	}
-	return surfaces
+	return surfaces, bodyErr
 }
 
 // The placeholder as EscapedPath would render it. The leading '/' keeps url.URL's `Path == "*"` case out of
@@ -209,16 +215,16 @@ func bodySubstitutions(subs []substitution) bool {
 	return false
 }
 
-func applyBodySubstitutions(req *http.Request, serviceName string, subs []substitution) bool {
+func applyBodySubstitutions(req *http.Request, serviceName string, subs []substitution) (bool, error) {
 	if req.Body == http.NoBody || req.ContentLength == 0 {
-		return false
+		return false, nil
 	}
 	if req.Header.Get("Content-Encoding") != "" {
 		log.Warn().
 			Str("service", serviceName).
 			Bool("hasContentEncoding", true).
 			Msg("agent-vault: body substitution skipped on an encoded body; the placeholder is going upstream unchanged")
-		return false
+		return false, nil
 	}
 	// Judged before reading, so an oversize body costs no memory. The check below still has to stand on its
 	// own: a chunked request declares -1, and a declared length is a claim rather than a fact.
@@ -226,25 +232,25 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 		log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
 			Int64("declaredBytes", req.ContentLength).
 			Msg("agent-vault: body larger than the substitution limit; the placeholder is going upstream unchanged")
-		return false
+		return false, nil
 	}
 
 	body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
 	if err != nil {
-		// ContentLength is deliberately left disagreeing with the bytes, so http.Transport refuses the request.
-		// Correcting it would hand the upstream a well-formed shorter request it cannot tell from a complete
-		// one, turning a broken upload into a partial write nobody can take back.
+		// Refused outright rather than forwarded short. This used to leave ContentLength disagreeing with the
+		// bytes so http.Transport would refuse, but a chunked upload declares -1 and there is nothing to leave
+		// wrong, so the upstream received a well-formed partial request with the credential on it and could not
+		// tell. A partial write is not something an agent can take back.
 		_ = req.Body.Close()
-		req.Body = io.NopCloser(bytes.NewReader(body))
 		log.Warn().Err(err).Str("service", serviceName).Int("bytesRead", len(body)).
 			Msg("agent-vault: could not read the whole request body for substitution; refusing to forward a truncated one")
-		return false
+		return false, errBodyUnreadable
 	}
 	if len(body) > maxBodyRewriteSize {
 		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), req.Body))
 		log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
 			Msg("agent-vault: body larger than the substitution limit; the placeholder is going upstream unchanged")
-		return false
+		return false, nil
 	}
 	_ = req.Body.Close()
 
@@ -276,7 +282,7 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 	}
 	req.ContentLength = int64(len(rewritten))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
-	return replaced
+	return replaced, nil
 }
 
 // Returns the input unchanged when the expansion would exceed limit, so a short placeholder mapped to a long

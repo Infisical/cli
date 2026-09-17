@@ -3,6 +3,7 @@ package agentvault
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -246,5 +247,77 @@ func TestAnExplicitRootPrefixMatchesEverythingAnUnrestrictedServiceWould(t *test
 				t.Fatalf("prefix / and no prefix disagree on %s: %v vs %v", path, rootErr, openErr)
 			}
 		})
+	}
+}
+
+// The post-substitution check is weaker than isAmbiguousPath on purpose, because we escape the value
+// ourselves and isAmbiguousPath refuses that escaping. It still has to refuse what a value can introduce.
+func TestThePostSubstitutionCheckRefusesWhatAValueCanIntroduce(t *testing.T) {
+	prefixes := toPathPrefixes([]string{"/repos"})
+	for _, tc := range []struct {
+		value string
+		want  bool
+		why   string
+	}{
+		{"ghp_plain", true, "an ordinary secret"},
+		{"org/repo", true, "a slash is escaped by us, not a separator"},
+		{"v1.2", true, "a dot inside a segment is not a dot segment"},
+		{"a%b", true, "a percent is escaped by us"},
+		{"", false, "an empty value leaves '//' behind"},
+		{"/admin", false, "a leading slash leaves '//' behind"},
+		{"admin/", false, "a trailing slash leaves '//' behind"},
+		{"a//b", false, "a doubled slash inside the value"},
+		{"a\tb", false, "a control byte"},
+		{"\xc0\xae\xc0\xae", false, "an overlong '..'"},
+	} {
+		req, _ := http.NewRequest("GET", "https://api.github.com/repos/__PAT__/admin", nil)
+		if _, err := applySubstitutions(req, "github", []substitution{subOn("__PAT__", tc.value, surfacePath)}); err != nil {
+			t.Fatalf("%s: %v", tc.why, err)
+		}
+		if got := pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, prefixes); got != tc.want {
+			t.Errorf("value %q (%s): allowed = %v, want %v (path %q)", tc.value, tc.why, got, tc.want, requestPath(req))
+		}
+	}
+}
+
+// Go rebuilds EscapedPath from the decoded path when RawPath is not valid encoding, which drops the very
+// '%2F' hasUnsafeEscape exists to refuse. Escaping those bytes first keeps the escape intact.
+func TestNormalizeRequestTargetKeepsAnEscapeGoWouldDrop(t *testing.T) {
+	for _, tc := range []struct{ raw, want, why string }{
+		{"/repos/a%2Fb", "/repos/a%2Fb", "already valid, left alone"},
+		{"/repos/a%2Fb/{x}", "/repos/a%2Fb/%7Bx%7D", "the brace is escaped, the %2F survives"},
+		{"/repos/{{PAT}}", "/repos/%7B%7BPAT%7D%7D", "a placeholder still reads as one"},
+		{"/repos/a|b", "/repos/a%7Cb", "a pipe"},
+		{"/repos/a%25b/{x}", "/repos/a%25b/%7Bx%7D", "an escaped percent is not escaped twice"},
+		{"/repos/plain", "/repos/plain", "nothing to do"},
+		// validEncoded accepts these, so Go never rebuilds and the guard leaves them exactly as sent. Escaping
+		// them would change the wire and break a byte-compared prefix.
+		{"/repos/a(b)!*[]'", "/repos/a(b)!*[]'", "sub-delims Go accepts unescaped"},
+		{"/repos/a%2Fb/c(d)", "/repos/a%2Fb/c(d)", "an escape plus sub-delims, still valid"},
+	} {
+		u, err := url.ParseRequestURI(tc.raw)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.raw, err)
+		}
+		normalizeRequestTarget(u)
+		if got := u.EscapedPath(); got != tc.want {
+			t.Errorf("%s (%s): EscapedPath = %q, want %q", tc.raw, tc.why, got, tc.want)
+		}
+	}
+}
+
+// The escape that used to be dropped is the one the prefix check runs on, so a single brace decided whether
+// a path was refused.
+func TestAnEscapedSlashIsRefusedWhateverElseThePathCarries(t *testing.T) {
+	prefixes := toPathPrefixes([]string{"/repos"})
+	for _, raw := range []string{"/repos/a%2Fb", "/repos/a%2Fb/{x}"} {
+		u, err := url.ParseRequestURI(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		normalizeRequestTarget(u)
+		if pathAllowed(u.EscapedPath(), prefixes) {
+			t.Errorf("%s was allowed; an escaped slash must be refused", raw)
+		}
 	}
 }
