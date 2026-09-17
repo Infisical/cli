@@ -247,7 +247,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Node's fetch tunnels http:// targets too and speaks plaintext inside, where every other client sends
 	// absolute-form. A tunnel is opaque bytes to an ordinary proxy, so that works everywhere else; here the
 	// first byte decides: a TLS record starts with 0x16, anything else is plain HTTP and takes the same path
-	// as absolute-form, which already refuses to attach a credential over plaintext.
+	// as absolute-form. The port stays the one the CONNECT line named, so a service still only matches if
+	// its pattern covers that port.
 	buffered := newBufferedConn(clientConn)
 	_ = clientConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	first, err := buffered.reader.Peek(1)
@@ -291,8 +292,8 @@ func newBufferedConn(c net.Conn) *bufferedConn {
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.reader.Read(p) }
 
-// The scheme is the tunnel's, not the inner request's: a credential is only ever attached on https, and
-// the target host comes from the CONNECT line so an agent cannot address one host through a tunnel to another.
+// The scheme is the tunnel's, not the inner request's, and the target host comes from the CONNECT line so
+// an agent cannot address one host through a tunnel to another.
 func (ps *proxyServer) serveTunnel(conn net.Conn, scheme, hostname, port, sessionToken string) {
 	listener := newOneShotListener(conn)
 	srv := &http.Server{
@@ -393,6 +394,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	if matched != nil {
 		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
 	}
+	if outcome.brokered && !strings.EqualFold(scheme, "https") {
+		event = event.Bool("plaintext", true)
+	}
 	// The logged path is always the agent's, so without this a substitution that matched nothing reads
 	// exactly like one that fired.
 	if len(outcome.substituted) > 0 {
@@ -486,33 +490,24 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	}
 
 	if matched != nil {
-		// A credential is only ever injected over TLS, whatever port the pattern names.
-		if !strings.EqualFold(scheme, "https") {
-			log.Warn().
-				Str("host", hostname).
-				Str("service", matched.name).
-				Msg("agent-vault: refusing to attach a credential over plaintext http")
-			matched = nil
-		} else {
-			// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
-			// so a custom header naming the credential's own header loses rather than replacing the token.
-			outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
-			outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
-			if injectCredential(req, &matched.credential) {
-				outcome.brokered = true
-			}
-			if len(outcome.substituted) > 0 {
-				outcome.brokered = true
-			}
+		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
+		// so a custom header naming the credential's own header loses rather than replacing the token.
+		outcome.substituted = applySubstitutions(req, matched.name, matched.substitutions)
+		outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
+		if injectCredential(req, &matched.credential) {
+			outcome.brokered = true
+		}
+		if len(outcome.substituted) > 0 {
+			outcome.brokered = true
+		}
 
-			if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
-				if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
-					// The path now carries the real credential, so it must not reach the body or the log.
-					return nil, matched, outcome, fmt.Errorf(
-						"service %q does not allow the path this request substitutes to: %w",
-						matched.name, errPolicyBlocked,
-					)
-				}
+		if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
+			if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
+				// The path now carries the real credential, so it must not reach the body or the log.
+				return nil, matched, outcome, fmt.Errorf(
+					"service %q does not allow the path this request substitutes to: %w",
+					matched.name, errPolicyBlocked,
+				)
 			}
 		}
 	}

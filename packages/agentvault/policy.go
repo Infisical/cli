@@ -10,7 +10,6 @@ import (
 
 var errPolicyBlocked = errors.New("blocked by service policy")
 
-// Runs before the plaintext refusal that nils a match, so a restriction holds on http:// too.
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	if !svc.allowsMethod(req.Method) {
 		return fmt.Errorf("service %q does not allow %s: %w", svc.name, req.Method, errPolicyBlocked)
