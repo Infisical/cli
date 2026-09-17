@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/Infisical/infisical-merge/packages/api"
 )
 
 func subOn(placeholder, value string, surfaces ...string) substitution {
@@ -228,6 +230,27 @@ func TestApplySubstitutions(t *testing.T) {
 			t.Fatalf("X-Key = %q", got)
 		}
 	})
+}
+
+// A placeholder that starts with another one is only swapped correctly when the longer runs first, and the
+// server is free to send them in either order.
+func TestAPlaceholderPrefixingAnotherStillSendsItsOwnSecret(t *testing.T) {
+	short := api.AgentVaultSubstitution{Placeholder: "__TOKEN__", Surfaces: []string{"header"}, Value: "SECRET_A"}
+	long := api.AgentVaultSubstitution{Placeholder: "__TOKEN__V2", Surfaces: []string{"header"}, Value: "SECRET_B"}
+
+	for _, wire := range [][]api.AgentVaultSubstitution{{short, long}, {long, short}} {
+		req := requestTo(t, "GET", "/")
+		req.Header.Set("X-A", "__TOKEN__")
+		req.Header.Set("X-B", "__TOKEN__V2")
+		applySubstitutions(req, "svc", toSubstitutions(wire))
+
+		if got := req.Header.Get("X-A"); got != "SECRET_A" {
+			t.Errorf("server order %q: X-A = %q, want SECRET_A", wire[0].Placeholder, got)
+		}
+		if got := req.Header.Get("X-B"); got != "SECRET_B" {
+			t.Errorf("server order %q: X-B = %q, want SECRET_B", wire[0].Placeholder, got)
+		}
+	}
 }
 
 func TestAPathSubstitutionLeavesTheRestOfThePathAlone(t *testing.T) {

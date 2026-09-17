@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -151,5 +152,11 @@ func toSubstitutions(wire []api.AgentVaultSubstitution) []substitution {
 		}
 		subs = append(subs, substitution{placeholder: s.Placeholder, surfaces: surfaces, value: []byte(s.Value)})
 	}
+	// Longest first, so a placeholder that starts with another one is swapped before the shorter one can
+	// eat its prefix and leave the tail behind. Sorted here rather than per request: the slice is shared by
+	// every request the session serves.
+	sort.SliceStable(subs, func(i, j int) bool {
+		return len(subs[i].placeholder) > len(subs[j].placeholder)
+	})
 	return subs
 }
