@@ -3,14 +3,16 @@ package session
 import (
 	"regexp"
 	"testing"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
 
 func TestApplyMasking(t *testing.T) {
 	logger := &EncryptedSessionLogger{
-		maskingPatterns: []*regexp.Regexp{
+		masker: masking.New([]*regexp.Regexp{
 			regexp.MustCompile(`password\s*=\s*\S+`),
 			regexp.MustCompile(`secret_key`),
-		},
+		}, false, nil, "sess-1"),
 	}
 
 	tests := []struct {

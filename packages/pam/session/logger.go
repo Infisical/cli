@@ -7,11 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
 
 type sessionMutexInfo struct {
@@ -82,13 +83,13 @@ type SessionLogger interface {
 }
 
 type EncryptedSessionLogger struct {
-	sessionID       string
-	encryptionKey   string
-	expiresAt       time.Time
-	file            *os.File
-	mutex           sync.Mutex
-	sessionStart    time.Time        // Track session start time for elapsed time calculation
-	maskingPatterns []*regexp.Regexp // Patterns for masking sensitive data in session logs
+	sessionID     string
+	encryptionKey string
+	expiresAt     time.Time
+	file          *os.File
+	mutex         sync.Mutex
+	sessionStart  time.Time // Track session start time for elapsed time calculation
+	masker        masking.Masker
 }
 
 type RequestResponsePair struct {
@@ -188,7 +189,7 @@ func CleanupSessionMutex(sessionID string) {
 	}
 }
 
-func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time, resourceType string, maskingPatterns []*regexp.Regexp) (*EncryptedSessionLogger, error) {
+func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time, resourceType string, masker masking.Masker) (*EncryptedSessionLogger, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
 	}
@@ -219,12 +220,12 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 	}
 
 	return &EncryptedSessionLogger{
-		sessionID:       sessionID,
-		encryptionKey:   encryptionKey,
-		expiresAt:       expiresAt,
-		file:            file,
-		sessionStart:    time.Now(),
-		maskingPatterns: maskingPatterns,
+		sessionID:     sessionID,
+		encryptionKey: encryptionKey,
+		expiresAt:     expiresAt,
+		file:          file,
+		sessionStart:  time.Now(),
+		masker:        masker,
 	}, nil
 }
 
@@ -271,28 +272,18 @@ func (sl *EncryptedSessionLogger) writeEvent(productEventData func() ([]byte, er
 	return nil
 }
 
-// applyMasking replaces regex matches in byte data with [MASKED]
 func (sl *EncryptedSessionLogger) applyMasking(data []byte) []byte {
-	if len(sl.maskingPatterns) == 0 || len(data) == 0 {
+	if sl.masker == nil {
 		return data
 	}
-	result := data
-	for _, pattern := range sl.maskingPatterns {
-		result = pattern.ReplaceAll(result, []byte("[MASKED]"))
-	}
-	return result
+	return sl.masker.Mask(data)
 }
 
-// applyMaskingString replaces regex matches in string data with [MASKED]
 func (sl *EncryptedSessionLogger) applyMaskingString(s string) string {
-	if len(sl.maskingPatterns) == 0 || s == "" {
+	if sl.masker == nil {
 		return s
 	}
-	result := s
-	for _, pattern := range sl.maskingPatterns {
-		result = pattern.ReplaceAllString(result, "[MASKED]")
-	}
-	return result
+	return sl.masker.MaskString(s)
 }
 
 func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {

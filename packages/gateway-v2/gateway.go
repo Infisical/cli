@@ -455,7 +455,10 @@ func (g *Gateway) startMetricsReport(ctx context.Context) {
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
-		capabilities := map[string]any{}
+		capabilities := map[string]any{
+			// Absence is how the platform spots a gateway too old to honour the setting.
+			CapabilitySessionLogMaskingBuiltInDetection: true,
+		}
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
 		}
