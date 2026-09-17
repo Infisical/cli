@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -131,8 +133,13 @@ func (p *ClickHouseProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 	listener := newSingleConnListener(clientConn)
 
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
 		listener.Close()
 		server.Close()
 	}()
@@ -202,19 +209,19 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 	}
 	head = head[:n]
 
-	if len(head) > maxInspectBytes && len(p.config.BlockedCommands) > 0 {
+	forwarded := bodyReadCloser{Reader: io.MultiReader(bytes.NewReader(head), r.Body), Closer: r.Body}
+
+	decoded, decodedOverflow, decodeErr := decodeHead(head, encoding)
+	if decodeErr != nil {
+		return "", nil, fmt.Errorf(
+			"the gateway could not decompress the request body to apply the command blocking policy: %v", decodeErr)
+	}
+
+	if (len(head) > maxInspectBytes || decodedOverflow) && len(p.config.BlockedCommands) > 0 {
 		return "", nil, fmt.Errorf(
 			"this account blocks commands, so a request body larger than %d MB is refused: the gateway has to read "+
 				"the whole statement to apply the policy. Send the data in smaller batches",
 			maxInspectBytes>>20)
-	}
-
-	forwarded := bodyReadCloser{Reader: io.MultiReader(bytes.NewReader(head), r.Body), Closer: r.Body}
-
-	decoded, decodeErr := decodeHead(head, encoding)
-	if decodeErr != nil {
-		return "", nil, fmt.Errorf(
-			"the gateway could not decompress the request body to apply the command blocking policy: %v", decodeErr)
 	}
 
 	return joinStatement(queryParam, string(decoded)), forwarded, nil
@@ -232,12 +239,12 @@ func joinStatement(queryParam string, body string) string {
 	}
 }
 
-func decodeHead(head []byte, encoding string) ([]byte, error) {
+func decodeHead(head []byte, encoding string) ([]byte, bool, error) {
 	switch encoding {
 	case "gzip":
 		reader, err := gzip.NewReader(bytes.NewReader(head))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		defer reader.Close()
 		return readTolerant(reader)
@@ -245,25 +252,29 @@ func decodeHead(head []byte, encoding string) ([]byte, error) {
 		// "deflate" is sent both as zlib and as raw deflate, so both are tried
 		if reader, err := zlib.NewReader(bytes.NewReader(head)); err == nil {
 			defer reader.Close()
-			if decoded, readErr := readTolerant(reader); readErr == nil {
-				return decoded, nil
+			if decoded, overflow, readErr := readTolerant(reader); readErr == nil {
+				return decoded, overflow, nil
 			}
 		}
 		reader := flate.NewReader(bytes.NewReader(head))
 		defer reader.Close()
 		return readTolerant(reader)
 	default:
-		return head, nil
+		return head, len(head) > maxInspectBytes, nil
 	}
 }
 
 // The head is a deliberate prefix, so a stream ending mid-frame is expected rather than an error
-func readTolerant(r io.Reader) ([]byte, error) {
-	decoded, err := io.ReadAll(io.LimitReader(r, maxInspectBytes))
-	if len(decoded) > 0 || err == nil || err == io.EOF {
-		return decoded, nil
+func readTolerant(r io.Reader) ([]byte, bool, error) {
+	decoded, err := io.ReadAll(io.LimitReader(r, maxInspectBytes+1))
+	overflow := len(decoded) > maxInspectBytes
+	if overflow {
+		decoded = decoded[:maxInspectBytes]
 	}
-	return nil, err
+	if len(decoded) > 0 || err == nil || err == io.EOF {
+		return decoded, overflow, nil
+	}
+	return nil, false, err
 }
 
 func (p *ClickHouseProxy) director(req *http.Request) {
@@ -275,7 +286,7 @@ func (p *ClickHouseProxy) director(req *http.Request) {
 	for _, param := range strippedAuthParams {
 		query.Del(param)
 	}
-	if p.config.Database != "" && query.Get("database") == "" {
+	if p.config.Database != "" {
 		query.Set("database", p.config.Database)
 	}
 	req.URL.RawQuery = query.Encode()
@@ -295,7 +306,6 @@ func (p *ClickHouseProxy) modifyResponse(resp *http.Response) error {
 	if !ok || state == nil {
 		return nil
 	}
-	elapsed := time.Since(state.started)
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		original := resp.Body
@@ -305,8 +315,39 @@ func (p *ClickHouseProxy) modifyResponse(resp *http.Response) error {
 		return nil
 	}
 
-	p.logStatement(state.statement, summarize(resp, elapsed))
+	// Recorded once the body has finished, so a transfer that dies mid-stream is not logged as a success
+	resp.Body = &completionLoggingBody{ReadCloser: resp.Body, onDone: func(err error) {
+		outcome := summarize(resp, time.Since(state.started))
+		if err != nil {
+			outcome = fmt.Sprintf("INTERRUPTED: %s, %v", outcome, err)
+		}
+		p.logStatement(state.statement, outcome)
+	}}
 	return nil
+}
+
+type completionLoggingBody struct {
+	io.ReadCloser
+	onDone func(error)
+	once   sync.Once
+}
+
+func (b *completionLoggingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		finished := err
+		if errors.Is(err, io.EOF) {
+			finished = nil
+		}
+		b.once.Do(func() { b.onDone(finished) })
+	}
+	return n, err
+}
+
+func (b *completionLoggingBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(func() { b.onDone(errors.New("the response was closed before it finished")) })
+	return err
 }
 
 func summarize(resp *http.Response, elapsed time.Duration) string {

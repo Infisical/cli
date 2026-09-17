@@ -50,7 +50,7 @@ func newTestProxy(t *testing.T, upstream http.HandlerFunc, blocked ...string) (h
 	proxy := NewClickHouseProxy(ClickHouseProxyConfig{
 		TargetAddr:      strings.TrimPrefix(server.URL, "http://"),
 		Username:        "pam_svc",
-		Password:        "s3cret",
+		Password:        "s3cret", // ggignore
 		Database:        "analytics",
 		SessionID:       "session-1",
 		SessionLogger:   logger,
@@ -94,7 +94,7 @@ func TestReplacesClientCredentialsWithTheAccountsOwn(t *testing.T) {
 	defer closeUpstream()
 
 	req := httptest.NewRequest(http.MethodPost, "/?user=attacker&password=guessed&query=SELECT+1", http.NoBody)
-	req.Header.Set("Authorization", "Basic YXR0YWNrZXI6Z3Vlc3NlZA==")
+	req.Header.Set("Authorization", "Basic YXR0YWNrZXI6Z3Vlc3NlZA==") // ggignore
 	req.Header.Set("X-ClickHouse-User", "attacker")
 	req.Header.Set("X-ClickHouse-Key", "guessed")
 	handler.ServeHTTP(httptest.NewRecorder(), req)
@@ -107,7 +107,7 @@ func TestReplacesClientCredentialsWithTheAccountsOwn(t *testing.T) {
 	require.Empty(t, captured.query.Get("password"))
 }
 
-func TestAppliesTheAccountDatabaseOnlyWhenTheClientNamesNone(t *testing.T) {
+func TestReplacesWhateverDatabaseTheClientAsksFor(t *testing.T) {
 	var captured capturedRequest
 	handler, _, closeUpstream := newTestProxy(t, capturingUpstream(&captured, nil))
 	defer closeUpstream()
@@ -116,7 +116,7 @@ func TestAppliesTheAccountDatabaseOnlyWhenTheClientNamesNone(t *testing.T) {
 	require.Equal(t, "analytics", captured.query.Get("database"))
 
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/?database=other&query=SELECT+1", http.NoBody))
-	require.Equal(t, "other", captured.query.Get("database"))
+	require.Equal(t, "analytics", captured.query.Get("database"))
 }
 
 func TestBlocksAStatementInTheQueryParameter(t *testing.T) {
@@ -210,6 +210,24 @@ func TestTruncatesWhatALargeStatementWritesToTheRecording(t *testing.T) {
 	require.Less(t, len(logger.entries[0].Input), len(payload))
 }
 
+func TestRefusesACompressedBodyThatExpandsPastTheInspectionWindow(t *testing.T) {
+	reached := false
+	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}, `(?i)\bdrop\b`)
+	defer closeUpstream()
+
+	payload := "/*" + strings.Repeat("x", maxInspectBytes*2) + "*/ DROP TABLE events"
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(gzipped(t, payload)))
+	req.Header.Set("Content-Encoding", "gzip")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.False(t, reached)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "blocks commands")
+}
+
 func TestRejectsABodyEncodingItCannotInspect(t *testing.T) {
 	reached := false
 	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +267,27 @@ func TestRecordsTheRowCountsClickHouseReports(t *testing.T) {
 	require.Contains(t, logger.entries[0].Output, "7 row(s) returned")
 	require.Contains(t, logger.entries[0].Output, "120 row(s) read")
 	require.NotContains(t, logger.entries[0].Output, "row(s) written")
+}
+
+func TestRecordsAStreamingFailureAsInterruptedRatherThanSuccess(t *testing.T) {
+	handler, logger, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Length", "64")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+
+		if hijacker, ok := w.(http.Hijacker); ok {
+			conn, _, err := hijacker.Hijack()
+			require.NoError(t, err)
+			_ = conn.Close()
+		}
+	})
+	defer closeUpstream()
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/?query=SELECT+1", http.NoBody))
+
+	require.Len(t, logger.entries, 1)
+	require.Contains(t, logger.entries[0].Output, "INTERRUPTED")
 }
 
 func TestRecordsAnUpstreamErrorAndStillReturnsItToTheClient(t *testing.T) {
