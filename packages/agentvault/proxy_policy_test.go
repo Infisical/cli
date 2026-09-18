@@ -460,3 +460,21 @@ func TestAMethodOverrideHeaderCannotOutrankTheAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestAnInjectedMethodOverrideCannotOutrankTheAllowlist(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, []string{"GET", "POST"}, nil, []customHeader{
+			{name: "X-HTTP-Method-Override", value: []byte("DELETE")},
+		}, nil)
+	})
+
+	status, body := do(t, client, "POST", fmt.Sprintf("https://%s/anything", host), "x")
+	if status != http.StatusOK {
+		t.Fatalf("the POST itself is allowed, got %d: %s", status, body)
+	}
+
+	got := decodeEcho(t, body)
+	if v := got.Headers["X-Http-Method-Override"]; len(v) > 0 {
+		t.Fatalf("the service's own header reached the upstream as %v, so the allowlist can be outranked", v)
+	}
+}

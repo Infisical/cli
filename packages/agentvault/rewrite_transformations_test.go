@@ -207,6 +207,22 @@ func TestApplySubstitutions(t *testing.T) {
 		}
 	})
 
+	t.Run("a body that only crosses the limit once substituted is forwarded untouched", func(t *testing.T) {
+		// Under the limit as sent, over it once every placeholder has grown. The count times the growth is
+		// what overflows int on a 32-bit build, so this is the case the division guards.
+		value := strings.Repeat("v", 8192)
+		body := strings.Repeat("__T__", 4096)
+		req, _ := http.NewRequest("POST", "https://api.github.com/x", strings.NewReader(body))
+		surfaces, _ := applySubstitutions(req, "github", []substitution{subOn("__T__", value, surfaceBody)})
+		got, _ := io.ReadAll(req.Body)
+		if !bytes.Equal(got, []byte(body)) {
+			t.Fatalf("the body must go upstream unchanged (got %d bytes, want %d)", len(got), len(body))
+		}
+		if len(surfaces) != 0 {
+			t.Fatalf("nothing should be reported as changed, got %v", surfaces)
+		}
+	})
+
 	t.Run("a body with no placeholder in it is untouched", func(t *testing.T) {
 		body := `{"a":"b"}`
 		req, _ := http.NewRequest("POST", "https://api.github.com/x", strings.NewReader(body))

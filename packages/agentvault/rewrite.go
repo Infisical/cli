@@ -264,7 +264,10 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 		if count == 0 {
 			continue
 		}
-		if len(rewritten)+count*(len(sub.value)-len(sub.placeholder)) > maxBodyRewriteSize {
+		// Division for the growing case, for the overflow reason replaceWithinLimit spells out below.
+		delta := len(sub.value) - len(sub.placeholder)
+		room := maxBodyRewriteSize - len(rewritten)
+		if delta > 0 && (room < 0 || count > room/delta) {
 			log.Warn().Str("service", serviceName).Int("limitBytes", maxBodyRewriteSize).
 				Msg("agent-vault: substituted body would exceed the limit; the placeholder is going upstream unchanged")
 			continue

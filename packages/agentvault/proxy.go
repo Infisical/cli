@@ -498,10 +498,6 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// Stripped before injecting, so a client's Connection header cannot delete the credential.
 	stripHopByHopHeaders(req.Header)
 
-	if matched != nil && matched.allowedMethods != nil {
-		stripMethodOverrideHeaders(req.Header)
-	}
-
 	if matched != nil {
 		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
 		// so a custom header naming the credential's own header loses rather than replacing the token.
@@ -513,6 +509,12 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
 		if injectCredential(req, &matched.credential) {
 			outcome.brokered = true
+		}
+
+		// After the brokered headers rather than before them, so a custom header cannot reintroduce an
+		// override of the method the allowlist already judged.
+		if matched.allowedMethods != nil {
+			stripMethodOverrideHeaders(req.Header)
 		}
 		if len(outcome.substituted) > 0 {
 			outcome.brokered = true
