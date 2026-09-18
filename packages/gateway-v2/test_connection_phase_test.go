@@ -97,7 +97,7 @@ func TestConfigFailuresAreNotReadAsRejectedCredentials(t *testing.T) {
 	}{
 		{"sql/unsupported dialect", func() error {
 			port := reachablePort(t)
-			return doSQLConnectionTest(ctx, "127.0.0.1", port, sqlTestParams{Dialect: "oracle", Username: "u"})
+			return doSQLConnectionTest(ctx, "127.0.0.1", port, sqlTestParams{Dialect: "db2", Username: "u"})
 		}},
 		{"sql/unparseable CA", func() error {
 			port := reachablePort(t)

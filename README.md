@@ -8,9 +8,9 @@
 </p>
 
 > [!IMPORTANT]
-> **The Infisical CLI Linux package repository is moving off Cloudsmith.** To keep up with download volume, we're migrating the Linux package repository to our own host at `artifacts-cli.infisical.com`. Cloudsmith downloads will stop being served on **September 16th, 2026**, after which installs and updates from the old URL will fail.
+> **The Infisical CLI Linux package repository has moved off Cloudsmith.** To keep up with download volume, we migrated the Linux package repository to our own host at `artifacts-cli.infisical.com`. Cloudsmith stopped being served on **September 16th, 2026**, so installs and updates from the old URL will fail.
 >
-> Every release, including all older versions, is already available on the new host. If you're on an existing setup, you don't need to change anything else, just repoint your machine to the new artifact URL by following the [migration steps](https://infisical.com/docs/cli/cloudsmith-migration).
+> Every release, including all older versions, is available on the new host. If you're on an existing setup, you don't need to change anything else, just repoint your machine to the new artifact URL by following the [migration steps](https://infisical.com/docs/cli/cloudsmith-migration).
 
 ## Introduction
 

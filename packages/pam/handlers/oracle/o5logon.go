@@ -43,6 +43,9 @@ func decryptSessionKey(padding bool, encKey []byte, sessionKeyHex string) ([]byt
 	if err != nil {
 		return nil, err
 	}
+	if len(result) == 0 || len(result)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("session key is %d bytes, not a whole number of cipher blocks", len(result))
+	}
 	blk, err := aes.NewCipher(encKey)
 	if err != nil {
 		return nil, err

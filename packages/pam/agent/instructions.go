@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	pam "github.com/Infisical/infisical-merge/packages/pam/local"
 )
 
@@ -100,9 +101,10 @@ func RenderInstructions(accounts []LiveAccount, requestApproval bool) string {
 	// thing guaranteed to keep it out: the proxy accepts any user but expects an empty password, so a
 	// supplied one is checked and fails. Said as a rule rather than a MySQL footnote, because it holds
 	// everywhere and the reflex needs heading off before it starts.
-	out.WriteString("Send no password at all, and leave any password field empty. There is no password to\n")
-	out.WriteString("find, and some of these accept a connection only when none is sent, so adding one is\n")
-	out.WriteString("never the fix for a connection that was refused.\n\n")
+	out.WriteString("Unless the notes for a specific account below say otherwise, send no password at all and\n")
+	out.WriteString("leave any password field empty. There is no password to find, and some of these accept a\n")
+	out.WriteString("connection only when none is sent, so inventing one is never the fix for a connection that\n")
+	out.WriteString("was refused.\n\n")
 
 	out.WriteString("Every command you run through these proxies is recorded and attributed to you.\n\n")
 
@@ -149,6 +151,10 @@ func RenderInstructions(accounts []LiveAccount, requestApproval bool) string {
 		if account.Type == "mongodb" {
 			out.WriteString("- No database is preselected. Run `show dbs` to see what this account reaches, then name\n")
 			out.WriteString("  the database explicitly: connecting without one lands on an empty database called `test`.\n")
+		}
+		if account.Type == "oracledb" {
+			fmt.Fprintf(&out, "- This account is the exception to the no-password rule. Oracle's login cannot omit a\n")
+			fmt.Fprintf(&out, "  password, so send %s as the password. The real credential is substituted for you.\n", oracle.ProxyPasswordPlaceholder)
 		}
 		if note != "" {
 			fmt.Fprintf(&out, "- %s\n", note)

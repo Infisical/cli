@@ -150,6 +150,9 @@ func (r *TTCReader) Remaining() int { return len(r.buf) - r.pos }
 func (r *TTCReader) Pos() int { return r.pos }
 
 func (r *TTCReader) read(n int) ([]byte, error) {
+	if n < 0 || n > len(r.buf)-r.pos {
+		return nil, io.ErrUnexpectedEOF
+	}
 	if r.pos+n > len(r.buf) {
 		return nil, io.ErrUnexpectedEOF
 	}
