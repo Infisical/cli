@@ -59,9 +59,19 @@ func TestInjectCustomHeaders(t *testing.T) {
 		req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
 		injectCustomHeaders(req,
 			[]customHeader{{name: "Authorization", prefix: "Bearer", value: []byte("__KEY__")}},
-			[]substitution{{placeholder: "__KEY__", value: []byte("real")}})
+			[]substitution{{placeholder: "__KEY__", surfaces: map[string]bool{surfaceHeader: true}, value: []byte("real")}})
 		if got := req.Header.Get("Authorization"); got != "Bearer real" {
 			t.Fatalf("Authorization = %q, want the substitution resolved", got)
+		}
+	})
+
+	t.Run("a substitution not on the header surface leaves the value alone", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "https://api.github.com/x", nil)
+		injectCustomHeaders(req,
+			[]customHeader{{name: "X-Sig", value: []byte("__KEY__")}},
+			[]substitution{{placeholder: "__KEY__", surfaces: map[string]bool{surfaceBody: true}, value: []byte("real")}})
+		if got := req.Header.Get("X-Sig"); got != "__KEY__" {
+			t.Fatalf("X-Sig = %q, want the body-only substitution left it untouched", got)
 		}
 	})
 }

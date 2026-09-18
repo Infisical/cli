@@ -88,7 +88,7 @@ func TestACustomHeaderValueResolvesASubstitutionOverPlainHTTP(t *testing.T) {
 	client, host := newPlaintextFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, nil,
 			[]customHeader{{name: "X-Signature", prefix: "v1", value: []byte("__KEY__")}},
-			[]substitution{{placeholder: "__KEY__", value: []byte("s3cr3t")}},
+			[]substitution{{placeholder: "__KEY__", surfaces: map[string]bool{surfaceHeader: true}, value: []byte("s3cr3t")}},
 		)
 	})
 

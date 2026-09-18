@@ -56,10 +56,11 @@ func injectCustomHeaders(req *http.Request, customHeaders []customHeader, subs [
 			value = header.prefix + " " + value
 		}
 		// A placeholder written into a header value is resolved here, so one substitution can stand for a
-		// secret reused across several headers. Scoped to the value the admin set, never the agent's request
-		// or the credential, so nothing the agent sends can steer it.
+		// secret reused across several headers. Gated on the header surface: ticking it is the admin saying
+		// the secret may appear in a header, and a custom header is one. Never the agent's request or the
+		// credential, so nothing the agent sends can steer it.
 		for _, sub := range subs {
-			if len(sub.placeholder) == 0 {
+			if !sub.surfaces[surfaceHeader] || len(sub.placeholder) == 0 {
 				continue
 			}
 			if replaced, ok := replaceWithinLimit(value, sub.placeholder, string(sub.value), maxBodyRewriteSize); ok {
