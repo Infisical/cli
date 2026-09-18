@@ -250,13 +250,6 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20250318082626-8f80e5cb09ec // indirect
 	github.com/pingcap/log v1.1.1-0.20241212030209-7e3ff8601a2a // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20250421232622-526b2c79173d // indirect
-	github.com/pion/dtls/v3 v3.1.4 // indirect
-	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/stun/v3 v3.1.5 // indirect
-	github.com/pion/transport/v3 v3.0.7 // indirect
-	github.com/pion/transport/v4 v4.0.2 // indirect
-	github.com/pion/turn/v4 v4.0.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
@@ -267,7 +260,6 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/rs/cors v1.11.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.6.0 // indirect
@@ -302,7 +294,6 @@ require (
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect
 	github.com/wasilibs/go-re2 v1.10.0 // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
-	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
@@ -375,5 +366,3 @@ tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 replace github.com/Infisical/infisical-merge => ../
 
 replace github.com/zalando/go-keyring => github.com/Infisical/go-keyring v1.0.2
-
-replace github.com/pion/turn/v4 => github.com/Infisical/turn/v4 v4.0.1
