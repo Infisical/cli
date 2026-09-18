@@ -45,9 +45,6 @@ const (
 	operationCallFetchSingleSecretByName           = "CallFetchSingleSecretByName"
 	operationCallCreateRawSecretsV3                = "CallCreateRawSecretsV3"
 	operationCallUpdateRawSecretsV3                = "CallUpdateRawSecretsV3"
-	operationCallRegisterGatewayIdentityV1         = "CallRegisterGatewayIdentityV1"
-	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
-	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
 	operationCallGatewayMetricsReportV2            = "CallGatewayMetricsReportV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
@@ -773,62 +770,6 @@ func CallUpdateRawSecretsV3(httpClient *resty.Client, request UpdateRawSecretByN
 
 	if response.IsError() {
 		return NewAPIErrorWithResponse(operationCallUpdateRawSecretsV3, response, nil)
-	}
-
-	return nil
-}
-
-func CallRegisterGatewayIdentityV1(httpClient *resty.Client) (*GetRelayCredentialsResponseV1, error) {
-	var resBody GetRelayCredentialsResponseV1
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/register-identity", config.INFISICAL_URL))
-
-	if err != nil {
-		return nil, NewGenericRequestError(operationCallRegisterGatewayIdentityV1, err)
-	}
-
-	if response.IsError() {
-		return nil, NewAPIErrorWithResponse(operationCallRegisterGatewayIdentityV1, response, nil)
-	}
-
-	return &resBody, nil
-}
-
-func CallExchangeRelayCertV1(httpClient *resty.Client, request ExchangeRelayCertRequestV1) (*ExchangeRelayCertResponseV1, error) {
-	var resBody ExchangeRelayCertResponseV1
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
-		SetBody(request).
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/exchange-cert", config.INFISICAL_URL))
-
-	if err != nil {
-		return nil, NewGenericRequestError(operationCallExchangeRelayCertV1, err)
-	}
-
-	if response.IsError() {
-		return nil, NewAPIErrorWithResponse(operationCallExchangeRelayCertV1, response, nil)
-	}
-
-	return &resBody, nil
-}
-
-func CallGatewayHeartBeatV1(httpClient *resty.Client) error {
-	response, err := httpClient.
-		R().
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/heartbeat", config.INFISICAL_URL))
-
-	if err != nil {
-		return NewGenericRequestError(operationCallGatewayHeartBeatV1, err)
-	}
-
-	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV1, response, nil)
 	}
 
 	return nil
