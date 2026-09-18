@@ -498,6 +498,14 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// Stripped before injecting, so a client's Connection header cannot delete the credential.
 	stripHopByHopHeaders(req.Header)
 
+	// A service reaches port 443 by default, which everywhere else in the product means TLS, so plain HTTP
+	// here is either a tunnel that declined to handshake or an http:// URL naming 443 — nothing legitimate.
+	// Refused before substitution, which would otherwise put a secret in the path of a cleartext request.
+	if matched != nil && scheme == "http" && port == "443" {
+		return nil, matched, outcome, fmt.Errorf(
+			"service %q expects TLS on port 443; refusing to broker plain HTTP: %w", matched.name, errPolicyBlocked)
+	}
+
 	if matched != nil {
 		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
 		// so a custom header naming the credential's own header loses rather than replacing the token.
