@@ -49,7 +49,9 @@ func injectCredential(req *http.Request, cred *credential) bool {
 
 // Written before the credential, so one colliding with the credential's header loses to it. Pass-through
 // injects nothing, which is why Authorization as a custom header on one still works.
-func injectCustomHeaders(req *http.Request, customHeaders []customHeader, subs []substitution) bool {
+// Returns whether any header was written, and whether a placeholder was resolved inside one, so the audit
+// record can report the injection the way a request-surface substitution is reported.
+func injectCustomHeaders(req *http.Request, customHeaders []customHeader, subs []substitution) (brokered, resolved bool) {
 	for _, header := range customHeaders {
 		value := string(header.value)
 		if header.prefix != "" {
@@ -63,13 +65,14 @@ func injectCustomHeaders(req *http.Request, customHeaders []customHeader, subs [
 			if !sub.surfaces[surfaceHeader] || len(sub.placeholder) == 0 {
 				continue
 			}
-			if replaced, ok := replaceWithinLimit(value, sub.placeholder, string(sub.value), maxBodyRewriteSize); ok {
-				value = replaced
+			if replacedValue, ok := replaceWithinLimit(value, sub.placeholder, string(sub.value), maxBodyRewriteSize); ok && replacedValue != value {
+				value = replacedValue
+				resolved = true
 			}
 		}
 		req.Header.Set(header.name, value)
 	}
-	return len(customHeaders) > 0
+	return len(customHeaders) > 0, resolved
 }
 
 // A body it cannot rewrite is logged rather than skipped in silence: the placeholder goes upstream and the
@@ -81,7 +84,6 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 			continue
 		}
 		real := string(sub.value)
-		before := len(changed)
 
 		// Swapped in the escaped path so every other segment keeps the byte form the agent sent. Rewriting the
 		// decoded Path makes Go re-derive the wire path without re-escaping '/', and `group%2Fproject` would
@@ -145,15 +147,6 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 			}
 		}
 
-		// The body is rewritten after this loop, so a substitution that reaches it is judged there. Anything
-		// else that matched nothing sent its placeholder upstream, and the third party's 401 says nothing
-		// about why.
-		if !sub.surfaces[surfaceBody] && len(changed) == before {
-			log.Warn().
-				Str("service", serviceName).
-				Str("placeholder", sub.placeholder).
-				Msg("agent-vault: a substitution matched nothing in the request")
-		}
 	}
 
 	// The path, query and header surfaces are already rewritten by now, so a body that cannot be read has to

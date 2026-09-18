@@ -1,12 +1,17 @@
 package agentvault
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // The leg an agent takes for an http:// upstream: absolute-form through the proxy, no CONNECT and no TLS
@@ -85,6 +90,11 @@ func TestEverythingAServiceCarriesIsAttachedOverPlainHTTP(t *testing.T) {
 // A custom header value carrying a placeholder is resolved from the service's substitutions on the way out,
 // end to end through the proxy, so one secret can be referenced across headers.
 func TestACustomHeaderValueResolvesASubstitutionOverPlainHTTP(t *testing.T) {
+	var logs bytes.Buffer
+	restore := log.Logger
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = restore })
+
 	client, host := newPlaintextFixture(t, func(h string) *resolvedService {
 		return policyService(h, nil, nil,
 			[]customHeader{{name: "X-Signature", prefix: "v1", value: []byte("__KEY__")}},
@@ -98,6 +108,16 @@ func TestACustomHeaderValueResolvesASubstitutionOverPlainHTTP(t *testing.T) {
 	}
 	if sig := decodeEcho(t, payload).Headers["X-Signature"]; len(sig) != 1 || sig[0] != "v1 s3cr3t" {
 		t.Errorf("X-Signature = %v, want the placeholder resolved", sig)
+	}
+
+	// The audit line has to record the injection, and the "matched nothing" warning must not fire on a
+	// placeholder that lives only in a custom header the agent never sends.
+	out := logs.String()
+	if !strings.Contains(out, `"substituted":["header"]`) {
+		t.Errorf("audit line did not record the header substitution: %s", out)
+	}
+	if strings.Contains(out, "matched nothing") {
+		t.Errorf("a resolved substitution was warned as unmatched: %s", out)
 	}
 }
 
