@@ -82,6 +82,25 @@ func TestEverythingAServiceCarriesIsAttachedOverPlainHTTP(t *testing.T) {
 	}
 }
 
+// A custom header value carrying a placeholder is resolved from the service's substitutions on the way out,
+// end to end through the proxy, so one secret can be referenced across headers.
+func TestACustomHeaderValueResolvesASubstitutionOverPlainHTTP(t *testing.T) {
+	client, host := newPlaintextFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, nil,
+			[]customHeader{{name: "X-Signature", prefix: "v1", value: []byte("__KEY__")}},
+			[]substitution{{placeholder: "__KEY__", value: []byte("s3cr3t")}},
+		)
+	})
+
+	status, payload := do(t, client, http.MethodGet, "http://"+host+"/things", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", status, payload)
+	}
+	if sig := decodeEcho(t, payload).Headers["X-Signature"]; len(sig) != 1 || sig[0] != "v1 s3cr3t" {
+		t.Errorf("X-Signature = %v, want the placeholder resolved", sig)
+	}
+}
+
 // A pass-through service carries no credential, so before this it was refused for a credential it never
 // had and its headers were dropped with it.
 func TestAPassThroughServiceStillAddsItsHeadersOverPlainHTTP(t *testing.T) {
