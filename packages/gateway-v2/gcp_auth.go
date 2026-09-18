@@ -47,7 +47,7 @@ func LoginGatewayWithGcp(ctx context.Context, httpClient *resty.Client, gatewayI
 		return "", err
 	}
 
-	resp, err := api.CallGcpAuthLoginGateway(httpClient, api.GcpAuthLoginGatewayRequest{
+	resp, err := api.CallGatewayLogin(httpClient, api.GcpAuthLoginGatewayRequest{
 		Method:    EnrollMethodGcp,
 		GatewayID: gatewayID,
 		JWT:       jwt,
