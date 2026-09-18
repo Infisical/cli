@@ -14,7 +14,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -193,7 +195,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 	queryParam := strings.TrimSpace(r.URL.Query().Get("query"))
 
 	if r.Body == nil || r.ContentLength == 0 {
-		return queryParam, http.NoBody, nil
+		return queryParam + parameterSuffix(r.URL.Query()), http.NoBody, nil
 	}
 
 	// ClickHouse's own block compression is opaque to anything but a ClickHouse client
@@ -235,7 +237,26 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 			maxInspectBytes>>20)
 	}
 
-	return joinStatement(queryParam, string(decoded)), forwarded, nil
+	return joinStatement(queryParam, string(decoded)) + parameterSuffix(r.URL.Query()), forwarded, nil
+}
+
+func parameterSuffix(query url.Values) string {
+	names := make([]string, 0, len(query))
+	for name := range query {
+		if strings.HasPrefix(name, "param_") {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+
+	pairs := make([]string, 0, len(names))
+	for _, name := range names {
+		pairs = append(pairs, strings.TrimPrefix(name, "param_")+"="+query.Get(name))
+	}
+	return "\n-- parameters: " + strings.Join(pairs, " ")
 }
 
 func joinStatement(queryParam string, body string) string {

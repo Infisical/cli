@@ -220,6 +220,36 @@ func TestRefusesAPaddedBodyThatWouldPushAStatementPastTheInspectionWindow(t *tes
 	require.Empty(t, logger.entries)
 }
 
+func TestMatchesAndRecordsValuesSubstitutedFromQueryParameters(t *testing.T) {
+	reached := false
+	handler, logger, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}, `(?i)\busers\b`)
+	defer closeUpstream()
+
+	// The blocked name is only in param_t, never in the statement text
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/?param_t=users",
+		strings.NewReader("SELECT count() FROM {t:Identifier}")))
+
+	require.False(t, reached)
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Len(t, logger.entries, 1)
+	require.Contains(t, logger.entries[0].Input, "-- parameters: t=users")
+}
+
+func TestRecordsParameterValuesAlongsideTheStatement(t *testing.T) {
+	handler, logger, closeUpstream := newTestProxy(t, capturingUpstream(&capturedRequest{}, nil))
+	defer closeUpstream()
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost,
+		"/?param_table=events&param_n=5", strings.NewReader("SELECT {n:UInt8} FROM {table:Identifier}")))
+
+	require.Len(t, logger.entries, 1)
+	// Sorted, so a recording reads the same way every time
+	require.Contains(t, logger.entries[0].Input, "-- parameters: n=5 table=events")
+}
+
 func TestForwardsABodyLargerThanTheInspectionCapWhenNothingIsBlocked(t *testing.T) {
 	var captured capturedRequest
 	handler, _, closeUpstream := newTestProxy(t, capturingUpstream(&captured, nil))
