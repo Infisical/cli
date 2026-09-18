@@ -146,6 +146,19 @@ func TestRefusesAPathOutsideTheQueryEndpoint(t *testing.T) {
 	}
 }
 
+func TestKeepsInjectedCredentialsWhenTheClientNamesThemHopByHop(t *testing.T) {
+	var captured capturedRequest
+	handler, _, closeUpstream := newTestProxy(t, capturingUpstream(&captured, nil))
+	defer closeUpstream()
+
+	req := httptest.NewRequest(http.MethodPost, "/?query=SELECT+1", http.NoBody)
+	req.Header.Set("Connection", "X-ClickHouse-User, X-ClickHouse-Key")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	require.Equal(t, "pam_svc", captured.headers.Get("X-ClickHouse-User"))
+	require.Equal(t, "s3cret", captured.headers.Get("X-ClickHouse-Key")) // ggignore
+}
+
 func TestReplacesWhateverDatabaseTheClientAsksFor(t *testing.T) {
 	var captured capturedRequest
 	handler, _, closeUpstream := newTestProxy(t, capturingUpstream(&captured, nil))

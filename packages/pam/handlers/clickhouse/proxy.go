@@ -99,7 +99,7 @@ type requestState struct {
 func NewClickHouseProxy(config ClickHouseProxyConfig) *ClickHouseProxy {
 	proxy := &ClickHouseProxy{config: config}
 	proxy.reverse = &httputil.ReverseProxy{
-		Director:       proxy.director,
+		Rewrite:        proxy.rewrite,
 		Transport:      newTransport(config),
 		ModifyResponse: proxy.modifyResponse,
 		ErrorHandler:   proxy.handleUpstreamError,
@@ -311,7 +311,8 @@ func readTolerant(r io.Reader) ([]byte, bool, error) {
 	return nil, false, err
 }
 
-func (p *ClickHouseProxy) director(req *http.Request) {
+func (p *ClickHouseProxy) rewrite(pr *httputil.ProxyRequest) {
+	req := pr.Out
 	req.URL.Scheme = p.scheme()
 	req.URL.Host = p.config.TargetAddr
 	req.Host = p.config.TargetAddr
@@ -332,7 +333,8 @@ func (p *ClickHouseProxy) director(req *http.Request) {
 	if p.config.Password != "" {
 		req.Header.Set("X-ClickHouse-Key", p.config.Password)
 	}
-	req.Header["X-Forwarded-For"] = nil
+	req.Header.Del("X-Forwarded-For")
+	req.Header.Del("Forwarded")
 }
 
 func (p *ClickHouseProxy) modifyResponse(resp *http.Response) error {
