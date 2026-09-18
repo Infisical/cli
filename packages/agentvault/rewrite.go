@@ -49,11 +49,22 @@ func injectCredential(req *http.Request, cred *credential) bool {
 
 // Written before the credential, so one colliding with the credential's header loses to it. Pass-through
 // injects nothing, which is why Authorization as a custom header on one still works.
-func injectCustomHeaders(req *http.Request, customHeaders []customHeader) bool {
+func injectCustomHeaders(req *http.Request, customHeaders []customHeader, subs []substitution) bool {
 	for _, header := range customHeaders {
 		value := string(header.value)
 		if header.prefix != "" {
 			value = header.prefix + " " + value
+		}
+		// A placeholder written into a header value is resolved here, so one substitution can stand for a
+		// secret reused across several headers. Scoped to the value the admin set, never the agent's request
+		// or the credential, so nothing the agent sends can steer it.
+		for _, sub := range subs {
+			if len(sub.placeholder) == 0 {
+				continue
+			}
+			if replaced, ok := replaceWithinLimit(value, sub.placeholder, string(sub.value), maxBodyRewriteSize); ok {
+				value = replaced
+			}
 		}
 		req.Header.Set(header.name, value)
 	}

@@ -514,7 +514,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		if err != nil {
 			return nil, matched, outcome, err
 		}
-		outcome.brokered = injectCustomHeaders(req, matched.customHeaders)
+		outcome.brokered = injectCustomHeaders(req, matched.customHeaders, matched.substitutions)
 		if injectCredential(req, &matched.credential) {
 			outcome.brokered = true
 		}
