@@ -54,8 +54,7 @@ const (
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 	operationCallConnectGateway                    = "CallConnectGateway"
 	operationCallEnrollGateway                     = "CallEnrollGateway"
-	operationCallAwsAuthLoginGateway               = "CallAwsAuthLoginGateway"
-	operationCallKubernetesAuthLoginGateway        = "CallKubernetesAuthLoginGateway"
+	operationCallGatewayLogin                      = "CallGatewayLogin"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMListAccessibleAccounts         = "CallPAMListAccessibleAccounts"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
@@ -1063,8 +1062,8 @@ func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (
 	return resBody, nil
 }
 
-func CallAwsAuthLoginGateway(httpClient *resty.Client, request AwsAuthLoginGatewayRequest) (AwsAuthLoginGatewayResponse, error) {
-	var resBody AwsAuthLoginGatewayResponse
+func CallGatewayLogin(httpClient *resty.Client, request any) (GatewayLoginResponse, error) {
+	var resBody GatewayLoginResponse
 	response, err := httpClient.
 		R().
 		SetResult(&resBody).
@@ -1073,31 +1072,11 @@ func CallAwsAuthLoginGateway(httpClient *resty.Client, request AwsAuthLoginGatew
 		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
 
 	if err != nil {
-		return AwsAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallAwsAuthLoginGateway, err)
+		return GatewayLoginResponse{}, NewGenericRequestError(operationCallGatewayLogin, err)
 	}
 
 	if response.IsError() {
-		return AwsAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallAwsAuthLoginGateway, response, nil)
-	}
-
-	return resBody, nil
-}
-
-func CallKubernetesAuthLoginGateway(httpClient *resty.Client, request KubernetesAuthLoginGatewayRequest) (KubernetesAuthLoginGatewayResponse, error) {
-	var resBody KubernetesAuthLoginGatewayResponse
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
-		SetHeader("User-Agent", USER_AGENT).
-		SetBody(request).
-		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
-
-	if err != nil {
-		return KubernetesAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallKubernetesAuthLoginGateway, err)
-	}
-
-	if response.IsError() {
-		return KubernetesAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallKubernetesAuthLoginGateway, response, nil)
+		return GatewayLoginResponse{}, NewAPIErrorWithResponse(operationCallGatewayLogin, response, nil)
 	}
 
 	return resBody, nil
