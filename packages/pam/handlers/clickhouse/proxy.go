@@ -69,11 +69,13 @@ var errorNames = map[int]string{
 }
 
 // Every way a client can present its own identity
-var strippedAuthHeaders = []string{
+var strippedClientHeaders = []string{
 	"Authorization",
 	"X-ClickHouse-User",
 	"X-ClickHouse-Key",
 	"X-ClickHouse-SSL-Certificate-Auth",
+	"X-ClickHouse-Database",
+	"X-ClickHouse-Quota-Key",
 }
 
 var strippedAuthParams = []string{"user", "password"}
@@ -323,7 +325,7 @@ func (p *ClickHouseProxy) director(req *http.Request) {
 	}
 	req.URL.RawQuery = query.Encode()
 
-	for _, header := range strippedAuthHeaders {
+	for _, header := range strippedClientHeaders {
 		req.Header.Del(header)
 	}
 	req.Header.Set("X-ClickHouse-User", p.config.Username)

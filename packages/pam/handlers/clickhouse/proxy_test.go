@@ -97,11 +97,15 @@ func TestReplacesClientCredentialsWithTheAccountsOwn(t *testing.T) {
 	req.Header.Set("Authorization", "Basic YXR0YWNrZXI6Z3Vlc3NlZA==") // ggignore
 	req.Header.Set("X-ClickHouse-User", "attacker")
 	req.Header.Set("X-ClickHouse-Key", "guessed")
+	req.Header.Set("X-ClickHouse-Database", "other_db")
+	req.Header.Set("X-ClickHouse-Quota-Key", "someone-elses-quota")
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
 	require.Equal(t, "pam_svc", captured.headers.Get("X-ClickHouse-User"))
 	require.Equal(t, "s3cret", captured.headers.Get("X-ClickHouse-Key"))
 	require.Empty(t, captured.headers.Get("Authorization"))
+	require.Empty(t, captured.headers.Get("X-ClickHouse-Database"))
+	require.Empty(t, captured.headers.Get("X-ClickHouse-Quota-Key"))
 	require.Empty(t, captured.headers.Get("X-Forwarded-For"))
 	require.Empty(t, captured.query.Get("user"))
 	require.Empty(t, captured.query.Get("password"))
