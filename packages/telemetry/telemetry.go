@@ -71,6 +71,13 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 		}
 
 		if orgId := t.resolveOrganizationId(); orgId != "" {
+			// Set the organization both as a flat property (so property-based
+			// filters and joins against backend events work) and as a PostHog
+			// group (for group analytics).
+			if capture.Properties == nil {
+				capture.Properties = posthog.NewProperties()
+			}
+			capture.Properties.Set("organizationId", orgId)
 			capture.Groups = posthog.NewGroups().Set("organization", orgId)
 		}
 
@@ -78,6 +85,15 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 
 		defer t.posthogClient.Close()
 	}
+}
+
+// SetEnabled turns event capture on or off. It exists so the opt-out surfaces
+// (--telemetry flag, INFISICAL_TELEMETRY_ENABLED env var) can be applied after
+// cobra has actually parsed argv: the Telemetry instance is constructed in
+// init(), before flag values are available. Capture can never be enabled
+// without a PostHog client (i.e. when no API key was compiled in).
+func (t *Telemetry) SetEnabled(enabled bool) {
+	t.isEnabled = enabled && t.posthogClient != nil
 }
 
 // SetActor records who the command is acting as, for commands that resolve their
@@ -89,12 +105,42 @@ func (t *Telemetry) SetActor(identityId, orgId string) {
 
 // Once an actor is set, its organization is authoritative even when empty: falling
 // back to the environment would group the event under a different actor's org.
+//
+// The resolution priority mirrors GetDistinctId: SetActor, then the logged-in
+// user's session JWT, then a machine-identity access token from the environment.
+// A logged-in user is authoritative even when their token carries no
+// organization, for the same reason as SetActor: their events are attributed to
+// their email, so grouping them under an env-token's org would be wrong.
 func (t *Telemetry) resolveOrganizationId() string {
 	if t.attachedIdentityId != "" || t.attachedOrgId != "" {
 		return t.attachedOrgId
 	}
+	if orgId, ok := loggedInUserOrganizationId(); ok {
+		return orgId
+	}
 	_, orgId := machineIdentityClaimsFromEnv()
 	return orgId
+}
+
+// loggedInUserOrganizationId reads the `organizationId` claim from the
+// logged-in user's session JWT in the system keyring. The second return value
+// reports whether a logged-in user exists at all (their org claim may still be
+// empty, e.g. before an organization is selected). Best-effort and silent on
+// failure, like the rest of the telemetry claim parsing: nothing from the
+// token itself is kept and no server call is made.
+func loggedInUserOrganizationId() (orgId string, loggedIn bool) {
+	configFile, err := util.GetConfigFile()
+	if err != nil || configFile.LoggedInUserEmail == "" {
+		return "", false
+	}
+
+	userCreds, err := util.GetUserCredsFromKeyRing(configFile.LoggedInUserEmail)
+	if err != nil {
+		return "", true
+	}
+
+	_, orgId = IdentityClaimsFromToken(userCreds.JTWToken)
+	return orgId, true
 }
 
 // IdentifyUserIfNeeded sends a PostHog Identify call to enrich the person
