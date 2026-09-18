@@ -119,7 +119,7 @@ func signGcpServiceAccountJwt(ctx context.Context, audience string, serviceAccou
 		Payload: string(payload),
 	})
 	if err != nil {
-		return "", fmt.Errorf("unable to sign the GCP JWT as %s. Ensure the IAM Service Account Credentials API is enabled and the caller holds roles/iam.serviceAccountTokenCreator on that service account: %w", clientEmail, err)
+		return "", fmt.Errorf("unable to sign the GCP JWT as %s. On a Compute Engine instance this is usually the instance scopes: the defaults omit iamcredentials, so the instance needs the cloud-platform scope, which can only be changed while it is stopped. Otherwise check that the IAM Service Account Credentials API is enabled and that the caller holds roles/iam.serviceAccountTokenCreator on that service account: %w", clientEmail, err)
 	}
 
 	if resp.SignedJwt == "" {
