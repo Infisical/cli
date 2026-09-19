@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -29,6 +30,7 @@ const (
 	AccountTypeOracleDB          = "oracledb"
 	AccountTypeRedis             = "redis"
 	AccountTypeSnowflake         = "snowflake"
+	AccountTypeClickhouse        = "clickhouse"
 	AccountTypeKubernetes        = "kubernetes"
 	AccountTypeAwsIam            = "aws-iam"
 	AccountTypeGcpServiceAccount = "gcp-service-account"
@@ -128,7 +130,7 @@ func StartPAMAccess(accessToken string, opts AccessOptions) {
 	// Route based on account type from API response
 	switch pamResponse.AccountType {
 	// Database types - all use the same proxy mechanism with different display configs
-	case AccountTypePostgres, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB:
+	case AccountTypePostgres, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB, AccountTypeClickhouse:
 		startDatabaseProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 
 	case AccountTypeSSH:
@@ -315,6 +317,9 @@ type AccountConnectionDisplay struct {
 	// whose login protocol refuses an empty one. The proxy swaps the real credential in during login. Empty
 	// for every type that accepts no password at all.
 	RequiredPassword string
+	// Note is guidance shown under "How to Connect", one banner line per entry, for an account type
+	// whose port does not behave the way a client would assume. Empty for every type that needs none.
+	Note []string
 	// ConnectionString builds the connection string, and is nil for account types that have none.
 	ConnectionString func(username, database string, port int) string
 	// UsageExamples builds sample CLI commands, and is nil for account types reached without one.
@@ -385,6 +390,23 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
 				fmt.Sprintf("sqlplus %s/%s@127.0.0.1:%d/%s", username, oracle.ProxyPasswordPlaceholder, port, database),
+			}
+		},
+	},
+	AccountTypeClickhouse: {
+		TypeLabel:   "ClickHouse",
+		DefaultPort: 8123,
+		Note: []string{
+			"This is ClickHouse's HTTP interface, so a client that only speaks the",
+			"native protocol, clickhouse-client included, cannot use this port.",
+			"JDBC, clickhouse-connect and curl all can.",
+		},
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("jdbc:clickhouse://127.0.0.1:%d/%s", port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("curl 'http://127.0.0.1:%d/?database=%s&query=SELECT+1'", port, url.QueryEscape(database)),
 			}
 		},
 	},
@@ -955,6 +977,9 @@ func printDatabaseSessionInfo(config AccountConnectionDisplay, folder, account s
 		fmt.Printf("  swaps in the real credential during login.\n")
 	} else {
 		fmt.Printf("  to 127.0.0.1:%d. No password is needed.\n", port)
+	}
+	for _, line := range config.Note {
+		fmt.Printf("  %s\n", line)
 	}
 	fmt.Printf("\n")
 	if examples := config.ConnectionExamples(username, database, port); len(examples) > 0 {

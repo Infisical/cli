@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	clickhousehandler "github.com/Infisical/infisical-merge/packages/pam/handlers/clickhouse"
 	mssqlhandler "github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	oraclehandler "github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
 	snowflakehandler "github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
@@ -62,6 +63,7 @@ const (
 	testConnModeKubernetes = "kubernetes"
 	testConnModeSSH        = "ssh"
 	testConnModeSnowflake  = "snowflake"
+	testConnModeClickhouse = "clickhouse"
 	testConnModeTCP        = "tcp"
 )
 
@@ -116,6 +118,15 @@ type snowflakeTestParams struct {
 	Database             string `json:"database"`
 	Schema               string `json:"schema"`
 	Role                 string `json:"role"`
+}
+
+type clickhouseTestParams struct {
+	Username              string `json:"username"`
+	Password              string `json:"password"`
+	Database              string `json:"database"`
+	SslEnabled            bool   `json:"sslEnabled"`
+	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
+	SslCertificate        string `json:"sslCertificate"`
 }
 
 type ldapTestParams struct {
@@ -688,6 +699,32 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			}
 			defer proxy.Close()
 			return authFailure(proxy.Probe(ctx))
+		}
+	case testConnModeClickhouse:
+		var params clickhouseTestParams
+		if !decode(&params) {
+			return
+		}
+		redactSecrets = append(redactSecrets, params.Password)
+		op = func() error {
+			var tlsConfig *tls.Config
+			if params.SslEnabled {
+				var err error
+				if tlsConfig, err = buildTestTLSConfig(target.host, params.SslCertificate, params.SslRejectUnauthorized); err != nil {
+					return connectFailure(err)
+				}
+			}
+			if err := dialTarget(ctx, target.host, target.port); err != nil {
+				return connectFailure(err)
+			}
+			return authFailure(clickhousehandler.TestConnection(ctx, clickhousehandler.ClickHouseProxyConfig{
+				TargetAddr: net.JoinHostPort(target.host, strconv.Itoa(target.port)),
+				Username:   params.Username,
+				Password:   params.Password,
+				Database:   params.Database,
+				EnableTLS:  params.SslEnabled,
+				TLSConfig:  tlsConfig,
+			}))
 		}
 	case testConnModeSSH:
 		var params sshTestParams
