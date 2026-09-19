@@ -247,7 +247,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Node's fetch tunnels http:// targets too and speaks plaintext inside, where every other client sends
 	// absolute-form. A tunnel is opaque bytes to an ordinary proxy, so that works everywhere else; here the
 	// first byte decides: a TLS record starts with 0x16, anything else is plain HTTP and takes the same path
-	// as absolute-form, which already refuses to attach a credential over plaintext.
+	// as absolute-form. The port stays the one the CONNECT line named, so a service still only matches if
+	// its pattern covers that port.
 	buffered := newBufferedConn(clientConn)
 	_ = clientConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	first, err := buffered.reader.Peek(1)
@@ -291,8 +292,8 @@ func newBufferedConn(c net.Conn) *bufferedConn {
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.reader.Read(p) }
 
-// The scheme is the tunnel's, not the inner request's: a credential is only ever attached on https, and
-// the target host comes from the CONNECT line so an agent cannot address one host through a tunnel to another.
+// The scheme is the tunnel's, not the inner request's, and the target host comes from the CONNECT line so
+// an agent cannot address one host through a tunnel to another.
 func (ps *proxyServer) serveTunnel(conn net.Conn, scheme, hostname, port, sessionToken string) {
 	listener := newOneShotListener(conn)
 	srv := &http.Server{
@@ -346,18 +347,22 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
-	// TRACE and TRACK make the upstream reflect the injected credential back in the response body.
-	if r.Method == http.MethodTrace || r.Method == "TRACK" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive
+	// as a request-target with no leading slash. handlePlainForward refuses the shape already; the tunnel
+	// reaches this handler directly, so the refusal belongs here where both doors meet.
+	if r.URL.Opaque != "" {
+		http.Error(w, "the request target must be a path; opaque forms are not forwarded", http.StatusBadRequest)
 		return
 	}
 
-	reqPath := r.URL.EscapedPath()
-	if len(reqPath) > maxLoggedPathLen {
-		reqPath = reqPath[:maxLoggedPathLen] + "...[truncated]"
-	}
+	// Before anything reads the path: the policy check, the substitutions and the forward all have to see
+	// the bytes the agent sent, not the ones Go rebuilds.
+	normalizeRequestTarget(r.URL)
 
-	resp, matched, err := ps.forward(r, scheme, hostname, port, sessionToken)
+	// requestPath rather than EscapedPath, so a brokered request is never recorded with a blank path.
+	reqPath := truncatePath(requestPath(r))
+
+	resp, matched, outcome, err := ps.forward(r, scheme, hostname, port, sessionToken)
 
 	// The body is fixed text per outcome, never err.Error(): an APIError carries the control-plane URL and
 	// request id, and a dial error names the upstream address. The detail goes on the log line below.
@@ -366,8 +371,11 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	status := 0
 	body := ""
 	switch {
-	case errors.Is(err, errHostBlocked):
+	case errors.Is(err, errHostBlocked), errors.Is(err, errPolicyBlocked):
 		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
+	case errors.Is(err, errBodyUnreadable):
+		// The agent's upload broke, so this is its request to retry rather than an upstream or policy failure.
+		decision, status, body = decisionBlocked, http.StatusBadRequest, err.Error()
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
@@ -376,8 +384,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to reach the upstream"
-	// brokered means a credential went out, not merely that a service matched.
-	case matched != nil && matched.credential.kind != credentialPassthrough:
+	case outcome.brokered:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
 		status = resp.StatusCode
@@ -399,6 +406,14 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		Int("status", status)
 	if matched != nil {
 		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
+	}
+	if outcome.brokered && !strings.EqualFold(scheme, "https") {
+		event = event.Bool("plaintext", true)
+	}
+	// The logged path is always the agent's, so without this a substitution that matched nothing reads
+	// exactly like one that fired.
+	if len(outcome.substituted) > 0 {
+		event = event.Strs("substituted", outcome.substituted)
 	}
 	if err != nil {
 		event = event.Err(err)
@@ -441,16 +456,36 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, error) {
+type forwardOutcome struct {
+	brokered    bool
+	substituted []string
+}
+
+func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
+	var outcome forwardOutcome
+
 	services, err := ps.cache.get(sessionToken)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", errSessionResolve, err)
+		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
+	}
+
+	// TRACE and TRACK make the upstream reflect the injected credential back in the response body. Upper
+	// -cased like allowsMethod already was, or a lowercase "trace" walks past. Refused here rather than in
+	// the handler so it is logged like every other refusal.
+	if method := strings.ToUpper(req.Method); method == http.MethodTrace || method == "TRACK" {
+		return nil, nil, outcome, fmt.Errorf("method %s echoes headers back: %w", method, errPolicyBlocked)
 	}
 
 	matched := bestMatch(services, hostname, port)
 
 	if ps.blocksOffBundle(matched, hostname, port) {
-		return nil, nil, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
+		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
+	}
+
+	if matched != nil {
+		if err := checkServicePolicy(matched, req); err != nil {
+			return nil, matched, outcome, err
+		}
 	}
 
 	req.URL.Scheme = scheme
@@ -463,24 +498,65 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// Stripped before injecting, so a client's Connection header cannot delete the credential.
 	stripHopByHopHeaders(req.Header)
 
+	// A service reaches port 443 by default, which everywhere else in the product means TLS, so plain HTTP
+	// here is either a tunnel that declined to handshake or an http:// URL naming 443 — nothing legitimate.
+	// Refused before substitution, which would otherwise put a secret in the path of a cleartext request.
+	if matched != nil && scheme == "http" && port == "443" {
+		return nil, matched, outcome, fmt.Errorf(
+			"service %q expects TLS on port 443; refusing to broker plain HTTP: %w", matched.name, errPolicyBlocked)
+	}
+
 	if matched != nil {
-		// A credential is only ever injected over TLS, whatever port the pattern names.
-		if !strings.EqualFold(scheme, "https") {
-			log.Warn().
-				Str("host", hostname).
-				Str("service", matched.name).
-				Msg("agent-vault: refusing to attach a credential over plaintext http")
-			matched = nil
-		} else {
-			injectCredential(req, &matched.credential)
+		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
+		// so a custom header naming the credential's own header loses rather than replacing the token.
+		substituted, err := applySubstitutions(req, matched.name, matched.substitutions)
+		outcome.substituted = substituted
+		if err != nil {
+			return nil, matched, outcome, err
+		}
+		brokered, resolvedInHeader := injectCustomHeaders(req, matched.customHeaders, matched.substitutions)
+		outcome.brokered = brokered
+		if resolvedInHeader && !containsSurface(outcome.substituted, surfaceHeader) {
+			outcome.substituted = append(outcome.substituted, surfaceHeader)
+		}
+		if injectCredential(req, &matched.credential) {
+			outcome.brokered = true
+		}
+
+		// After the brokered headers rather than before them, so a custom header cannot reintroduce an
+		// override of the method the allowlist already judged.
+		if matched.allowedMethods != nil {
+			stripMethodOverrideHeaders(req.Header)
+		}
+		if len(outcome.substituted) > 0 {
+			outcome.brokered = true
+		}
+
+		if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
+			if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
+				// The path now carries the real credential, so it must not reach the body or the log.
+				return nil, matched, outcome, fmt.Errorf(
+					"service %q does not allow the path this request substitutes to: %w",
+					matched.name, errPolicyBlocked,
+				)
+			}
 		}
 	}
 
 	resp, err := ps.transport.RoundTrip(req)
 	if err != nil {
-		return nil, matched, err
+		return nil, matched, outcome, err
 	}
-	return resp, matched, nil
+	return resp, matched, outcome, nil
+}
+
+func containsSurface(surfaces []string, target string) bool {
+	for _, surface := range surfaces {
+		if surface == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (ps *proxyServer) isAllowedHost(hostname, port string) bool {

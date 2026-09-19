@@ -39,12 +39,29 @@ type credential struct {
 	password     []byte
 }
 
+type customHeader struct {
+	name   string
+	prefix string
+	value  []byte
+}
+
+type substitution struct {
+	placeholder string
+	surfaces    map[string]bool
+	value       []byte
+}
+
 type resolvedService struct {
 	id               string
 	name             string
 	accessBundleName string
 	hostPatterns     []hostPattern
-	credential       credential
+	// A nil map means every method is allowed; an empty slice of prefixes means every path.
+	allowedMethods      map[string]bool
+	allowedPathPrefixes []string
+	credential          credential
+	customHeaders       []customHeader
+	substitutions       []substitution
 }
 
 type sessionEntry struct {

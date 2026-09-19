@@ -77,12 +77,29 @@ type AgentVaultCredential struct {
 	Password     string `json:"password,omitempty"`
 }
 
+type AgentVaultCustomHeader struct {
+	Name   string `json:"name"`
+	Prefix string `json:"prefix,omitempty"`
+	Value  string `json:"value"`
+}
+
+type AgentVaultSubstitution struct {
+	Placeholder string   `json:"placeholder"`
+	Surfaces    []string `json:"surfaces"`
+	Value       string   `json:"value"`
+}
+
 type AgentVaultService struct {
-	ID               string               `json:"id"`
-	Name             string               `json:"name"`
-	AccessBundleName string               `json:"accessBundleName"`
-	HostPattern      string               `json:"hostPattern"`
-	Credential       AgentVaultCredential `json:"credential"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	AccessBundleName string `json:"accessBundleName"`
+	HostPattern      string `json:"hostPattern"`
+	// A nil slice means unrestricted, which is what JSON null decodes to.
+	AllowedMethods      []string                 `json:"allowedMethods"`
+	AllowedPathPrefixes []string                 `json:"allowedPathPrefixes"`
+	Credential          AgentVaultCredential     `json:"credential"`
+	CustomHeaders       []AgentVaultCustomHeader `json:"customHeaders"`
+	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 }
 
 type ResolveAgentVaultSessionResponse struct {
