@@ -71,6 +71,19 @@ func collectSessionIDs(tokens []string) []string {
 	return ids
 }
 
+// collectLiveSessionIDs returns the session ids represented by tokens that have
+// not expired. An expired token cannot authenticate anything, so the session
+// behind it is not being used by anyone.
+func collectLiveSessionIDs(tokens []string) []string {
+	var live []string
+	for _, token := range tokens {
+		if token != "" && !IsJWTExpired(token) {
+			live = append(live, token)
+		}
+	}
+	return collectSessionIDs(live)
+}
+
 // liveToken returns the first token that is still valid. Tokens are ordered
 // with the profile's own first; an organization token cached later can outlive
 // it, and revocation needs some live token to authenticate with.
@@ -132,7 +145,12 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 		targets[name] = true
 	}
 
-	// Session ids that must survive because a profile we are keeping uses them.
+	// Session ids that must survive because a profile we are keeping can still
+	// use them. Only an unexpired token counts: a profile whose token has
+	// expired re-authenticates from scratch (EstablishUserLoginSession re-runs
+	// login rather than refreshing a session), so treating it as a user would
+	// skip the revocation below and leave the session live on the server, which
+	// is exactly what the logout was asked to end.
 	retained := map[string]string{}
 	for _, profile := range configFile.Profiles {
 		if targets[profile.Name] {
@@ -142,7 +160,7 @@ func LogoutProfiles(configFile models.ConfigFile, targetNames []string, localOnl
 		if !ok {
 			continue
 		}
-		for _, id := range collectSessionIDs(tokens) {
+		for _, id := range collectLiveSessionIDs(tokens) {
 			retained[id] = profile.Name
 		}
 	}
