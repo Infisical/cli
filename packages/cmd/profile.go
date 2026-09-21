@@ -722,6 +722,13 @@ var profileDeleteCmd = &cobra.Command{
 			case result.Revoked:
 				util.PrintlnStderr("Revoked the session on the server.")
 			}
+
+			// Deleting the profile entry below removes the index that names
+			// these keyring entries, so nothing can find them afterwards. Say so
+			// rather than reporting a clean delete over credentials that remain.
+			if result.LocalErr != nil {
+				util.PrintWarning(fmt.Sprintf("Unable to remove the stored credentials for profile '%s' [err=%s]. The profile is still being removed, so delete any leftover entries from your system vault manually.", result.ProfileName, result.LocalErr))
+			}
 		}
 
 		util.RemoveProfile(&configFile, profileName)
