@@ -854,6 +854,35 @@ func ResolveActiveProfileDetails() (resolved ResolvedProfile, profile models.Pro
 	return resolved, profile, found
 }
 
+// ActiveProfileDomain returns the Infisical instance of the profile this
+// invocation resolves to.
+//
+// Commands that resolve their own domain must use this rather than reading
+// ConfigFile.LoggedInUserDomain directly. That legacy mirror is only populated
+// for a profile named after its own account email (see syncLegacyLoginFields),
+// which derived names are not, so reading it alone would silently fall back to
+// the default cloud URL for self-hosted users.
+func ActiveProfileDomain() string {
+	configFile, err := GetConfigFile()
+	if err != nil {
+		return ""
+	}
+	MigrateConfigProfiles(&configFile)
+	return activeProfileDomain(configFile, ResolveProfile(configFile))
+}
+
+func activeProfileDomain(configFile models.ConfigFile, resolved ResolvedProfile) string {
+	if resolved.Name != "" {
+		if profile, found := FindProfile(configFile, resolved.Name); found && profile.Domain != "" {
+			return profile.Domain
+		}
+	}
+
+	// A config that predates profiles, or a profile stored before the domain
+	// was recorded, still carries the instance in the legacy field.
+	return configFile.LoggedInUserDomain
+}
+
 // LoginRenewalArgs builds the arguments for re-running login to restore the
 // session of the profile this invocation resolved to. An existing profile is
 // signed back in to with --profile, which keeps its account, instance, and

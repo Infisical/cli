@@ -80,8 +80,8 @@ func resolveKmipDomain(cmd *cobra.Command, serverName string) string {
 	if storedDomain, _ := localkmip.LoadStoredDomain(serverName); storedDomain != "" {
 		return storedDomain
 	}
-	if configFile, err := util.GetConfigFile(); err == nil && configFile.LoggedInUserDomain != "" {
-		return configFile.LoggedInUserDomain
+	if profileDomain := util.ActiveProfileDomain(); profileDomain != "" {
+		return profileDomain
 	}
 	if envDomain, ok := util.GetEnvDomain(); ok {
 		return envDomain

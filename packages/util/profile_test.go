@@ -876,3 +876,54 @@ func TestLoginRenewalArgs(t *testing.T) {
 		}
 	})
 }
+
+// The gateway, relay, and kmip commands resolve their own domain. They must
+// follow the resolved profile: the legacy mirror is empty for any profile whose
+// name is not its account email, which is what DeriveProfileName produces.
+func TestActiveProfileDomain(t *testing.T) {
+	const selfHosted = "https://infisical.example.com/api"
+
+	t.Run("derived profile name still resolves the instance", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			ActiveProfile: "scott@example.com--acme",
+			Profiles: []models.Profile{
+				{Name: "scott@example.com--acme", Email: "scott@example.com", Domain: selfHosted},
+			},
+			// Cleared by syncLegacyLoginFields because name != email.
+			LoggedInUserDomain: "",
+		}
+
+		got := activeProfileDomain(configFile, ResolvedProfile{Name: "scott@example.com--acme"})
+		if got != selfHosted {
+			t.Fatalf("expected %q, got %q", selfHosted, got)
+		}
+	})
+
+	t.Run("falls back to the legacy field for a pre-profile config", func(t *testing.T) {
+		configFile := models.ConfigFile{LoggedInUserDomain: selfHosted}
+
+		got := activeProfileDomain(configFile, ResolvedProfile{})
+		if got != selfHosted {
+			t.Fatalf("expected %q, got %q", selfHosted, got)
+		}
+	})
+
+	t.Run("falls back when the resolved profile has no stored domain", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			ActiveProfile:      "work",
+			Profiles:           []models.Profile{{Name: "work", Email: "scott@example.com"}},
+			LoggedInUserDomain: selfHosted,
+		}
+
+		got := activeProfileDomain(configFile, ResolvedProfile{Name: "work"})
+		if got != selfHosted {
+			t.Fatalf("expected %q, got %q", selfHosted, got)
+		}
+	})
+
+	t.Run("reports nothing when neither is set", func(t *testing.T) {
+		if got := activeProfileDomain(models.ConfigFile{}, ResolvedProfile{}); got != "" {
+			t.Fatalf("expected empty domain, got %q", got)
+		}
+	})
+}
