@@ -26,6 +26,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
@@ -152,13 +153,40 @@ func (c *activityConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Only the fields that are secret. Host, username, database and the like appear throughout normal
+// output, so redacting them would gut the recording without protecting anything.
+func credentialValues(c *session.PAMCredentials) []string {
+	if c == nil {
+		return nil
+	}
+	values := []string{
+		c.Password,
+		c.PrivateKey,
+		c.PrivateKeyPassphrase,
+		c.Token,
+		c.ServiceAccountToken,
+		c.ConnectionString,
+	}
+	for _, token := range c.Tokens {
+		values = append(values, token)
+	}
+	return values
+}
+
+func rulePatterns(rule *api.PAMPolicyRuleConfig) []string {
+	if rule == nil {
+		return nil
+	}
+	return rule.Patterns
+}
+
 // compilePolicyPatterns compiles regex pattern strings, logging warnings for any that fail.
-func compilePolicyPatterns(config *api.PAMPolicyRuleConfig, sessionID string, ruleType string) []*regexp.Regexp {
-	if config == nil || len(config.Patterns) == 0 {
+func compilePolicyPatterns(patterns []string, sessionID string, ruleType string) []*regexp.Regexp {
+	if len(patterns) == 0 {
 		return nil
 	}
 	var compiled []*regexp.Regexp
-	for _, pattern := range config.Patterns {
+	for _, pattern := range patterns {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
 			log.Warn().
@@ -229,13 +257,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 	}
 
-	// Compile session log masking patterns from policy rules
-	var maskingPatterns []*regexp.Regexp
-	if credentials.PolicyRules != nil {
-		maskingPatterns = compilePolicyPatterns(credentials.PolicyRules.SessionLogMasking, pamConfig.SessionId, "session-log-masking")
+	masker := masking.Nop()
+	if credentials.PolicyRules != nil && credentials.PolicyRules.SessionLogMasking != nil {
+		rule := credentials.PolicyRules.SessionLogMasking
+		masker = masking.New(
+			compilePolicyPatterns(rule.Patterns, pamConfig.SessionId, "session-log-masking"),
+			rule.BuiltInDetection,
+			credentialValues(credentials),
+			pamConfig.SessionId,
+		)
 	}
 
-	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, maskingPatterns)
+	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, masker)
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
@@ -371,7 +404,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		// Compile command blocking patterns from policy rules
 		var blockedCommandPatterns []*regexp.Regexp
 		if credentials.PolicyRules != nil {
-			blockedCommandPatterns = compilePolicyPatterns(credentials.PolicyRules.CommandBlocking, pamConfig.SessionId, "command-blocking")
+			blockedCommandPatterns = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
 		}
 
 		sshConfig := ssh.SSHProxyConfig{
@@ -522,7 +555,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	case session.ResourceTypeSnowflake:
 		var blockedCommands []*regexp.Regexp
 		if credentials.PolicyRules != nil {
-			blockedCommands = compilePolicyPatterns(credentials.PolicyRules.CommandBlocking, pamConfig.SessionId, "command-blocking")
+			blockedCommands = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
 		}
 
 		proxy := snowflake.NewSnowflakeProxy(snowflake.SnowflakeProxyConfig{

@@ -1,0 +1,3 @@
+package gatewayv2
+
+const CapabilitySessionLogMaskingBuiltInDetection = "sessionLogMaskingBuiltInDetection"

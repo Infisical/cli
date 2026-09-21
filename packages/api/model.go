@@ -950,9 +950,15 @@ type PAMPolicyRuleConfig struct {
 	Patterns []string `json:"patterns"`
 }
 
+// An older backend omits builtInDetection, which decodes as false.
+type PAMSessionLogMaskingConfig struct {
+	Patterns         []string `json:"patterns"`
+	BuiltInDetection bool     `json:"builtInDetection"`
+}
+
 type PAMPolicyRules struct {
-	CommandBlocking   *PAMPolicyRuleConfig `json:"command-blocking,omitempty"`
-	SessionLogMasking *PAMPolicyRuleConfig `json:"session-log-masking,omitempty"`
+	CommandBlocking   *PAMPolicyRuleConfig        `json:"command-blocking,omitempty"`
+	SessionLogMasking *PAMSessionLogMaskingConfig `json:"session-log-masking,omitempty"`
 }
 
 type PAMSessionCredentialsResponse struct {
