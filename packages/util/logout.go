@@ -35,19 +35,26 @@ type LogoutResult struct {
 // the cached organization-scoped ones listed in its index. ok is false when the
 // profile has no stored session at all.
 func profileTokens(profile models.Profile) (tokens []string, ok bool) {
-	creds, err := GetUserCredsFromKeyRing(profile.Name)
-	if err != nil {
-		return nil, false
+	if creds, err := GetUserCredsFromKeyRing(profile.Name); err == nil {
+		ok = true
+		if creds.JTWToken != "" {
+			tokens = append(tokens, creds.JTWToken)
+		}
 	}
-	if creds.JTWToken != "" {
-		tokens = append(tokens, creds.JTWToken)
-	}
+
+	// A missing main entry does not mean the profile holds nothing: the
+	// organization sessions cached under it are separate keyring entries that
+	// still need revoking and deleting. Bailing out here would leave them live
+	// on the server, and would also drop them from the retained set that keeps
+	// a shared session from being revoked out from under another profile.
 	for _, ref := range profile.OrgSessions {
 		if token, found := GetOrgSessionToken(profile.Name, ref.OrgID); found {
 			tokens = append(tokens, token)
+			ok = true
 		}
 	}
-	return tokens, true
+
+	return tokens, ok
 }
 
 // collectSessionIDs returns every distinct server-side session id represented
