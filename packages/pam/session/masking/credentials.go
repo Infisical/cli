@@ -23,6 +23,11 @@ const minCredentialLength = 6
 // constant (a header, a trailer, padding) shared with every other key of that type.
 const minCredentialLineLength = 32
 
+// base64 of "openssh-key-v1\0". An OpenSSH key's first body line encodes the fixed container
+// header and is byte-identical across every key of that type, so it must not be registered. Other
+// PEM formats (PKCS#8, RFC 1421) carry key material on that line, so they are registered normally.
+const opensshContainerPrefix = "b3BlbnNzaC1rZXktdjEA"
+
 // credentialMasker redacts the account's own credential values.
 type credentialMasker struct {
 	secrets []string
@@ -102,10 +107,10 @@ func newCredentialMasker(values []string) *credentialMasker {
 					continue
 				}
 				if atBodyStart {
-					// The first body line encodes the PEM header rather than key material, so it
-					// is identical across every key of this type.
 					atBodyStart = false
-					continue
+					if strings.HasPrefix(trimmed, opensshContainerPrefix) {
+						continue
+					}
 				}
 				if len([]rune(trimmed)) >= minCredentialLineLength {
 					add(trimmed)

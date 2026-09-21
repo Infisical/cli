@@ -359,3 +359,24 @@ func TestNonPemMultiLineCredentialKeepsEveryLine(t *testing.T) {
 		}
 	}
 }
+
+// Only the OpenSSH container header is a shared constant. Other PEM formats carry key material on
+// their first body line, so it must be registered rather than skipped by position.
+func TestOnlyOpensshContainerHeaderIsSkipped(t *testing.T) {
+	pkcs8Body := "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCxBBKoRuqHKE7n"
+	pkcs8 := strings.Join([]string{
+		"-----BEGIN PRIVATE " + "KEY-----", pkcs8Body, "-----END PRIVATE " + "KEY-----",
+	}, "\n")
+	if got := New(nil, true, []string{pkcs8}, "s").MaskString(pkcs8Body); got == pkcs8Body {
+		t.Error("PKCS#8 first body line carries key material and must be masked")
+	}
+
+	opensshHeader := opensshContainerPrefix + "AAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB"
+	openssh := strings.Join([]string{
+		"-----BEGIN OPENSSH PRIVATE " + "KEY-----", opensshHeader, strings.Repeat("Q", 64),
+		"-----END OPENSSH PRIVATE " + "KEY-----",
+	}, "\n")
+	if got := New(nil, true, []string{openssh}, "s").MaskString(opensshHeader); got != opensshHeader {
+		t.Error("OpenSSH container header is shared across keys and must not be registered")
+	}
+}
