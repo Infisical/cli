@@ -280,6 +280,12 @@ profile that already exists.`,
 					util.HandleError(err)
 				}
 
+				// The account is known before the profile's organization is
+				// applied below, so refuse the mismatch here rather than
+				// authenticating and then asking for a token in an organization
+				// this account cannot reach.
+				exitOnLoginAccountMismatch(target, email)
+
 				var organizationId string
 
 				// Signing back in to a profile keeps its organization, so the
@@ -305,6 +311,12 @@ profile that already exists.`,
 
 				cliDefaultLogin(&userCredentialsToBeStored, email, password, organizationId)
 			}
+
+			// The browser flow only learns the account once the session comes
+			// back, so check here too: re-scoping below asks the server for a
+			// token in the profile's organization, which an account that is not
+			// the profile's own cannot reach.
+			exitOnLoginAccountMismatch(target, userCredentialsToBeStored.Email)
 
 			// The browser flow scopes the session to whatever organization the
 			// browser had selected. Signing back in to a profile keeps its
@@ -338,13 +350,11 @@ profile that already exists.`,
 				profileName = util.DeriveProfileName(existingConfig, userCredentialsToBeStored.Email, config.INFISICAL_URL, scopedOrgID, orgName, orgInfo.Slug)
 			}
 
+			// A --save-as onto an existing profile, or a derived name that lands
+			// on one, replaces whose session it holds. Signing back in with
+			// --profile is refused earlier instead, before the session is
+			// re-scoped.
 			if existingProfile, found := util.FindProfile(existingConfig, profileName); found && existingProfile.Email != userCredentialsToBeStored.Email {
-				if target.reauth {
-					// Signing back in means the same account. A different one is
-					// almost certainly a browser signed in as someone else, so do
-					// not quietly hand the profile to that account.
-					util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' belongs to %s, but you signed in as %s. Nothing was stored. To keep this login, run [infisical login --save-as <name>] with another name.", profileName, existingProfile.Email, userCredentialsToBeStored.Email))
-				}
 				util.PrintWarning(fmt.Sprintf("Profile '%s' previously stored the session for %s and now stores the session for %s.", profileName, existingProfile.Email, userCredentialsToBeStored.Email))
 			}
 
@@ -937,6 +947,27 @@ func resolveLoginTarget(saveAs string, override string, overrideSource string, c
 		return loginTarget{}, fmt.Errorf("profile '%s' (selected via %s) does not exist. --profile signs back in to an existing profile; to store this login under that name run [infisical login --save-as %s]", override, overrideSource, override)
 	}
 	return loginTarget{name: override, reauth: true, profile: profile, explicit: true}, nil
+}
+
+// loginAccountMismatch reports whether a login that signs back in to a profile
+// authenticated as somebody other than the profile's own account. Only --profile
+// asserts an account; --save-as names where to store whoever signs in, and a
+// derived name cannot mismatch because it follows the account.
+// exitOnLoginAccountMismatch refuses a login that signs back in to a profile as
+// somebody else. Both login paths check as soon as the account is known, which
+// is before either of them applies the profile's organization.
+func exitOnLoginAccountMismatch(target loginTarget, signedInEmail string) {
+	if !loginAccountMismatch(target, signedInEmail) {
+		return
+	}
+	util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' belongs to %s, but you signed in as %s. Nothing was stored. To keep this login, run [infisical login --save-as <name>] with another name.", target.name, target.profile.Email, signedInEmail))
+}
+
+func loginAccountMismatch(target loginTarget, signedInEmail string) bool {
+	if !target.reauth || target.profile.Email == "" || signedInEmail == "" {
+		return false
+	}
+	return target.profile.Email != signedInEmail
 }
 
 func userLoginMenu(currentLoggedInUserEmail string) (bool, error) {

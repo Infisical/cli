@@ -94,3 +94,44 @@ func TestResolveLoginTarget(t *testing.T) {
 		}
 	})
 }
+
+// The mismatch has to be caught before the session is re-scoped to the
+// profile's organization: that call fails as a bare authorization error for an
+// account with no access to it, which hides why the login was refused.
+func TestLoginAccountMismatch(t *testing.T) {
+	profile := models.Profile{Name: "work", Email: "a@x.com", Domain: "https://eu.infisical.com/api", OrganizationID: "org-1"}
+
+	t.Run("signing back in as another account is a mismatch", func(t *testing.T) {
+		target := loginTarget{name: "work", reauth: true, profile: profile, explicit: true}
+		if !loginAccountMismatch(target, "b@x.com") {
+			t.Fatal("expected a different account to be refused")
+		}
+	})
+
+	t.Run("signing back in as the same account is not", func(t *testing.T) {
+		target := loginTarget{name: "work", reauth: true, profile: profile, explicit: true}
+		if loginAccountMismatch(target, "a@x.com") {
+			t.Fatal("expected the profile's own account to be accepted")
+		}
+	})
+
+	t.Run("--save-as stores whoever signs in", func(t *testing.T) {
+		target := loginTarget{name: "client-b", explicit: true}
+		if loginAccountMismatch(target, "b@x.com") {
+			t.Fatal("expected --save-as not to assert an account")
+		}
+	})
+
+	t.Run("an untargeted login derives its name from the account", func(t *testing.T) {
+		if loginAccountMismatch(loginTarget{}, "b@x.com") {
+			t.Fatal("expected an untargeted login not to assert an account")
+		}
+	})
+
+	t.Run("a profile with no recorded account is not a mismatch", func(t *testing.T) {
+		target := loginTarget{name: "work", reauth: true, profile: models.Profile{Name: "work"}, explicit: true}
+		if loginAccountMismatch(target, "b@x.com") {
+			t.Fatal("expected a profile with no stored email to be accepted")
+		}
+	})
+}
