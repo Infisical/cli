@@ -437,6 +437,24 @@ func orgSessionsSurvive(previousSessionID string, newToken string) bool {
 	return previousSessionID != "" && ParseTokenSessionID(newToken) == previousSessionID
 }
 
+// purgeOrgSessions deletes a profile's cached organization sessions and returns
+// the index entries that must stay. An entry whose keyring token could not be
+// removed is kept: the index is the only way ClearStoredSession finds these
+// entries later, so forgetting one would strand the token with nothing left to
+// reach it by.
+func purgeOrgSessions(profile models.Profile) []models.OrgSessionRef {
+	kept := []models.OrgSessionRef{}
+	for _, ref := range profile.OrgSessions {
+		if err := DeleteOrgSessionToken(profile.Name, ref.OrgID); err != nil {
+			log.Warn().Err(err).Str("profile", profile.Name).Str("organization", ref.OrgID).
+				Msg("unable to remove a cached organization session; keeping it on the profile so it can still be removed")
+			kept = append(kept, ref)
+			continue
+		}
+	}
+	return kept
+}
+
 // UpdateStoredProfile applies mutate to the named profile in the config file
 // and saves it. The file is reloaded first, so only that profile changes and
 // edits made by other commands in the meantime are kept.
@@ -864,12 +882,7 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 	// cost a listing and an exchange per organization to rebuild.
 	if existing, found := FindProfile(configFile, profile.Name); found {
 		if !orgSessionsSurvive(previousSessionID, userCred.JTWToken) {
-			for _, ref := range existing.OrgSessions {
-				if err := DeleteOrgSessionToken(existing.Name, ref.OrgID); err != nil {
-					log.Debug().Err(err).Str("profile", existing.Name).Str("organization", ref.OrgID).Msg("unable to remove a cached organization session")
-				}
-			}
-			profile.OrgSessions = []models.OrgSessionRef{}
+			profile.OrgSessions = purgeOrgSessions(existing)
 		}
 	}
 
