@@ -427,6 +427,16 @@ func RemoveOrgSession(profile *models.Profile, orgID string) bool {
 	return false
 }
 
+// orgSessionsSurvive reports whether the organization sessions cached for a
+// profile are still usable once newToken becomes its session. They are
+// exchanged from the profile's own session and share its id, so they survive
+// exactly when that session does not change. An unknown previous session (an
+// unreadable or missing keyring entry) counts as a change: nothing then
+// confirms the cached tokens belong to a session that is still live.
+func orgSessionsSurvive(previousSessionID string, newToken string) bool {
+	return previousSessionID != "" && ParseTokenSessionID(newToken) == previousSessionID
+}
+
 // UpdateStoredProfile applies mutate to the named profile in the config file
 // and saves it. The file is reloaded first, so only that profile changes and
 // edits made by other commands in the meantime are kept.
@@ -824,6 +834,14 @@ func slugifyProfileSuffix(value string) string {
 // profile as the global default; regardless of it, an already-active profile
 // keeps the legacy fields in sync.
 func PersistLoginProfile(profile models.Profile, userCred *models.UserCredentials, makeActive bool) error {
+	// Read the session this write replaces before the keyring entry is
+	// overwritten; whether the cached organization sessions survive depends on
+	// it. An unreadable entry leaves this empty, which counts as a change.
+	previousSessionID := ""
+	if previous, err := GetUserCredsFromKeyRing(profile.Name); err == nil {
+		previousSessionID = ParseTokenSessionID(previous.JTWToken)
+	}
+
 	// Deliberately no name validation here: derived names are raw account
 	// emails (which may contain any RFC-legal character) and have always been
 	// valid keyring keys. Rejecting them would block login entirely. Name
@@ -838,19 +856,22 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 		return fmt.Errorf("persistLoginProfile: unable to load config file [err=%s]", err)
 	}
 
-	// The organization sessions cached for this profile were exchanged from the
-	// session this login replaces, so they are void. Cached tokens are only
-	// checked for expiry before use, so keeping them would serve a token from a
-	// superseded session and fail at request time. Drop the keyring entries and
-	// the index together, so neither outlives the other.
+	// Organization sessions are exchanged from the profile's own session and
+	// stay valid for exactly as long as it does, so they only need dropping
+	// when this write installs a different session. Signing back in usually
+	// returns the existing one, and [profile set-org] and [init] only re-scope
+	// within it, so discarding the cache there would delete working tokens and
+	// cost a listing and an exchange per organization to rebuild.
 	if existing, found := FindProfile(configFile, profile.Name); found {
-		for _, ref := range existing.OrgSessions {
-			if err := DeleteOrgSessionToken(existing.Name, ref.OrgID); err != nil {
-				log.Debug().Err(err).Str("profile", existing.Name).Str("organization", ref.OrgID).Msg("unable to remove a cached organization session")
+		if !orgSessionsSurvive(previousSessionID, userCred.JTWToken) {
+			for _, ref := range existing.OrgSessions {
+				if err := DeleteOrgSessionToken(existing.Name, ref.OrgID); err != nil {
+					log.Debug().Err(err).Str("profile", existing.Name).Str("organization", ref.OrgID).Msg("unable to remove a cached organization session")
+				}
 			}
+			profile.OrgSessions = []models.OrgSessionRef{}
 		}
 	}
-	profile.OrgSessions = []models.OrgSessionRef{}
 
 	UpsertProfile(&configFile, profile)
 	if makeActive || configFile.ActiveProfile == "" || configFile.ActiveProfile == profile.Name {

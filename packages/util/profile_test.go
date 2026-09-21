@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/models"
 )
@@ -441,6 +442,41 @@ func TestUpsertProfileKeepsOrgSessions(t *testing.T) {
 
 		if len(configFile.Profiles) != 1 || configFile.Profiles[0].Name != "work" {
 			t.Fatalf("expected the profile to be appended, got %+v", configFile.Profiles)
+		}
+	})
+}
+
+// Cached organization sessions are exchanged from the profile's own session and
+// share its id, so they outlive a write that keeps that session: [profile
+// set-org] and [init] only re-scope within it, and signing back in usually
+// returns the same one. Only a genuinely new session voids them.
+func TestOrgSessionsSurvive(t *testing.T) {
+	sameSession := sessionToken(t, "session-a", time.Hour)
+	otherSession := sessionToken(t, "session-b", time.Hour)
+
+	t.Run("a re-scope within the same session keeps the cache", func(t *testing.T) {
+		if !orgSessionsSurvive("session-a", sameSession) {
+			t.Fatal("expected the cached organization sessions to survive an unchanged session")
+		}
+	})
+
+	t.Run("a new session voids the cache", func(t *testing.T) {
+		if orgSessionsSurvive("session-a", otherSession) {
+			t.Fatal("expected a different session to void the cached organization sessions")
+		}
+	})
+
+	t.Run("an unknown previous session voids the cache", func(t *testing.T) {
+		// The keyring entry was missing or unreadable, so nothing confirms the
+		// cached tokens belong to a session that is still live.
+		if orgSessionsSurvive("", sameSession) {
+			t.Fatal("expected an unknown previous session to be treated as a change")
+		}
+	})
+
+	t.Run("an unparsable new token voids the cache", func(t *testing.T) {
+		if orgSessionsSurvive("session-a", "not-a-jwt") {
+			t.Fatal("expected an unreadable session id to be treated as a change")
 		}
 	})
 }
