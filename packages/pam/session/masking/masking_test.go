@@ -264,25 +264,38 @@ func TestCredentialsNotRedactedWhenDetectionOff(t *testing.T) {
 }
 
 // The logger masks one rendered terminal line at a time, so a key registered only as a whole blob
-// never matches. `cat id_rsa` is the case this covers.
+// never matches. `cat id_rsa` is the case this covers. Format constants (banners, the PEM header
+// line, the padding trailer) are deliberately skipped: they are identical across every key of a
+// type, so registering them would redact foreign keys whose bodies still leak.
 func TestMultiLineCredentialIsMaskedPerLine(t *testing.T) {
 	key := pemFixture()
-
 	masker := New(nil, true, []string{key}, "s")
-	for _, line := range strings.Split(key, "\n") {
+
+	body := strings.Split(key, "\n")
+	unique := body[2 : len(body)-1] // skip BEGIN, the header line, and END
+	if len(unique) == 0 {
+		t.Fatal("fixture has no unique body lines to assert on")
+	}
+	for _, line := range unique {
 		if got := masker.MaskString(line); got == line {
-			t.Errorf("key line survived masking: %s", line)
+			t.Errorf("unique key line survived masking: %s", line)
 		}
 	}
 
 	// The whole blob still masks when it arrives in one fragment.
-	if got := masker.MaskString(key); strings.Contains(got, "b3BlbnNzaC1rZXkt") {
+	if got := masker.MaskString(key); strings.Contains(got, unique[0]) {
 		t.Error("whole key blob survived masking")
 	}
 }
 
 func TestCredentialLinesRespectTheLengthFloor(t *testing.T) {
 	// Blank and short lines must not become masks, or they would blank out ordinary output.
+	// A whitespace-only credential must register nothing: masking it would replace that run of
+	// whitespace throughout the recording.
+	if newCredentialMasker([]string{"   \n\n  ", ""}) != nil {
+		t.Error("registered a blank credential")
+	}
+
 	m := newCredentialMasker([]string{"longenoughvalue\n\nabc\n   \nanotherlongvalue"})
 	for _, secret := range m.secrets {
 		if len([]rune(secret)) < minCredentialLength {
@@ -303,6 +316,46 @@ func TestInlineAllowMarkerCannotSuppressMasking(t *testing.T) {
 		input := awsIDLine + suffix
 		if got := masker.MaskString(input); strings.Contains(got, awsIDFixture) {
 			t.Errorf("secret survived with suffix %q: %s", suffix, got)
+		}
+	}
+}
+
+// Masking only a key's banners is worse than masking nothing: the body still leaks while the
+// recording reads as handled. Banners are identical across keys, so they must not be registered.
+func TestPemBoilerplateIsNotRegistered(t *testing.T) {
+	accountKey := pemFixture()
+	otherKey := strings.Join([]string{
+		"-----BEGIN OPENSSH PRIVATE " + "KEY-----",
+		"Proc-Type: 4,ENCRYPTED",
+		"BBBBotherKeyBodyLineCompletelyDifferentFromOurs",
+		"-----END OPENSSH PRIVATE " + "KEY-----",
+	}, "\n")
+
+	masker := New(nil, true, []string{accountKey}, "s")
+	for _, line := range strings.Split(otherKey, "\n") {
+		if got := masker.MaskString(line); got != line {
+			t.Errorf("another key's line was masked, implying cover we do not have: %q -> %q", line, got)
+		}
+	}
+
+	// The account's own unique body lines are still masked; only format constants are skipped.
+	own := strings.Split(accountKey, "\n")
+	for _, line := range own[2 : len(own)-1] {
+		if got := masker.MaskString(line); got == line {
+			t.Errorf("account key body survived masking: %s", line)
+		}
+	}
+}
+
+// The PEM rules must not reach a credential that is not a PEM block, or a multi-line value whose
+// lines happen to look like headers would lose its per-line cover.
+func TestNonPemMultiLineCredentialKeepsEveryLine(t *testing.T) {
+	value := "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456\nX-Other: alsoacredentialline"
+	masker := New(nil, true, []string{value}, "s")
+
+	for _, line := range strings.Split(value, "\n") {
+		if got := masker.MaskString(line); got == line {
+			t.Errorf("line of a non-PEM credential survived masking: %s", line)
 		}
 	}
 }
