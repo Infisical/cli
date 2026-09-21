@@ -293,3 +293,16 @@ func TestCredentialLinesRespectTheLengthFloor(t *testing.T) {
 		t.Errorf("short line was masked: %q", got)
 	}
 }
+
+// Session content is untrusted input, so the inline allow marker must not suppress masking —
+// otherwise anyone can exempt a secret by appending it to the command.
+func TestInlineAllowMarkerCannotSuppressMasking(t *testing.T) {
+	masker := New(nil, true, nil, "s")
+
+	for _, suffix := range []string{"", " # gitleaks:allow", " //gitleaks:allow", " -- gitleaks:allow"} {
+		input := awsIDLine + suffix
+		if got := masker.MaskString(input); strings.Contains(got, awsIDFixture) {
+			t.Errorf("secret survived with suffix %q: %s", suffix, got)
+		}
+	}
+}

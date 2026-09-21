@@ -40,6 +40,9 @@ func sharedDetector() (*detect.Detector, error) {
 		}
 
 		detector = detect.NewDetector(cfg)
+		// A session is untrusted input, unlike a repository someone owns: honouring the inline
+		// allow marker would let anyone suppress masking by appending it to a command.
+		detector.IgnoreGitleaksAllow = true
 	})
 
 	return detector, detectorErr
