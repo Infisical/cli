@@ -392,6 +392,59 @@ func TestDeriveProfileNameSeparatesSubOrganizations(t *testing.T) {
 	})
 }
 
+// OrgSessions indexes keyring entries, so a caller that rewrites a profile
+// without it (a fresh login builds the profile from the session alone) must not
+// silently strand those entries.
+func TestUpsertProfileKeepsOrgSessions(t *testing.T) {
+	cached := []models.OrgSessionRef{{OrgID: "org-b", OrgName: "Beta"}}
+
+	t.Run("a rewrite that omits the index keeps it", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "work", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrgSessions: cached},
+			},
+		}
+
+		UpsertProfile(&configFile, models.Profile{
+			Name:   "work",
+			Email:  "scott@example.com",
+			Domain: "https://app.infisical.com/api",
+		})
+
+		if got := configFile.Profiles[0].OrgSessions; len(got) != 1 || got[0].OrgID != "org-b" {
+			t.Fatalf("expected the cached organization sessions to survive, got %+v", got)
+		}
+	})
+
+	t.Run("an empty slice clears it", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "work", Email: "scott@example.com", OrgSessions: cached},
+			},
+		}
+
+		UpsertProfile(&configFile, models.Profile{
+			Name:        "work",
+			Email:       "scott@example.com",
+			OrgSessions: []models.OrgSessionRef{},
+		})
+
+		if got := configFile.Profiles[0].OrgSessions; len(got) != 0 {
+			t.Fatalf("expected an explicit empty index to clear the cache, got %+v", got)
+		}
+	})
+
+	t.Run("a new profile is appended unchanged", func(t *testing.T) {
+		configFile := models.ConfigFile{}
+
+		UpsertProfile(&configFile, models.Profile{Name: "work", Email: "scott@example.com"})
+
+		if len(configFile.Profiles) != 1 || configFile.Profiles[0].Name != "work" {
+			t.Fatalf("expected the profile to be appended, got %+v", configFile.Profiles)
+		}
+	})
+}
+
 func TestSetActiveProfileSyncsLegacyFields(t *testing.T) {
 	t.Run("an email-named profile publishes the legacy pointer", func(t *testing.T) {
 		configFile := models.ConfigFile{

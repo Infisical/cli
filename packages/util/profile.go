@@ -562,6 +562,14 @@ func FindProfile(configFile models.ConfigFile, name string) (models.Profile, boo
 // UpsertProfile inserts the profile or replaces the existing one with the same name.
 func UpsertProfile(configFile *models.ConfigFile, profile models.Profile) {
 	if idx := findProfileIndex(configFile.Profiles, profile.Name); idx >= 0 {
+		// OrgSessions indexes keyring entries rather than describing the login,
+		// so a caller rebuilding the profile from a fresh session does not carry
+		// it. Dropping it would strand those entries: ClearStoredSession finds
+		// them only through this index. A caller that means to empty the cache
+		// passes an empty (non-nil) slice.
+		if profile.OrgSessions == nil {
+			profile.OrgSessions = configFile.Profiles[idx].OrgSessions
+		}
 		configFile.Profiles[idx] = profile
 		return
 	}
@@ -829,6 +837,20 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 	if err != nil {
 		return fmt.Errorf("persistLoginProfile: unable to load config file [err=%s]", err)
 	}
+
+	// The organization sessions cached for this profile were exchanged from the
+	// session this login replaces, so they are void. Cached tokens are only
+	// checked for expiry before use, so keeping them would serve a token from a
+	// superseded session and fail at request time. Drop the keyring entries and
+	// the index together, so neither outlives the other.
+	if existing, found := FindProfile(configFile, profile.Name); found {
+		for _, ref := range existing.OrgSessions {
+			if err := DeleteOrgSessionToken(existing.Name, ref.OrgID); err != nil {
+				log.Debug().Err(err).Str("profile", existing.Name).Str("organization", ref.OrgID).Msg("unable to remove a cached organization session")
+			}
+		}
+	}
+	profile.OrgSessions = []models.OrgSessionRef{}
 
 	UpsertProfile(&configFile, profile)
 	if makeActive || configFile.ActiveProfile == "" || configFile.ActiveProfile == profile.Name {
