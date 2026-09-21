@@ -1,6 +1,9 @@
 package masking
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // A credential shorter than this would blank out ordinary words wherever they appear.
 const minCredentialLength = 6
@@ -37,25 +40,33 @@ func (m *credentialMasker) Mask(data []byte) []byte {
 func newCredentialMasker(values []string) *credentialMasker {
 	seen := make(map[string]struct{}, len(values))
 	var secrets []string
-	for _, v := range values {
+
+	add := func(v string) {
 		if len([]rune(v)) < minCredentialLength {
-			continue
+			return
 		}
 		if _, dup := seen[v]; dup {
-			continue
+			return
 		}
 		seen[v] = struct{}{}
 		secrets = append(secrets, v)
+	}
+
+	for _, v := range values {
+		add(v)
+		// A private key reaches the logger one rendered line at a time, so the whole blob never
+		// matches. Register its lines too, which needs no buffering.
+		if strings.ContainsAny(v, "\r\n") {
+			for _, line := range strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == '\r' }) {
+				add(strings.TrimSpace(line))
+			}
+		}
 	}
 	if len(secrets) == 0 {
 		return nil
 	}
 	// Longest first: a credential containing another (a passphrase inside a key block) must be
 	// redacted before the shorter one rewrites the text around it.
-	for i := 1; i < len(secrets); i++ {
-		for j := i; j > 0 && len(secrets[j]) > len(secrets[j-1]); j-- {
-			secrets[j], secrets[j-1] = secrets[j-1], secrets[j]
-		}
-	}
+	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 	return &credentialMasker{secrets: secrets}
 }

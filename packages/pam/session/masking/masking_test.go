@@ -19,6 +19,18 @@ var (
 	pwFixture       = "hunter2" + "CorrectHorseBattery"
 )
 
+// Built at runtime for the same reason as the fixtures above: a literal PEM block in source is a
+// private-key hit for both our own scanner and GitHub push protection.
+func pemFixture() string {
+	banner := func(edge string) string { return "-----" + edge + " OPENSSH PRIVATE " + "KEY-----" }
+	return strings.Join([]string{
+		banner("BEGIN"),
+		"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gt",
+		"cnNhAAAAAwEAAQAAAYEAy8kQvN3mK9Zt7Lp2RwXhJ4dF6gYcQnB1sVeTmAoPdKjHrUxN",
+		banner("END"),
+	}, "\n")
+}
+
 func mustCompile(t *testing.T, patterns ...string) []*regexp.Regexp {
 	t.Helper()
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
@@ -248,5 +260,36 @@ func TestCredentialsNotRedactedWhenDetectionOff(t *testing.T) {
 	password := "k5.~A76J|5}~Mmvj3~m.&X3v"
 	if got := New(nil, false, []string{password}, "s").MaskString(password); got != password {
 		t.Errorf("detection is off, so nothing should change; got %q", got)
+	}
+}
+
+// The logger masks one rendered terminal line at a time, so a key registered only as a whole blob
+// never matches. `cat id_rsa` is the case this covers.
+func TestMultiLineCredentialIsMaskedPerLine(t *testing.T) {
+	key := pemFixture()
+
+	masker := New(nil, true, []string{key}, "s")
+	for _, line := range strings.Split(key, "\n") {
+		if got := masker.MaskString(line); got == line {
+			t.Errorf("key line survived masking: %s", line)
+		}
+	}
+
+	// The whole blob still masks when it arrives in one fragment.
+	if got := masker.MaskString(key); strings.Contains(got, "b3BlbnNzaC1rZXkt") {
+		t.Error("whole key blob survived masking")
+	}
+}
+
+func TestCredentialLinesRespectTheLengthFloor(t *testing.T) {
+	// Blank and short lines must not become masks, or they would blank out ordinary output.
+	m := newCredentialMasker([]string{"longenoughvalue\n\nabc\n   \nanotherlongvalue"})
+	for _, secret := range m.secrets {
+		if len([]rune(secret)) < minCredentialLength {
+			t.Errorf("registered a secret below the floor: %q", secret)
+		}
+	}
+	if got := m.MaskString("abc and    spaces"); got != "abc and    spaces" {
+		t.Errorf("short line was masked: %q", got)
 	}
 }
