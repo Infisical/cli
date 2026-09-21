@@ -349,6 +349,49 @@ func TestDeriveProfileName(t *testing.T) {
 	})
 }
 
+// Two sub-organizations under one root are different tenants with different
+// sessions, so they must not share a profile: reusing the first one's name
+// would overwrite its stored session on the second login.
+func TestDeriveProfileNameSeparatesSubOrganizations(t *testing.T) {
+	const domain = "https://app.infisical.com/api"
+
+	configFile := models.ConfigFile{
+		Profiles: []models.Profile{
+			{
+				Name:              "scott@example.com--test-1",
+				Email:             "scott@example.com",
+				Domain:            domain,
+				OrganizationID:    "root-org",
+				SubOrganizationID: "sub-org-1",
+			},
+		},
+	}
+
+	t.Run("a different sub-organization gets its own profile", func(t *testing.T) {
+		name := DeriveProfileName(configFile, "scott@example.com", domain, "sub-org-2", "Test 2", "test-2")
+		if name == "scott@example.com--test-1" {
+			t.Fatal("a second sub-organization reused the first one's profile, which would overwrite its session")
+		}
+		if name != "scott@example.com--test-2" {
+			t.Fatalf("expected email--slug for the second sub-organization, got %q", name)
+		}
+	})
+
+	t.Run("the same sub-organization reuses its profile", func(t *testing.T) {
+		name := DeriveProfileName(configFile, "scott@example.com", domain, "sub-org-1", "Test 1", "test-1")
+		if name != "scott@example.com--test-1" {
+			t.Fatalf("expected the existing profile to be reused, got %q", name)
+		}
+	})
+
+	t.Run("the root organization does not match its own sub-organization's profile", func(t *testing.T) {
+		name := DeriveProfileName(configFile, "scott@example.com", domain, "root-org", "Acme", "acme")
+		if name != "scott@example.com--acme" {
+			t.Fatalf("expected a separate profile for the root organization, got %q", name)
+		}
+	})
+}
+
 func TestSetActiveProfileSyncsLegacyFields(t *testing.T) {
 	t.Run("an email-named profile publishes the legacy pointer", func(t *testing.T) {
 		configFile := models.ConfigFile{

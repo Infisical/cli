@@ -750,17 +750,22 @@ func RemoveProfile(configFile *models.ConfigFile, name string) bool {
 // report no slugs fall back to the slugified name, then to a prefix of the id.
 // Only with no organization information at all is the bare email used.
 //
+// scopedOrgID is the organization the session actually acts in, so callers pass
+// the sub-organization when the session is scoped to one. Comparing the root
+// instead would collapse every sub-organization under one root into a single
+// profile, and the second login would overwrite the first one's session.
+//
 // Names that are not the bare email leave the legacy loggedInUserEmail pointer
 // unset (see syncLegacyLoginFields), so a CLI build that predates profiles
 // asks for a fresh login rather than loading another profile's session.
-func DeriveProfileName(configFile models.ConfigFile, email string, domain string, orgID string, orgName string, orgSlug string) string {
+func DeriveProfileName(configFile models.ConfigFile, email string, domain string, scopedOrgID string, orgName string, orgSlug string) string {
 	for _, profile := range configFile.Profiles {
-		if profile.Email == email && profile.Domain == domain && profile.OrganizationID == orgID {
+		if profile.Email == email && profile.Domain == domain && profile.ScopedOrganizationID() == scopedOrgID {
 			return profile.Name
 		}
 	}
 	for _, profile := range configFile.Profiles {
-		if profile.Email == email && profile.Domain == domain && profile.OrganizationID == "" {
+		if profile.Email == email && profile.Domain == domain && profile.ScopedOrganizationID() == "" {
 			return profile.Name
 		}
 	}
@@ -770,10 +775,10 @@ func DeriveProfileName(configFile models.ConfigFile, email string, domain string
 		suffix = slugifyProfileSuffix(orgName)
 	}
 	if suffix == "" {
-		if len(orgID) >= 8 {
-			suffix = orgID[:8]
+		if len(scopedOrgID) >= 8 {
+			suffix = scopedOrgID[:8]
 		} else {
-			suffix = orgID
+			suffix = scopedOrgID
 		}
 	}
 

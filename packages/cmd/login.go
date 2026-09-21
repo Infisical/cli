@@ -329,7 +329,13 @@ profile that already exists.`,
 
 			profileName := target.name
 			if profileName == "" {
-				profileName = util.DeriveProfileName(existingConfig, userCredentialsToBeStored.Email, config.INFISICAL_URL, orgID, orgName, orgInfo.Slug)
+				// The profile is identified by the organization the session acts
+				// in, which is the sub-organization when there is one.
+				scopedOrgID := orgID
+				if subOrgID != "" {
+					scopedOrgID = subOrgID
+				}
+				profileName = util.DeriveProfileName(existingConfig, userCredentialsToBeStored.Email, config.INFISICAL_URL, scopedOrgID, orgName, orgInfo.Slug)
 			}
 
 			if existingProfile, found := util.FindProfile(existingConfig, profileName); found && existingProfile.Email != userCredentialsToBeStored.Email {
