@@ -75,12 +75,12 @@ var strippedClientHeaders = []string{
 	"X-ClickHouse-Key",
 	"X-ClickHouse-SSL-Certificate-Auth",
 	"X-ClickHouse-Database",
-	"X-ClickHouse-Quota-Key",
+	"X-ClickHouse-Quota",
 }
 
 var strippedAuthParams = []string{"user", "password"}
 
-var strippedExecutionParams = []string{"role"}
+var strippedExecutionParams = []string{"role", "quota_key"}
 
 var allowedPaths = map[string]bool{"/": true, "/ping": true}
 
