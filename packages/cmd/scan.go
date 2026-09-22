@@ -23,7 +23,9 @@
 package cmd
 
 import (
+	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -33,17 +35,16 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/detect"
-	"github.com/Infisical/infisical-merge/detect/cmd/scm"
 	"github.com/Infisical/infisical-merge/detect/config"
 	"github.com/Infisical/infisical-merge/detect/logging"
 	"github.com/Infisical/infisical-merge/detect/report"
 	"github.com/Infisical/infisical-merge/detect/sources"
+	"github.com/Infisical/infisical-merge/detect/sources/scm"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/manifoldco/promptui"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const configDescription = `config file path
@@ -88,12 +89,6 @@ func init() {
 	scanGitChangesCmd.Flags().Bool("staged", false, "detect secrets in a --staged state")
 	scanGitChangesCmd.Flags().String("log-opts", "", "git log options")
 
-	// find config source
-	err := viper.BindPFlag("config", scanCmd.PersistentFlags().Lookup("config"))
-	if err != nil {
-		log.Fatal().Msgf("err binding config %s", err.Error())
-	}
-
 	// add flags to main
 	scanCmd.AddCommand(scanGitChangesCmd)
 	RootCmd.AddCommand(scanCmd)
@@ -102,57 +97,73 @@ func init() {
 	scanCmd.AddCommand(installCmd)
 }
 
-func initScanConfig(cmd *cobra.Command) {
+// loadScanConfig resolves the scan config using the documented order of
+// precedence: --config, then INFISICAL_SCAN_CONFIG, then
+// (--source)/.infisical-scan.toml, then the embedded default.
+func loadScanConfig(cmd *cobra.Command) (*config.Config, error) {
 	cfgPath, err := cmd.Flags().GetString("config")
 	if err != nil {
-		log.Fatal().Msg(err.Error())
+		return nil, err
 	}
-
 	if cfgPath != "" {
-		viper.SetConfigFile(cfgPath)
 		log.Debug().Msgf("using scan config %s from `--config`", cfgPath)
-	} else if os.Getenv(config.DefaultScanConfigEnvName) != "" {
-		envPath := os.Getenv(config.DefaultScanConfigEnvName)
-		viper.SetConfigFile(envPath)
+		return config.LoadFile(cfgPath)
+	}
+
+	if envPath := os.Getenv(config.DefaultScanConfigEnvName); envPath != "" {
 		log.Debug().Msgf("using scan config from %s env var: %s", config.DefaultScanConfigEnvName, envPath)
-	} else {
-		source, err := cmd.Flags().GetString("source")
-		if err != nil {
-			log.Fatal().Msg(err.Error())
-		}
-		fileInfo, err := os.Stat(source)
-		if err != nil {
-			log.Fatal().Msg(err.Error())
-		}
-
-		if !fileInfo.IsDir() {
-			log.Debug().Msgf("unable to load scan config from %s since --source=%s is a file, using default config",
-				filepath.Join(source, config.DefaultScanConfigFileName), source)
-			viper.SetConfigType("toml")
-			if err = viper.ReadConfig(strings.NewReader(config.DefaultConfig)); err != nil {
-				log.Fatal().Msgf("err reading toml %s", err.Error())
-			}
-			return
-		}
-
-		if _, err := os.Stat(filepath.Join(source, config.DefaultScanConfigFileName)); os.IsNotExist(err) {
-			log.Debug().Msgf("no scan config found in path %s, using default scan config", filepath.Join(source, config.DefaultScanConfigFileName))
-			viper.SetConfigType("toml")
-			if err = viper.ReadConfig(strings.NewReader(config.DefaultConfig)); err != nil {
-				log.Fatal().Msgf("err reading default scan config toml %s", err.Error())
-			}
-			return
-		} else {
-			log.Debug().Msgf("using existing scan config %s from `(--source)/%s`", filepath.Join(source, config.DefaultScanConfigFileName), config.DefaultScanConfigFileName)
-		}
-
-		viper.AddConfigPath(source)
-		viper.SetConfigName(config.DefaultScanConfigFileName)
-		viper.SetConfigType("toml")
+		return config.LoadFile(envPath)
 	}
-	if err := viper.ReadInConfig(); err != nil {
-		log.Fatal().Msgf("unable to load scan config, err: %s", err)
+
+	source, err := cmd.Flags().GetString("source")
+	if err != nil {
+		return nil, err
 	}
+	fileInfo, err := os.Stat(source)
+	if err != nil {
+		return nil, err
+	}
+
+	sourceConfig := filepath.Join(source, config.DefaultScanConfigFileName)
+	if !fileInfo.IsDir() {
+		log.Debug().Msgf("unable to load scan config from %s since --source=%s is a file, using default config",
+			sourceConfig, source)
+		return config.Default()
+	}
+
+	if _, err := os.Stat(sourceConfig); os.IsNotExist(err) {
+		log.Debug().Msgf("no scan config found in path %s, using default scan config", sourceConfig)
+		return config.Default()
+	}
+
+	log.Debug().Msgf("using existing scan config %s from `(--source)/%s`", sourceConfig, config.DefaultScanConfigFileName)
+	return config.LoadFile(sourceConfig)
+}
+
+// collectFindings drains a detector run over the given source, gathering
+// findings and joining any per-fragment errors.
+func collectFindings(ctx context.Context, detector *detect.Detector, src sources.Source) ([]report.Finding, error) {
+	var (
+		findings []report.Finding
+		errs     []error
+	)
+	for result := range detector.Run(ctx, src) {
+		if result.Err != nil {
+			errs = append(errs, result.Err)
+			continue
+		}
+		findings = append(findings, result.Finding)
+
+		// Run leaves printing to the caller, unlike the detector's own scan loop.
+		if detector.Verbose {
+			if detector.LegacyPrint {
+				result.Finding.PrintLegacy(detector.NoColor, detector.Redact)
+			} else {
+				result.Finding.Print(detector.NoColor, detector.Redact)
+			}
+		}
+	}
+	return findings, errors.Join(errs...)
 }
 
 var installCmd = &cobra.Command{
@@ -203,19 +214,13 @@ var scanCmd = &cobra.Command{
 	Use:   "scan",
 	Short: "Scan for leaked secrets in git history, directories, and files",
 	Run: func(cmd *cobra.Command, args []string) {
-		initScanConfig(cmd)
-
 		var (
-			vc       config.ViperConfig
 			findings []report.Finding
 			err      error
 		)
 
 		// Load config
-		if err = viper.Unmarshal(&vc); err != nil {
-			log.Fatal().Err(err).Msg("Failed to load config")
-		}
-		cfg, err := vc.Translate()
+		cfg, err := loadScanConfig(cmd)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to load config")
 		}
@@ -225,7 +230,7 @@ var scanCmd = &cobra.Command{
 		start := time.Now()
 
 		// Setup detector
-		detector := detect.NewDetector(cfg)
+		detector := detect.NewDetectorContext(cmd.Context(), cfg, detect.ValidationOptions{})
 		detector.Config.Path, err = cmd.Flags().GetString("config")
 		if err != nil {
 			log.Fatal().Err(err).Msg("")
@@ -305,22 +310,27 @@ var scanCmd = &cobra.Command{
 
 		// start the detector scan
 		if noGit {
-			paths, err := sources.DirectoryTargets(
-				source,
-				detector.Sema,
-				detector.FollowSymlinks,
-				detector.Config.Allowlists,
-			)
-			if err != nil {
-				logging.Fatal().Err(err).Send()
+			src := &sources.Files{
+				Path:            source,
+				ShouldSkip:      detector.SkipFunc(),
+				FollowSymlinks:  detector.FollowSymlinks,
+				MaxFileSize:     detector.MaxTargetMegaBytes * 1_000_000,
+				Sema:            detector.Sema,
+				MaxArchiveDepth: detector.MaxArchiveDepth,
 			}
 
-			if findings, err = detector.DetectFiles(paths); err != nil {
+			if findings, err = collectFindings(cmd.Context(), detector, src); err != nil {
 				// don't exit on error, just log it
 				logging.Error().Err(err).Msg("failed scan directory")
 			}
 		} else if fromPipe {
-			if findings, err = detector.DetectReader(os.Stdin, 10); err != nil {
+			src := &sources.Stdin{
+				Content:         os.Stdin,
+				ShouldSkip:      detector.SkipFunc(),
+				MaxArchiveDepth: detector.MaxArchiveDepth,
+			}
+
+			if findings, err = collectFindings(cmd.Context(), detector, src); err != nil {
 				// log fatal to exit, no need to continue since a report
 				// will not be generated when scanning from a pipe...for now
 				logging.Fatal().Err(err).Msg("failed scan input from stdin")
@@ -329,13 +339,14 @@ var scanCmd = &cobra.Command{
 			var (
 				gitCmd      *sources.GitCmd
 				scmPlatform scm.Platform
-				remote      *detect.RemoteInfo
 			)
 
-			var logOpts string
-			logOpts, err = cmd.Flags().GetString("log-opts")
+			logOpts, err := cmd.Flags().GetString("log-opts")
+			if err != nil {
+				log.Fatal().Err(err).Msg("could not call GetString() for log-opts")
+			}
 
-			if gitCmd, err = sources.NewGitLogCmd(source, logOpts); err != nil {
+			if gitCmd, err = sources.NewGitLogCmdContext(cmd.Context(), source, logOpts); err != nil {
 				logging.Fatal().Err(err).Msg("could not create Git cmd")
 			}
 			scmPlatform = scm.UnknownPlatform
@@ -346,9 +357,18 @@ var scanCmd = &cobra.Command{
 					log.Fatal().Err(err).Msg("invalid --platform value")
 				}
 			}
-			remote = detect.NewRemoteInfo(scmPlatform, source)
+			resolvedPlatform, remoteURL := sources.ResolveRemote(cmd.Context(), scmPlatform, source)
 
-			if findings, err = detector.DetectGit(gitCmd, remote); err != nil {
+			src := &sources.Git{
+				Cmd:             gitCmd,
+				ShouldSkip:      detector.SkipFunc(),
+				Platform:        resolvedPlatform,
+				RemoteURL:       remoteURL,
+				Sema:            detector.Sema,
+				MaxArchiveDepth: detector.MaxArchiveDepth,
+			}
+
+			if findings, err = collectFindings(cmd.Context(), detector, src); err != nil {
 				// don't exit on error, just log it
 				logging.Error().Err(err).Msg("failed to scan Git repository")
 			}
@@ -376,7 +396,7 @@ var scanCmd = &cobra.Command{
 		reportPath, _ := cmd.Flags().GetString("report-path")
 		ext, _ := cmd.Flags().GetString("report-format")
 		if reportPath != "" {
-			reportFindings(findings, reportPath, ext, &cfg)
+			reportFindings(findings, reportPath, ext, cfg)
 		}
 
 		if err != nil {
@@ -393,14 +413,7 @@ var scanGitChangesCmd = &cobra.Command{
 	Use:   "git-changes",
 	Short: "Scan for secrets in uncommitted changes in a git repo",
 	Run: func(cmd *cobra.Command, args []string) {
-		initScanConfig(cmd)
-
-		var vc config.ViperConfig
-
-		if err := viper.Unmarshal(&vc); err != nil {
-			log.Fatal().Err(err).Msg("Failed to load config")
-		}
-		cfg, err := vc.Translate()
+		cfg, err := loadScanConfig(cmd)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to load config")
 		}
@@ -459,15 +472,22 @@ var scanGitChangesCmd = &cobra.Command{
 			findings []report.Finding
 
 			gitCmd *sources.GitCmd
-			remote *detect.RemoteInfo
 		)
 
-		if gitCmd, err = sources.NewGitDiffCmd(source, staged); err != nil {
+		if gitCmd, err = sources.NewGitDiffCmdContext(cmd.Context(), source, staged); err != nil {
 			logging.Fatal().Err(err).Msg("could not create Git diff cmd")
 		}
-		remote = &detect.RemoteInfo{Platform: scm.NoPlatform}
 
-		if findings, err = detector.DetectGit(gitCmd, remote); err != nil {
+		// Remote info and links are irrelevant for uncommitted changes.
+		src := &sources.Git{
+			Cmd:             gitCmd,
+			ShouldSkip:      detector.SkipFunc(),
+			Platform:        scm.NoPlatform,
+			Sema:            detector.Sema,
+			MaxArchiveDepth: detector.MaxArchiveDepth,
+		}
+
+		if findings, err = collectFindings(cmd.Context(), detector, src); err != nil {
 			// don't exit on error, just log it
 			logging.Error().Err(err).Msg("failed to scan Git repository")
 		}
@@ -477,7 +497,7 @@ var scanGitChangesCmd = &cobra.Command{
 		reportPath, _ := cmd.Flags().GetString("report-path")
 		ext, _ := cmd.Flags().GetString("report-format")
 		if reportPath != "" {
-			reportFindings(findings, reportPath, ext, &cfg)
+			reportFindings(findings, reportPath, ext, cfg)
 		}
 		if len(findings) != 0 {
 			os.Exit(exitCode)

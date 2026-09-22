@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/spf13/viper"
-
 	"github.com/Infisical/infisical-merge/detect"
 	"github.com/Infisical/infisical-merge/detect/config"
 )
@@ -21,23 +19,11 @@ var (
 // repeat per session, and scanning only reads that state.
 func sharedDetector() (*detect.Detector, error) {
 	detectorOnce.Do(func() {
-		// Isolated instance: detect uses the viper singleton, which `infisical scan` also writes.
-		v := viper.New()
-		v.SetConfigType("toml")
-
-		if detectorErr = v.ReadConfig(strings.NewReader(config.DefaultConfig)); detectorErr != nil {
+		var cfg *config.Config
+		if cfg, detectorErr = config.Default(); detectorErr != nil {
 			return
 		}
-
-		var vc config.ViperConfig
-		if detectorErr = v.Unmarshal(&vc); detectorErr != nil {
-			return
-		}
-
-		var cfg config.Config
-		if cfg, detectorErr = vc.Translate(); detectorErr != nil {
-			return
-		}
+		relaxRequiredComponents(cfg)
 
 		detector = detect.NewDetector(cfg)
 		// A session is untrusted input, unlike a repository someone owns: honouring the inline
@@ -46,6 +32,28 @@ func sharedDetector() (*detect.Detector, error) {
 	})
 
 	return detector, detectorErr
+}
+
+// relaxRequiredComponents makes every multi-part rule's components optional.
+//
+// Upstream gates rules like azure-storage-account-key or alibaba-secret-key on a second match
+// (the matching account name or access key id) appearing within a few lines. That trades recall
+// for precision, which suits scanning a repository someone owns but not masking a session:
+// terminal output arrives in chunks, so the two halves of a credential are rarely visible to the
+// same call, and the secret half would then stream into the recording unmasked.
+//
+// Findings still carry their component metadata when both halves do appear; only the requirement
+// to have seen them is dropped.
+func relaxRequiredComponents(cfg *config.Config) {
+	for id, rule := range cfg.Rules {
+		if len(rule.Components) == 0 {
+			continue
+		}
+		for _, component := range rule.Components {
+			component.Optional = true
+		}
+		cfg.Rules[id] = rule
+	}
 }
 
 // Below this a finding is likelier a capture-group artifact than a credential, and replacing it
