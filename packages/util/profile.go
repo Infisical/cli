@@ -853,10 +853,12 @@ func slugifyProfileSuffix(value string) string {
 // keeps the legacy fields in sync.
 func PersistLoginProfile(profile models.Profile, userCred *models.UserCredentials, makeActive bool) error {
 	// Read the session this write replaces before the keyring entry is
-	// overwritten; whether the cached organization sessions survive depends on
-	// it. An unreadable entry leaves this empty, which counts as a change.
+	// overwritten. It decides whether the cached organization sessions survive,
+	// and it is what a failure below is rolled back to. An unreadable entry
+	// leaves this empty, which counts as a change.
+	previous, previousErr := GetUserCredsFromKeyRing(profile.Name)
 	previousSessionID := ""
-	if previous, err := GetUserCredsFromKeyRing(profile.Name); err == nil {
+	if previousErr == nil {
 		previousSessionID = ParseTokenSessionID(previous.JTWToken)
 	}
 
@@ -868,6 +870,27 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 	if err := StoreUserCredsInKeyRing(profile.Name, userCred); err != nil {
 		return err
 	}
+
+	// The new session is in the vault but the profile still describes the old
+	// one, including the instance it belongs to. Leaving those two disagreeing
+	// would send this token to the profile's previous instance on the next
+	// command, so put the credentials back if anything below fails.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if previousErr != nil {
+			// There was nothing here before; leave nothing behind.
+			if err := DeleteValueInKeyring(profile.Name); err != nil && !IsKeyringEntryAbsent(err) {
+				log.Warn().Err(err).Str("profile", profile.Name).Msg("unable to remove the session stored for a profile that was not saved")
+			}
+			return
+		}
+		if err := StoreUserCredsInKeyRing(profile.Name, &previous); err != nil {
+			log.Warn().Err(err).Str("profile", profile.Name).Msg("unable to restore the previous session after a failed profile write; run [infisical login] for this profile")
+		}
+	}()
 
 	configFile, err := GetMigratedConfigFile()
 	if err != nil {
@@ -893,7 +916,12 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 		}
 	}
 
-	return WriteConfigFile(&configFile)
+	if err := WriteConfigFile(&configFile); err != nil {
+		return err
+	}
+
+	committed = true
+	return nil
 }
 
 // ResolveActiveProfileDetails loads the config (with an in-memory migration)
