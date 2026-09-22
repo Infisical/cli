@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
-	"github.com/Infisical/infisical-merge/packages/gateway"
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -84,130 +84,18 @@ func getInfisicalSdkInstance(cmd *cobra.Command) (infisicalSdk.InfisicalClientIn
 
 var gatewayCmd = &cobra.Command{
 	Use:   "gateway",
-	Short: "Run the Infisical gateway or manage its systemd service",
-	Long:  "Run the Infisical gateway in the foreground or manage its systemd service installation. Use 'gateway install' to set up the systemd service.",
-	Example: `infisical gateway --token=<token>
-  sudo infisical gateway install --token=<token> --domain=<domain>`,
+	Short: "Manage the Infisical gateway",
+	Long:  "Run the Infisical gateway in the foreground or manage its systemd service installation. Use 'gateway start' to run it and 'gateway systemd install' to set up the systemd service.",
+	Example: `infisical gateway start my-gateway --token=<token>
+  sudo infisical gateway systemd install my-gateway --token=<token> --domain=<domain>`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		log.Info().Msg("DEPRECATION NOTICE: The 'infisical gateway' command will be deprecated in a future version. Please use 'infisical gateway start'.\nNOTE: This requires manually updating your existing resources to point to the new gateway.")
-
-		infisicalClient, cancelSdk, err := getInfisicalSdkInstance(cmd)
-		if err != nil {
-			util.HandleError(err, "unable to get infisical client")
-		}
-		defer cancelSdk()
-
-		var accessToken atomic.Value
-		accessToken.Store(infisicalClient.Auth().GetAccessToken())
-
-		if accessToken.Load().(string) == "" {
-			util.HandleError(errors.New("no access token found"))
-		}
-
-		Telemetry.CaptureEvent("cli-command:gateway", posthog.NewProperties().Set("version", util.CLI_VERSION))
-
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		sigStopCh := make(chan bool, 1)
-
-		ctx, cancelCmd := context.WithCancel(cmd.Context())
-		defer cancelCmd()
-
-		go func() {
-			<-sigCh
-			close(sigStopCh)
-			cancelCmd()
-			cancelSdk()
-
-			// If we get a second signal, force exit
-			<-sigCh
-			log.Warn().Msgf("Force exit triggered")
-			os.Exit(1)
-		}()
-
-		var gatewayInstance *gateway.Gateway
-
-		// Token refresh goroutine - runs every 10 seconds
-		go func() {
-			tokenRefreshTicker := time.NewTicker(10 * time.Second)
-			defer tokenRefreshTicker.Stop()
-
-			for {
-				select {
-				case <-tokenRefreshTicker.C:
-					if ctx.Err() != nil {
-						return
-					}
-
-					newToken := infisicalClient.Auth().GetAccessToken()
-					if newToken != "" && newToken != accessToken.Load().(string) {
-						accessToken.Store(newToken)
-						if gatewayInstance != nil {
-							gatewayInstance.UpdateIdentityAccessToken(newToken)
-						}
-					}
-
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-
-		// Main gateway retry loop with proper context handling
-		retryTicker := time.NewTicker(5 * time.Second)
-		defer retryTicker.Stop()
-
-		for {
-			if ctx.Err() != nil {
-				log.Info().Msg("Shutting down gateway")
-				return
-			}
-			gatewayInstance, err := gateway.NewGateway(accessToken.Load().(string))
-			if err != nil {
-				util.HandleError(err)
-			}
-
-			if err = gatewayInstance.ConnectWithRelay(); err != nil {
-				if ctx.Err() != nil {
-					log.Info().Msg("Shutting down gateway")
-					return
-				}
-
-				log.Error().Msgf("Gateway connection error with relay: %s", err)
-				log.Info().Msg("Retrying connection in 5 seconds...")
-				select {
-				case <-retryTicker.C:
-					continue
-				case <-ctx.Done():
-					log.Info().Msg("Shutting down gateway")
-					return
-				}
-			}
-
-			err = gatewayInstance.Listen(ctx)
-			if ctx.Err() != nil {
-				log.Info().Msg("Gateway shutdown complete")
-				return
-			}
-			log.Error().Msgf("Gateway listen error: %s", err)
-			log.Info().Msg("Retrying connection in 5 seconds...")
-			select {
-			case <-retryTicker.C:
-				continue
-			case <-ctx.Done():
-				log.Info().Msg("Shutting down gateway")
-				return
-			}
-		}
-	},
 }
 
 var gatewayStartCmd = &cobra.Command{
 	Use:   "start [name]",
-	Short: "Start the new Infisical gateway",
-	Long:  "Start the new Infisical gateway component.",
+	Short: "Start the Infisical gateway",
+	Long:  "Start the Infisical gateway component.",
 	Example: `infisical gateway start my-gateway --token=<token>
   infisical gateway start my-gateway --enroll-method=kubernetes --gateway-id=<gateway-id>`,
 	DisableFlagsInUseLine: true,
@@ -233,14 +121,15 @@ var gatewayStartCmd = &cobra.Command{
 		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
 		// Fall back to env var for systemd-managed runs where flags aren't set.
 		if enrollMethod == "" {
-			enrollMethod = os.Getenv("INFISICAL_GATEWAY_ENROLL_METHOD")
+			enrollMethod = os.Getenv(gatewayv2.ENROLL_METHOD_ENV_NAME)
 		}
 		if enrollMethod != "" &&
 			enrollMethod != gatewayv2.EnrollMethodToken &&
 			enrollMethod != gatewayv2.EnrollMethodAws &&
+			enrollMethod != gatewayv2.EnrollMethodGcp &&
 			enrollMethod != gatewayv2.EnrollMethodKubernetes {
-			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid enroll method: %s. Valid values are '%s', '%s', and '%s'",
-				enrollMethod, gatewayv2.EnrollMethodToken, gatewayv2.EnrollMethodAws, gatewayv2.EnrollMethodKubernetes))
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid enroll method: %s. Valid values are '%s', '%s', '%s', and '%s'",
+				enrollMethod, gatewayv2.EnrollMethodToken, gatewayv2.EnrollMethodAws, gatewayv2.EnrollMethodGcp, gatewayv2.EnrollMethodKubernetes))
 		}
 		var alreadyEnrolled bool
 		var enrolledAccessToken string // set during fresh enrollment, used directly to avoid env var interference
@@ -261,8 +150,8 @@ var gatewayStartCmd = &cobra.Command{
 			config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
 		} else if storedDomain, _ := gatewayv2.LoadStoredDomain(gatewayName); storedDomain != "" {
 			config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
-		} else if configFile, cfgErr := util.GetConfigFile(); cfgErr == nil && configFile.LoggedInUserDomain != "" {
-			config.INFISICAL_URL = util.AppendAPIEndpoint(configFile.LoggedInUserDomain)
+		} else if profileDomain := util.ActiveProfileDomain(); profileDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(profileDomain)
 		}
 
 		// --- AWS Auth path ---
@@ -305,6 +194,59 @@ var gatewayStartCmd = &cobra.Command{
 			}
 
 			log.Info().Msgf("Gateway authenticated via AWS Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
+			log.Info().Msg("Starting gateway...")
+		}
+
+		// --- GCP Auth path ---
+		if enrollMethod == gatewayv2.EnrollMethodGcp {
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				gatewayID = os.Getenv(gatewayv2.INFISICAL_GATEWAY_ID_KEY)
+			}
+			if gatewayID == "" {
+				stored, _ := gatewayv2.LoadStoredGatewayID(gatewayName)
+				gatewayID = stored
+			}
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=gcp"))
+			}
+
+			gcpAuthType, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "gcp-auth-type", []string{gatewayv2.GCP_AUTH_TYPE_ENV_NAME}, gatewayv2.GcpAuthTypeGce)
+			if gcpAuthType != gatewayv2.GcpAuthTypeGce && gcpAuthType != gatewayv2.GcpAuthTypeIam {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid gcp auth type: %s. Valid values are '%s' and '%s'",
+					gcpAuthType, gatewayv2.GcpAuthTypeGce, gatewayv2.GcpAuthTypeIam))
+			}
+
+			var serviceAccountKeyPath string
+			if gcpAuthType == gatewayv2.GcpAuthTypeIam {
+				serviceAccountKeyPath, _ = util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			} else if keyPath, _ := cmd.Flags().GetString("service-account-key-file-path"); keyPath != "" {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--service-account-key-file-path only applies to --gcp-auth-type=%s", gatewayv2.GcpAuthTypeIam))
+			}
+
+			httpClient, err := util.GetRestyClientWithCustomHeaders()
+			if err != nil {
+				util.HandleError(err, "unable to create HTTP client")
+			}
+
+			log.Info().Msgf("Authenticating gateway via GCP Auth (%s)...", gcpAuthType)
+			accessTokenStr, err := gatewayv2.LoginGatewayWithGcp(cmd.Context(), httpClient, gatewayID, gcpAuthType, serviceAccountKeyPath)
+			if err != nil {
+				util.HandleError(err, "GCP Auth login failed")
+			}
+
+			enrolledAccessToken = accessTokenStr
+			alreadyEnrolled = true
+
+			if err := gatewayv2.SaveGatewayID(gatewayName, gatewayID); err != nil {
+				util.HandleError(err, "failed to save gateway id to config")
+			}
+
+			if err := gatewayv2.SaveDomain(gatewayName, config.INFISICAL_URL); err != nil {
+				util.HandleError(err, "failed to save domain to config")
+			}
+
+			log.Info().Msgf("Gateway authenticated via GCP Auth. State saved to %s", gatewayv2.GetConfPathDisplay(gatewayName))
 			log.Info().Msg("Starting gateway...")
 		}
 
@@ -401,6 +343,7 @@ var gatewayStartCmd = &cobra.Command{
 
 		isResourceAuth := enrollMethod == gatewayv2.EnrollMethodToken ||
 			enrollMethod == gatewayv2.EnrollMethodAws ||
+			enrollMethod == gatewayv2.EnrollMethodGcp ||
 			enrollMethod == gatewayv2.EnrollMethodKubernetes
 
 		// Only use the stored token when no explicit identity credentials are provided.
@@ -567,72 +510,6 @@ var gatewayStartCmd = &cobra.Command{
 	},
 }
 
-var gatewayInstallCmd = &cobra.Command{
-	Use:                   "install",
-	Short:                 "Install and enable systemd service for the gateway (requires sudo)",
-	Long:                  "Install and enable systemd service for the gateway. Must be run with sudo on Linux.",
-	Example:               "sudo infisical gateway install --token=<token> --domain=<domain>",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		if runtime.GOOS != "linux" {
-			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
-		}
-
-		if os.Geteuid() != 0 {
-			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
-		}
-
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		if token == nil {
-			util.HandleError(errors.New("Token not found"))
-		}
-
-		domain, err := cmd.Flags().GetString("domain")
-		if err != nil {
-			util.HandleError(err, "Unable to parse domain flag")
-		}
-
-		if err := gateway.InstallGatewaySystemdService(token.Token, domain); err != nil {
-			util.HandleError(err, "Failed to install systemd service")
-		}
-
-		enableCmd := exec.Command("systemctl", "enable", "infisical-gateway")
-		if err := enableCmd.Run(); err != nil {
-			util.HandleError(err, "Failed to enable systemd service")
-		}
-
-		log.Info().Msg("Successfully installed and enabled infisical-gateway service")
-		log.Info().Msg("To start the service, run: sudo systemctl start infisical-gateway")
-	},
-}
-
-var gatewayUninstallCmd = &cobra.Command{
-	Use:                   "uninstall",
-	Short:                 "Uninstall and remove systemd service for the gateway (requires sudo)",
-	Long:                  "Uninstall and remove systemd service for the gateway. Must be run with sudo on Linux.",
-	Example:               "sudo infisical gateway uninstall",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		if runtime.GOOS != "linux" {
-			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
-		}
-
-		if os.Geteuid() != 0 {
-			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
-		}
-
-		if err := gateway.UninstallGatewaySystemdService(); err != nil {
-			util.HandleError(err, "Failed to uninstall systemd service")
-		}
-	},
-}
-
 var gatewaySystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd service for Infisical gateway",
@@ -645,8 +522,8 @@ var gatewaySystemdCmd = &cobra.Command{
 
 var gatewaySystemdInstallCmd = &cobra.Command{
 	Use:                   "install [name]",
-	Short:                 "Install and enable systemd service for the gateway (v2) (requires sudo)",
-	Long:                  "Install and enable systemd service for the new gateway (v2). Must be run with sudo on Linux.",
+	Short:                 "Install and enable systemd service for the gateway (requires sudo)",
+	Long:                  "Install and enable systemd service for the gateway. Must be run with sudo on Linux.",
 	Example:               "sudo infisical gateway systemd install my-gateway --token=<token> --domain=<domain>",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
@@ -752,6 +629,48 @@ var gatewaySystemdInstallCmd = &cobra.Command{
 				util.HandleError(installErr, "Unable to install systemd service")
 			}
 			installedServiceName = svcName
+		} else if enrollMethod == gatewayv2.EnrollMethodGcp {
+			// --- GCP Auth path ---
+			gatewayID, _ := cmd.Flags().GetString("gateway-id")
+			if gatewayID == "" {
+				util.HandleError(errors.New("--gateway-id is required when --enroll-method=gcp"))
+			}
+
+			gcpAuthType, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "gcp-auth-type", []string{gatewayv2.GCP_AUTH_TYPE_ENV_NAME}, gatewayv2.GcpAuthTypeGce)
+			if gcpAuthType != gatewayv2.GcpAuthTypeGce && gcpAuthType != gatewayv2.GcpAuthTypeIam {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid gcp auth type: %s. Valid values are '%s' and '%s'",
+					gcpAuthType, gatewayv2.GcpAuthTypeGce, gatewayv2.GcpAuthTypeIam))
+			}
+
+			var serviceAccountKeyPath string
+			if gcpAuthType == gatewayv2.GcpAuthTypeIam {
+				serviceAccountKeyPath, _ = util.GetCmdFlagOrEnv(cmd, "service-account-key-file-path", []string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME})
+			} else if keyPath, _ := cmd.Flags().GetString("service-account-key-file-path"); keyPath != "" {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--service-account-key-file-path only applies to --gcp-auth-type=%s", gatewayv2.GcpAuthTypeIam))
+			}
+			if serviceAccountKeyPath != "" {
+				// The unit sets InaccessibleDirectories=/home with no working directory.
+				if !filepath.IsAbs(serviceAccountKeyPath) {
+					util.HandleError(fmt.Errorf("--service-account-key-file-path must be an absolute path (got %q)", serviceAccountKeyPath))
+				}
+				cleaned := filepath.Clean(serviceAccountKeyPath)
+				for _, dir := range []string{"/home/", "/tmp/"} {
+					if strings.HasPrefix(cleaned, dir) {
+						util.HandleError(fmt.Errorf("--service-account-key-file-path must not be under %s: the systemd service cannot read it there. Move the key somewhere like /etc/infisical (got %q)", strings.TrimSuffix(dir, "/"), serviceAccountKeyPath))
+					}
+				}
+				if _, statErr := os.Stat(serviceAccountKeyPath); statErr != nil {
+					util.HandleError(fmt.Errorf("GCP service account key not found at %q: %w", serviceAccountKeyPath, statErr))
+				}
+			}
+
+			relayName, _ := resolveRelayName("")
+
+			svcName, installErr := gatewayv2.InstallGcpAuthGatewaySystemdService(gatewayID, gcpAuthType, serviceAccountKeyPath, domain, gatewayName, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
+			if installErr != nil {
+				util.HandleError(installErr, "Unable to install systemd service")
+			}
+			installedServiceName = svcName
 		} else {
 			// --- Machine identity token path ---
 			token, tokenErr := util.GetInfisicalToken(cmd)
@@ -818,53 +737,17 @@ var gatewaySystemdUninstallCmd = &cobra.Command{
 	},
 }
 
-var gatewayRelayCmd = &cobra.Command{
-	Example:               `infisical gateway relay`,
-	Short:                 "Used to run infisical gateway relay",
-	Use:                   "relay",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		relayConfigFilePath, err := cmd.Flags().GetString("config")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		if relayConfigFilePath == "" {
-			util.HandleError(errors.New("Missing config file"))
-		}
-
-		gatewayRelay, err := gateway.NewGatewayRelay(relayConfigFilePath)
-		if err != nil {
-			util.HandleError(err, "Failed to initialize gateway")
-		}
-		err = gatewayRelay.Run()
-		if err != nil {
-			util.HandleError(err, "Failed to start gateway")
-		}
-	},
-}
-
 func init() {
-	// Legacy gateway command flags (v1)
-	gatewayCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
-	gatewayCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
-	gatewayCmd.Flags().String("client-id", "", "client id for universal auth")
-	gatewayCmd.Flags().String("client-secret", "", "client secret for universal auth")
-	gatewayCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
-	gatewayCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth")
-	gatewayCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
-	gatewayCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
-
-	// Gateway start command flags (v2)
+	// Gateway start command flags
 	gatewayStartCmd.Flags().String("relay", "", "name of the relay to connect to (deprecated, use --target-relay-name)") // Deprecated, use --target-relay-name instead
 	gatewayStartCmd.Flags().String("target-relay-name", "", "name of the relay to connect to")
 	gatewayStartCmd.Flags().String("name", "", "name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewayStartCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway start <name>")
 	gatewayStartCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, kubernetes]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id. when set to 'kubernetes', authenticates with the pod's service account token using --gateway-id")
-	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws or --enroll-method=kubernetes)")
-	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token, --enroll-method=aws, or --enroll-method=kubernetes)")
+	gatewayStartCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, gcp, kubernetes]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --gateway-id. when set to 'gcp', authenticates with a GCP identity token using --gateway-id. when set to 'kubernetes', authenticates with the pod's service account token using --gateway-id")
+	gatewayStartCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws, --enroll-method=gcp or --enroll-method=kubernetes)")
+	gatewayStartCmd.Flags().String("gcp-auth-type", "", "how the gateway proves its GCP identity when --enroll-method=gcp [gce, iam]. 'gce' reads an identity token from the instance metadata server, which covers Compute Engine VMs and GKE workload identity. 'iam' signs a JWT through the IAM Credentials API. defaults to gce")
+	gatewayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method=token, --enroll-method=aws, --enroll-method=gcp, or --enroll-method=kubernetes)")
 	gatewayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
 	gatewayStartCmd.Flags().String("organization-slug", "", "When set, this will scope the login session to the specified sub-organization the machine identity has access to. If left empty, the session defaults to the organization where the machine identity was created in.")
 	gatewayStartCmd.Flags().String("client-id", "", "client id for universal auth")
@@ -878,14 +761,12 @@ func init() {
 	gatewayStartCmd.Flags().String("listen-address", "", "stable host:port advertised for direct gateway connections")
 	gatewayStartCmd.Flags().String("bind", "", "local host:port to bind for a direct gateway (defaults to all interfaces on the configured direct port)")
 
-	// Legacy install command flags (v1)
-	gatewayInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token")
-	gatewayInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
-
-	// Systemd install command flags (v2)
+	// Systemd install command flags
 	gatewaySystemdInstallCmd.Flags().String("token", "", "enrollment token or access token for authenticating with Infisical")
-	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id). 'kubernetes' is not available here: in-cluster gateways are not managed by systemd")
-	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws)")
+	gatewaySystemdInstallCmd.Flags().String("enroll-method", "", "gateway auth method [token, aws, gcp]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', the gateway authenticates via AWS STS on each service start (requires --gateway-id). when set to 'gcp', it authenticates with a GCP identity token on each service start (requires --gateway-id). 'kubernetes' is not available here: in-cluster gateways are not managed by systemd")
+	gatewaySystemdInstallCmd.Flags().String("gateway-id", "", "gateway id (required when --enroll-method=aws or --enroll-method=gcp)")
+	gatewaySystemdInstallCmd.Flags().String("gcp-auth-type", "", "how the gateway proves its GCP identity when --enroll-method=gcp [gce, iam]. defaults to gce")
+	gatewaySystemdInstallCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	gatewaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
 	gatewaySystemdInstallCmd.Flags().String("name", "", "The name of the gateway (deprecated, use positional argument instead)")
 	_ = gatewaySystemdInstallCmd.Flags().MarkDeprecated("name", "use positional argument instead: infisical gateway systemd install <name>")
@@ -896,17 +777,11 @@ func init() {
 	gatewaySystemdInstallCmd.Flags().String("listen-address", "", "stable host:port advertised for direct gateway connections")
 	gatewaySystemdInstallCmd.Flags().String("bind", "", "local host:port to bind for a direct gateway (defaults to all interfaces on the configured direct port)")
 
-	// Gateway relay command flags
-	gatewayRelayCmd.Flags().String("config", "", "Relay config yaml file path")
-
 	// Wire up command hierarchy
 	gatewaySystemdCmd.AddCommand(gatewaySystemdInstallCmd)
 	gatewaySystemdCmd.AddCommand(gatewaySystemdUninstallCmd)
 
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewaySystemdCmd)
-	gatewayCmd.AddCommand(gatewayInstallCmd)
-	gatewayCmd.AddCommand(gatewayUninstallCmd)
-	gatewayCmd.AddCommand(gatewayRelayCmd)
 	RootCmd.AddCommand(gatewayCmd)
 }

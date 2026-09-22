@@ -45,9 +45,6 @@ const (
 	operationCallFetchSingleSecretByName           = "CallFetchSingleSecretByName"
 	operationCallCreateRawSecretsV3                = "CallCreateRawSecretsV3"
 	operationCallUpdateRawSecretsV3                = "CallUpdateRawSecretsV3"
-	operationCallRegisterGatewayIdentityV1         = "CallRegisterGatewayIdentityV1"
-	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
-	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
 	operationCallGatewayMetricsReportV2            = "CallGatewayMetricsReportV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
@@ -57,8 +54,7 @@ const (
 	operationCallRegisterGateway                   = "CallRegisterGateway"
 	operationCallConnectGateway                    = "CallConnectGateway"
 	operationCallEnrollGateway                     = "CallEnrollGateway"
-	operationCallAwsAuthLoginGateway               = "CallAwsAuthLoginGateway"
-	operationCallKubernetesAuthLoginGateway        = "CallKubernetesAuthLoginGateway"
+	operationCallGatewayLogin                      = "CallGatewayLogin"
 	operationCallPAMAccess                         = "CallPAMAccess"
 	operationCallPAMListAccessibleAccounts         = "CallPAMListAccessibleAccounts"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
@@ -82,6 +78,7 @@ const (
 	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
+	operationCallRevokeUserSession                 = "CallRevokeUserSession"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -163,6 +160,25 @@ func CallLoginV3(httpClient *resty.Client, request GetLoginV3Request) (GetLoginV
 	}
 
 	return loginV3Response, nil
+}
+
+// CallRevokeUserSession revokes a single server-side login session by its id
+// (the tokenVersionId claim carried in every session JWT).
+func CallRevokeUserSession(httpClient *resty.Client, sessionID string) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v2/users/me/sessions/%v", config.INFISICAL_URL, url.PathEscape(sessionID)))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallRevokeUserSession, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallRevokeUserSession, response, nil)
+	}
+
+	return nil
 }
 
 func CallVerifyMfaToken(httpClient *resty.Client, request VerifyMfaTokenRequest) (*VerifyMfaTokenResponse, *VerifyMfaTokenErrorResponse, error) {
@@ -778,62 +794,6 @@ func CallUpdateRawSecretsV3(httpClient *resty.Client, request UpdateRawSecretByN
 	return nil
 }
 
-func CallRegisterGatewayIdentityV1(httpClient *resty.Client) (*GetRelayCredentialsResponseV1, error) {
-	var resBody GetRelayCredentialsResponseV1
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/register-identity", config.INFISICAL_URL))
-
-	if err != nil {
-		return nil, NewGenericRequestError(operationCallRegisterGatewayIdentityV1, err)
-	}
-
-	if response.IsError() {
-		return nil, NewAPIErrorWithResponse(operationCallRegisterGatewayIdentityV1, response, nil)
-	}
-
-	return &resBody, nil
-}
-
-func CallExchangeRelayCertV1(httpClient *resty.Client, request ExchangeRelayCertRequestV1) (*ExchangeRelayCertResponseV1, error) {
-	var resBody ExchangeRelayCertResponseV1
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
-		SetBody(request).
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/exchange-cert", config.INFISICAL_URL))
-
-	if err != nil {
-		return nil, NewGenericRequestError(operationCallExchangeRelayCertV1, err)
-	}
-
-	if response.IsError() {
-		return nil, NewAPIErrorWithResponse(operationCallExchangeRelayCertV1, response, nil)
-	}
-
-	return &resBody, nil
-}
-
-func CallGatewayHeartBeatV1(httpClient *resty.Client) error {
-	response, err := httpClient.
-		R().
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/heartbeat", config.INFISICAL_URL))
-
-	if err != nil {
-		return NewGenericRequestError(operationCallGatewayHeartBeatV1, err)
-	}
-
-	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV1, response, nil)
-	}
-
-	return nil
-}
-
 func CallGatewayHeartBeatV2(httpClient *resty.Client, request GatewayHeartbeatRequest) error {
 	response, err := httpClient.
 		R().
@@ -1122,8 +1082,8 @@ func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (
 	return resBody, nil
 }
 
-func CallAwsAuthLoginGateway(httpClient *resty.Client, request AwsAuthLoginGatewayRequest) (AwsAuthLoginGatewayResponse, error) {
-	var resBody AwsAuthLoginGatewayResponse
+func CallGatewayLogin(httpClient *resty.Client, request any) (GatewayLoginResponse, error) {
+	var resBody GatewayLoginResponse
 	response, err := httpClient.
 		R().
 		SetResult(&resBody).
@@ -1132,31 +1092,11 @@ func CallAwsAuthLoginGateway(httpClient *resty.Client, request AwsAuthLoginGatew
 		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
 
 	if err != nil {
-		return AwsAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallAwsAuthLoginGateway, err)
+		return GatewayLoginResponse{}, NewGenericRequestError(operationCallGatewayLogin, err)
 	}
 
 	if response.IsError() {
-		return AwsAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallAwsAuthLoginGateway, response, nil)
-	}
-
-	return resBody, nil
-}
-
-func CallKubernetesAuthLoginGateway(httpClient *resty.Client, request KubernetesAuthLoginGatewayRequest) (KubernetesAuthLoginGatewayResponse, error) {
-	var resBody KubernetesAuthLoginGatewayResponse
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
-		SetHeader("User-Agent", USER_AGENT).
-		SetBody(request).
-		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
-
-	if err != nil {
-		return KubernetesAuthLoginGatewayResponse{}, NewGenericRequestError(operationCallKubernetesAuthLoginGateway, err)
-	}
-
-	if response.IsError() {
-		return KubernetesAuthLoginGatewayResponse{}, NewAPIErrorWithResponse(operationCallKubernetesAuthLoginGateway, response, nil)
+		return GatewayLoginResponse{}, NewAPIErrorWithResponse(operationCallGatewayLogin, response, nil)
 	}
 
 	return resBody, nil

@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// A pattern with no port covers every port in Agent Proxy's grammar, which lets plaintext port 80
-// through with the credential attached. Defaulting to 443 keeps that from happening here.
+// A pattern with no port covers every port in Agent Proxy's grammar, which lets plaintext port 80 through
+// with the credential attached. Defaulting to 443 keeps that from happening here, and is the whole of it:
+// injection itself is scheme-blind, so naming a plaintext port is how an admin opts a service into it.
 const defaultPort = "443"
 
 // hostPattern carries no path: paths are rejected at write time, since the matcher would compare the
@@ -15,7 +16,7 @@ type hostPattern struct {
 	host string
 	port string
 	// Whether the entry named a port itself. Only the exception list reads this: a service without one
-	// has to stay on 443 or a credential would go out in the clear, but an exception carries no
+	// stays on 443, since that is what keeps a credential off plaintext, but an exception carries no
 	// credential, so a bare host there means the host rather than one port of it.
 	portWritten bool
 }

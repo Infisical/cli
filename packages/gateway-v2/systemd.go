@@ -222,6 +222,20 @@ func InstallEnrolledGatewaySystemdService(accessToken string, domain string, nam
 // (instance role, env vars, shared profile). We just persist the gateway id, domain, and name
 // so `gateway start` can re-authenticate.
 func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name string, relayName string, listenAddress string, bindAddress string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
+	return installResourceAuthGatewaySystemdService(EnrollMethodAws, gatewayID, nil, domain, name, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
+}
+
+// InstallGcpAuthGatewaySystemdService is the GCP equivalent: the gateway mints a fresh identity
+// token on each service start, so only the gateway id and the token type are persisted.
+func InstallGcpAuthGatewaySystemdService(gatewayID string, gcpAuthType string, serviceAccountKeyPath string, domain string, name string, relayName string, listenAddress string, bindAddress string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
+	extraEnv := [][2]string{{GCP_AUTH_TYPE_ENV_NAME, gcpAuthType}}
+	if serviceAccountKeyPath != "" {
+		extraEnv = append(extraEnv, [2]string{util.INFISICAL_GCP_IAM_SERVICE_ACCOUNT_KEY_FILE_PATH_NAME, serviceAccountKeyPath})
+	}
+	return installResourceAuthGatewaySystemdService(EnrollMethodGcp, gatewayID, extraEnv, domain, name, relayName, listenAddress, bindAddress, serviceLogFile, pkcs11ModulePath)
+}
+
+func installResourceAuthGatewaySystemdService(enrollMethod string, gatewayID string, extraEnv [][2]string, domain string, name string, relayName string, listenAddress string, bindAddress string, serviceLogFile string, pkcs11ModulePath string) (string, error) {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return "", nil
@@ -242,7 +256,10 @@ func InstallAwsAuthGatewaySystemdService(gatewayID string, domain string, name s
 	}
 
 	configContent := fmt.Sprintf("%s=%s\n", INFISICAL_GATEWAY_ID_KEY, gatewayID)
-	configContent += "INFISICAL_GATEWAY_ENROLL_METHOD=aws\n"
+	configContent += fmt.Sprintf("%s=%s\n", ENROLL_METHOD_ENV_NAME, enrollMethod)
+	for _, entry := range extraEnv {
+		configContent += fmt.Sprintf("%s=%s\n", entry[0], entry[1])
+	}
 	if domain != "" {
 		configContent += fmt.Sprintf("INFISICAL_API_URL=%s\n", domain)
 	}

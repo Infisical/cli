@@ -3,10 +3,10 @@ module github.com/Infisical/infisical-merge
 go 1.25.14
 
 require (
+	cloud.google.com/go/iam v1.1.11
 	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/BobuSumisu/aho-corasick v1.0.3
 	github.com/Masterminds/sprig/v3 v3.3.0
-	github.com/alessio/shellescape v1.4.1
 	github.com/awnumar/memguard v0.23.0
 	github.com/aws/aws-sdk-go-v2 v1.27.2
 	github.com/bradleyjkemp/cupaloy/v2 v2.8.0
@@ -37,13 +37,9 @@ require (
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/roff v0.1.0
 	github.com/oiweiwei/go-msrpc v1.5.1
-	github.com/pion/dtls/v3 v3.1.4
-	github.com/pion/logging v0.2.4
-	github.com/pion/turn/v4 v4.0.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/pkg/errors v0.9.1
 	github.com/posthog/posthog-go v0.0.0-20221221115252-24dfed35d71a
-	github.com/quic-go/quic-go v0.59.1
 	github.com/rs/cors v1.11.0
 	github.com/rs/zerolog v1.35.1
 	github.com/sijms/go-ora/v2 v2.9.0
@@ -60,6 +56,7 @@ require (
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
+	google.golang.org/api v0.267.0
 	gopkg.in/ini.v1 v1.62.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -72,12 +69,12 @@ require (
 	cloud.google.com/go/auth v0.18.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	cloud.google.com/go/iam v1.1.11 // indirect
 	dario.cat/mergo v1.0.1 // indirect
 	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/ChrisTrenkamp/goxpath v0.0.0-20210404020558-97928f7e12b6 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.3.0 // indirect
+	github.com/alessio/shellescape v1.4.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20200907205600-7a23bdc65eef // indirect
 	github.com/awnumar/memcall v0.4.0 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.27.18 // indirect
@@ -185,10 +182,6 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20250318082626-8f80e5cb09ec // indirect
 	github.com/pingcap/log v1.1.1-0.20241212030209-7e3ff8601a2a // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20250421232622-526b2c79173d // indirect
-	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/stun/v3 v3.1.5 // indirect
-	github.com/pion/transport/v3 v3.0.7 // indirect
-	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
@@ -199,7 +192,6 @@ require (
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/tidwall/transform v0.0.0-20201103190739-32f242e2dbde // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
-	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
@@ -220,7 +212,6 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/api v0.267.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.2 // indirect
@@ -247,5 +238,3 @@ require (
 )
 
 replace github.com/zalando/go-keyring => github.com/Infisical/go-keyring v1.0.2
-
-replace github.com/pion/turn/v4 => github.com/Infisical/turn/v4 v4.0.1

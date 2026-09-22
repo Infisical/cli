@@ -730,25 +730,6 @@ type GetSecretV4ByNameResponse struct {
 	ETag string
 }
 
-type GetRelayCredentialsResponseV1 struct {
-	TurnServerUsername string `json:"turnServerUsername"`
-	TurnServerPassword string `json:"turnServerPassword"`
-	TurnServerRealm    string `json:"turnServerRealm"`
-	TurnServerAddress  string `json:"turnServerAddress"`
-	InfisicalStaticIp  string `json:"infisicalStaticIp"`
-}
-
-type ExchangeRelayCertRequestV1 struct {
-	RelayAddress string `json:"relayAddress"`
-}
-
-type ExchangeRelayCertResponseV1 struct {
-	SerialNumber     string `json:"serialNumber"`
-	PrivateKey       string `json:"privateKey"`
-	Certificate      string `json:"certificate"`
-	CertificateChain string `json:"certificateChain"`
-}
-
 type BootstrapInstanceRequest struct {
 	Email        string `json:"email"`
 	Password     string `json:"password"`
@@ -840,6 +821,12 @@ type EnrollGatewayResponse struct {
 	GatewayID   string `json:"gatewayId"`
 }
 
+// Every gateway login method posts to the same endpoint and gets the same body back.
+type GatewayLoginResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
 type AwsAuthLoginGatewayRequest struct {
 	Method            string `json:"method"`
 	GatewayID         string `json:"gatewayId"`
@@ -848,20 +835,16 @@ type AwsAuthLoginGatewayRequest struct {
 	IamRequestHeaders string `json:"iamRequestHeaders"`
 }
 
-type AwsAuthLoginGatewayResponse struct {
-	AccessToken string `json:"accessToken"`
-	TokenType   string `json:"tokenType"`
-}
-
 type KubernetesAuthLoginGatewayRequest struct {
 	Method    string `json:"method"`
 	GatewayID string `json:"gatewayId"`
 	JWT       string `json:"jwt"`
 }
 
-type KubernetesAuthLoginGatewayResponse struct {
-	AccessToken string `json:"accessToken"`
-	TokenType   string `json:"tokenType"`
+type GcpAuthLoginGatewayRequest struct {
+	Method    string `json:"method"`
+	GatewayID string `json:"gatewayId"`
+	JWT       string `json:"jwt"`
 }
 
 type RegisterGatewayResponse struct {
@@ -969,9 +952,15 @@ type PAMPolicyRuleConfig struct {
 	Patterns []string `json:"patterns"`
 }
 
+// An older backend omits builtInDetection, which decodes as false.
+type PAMSessionLogMaskingConfig struct {
+	Patterns         []string `json:"patterns"`
+	BuiltInDetection bool     `json:"builtInDetection"`
+}
+
 type PAMPolicyRules struct {
-	CommandBlocking   *PAMPolicyRuleConfig `json:"command-blocking,omitempty"`
-	SessionLogMasking *PAMPolicyRuleConfig `json:"session-log-masking,omitempty"`
+	CommandBlocking   *PAMPolicyRuleConfig        `json:"command-blocking,omitempty"`
+	SessionLogMasking *PAMSessionLogMaskingConfig `json:"session-log-masking,omitempty"`
 }
 
 type PAMSessionCredentialsResponse struct {
