@@ -70,8 +70,10 @@ func EstablishUserLoginSession() LoggedInUserDetails {
 		PrintErrorMessageAndExit(fmt.Sprintf("Failed to determine executable path: %v", err))
 	}
 
+	loginArgs := LoginRenewalArgs(ResolveActiveProfileDetails())
+
 	// Spawn infisical login command
-	loginCmd := exec.Command(exePath, "login", "--silent")
+	loginCmd := exec.Command(exePath, loginArgs...)
 	loginCmd.Stdin = os.Stdin
 	loginCmd.Stdout = os.Stdout
 	loginCmd.Stderr = os.Stderr

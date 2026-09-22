@@ -122,7 +122,7 @@ func (t *Telemetry) IdentifyUserIfNeeded() {
 		return
 	}
 
-	email := configFile.LoggedInUserEmail
+	email := util.ActiveAccountEmail(configFile)
 	if email == "" || email == configFile.LastIdentifiedEmail {
 		return
 	}
@@ -273,8 +273,8 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	//  4. Anonymous fallback keyed by the local machine ID.
 	if t.attachedIdentityId != "" {
 		distinctId = "identity-" + t.attachedIdentityId
-	} else if infisicalConfig.LoggedInUserEmail != "" {
-		distinctId = infisicalConfig.LoggedInUserEmail
+	} else if accountEmail := util.ActiveAccountEmail(infisicalConfig); accountEmail != "" {
+		distinctId = accountEmail
 	} else if envIdentityId, _ := machineIdentityClaimsFromEnv(); envIdentityId != "" {
 		distinctId = "identity-" + envIdentityId
 	} else if machineId != "" {

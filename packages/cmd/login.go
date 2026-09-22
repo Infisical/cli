@@ -48,10 +48,21 @@ const REPLACE_USER = "Override current logged in user"
 const EXIT_USER_MENU = "Exit"
 const QUIT_BROWSER_LOGIN = "q"
 
+// mfaMaxAttempts is how many verification codes a user may try before a
+// command gives up. Every MFA prompt in the CLI uses it, so they stay in step.
+const mfaMaxAttempts = 5
+
 // loginCmd represents the login command
 var loginCmd = &cobra.Command{
-	Use:                   "login",
-	Short:                 "Login into your Infisical account",
+	Use:   "login",
+	Short: "Login into your Infisical account",
+	Long: `Login into your Infisical account.
+
+Sessions are stored in login profiles. Without options the profile is named
+after the account and organization, as in scott@example.com--acme-x4k2. Use
+--save-as <name> to store the login under a name of your choice, creating that
+profile or replacing its session, and --profile <name> to sign back in to a
+profile that already exists.`,
 	DisableFlagsInUseLine: true,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		// daniel: oidc-jwt is deprecated in favor of `jwt`. we backfill the `jwt` flag with the value of `oidc-jwt` if it's set.
@@ -127,21 +138,52 @@ var loginCmd = &cobra.Command{
 
 		// standalone user auth
 		if loginMethod == "user" {
-			isDirectUserLoginFlagsAndEnvsSet, err := validateDirectUserLoginFlagsAndEnvsSet(cmd, presetDomain)
+			existingConfig, err := util.GetMigratedConfigFile()
+			if err != nil {
+				util.HandleError(err, "Unable to read the Infisical config file")
+			}
+
+			saveAs, err := cmd.Flags().GetString("save-as")
+			if err != nil {
+				util.HandleError(err)
+			}
+			profileOverride, profileOverrideSource := util.GetProfileOverride()
+			target, err := resolveLoginTarget(saveAs, profileOverride, profileOverrideSource, existingConfig)
+			if err != nil {
+				util.HandleError(err)
+			}
+
+			// Signing back in to a profile takes its organization, so
+			// --organization-id is not required to drive the login
+			// non-interactively the way it is for a fresh one.
+			isDirectUserLoginFlagsAndEnvsSet, err := validateDirectUserLoginFlagsAndEnvsSet(cmd, presetDomain, target.reauth && target.profile.ScopedOrganizationID() != "")
 
 			if err != nil {
 				util.HandleError(err)
 			}
 
+			// Login creates or refreshes a session and never scopes it through
+			// --org, so resolve the existing session with the override suspended:
+			// applying it here could only fail (unknown organization, MFA) and
+			// abort the login.
+			if _, orgSource := util.GetOrgOverride(); orgSource == util.OrgSourceFlag && !silentMode {
+				util.PrintWarning("--org does not apply to login. Pick the organization in the prompt, or pass --organization-id.")
+			}
+			restoreOrgOverride := util.SuspendOrgOverride()
 			currentLoggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
-			// if the key can't be found or there is an error getting current credentials from key ring, allow them to override
-			if err != nil && (strings.Contains(err.Error(), "we couldn't find your logged in details")) {
+			restoreOrgOverride()
+			// if the key can't be found, the selected profile doesn't exist yet, or
+			// there is an error getting current credentials from key ring, allow them to override
+			if err != nil && (errors.Is(err, util.ErrProfileNotFound) || errors.Is(err, util.ErrProfileDomainMismatch) || strings.Contains(err.Error(), "we couldn't find your logged in details")) {
 				log.Debug().Err(err)
 			} else if err != nil {
 				util.HandleError(err)
 			}
 
-			if currentLoggedInUserDetails.IsUserLoggedIn && !currentLoggedInUserDetails.LoginExpired && len(currentLoggedInUserDetails.UserCredentials.PrivateKey) != 0 {
+			// A login that names its profile (--save-as, or --profile for an
+			// existing one) is a deliberate write to that profile; skip the
+			// add/override menu.
+			if !target.explicit && currentLoggedInUserDetails.IsUserLoggedIn && !currentLoggedInUserDetails.LoginExpired && len(currentLoggedInUserDetails.UserCredentials.PrivateKey) != 0 {
 				shouldOverride, err := userLoginMenu(currentLoggedInUserDetails.UserCredentials.Email)
 				if err != nil {
 					util.HandleError(err)
@@ -157,7 +199,27 @@ var loginCmd = &cobra.Command{
 			_, validDomainFromFile := util.GetDomainFromFile()
 			domainSource := presetDomainSourceLabel(domainFlagExplicitlySet, domainEnvName, validDomainFromFile)
 			shouldPrintInfo := !silentMode && !plainOutput
-			usePresetDomain, err := usePresetDomain(presetDomain, domainSource, shouldPrintInfo)
+			printPresetDomainInfo := shouldPrintInfo
+
+			// Signing back in to a profile keeps it on its instance: the stored
+			// domain stands in for the flag, so no hosting prompt appears, and an
+			// explicitly requested different instance is refused rather than
+			// silently moving the profile there.
+			if target.reauth && target.profile.Domain != "" {
+				profileDomain := util.AppendAPIEndpoint(target.profile.Domain)
+				if config.INFISICAL_DOMAIN_EXPLICITLY_SET && util.AppendAPIEndpoint(presetDomain) != profileDomain {
+					util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' belongs to %s, but %s was requested. Sign in there as a new profile with --save-as <name>, or move this profile with [infisical user update domain].",
+						target.name, util.DisplayDomain(profileDomain), util.DisplayDomain(presetDomain)))
+				}
+				presetDomain = profileDomain
+				domainSource = fmt.Sprintf("profile '%s'", target.name)
+				printPresetDomainInfo = false
+				if shouldPrintInfo {
+					util.PrintlnStderr(fmt.Sprintf("Signing back in to profile '%s' on %s.", target.name, util.DisplayDomain(profileDomain)))
+				}
+			}
+
+			usePresetDomain, err := usePresetDomain(presetDomain, domainSource, printPresetDomainInfo)
 
 			if err != nil {
 				util.HandleError(err)
@@ -218,30 +280,106 @@ var loginCmd = &cobra.Command{
 					util.HandleError(err)
 				}
 
+				// The account is known before the profile's organization is
+				// applied below, so refuse the mismatch here rather than
+				// authenticating and then asking for a token in an organization
+				// this account cannot reach.
+				exitOnLoginAccountMismatch(target, email)
+
 				var organizationId string
 
+				// Signing back in to a profile keeps its organization, so the
+				// profile supplies the default and neither the flag nor the
+				// picker is needed; an explicit --organization-id still wins.
+				profileOrgID := ""
+				if target.reauth {
+					profileOrgID = target.profile.ScopedOrganizationID()
+				}
+
 				if isDirectUserLoginFlagsAndEnvsSet {
-					organizationId, err = util.GetCmdFlagOrEnv(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"})
+					if profileOrgID != "" {
+						organizationId, err = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"}, profileOrgID)
+					} else {
+						organizationId, err = util.GetCmdFlagOrEnv(cmd, "organization-id", []string{"INFISICAL_ORGANIZATION_ID"})
+					}
 					if err != nil {
 						util.HandleError(err)
 					}
+				} else if organizationId == "" {
+					organizationId = profileOrgID
 				}
 
 				cliDefaultLogin(&userCredentialsToBeStored, email, password, organizationId)
 			}
 
-			err = util.StoreUserCredsInKeyRing(&userCredentialsToBeStored)
+			// The browser flow only learns the account once the session comes
+			// back, so check here too: re-scoping below asks the server for a
+			// token in the profile's organization, which an account that is not
+			// the profile's own cannot reach.
+			exitOnLoginAccountMismatch(target, userCredentialsToBeStored.Email)
+
+			// The browser flow scopes the session to whatever organization the
+			// browser had selected. Signing back in to a profile keeps its
+			// organization, so re-scope the session when the two differ.
+			if wantOrg := target.profile.ScopedOrganizationID(); target.reauth && wantOrg != "" {
+				gotOrg, gotSubOrg := util.ParseTokenOrgClaims(userCredentialsToBeStored.JTWToken)
+				if gotSubOrg != "" {
+					gotOrg = gotSubOrg
+				}
+				if gotOrg != wantOrg {
+					rescopedToken, err := selectOrganizationToken(userCredentialsToBeStored.JTWToken, userCredentialsToBeStored.Email, wantOrg)
+					if err != nil {
+						util.HandleError(err, fmt.Sprintf("Unable to scope the session to the organization of profile '%s'. Run [infisical login] without --profile to pick another organization.", target.name))
+					}
+					userCredentialsToBeStored.JTWToken = rescopedToken
+				}
+			}
+
+			orgID, subOrgID := util.ParseTokenOrgClaims(userCredentialsToBeStored.JTWToken)
+			orgInfo := util.DescribeSessionOrg(userCredentialsToBeStored.JTWToken, orgID, subOrgID)
+			orgName := orgInfo.DisplayName()
+
+			profileName := target.name
+			if profileName == "" {
+				// The profile is identified by the organization the session acts
+				// in, which is the sub-organization when there is one.
+				scopedOrgID := orgID
+				if subOrgID != "" {
+					scopedOrgID = subOrgID
+				}
+				profileName = util.DeriveProfileName(existingConfig, userCredentialsToBeStored.Email, config.INFISICAL_URL, scopedOrgID, orgName, orgInfo.Slug)
+			}
+
+			// A --save-as onto an existing profile, or a derived name that lands
+			// on one, replaces whose session it holds. Signing back in with
+			// --profile is refused earlier instead, before the session is
+			// re-scoped.
+			if existingProfile, found := util.FindProfile(existingConfig, profileName); found && existingProfile.Email != userCredentialsToBeStored.Email {
+				util.PrintWarning(fmt.Sprintf("Profile '%s' previously stored the session for %s and now stores the session for %s.", profileName, existingProfile.Email, userCredentialsToBeStored.Email))
+			}
+
+			// A login that names its profile (--save-as, or --profile) is a scoped
+			// write: it must not move the global default out from under other
+			// terminals that rely on it. This also keeps expired-session renewals
+			// (which re-exec login with --profile) from stealing the default.
+			// Untargeted logins keep the familiar "last login wins" behavior.
+			makeActive := !target.explicit
+
+			err = util.PersistLoginProfile(models.Profile{
+				Name:              profileName,
+				Email:             userCredentialsToBeStored.Email,
+				Domain:            config.INFISICAL_URL,
+				OrganizationID:    orgID,
+				OrganizationName:  orgName,
+				OrganizationSlug:  orgInfo.Slug,
+				SubOrganizationID: subOrgID,
+			}, &userCredentialsToBeStored, makeActive)
 			if err != nil {
 				log.Error().Msgf("Unable to store your credentials in system vault")
 				log.Error().Msgf("\nTo trouble shoot further, read https://infisical.com/docs/cli/faq")
 				log.Debug().Err(err)
 				//return here
 				util.HandleError(err)
-			}
-
-			err = util.WriteInitalConfig(&userCredentialsToBeStored)
-			if err != nil {
-				util.HandleError(err, "Unable to write write to Infisical Config file. Please try again")
 			}
 
 			// Identify the user in PostHog and alias the anonymous machine ID
@@ -269,6 +407,20 @@ var loginCmd = &cobra.Command{
 			time.Sleep(time.Second * 1)
 			boldWhite.Printf(">>>> Welcome to Infisical!")
 			boldWhite.Printf(" You are now logged in as %v <<<< \n", userCredentialsToBeStored.Email)
+
+			orgDetail := ""
+			if orgName != "" {
+				orgDetail = fmt.Sprintf(" (org %s)", orgName)
+			}
+			switch {
+			case target.reauth:
+				util.PrintlnStderr(fmt.Sprintf("Signed back in to profile '%s'%s.", profileName, orgDetail))
+			case profileName != userCredentialsToBeStored.Email:
+				util.PrintlnStderr(fmt.Sprintf("Session saved to profile '%s'%s. Select it with --profile %s or INFISICAL_PROFILE=%s.", profileName, orgDetail, profileName, profileName))
+			}
+			if configAfterLogin, err := util.GetConfigFile(); err == nil && configAfterLogin.ActiveProfile != "" && configAfterLogin.ActiveProfile != profileName {
+				util.PrintlnStderr(fmt.Sprintf("Your default profile remains '%s'; terminals using it are unaffected. Run [infisical profile use %s] to make '%s' the default.", configAfterLogin.ActiveProfile, profileName, profileName))
+			}
 
 			plainBold := color.New(color.Bold)
 
@@ -340,7 +492,7 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email st
 
 		if loginTwoResponse.MfaEnabled {
 			i := 1
-			for i < 6 {
+			for i <= mfaMaxAttempts {
 				mfaVerifyCode := askForMFACode("email")
 
 				httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -358,9 +510,9 @@ func cliDefaultLogin(userCredentialsToBeStored *models.UserCredentials, email st
 					break
 				} else if mfaErrorResponse != nil {
 					if mfaErrorResponse.Context.Code == "mfa_invalid" {
-						msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
+						msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", mfaMaxAttempts-i)
 						util.PrintlnStderr(msg)
-						if i == 5 {
+						if i == mfaMaxAttempts {
 							util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
 							break
 						}
@@ -427,6 +579,7 @@ func init() {
 	loginCmd.Flags().String("email", "", "email for 'user' login method")
 	loginCmd.Flags().String("password", "", "password for 'user' login method")
 	loginCmd.Flags().String("organization-id", "", "organization id for 'user' login method")
+	loginCmd.Flags().String("save-as", "", "store this login as the named profile, creating it or replacing its session ('user' login method). Use --profile to sign back in to an existing profile instead.")
 
 	loginCmd.Flags().MarkDeprecated("oidc-jwt", "use --jwt instead")
 
@@ -729,73 +882,92 @@ func getFreshUserCredentialsWithSrp(email string, password string) (*api.GetLogi
 func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizationId string) string {
 	log.Debug().Msg(fmt.Sprint("GetJwtTokenWithOrganizationId: ", "oldJwtToken", oldJwtToken))
 
-	httpClient, err := util.GetRestyClientWithCustomHeaders()
-	if err != nil {
-		util.HandleError(err, "Unable to get resty client with custom headers")
-	}
-	httpClient.SetAuthToken(oldJwtToken)
-
 	selectedOrganizationId := organizationId
 
 	if selectedOrganizationId == "" {
+		httpClient, err := util.GetRestyClientWithCustomHeaders()
+		if err != nil {
+			util.HandleError(err, "Unable to get resty client with custom headers")
+		}
+		httpClient.SetAuthToken(oldJwtToken)
+
 		selectedOrganizationId, _, err = pickOrganization(httpClient, "Which Infisical organization would you like to log into?", email)
 		if err != nil {
 			util.HandleError(err, "Unable to select organization")
 		}
 	}
 
-	selectedOrgRes, err := api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganizationId})
-	if err != nil {
-		util.HandleError(err)
-	}
-
-	if selectedOrgRes.MfaEnabled {
-		i := 1
-		for i < 6 {
-			mfaVerifyCode := askForMFACode(selectedOrgRes.MfaMethod)
-
-			httpClient, err := util.GetRestyClientWithCustomHeaders()
-			if err != nil {
-				util.HandleError(err, "Unable to get resty client with custom headers")
-			}
-			httpClient.SetAuthToken(selectedOrgRes.Token)
-			verifyMFAresponse, mfaErrorResponse, requestError := api.CallVerifyMfaToken(httpClient, api.VerifyMfaTokenRequest{
-				Email:     email,
-				MFAToken:  mfaVerifyCode,
-				MFAMethod: selectedOrgRes.MfaMethod,
-			})
-			if requestError != nil {
-				util.HandleError(err)
-				break
-			} else if mfaErrorResponse != nil {
-				if mfaErrorResponse.Context.Code == "mfa_invalid" {
-					msg := fmt.Sprintf("Incorrect, verification code. You have %v attempts left", 5-i)
-					util.PrintlnStderr(msg)
-					if i == 5 {
-						util.PrintErrorMessageAndExit("No tries left, please try again in a bit")
-						break
-					}
-				}
-
-				if mfaErrorResponse.Context.Code == "mfa_expired" {
-					util.PrintErrorMessageAndExit("Your 2FA verification code has expired, please try logging in again")
-					break
-				}
-				i++
-			} else {
-				httpClient.SetAuthToken(verifyMFAresponse.Token)
-				selectedOrgRes, err = api.CallSelectOrganization(httpClient, api.SelectOrganizationRequest{OrganizationId: selectedOrganizationId})
-				break
-			}
-		}
-	}
-
+	// The exchange, MFA prompt included, is shared with [profile set-org] and
+	// [profile new], so the flows cannot drift apart.
+	token, err := selectOrganizationToken(oldJwtToken, email, selectedOrganizationId)
 	if err != nil {
 		util.HandleError(err, "Unable to select organization")
 	}
 
-	return selectedOrgRes.Token
+	return token
+}
 
+// loginTarget says which profile a login writes to and how it was chosen.
+type loginTarget struct {
+	// name is empty when the profile is derived from the account after login.
+	name string
+	// reauth is true when --profile named an existing profile, which is signed
+	// back in to: same account, same instance, same organization.
+	reauth  bool
+	profile models.Profile
+	// explicit is true when the user named the profile with either flag, which
+	// makes the login a scoped write that leaves the machine default alone.
+	explicit bool
+}
+
+// resolveLoginTarget applies the two ways to name a profile on login. --save-as
+// stores the login under that name, creating the profile or replacing its
+// session. --profile (or INFISICAL_PROFILE) signs back in to a profile that
+// already exists; naming a missing one is refused rather than quietly creating
+// it, since everywhere else --profile only selects. An ambient INFISICAL_PROFILE
+// does not conflict with --save-as, but the two flags naming different
+// profiles do.
+func resolveLoginTarget(saveAs string, override string, overrideSource string, configFile models.ConfigFile) (loginTarget, error) {
+	if saveAs != "" {
+		if err := util.ValidateProfileName(saveAs); err != nil {
+			return loginTarget{}, err
+		}
+		if overrideSource == util.ProfileSourceFlag && override != saveAs {
+			return loginTarget{}, fmt.Errorf("--profile and --save-as name different profiles ('%s' and '%s'). Use --profile to sign back in to an existing profile, or --save-as to store this login under a name, not both", override, saveAs)
+		}
+		return loginTarget{name: saveAs, explicit: true}, nil
+	}
+
+	if override == "" {
+		return loginTarget{}, nil
+	}
+
+	profile, found := util.FindProfile(configFile, override)
+	if !found {
+		return loginTarget{}, fmt.Errorf("profile '%s' (selected via %s) does not exist. --profile signs back in to an existing profile; to store this login under that name run [infisical login --save-as %s]", override, overrideSource, override)
+	}
+	return loginTarget{name: override, reauth: true, profile: profile, explicit: true}, nil
+}
+
+// loginAccountMismatch reports whether a login that signs back in to a profile
+// authenticated as somebody other than the profile's own account. Only --profile
+// asserts an account; --save-as names where to store whoever signs in, and a
+// derived name cannot mismatch because it follows the account.
+// exitOnLoginAccountMismatch refuses a login that signs back in to a profile as
+// somebody else. Both login paths check as soon as the account is known, which
+// is before either of them applies the profile's organization.
+func exitOnLoginAccountMismatch(target loginTarget, signedInEmail string) {
+	if !loginAccountMismatch(target, signedInEmail) {
+		return
+	}
+	util.PrintErrorMessageAndExit(fmt.Sprintf("Profile '%s' belongs to %s, but you signed in as %s. Nothing was stored. To keep this login, run [infisical login --save-as <name>] with another name.", target.name, target.profile.Email, signedInEmail))
+}
+
+func loginAccountMismatch(target loginTarget, signedInEmail string) bool {
+	if !target.reauth || target.profile.Email == "" || signedInEmail == "" {
+		return false
+	}
+	return target.profile.Email != signedInEmail
 }
 
 func userLoginMenu(currentLoggedInUserEmail string) (bool, error) {
@@ -1013,11 +1185,15 @@ func browserLoginHandler(success chan models.UserCredentials, failure chan error
 }
 
 // check if one of the flag or all the envs are set
-func validateDirectUserLoginFlagsAndEnvsSet(cmd *cobra.Command, domain string) (isDirectUserLogin bool, err error) {
+// orgIDOptional is set when the login already knows which organization to use,
+// which is the case when signing back in to an existing profile.
+func validateDirectUserLoginFlagsAndEnvsSet(cmd *cobra.Command, domain string, orgIDOptional bool) (isDirectUserLogin bool, err error) {
 	requiredFlagsEnvs := map[string]string{
-		"email":           "INFISICAL_EMAIL",
-		"password":        "INFISICAL_PASSWORD",
-		"organization-id": "INFISICAL_ORGANIZATION_ID",
+		"email":    "INFISICAL_EMAIL",
+		"password": "INFISICAL_PASSWORD",
+	}
+	if !orgIDOptional {
+		requiredFlagsEnvs["organization-id"] = "INFISICAL_ORGANIZATION_ID"
 	}
 
 	var missingFlagsEnvs []string

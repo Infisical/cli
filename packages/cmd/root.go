@@ -122,6 +122,26 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	return domain
 }
 
+// Commands that manage profiles/sessions themselves print their own outcome,
+// so the ambient "using profile X" notice would just be noise for them.
+var profileNoticeExemptCommands = map[string]bool{
+	"login":   true,
+	"logout":  true,
+	"profile": true,
+	"org":     true,
+	"user":    true,
+	"reset":   true,
+	"vault":   true,
+}
+
+func topLevelCommandName(cmd *cobra.Command) string {
+	current := cmd
+	for current.Parent() != nil && current.Parent() != RootCmd {
+		current = current.Parent()
+	}
+	return current.Name()
+}
+
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
@@ -132,11 +152,40 @@ func init() {
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
 	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'domain' field in .infisical.json. Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
+	RootCmd.PersistentFlags().String("profile", "", "Use a specific login profile for this command (see [infisical profile list]). Can also set via the INFISICAL_PROFILE environment variable.")
+	RootCmd.PersistentFlags().String("org", "", "Use a specific organization for this command, by name, slug, or id. Overrides the profile's default organization without changing it. Can also set via the INFISICAL_ORG environment variable.")
 	RootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		silent, err := cmd.Flags().GetBool("silent")
 		if err != nil {
 			util.HandleError(err)
 		}
+
+		profileFlag, err := cmd.Flags().GetString("profile")
+		if err != nil {
+			util.HandleError(err)
+		}
+		if profileFlag != "" {
+			config.INFISICAL_PROFILE_OVERRIDE = profileFlag
+			config.INFISICAL_PROFILE_OVERRIDE_SOURCE = util.ProfileSourceFlag
+		} else if envProfile := strings.TrimSpace(os.Getenv(util.INFISICAL_PROFILE_ENV_NAME)); envProfile != "" {
+			config.INFISICAL_PROFILE_OVERRIDE = envProfile
+			config.INFISICAL_PROFILE_OVERRIDE_SOURCE = util.ProfileSourceEnv
+		}
+
+		orgFlag, err := cmd.Flags().GetString("org")
+		if err != nil {
+			util.HandleError(err)
+		}
+		if orgFlag != "" {
+			config.INFISICAL_ORG_OVERRIDE = orgFlag
+			config.INFISICAL_ORG_OVERRIDE_SOURCE = util.OrgSourceFlag
+		} else if envOrg := strings.TrimSpace(os.Getenv(util.INFISICAL_ORG_ENV_NAME)); envOrg != "" {
+			config.INFISICAL_ORG_OVERRIDE = envOrg
+			config.INFISICAL_ORG_OVERRIDE_SOURCE = util.OrgSourceEnv
+		}
+
+		_, envDomainSet := util.GetEnvDomain()
+		config.INFISICAL_DOMAIN_EXPLICITLY_SET = cmd.Flags().Changed("domain") || envDomainSet
 
 		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
 
@@ -154,6 +203,13 @@ func init() {
 			}
 		}
 
+		// The "Using profile ..." notice is printed by the session loader the
+		// first time a command actually uses a login session, so commands that
+		// never do (scan, agent, gateway, ...) stay quiet even in a pinned
+		// terminal. Profile-management commands print their own outcome.
+		if !silent && !isStructuredOutputRequested(cmd) && !profileNoticeExemptCommands[topLevelCommandName(cmd)] {
+			util.EnableProfileNotice(cmd.ErrOrStderr())
+		}
 	}
 
 	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")

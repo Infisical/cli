@@ -1,0 +1,1061 @@
+package util
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Infisical/infisical-merge/packages/models"
+)
+
+func TestMigrateConfigProfiles(t *testing.T) {
+	t.Run("legacy single user becomes a profile named after the email", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail:  "scott@example.com",
+			LoggedInUserDomain: "https://app.infisical.com/api",
+		}
+
+		changed := MigrateConfigProfiles(&configFile)
+
+		if !changed {
+			t.Fatal("expected migration to report a change")
+		}
+		if len(configFile.Profiles) != 1 {
+			t.Fatalf("expected 1 profile, got %d", len(configFile.Profiles))
+		}
+		profile := configFile.Profiles[0]
+		if profile.Name != "scott@example.com" || profile.Email != "scott@example.com" || profile.Domain != "https://app.infisical.com/api" {
+			t.Fatalf("unexpected migrated profile: %+v", profile)
+		}
+		if configFile.ActiveProfile != "scott@example.com" {
+			t.Fatalf("expected active profile to be the migrated one, got %q", configFile.ActiveProfile)
+		}
+	})
+
+	t.Run("legacy roster becomes profiles and the active pointer follows LoggedInUserEmail", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail:  "b@example.com",
+			LoggedInUserDomain: "https://eu.infisical.com/api",
+			LoggedInUsers: []models.LoggedInUser{
+				{Email: "a@example.com", Domain: "https://app.infisical.com/api"},
+				{Email: "b@example.com", Domain: "https://eu.infisical.com/api"},
+			},
+		}
+
+		MigrateConfigProfiles(&configFile)
+
+		if len(configFile.Profiles) != 2 {
+			t.Fatalf("expected 2 profiles, got %d", len(configFile.Profiles))
+		}
+		if configFile.ActiveProfile != "b@example.com" {
+			t.Fatalf("expected active profile b@example.com, got %q", configFile.ActiveProfile)
+		}
+	})
+
+	t.Run("is idempotent", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail:  "scott@example.com",
+			LoggedInUserDomain: "https://app.infisical.com/api",
+		}
+
+		MigrateConfigProfiles(&configFile)
+		changed := MigrateConfigProfiles(&configFile)
+
+		if changed {
+			t.Fatal("expected second migration to be a no-op")
+		}
+		if len(configFile.Profiles) != 1 {
+			t.Fatalf("expected 1 profile after re-migration, got %d", len(configFile.Profiles))
+		}
+	})
+
+	t.Run("does nothing for an empty config", func(t *testing.T) {
+		configFile := models.ConfigFile{}
+
+		if MigrateConfigProfiles(&configFile) {
+			t.Fatal("expected no change for an empty config")
+		}
+		if len(configFile.Profiles) != 0 || configFile.ActiveProfile != "" {
+			t.Fatalf("expected empty config to stay empty, got %+v", configFile)
+		}
+	})
+
+	t.Run("a legacy user switch (LoggedInUserEmail moved by an old binary) wins over a stale active pointer", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail: "b@example.com",
+			ActiveProfile:     "a@example.com",
+			Profiles: []models.Profile{
+				{Name: "a@example.com", Email: "a@example.com"},
+				{Name: "b@example.com", Email: "b@example.com"},
+			},
+		}
+
+		changed := MigrateConfigProfiles(&configFile)
+
+		if !changed {
+			t.Fatal("expected reconciliation to report a change")
+		}
+		if configFile.ActiveProfile != "b@example.com" {
+			t.Fatalf("expected active profile b@example.com, got %q", configFile.ActiveProfile)
+		}
+	})
+
+	t.Run("roster mirrors of named profiles do not spawn phantom profiles", func(t *testing.T) {
+		// State after a targeted first login: only a named profile exists, and
+		// the legacy fields mirror it for old-binary compatibility.
+		configFile := models.ConfigFile{
+			LoggedInUserEmail:  "scott@example.com",
+			LoggedInUserDomain: "https://app.infisical.com/api",
+			LoggedInUsers: []models.LoggedInUser{
+				{Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+			},
+			ActiveProfile: "globex",
+			Profiles: []models.Profile{
+				{Name: "globex", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-2"},
+			},
+		}
+
+		changed := MigrateConfigProfiles(&configFile)
+
+		if changed {
+			t.Fatal("expected migration to be a no-op")
+		}
+		if len(configFile.Profiles) != 1 {
+			t.Fatalf("expected no phantom profile, got %+v", configFile.Profiles)
+		}
+		if configFile.ActiveProfile != "globex" {
+			t.Fatalf("expected active profile to stay globex, got %q", configFile.ActiveProfile)
+		}
+	})
+
+	t.Run("legacy switch reconciles to a named profile when no email-named one exists", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail: "b@example.com",
+			ActiveProfile:     "a-work",
+			LoggedInUsers: []models.LoggedInUser{
+				{Email: "a@example.com"},
+				{Email: "b@example.com"},
+			},
+			Profiles: []models.Profile{
+				{Name: "a-work", Email: "a@example.com"},
+				{Name: "b-work", Email: "b@example.com"},
+			},
+		}
+
+		MigrateConfigProfiles(&configFile)
+
+		if len(configFile.Profiles) != 2 {
+			t.Fatalf("expected no phantom profiles, got %+v", configFile.Profiles)
+		}
+		if configFile.ActiveProfile != "b-work" {
+			t.Fatalf("expected active profile b-work, got %q", configFile.ActiveProfile)
+		}
+	})
+
+	t.Run("a named active profile for the same account is kept", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail: "scott@example.com",
+			ActiveProfile:     "client-a",
+			Profiles: []models.Profile{
+				{Name: "client-a", Email: "scott@example.com", OrganizationID: "org-1"},
+				{Name: "scott@example.com", Email: "scott@example.com"},
+			},
+		}
+
+		MigrateConfigProfiles(&configFile)
+
+		if configFile.ActiveProfile != "client-a" {
+			t.Fatalf("expected active profile client-a to be kept, got %q", configFile.ActiveProfile)
+		}
+	})
+}
+
+func TestResolveProfileWith(t *testing.T) {
+	scopedDir := filepath.Join("/", "home", "scott", "work", "client-a")
+
+	configFile := models.ConfigFile{
+		ActiveProfile: "default-profile",
+		Profiles: []models.Profile{
+			{Name: "default-profile", Email: "scott@example.com"},
+			{Name: "client-a", Email: "scott@example.com"},
+		},
+		DirectoryProfiles: map[string]string{
+			scopedDir: "client-a",
+		},
+	}
+
+	t.Run("an override beats everything", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "client-b", ProfileSourceEnv, scopedDir)
+		if resolved.Name != "client-b" || resolved.Source != ProfileSourceEnv {
+			t.Fatalf("unexpected resolution: %+v", resolved)
+		}
+	})
+
+	t.Run("a directory scope beats the global default", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "", "", scopedDir)
+		if resolved.Name != "client-a" || resolved.Source != ProfileSourceDirectory || resolved.ScopeDir != scopedDir {
+			t.Fatalf("unexpected resolution: %+v", resolved)
+		}
+	})
+
+	t.Run("a subdirectory inherits the nearest ancestor binding", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "", "", filepath.Join(scopedDir, "api", "src"))
+		if resolved.Name != "client-a" || resolved.ScopeDir != scopedDir {
+			t.Fatalf("unexpected resolution: %+v", resolved)
+		}
+	})
+
+	t.Run("a nested binding beats an ancestor binding", func(t *testing.T) {
+		nested := filepath.Join(scopedDir, "sub-project")
+		withNested := configFile
+		withNested.DirectoryProfiles = map[string]string{
+			scopedDir: "client-a",
+			nested:    "client-b",
+		}
+		resolved := resolveProfileWith(withNested, "", "", filepath.Join(nested, "deep"))
+		if resolved.Name != "client-b" || resolved.ScopeDir != nested {
+			t.Fatalf("unexpected resolution: %+v", resolved)
+		}
+	})
+
+	t.Run("an unbound directory falls back to the global default", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "", "", filepath.Join("/", "home", "scott", "other"))
+		if resolved.Name != "default-profile" || resolved.Source != ProfileSourceDefault {
+			t.Fatalf("unexpected resolution: %+v", resolved)
+		}
+	})
+
+	t.Run("unmigrated legacy config falls back to LoggedInUserEmail", func(t *testing.T) {
+		legacyOnly := models.ConfigFile{LoggedInUserEmail: "scott@example.com"}
+		resolved := resolveProfileWith(legacyOnly, "", "", "")
+		if resolved.Name != "scott@example.com" || resolved.Source != ProfileSourceDefault {
+			t.Fatalf("unexpected resolution: %+v", resolved)
+		}
+	})
+
+	t.Run("nothing resolves on a fresh machine", func(t *testing.T) {
+		resolved := resolveProfileWith(models.ConfigFile{}, "", "", "")
+		if resolved.Name != "" {
+			t.Fatalf("expected empty resolution, got %+v", resolved)
+		}
+	})
+}
+
+func TestDeriveProfileName(t *testing.T) {
+	base := models.ConfigFile{
+		Profiles: []models.Profile{
+			{Name: "scott@example.com", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-1"},
+		},
+	}
+
+	t.Run("a new account is named after the account and organization slug", func(t *testing.T) {
+		name := DeriveProfileName(base, "new@example.com", "https://app.infisical.com/api", "org-9", "Acme", "acme-x4k2")
+		if name != "new@example.com--acme-x4k2" {
+			t.Fatalf("expected email--slug, got %q", name)
+		}
+	})
+
+	t.Run("a plus-addressed email is kept verbatim", func(t *testing.T) {
+		name := DeriveProfileName(base, "ci+tests@example.com", "https://app.infisical.com/api", "org-9", "Acme", "acme-x4k2")
+		if name != "ci+tests@example.com--acme-x4k2" {
+			t.Fatalf("expected plus-addressed email verbatim, got %q", name)
+		}
+	})
+
+	t.Run("with no organization information at all the bare email is used", func(t *testing.T) {
+		name := DeriveProfileName(base, "new@example.com", "https://app.infisical.com/api", "", "", "")
+		if name != "new@example.com" {
+			t.Fatalf("expected bare email, got %q", name)
+		}
+	})
+
+	t.Run("a bare email that is taken is numbered", func(t *testing.T) {
+		name := DeriveProfileName(base, "scott@example.com", "https://app.infisical.com/api", "", "", "")
+		if name != "scott@example.com-2" {
+			t.Fatalf("expected numbered bare email, got %q", name)
+		}
+	})
+
+	t.Run("relogin into the same account, instance, and org reuses the profile", func(t *testing.T) {
+		name := DeriveProfileName(base, "scott@example.com", "https://app.infisical.com/api", "org-1", "Acme", "")
+		if name != "scott@example.com" {
+			t.Fatalf("expected existing profile name to be reused, got %q", name)
+		}
+	})
+
+	t.Run("relogin reuses a named profile for the same account, instance, and org", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "client-a", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-1"},
+			},
+		}
+		name := DeriveProfileName(configFile, "scott@example.com", "https://app.infisical.com/api", "org-1", "Acme", "")
+		if name != "client-a" {
+			t.Fatalf("expected named profile to be reused, got %q", name)
+		}
+	})
+
+	t.Run("adopts a migrated profile whose org is unknown", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "scott@example.com", Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+			},
+		}
+		name := DeriveProfileName(configFile, "scott@example.com", "https://app.infisical.com/api", "org-1", "Acme", "")
+		if name != "scott@example.com" {
+			t.Fatalf("expected migrated profile to be adopted, got %q", name)
+		}
+	})
+
+	t.Run("a second organization gets its slug as a suffix instead of overwriting", func(t *testing.T) {
+		name := DeriveProfileName(base, "scott@example.com", "https://app.infisical.com/api", "org-2", "Beta Corp", "beta-corp-x4k2")
+		if name != "scott@example.com--beta-corp-x4k2" {
+			t.Fatalf("expected slug-suffixed name, got %q", name)
+		}
+	})
+
+	t.Run("a slug is normalized to the profile name character set", func(t *testing.T) {
+		name := DeriveProfileName(base, "scott@example.com", "https://app.infisical.com/api", "org-2", "Beta Corp", "Beta_Corp/EU")
+		if name != "scott@example.com--beta-corp-eu" {
+			t.Fatalf("expected a normalized slug suffix, got %q", name)
+		}
+	})
+
+	t.Run("without a slug the organization name is used", func(t *testing.T) {
+		name := DeriveProfileName(base, "scott@example.com", "https://app.infisical.com/api", "org-2", "Beta Corp", "")
+		if name != "scott@example.com--beta-corp" {
+			t.Fatalf("expected name-suffixed fallback, got %q", name)
+		}
+	})
+
+	t.Run("falls back to the org id when the org name is unavailable", func(t *testing.T) {
+		name := DeriveProfileName(base, "scott@example.com", "https://app.infisical.com/api", "1234567890ab", "", "")
+		if name != "scott@example.com--12345678" {
+			t.Fatalf("expected org-id-suffixed name, got %q", name)
+		}
+	})
+
+	t.Run("numbers suffix collisions", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "scott@example.com", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-1"},
+				{Name: "scott@example.com--beta", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-2"},
+			},
+		}
+		name := DeriveProfileName(configFile, "scott@example.com", "https://app.infisical.com/api", "org-3", "Beta", "")
+		if name != "scott@example.com--beta-2" {
+			t.Fatalf("expected numbered suffix, got %q", name)
+		}
+	})
+}
+
+// Two sub-organizations under one root are different tenants with different
+// sessions, so they must not share a profile: reusing the first one's name
+// would overwrite its stored session on the second login.
+func TestDeriveProfileNameSeparatesSubOrganizations(t *testing.T) {
+	const domain = "https://app.infisical.com/api"
+
+	configFile := models.ConfigFile{
+		Profiles: []models.Profile{
+			{
+				Name:              "scott@example.com--test-1",
+				Email:             "scott@example.com",
+				Domain:            domain,
+				OrganizationID:    "root-org",
+				SubOrganizationID: "sub-org-1",
+			},
+		},
+	}
+
+	t.Run("a different sub-organization gets its own profile", func(t *testing.T) {
+		name := DeriveProfileName(configFile, "scott@example.com", domain, "sub-org-2", "Test 2", "test-2")
+		if name == "scott@example.com--test-1" {
+			t.Fatal("a second sub-organization reused the first one's profile, which would overwrite its session")
+		}
+		if name != "scott@example.com--test-2" {
+			t.Fatalf("expected email--slug for the second sub-organization, got %q", name)
+		}
+	})
+
+	t.Run("the same sub-organization reuses its profile", func(t *testing.T) {
+		name := DeriveProfileName(configFile, "scott@example.com", domain, "sub-org-1", "Test 1", "test-1")
+		if name != "scott@example.com--test-1" {
+			t.Fatalf("expected the existing profile to be reused, got %q", name)
+		}
+	})
+
+	t.Run("the root organization does not match its own sub-organization's profile", func(t *testing.T) {
+		name := DeriveProfileName(configFile, "scott@example.com", domain, "root-org", "Acme", "acme")
+		if name != "scott@example.com--acme" {
+			t.Fatalf("expected a separate profile for the root organization, got %q", name)
+		}
+	})
+}
+
+// OrgSessions indexes keyring entries, so a caller that rewrites a profile
+// without it (a fresh login builds the profile from the session alone) must not
+// silently strand those entries.
+func TestUpsertProfileKeepsOrgSessions(t *testing.T) {
+	cached := []models.OrgSessionRef{{OrgID: "org-b", OrgName: "Beta"}}
+
+	t.Run("a rewrite that omits the index keeps it", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "work", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrgSessions: cached},
+			},
+		}
+
+		UpsertProfile(&configFile, models.Profile{
+			Name:   "work",
+			Email:  "scott@example.com",
+			Domain: "https://app.infisical.com/api",
+		})
+
+		if got := configFile.Profiles[0].OrgSessions; len(got) != 1 || got[0].OrgID != "org-b" {
+			t.Fatalf("expected the cached organization sessions to survive, got %+v", got)
+		}
+	})
+
+	t.Run("an empty slice clears it", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "work", Email: "scott@example.com", OrgSessions: cached},
+			},
+		}
+
+		UpsertProfile(&configFile, models.Profile{
+			Name:        "work",
+			Email:       "scott@example.com",
+			OrgSessions: []models.OrgSessionRef{},
+		})
+
+		if got := configFile.Profiles[0].OrgSessions; len(got) != 0 {
+			t.Fatalf("expected an explicit empty index to clear the cache, got %+v", got)
+		}
+	})
+
+	t.Run("a new profile is appended unchanged", func(t *testing.T) {
+		configFile := models.ConfigFile{}
+
+		UpsertProfile(&configFile, models.Profile{Name: "work", Email: "scott@example.com"})
+
+		if len(configFile.Profiles) != 1 || configFile.Profiles[0].Name != "work" {
+			t.Fatalf("expected the profile to be appended, got %+v", configFile.Profiles)
+		}
+	})
+}
+
+// Cached organization sessions are exchanged from the profile's own session and
+// share its id, so they outlive a write that keeps that session: [profile
+// set-org] and [init] only re-scope within it, and signing back in usually
+// returns the same one. Only a genuinely new session voids them.
+func TestOrgSessionsSurvive(t *testing.T) {
+	sameSession := sessionToken(t, "session-a", time.Hour)
+	otherSession := sessionToken(t, "session-b", time.Hour)
+
+	t.Run("a re-scope within the same session keeps the cache", func(t *testing.T) {
+		if !orgSessionsSurvive("session-a", sameSession) {
+			t.Fatal("expected the cached organization sessions to survive an unchanged session")
+		}
+	})
+
+	t.Run("a new session voids the cache", func(t *testing.T) {
+		if orgSessionsSurvive("session-a", otherSession) {
+			t.Fatal("expected a different session to void the cached organization sessions")
+		}
+	})
+
+	t.Run("an unknown previous session voids the cache", func(t *testing.T) {
+		// The keyring entry was missing or unreadable, so nothing confirms the
+		// cached tokens belong to a session that is still live.
+		if orgSessionsSurvive("", sameSession) {
+			t.Fatal("expected an unknown previous session to be treated as a change")
+		}
+	})
+
+	t.Run("an unparsable new token voids the cache", func(t *testing.T) {
+		if orgSessionsSurvive("session-a", "not-a-jwt") {
+			t.Fatal("expected an unreadable session id to be treated as a change")
+		}
+	})
+}
+
+func TestSetActiveProfileSyncsLegacyFields(t *testing.T) {
+	t.Run("an email-named profile publishes the legacy pointer", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			Profiles: []models.Profile{
+				{Name: "scott@example.com", Email: "scott@example.com", Domain: "https://eu.infisical.com/api"},
+			},
+		}
+
+		if err := SetActiveProfile(&configFile, "scott@example.com"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if configFile.LoggedInUserEmail != "scott@example.com" || configFile.LoggedInUserDomain != "https://eu.infisical.com/api" {
+			t.Fatalf("legacy fields not synced: %+v", configFile)
+		}
+		if len(configFile.LoggedInUsers) != 1 || configFile.LoggedInUsers[0].Email != "scott@example.com" {
+			t.Fatalf("legacy roster not synced: %+v", configFile.LoggedInUsers)
+		}
+	})
+
+	t.Run("a named profile clears it, so an old binary cannot load another profile's token", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			LoggedInUserEmail:  "scott@example.com",
+			LoggedInUserDomain: "https://app.infisical.com/api",
+			Profiles: []models.Profile{
+				{Name: "client-a", Email: "scott@example.com", Domain: "https://eu.infisical.com/api"},
+			},
+		}
+
+		if err := SetActiveProfile(&configFile, "client-a"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if configFile.ActiveProfile != "client-a" {
+			t.Fatalf("expected active profile client-a, got %q", configFile.ActiveProfile)
+		}
+		if configFile.LoggedInUserEmail != "" || configFile.LoggedInUserDomain != "" {
+			t.Fatalf("expected the legacy pointer to be cleared, got %+v", configFile)
+		}
+	})
+
+	t.Run("a missing profile errors", func(t *testing.T) {
+		configFile := models.ConfigFile{Profiles: []models.Profile{{Name: "a", Email: "a"}}}
+		if err := SetActiveProfile(&configFile, "missing"); err == nil {
+			t.Fatal("expected an error for a missing profile")
+		}
+	})
+}
+
+func TestRemoveProfile(t *testing.T) {
+	scopedDir := filepath.Join("/", "home", "scott", "work", "client-a")
+	configFile := models.ConfigFile{
+		ActiveProfile:      "client-a",
+		LoggedInUserEmail:  "scott@example.com",
+		LoggedInUserDomain: "https://app.infisical.com/api",
+		LoggedInUsers: []models.LoggedInUser{
+			{Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+			{Email: "other@example.com", Domain: "https://app.infisical.com/api"},
+		},
+		Profiles: []models.Profile{
+			{Name: "client-a", Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+			{Name: "other@example.com", Email: "other@example.com", Domain: "https://app.infisical.com/api"},
+		},
+		DirectoryProfiles: map[string]string{
+			scopedDir: "client-a",
+		},
+	}
+
+	if !RemoveProfile(&configFile, "client-a") {
+		t.Fatal("expected profile to be removed")
+	}
+
+	if _, found := FindProfile(configFile, "client-a"); found {
+		t.Fatal("profile still present after removal")
+	}
+	if len(configFile.DirectoryProfiles) != 0 {
+		t.Fatalf("expected directory bindings to be removed, got %+v", configFile.DirectoryProfiles)
+	}
+	if configFile.ActiveProfile != "" || configFile.LoggedInUserEmail != "" {
+		t.Fatalf("expected active pointers to be cleared, got %+v", configFile)
+	}
+	if len(configFile.LoggedInUsers) != 1 || configFile.LoggedInUsers[0].Email != "other@example.com" {
+		t.Fatalf("expected legacy roster cleanup, got %+v", configFile.LoggedInUsers)
+	}
+
+	if RemoveProfile(&configFile, "does-not-exist") {
+		t.Fatal("expected removal of a missing profile to report false")
+	}
+}
+
+func TestValidateProfileName(t *testing.T) {
+	// Plus-addressed emails are common for shared/test accounts and must be
+	// accepted so users can explicitly target their email-named profiles.
+	valid := []string{"scott@example.com", "ci+tests@example.com", "client-a", "work.eu", "a", "A1_b-c", "scott@example.com--beta-2"}
+	for _, name := range valid {
+		if err := ValidateProfileName(name); err != nil {
+			t.Fatalf("expected %q to be valid: %v", name, err)
+		}
+	}
+
+	invalid := []string{"", "-leading-dash", ".leading-dot", "has space", "has/slash", "has:colon"}
+	for _, name := range invalid {
+		if err := ValidateProfileName(name); err == nil {
+			t.Fatalf("expected %q to be invalid", name)
+		}
+	}
+}
+
+func TestOrgMatchesSelector(t *testing.T) {
+	cases := []struct {
+		selector, id, slug, name string
+		want                     bool
+	}{
+		{"globex", "org-1", "globex-demo", "Globex", true},      // by name
+		{"GLOBEX", "org-1", "globex-demo", "Globex", true},      // case-insensitive
+		{"globex-demo", "org-1", "globex-demo", "Globex", true}, // by slug
+		{"org-1", "org-1", "globex-demo", "Globex", true},       // by id
+		{"acme", "org-1", "globex-demo", "Globex", false},
+		{"", "org-1", "globex-demo", "Globex", false},
+		{"globex", "org-1", "", "", false}, // no metadata to match against
+	}
+
+	for _, tc := range cases {
+		if got := OrgMatchesSelector(tc.selector, tc.id, tc.slug, tc.name); got != tc.want {
+			t.Fatalf("OrgMatchesSelector(%q, %q, %q, %q) = %v, want %v", tc.selector, tc.id, tc.slug, tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestResolveProfileRecordsShadowedBinding(t *testing.T) {
+	scopedDir := filepath.Join("/", "home", "scott", "work", "client-a")
+	configFile := models.ConfigFile{
+		ActiveProfile:     "default-profile",
+		Profiles:          []models.Profile{{Name: "default-profile"}, {Name: "client-a"}, {Name: "client-b"}},
+		DirectoryProfiles: map[string]string{scopedDir: "client-a"},
+	}
+
+	t.Run("an override records the binding it shadowed", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "client-b", ProfileSourceEnv, scopedDir)
+		if resolved.Name != "client-b" {
+			t.Fatalf("expected client-b, got %q", resolved.Name)
+		}
+		if resolved.ShadowedName != "client-a" || resolved.ShadowedScopeDir != scopedDir {
+			t.Fatalf("expected the binding to be recorded, got %+v", resolved)
+		}
+	})
+
+	t.Run("an override matching the binding shadows nothing", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "client-a", ProfileSourceEnv, scopedDir)
+		if resolved.ShadowedName != "" {
+			t.Fatalf("expected no shadowed binding, got %+v", resolved)
+		}
+	})
+
+	t.Run("an override outside any binding shadows nothing", func(t *testing.T) {
+		resolved := resolveProfileWith(configFile, "client-b", ProfileSourceEnv, filepath.Join("/", "tmp"))
+		if resolved.ShadowedName != "" {
+			t.Fatalf("expected no shadowed binding, got %+v", resolved)
+		}
+	})
+}
+
+func TestShellQuote(t *testing.T) {
+	cases := map[string]string{
+		"work":                "'work'",
+		"a@x.com":             "'a@x.com'",
+		"ci+tests@x.com":      "'ci+tests@x.com'",
+		"evil$(whoami)@x.com": `'evil$(whoami)@x.com'`,
+		"back`tick`":          "'back`tick`'",
+		"it's":                `'it'\''s'`,
+		"a; rm -rf /":         "'a; rm -rf /'",
+	}
+	for in, want := range cases {
+		if got := ShellQuote(in); got != want {
+			t.Fatalf("ShellQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSanitizeDisplay(t *testing.T) {
+	if got := SanitizeDisplay("Acme\x1b[31m evil\x07"); got != "Acme[31m evil" {
+		t.Fatalf("escape sequences not stripped: %q", got)
+	}
+	if got := SanitizeDisplay("line\nbreak"); got != "linebreak" {
+		t.Fatalf("newline not stripped: %q", got)
+	}
+	if got := SanitizeDisplay("Acme / Research"); got != "Acme / Research" {
+		t.Fatalf("ordinary text altered: %q", got)
+	}
+}
+
+func TestOrgMatchTierPrecedence(t *testing.T) {
+	if OrgMatchTier("org-1", "org-1", "slug", "name") != orgMatchID {
+		t.Fatal("expected an id match to rank highest")
+	}
+	if OrgMatchTier("slug", "org-1", "slug", "name") != orgMatchSlug {
+		t.Fatal("expected a slug match")
+	}
+	if OrgMatchTier("NAME", "org-1", "slug", "name") != orgMatchName {
+		t.Fatal("expected a case-insensitive name match")
+	}
+	if OrgMatchTier("other", "org-1", "slug", "name") != orgMatchNone {
+		t.Fatal("expected no match")
+	}
+	// An organization named after another one's id must not outrank it.
+	if OrgMatchTier("org-1", "attacker-id", "", "org-1") >= OrgMatchTier("org-1", "org-1", "", "") {
+		t.Fatal("a name match must rank below an id match")
+	}
+}
+
+func TestRepointProfileDomain(t *testing.T) {
+	base := func() models.ConfigFile {
+		return models.ConfigFile{
+			ActiveProfile:      "acme-work",
+			LoggedInUserEmail:  "scott@example.com",
+			LoggedInUserDomain: "https://app.infisical.com/api",
+			LoggedInUsers: []models.LoggedInUser{
+				{Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+			},
+			Profiles: []models.Profile{
+				// Same email and instance, different organizations.
+				{Name: "acme-work", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-a", OrganizationName: "Acme"},
+				{Name: "globex-work", Email: "scott@example.com", Domain: "https://app.infisical.com/api", OrganizationID: "org-b", OrganizationName: "Globex"},
+			},
+		}
+	}
+
+	t.Run("only the named profile moves", func(t *testing.T) {
+		configFile := base()
+		if !RepointProfileDomain(&configFile, "acme-work", "https://self.example.com/api") {
+			t.Fatal("expected the profile to move")
+		}
+		if configFile.Profiles[0].Domain != "https://self.example.com/api" {
+			t.Fatalf("selected profile did not move: %+v", configFile.Profiles[0])
+		}
+		if configFile.Profiles[1].Domain != "https://app.infisical.com/api" {
+			t.Fatalf("a profile sharing the email and instance was moved too: %+v", configFile.Profiles[1])
+		}
+	})
+
+	t.Run("the organization from the previous instance is dropped", func(t *testing.T) {
+		configFile := base()
+		RepointProfileDomain(&configFile, "acme-work", "https://self.example.com/api")
+		moved := configFile.Profiles[0]
+		if moved.OrganizationID != "" || moved.OrganizationName != "" || moved.SubOrganizationID != "" {
+			t.Fatalf("expected the organization to be cleared, got %+v", moved)
+		}
+	})
+
+	t.Run("the legacy roster entry is kept while another profile still uses the old instance", func(t *testing.T) {
+		configFile := base()
+		RepointProfileDomain(&configFile, "acme-work", "https://self.example.com/api")
+		if configFile.LoggedInUsers[0].Domain != "https://app.infisical.com/api" {
+			t.Fatalf("roster entry moved while another profile still uses the old instance: %+v", configFile.LoggedInUsers[0])
+		}
+	})
+
+	t.Run("the legacy roster entry follows the last profile off the old instance", func(t *testing.T) {
+		configFile := base()
+		configFile.Profiles = configFile.Profiles[:1]
+		RepointProfileDomain(&configFile, "acme-work", "https://self.example.com/api")
+		if configFile.LoggedInUsers[0].Domain != "https://self.example.com/api" {
+			t.Fatalf("roster entry did not follow: %+v", configFile.LoggedInUsers[0])
+		}
+	})
+
+	t.Run("an unchanged instance or unknown profile is a no-op", func(t *testing.T) {
+		configFile := base()
+		if RepointProfileDomain(&configFile, "acme-work", "https://app.infisical.com/api") {
+			t.Fatal("expected no move for the same instance")
+		}
+		if RepointProfileDomain(&configFile, "missing", "https://self.example.com/api") {
+			t.Fatal("expected no move for an unknown profile")
+		}
+	})
+}
+
+func TestValidateProfileNameLength(t *testing.T) {
+	if err := ValidateProfileName(strings.Repeat("a", MaxProfileNameLength)); err != nil {
+		t.Fatalf("a name at the limit should be valid, got %v", err)
+	}
+	if err := ValidateProfileName(strings.Repeat("a", MaxProfileNameLength+1)); err == nil {
+		t.Fatal("expected an overlong name to be rejected")
+	}
+}
+
+func TestOrgDisplayNameRoundTrip(t *testing.T) {
+	if got := JoinOrgDisplayName("Acme", "Research"); got != "Acme / Research" {
+		t.Fatalf("JoinOrgDisplayName = %q", got)
+	}
+	if got := JoinOrgDisplayName("", "Acme"); got != "Acme" {
+		t.Fatalf("JoinOrgDisplayName without a parent = %q", got)
+	}
+	parent, own := SplitOrgDisplayName("Acme / Research")
+	if parent != "Acme" || own != "Research" {
+		t.Fatalf("SplitOrgDisplayName = %q, %q", parent, own)
+	}
+	parent, own = SplitOrgDisplayName("Acme")
+	if parent != "" || own != "Acme" {
+		t.Fatalf("SplitOrgDisplayName of a plain name = %q, %q", parent, own)
+	}
+}
+
+func TestOrgMatchTierSubOrgOwnName(t *testing.T) {
+	// A sub-organization displays as "Parent / Child" but is selected by its own name.
+	if OrgMatchTier("research", "sub-1", "", "Acme / Research") != orgMatchName {
+		t.Fatal("expected a sub-organization to match on its own name")
+	}
+	if OrgMatchTier("Acme / Research", "sub-1", "", "Acme / Research") != orgMatchName {
+		t.Fatal("expected the full display name to match too")
+	}
+	if OrgMatchTier("acme", "sub-1", "", "Acme / Research") != orgMatchNone {
+		t.Fatal("the parent's name must not select the sub-organization")
+	}
+}
+
+func TestMatchKnownOrg(t *testing.T) {
+	profile := models.Profile{
+		Name:              "work",
+		OrganizationID:    "root-1",
+		SubOrganizationID: "sub-1",
+		OrganizationName:  "Acme / Research",
+		OrganizationSlug:  "acme-research",
+		OrgSessions: []models.OrgSessionRef{
+			{OrgID: "org-2", OrgName: "Globex", OrgSlug: "globex"},
+			{OrgID: "org-3", OrgName: "Initech", OrgSlug: "initech"},
+		},
+	}
+
+	t.Run("the profile's own organization matches by scoped id, slug, and own name", func(t *testing.T) {
+		for _, selector := range []string{"sub-1", "acme-research", "research", "Acme / Research"} {
+			match, ok := MatchKnownOrg(profile, selector)
+			if !ok || !match.IsProfileDefault || match.OrgID != "sub-1" {
+				t.Fatalf("selector %q: got %+v, %v", selector, match, ok)
+			}
+		}
+	})
+
+	t.Run("the root of a sub-organization session is not the profile's own organization", func(t *testing.T) {
+		if _, ok := MatchKnownOrg(profile, "root-1"); ok {
+			t.Fatal("the root id must not short-circuit while the session is scoped to a sub-organization")
+		}
+	})
+
+	t.Run("a cached session matches by id, slug, and name", func(t *testing.T) {
+		for _, selector := range []string{"org-2", "globex", "GLOBEX"} {
+			match, ok := MatchKnownOrg(profile, selector)
+			if !ok || match.IsProfileDefault || match.OrgID != "org-2" {
+				t.Fatalf("selector %q: got %+v, %v", selector, match, ok)
+			}
+		}
+	})
+
+	t.Run("an unknown selector is left to the server", func(t *testing.T) {
+		if _, ok := MatchKnownOrg(profile, "umbrella"); ok {
+			t.Fatal("expected no local match")
+		}
+	})
+
+	t.Run("a name shared by two known organizations is left to the server", func(t *testing.T) {
+		ambiguous := models.Profile{
+			Name:           "work",
+			OrganizationID: "root-1",
+			OrgSessions: []models.OrgSessionRef{
+				{OrgID: "org-2", OrgName: "Globex", OrgSlug: "globex-us"},
+				{OrgID: "org-4", OrgName: "Globex", OrgSlug: "globex-eu"},
+			},
+		}
+		if _, ok := MatchKnownOrg(ambiguous, "globex"); ok {
+			t.Fatal("expected the ambiguous name to be left unresolved")
+		}
+		match, ok := MatchKnownOrg(ambiguous, "globex-eu")
+		if !ok || match.OrgID != "org-4" {
+			t.Fatalf("expected the slug to disambiguate, got %+v, %v", match, ok)
+		}
+	})
+
+	t.Run("a stronger match wins regardless of order", func(t *testing.T) {
+		// An organization named after another one's id must not shadow it.
+		tricky := models.Profile{
+			Name: "work",
+			OrgSessions: []models.OrgSessionRef{
+				{OrgID: "attacker", OrgName: "org-9"},
+				{OrgID: "org-9", OrgName: "Nine"},
+			},
+		}
+		match, ok := MatchKnownOrg(tricky, "org-9")
+		if !ok || match.OrgID != "org-9" {
+			t.Fatalf("expected the id match to win, got %+v, %v", match, ok)
+		}
+	})
+}
+
+func TestOrgSessionIndex(t *testing.T) {
+	profile := models.Profile{Name: "work"}
+	RecordOrgSession(&profile, models.OrgSessionRef{OrgID: "org-2", OrgName: "Globex"})
+	RecordOrgSession(&profile, models.OrgSessionRef{OrgID: "org-3", OrgName: "Initech"})
+	RecordOrgSession(&profile, models.OrgSessionRef{OrgID: "org-2", OrgName: "Globex Renamed", OrgSlug: "globex"})
+	if len(profile.OrgSessions) != 2 {
+		t.Fatalf("expected re-recording an organization to replace its entry, got %+v", profile.OrgSessions)
+	}
+	if profile.OrgSessions[0].OrgName != "Globex Renamed" || profile.OrgSessions[0].OrgSlug != "globex" {
+		t.Fatalf("expected the entry to be refreshed, got %+v", profile.OrgSessions[0])
+	}
+	if !RemoveOrgSession(&profile, "org-2") || len(profile.OrgSessions) != 1 || profile.OrgSessions[0].OrgID != "org-3" {
+		t.Fatalf("expected org-2 to be removed, got %+v", profile.OrgSessions)
+	}
+	if RemoveOrgSession(&profile, "missing") {
+		t.Fatal("removing an unknown organization must report false")
+	}
+	if got := OrgSessionKeyringKey("work", "org-3"); got != "org-session:work:org-3" {
+		t.Fatalf("unexpected keyring key %q", got)
+	}
+}
+
+func TestScopedOrganizationID(t *testing.T) {
+	root := models.Profile{OrganizationID: "root-1"}
+	if root.ScopedOrganizationID() != "root-1" {
+		t.Fatal("a root session acts in the root organization")
+	}
+	sub := models.Profile{OrganizationID: "root-1", SubOrganizationID: "sub-1"}
+	if sub.ScopedOrganizationID() != "sub-1" {
+		t.Fatal("a sub-organization session acts in the sub-organization")
+	}
+}
+
+func TestRenameProfile(t *testing.T) {
+	scopedDir := filepath.Join("/", "home", "scott", "work")
+	base := func() models.ConfigFile {
+		return models.ConfigFile{
+			ActiveProfile:      "scott@example.com",
+			LoggedInUserEmail:  "scott@example.com",
+			LoggedInUserDomain: "https://app.infisical.com/api",
+			Profiles: []models.Profile{
+				{Name: "scott@example.com", Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+				{Name: "globex", Email: "scott@example.com", Domain: "https://app.infisical.com/api"},
+			},
+			DirectoryProfiles: map[string]string{scopedDir: "globex"},
+		}
+	}
+
+	t.Run("directory bindings follow the new name", func(t *testing.T) {
+		configFile := base()
+		if err := RenameProfile(&configFile, "globex", "globex-work"); err != nil {
+			t.Fatal(err)
+		}
+		if _, found := FindProfile(configFile, "globex"); found {
+			t.Fatal("old name still present")
+		}
+		if _, found := FindProfile(configFile, "globex-work"); !found {
+			t.Fatal("new name missing")
+		}
+		if configFile.DirectoryProfiles[scopedDir] != "globex-work" {
+			t.Fatalf("directory binding did not follow: %+v", configFile.DirectoryProfiles)
+		}
+		if configFile.ActiveProfile != "scott@example.com" {
+			t.Fatalf("default profile changed unexpectedly: %q", configFile.ActiveProfile)
+		}
+	})
+
+	t.Run("renaming the default profile moves the pointer and re-syncs the legacy fields", func(t *testing.T) {
+		configFile := base()
+		if err := RenameProfile(&configFile, "scott@example.com", "personal"); err != nil {
+			t.Fatal(err)
+		}
+		if configFile.ActiveProfile != "personal" {
+			t.Fatalf("expected the default to follow, got %q", configFile.ActiveProfile)
+		}
+		// The legacy pointer is only published for email-named profiles, since
+		// older binaries load the keyring entry it names.
+		if configFile.LoggedInUserEmail != "" {
+			t.Fatalf("expected the legacy pointer to be cleared, got %q", configFile.LoggedInUserEmail)
+		}
+	})
+
+	t.Run("rejects unknown, duplicate, and unchanged names", func(t *testing.T) {
+		configFile := base()
+		if err := RenameProfile(&configFile, "missing", "x"); err == nil {
+			t.Fatal("expected an error for an unknown profile")
+		}
+		if err := RenameProfile(&configFile, "globex", "scott@example.com"); err == nil {
+			t.Fatal("expected an error for a name already in use")
+		}
+		if err := RenameProfile(&configFile, "globex", "globex"); err == nil {
+			t.Fatal("expected an error for an unchanged name")
+		}
+	})
+}
+
+func TestRepointProfileDomainClearsOrgCache(t *testing.T) {
+	configFile := models.ConfigFile{
+		Profiles: []models.Profile{{
+			Name:             "work",
+			Email:            "scott@example.com",
+			Domain:           "https://app.infisical.com/api",
+			OrganizationID:   "org-a",
+			OrganizationSlug: "acme",
+			OrgSessions:      []models.OrgSessionRef{{OrgID: "org-b", OrgName: "Globex"}},
+		}},
+	}
+	RepointProfileDomain(&configFile, "work", "https://self.example.com/api")
+	moved := configFile.Profiles[0]
+	if moved.OrganizationSlug != "" || len(moved.OrgSessions) != 0 {
+		t.Fatalf("expected the organization slug and cached sessions to be dropped, got %+v", moved)
+	}
+}
+
+func TestLoginRenewalArgs(t *testing.T) {
+	t.Run("nothing resolved renews the default login", func(t *testing.T) {
+		got := LoginRenewalArgs(ResolvedProfile{}, models.Profile{}, false)
+		if strings.Join(got, " ") != "login --silent" {
+			t.Fatalf("unexpected args %v", got)
+		}
+	})
+
+	t.Run("an existing profile is signed back in to on its instance", func(t *testing.T) {
+		got := LoginRenewalArgs(ResolvedProfile{Name: "work"}, models.Profile{Name: "work", Domain: "https://eu.infisical.com/api"}, true)
+		if strings.Join(got, " ") != "login --silent --profile work --domain https://eu.infisical.com" {
+			t.Fatalf("unexpected args %v", got)
+		}
+	})
+
+	t.Run("a selected but missing profile is created", func(t *testing.T) {
+		got := LoginRenewalArgs(ResolvedProfile{Name: "client-b", Source: ProfileSourceDirectory}, models.Profile{}, false)
+		if strings.Join(got, " ") != "login --silent --save-as client-b" {
+			t.Fatalf("unexpected args %v", got)
+		}
+	})
+}
+
+// The gateway, relay, and kmip commands resolve their own domain. They must
+// follow the resolved profile: the legacy mirror is empty for any profile whose
+// name is not its account email, which is what DeriveProfileName produces.
+func TestActiveProfileDomain(t *testing.T) {
+	const selfHosted = "https://infisical.example.com/api"
+
+	t.Run("derived profile name still resolves the instance", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			ActiveProfile: "scott@example.com--acme",
+			Profiles: []models.Profile{
+				{Name: "scott@example.com--acme", Email: "scott@example.com", Domain: selfHosted},
+			},
+			// Cleared by syncLegacyLoginFields because name != email.
+			LoggedInUserDomain: "",
+		}
+
+		got := activeProfileDomain(configFile, ResolvedProfile{Name: "scott@example.com--acme"})
+		if got != selfHosted {
+			t.Fatalf("expected %q, got %q", selfHosted, got)
+		}
+	})
+
+	t.Run("falls back to the legacy field for a pre-profile config", func(t *testing.T) {
+		configFile := models.ConfigFile{LoggedInUserDomain: selfHosted}
+
+		got := activeProfileDomain(configFile, ResolvedProfile{})
+		if got != selfHosted {
+			t.Fatalf("expected %q, got %q", selfHosted, got)
+		}
+	})
+
+	t.Run("falls back when the resolved profile has no stored domain", func(t *testing.T) {
+		configFile := models.ConfigFile{
+			ActiveProfile:      "work",
+			Profiles:           []models.Profile{{Name: "work", Email: "scott@example.com"}},
+			LoggedInUserDomain: selfHosted,
+		}
+
+		got := activeProfileDomain(configFile, ResolvedProfile{Name: "work"})
+		if got != selfHosted {
+			t.Fatalf("expected %q, got %q", selfHosted, got)
+		}
+	})
+
+	t.Run("reports nothing when neither is set", func(t *testing.T) {
+		if got := activeProfileDomain(models.ConfigFile{}, ResolvedProfile{}); got != "" {
+			t.Fatalf("expected empty domain, got %q", got)
+		}
+	})
+}
