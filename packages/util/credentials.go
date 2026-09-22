@@ -251,6 +251,19 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 	return details, nil
 }
 
+// orgSessionUsable reports whether a cached organization token can still be
+// sent. It is minted from the profile's own session and dies with it, so an
+// unexpired token from a superseded session would be rejected by the server
+// with no way to recover mid-command. Checking the session it belongs to costs
+// nothing and turns that failure into a fresh exchange.
+func orgSessionUsable(cachedToken string, sessionToken string) bool {
+	if cachedToken == "" || IsJWTExpired(cachedToken) {
+		return false
+	}
+	session := ParseTokenSessionID(sessionToken)
+	return session != "" && ParseTokenSessionID(cachedToken) == session
+}
+
 // applyOrgOverride retargets the session to the organization named by the
 // --org/INFISICAL_ORG selector, minting and caching a token for it when needed.
 func applyOrgOverride(details *LoggedInUserDetails, selector string, selectorSource string) error {
@@ -265,15 +278,16 @@ func applyOrgOverride(details *LoggedInUserDetails, selector string, selectorSou
 			details.OrganizationSource = selectorSource
 			return nil
 		}
-		if token, ok := GetOrgSessionToken(profile.Name, known.OrgID); ok && !IsJWTExpired(token) {
+		if token, ok := GetOrgSessionToken(profile.Name, known.OrgID); ok && orgSessionUsable(token, details.UserCredentials.JTWToken) {
 			details.UserCredentials.JTWToken = token
 			details.OrganizationID = known.OrgID
 			details.OrganizationName = known.OrgName
 			details.OrganizationSource = selectorSource
 			return nil
 		}
-		// The cached token is gone or expired, but the organization is known,
-		// so skip the listing and go straight to a fresh exchange.
+		// The cached token is gone, expired, or left over from a superseded
+		// session, but the organization is known, so skip the listing and go
+		// straight to a fresh exchange.
 		target = ResolvedOrg{ID: known.OrgID, Name: known.OrgName, Slug: known.OrgSlug}
 	} else {
 		resolved, err := ResolveOrgSelector(details.UserCredentials.JTWToken, selector)
