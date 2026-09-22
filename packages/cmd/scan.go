@@ -72,6 +72,7 @@ func init() {
 	scanCmd.Flags().Bool("pipe", false, "scan input from stdin, ex: `cat some_file | infisical scan --pipe`")
 	scanCmd.Flags().Bool("follow-symlinks", false, "scan files that are symlinks to other files")
 	scanCmd.Flags().String("platform", "", "SCM platform to use for generating finding links (github, gitlab, azuredevops, bitbucket)")
+	scanCmd.Flags().String("confidence", "", "minimum confidence to include (low, medium, high)")
 
 	// global scan flags
 	scanCmd.PersistentFlags().StringP("config", "c", "", configDescription)
@@ -266,6 +267,15 @@ var scanCmd = &cobra.Command{
 		// set color flag
 		if detector.NoColor, err = cmd.Flags().GetBool("no-color"); err != nil {
 			log.Fatal().Err(err).Msg("")
+		}
+
+		// Enforced in the shared fragment loop, so this covers the git, directory and stdin paths.
+		minConfidence, err := cmd.Flags().GetString("confidence")
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not call GetString() for confidence")
+		}
+		if detector.MinConfidence, err = parseConfidence(minConfidence); err != nil {
+			log.Fatal().Err(err).Msg("invalid --confidence value (expected one of: low, medium, high)")
 		}
 
 		if fileExists(filepath.Join(source, config.DefaultInfisicalIgnoreFineName)) {
@@ -503,6 +513,18 @@ var scanGitChangesCmd = &cobra.Command{
 			os.Exit(exitCode)
 		}
 	},
+}
+
+// parseConfidence normalises the --confidence flag. An empty value means no
+// filtering. The engine silently ignores an unrecognised minimum, so reject it
+// here rather than let a typo quietly disable the filter.
+func parseConfidence(value string) (string, error) {
+	switch v := strings.ToLower(strings.TrimSpace(value)); v {
+	case "", "low", "medium", "high":
+		return v, nil
+	default:
+		return "", fmt.Errorf("invalid confidence %q", value)
+	}
 }
 
 func reportFindings(findings []report.Finding, reportPath string, ext string, cfg *config.Config) {
