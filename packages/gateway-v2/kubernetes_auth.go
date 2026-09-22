@@ -34,7 +34,7 @@ func LoginGatewayWithKubernetes(httpClient *resty.Client, gatewayID string, toke
 		return "", fmt.Errorf("the Kubernetes service account token at %s is empty", tokenPath)
 	}
 
-	resp, err := api.CallKubernetesAuthLoginGateway(httpClient, api.KubernetesAuthLoginGatewayRequest{
+	resp, err := api.CallGatewayLogin(httpClient, api.KubernetesAuthLoginGatewayRequest{
 		Method:    EnrollMethodKubernetes,
 		GatewayID: gatewayID,
 		JWT:       jwt,

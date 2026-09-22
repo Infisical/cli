@@ -16,6 +16,8 @@ const (
 	RELAY_HOST_ENV_NAME     = "INFISICAL_RELAY_HOST"
 	RELAY_TYPE_ENV_NAME     = "INFISICAL_RELAY_TYPE"
 	GATEWAY_NAME_ENV_NAME   = "INFISICAL_GATEWAY_NAME"
+	ENROLL_METHOD_ENV_NAME  = "INFISICAL_GATEWAY_ENROLL_METHOD"
+	GCP_AUTH_TYPE_ENV_NAME  = "INFISICAL_GATEWAY_GCP_AUTH_TYPE"
 
 	RELAY_AUTH_SECRET_ENV_NAME = "INFISICAL_RELAY_AUTH_SECRET"
 	INFISICAL_TOKEN_ENV_NAME   = "INFISICAL_TOKEN"
@@ -30,8 +32,12 @@ const (
 	// Gateway auth-method discriminators. Used both for matching the user's --enroll-method
 	// flag value and as the `method` field on the /v3/gateways/login request body.
 	EnrollMethodAws        = "aws"
+	EnrollMethodGcp        = "gcp"
 	EnrollMethodKubernetes = "kubernetes"
 	EnrollMethodToken      = "token"
+
+	GcpAuthTypeGce = "gce"
+	GcpAuthTypeIam = "iam"
 )
 
 type HttpProxyAction string

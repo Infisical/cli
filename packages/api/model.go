@@ -821,6 +821,12 @@ type EnrollGatewayResponse struct {
 	GatewayID   string `json:"gatewayId"`
 }
 
+// Every gateway login method posts to the same endpoint and gets the same body back.
+type GatewayLoginResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
 type AwsAuthLoginGatewayRequest struct {
 	Method            string `json:"method"`
 	GatewayID         string `json:"gatewayId"`
@@ -829,20 +835,16 @@ type AwsAuthLoginGatewayRequest struct {
 	IamRequestHeaders string `json:"iamRequestHeaders"`
 }
 
-type AwsAuthLoginGatewayResponse struct {
-	AccessToken string `json:"accessToken"`
-	TokenType   string `json:"tokenType"`
-}
-
 type KubernetesAuthLoginGatewayRequest struct {
 	Method    string `json:"method"`
 	GatewayID string `json:"gatewayId"`
 	JWT       string `json:"jwt"`
 }
 
-type KubernetesAuthLoginGatewayResponse struct {
-	AccessToken string `json:"accessToken"`
-	TokenType   string `json:"tokenType"`
+type GcpAuthLoginGatewayRequest struct {
+	Method    string `json:"method"`
+	GatewayID string `json:"gatewayId"`
+	JWT       string `json:"jwt"`
 }
 
 type RegisterGatewayResponse struct {

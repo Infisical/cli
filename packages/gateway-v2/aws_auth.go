@@ -79,7 +79,7 @@ func LoginGatewayWithAws(ctx context.Context, httpClient *resty.Client, gatewayI
 		return "", fmt.Errorf("error marshalling headers: %w", err)
 	}
 
-	resp, err := api.CallAwsAuthLoginGateway(httpClient, api.AwsAuthLoginGatewayRequest{
+	resp, err := api.CallGatewayLogin(httpClient, api.AwsAuthLoginGatewayRequest{
 		Method:            EnrollMethodAws,
 		GatewayID:         gatewayID,
 		HTTPRequestMethod: req.Method,
