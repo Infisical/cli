@@ -1,31 +1,13 @@
-// MIT License
-
-// Copyright (c) 2019 Zachary Rice
-
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/Infisical/infisical-merge/detect/internal/confidence"
+	"github.com/Infisical/infisical-merge/detect/internal/contextwindow"
+	"github.com/Infisical/infisical-merge/detect/internal/exprruntime"
 	"github.com/Infisical/infisical-merge/detect/regexp"
 )
 
@@ -57,6 +39,13 @@ type Rule struct {
 	// and reporting purposes.
 	Tags []string
 
+	// Specificity controls precedence when overlapping findings compete.
+	// Higher specificity findings suppress lower specificity findings.
+	Specificity int
+
+	// Confidence estimates how likely a match is to be a real secret.
+	Confidence string
+
 	// Keywords are used for pre-regex check filtering. Rules that contain
 	// keywords will perform a quick string compare check to make sure the
 	// keyword(s) are in the content being scanned.
@@ -67,6 +56,45 @@ type Rule struct {
 
 	// validated is an internal flag to track whether `Validate()` has been called.
 	validated bool
+
+	// Components are other rules whose matches contribute to this rule.
+	// Required components gate the rule; optional components are attached when found.
+	Components []*Component
+
+	// componentsSet records whether a config explicitly supplied components. It is
+	// used while extending configs to distinguish omission from components = [].
+	componentsSet bool
+
+	SkipReport bool
+
+	// TokenEfficiency enables the Token Efficiency filter for this rule.
+	// When enabled, candidate secrets are evaluated using BPE tokenization
+	// to measure how "rare" or non-natural-language a string is. Strings that
+	// tokenize efficiently (i.e., common words/phrases) are filtered out.
+	TokenEfficiency bool
+
+	// ValidateExpr is the raw expression used for secret validation.
+	ValidateExpr string
+
+	// validationProgram is the compiled validation program, set at config load time.
+	validationProgram exprruntime.Program
+
+	// Filter is an expression evaluated against attributes + finding per regex match.
+	// Returns true = skip (discard this finding); false = keep.
+	// Deprecated legacy Allowlists, Entropy, and TokenEfficiency are translated into this field.
+	Filter string
+
+	// filterProgram is the compiled filter program, set at startup.
+	filterProgram exprruntime.Program
+}
+
+// Component references another rule that contributes a nearby match to a multipart finding.
+type Component struct {
+	RuleID string
+	// Optional components are attached when found but do not gate the primary finding.
+	Optional bool
+	// Within uses the same directional L/C grammar as --match-context.
+	Within string
 }
 
 // Validate guards against common misconfigurations.
@@ -78,20 +106,25 @@ func (r *Rule) Validate() error {
 	// Ensure |id| is present.
 	if strings.TrimSpace(r.RuleID) == "" {
 		// Try to provide helpful context, since |id| is empty.
-		var context string
-		if r.Regex != nil {
-			context = ", regex: " + r.Regex.String()
-		} else if r.Path != nil {
-			context = ", path: " + r.Path.String()
-		} else if r.Description != "" {
-			context = ", description: " + r.Description
+		var sb strings.Builder
+		if r.Description != "" {
+			sb.WriteString(", description: " + r.Description)
 		}
-		return fmt.Errorf("rule |id| is missing or empty" + context)
+		if r.Regex != nil {
+			sb.WriteString(", regex: " + r.Regex.String())
+		}
+		if r.Path != nil {
+			sb.WriteString(", path: " + r.Path.String())
+		}
+		return errors.New("rule |id| is missing or empty" + sb.String())
 	}
 
 	// Ensure the rule actually matches something.
 	if r.Regex == nil && r.Path == nil {
-		return fmt.Errorf("%s: both |regex| and |path| are empty, this rule will have no effect", r.RuleID)
+		return errors.New(r.RuleID + ": both |regex| and |path| are empty, this rule will have no effect")
+	}
+	if r.Confidence != "" && !confidence.Valid(r.Confidence) {
+		return fmt.Errorf("%s: invalid confidence %q (expected low, medium, or high)", r.RuleID, r.Confidence)
 	}
 
 	// Ensure |secretGroup| works.
@@ -109,6 +142,39 @@ func (r *Rule) Validate() error {
 		}
 	}
 
+	seenComponents := make(map[string]struct{}, len(r.Components))
+	for _, component := range r.Components {
+		if component == nil {
+			return fmt.Errorf("%s: component is nil", r.RuleID)
+		}
+		if strings.TrimSpace(component.RuleID) == "" {
+			return fmt.Errorf("%s: component rule ID is empty", r.RuleID)
+		}
+		if _, exists := seenComponents[component.RuleID]; exists {
+			return fmt.Errorf("%s: duplicate component rule ID %q", r.RuleID, component.RuleID)
+		}
+		seenComponents[component.RuleID] = struct{}{}
+		if _, err := contextwindow.Parse(component.Within); err != nil {
+			return fmt.Errorf("%s: component %q has invalid within value %q: %w", r.RuleID, component.RuleID, component.Within, err)
+		}
+	}
+
 	r.validated = true
 	return nil
 }
+
+// ValidationProgram returns the compiled validation program for this rule, or nil.
+func (r *Rule) ValidationProgram() exprruntime.Program {
+	return r.validationProgram
+}
+
+// SetValidationProgram stores a compiled validation program on the rule.
+func (r *Rule) SetValidationProgram(p exprruntime.Program) {
+	r.validationProgram = p
+}
+
+// FilterProgram returns the compiled filter program for this rule, or nil.
+func (r *Rule) FilterProgram() exprruntime.Program { return r.filterProgram }
+
+// SetFilterProgram stores a compiled filter program on the rule.
+func (r *Rule) SetFilterProgram(p exprruntime.Program) { r.filterProgram = p }

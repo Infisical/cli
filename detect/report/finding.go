@@ -1,34 +1,17 @@
-// MIT License
-
-// Copyright (c) 2019 Zachary Rice
-
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
 package report
 
 import (
+	"fmt"
+	"maps"
 	"math"
+	"sort"
 	"strings"
+
+	"github.com/Infisical/infisical-merge/detect/sources"
 )
 
-// Finding contains information about strings that
-// have been captured by a tree-sitter query.
+// Finding contains a whole bunch of information about a secret finding.
+// Plenty of real estate in this bad boy so fillerup as needed.
 type Finding struct {
 	// Rule is the name of the rule that was matched
 	RuleID      string
@@ -39,54 +22,340 @@ type Finding struct {
 	StartColumn int
 	EndColumn   int
 
-	Line string `json:"-"`
-
+	// Regex match that triggered the finding
 	Match string
 
-	// Secret contains the full content of what is matched in
-	// the tree-sitter query.
+	// Captured secret
 	Secret string
 
-	// File is the name of the file containing the finding
-	File        string
-	SymlinkFile string
-	Commit      string
-	Link        string `json:",omitempty"`
+	// MatchContext contains surrounding lines around the match
+	MatchContext string `json:",omitempty"`
 
-	// Entropy is the shannon entropy of Value
-	Entropy float32
+	Line string `json:"-"`
 
-	Author  string
-	Email   string
-	Date    string
-	Message string
-	Tags    []string
+	// CaptureGroups holds named regex capture groups from the match.
+	CaptureGroups map[string]string `json:",omitempty"`
+
+	// Fragment used for multi-part rule checking and CEL filtering
+	Fragment *sources.Fragment `json:",omitempty"`
+
+	// Attributes holds additional metadata about the finding.
+	// Keys are defined in sources.Attr* constants (subject to change), but this is extensible for custom use cases.
+	// Attributes are initially populated from the source's Fragment attributes and can be added to in the Detector or ValidationPool.
+	// Deprecated "attribute" fields (File, Commit, etc.) are synced from Attributes for compatibility.
+	Attributes map[string]string `json:",omitempty"`
+
+	Tags []string
+
+	RuleSpecificity int `json:"-"`
+
+	// ComponentSets holds the Cartesian-product combinations of component findings.
+	// Each set is one complete group of components that can be validated independently.
+	ComponentSets []ComponentSet `json:",omitempty"`
+
+	ValidationStatus ValidationStatus `json:",omitempty"`
+	ValidationReason string           `json:",omitempty"`
+	// TODO maybe just use the Attribute map
+	ValidationMeta map[string]any `json:",omitempty"`
 
 	// unique identifier
 	Fingerprint string
+
+	// Hidden field to hold expression context without bloating the report output.
+	exprContext string
+
+	// Deprecated
+	// File is the name of the file containing the finding
+	// Deprecated
+	File string
+	// Deprecated
+	SymlinkFile string
+	// Deprecated
+	Commit string
+	// Deprecated
+	Link string `json:",omitempty"`
+
+	// Entropy is the shannon entropy of Value
+	// Deprecated
+	Entropy float32
+
+	// Deprecated
+	Author string
+	// Deprecated
+	Email string
+	// Deprecated
+	Date string
+	// Deprecated
+	Message string
+}
+
+// ComponentSet represents one combination of component findings (one element per
+// matched component rule) from the Cartesian product. Each set can be validated
+// independently and carries its own validation result.
+type ComponentSet struct {
+	Components       []*ComponentFinding `json:"components"`
+	ValidationStatus ValidationStatus    `json:"validationStatus,omitempty"`
+	ValidationReason string              `json:"validationReason,omitempty"`
+}
+
+type ComponentFinding struct {
+	// contains a subset of the Finding fields
+	// only used for reporting
+	RuleID      string
+	Optional    bool
+	StartLine   int
+	EndLine     int
+	StartColumn int
+	EndColumn   int
+	Line        string `json:"-"`
+	Match       string
+	Secret      string
+	// CaptureGroups holds named regex capture groups from the component match.
+	CaptureGroups   map[string]string `json:",omitempty"`
+	RuleSpecificity int               `json:"-"`
+}
+
+// BuildComponentSets generates the Cartesian product of the given component findings
+// grouped by RuleID and populates f.ComponentSets. maxComponentSets caps the total number of
+// combos to prevent excessive memory use.
+func (f *Finding) BuildComponentSets(componentFindings []*ComponentFinding, maxComponentSets int) {
+	if len(componentFindings) == 0 {
+		f.ComponentSets = nil
+		return
+	}
+
+	// Group by RuleID, preserving first-occurrence order.
+	var ruleOrder []string
+	byRule := make(map[string][]*ComponentFinding)
+	for _, rf := range componentFindings {
+		if _, exists := byRule[rf.RuleID]; !exists {
+			ruleOrder = append(ruleOrder, rf.RuleID)
+		}
+		byRule[rf.RuleID] = append(byRule[rf.RuleID], rf)
+	}
+
+	products := cartesianFindings(ruleOrder, byRule, maxComponentSets)
+	f.ComponentSets = make([]ComponentSet, len(products))
+	for i, components := range products {
+		f.ComponentSets[i] = ComponentSet{Components: components}
+	}
+}
+
+// cartesianFindings computes the Cartesian product over ComponentFinding slices
+// keyed by ruleOrder. It stops early once maxComponentSets is reached.
+func cartesianFindings(ruleOrder []string, byRule map[string][]*ComponentFinding, maxComponentSets int) [][]*ComponentFinding {
+	if len(ruleOrder) == 0 {
+		return [][]*ComponentFinding{{}}
+	}
+
+	head := ruleOrder[0]
+	rest := cartesianFindings(ruleOrder[1:], byRule, maxComponentSets)
+
+	var result [][]*ComponentFinding
+	for _, rf := range byRule[head] {
+		for _, tail := range rest {
+			row := make([]*ComponentFinding, 0, len(tail)+1)
+			row = append(row, rf)
+			row = append(row, tail...)
+			result = append(result, row)
+			if len(result) >= maxComponentSets {
+				return result
+			}
+		}
+	}
+	return result
 }
 
 // Redact removes sensitive information from a finding.
 func (f *Finding) Redact(percent uint) {
-	secret := maskSecret(f.Secret, percent)
+	secret := MaskSecret(f.Secret, percent)
 	if percent >= 100 {
 		secret = "REDACTED"
 	}
-	f.Line = strings.Replace(f.Line, f.Secret, secret, -1)
-	f.Match = strings.Replace(f.Match, f.Secret, secret, -1)
+	f.Line = strings.ReplaceAll(f.Line, f.Secret, secret)
+	f.Match = strings.ReplaceAll(f.Match, f.Secret, secret)
+	f.MatchContext = strings.ReplaceAll(f.MatchContext, f.Secret, secret)
+	// Capture groups can contain the secret verbatim and are emitted in JSON,
+	// JUnit, and template reports, so they must be redacted too. Done before
+	// f.Secret is overwritten so the original value is still available to match.
+	for k, v := range f.CaptureGroups {
+		f.CaptureGroups[k] = strings.ReplaceAll(v, f.Secret, secret)
+	}
 	f.Secret = secret
+
+	seen := make(map[*ComponentFinding]struct{})
+	for _, set := range f.ComponentSets {
+		for _, comp := range set.Components {
+			if _, ok := seen[comp]; ok {
+				continue
+			}
+			seen[comp] = struct{}{}
+			compSecret := MaskSecret(comp.Secret, percent)
+			if percent >= 100 {
+				compSecret = "REDACTED"
+			}
+			comp.Line = strings.ReplaceAll(comp.Line, comp.Secret, compSecret)
+			comp.Match = strings.ReplaceAll(comp.Match, comp.Secret, compSecret)
+			for k, v := range comp.CaptureGroups {
+				comp.CaptureGroups[k] = strings.ReplaceAll(v, comp.Secret, compSecret)
+			}
+			comp.Secret = compSecret
+		}
+	}
 }
 
-func maskSecret(secret string, percent uint) string {
+// MaskSecret applies partial masking to a secret string based on the given percentage.
+// At 100% the caller should use "REDACTED" instead.
+func MaskSecret(secret string, percent uint) string {
 	if percent > 100 {
 		percent = 100
 	}
-	len := float64(len(secret))
-	if len <= 0 {
+	// Operate on runes, not bytes: slicing a multi-byte UTF-8 secret by byte
+	// offset can split a rune (producing invalid UTF-8) and skews the mask ratio.
+	runes := []rune(secret)
+	total := float64(len(runes))
+	if total <= 0 {
 		return secret
 	}
 	prc := float64(100 - percent)
-	lth := int64(math.RoundToEven(len * prc / float64(100)))
+	keep := int(math.RoundToEven(total * prc / float64(100)))
 
-	return secret[:lth] + "..."
+	return string(runes[:keep]) + "..."
+}
+
+func (f *Finding) SetExprContext(context string) {
+	f.exprContext = context
+}
+
+// Print writes a verbose finding using the pretty box format.
+func (f Finding) Print(noColor bool, redact uint) {
+	f.printPretty(noColor, redact)
+}
+
+// locateMatch returns the byte index of match within rawLine, using startCol
+// (1-indexed byte offset) to disambiguate duplicate occurrences. When the
+// exact position doesn't match, it searches forward then backward from the
+// expected position before falling back to the first occurrence.
+func locateMatch(rawLine, rawMatch string, startCol int) int {
+	if rawLine == "" || rawMatch == "" {
+		return -1
+	}
+
+	if startCol > 0 {
+		idx := startCol - 1 // assumes StartColumn is a 1-based byte offset
+
+		if idx >= 0 && idx+len(rawMatch) <= len(rawLine) &&
+			rawLine[idx:idx+len(rawMatch)] == rawMatch {
+			return idx
+		}
+
+		// Search near the expected position first, not from the start.
+		if idx < 0 {
+			idx = 0
+		}
+		if idx > len(rawLine) {
+			idx = len(rawLine)
+		}
+		if rel := strings.Index(rawLine[idx:], rawMatch); rel >= 0 {
+			return idx + rel
+		}
+		if prev := strings.LastIndex(rawLine[:idx], rawMatch); prev >= 0 {
+			return prev
+		}
+	}
+
+	// startCol <= 0 (no hint provided) or, redundantly, when the
+	// forward+backward searches above already covered the full line.
+	return strings.Index(rawLine, rawMatch)
+}
+
+func sortedMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (f *Finding) SetAttr(key, value string) {
+	if f.Attributes == nil {
+		f.Attributes = make(map[string]string)
+	}
+	f.Attributes[key] = value
+}
+
+func (f Finding) Attr(key string) string {
+	if f.Attributes != nil {
+		if value := f.Attributes[key]; value != "" {
+			return value
+		}
+	}
+
+	switch key {
+	case sources.AttrPath:
+		return f.File
+	case sources.AttrFSSymlink:
+		return f.SymlinkFile
+	case sources.AttrGitSHA:
+		return f.Commit
+	case sources.AttrGitAuthorName:
+		return f.Author
+	case sources.AttrGitAuthorEmail:
+		return f.Email
+	case sources.AttrGitDate:
+		return f.Date
+	case sources.AttrGitMessage:
+		return f.Message
+	default:
+		return ""
+	}
+}
+
+// SetAttributes stores a copy of attrs and syncs deprecated source fields for compatibility.
+func (f *Finding) SetAttributes(attrs map[string]string) {
+	f.Attributes = maps.Clone(attrs)
+	f.SyncDeprecatedSourceFields()
+}
+
+// Attribute is retained as a compatibility wrapper around Attr.
+func (f Finding) Attribute(key string) string {
+	return f.Attr(key)
+}
+
+// SyncDeprecatedSourceFields backfills deprecated fields from Attributes so
+// legacy reporters, baselines, and templates continue to work.
+func (f *Finding) SyncDeprecatedSourceFields() {
+	f.File = f.Attr(sources.AttrPath)
+	f.SymlinkFile = f.Attr(sources.AttrFSSymlink)
+	f.Commit = f.Attr(sources.AttrGitSHA)
+	f.Author = f.Attr(sources.AttrGitAuthorName)
+	f.Email = f.Attr(sources.AttrGitAuthorEmail)
+	f.Date = f.Attr(sources.AttrGitDate)
+	f.Message = f.Attr(sources.AttrGitMessage)
+}
+
+func (f *Finding) SetFingerprint() {
+	path := f.Attributes[sources.AttrPath]
+	commit := f.Attributes[sources.AttrGitSHA]
+
+	globalFingerprint := fmt.Sprintf("%s:%s:%d", path, f.RuleID, f.StartLine)
+	if commit != "" {
+		f.Fingerprint = fmt.Sprintf("%s:%s:%s:%d", commit, path, f.RuleID, f.StartLine)
+	} else {
+		f.Fingerprint = globalFingerprint
+	}
+}
+
+// ToExprMap returns the fixed-shape map[string]string used as the `finding`
+// variable in filter and validation expressions.
+func (f *Finding) ToExprMap() map[string]string {
+	return map[string]string{
+		"secret":      f.Secret,
+		"match":       f.Match,
+		"line":        f.Line,
+		"rule_id":     f.RuleID,
+		"description": f.Description,
+		"context":     f.exprContext,
+	}
 }
