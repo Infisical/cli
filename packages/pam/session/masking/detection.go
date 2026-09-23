@@ -36,14 +36,13 @@ func sharedDetector() (*detect.Detector, error) {
 
 // relaxRequiredComponents makes every multi-part rule's components optional.
 //
-// Upstream gates rules like azure-storage-account-key or alibaba-secret-key on a second match
-// (the matching account name or access key id) appearing within a few lines. That trades recall
-// for precision, which suits scanning a repository someone owns but not masking a session:
-// terminal output arrives in chunks, so the two halves of a credential are rarely visible to the
-// same call, and the secret half would then stream into the recording unmasked.
-//
-// Findings still carry their component metadata when both halves do appear; only the requirement
-// to have seen them is dropped.
+// Betterleaks introduces new rules that only report some secret if something
+// else is leaked up to 5 lines away from the original leak.
+// For example:
+// It only triggers an AWS_ACCESS_KEY_ID it it finds a AWS_SECRET_KEY_ID next
+// to it (5 lines away) to it, otherwise it does not report it as a leaked secret.
+// But because this is used for redacting secrets, It makes more sense to be more
+// restrictive.
 func relaxRequiredComponents(cfg *config.Config) {
 	for id, rule := range cfg.Rules {
 		if len(rule.Components) == 0 {
