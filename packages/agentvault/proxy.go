@@ -47,6 +47,10 @@ const (
 	maxConcurrentConns = 512
 
 	maxLoggedPathLen = 2048
+	// The agent chooses the method and the port too, and Go bounds them only by the 1 MiB header limit.
+	// Uncapped, one request could make its own record big enough to stall whoever reads the session.
+	maxLoggedMethodLen = 32
+	maxLoggedPortLen   = 16
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
@@ -362,6 +366,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 
 	// requestPath rather than EscapedPath, so a brokered request is never recorded with a blank path.
 	reqPath := truncatePath(requestPath(r))
+	reqMethod := truncateLogged(r.Method, maxLoggedMethodLen)
 
 	resp, matched, outcome, err := ps.forward(r, scheme, hostname, port, sessionToken)
 
@@ -400,7 +405,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	case decisionError:
 		event = log.Error()
 	}
-	event.Str("method", r.Method).
+	event.Str("method", reqMethod).
 		Str("host", hostname).
 		Str("path", reqPath).
 		Str("decision", decision).
@@ -429,9 +434,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 			service, bundle = &matched.name, &matched.accessBundleName
 		}
 		ps.activity.record(outcome.activity, activityRecord{
-			Method:       r.Method,
+			Method:       reqMethod,
 			Host:         hostname,
-			Port:         port,
+			Port:         truncateLogged(port, maxLoggedPortLen),
 			Path:         reqPath,
 			Status:       status,
 			Decision:     decision,

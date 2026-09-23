@@ -166,6 +166,34 @@ func TestABlockedRequestIsRecordedWithItsRefusal(t *testing.T) {
 	}
 }
 
+func TestAnOversizedMethodIsRecordedTruncated(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer upstream.Close()
+
+	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, nil)
+
+	proxyURL, _ := url.Parse(front.URL)
+	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	// A valid token, so Go sends it. Only the header limit stops an agent sending one far longer.
+	req, err := http.NewRequest(strings.Repeat("A", 5000), upstream.URL+"/v1/thing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("the proxy did not answer: %v", err)
+	}
+	defer res.Body.Close()
+
+	got := drainOneRecord(t, log)
+	if len(got.Method) > maxLoggedMethodLen+len("...[truncated]") {
+		t.Fatalf("the record kept a %d-byte method; an agent could inflate its own records", len(got.Method))
+	}
+}
+
 func TestRecordingSurvivesAnUnreachableUpstream(t *testing.T) {
 	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, nil)
 

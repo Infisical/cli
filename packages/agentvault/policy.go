@@ -114,10 +114,14 @@ func requestPath(req *http.Request) string {
 }
 
 func truncatePath(path string) string {
-	if len(path) > maxLoggedPathLen {
-		return path[:maxLoggedPathLen] + "...[truncated]"
+	return truncateLogged(path, maxLoggedPathLen)
+}
+
+func truncateLogged(value string, limit int) string {
+	if len(value) > limit {
+		return value[:limit] + "...[truncated]"
 	}
-	return path
+	return value
 }
 
 // Never decodes: anything whose meaning depends on the upstream's normalisation is refused outright, so the
