@@ -73,8 +73,9 @@ type activityLog struct {
 	// when it grows, the way the session cache handles its own refusal map.
 	seqBySession map[string]uint64
 
-	total       int
-	sealedBytes int
+	total         int
+	sealedBytes   int
+	nextSealOrder uint64
 
 	// Proxy-wide, because both reasons are proxy-wide: the ceiling is per organization and the switch is
 	// per project, and this proxy serves one project.
@@ -302,6 +303,8 @@ func (a *activityLog) sealRing(spool *activitySpool) {
 		}
 
 		a.mu.Lock()
+		chunk.sealOrder = a.nextSealOrder
+		a.nextSealOrder++
 		spool.pending = append(spool.pending, chunk)
 		a.sealedBytes += len(chunk.ciphertext)
 		a.enforcePendingCapsLocked(spool)
@@ -310,19 +313,49 @@ func (a *activityLog) sealRing(spool *activitySpool) {
 }
 
 // enforcePendingCapsLocked runs on every append, because the caps are a property of `pending` rather than
-// a branch of the ceiling handler. The oldest sealed chunk is evicted and its records counted as dropped.
+// a branch of the ceiling handler. Both evict the oldest sealed chunk and count what it held as dropped.
+//
+// The byte cap is proxy-wide, so it evicts the oldest chunk on the proxy wherever it sits, a session's only
+// chunk included. Sparing every session its last chunk let an outage hold one per session with no bound.
 func (a *activityLog) enforcePendingCapsLocked(spool *activitySpool) {
-	for len(spool.pending) > activityPendingChunks || (a.sealedBytes > activityTotalSealedBytes && len(spool.pending) > 1) {
-		oldest := spool.pending[0]
-		spool.pending = spool.pending[1:]
-		a.sealedBytes -= len(oldest.ciphertext)
-		spool.ring.dropped += uint64(oldest.meta.RecordCount)
-		log.Warn().
-			Str("sessionId", spool.sessionID).
-			Str("chunkId", oldest.meta.ChunkID).
-			Int("records", oldest.meta.RecordCount).
-			Msg("agent-vault: dropped an unshipped activity chunk, the buffer is full")
+	for len(spool.pending) > activityPendingChunks {
+		a.evictOldestLocked(spool)
 	}
+	for a.sealedBytes > activityTotalSealedBytes {
+		victim := a.oldestPendingLocked()
+		if victim == nil {
+			// Unreachable while sealedBytes counts only pending chunks. Guarded anyway: this runs under the
+			// lock every proxied request takes to record.
+			return
+		}
+		a.evictOldestLocked(victim)
+	}
+}
+
+// oldestPendingLocked scans every spool, which is fine: it only runs once the proxy is over its byte cap.
+func (a *activityLog) oldestPendingLocked() *activitySpool {
+	var oldest *activitySpool
+	for _, spool := range a.spools {
+		if len(spool.pending) == 0 {
+			continue
+		}
+		if oldest == nil || spool.pending[0].sealOrder < oldest.pending[0].sealOrder {
+			oldest = spool
+		}
+	}
+	return oldest
+}
+
+func (a *activityLog) evictOldestLocked(spool *activitySpool) {
+	oldest := spool.pending[0]
+	spool.pending = spool.pending[1:]
+	a.sealedBytes -= len(oldest.ciphertext)
+	spool.ring.dropped += oldest.lostCount()
+	log.Warn().
+		Str("sessionId", spool.sessionID).
+		Str("chunkId", oldest.meta.ChunkID).
+		Int("records", oldest.meta.RecordCount).
+		Msg("agent-vault: dropped an unshipped activity chunk, the buffer is full")
 }
 
 func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, final bool) {
@@ -365,6 +398,7 @@ func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk
 		if err != nil {
 			return a.handleCreateFailure(spool, chunk, err)
 		}
+		chunk.posted = true
 		chunk.uploadURL = res.UploadURL
 		chunk.urlExpires = a.now().Add(time.Duration(res.ExpiresInSeconds) * time.Second)
 	}

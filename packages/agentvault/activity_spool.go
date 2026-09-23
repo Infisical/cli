@@ -119,6 +119,22 @@ type sealedChunk struct {
 	// chunk id and the server replays it idempotently.
 	uploadURL  string
 	urlExpires time.Time
+
+	// Proxy-wide, so the byte cap can find the oldest chunk across every session.
+	sealOrder uint64
+	// Set once Infisical has written the row. Never cleared: a re-POST replays the same row.
+	posted bool
+}
+
+// lostCount is what a chunk that will never be uploaded adds to its session's gap. Once the POST succeeded
+// the row exists, and the viewer already shows those records as a batch it cannot read, so counting them
+// again would report one loss twice. The drop count the chunk carried is shown nowhere else, so it always
+// comes back.
+func (c *sealedChunk) lostCount() uint64 {
+	if c.posted {
+		return c.meta.DroppedCount
+	}
+	return c.meta.DroppedCount + uint64(c.meta.RecordCount)
 }
 
 // activitySpool is one session's buffer on this proxy. proxyID is constant for the process, so it lives on

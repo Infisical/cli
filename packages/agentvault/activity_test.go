@@ -483,6 +483,59 @@ func TestThePendingCapEvictsTheOldestAndCountsIt(t *testing.T) {
 	}
 }
 
+func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
+	log, _, _ := newTestLog(&fakeShipper{})
+
+	// Only the length counts toward the cap, so every chunk can share one buffer.
+	blob := make([]byte, 12<<20)
+	add := func(sessionID string, order uint64, posted bool, carried uint64) *activitySpool {
+		spool, ok := log.spools[sessionID]
+		if !ok {
+			spool = newActivitySpool(testGrant(sessionID), log.now())
+			log.spools[sessionID] = spool
+		}
+		spool.pending = append(spool.pending, &sealedChunk{
+			meta:       api.CreateAgentVaultActivityChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100, DroppedCount: carried},
+			ciphertext: blob,
+			sealOrder:  order,
+			posted:     posted,
+		})
+		log.sealedBytes += len(blob)
+		return spool
+	}
+
+	// One chunk per session, the shape an outage leaves behind, seven of them for 84 MiB against a 64 MiB cap.
+	log.mu.Lock()
+	add("oldest", 0, false, 7)
+	add("posted", 1, true, 3)
+	var newest *activitySpool
+	for i := 2; i < 7; i++ {
+		newest = add(fmt.Sprintf("s%d", i), uint64(i), false, 0)
+	}
+	log.enforcePendingCapsLocked(newest)
+	log.mu.Unlock()
+
+	if log.sealedBytes > activityTotalSealedBytes {
+		t.Fatalf("the proxy holds %d sealed bytes, past the %d cap", log.sealedBytes, activityTotalSealedBytes)
+	}
+	if got := len(log.spools["oldest"].pending) + len(log.spools["posted"].pending); got != 0 {
+		t.Fatalf("the two oldest chunks were not evicted, %d remain", got)
+	}
+	for i := 2; i < 7; i++ {
+		if len(log.spools[fmt.Sprintf("s%d", i)].pending) != 1 {
+			t.Fatalf("s%d lost its chunk; only the oldest should go", i)
+		}
+	}
+	// Never posted, so its records and the drops it carried are both unaccounted for anywhere else.
+	if got := log.spools["oldest"].ring.dropped; got != 107 {
+		t.Fatalf("the unposted chunk counted %d dropped, expected 107", got)
+	}
+	// Posted, so the viewer already shows its records as unreadable. Only the carried drops come back.
+	if got := log.spools["posted"].ring.dropped; got != 3 {
+		t.Fatalf("the posted chunk counted %d dropped, expected 3", got)
+	}
+}
+
 func TestTheTickBreakerStopsHammeringADeadBucket(t *testing.T) {
 	shipper := &fakeShipper{putDefault: errors.New("i/o timeout")}
 	log, _, tick := newTestLog(shipper)
