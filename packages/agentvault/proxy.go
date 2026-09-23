@@ -55,6 +55,12 @@ const (
 
 var errHostBlocked = errors.New("host blocked by policy")
 
+// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive as
+// a request-target with no leading slash, and no path rule could judge it. RFC 9110 makes an http(s) URI
+// without an authority invalid. handlePlainForward refuses the shape already; a tunnel reaches forward
+// directly, so the refusal lives there.
+var errOpaqueTarget = errors.New("the request target must be a path; opaque forms are not forwarded")
+
 // Wraps a resolve failure so the tunnel can tell it from an upstream failure without reading the text.
 var errSessionResolve = errors.New("failed to resolve the session")
 
@@ -352,14 +358,6 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
-	// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive
-	// as a request-target with no leading slash. handlePlainForward refuses the shape already; the tunnel
-	// reaches this handler directly, so the refusal belongs here where both doors meet.
-	if r.URL.Opaque != "" {
-		http.Error(w, "the request target must be a path; opaque forms are not forwarded", http.StatusBadRequest)
-		return
-	}
-
 	// Before anything reads the path: the policy check, the substitutions and the forward all have to see
 	// the bytes the agent sent, not the ones Go rebuilds.
 	normalizeRequestTarget(r.URL)
@@ -382,6 +380,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	case errors.Is(err, errBodyUnreadable):
 		// The agent's upload broke, so this is its request to retry rather than an upstream or policy failure.
 		decision, status, body = decisionBlocked, http.StatusBadRequest, err.Error()
+	case errors.Is(err, errOpaqueTarget):
+		decision, status, body = decisionBlocked, http.StatusBadRequest, errOpaqueTarget.Error()
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
@@ -504,6 +504,12 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// the handler so it is logged like every other refusal.
 	if method := strings.ToUpper(req.Method); method == http.MethodTrace || method == "TRACK" {
 		return nil, nil, outcome, fmt.Errorf("method %s echoes headers back: %w", method, errPolicyBlocked)
+	}
+
+	// After the lookup for the same reason: the only use of this form is probing for a path the policy
+	// misreads, which is the attempt an admin most wants to see in the session's activity.
+	if req.URL.Opaque != "" {
+		return nil, nil, outcome, errOpaqueTarget
 	}
 
 	matched := bestMatch(services, hostname, port)

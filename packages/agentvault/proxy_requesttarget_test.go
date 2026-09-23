@@ -108,14 +108,46 @@ func TestAPlaceholderInThePathStillSubstitutes(t *testing.T) {
 }
 
 // 'http:admin/secrets' parses to an empty path and a non-empty Opaque. handlePlainForward refuses the shape,
-// the tunnel reaches forwardHTTP directly, and the upstream would have received a target with no leading
-// slash and a real credential on it.
+// the tunnel reaches forward directly, and the upstream would have received a target with no leading slash
+// and a real credential on it.
 func TestAnOpaqueRequestTargetIsRefusedInsideATunnel(t *testing.T) {
 	proxyHost, upstreamHost := newRequestTargetFixture(t, nil)
 
 	resp, _ := rawProxyRequest(t, proxyHost, "GET http:admin/secrets HTTP/1.1", upstreamHost, upstreamHost)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestAnOpaqueRequestTargetIsRecordedAsBlocked(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	uu, _ := url.Parse(upstream.URL)
+	upstreamHost := "127.0.0.1:" + uu.Port()
+
+	key, cert, err := generateRootCa()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := &proxyServer{transport: newUpstreamTransport(), ca: newCaManager(key, cert)}
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
+	ps.cache = newSessionCache(grantingResolver{}, ps.pollInterval)
+	ps.activity = newActivityLog("proxy-1", &fakeShipper{})
+	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
+	t.Cleanup(front.Close)
+	fu, _ := url.Parse(front.URL)
+
+	resp, _ := rawProxyRequest(t, fu.Host, "GET http:admin/secrets HTTP/1.1", upstreamHost, upstreamHost)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+
+	// Refused, and still on the record: nobody sends this form except to probe the path rules.
+	got := drainOneRecord(t, ps.activity)
+	if got.Decision != decisionBlocked || got.Status != http.StatusBadRequest || got.Path != "admin/secrets" {
+		t.Fatalf("record is %+v, expected a blocked 400 for admin/secrets", got)
 	}
 }
 

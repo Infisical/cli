@@ -103,8 +103,8 @@ func escapeInvalidPathBytes(raw string) string {
 func requestPath(req *http.Request) string {
 	path := req.URL.EscapedPath()
 	if path == "" {
-		// forwardHTTP refuses an opaque target before this runs, so the branch is a floor under that check
-		// rather than a shape expected here. A genuinely empty path is the root.
+		// forward refuses an opaque target before any policy reads the path, so this branch is what the log
+		// line and the activity record show for one. A genuinely empty path is the root.
 		if req.URL.Opaque != "" {
 			return req.URL.Opaque
 		}
