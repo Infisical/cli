@@ -164,13 +164,50 @@ func newActivitySpool(g *activityGrant, now time.Time) *activitySpool {
 	}
 }
 
-// sealSlice turns one slice of records into a sealed chunk ready to ship.
-func (s *activitySpool) sealSlice(proxyID string, records []activityRecord, dropped uint64, now time.Time) (*sealedChunk, error) {
-	plaintext, err := json.Marshal(records)
+type activityGroup struct {
+	records   []activityRecord
+	plaintext []byte
+}
+
+// packActivityRecords splits one drained slice into chunks the server takes by size as well as by count.
+// Nearly every flush fits whole and is marshalled once. The rest are marshalled per record and packed, which
+// yields exactly what marshalling each group as a slice would: '[', the records joined by ',', then ']'.
+func packActivityRecords(records []activityRecord) ([]activityGroup, error) {
+	whole, err := json.Marshal(records)
 	if err != nil {
 		return nil, err
 	}
+	if len(whole) <= activityMaxChunkPlaintext {
+		return []activityGroup{{records: records, plaintext: whole}}, nil
+	}
 
+	var groups []activityGroup
+	var buf []byte
+	start := 0
+	for i, rec := range records {
+		part, err := json.Marshal(rec)
+		if err != nil {
+			return nil, err
+		}
+		// One byte for the separator before it and one for the closing bracket. A record too big to share a
+		// chunk still gets one of its own rather than being split.
+		if len(buf) > 0 && len(buf)+1+len(part)+1 > activityMaxChunkPlaintext {
+			groups = append(groups, activityGroup{records: records[start:i], plaintext: append(buf, ']')})
+			buf, start = nil, i
+		}
+		if len(buf) == 0 {
+			buf = append(buf, '[')
+		} else {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, part...)
+	}
+	groups = append(groups, activityGroup{records: records[start:], plaintext: append(buf, ']')})
+	return groups, nil
+}
+
+// sealSlice turns one group of records, already marshalled, into a sealed chunk ready to ship.
+func (s *activitySpool) sealSlice(proxyID string, records []activityRecord, plaintext []byte, dropped uint64, now time.Time) (*sealedChunk, error) {
 	chunkID := newActivityChunkID(now)
 	aad := buildActivityAAD(s.projectID, s.sessionID, proxyID, chunkID)
 	ciphertext, iv, err := sealActivity(s.key, plaintext, aad)

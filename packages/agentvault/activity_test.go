@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ type shipperCall struct {
 	chunkID   string
 	url       string
 	bytes     int
+	dropped   uint64
 	body      []byte
 	final     bool
 }
@@ -47,7 +49,7 @@ func (f *fakeShipper) createChunk(final bool, sessionID string, req api.CreateAg
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, final: final})
+	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, dropped: req.DroppedCount, final: final})
 
 	result := f.postDefault
 	if len(f.postResults) > 0 {
@@ -444,6 +446,57 @@ func TestAPoisonChunkIsDroppedAndTheRestShip(t *testing.T) {
 	tick()
 	if len(shipper.puts()) != 1 {
 		t.Fatalf("the next chunk did not ship after a poison one, %d uploads", len(shipper.puts()))
+	}
+}
+
+func TestARefusedChunkIsCountedOnTheNextOne(t *testing.T) {
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusUnprocessableEntity, "")}}}
+	log, _, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+
+	// The refused chunk was never written, so the next one is the only place its record can show up.
+	posts := shipper.posts()
+	if len(posts) != 2 || posts[1].dropped != 1 {
+		t.Fatalf("posts were %+v, expected the second to carry one dropped record", posts)
+	}
+}
+
+func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
+	shipper := &fakeShipper{postDefault: scriptedResult{err: errors.New("infisical unreachable")}}
+	log, _, tick := newTestLog(shipper)
+	grant := testGrant("s1")
+
+	// JSON writes '&' as &, so a full slice of these is about 12 MB: over the server's 8 MiB.
+	for i := 0; i < activityFlushRecords; i++ {
+		rec := aRecord("api.github.com")
+		rec.Path = truncatePath("/" + strings.Repeat("&", maxLoggedPathLen))
+		log.record(grant, rec)
+	}
+	tick()
+
+	const gcmTag = 16
+	pending := log.spools["s1"].pending
+	if len(pending) < 2 {
+		t.Fatalf("a ~12 MB flush sealed into %d chunk(s); it must be split", len(pending))
+	}
+	var next uint64
+	var total int
+	for i, chunk := range pending {
+		if chunk.meta.CiphertextBytes-gcmTag > activityMaxChunkPlaintext {
+			t.Fatalf("chunk %d holds %d bytes of plaintext, over %d", i, chunk.meta.CiphertextBytes-gcmTag, activityMaxChunkPlaintext)
+		}
+		if chunk.meta.FirstSeq != next {
+			t.Fatalf("chunk %d starts at seq %d, expected %d; a record was lost or reordered", i, chunk.meta.FirstSeq, next)
+		}
+		next = chunk.meta.LastSeq + 1
+		total += chunk.meta.RecordCount
+	}
+	if total != activityFlushRecords {
+		t.Fatalf("the chunks hold %d records, expected %d", total, activityFlushRecords)
 	}
 }
 

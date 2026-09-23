@@ -16,6 +16,10 @@ const (
 	activityFlushInterval = 60 * time.Second
 	// The server refuses a chunk over this, so the ring is drained in slices of at most this many.
 	activityFlushRecords = 1000
+	// The server also refuses a chunk over 8 MiB. The agent controls how long its paths are and JSON
+	// escapes some bytes six to one, so a full slice can pass that. Half the limit leaves ordinary
+	// flushes whole.
+	activityMaxChunkPlaintext = 4 << 20
 
 	// Five missed flushes of headroom per session before the oldest records start being overwritten.
 	activitySpoolCapacity = 5000
@@ -286,30 +290,47 @@ func (a *activityLog) sealRing(spool *activitySpool) {
 			return
 		}
 		a.total -= len(records)
-		// droppedCount rides the first slice only, so one gap is reported once.
+		// droppedCount rides the first chunk only, so one gap is reported once.
 		dropped := spool.ring.takeDropped()
 		now := a.now()
 		a.mu.Unlock()
 
-		chunk, err := spool.sealSlice(a.proxyID, records, dropped, now)
+		groups, err := packActivityRecords(records)
 		if err != nil {
-			a.mu.Lock()
-			// These records are gone, so they join the gap rather than vanishing from the count with it.
-			spool.ring.dropped += dropped + uint64(len(records))
-			a.mu.Unlock()
-			log.Error().Err(err).Str("sessionId", spool.sessionID).Int("records", len(records)).
-				Msg("agent-vault: could not seal an activity chunk, dropping those records")
+			a.dropUnsealed(spool, len(records), dropped, err)
 			continue
 		}
+		for i, group := range groups {
+			var groupDropped uint64
+			if i == 0 {
+				groupDropped = dropped
+			}
 
-		a.mu.Lock()
-		chunk.sealOrder = a.nextSealOrder
-		a.nextSealOrder++
-		spool.pending = append(spool.pending, chunk)
-		a.sealedBytes += len(chunk.ciphertext)
-		a.enforcePendingCapsLocked(spool)
-		a.mu.Unlock()
+			chunk, err := spool.sealSlice(a.proxyID, group.records, group.plaintext, groupDropped, now)
+			if err != nil {
+				a.dropUnsealed(spool, len(group.records), groupDropped, err)
+				continue
+			}
+
+			a.mu.Lock()
+			chunk.sealOrder = a.nextSealOrder
+			a.nextSealOrder++
+			spool.pending = append(spool.pending, chunk)
+			a.sealedBytes += len(chunk.ciphertext)
+			a.enforcePendingCapsLocked(spool)
+			a.mu.Unlock()
+		}
 	}
+}
+
+// dropUnsealed accounts for records that could not be sealed. They are gone, so they join the gap rather
+// than vanishing from the count with it.
+func (a *activityLog) dropUnsealed(spool *activitySpool, records int, dropped uint64, err error) {
+	a.mu.Lock()
+	spool.ring.dropped += dropped + uint64(records)
+	a.mu.Unlock()
+	log.Error().Err(err).Str("sessionId", spool.sessionID).Int("records", records).
+		Msg("agent-vault: could not seal an activity chunk, dropping those records")
 }
 
 // enforcePendingCapsLocked runs on every append, because the caps are a property of `pending` rather than
@@ -462,9 +483,12 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 		if len(spool.pending) > 0 && spool.pending[0] == chunk {
 			spool.pending = spool.pending[1:]
 			a.sealedBytes -= len(chunk.ciphertext)
+			// Otherwise a refused chunk leaves no trace in the timeline, and an agent that can get its own
+			// chunk refused can erase what it did.
+			spool.ring.dropped += chunk.lostCount()
 		}
 		a.mu.Unlock()
-		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).
+		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.meta.RecordCount).
 			Msg("agent-vault: Infisical rejected an activity chunk as malformed, dropping it")
 		return false
 
