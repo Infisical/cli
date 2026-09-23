@@ -182,6 +182,50 @@ func TestTheRingDropsTheOldestAndCountsIt(t *testing.T) {
 	}
 }
 
+func TestTheRingAllocatesOnlyWhatItHolds(t *testing.T) {
+	ring := newActivityRing(activitySpoolCapacity)
+	ring.push(activityRecord{Seq: 0})
+
+	// A quiet session is the common case, so it must not pay for a busy one's headroom.
+	if got := cap(ring.buf); got > activityRingInitialSize {
+		t.Fatalf("one record reserved room for %d, expected at most %d", got, activityRingInitialSize)
+	}
+
+	ring.drain(10)
+	if ring.buf != nil {
+		t.Fatal("a drained ring kept its buffer; an idle session should hold nothing")
+	}
+}
+
+func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
+	ring := newActivityRing(activitySpoolCapacity)
+	var next uint64
+	push := func(n int) {
+		for i := 0; i < n; i++ {
+			ring.push(activityRecord{Seq: next})
+			next++
+		}
+	}
+
+	// Fill the first allocation, drain part of it so the head moves, then push enough to wrap and grow.
+	push(activityRingInitialSize)
+	ring.drain(10)
+	push(activityRingInitialSize * 3)
+
+	drained := ring.drain(activitySpoolCapacity)
+	if len(drained) != activityRingInitialSize*4-10 {
+		t.Fatalf("drained %d records, expected %d", len(drained), activityRingInitialSize*4-10)
+	}
+	for i, rec := range drained {
+		if rec.Seq != uint64(10+i) {
+			t.Fatalf("record %d has seq %d, expected %d; growth reordered the ring", i, rec.Seq, 10+i)
+		}
+	}
+	if ring.dropped != 0 {
+		t.Fatalf("growth counted %d drops; nothing was over capacity", ring.dropped)
+	}
+}
+
 func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
 	ring := newActivityRing(activitySpoolCapacity)
 	for i := 0; i < 2500; i++ {

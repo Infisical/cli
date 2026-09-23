@@ -25,36 +25,58 @@ type activityRecord struct {
 	AccessBundle *string `json:"accessBundle"`
 }
 
+// The first allocation a ring makes. A session that sends a handful of requests a minute never needs more.
+const activityRingInitialSize = 64
+
 // activityRing is a bounded FIFO that overwrites its oldest entry when full and counts what it lost, so a
 // burst costs the oldest records rather than the newest and the gap is visible in the timeline.
+//
+// It grows to capacity only as records arrive and lets go of its buffer once drained. Reserving capacity up
+// front cost every session about 700 KB from its first request, so a proxy serving a few hundred mostly
+// idle sessions held hundreds of megabytes of empty slots.
 type activityRing struct {
-	buf     []activityRecord
-	head    int
-	n       int
-	dropped uint64
+	buf      []activityRecord
+	capacity int
+	head     int
+	n        int
+	dropped  uint64
 }
 
 func newActivityRing(capacity int) activityRing {
-	return activityRing{buf: make([]activityRecord, capacity)}
+	return activityRing{capacity: capacity}
 }
 
 func (r *activityRing) len() int { return r.n }
 
 func (r *activityRing) push(rec activityRecord) (evicted bool) {
-	capacity := len(r.buf)
-	if capacity == 0 {
+	if r.capacity == 0 {
 		r.dropped++
 		return true
 	}
-	if r.n == capacity {
+	if r.n == len(r.buf) && len(r.buf) < r.capacity {
+		r.grow()
+	}
+	if r.n == r.capacity {
 		r.buf[r.head] = rec
-		r.head = (r.head + 1) % capacity
+		r.head = (r.head + 1) % len(r.buf)
 		r.dropped++
 		return true
 	}
-	r.buf[(r.head+r.n)%capacity] = rec
+	r.buf[(r.head+r.n)%len(r.buf)] = rec
 	r.n++
 	return false
+}
+
+// grow doubles the buffer, up to capacity, and unwraps it so the oldest record sits at index 0.
+func (r *activityRing) grow() {
+	size := max(activityRingInitialSize, 2*len(r.buf))
+	size = min(size, r.capacity)
+	next := make([]activityRecord, size)
+	for i := 0; i < r.n; i++ {
+		next[i] = r.buf[(r.head+i)%len(r.buf)]
+	}
+	r.buf = next
+	r.head = 0
 }
 
 // drain removes up to max records, oldest first. The caller seals one chunk per call and loops until the
@@ -73,6 +95,11 @@ func (r *activityRing) drain(max int) []activityRecord {
 	}
 	r.head = (r.head + max) % len(r.buf)
 	r.n -= max
+	if r.n == 0 {
+		// Released between flushes, so a session that went quiet holds nothing until it speaks again.
+		r.buf = nil
+		r.head = 0
+	}
 	return out
 }
 
