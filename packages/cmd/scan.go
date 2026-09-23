@@ -72,7 +72,7 @@ func init() {
 	scanCmd.Flags().Bool("pipe", false, "scan input from stdin, ex: `cat some_file | infisical scan --pipe`")
 	scanCmd.Flags().Bool("follow-symlinks", false, "scan files that are symlinks to other files")
 	scanCmd.Flags().String("platform", "", "SCM platform to use for generating finding links (github, gitlab, azuredevops, bitbucket)")
-	scanCmd.Flags().String("confidence", "", "minimum confidence to include (low, medium, high)")
+	scanCmd.Flags().String("confidence", "medium", "minimum confidence to include (low, medium, high)")
 
 	// global scan flags
 	scanCmd.PersistentFlags().StringP("config", "c", "", configDescription)
@@ -515,12 +515,12 @@ var scanGitChangesCmd = &cobra.Command{
 	},
 }
 
-// parseConfidence normalises the --confidence flag. An empty value means no
-// filtering. The engine silently ignores an unrecognised minimum, so reject it
+// parseConfidence normalises the --confidence flag.
+// The engine silently ignores an unrecognised minimum, so reject it
 // here rather than let a typo quietly disable the filter.
 func parseConfidence(value string) (string, error) {
 	switch v := strings.ToLower(strings.TrimSpace(value)); v {
-	case "", "low", "medium", "high":
+	case "low", "medium", "high":
 		return v, nil
 	default:
 		return "", fmt.Errorf("invalid confidence %q", value)
