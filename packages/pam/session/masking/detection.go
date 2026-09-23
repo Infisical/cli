@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/spf13/viper"
-
 	"github.com/Infisical/infisical-merge/detect"
 	"github.com/Infisical/infisical-merge/detect/config"
 )
@@ -21,23 +19,11 @@ var (
 // repeat per session, and scanning only reads that state.
 func sharedDetector() (*detect.Detector, error) {
 	detectorOnce.Do(func() {
-		// Isolated instance: detect uses the viper singleton, which `infisical scan` also writes.
-		v := viper.New()
-		v.SetConfigType("toml")
-
-		if detectorErr = v.ReadConfig(strings.NewReader(config.DefaultConfig)); detectorErr != nil {
+		var cfg *config.Config
+		if cfg, detectorErr = config.Default(); detectorErr != nil {
 			return
 		}
-
-		var vc config.ViperConfig
-		if detectorErr = v.Unmarshal(&vc); detectorErr != nil {
-			return
-		}
-
-		var cfg config.Config
-		if cfg, detectorErr = vc.Translate(); detectorErr != nil {
-			return
-		}
+		relaxRequiredComponents(cfg)
 
 		detector = detect.NewDetector(cfg)
 		// A session is untrusted input, unlike a repository someone owns: honouring the inline
@@ -46,6 +32,27 @@ func sharedDetector() (*detect.Detector, error) {
 	})
 
 	return detector, detectorErr
+}
+
+// relaxRequiredComponents makes every multi-part rule's components optional.
+//
+// Betterleaks introduces new rules that only report some secret if something
+// else is leaked up to 5 lines away from the original leak.
+// For example:
+// It only triggers an AWS_ACCESS_KEY_ID it it finds a AWS_SECRET_KEY_ID next
+// to it (5 lines away) to it, otherwise it does not report it as a leaked secret.
+// But because this is used for redacting secrets, It makes more sense to be more
+// restrictive.
+func relaxRequiredComponents(cfg *config.Config) {
+	for id, rule := range cfg.Rules {
+		if len(rule.Components) == 0 {
+			continue
+		}
+		for _, component := range rule.Components {
+			component.Optional = true
+		}
+		cfg.Rules[id] = rule
+	}
 }
 
 // Below this a finding is likelier a capture-group artifact than a credential, and replacing it
