@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -27,7 +28,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 		postedPath string
 	)
 
-	bucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		putAuth = r.Header.Get("Authorization")
 		putLength = r.Header.Get("Content-Length")
@@ -58,6 +59,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	shipper.put.Transport = bucket.Client().Transport
 
 	ciphertext := []byte("sealed-bytes")
 	res, err := shipper.createChunk(false, "sess-1", api.CreateAgentVaultActivityChunkRequest{
@@ -99,7 +101,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 }
 
 func TestABucketRefusalIsAnErrorThatNamesNoURL(t *testing.T) {
-	bucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte("<Error><Code>AccessDenied</Code></Error>"))
 	}))
@@ -109,6 +111,7 @@ func TestABucketRefusalIsAnErrorThatNamesNoURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	shipper.put.Transport = bucket.Client().Transport
 
 	err = shipper.putObject(context.Background(), bucket.URL+"/object?X-Amz-Signature=secret", []byte("bytes"))
 	if err == nil {
@@ -117,5 +120,74 @@ func TestABucketRefusalIsAnErrorThatNamesNoURL(t *testing.T) {
 	// A presigned URL carries a working signature, so it must never reach a log line.
 	if got := err.Error(); strings.Contains(got, "X-Amz-Signature") || strings.Contains(got, bucket.URL) {
 		t.Fatalf("the error names the signed url: %q", got)
+	}
+}
+
+func TestAnUploadLinkThatIsNotHttpsIsRefused(t *testing.T) {
+	var hits atomic.Int32
+	bucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer bucket.Close()
+
+	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := shipper.putObject(context.Background(), bucket.URL+"/object", []byte("bytes")); err == nil {
+		t.Fatal("an http upload link was accepted")
+	}
+	if hits.Load() != 0 {
+		t.Fatal("the proxy sent the chunk to a link that is not https")
+	}
+}
+
+func TestARedirectFromTheBucketIsNotFollowed(t *testing.T) {
+	var followed atomic.Int32
+	bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/elsewhere" {
+			followed.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+	}))
+	defer bucket.Close()
+
+	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipper.put.Transport = bucket.Client().Transport
+
+	if err := shipper.putObject(context.Background(), bucket.URL+"/object", []byte("bytes")); err == nil {
+		t.Fatal("a redirect was treated as a successful upload")
+	}
+	if followed.Load() != 0 {
+		t.Fatal("the upload followed a redirect")
+	}
+}
+
+func TestAnUnreachableBucketIsAnErrorThatNamesNoSignature(t *testing.T) {
+	bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	target := bucket.URL + "/object?X-Amz-Signature=secret"
+	bucket.Close()
+
+	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = shipper.putObject(context.Background(), target, []byte("bytes"))
+	if err == nil {
+		t.Fatal("an upload to a closed server succeeded")
+	}
+	// This is the error logged on every S3 timeout, so it is the one most likely to leak the signature.
+	if strings.Contains(err.Error(), "X-Amz-Signature") {
+		t.Fatalf("the error names the signed url: %q", err.Error())
 	}
 }
