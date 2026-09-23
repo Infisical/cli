@@ -47,10 +47,10 @@ const (
 	maxConcurrentConns = 512
 
 	maxLoggedPathLen = 2048
-	// The agent chooses the method and the port too, and Go bounds them only by the 1 MiB header limit.
-	// Uncapped, one request could make its own record big enough to stall whoever reads the session.
+	// The agent chooses the method too, and Go bounds it only by the 1 MiB header limit. Uncapped, one
+	// request could make its own record big enough to stall whoever reads the session. The port needs no
+	// cap: checkedTarget refuses anything that is not a plain port number.
 	maxLoggedMethodLen = 32
-	maxLoggedPortLen   = 16
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
@@ -436,7 +436,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		ps.activity.record(outcome.activity, activityRecord{
 			Method:       reqMethod,
 			Host:         hostname,
-			Port:         truncateLogged(port, maxLoggedPortLen),
+			Port:         port,
 			Path:         reqPath,
 			Status:       status,
 			Decision:     decision,
@@ -656,11 +656,34 @@ const (
 
 var errHostTooLong = errors.New("the target host is longer than a DNS name can be")
 
+var errBadPort = errors.New("the target port must be a number from 1 to 65535")
+
+// validPort accepts a port only in its plain form. The dialer reads a megabyte of leading zeros, or a '+',
+// as an ordinary port, so an agent could otherwise reach 443 under a port string that fills log lines,
+// shows in its own record as noise, and misses every service pattern, which compares ports as strings.
+func validPort(port string) bool {
+	if len(port) == 0 || len(port) > 5 || port[0] == '0' {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(port); i++ {
+		c := port[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n <= 65535
+}
+
 func checkedTarget(hostname, port string) (string, string, error) {
 	// Normalised first: a host of only dots is non-empty until the trailing dots come off.
 	hostname = normalizeHostname(hostname)
 	if hostname == "" || port == "" {
 		return "", "", errNoHostInTarget
+	}
+	if !validPort(port) {
+		return "", "", errBadPort
 	}
 	if net.ParseIP(hostname) == nil {
 		if len(hostname) > maxHostnameBytes {

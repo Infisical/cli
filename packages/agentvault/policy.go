@@ -17,7 +17,8 @@ var errBodyUnreadable = errors.New("could not read the request body")
 
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	if !svc.allowsMethod(req.Method) {
-		return fmt.Errorf("service %q does not allow %s: %w", svc.name, req.Method, errPolicyBlocked)
+		// This lands in the proxy log, so the agent's method is capped here as it is in the record.
+		return fmt.Errorf("service %q does not allow %s: %w", svc.name, truncateLogged(req.Method, maxLoggedMethodLen), errPolicyBlocked)
 	}
 	if len(svc.allowedPathPrefixes) > 0 {
 		path := requestPath(req)
