@@ -447,7 +447,8 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 
 	case isActivityErrorNamed(err, activityCeilingReachedName):
 		a.pause(activityCeilingReachedName)
-		log.Warn().Err(err).Msg("agent-vault: the organization's activity storage limit is reached, pausing for 15m")
+		// An error, not a warning: recording has stopped for the whole organization until Infisical acts.
+		log.Error().Err(err).Msg("agent-vault: activity logging has reached its limit for this organization, retrying in 15m")
 		return false
 
 	case isActivityErrorNamed(err, activityDisabledName):
