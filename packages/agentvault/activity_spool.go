@@ -127,12 +127,11 @@ type sealedChunk struct {
 }
 
 // lostCount is what a chunk that will never be uploaded adds to its session's gap. Once the POST succeeded
-// the row exists, and the viewer already shows those records as a batch it cannot read, so counting them
-// again would report one loss twice. The drop count the chunk carried is shown nowhere else, so it always
-// comes back.
+// the row exists, and it already reports both halves: the viewer shows its records as a batch it cannot
+// read, and its drop count from the row itself. Counting either again would report one loss twice.
 func (c *sealedChunk) lostCount() uint64 {
 	if c.posted {
-		return c.meta.DroppedCount
+		return 0
 	}
 	return c.meta.DroppedCount + uint64(c.meta.RecordCount)
 }

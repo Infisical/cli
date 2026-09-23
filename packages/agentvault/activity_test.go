@@ -583,9 +583,9 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	if got := log.spools["oldest"].ring.dropped; got != 107 {
 		t.Fatalf("the unposted chunk counted %d dropped, expected 107", got)
 	}
-	// Posted, so the viewer already shows its records as unreadable. Only the carried drops come back.
-	if got := log.spools["posted"].ring.dropped; got != 3 {
-		t.Fatalf("the posted chunk counted %d dropped, expected 3", got)
+	// Posted, so its row already reports its records as unreadable and its drops as not recorded.
+	if got := log.spools["posted"].ring.dropped; got != 0 {
+		t.Fatalf("the posted chunk counted %d dropped, expected 0", got)
 	}
 }
 
