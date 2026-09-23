@@ -29,7 +29,7 @@ uses by default. Selecting a profile selects all three, so switching tenants
 never means logging in again.
 
 Create the first one with [infisical login], one per extra organization with
-[infisical profile new], and one per extra account or instance with
+[infisical profile create], and one per extra account or instance with
 [infisical login --save-as <name>]. Sign back in to an existing profile with
 [infisical login --profile <name>].
 
@@ -241,8 +241,8 @@ var profileCurrentCmd = &cobra.Command{
 	},
 }
 
-var profileNewCmd = &cobra.Command{
-	Use:   "new [name]",
+var profileCreateCmd = &cobra.Command{
+	Use:   "create [name]",
 	Short: "Create a profile for another organization, reusing your current login",
 	Long: `Create a profile for another organization without logging in again.
 
@@ -258,7 +258,7 @@ make it the default for the machine.
 To add a different account, or an account on another instance, use
 [infisical login --save-as <name>] instead.`,
 	DisableFlagsInUseLine: true,
-	Example:               "infisical profile new client-b --org globex\neval \"$(infisical profile new client-b --org globex --pin)\"\ninfisical profile new client-b --org globex --use",
+	Example:               "infisical profile create client-b --org globex\neval \"$(infisical profile create client-b --org globex --pin)\"\ninfisical profile create client-b --org globex --use",
 	Args:                  cobra.ExactArgs(1),
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
@@ -376,7 +376,7 @@ To add a different account, or an account on another instance, use
 			util.PrintlnStderr(fmt.Sprintf("Start using it here with [eval \"$(infisical profile pin %s)\"], in a directory with [infisical profile bind %s], or everywhere with [infisical profile use %s].", profileName, profileName, profileName))
 		}
 
-		Telemetry.CaptureEvent("cli-command:profile new", posthog.NewProperties().Set("version", util.CLI_VERSION))
+		Telemetry.CaptureEvent("cli-command:profile create", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
 }
 
@@ -749,9 +749,9 @@ func init() {
 	profileCurrentCmd.Flags().Bool("plain", false, "print only the profile name (useful for shell prompts)")
 	profileDeleteCmd.Flags().Bool("local-only", false, "remove the profile without revoking its session on the server")
 
-	profileNewCmd.Flags().Bool("use", false, "also make the new profile the default for this machine")
-	profileNewCmd.Flags().Bool("pin", false, "also pin this terminal to the new profile, for use with: eval \"$(infisical profile new <name> --pin)\"")
-	profileCmd.AddCommand(profileNewCmd)
+	profileCreateCmd.Flags().Bool("use", false, "also make the new profile the default for this machine")
+	profileCreateCmd.Flags().Bool("pin", false, "also pin this terminal to the new profile, for use with: eval \"$(infisical profile create <name> --pin)\"")
+	profileCmd.AddCommand(profileCreateCmd)
 	profileCmd.AddCommand(newSetOrgCommand("set-org [org]", "profile set-org", "Set the organization this profile uses by default"))
 	profileCmd.AddCommand(profileListCmd)
 	profileCmd.AddCommand(profileCurrentCmd)
