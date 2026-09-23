@@ -361,14 +361,17 @@ func (c *Client) getChainPem(ctx context.Context, caName string, cert *x509.Cert
 }
 
 // chainIssued reports whether any certificate in chain is the issuer of cert. The signature
-// check is authoritative; the key identifier comparison covers issuers whose signature
-// algorithm the Go runtime refuses to verify.
+// check is authoritative; only when Go refuses to verify the signature algorithm at all
+// (e.g. a SHA-1 CA) is the authority key identifier used instead. The backend verifies the
+// signature again on import.
 func chainIssued(chain []*x509.Certificate, cert *x509.Certificate) bool {
 	for _, ca := range chain {
-		if cert.CheckSignatureFrom(ca) == nil {
+		err := cert.CheckSignatureFrom(ca)
+		if err == nil {
 			return true
 		}
-		if len(cert.AuthorityKeyId) > 0 && bytes.Equal(cert.AuthorityKeyId, ca.SubjectKeyId) {
+		var insecure x509.InsecureAlgorithmError
+		if errors.As(err, &insecure) && len(cert.AuthorityKeyId) > 0 && bytes.Equal(cert.AuthorityKeyId, ca.SubjectKeyId) {
 			return true
 		}
 	}
