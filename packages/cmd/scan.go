@@ -89,6 +89,7 @@ func init() {
 	// scan git changes command flags
 	scanGitChangesCmd.Flags().Bool("staged", false, "detect secrets in a --staged state")
 	scanGitChangesCmd.Flags().String("log-opts", "", "git log options")
+	scanGitChangesCmd.Flags().String("confidence", "medium", "minimum confidence to include (low, medium, high)")
 
 	// add flags to main
 	scanCmd.AddCommand(scanGitChangesCmd)
@@ -144,10 +145,9 @@ func loadScanConfig(cmd *cobra.Command) (*config.Config, error) {
 // collectFindings drains a detector run over the given source, gathering
 // findings and joining any per-fragment errors.
 func collectFindings(ctx context.Context, detector *detect.Detector, src sources.Source) ([]report.Finding, error) {
-	var (
-		findings []report.Finding
-		errs     []error
-	)
+	var errs []error
+	// Non-nil: an empty report must marshal to `[]`, not `null`.
+	findings := []report.Finding{}
 	for result := range detector.Run(ctx, src) {
 		if result.Err != nil {
 			errs = append(errs, result.Err)
@@ -249,6 +249,8 @@ var scanCmd = &cobra.Command{
 		if detector.Verbose, err = cmd.Flags().GetBool("verbose"); err != nil {
 			log.Fatal().Err(err).Msg("")
 		}
+		// Keep the key/value verbose format users already parse in their pipelines.
+		detector.LegacyPrint = true
 		// set redact flag
 
 		redactFlag, err := cmd.Flags().GetBool("redact")
@@ -451,6 +453,8 @@ var scanGitChangesCmd = &cobra.Command{
 		if detector.Verbose, err = cmd.Flags().GetBool("verbose"); err != nil {
 			log.Fatal().Err(err).Msg("")
 		}
+		// Keep the key/value verbose format users already parse in their pipelines.
+		detector.LegacyPrint = true
 		// set redact flag
 
 		redactFlag, err := cmd.Flags().GetBool("redact")
@@ -469,6 +473,15 @@ var scanGitChangesCmd = &cobra.Command{
 		// set color flag
 		if detector.NoColor, err = cmd.Flags().GetBool("no-color"); err != nil {
 			log.Fatal().Err(err).Msg("")
+		}
+
+		// Enforced in the shared fragment loop, so the diff path is filtered like a full scan.
+		minConfidence, err := cmd.Flags().GetString("confidence")
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not call GetString() for confidence")
+		}
+		if detector.MinConfidence, err = parseConfidence(minConfidence); err != nil {
+			log.Fatal().Err(err).Msg("invalid --confidence value (expected one of: low, medium, high)")
 		}
 
 		if fileExists(filepath.Join(source, config.DefaultInfisicalIgnoreFineName)) {
@@ -528,6 +541,10 @@ func parseConfidence(value string) (string, error) {
 }
 
 func reportFindings(findings []report.Finding, reportPath string, ext string, cfg *config.Config) {
+	// A nil slice encodes as `null` in JSON, which breaks consumers that iterate the report.
+	if findings == nil {
+		findings = []report.Finding{}
+	}
 
 	var reporter report.Reporter
 
