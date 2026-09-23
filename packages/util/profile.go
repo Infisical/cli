@@ -865,7 +865,7 @@ func PersistLoginProfile(profile models.Profile, userCred *models.UserCredential
 	// Deliberately no name validation here: derived names are raw account
 	// emails (which may contain any RFC-legal character) and have always been
 	// valid keyring keys. Rejecting them would block login entirely. Name
-	// validation applies only where users type a name (--profile, profile new,
+	// validation applies only where users type a name (--profile, profile create,
 	// profile rename), at the command layer.
 	if err := StoreUserCredsInKeyRing(profile.Name, userCred); err != nil {
 		return err

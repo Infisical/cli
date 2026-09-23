@@ -898,7 +898,7 @@ func GetJwtTokenWithOrganizationId(oldJwtToken string, email string, organizatio
 	}
 
 	// The exchange, MFA prompt included, is shared with [profile set-org] and
-	// [profile new], so the flows cannot drift apart.
+	// [profile create], so the flows cannot drift apart.
 	token, err := selectOrganizationToken(oldJwtToken, email, selectedOrganizationId)
 	if err != nil {
 		util.HandleError(err, "Unable to select organization")

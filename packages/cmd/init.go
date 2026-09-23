@@ -129,7 +129,7 @@ var initCmd = &cobra.Command{
 				}
 				util.PrintErrorMessageAndExit(
 					fmt.Sprintf("Profile '%s' defaults to organization %s, so a project linked here under %s (selected via %s) would not be found by later commands unless they also pass --org.", userCreds.ProfileName, profileOrg, orgDisplay, userCreds.OrganizationSource),
-					fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile new <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
+					fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile create <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
 			}
 
 			util.PrintlnStderr(fmt.Sprintf("Using organization %s from profile '%s'. Pass --org to pick a different one.", orgDisplay, userCreds.ProfileName))

@@ -109,7 +109,7 @@ func newSetOrgCommand(use string, invocation string, short string) *cobra.Comman
 This changes a setting on the profile, so it persists for future commands. To
 use a different organization for a single command instead, pass --org, and to
 keep a second organization available as its own profile use
-[infisical profile new].`,
+[infisical profile create].`,
 		DisableFlagsInUseLine: true,
 		Example:               fmt.Sprintf("infisical %s\ninfisical %s globex", invocation, invocation),
 		Args:                  cobra.MaximumNArgs(1),
@@ -208,7 +208,7 @@ func runSetOrg(cmd *cobra.Command, args []string) {
 	}
 
 	util.PrintlnStderr(fmt.Sprintf("Profile '%s' now uses organization %s by default.", profile.Name, orgDisplay))
-	util.PrintlnStderr(fmt.Sprintf("To keep both organizations available at once, create a second profile with [infisical profile new <name> --org %s].", orgDisplay))
+	util.PrintlnStderr(fmt.Sprintf("To keep both organizations available at once, create a second profile with [infisical profile create <name> --org %s].", orgDisplay))
 	if !makeActive {
 		util.PrintlnStderr(fmt.Sprintf("This shell selects its profile via the %s. Use --profile %s or INFISICAL_PROFILE=%s to target the updated profile here.", details.ProfileSource, profile.Name, profile.Name))
 	}
