@@ -37,12 +37,13 @@ const (
 	ResourceTypeGcpServiceAccount = "gcp-service-account"
 	ResourceTypeAzureCli          = "azure-cli"
 	ResourceTypeSnowflake         = "snowflake"
+	ResourceTypeClickhouse        = "clickhouse"
 )
 
 var allResourceTypes = []string{
 	ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql,
 	ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows,
-	ResourceTypeGcpServiceAccount, ResourceTypeAzureCli, ResourceTypeSnowflake,
+	ResourceTypeGcpServiceAccount, ResourceTypeAzureCli, ResourceTypeSnowflake, ResourceTypeClickhouse,
 }
 
 type SessionFileInfo struct {

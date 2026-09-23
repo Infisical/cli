@@ -463,6 +463,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
 		}
+		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
 		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
 		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)

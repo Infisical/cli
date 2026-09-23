@@ -15,6 +15,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/azure"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/clickhouse"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/gcp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
@@ -64,6 +65,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeGcpServiceAccount,
 		session.ResourceTypeAzureCli,
 		session.ResourceTypeSnowflake,
+		session.ResourceTypeClickhouse,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -584,6 +586,29 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Str("account", credentials.Account).
 			Msg("Starting Snowflake PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeClickhouse:
+		var blockedCommands []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			blockedCommands = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
+		}
+
+		proxy := clickhouse.NewClickHouseProxy(clickhouse.ClickHouseProxyConfig{
+			TargetAddr:      fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			Username:        credentials.Username,
+			Password:        credentials.Password,
+			Database:        credentials.Database,
+			EnableTLS:       credentials.SSLEnabled,
+			TLSConfig:       tlsConfig,
+			SessionID:       pamConfig.SessionId,
+			SessionLogger:   sessionLogger,
+			BlockedCommands: blockedCommands,
+		})
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting ClickHouse PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeAzureCli:
 		azureConfig := azure.AzureProxyConfig{
