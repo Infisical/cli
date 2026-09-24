@@ -408,57 +408,77 @@ jobs:
       matrix:
         include:
           - image: debian:12
-            install: |
+            prepare: |
               export DEBIAN_FRONTEND=noninteractive
               apt-get update
               apt-get install -y curl ca-certificates
               curl -fsSL https://artifacts-cli.infisical.com/setup.deb.sh -o /tmp/setup.sh
               bash /tmp/setup.sh
-              apt-get update
+            install: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -o Dir::Etc::sourcelist=sources.list.d/infisical.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
               apt-get install -y "infisical=${VERSION}"
           - image: ubuntu:24.04
-            install: |
+            prepare: |
               export DEBIAN_FRONTEND=noninteractive
               apt-get update
               apt-get install -y curl ca-certificates
               curl -fsSL https://artifacts-cli.infisical.com/setup.deb.sh -o /tmp/setup.sh
               bash /tmp/setup.sh
-              apt-get update
+            install: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -o Dir::Etc::sourcelist=sources.list.d/infisical.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
               apt-get install -y "infisical=${VERSION}"
           - image: rockylinux:9
-            install: |
+            prepare: |
               curl -fsSL https://artifacts-cli.infisical.com/setup.rpm.sh -o /tmp/setup.sh
               bash /tmp/setup.sh
-              dnf install -y "infisical-${VERSION}-1"
+            install: |
+              dnf install -y --refresh --disablerepo='*' --enablerepo=infisical-cli "infisical-${VERSION}-1"
           - image: amazonlinux:2023
-            install: |
+            prepare: |
               curl -fsSL https://artifacts-cli.infisical.com/setup.rpm.sh -o /tmp/setup.sh
               bash /tmp/setup.sh
-              dnf install -y "infisical-${VERSION}-1"
-          - image: alpine:3.21
             install: |
+              dnf install -y --refresh --disablerepo='*' --enablerepo=infisical-cli "infisical-${VERSION}-1"
+          - image: alpine:3.21
+            prepare: |
               apk add --no-cache curl ca-certificates
               curl -fsSL https://artifacts-cli.infisical.com/setup.apk.sh -o /tmp/setup.sh
               sh /tmp/setup.sh
+            install: |
+              apk update
               apk add "infisical=${VERSION}"
     steps:
       - name: Install released version from public repo
         env:
           TAG: ${{ github.ref_name }}
           IMAGE: ${{ matrix.image }}
+          PREPARE: ${{ matrix.prepare }}
           INSTALL: ${{ matrix.install }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
           echo "Verifying infisical $VERSION on $IMAGE"
-          SCRIPT="set -eu
+          CHECK="set -eu
           $INSTALL
           infisical --version > /tmp/infisical-version
           cat /tmp/infisical-version
           grep -qFw \"\$VERSION\" /tmp/infisical-version"
+          container="verify-infisical-$$"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          started=false
+          prepared=false
           max_attempts=5
           for attempt in $(seq 1 "$max_attempts"); do
-            if docker run --rm -e VERSION="$VERSION" "$IMAGE" sh -c "$SCRIPT"; then
+            if ! $started && docker run -d --name "$container" -e VERSION="$VERSION" "$IMAGE" tail -f /dev/null >/dev/null; then
+              started=true
+            fi
+            if $started && ! $prepared && docker exec "$container" sh -c "set -eu
+          $PREPARE"; then
+              prepared=true
+            fi
+            if $prepared && docker exec "$container" sh -c "$CHECK"; then
               echo "infisical $VERSION installed and verified on $IMAGE (attempt $attempt)."
               exit 0
             fi
