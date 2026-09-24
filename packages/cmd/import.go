@@ -142,11 +142,24 @@ func runImport(cmd *cobra.Command, args []string) {
 			if err != nil {
 				util.PrintErrorMessageAndExit(fmt.Sprintf("Cannot resolve --file %q: %v", name, err))
 			}
-			if rel, err := filepath.Rel(realDir, realFile); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if _, inside := relInside(realDir, realFile); !inside {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is outside --path %q.", name, dir))
+			}
+			// The entry itself (a symlink, if it is one) must also sit under
+			// --path, and its location there is what .gitignore has to name.
+			// Resolve only its parent so the entry's own name is kept.
+			realParent, err := resolveRealPath(filepath.Dir(p))
+			if err != nil {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("Cannot resolve --file %q: %v", name, err))
+			}
+			entryRel, inside := relInside(realDir, filepath.Join(realParent, filepath.Base(p)))
+			if !inside {
 				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is outside --path %q.", name, dir))
 			}
 			candidateNames = append(candidateNames, name)
-			found = append(found, p)
+			// Rewrite as a path under --path so the gitignore step below
+			// derives the same relative entry the checks above did.
+			found = append(found, filepath.Join(dir, entryRel))
 		}
 	} else {
 		for _, c := range envFileCandidates {
@@ -273,9 +286,12 @@ func runImport(cmd *cobra.Command, args []string) {
 	absDir, _ := filepath.Abs(dir)
 	for _, s := range scans {
 		absFile, _ := filepath.Abs(s.Path)
-		rel, err := filepath.Rel(absDir, absFile)
-		if err != nil {
-			rel = filepath.Base(s.Path)
+		rel, inside := relInside(absDir, absFile)
+		if !inside {
+			// A "../" entry in this .gitignore would not ignore the file, so
+			// never write one or report the file as protected by it.
+			util.PrintfStderr("Warning: cannot check .gitignore coverage for %s: it is not under %s\n", s.Path, dir)
+			continue
 		}
 		if !gitignoreCovers(existingLines, rel) {
 			missing = append(missing, rel)
@@ -344,6 +360,16 @@ func findWorkspaceFileFrom(dir string) (models.WorkspaceConfigFile, error) {
 		}
 		current = parent
 	}
+}
+
+// relInside returns target relative to base, and whether target is base
+// itself or lies beneath it.
+func relInside(base, target string) (string, bool) {
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 // resolveRealPath returns p as an absolute path with every symlink resolved.
