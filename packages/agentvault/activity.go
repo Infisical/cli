@@ -26,6 +26,7 @@ const (
 	activityPauseBackoff = 15 * time.Minute
 	activityPutTimeout   = 10 * time.Second
 	activityFinalTimeout = 3 * time.Second
+	activityCloseTimeout = 5 * time.Second
 
 	activityCeilingReachedName = "AgentVaultActivityCeilingReached"
 	activityDisabledName       = "AgentVaultActivityDisabled"

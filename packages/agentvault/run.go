@@ -248,12 +248,17 @@ func Start(opts Options, enrollmentToken string) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
+	// Its own budget: in-flight requests can spend all of the shutdown's, and this is the last minute of activity.
+	closeActivity := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), activityCloseTimeout)
+		defer cancel()
+		ps.activity.close(ctx)
+	}
+
 	select {
 	case err := <-serveErr:
 		close(stop)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		ps.activity.close(ctx)
+		closeActivity()
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -265,7 +270,7 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
-		ps.activity.close(ctx)
+		closeActivity()
 		ps.cache.close()
 		return nil
 	case err := <-fatal:
@@ -273,7 +278,7 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
-		ps.activity.close(ctx)
+		closeActivity()
 		ps.cache.close()
 		return err
 	}
