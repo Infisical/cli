@@ -120,19 +120,30 @@ func runImport(cmd *cobra.Command, args []string) {
 	var found []string
 	var candidateNames []string
 	if len(explicitFiles) > 0 {
+		realDir, err := resolveRealPath(dir)
+		if err != nil {
+			util.PrintErrorMessageAndExit(fmt.Sprintf("Cannot resolve --path %q: %v", dir, err))
+		}
 		for _, name := range explicitFiles {
 			p := name
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(dir, name)
 			}
-			// Keep files under --path so the .gitignore check and entries
-			// written there refer to the right file.
-			if rel, err := filepath.Rel(dir, p); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is outside --path %q.", name, dir))
-			}
 			info, err := os.Stat(p)
 			if err != nil || info.IsDir() {
 				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is not a readable file.", name))
+			}
+			// Keep files under --path so the .gitignore check and entries
+			// written there refer to the right file. Compare resolved paths:
+			// the upload follows symlinks, so a link inside --path must not
+			// reach a file outside it, and an absolute --file must compare
+			// cleanly against a relative --path.
+			realFile, err := resolveRealPath(p)
+			if err != nil {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("Cannot resolve --file %q: %v", name, err))
+			}
+			if rel, err := filepath.Rel(realDir, realFile); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is outside --path %q.", name, dir))
 			}
 			candidateNames = append(candidateNames, name)
 			found = append(found, p)
@@ -259,8 +270,10 @@ func runImport(cmd *cobra.Command, args []string) {
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	existingLines := readGitignoreLines(gitignorePath)
 	var missing []string
+	absDir, _ := filepath.Abs(dir)
 	for _, s := range scans {
-		rel, err := filepath.Rel(dir, s.Path)
+		absFile, _ := filepath.Abs(s.Path)
+		rel, err := filepath.Rel(absDir, absFile)
 		if err != nil {
 			rel = filepath.Base(s.Path)
 		}
@@ -331,6 +344,15 @@ func findWorkspaceFileFrom(dir string) (models.WorkspaceConfigFile, error) {
 		}
 		current = parent
 	}
+}
+
+// resolveRealPath returns p as an absolute path with every symlink resolved.
+func resolveRealPath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
 }
 
 func containsFold(values []string, target string) bool {
