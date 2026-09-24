@@ -25,8 +25,9 @@ import (
 // without a stage suffix go to whichever env slug the caller picks (via --env
 // or .infisical.json). A stage-specific file is only imported when its stage
 // matches that env, so a default of "dev" never swallows .env.production.
-// Importing another stage means running `import --env=<stage>`, which keeps
-// the mental model of the command simple.
+// Stage matching only knows the conventional slugs; for a project whose
+// production env is called something else (say "live"), --file names the
+// files explicitly and --env the target, with no guessing.
 var envFileCandidates = []struct {
 	Name   string
 	Stages []string // env slugs this file belongs to; empty means any
@@ -42,7 +43,7 @@ var importCmd = &cobra.Command{
 	Use:                   "import",
 	Short:                 "Import secrets from local .env files into an Infisical environment (never deletes the source)",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical import\n  infisical import --yes\n  infisical import --path=./api --env=staging --add-gitignore",
+	Example:               "infisical import\n  infisical import --yes\n  infisical import --path=./api --env=staging --add-gitignore\n  infisical import --file=.env.production --env=live",
 	Args:                  cobra.NoArgs,
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
@@ -78,6 +79,13 @@ func runImport(cmd *cobra.Command, args []string) {
 	yes, _ := cmd.Flags().GetBool("yes")
 	jsonOut, _ := cmd.Flags().GetBool("json")
 	addGitignore, _ := cmd.Flags().GetBool("add-gitignore")
+	explicitFiles, _ := cmd.Flags().GetStringSlice("file")
+
+	// Named files skip stage matching, so the target env must be named too;
+	// otherwise a default of "dev" could receive .env.production after all.
+	if len(explicitFiles) > 0 && envSlug == "" {
+		util.PrintErrorMessageAndExit("--file requires --env, so the files go to an environment you chose explicitly.")
+	}
 
 	if dir == "" {
 		dir = "."
@@ -92,9 +100,11 @@ func runImport(cmd *cobra.Command, args []string) {
 	}
 	projectId := workspaceFile.WorkspaceId
 
-	// --env wins, else the env from that .infisical.json, else "dev".
+	// --env wins, else the env from that .infisical.json, else "dev". The
+	// branch mapping is read from the repository --path lives in, which may
+	// not be the one the command runs from.
 	if envSlug == "" {
-		if env := util.GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
+		if env := util.GetEnvironmentBasedOnGitBranchIn(workspaceFile, dir); env != "" {
 			envSlug = env
 		} else if workspaceFile.DefaultEnvironment != "" {
 			envSlug = workspaceFile.DefaultEnvironment
@@ -109,22 +119,44 @@ func runImport(cmd *cobra.Command, args []string) {
 	// .envrc and other files that people don't want their vault to swallow.
 	var found []string
 	var candidateNames []string
-	for _, c := range envFileCandidates {
-		candidateNames = append(candidateNames, c.Name)
-		p := filepath.Join(dir, c.Name)
-		info, err := os.Stat(p)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		if len(c.Stages) > 0 && !containsFold(c.Stages, envSlug) {
-			reason := fmt.Sprintf("belongs to %s, not %q; run with --env=%s to import it", c.Stages[0], envSlug, c.Stages[0])
-			result.Skipped = append(result.Skipped, skippedFile{File: p, Reason: reason})
-			if !jsonOut {
-				util.PrintfStderr("Skipping %s: %s\n", p, reason)
+	if len(explicitFiles) > 0 {
+		for _, name := range explicitFiles {
+			p := name
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(dir, name)
 			}
-			continue
+			// Keep files under --path so the .gitignore check and entries
+			// written there refer to the right file.
+			if rel, err := filepath.Rel(dir, p); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is outside --path %q.", name, dir))
+			}
+			info, err := os.Stat(p)
+			if err != nil || info.IsDir() {
+				util.PrintErrorMessageAndExit(fmt.Sprintf("--file %q is not a readable file.", name))
+			}
+			candidateNames = append(candidateNames, name)
+			found = append(found, p)
 		}
-		found = append(found, p)
+	} else {
+		for _, c := range envFileCandidates {
+			candidateNames = append(candidateNames, c.Name)
+			p := filepath.Join(dir, c.Name)
+			info, err := os.Stat(p)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			if len(c.Stages) > 0 && !containsFold(c.Stages, envSlug) {
+				// Don't suggest a slug: the project's env for this stage may
+				// not be called any of the conventional names.
+				reason := fmt.Sprintf("looks like a %s file but the target env is %q; to import it, re-run with --file=%s --env=<slug of the environment it belongs to>", c.Stages[0], envSlug, c.Name)
+				result.Skipped = append(result.Skipped, skippedFile{File: p, Reason: reason})
+				if !jsonOut {
+					util.PrintfStderr("Skipping %s: %s\n", p, reason)
+				}
+				continue
+			}
+			found = append(found, p)
+		}
 	}
 
 	if len(found) == 0 {
@@ -438,6 +470,7 @@ func init() {
 	importCmd.Flags().String("env", "", "Environment slug to upload into (default: env from .infisical.json, else \"dev\").")
 	importCmd.Flags().BoolP("yes", "y", false, "Skip the confirmation prompt. Required for non-interactive / agent runs.")
 	importCmd.Flags().Bool("json", false, "Emit a machine-readable summary of the import (files scanned, keys per file, upload counts, gitignore status).")
+	importCmd.Flags().StringSlice("file", nil, "Import exactly these files (relative to --path) instead of scanning for well-known names. Skips stage matching, so --env is required. Repeatable.")
 	importCmd.Flags().Bool("add-gitignore", false, "Append every imported file that is not already in .gitignore to .gitignore.")
 	RootCmd.AddCommand(importCmd)
 }

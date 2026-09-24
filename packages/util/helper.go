@@ -447,7 +447,14 @@ var getCurrentBranchCmd = execCmd{
 }
 
 func getCurrentBranch() (string, error) {
+	return getCurrentBranchIn("")
+}
+
+// getCurrentBranchIn reads the branch of the repository containing dir, or of
+// the working directory when dir is empty.
+func getCurrentBranchIn(dir string) (string, error) {
 	cmd := exec.Command(getCurrentBranchCmd.cmd, getCurrentBranchCmd.args...)
+	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
