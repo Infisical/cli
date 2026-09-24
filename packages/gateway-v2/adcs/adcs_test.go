@@ -400,6 +400,15 @@ func TestParseIssuedCert(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects a PKCS#7 bundle that holds no certificate for the CSR key", func(t *testing.T) {
+		leaf := issueLeaf(t, issuing)
+		bundle := degeneratePKCS7(t, root.cert, issuing.cert, leaf)
+		_, err := parseIssuedCert(bundle, csr)
+		if err == nil || !strings.Contains(err.Error(), "none for the CSR's public key") {
+			t.Fatalf("err = %v, want a no-matching-key error", err)
+		}
+	})
+
 	t.Run("falls back to the first non-CA certificate when the CSR is unusable", func(t *testing.T) {
 		leaf := issueLeaf(t, issuing)
 		bundle := degeneratePKCS7(t, root.cert, issuing.cert, leaf)

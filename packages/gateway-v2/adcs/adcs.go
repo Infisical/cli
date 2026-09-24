@@ -484,8 +484,9 @@ func (c *Client) Enroll(ctx context.Context, caName, template string, csrDER []b
 // parseIssuedCert accepts either a bare DER certificate or a PKCS#7 bundle and returns
 // the certificate issued for csrDER. A PKCS#7 response carries the issued certificate
 // alongside the CA chain in no guaranteed order, so the certificate is identified by the
-// CSR's public key; only if that yields nothing (e.g. an unparsable CSR) is the first
-// non-CA certificate, then the first certificate, used.
+// CSR's public key. A bundle holding no certificate for that key is an error, since
+// returning any other certificate would hand the caller a key it does not own; the first
+// non-CA certificate (then the first certificate) is used only when the CSR cannot be parsed.
 func parseIssuedCert(b []byte, csrDER []byte) (*x509.Certificate, error) {
 	if cert, err := x509.ParseCertificate(b); err == nil {
 		return cert, nil
@@ -503,6 +504,7 @@ func parseIssuedCert(b []byte, csrDER []byte) (*x509.Certificate, error) {
 				return cert, nil
 			}
 		}
+		return nil, fmt.Errorf("issued certificate response contained %d certificate(s), none for the CSR's public key", len(p7.Certificates))
 	}
 	for _, cert := range p7.Certificates {
 		if !cert.IsCA {
