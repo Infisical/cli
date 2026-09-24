@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// The fixture the backend pins in agent-vault-activity-crypto.test.ts. Three implementations seal or open
-// these bytes (this one, Infisical's reference, and the browser's), so a change to the AAD string, the IV
-// width or the tag placement has to fail somewhere rather than surface as "playback is broken".
 const (
 	vectorKeyHex     = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	vectorIVHex      = "aabbccddeeff001122334455"
@@ -83,7 +80,6 @@ func TestSealMatchesNodeVector(t *testing.T) {
 	}
 }
 
-// What the browser does, so the layout is proven openable rather than merely reproducible.
 func TestSealedChunkOpensWithTheTagAppended(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	aad := buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, vectorContext.proxyID, vectorContext.chunkID)
@@ -160,7 +156,6 @@ func TestChunkIDsAreULIDsThatSortByTime(t *testing.T) {
 	if len(earlier) != 26 {
 		t.Fatalf("a chunk id is %d characters, the server's column is 26", len(earlier))
 	}
-	// The read cursor is a plain string comparison on this column, so lexical order has to be time order.
 	if !(earlier < later) {
 		t.Fatalf("%q did not sort before %q", earlier, later)
 	}

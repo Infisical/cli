@@ -68,7 +68,6 @@ type sessionEntry struct {
 	sessionID string
 	expiresAt *time.Time
 	services  []*resolvedService
-	// nil when activity logging is off for this session, which is the whole of the disabled path.
 	activity  *activityGrant
 	lastSeen  time.Time
 	fetchedAt time.Time
@@ -81,8 +80,6 @@ func sessionKey(token string) string {
 }
 
 type sessionResolver interface {
-	// held is the activity grant the caller already has, or nil. Passing it lets the server skip
-	// re-sending a key that never changes.
 	resolve(sessionToken string, held *activityGrant) (*resolveResult, error)
 }
 
@@ -156,7 +153,6 @@ func isSessionGone(err error) bool {
 	return errors.Is(err, errSessionGone)
 }
 
-// get keeps the two CONNECT gates, which care only about validity, free of the activity plumbing.
 func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 	services, _, err := c.lookup(sessionToken)
 	return services, err
@@ -167,8 +163,6 @@ type cacheLookup struct {
 	activity *activityGrant
 }
 
-// lookup resolves a session token to what the request path needs: the services to match against, and the
-// grant to record under. Both come from one cache entry, so the request handler never resolves.
 func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *activityGrant, error) {
 	key := sessionKey(sessionToken)
 
@@ -202,7 +196,6 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *activit
 	c.mu.Unlock()
 
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
-		// No cached entry, so no cached key either: ask for one.
 		result, err := c.resolver.resolve(sessionToken, nil)
 		if err != nil {
 			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but
@@ -309,7 +302,6 @@ func (c *sessionCache) refresh() {
 }
 
 func (c *sessionCache) refreshOne(key, token string) {
-	// Tell the server whether we already hold this session's key, so it can skip the unwrap.
 	c.mu.Lock()
 	var held *activityGrant
 	if entry, ok := c.entries[key]; ok {
@@ -329,7 +321,6 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.sessionID = result.SessionID
 		entry.expiresAt = result.ExpiresAt
 		entry.services = result.Services
-		// A backend flip lands within one poll, in either direction.
 		entry.activity = result.Activity
 		entry.fetchedAt = time.Now()
 	}

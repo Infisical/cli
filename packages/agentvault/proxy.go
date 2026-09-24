@@ -46,19 +46,12 @@ const (
 
 	maxConcurrentConns = 512
 
-	maxLoggedPathLen = 2048
-	// The agent chooses the method too, and Go bounds it only by the 1 MiB header limit. Uncapped, one
-	// request could make its own record big enough to stall whoever reads the session. The port needs no
-	// cap: checkedTarget refuses anything that is not a plain port number.
+	maxLoggedPathLen   = 2048
 	maxLoggedMethodLen = 32
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
 
-// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive as
-// a request-target with no leading slash, and no path rule could judge it. RFC 9110 makes an http(s) URI
-// without an authority invalid. handlePlainForward refuses the shape already; a tunnel reaches forward
-// directly, so the refusal lives there.
 var errOpaqueTarget = errors.New("the request target must be a path; opaque forms are not forwarded")
 
 // Wraps a resolve failure so the tunnel can tell it from an upstream failure without reading the text.
@@ -426,8 +419,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	}
 	event.Msg("agent-vault: request")
 
-	// reqPath is the agent's own path, taken before forward ran, so a substitution that put a real
-	// credential into the path never reaches the activity log.
+	// reqPath was taken before forward, so a credential substituted into the path never reaches the record.
 	if outcome.activity != nil {
 		var service, bundle *string
 		if matched != nil {
@@ -484,10 +476,7 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 type forwardOutcome struct {
 	brokered    bool
 	substituted []string
-	// Set as soon as the session resolves, so every path after that carries it, a refusal included: an
-	// agent reaching a host or a path it may not is the most security-relevant line the activity log can
-	// hold. A session that fails to resolve has nothing to attribute a record to, and leaves it nil.
-	activity *activityGrant
+	activity    *activityGrant
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
@@ -506,8 +495,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return nil, nil, outcome, fmt.Errorf("method %s echoes headers back: %w", method, errPolicyBlocked)
 	}
 
-	// After the lookup for the same reason: the only use of this form is probing for a path the policy
-	// misreads, which is the attempt an admin most wants to see in the session's activity.
+	// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive
+	// as a request-target with no leading slash. handlePlainForward refuses the shape already; the tunnel
+	// reaches this handler directly, so the refusal belongs here where both doors meet.
 	if req.URL.Opaque != "" {
 		return nil, nil, outcome, errOpaqueTarget
 	}
@@ -658,9 +648,6 @@ var errHostTooLong = errors.New("the target host is longer than a DNS name can b
 
 var errBadPort = errors.New("the target port must be a number from 1 to 65535")
 
-// validPort accepts a port only in its plain form. The dialer reads a megabyte of leading zeros, or a '+',
-// as an ordinary port, so an agent could otherwise reach 443 under a port string that fills log lines,
-// shows in its own record as noise, and misses every service pattern, which compares ports as strings.
 func validPort(port string) bool {
 	if len(port) == 0 || len(port) > 5 || port[0] == '0' {
 		return false

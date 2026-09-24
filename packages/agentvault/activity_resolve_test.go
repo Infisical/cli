@@ -34,10 +34,6 @@ func TestTheFirstResolveTakesTheKeyOffTheWire(t *testing.T) {
 	}
 }
 
-// The key is sent exactly once per session, because unwrapping it costs a KMS round trip. Every poll
-// after the first answers with an empty sessionKey, and the cached copy has to be carried onto the
-// refreshed entry. Getting this backwards silently stops all logging after the first poll, which is why
-// it has a test of its own.
 func TestACachedKeySurvivesAResolveThatOmitsIt(t *testing.T) {
 	held := &activityGrant{sessionID: "s1", projectID: "proj-1", key: aKey(9)}
 
@@ -52,8 +48,6 @@ func TestACachedKeySurvivesAResolveThatOmitsIt(t *testing.T) {
 }
 
 func TestNoKeyAndNoCachedCopyMeansNoRecording(t *testing.T) {
-	// The proxy said it had no key and was sent none, so there is nothing to seal with. Recording
-	// anything here would produce chunks nobody can ever open.
 	if got := toActivityGrant("s1", enabledGrantWire(""), nil); got != nil {
 		t.Fatal("a grant was built with no key at all")
 	}
@@ -62,7 +56,6 @@ func TestNoKeyAndNoCachedCopyMeansNoRecording(t *testing.T) {
 func TestActivityBeingOffClearsAnyCachedGrant(t *testing.T) {
 	held := &activityGrant{sessionID: "s1", projectID: "proj-1", key: aKey(9)}
 
-	// An admin switching logging off has to reach a running proxy on its next poll.
 	if got := toActivityGrant("s1", api.AgentVaultActivityGrant{Enabled: false}, held); got != nil {
 		t.Fatal("the proxy kept recording after logging was switched off")
 	}
@@ -84,7 +77,6 @@ func TestAnUnusableKeyIsRefusedRatherThanUsed(t *testing.T) {
 }
 
 func TestAGrantWithoutAProjectIsRefused(t *testing.T) {
-	// The project id is part of the AAD, so a chunk sealed without it could never be opened.
 	wire := api.AgentVaultActivityGrant{Enabled: true, SessionKey: base64.StdEncoding.EncodeToString(aKey(7))}
 	if got := toActivityGrant("s1", wire, nil); got != nil {
 		t.Fatal("a grant was built with no project named")

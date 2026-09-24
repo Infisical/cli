@@ -265,8 +265,6 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
-		// After the front door is closed, so no record can arrive mid-flush, and before the cache is
-		// cleared, since the keys the final seal needs live on its entries.
 		ps.activity.close(ctx)
 		ps.cache.close()
 		return nil

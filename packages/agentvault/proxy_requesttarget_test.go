@@ -108,8 +108,8 @@ func TestAPlaceholderInThePathStillSubstitutes(t *testing.T) {
 }
 
 // 'http:admin/secrets' parses to an empty path and a non-empty Opaque. handlePlainForward refuses the shape,
-// the tunnel reaches forward directly, and the upstream would have received a target with no leading slash
-// and a real credential on it.
+// the tunnel reaches forwardHTTP directly, and the upstream would have received a target with no leading
+// slash and a real credential on it.
 func TestAnOpaqueRequestTargetIsRefusedInsideATunnel(t *testing.T) {
 	proxyHost, upstreamHost := newRequestTargetFixture(t, nil)
 
@@ -144,7 +144,6 @@ func TestAnOpaqueRequestTargetIsRecordedAsBlocked(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 
-	// Refused, and still on the record: nobody sends this form except to probe the path rules.
 	got := drainOneRecord(t, ps.activity)
 	if got.Decision != decisionBlocked || got.Status != http.StatusBadRequest || got.Path != "admin/secrets" {
 		t.Fatalf("record is %+v, expected a blocked 400 for admin/secrets", got)

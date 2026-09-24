@@ -102,9 +102,6 @@ type AgentVaultService struct {
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 }
 
-// AgentVaultActivityGrant is what a session needs in order to have its activity recorded. SessionKey is
-// sent exactly once per session: the proxy reports that it already holds one and Infisical skips the
-// unwrap, which is a KMS round trip, on every poll after the first.
 type AgentVaultActivityGrant struct {
 	Enabled    bool   `json:"enabled"`
 	SessionKey string `json:"sessionKey"`
@@ -141,9 +138,6 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string,
 	return res, nil
 }
 
-// CreateAgentVaultActivityChunkRequest is the metadata for one sealed chunk. The ciphertext itself never
-// passes through Infisical: the response carries a presigned URL to PUT it straight to the customer's
-// bucket. Re-sending the same ChunkID is idempotent, which is what makes a failed upload safe to retry.
 type CreateAgentVaultActivityChunkRequest struct {
 	ChunkID         string `json:"chunkId"`
 	StartedAt       string `json:"startedAt"`

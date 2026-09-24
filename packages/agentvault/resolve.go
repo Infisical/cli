@@ -22,8 +22,7 @@ type resolveResult struct {
 	SessionID string
 	ExpiresAt *time.Time
 	Services  []*resolvedService
-	// nil when logging is off for this session.
-	Activity *activityGrant
+	Activity  *activityGrant
 }
 
 const activityKeyBytes = 32
@@ -83,12 +82,6 @@ func (r *infisicalResolver) resolve(sessionToken string, held *activityGrant) (*
 	}, nil
 }
 
-// toActivityGrant decides what the proxy records under after a poll.
-//
-// The key is sent exactly once per session. When we told the server we already hold it, the response
-// carries no key and the cached one is carried forward; clearing it here instead would silently stop all
-// logging after the very first poll. After any cache eviction the grant and the flag are dropped
-// together, so the next resolve asks for the key again and this self-heals.
 func toActivityGrant(sessionID string, wire api.AgentVaultActivityGrant, held *activityGrant) *activityGrant {
 	if !wire.Enabled {
 		return nil

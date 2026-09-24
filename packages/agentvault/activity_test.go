@@ -14,7 +14,7 @@ import (
 )
 
 type shipperCall struct {
-	kind      string // "post" or "put"
+	kind      string
 	sessionID string
 	chunkID   string
 	url       string
@@ -29,8 +29,6 @@ type scriptedResult struct {
 	err error
 }
 
-// fakeShipper records every call in order and pops scripted outcomes, so a test asserts both what was
-// delivered and in which order the two steps ran.
 type fakeShipper struct {
 	mu sync.Mutex
 
@@ -123,12 +121,6 @@ func testGrant(sessionID string) *activityGrant {
 	return &activityGrant{sessionID: sessionID, projectID: "proj-1", key: make([]byte, 32)}
 }
 
-// newTestLog fixes the clock so flush eligibility and the pause window are decided, not raced.
-//
-// tick is what the run loop does once an interval: advance, then flush. A spool with only a few records
-// is deliberately not due until an interval has passed since its last flush, so that a size-triggered
-// wake-up for one busy session does not drag every quiet session into an early, billable flush. Calling
-// flushAll without advancing therefore ships nothing, which is correct rather than a bug to work around.
 func newTestLog(shipper activityShipper) (log *activityLog, advance func(time.Duration), tick func()) {
 	log = newActivityLog("proxy-1", shipper)
 	now := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
@@ -156,7 +148,7 @@ func aRecord(host string) activityRecord {
 
 func TestRecordingIsANoOpWithoutALogOrAGrant(t *testing.T) {
 	var nilLog *activityLog
-	nilLog.record(testGrant("s1"), aRecord("api.github.com")) // must not panic
+	nilLog.record(testGrant("s1"), aRecord("api.github.com"))
 
 	log, _, _ := newTestLog(&fakeShipper{})
 	log.record(nil, aRecord("api.github.com"))
@@ -188,7 +180,6 @@ func TestTheRingAllocatesOnlyWhatItHolds(t *testing.T) {
 	ring := newActivityRing(activitySpoolCapacity)
 	ring.push(activityRecord{Seq: 0})
 
-	// A quiet session is the common case, so it must not pay for a busy one's headroom.
 	if got := cap(ring.buf); got > activityRingInitialSize {
 		t.Fatalf("one record reserved room for %d, expected at most %d", got, activityRingInitialSize)
 	}
@@ -209,7 +200,6 @@ func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
 		}
 	}
 
-	// Fill the first allocation, drain part of it so the head moves, then push enough to wrap and grow.
 	push(activityRingInitialSize)
 	ring.drain(10)
 	push(activityRingInitialSize * 3)
@@ -234,8 +224,6 @@ func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
 		ring.push(activityRecord{Seq: uint64(i)})
 	}
 
-	// The ring holds five flushes of headroom but the server refuses a chunk over activityFlushRecords,
-	// which it answers with a 422 the proxy then treats as poison. Slicing is what prevents that loss.
 	var slices int
 	for ring.len() > 0 {
 		got := ring.drain(activityFlushRecords)
@@ -254,7 +242,6 @@ func TestTheDropCountIsReportedOnceAndRidesTheFirstChunk(t *testing.T) {
 	log, _, _ := newTestLog(shipper)
 	grant := testGrant("s1")
 
-	// Overfill so the ring evicts, then flush: the gap must be counted on the first chunk only.
 	for i := 0; i < activitySpoolCapacity+50; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
@@ -277,7 +264,6 @@ func TestASequenceNumberIsConsumedEvenWhenARecordIsDropped(t *testing.T) {
 		log.record(grant, aRecord("api.github.com"))
 	}
 
-	// A chunk's firstSeq is what reveals the hole, so the counter must not compact over dropped records.
 	if got := log.spools["s1"].nextSeq; got != uint64(activitySpoolCapacity+10) {
 		t.Fatalf("nextSeq is %d after %d records; drops must still consume a number", got, activitySpoolCapacity+10)
 	}
@@ -286,7 +272,6 @@ func TestASequenceNumberIsConsumedEvenWhenARecordIsDropped(t *testing.T) {
 func TestTheProxyWideFuseDropsTheNewest(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
-	// Spread across enough spools to pass the total cap without any one ring filling.
 	for i := 0; i < activityTotalCapacity/activitySpoolCapacity+2; i++ {
 		grant := testGrant(fmt.Sprintf("s%d", i))
 		for j := 0; j < activitySpoolCapacity; j++ {
@@ -306,7 +291,6 @@ func TestAChunkIsPostedBeforeItIsUploaded(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	log.flushAll(context.Background(), true)
 
-	// The row lands before the object, so a failed upload is a visible gap rather than a silent one.
 	if got := shipper.kinds(); len(got) != 2 || got[0] != "post" || got[1] != "put" {
 		t.Fatalf("call order was %v, expected post then put", got)
 	}
@@ -330,7 +314,6 @@ func TestAFailedUploadRePostsTheSameChunkID(t *testing.T) {
 	if len(posts) != 2 {
 		t.Fatalf("expected the chunk to be re-posted, saw %d posts", len(posts))
 	}
-	// The server replays the same id idempotently, which is what makes the retry safe.
 	if posts[0].chunkID != posts[1].chunkID {
 		t.Fatalf("re-post used a different chunk id: %q then %q", posts[0].chunkID, posts[1].chunkID)
 	}
@@ -363,7 +346,6 @@ func TestARejectedProxyTokenKeepsEverything(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	// The poll loop exits within two heartbeats; until then nothing is thrown away.
 	spool, ok := log.spools["s1"]
 	if !ok {
 		t.Fatal("the spool was dropped on a rejected proxy token")
@@ -384,14 +366,12 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 		t.Fatalf("expected a ceiling pause, got paused=%v reason=%q", paused, reason)
 	}
 
-	// The ceiling is per organization, so another session on this proxy is paused too.
 	log.record(testGrant("s2"), aRecord("api.github.com"))
 	tick()
 	if len(shipper.posts()) != 1 {
 		t.Fatalf("a second session posted while paused; the pause is proxy-wide")
 	}
 
-	// Ops may raise the limit within the window, so the sealed chunks are still there when it lifts.
 	advance(activityPauseBackoff + time.Second)
 	log.flushAll(context.Background(), false)
 	if len(shipper.posts()) < 2 {
@@ -458,7 +438,6 @@ func TestARefusedChunkIsCountedOnTheNextOne(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	// The refused chunk was never written, so the next one is the only place its record can show up.
 	posts := shipper.posts()
 	if len(posts) != 2 || posts[1].dropped != 1 {
 		t.Fatalf("posts were %+v, expected the second to carry one dropped record", posts)
@@ -470,7 +449,6 @@ func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
 
-	// JSON writes '&' as &, so a full slice of these is about 12 MB: over the server's 8 MiB.
 	for i := 0; i < activityFlushRecords; i++ {
 		rec := aRecord("api.github.com")
 		rec.Path = truncatePath("/" + strings.Repeat("&", maxLoggedPathLen))
@@ -539,7 +517,6 @@ func TestThePendingCapEvictsTheOldestAndCountsIt(t *testing.T) {
 func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
-	// Only the length counts toward the cap, so every chunk can share one buffer.
 	blob := make([]byte, 12<<20)
 	add := func(sessionID string, order uint64, posted bool, carried uint64) *activitySpool {
 		spool, ok := log.spools[sessionID]
@@ -557,7 +534,6 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 		return spool
 	}
 
-	// One chunk per session, the shape an outage leaves behind, seven of them for 84 MiB against a 64 MiB cap.
 	log.mu.Lock()
 	add("oldest", 0, false, 7)
 	add("posted", 1, true, 3)
@@ -579,11 +555,9 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 			t.Fatalf("s%d lost its chunk; only the oldest should go", i)
 		}
 	}
-	// Never posted, so its records and the drops it carried are both unaccounted for anywhere else.
 	if got := log.spools["oldest"].ring.dropped; got != 107 {
 		t.Fatalf("the unposted chunk counted %d dropped, expected 107", got)
 	}
-	// Posted, so its row already reports its records as unreadable and its drops as not recorded.
 	if got := log.spools["posted"].ring.dropped; got != 0 {
 		t.Fatalf("the posted chunk counted %d dropped, expected 0", got)
 	}
@@ -598,15 +572,12 @@ func TestTheTickBreakerStopsHammeringADeadBucket(t *testing.T) {
 	}
 	tick()
 
-	// After the first upload fails, the rest of the tick seals but skips both calls, so five spools
-	// against blocked egress cost one timeout rather than five.
 	if got := len(shipper.puts()); got != 1 {
 		t.Fatalf("%d uploads were attempted in one tick after the first failed", got)
 	}
 	if got := len(shipper.posts()); got != 1 {
 		t.Fatalf("%d rows were written for objects that could not be uploaded", got)
 	}
-	// Nothing is lost: every spool sealed its records and holds them.
 	for i := 0; i < 5; i++ {
 		if len(log.spools[fmt.Sprintf("s%d", i)].pending) == 0 {
 			t.Fatalf("spool s%d sealed nothing during the outage", i)
@@ -622,7 +593,6 @@ func TestReachingTheSliceSizeWakesTheLoopOnce(t *testing.T) {
 		log.record(grant, aRecord("api.github.com"))
 	}
 
-	// A buffered channel of one: the loop coalesces a burst into a single wake-up.
 	if len(log.wake) != 1 {
 		t.Fatalf("the wake channel holds %d, expected exactly one pending wake-up", len(log.wake))
 	}
@@ -644,7 +614,6 @@ func TestAnIdleSpoolIsForgotten(t *testing.T) {
 }
 
 func TestIdleCloseOutlastsTheSessionCacheTTL(t *testing.T) {
-	// A session evicted from the cache stops producing records but must still get its final flush.
 	if activityIdleClose <= sessionInactiveTTL {
 		t.Fatalf("idle close (%s) must outlast the session cache TTL (%s)", activityIdleClose, sessionInactiveTTL)
 	}
@@ -676,9 +645,6 @@ func TestABlockedHostIsStillRecorded(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)
 
-	// The point of logging every request rather than only brokered ones: under the default any-host
-	// policy an agent exfiltrating to an unconfigured host is passthrough traffic, and under bundle-hosts
-	// the refusal is the single most security-relevant line in the timeline.
 	log.record(testGrant("s1"), activityRecord{
 		Method: "POST", Host: "evil.example", Port: "443", Path: "/collect", Status: 403, Decision: decisionBlocked,
 	})
@@ -733,8 +699,6 @@ func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
 	log.record(grant, aRecord("api.github.com"))
 	tick()
 
-	// Idle long enough to be forgotten, then used again. Two records with the same (proxyId, seq) for
-	// one session would make the log ambiguous for anyone correlating it.
 	advance(activityIdleClose + time.Minute)
 	log.flushAll(context.Background(), false)
 	if _, ok := log.spools["s1"]; ok {
@@ -764,7 +728,6 @@ func TestRecordsLostToASealFailureAreStillCounted(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, tick := newTestLog(shipper)
 
-	// A key the AES constructor rejects, so sealing fails for every slice.
 	grant := &activityGrant{sessionID: "s1", projectID: "proj-1", key: make([]byte, 7)}
 	for i := 0; i < 3; i++ {
 		log.record(grant, aRecord("api.github.com"))
@@ -792,7 +755,6 @@ func TestAnUnreachableControlPlaneStopsTheTickAfterOneTimeout(t *testing.T) {
 	}
 	tick()
 
-	// Without a breaker this costs five control-plane timeouts in series, every tick.
 	if got := len(shipper.posts()); got != 1 {
 		t.Fatalf("%d chunk POSTs were attempted in one tick after the first timed out", got)
 	}
@@ -822,8 +784,6 @@ func TestShutdownDoesNotRaceTheRunLoop(t *testing.T) {
 
 	<-done
 	close(stop)
-	// Shutdown flushes from this goroutine while the run loop may still be inside one of its own. The
-	// race detector is what makes this test worth having.
 	log.close(context.Background())
 
 	if len(shipper.puts()) == 0 {

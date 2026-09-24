@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// grantingResolver hands back one service plus an activity grant, so a request driven through the real
-// dispatch path produces a real record.
 type grantingResolver struct {
 	services []*resolvedService
 }
@@ -25,8 +23,6 @@ func (g grantingResolver) resolve(string, *activityGrant) (*resolveResult, error
 	}, nil
 }
 
-// newRecordingProxy wires a proxy exactly as run.go does, minus the listener, so these tests exercise
-// the call site in forwardHTTP rather than activityLog in isolation.
 func newRecordingProxy(t *testing.T, policy string, services []*resolvedService) (*httptest.Server, *activityLog, *fakeShipper) {
 	t.Helper()
 
@@ -48,7 +44,6 @@ func proxiedGet(t *testing.T, front *httptest.Server, target string) *http.Respo
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The session token rides in the proxy credentials, which is how an agent presents it.
 	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
 
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
@@ -89,8 +84,6 @@ func TestAProxiedRequestIsRecorded(t *testing.T) {
 	if got.Method != http.MethodGet || got.Path != "/repos/acme/web/issues" || got.Status != http.StatusCreated {
 		t.Fatalf("record is %+v", got)
 	}
-	// Nothing in the bundle matched, so this is passthrough traffic. Recording it is the whole point:
-	// under the default any-host policy an agent exfiltrating to an unconfigured host looks like this.
 	if got.Decision != decisionPassthrough {
 		t.Fatalf("decision was %q, expected %q", got.Decision, decisionPassthrough)
 	}
@@ -109,8 +102,6 @@ func TestAQueryStringNeverReachesTheRecord(t *testing.T) {
 	defer upstream.Close()
 
 	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, nil)
-	// Plenty of APIs put a token in the query string, so the path is built from EscapedPath() and the
-	// query is never seen. This is true by construction; the test is what keeps it true.
 	proxiedGet(t, front, upstream.URL+"/v1/thing?access_token=super-secret&sid=abc")
 
 	got := drainOneRecord(t, log)
@@ -119,9 +110,6 @@ func TestAQueryStringNeverReachesTheRecord(t *testing.T) {
 	}
 }
 
-// A path substitution rewrites the request with the real credential before it goes upstream. The record
-// has to carry the path the agent sent, placeholder and all, or the activity log would be the one place
-// the secret the agent never sees gets written down.
 func TestASubstitutedPathIsRecordedAsTheAgentSentIt(t *testing.T) {
 	seen := make(chan string, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +137,6 @@ func TestASubstitutedPathIsRecordedAsTheAgentSentIt(t *testing.T) {
 }
 
 func TestABlockedRequestIsRecordedWithItsRefusal(t *testing.T) {
-	// bundle-hosts with no service covering the host, and no allow list: the request is refused.
 	front, log, _ := newRecordingProxy(t, TrafficPolicyBundleHosts, nil)
 
 	res := proxiedGet(t, front, "http://blocked.example/collect")
@@ -177,7 +164,6 @@ func TestAnOversizedMethodIsRecordedTruncated(t *testing.T) {
 	proxyURL, _ := url.Parse(front.URL)
 	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
-	// A valid token, so Go sends it. Only the header limit stops an agent sending one far longer.
 	req, err := http.NewRequest(strings.Repeat("A", 5000), upstream.URL+"/v1/thing", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +186,6 @@ func TestRecordingSurvivesAnUnreachableUpstream(t *testing.T) {
 	proxyURL, _ := url.Parse(front.URL)
 	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
-	// Port 1 refuses immediately.
 	res, err := client.Get("http://127.0.0.1:1/v1/thing")
 	if err != nil {
 		t.Fatalf("the proxy did not answer: %v", err)
@@ -224,7 +209,6 @@ func TestAWholeRequestRoundTripsFromProxyToSealedChunk(t *testing.T) {
 		proxiedGet(t, front, fmt.Sprintf("%s/v1/thing/%d", upstream.URL, i))
 	}
 
-	// close is what shutdown calls: it flushes whatever is buffered within the deadline.
 	log.close(context.Background())
 
 	posts := shipper.posts()
@@ -243,8 +227,6 @@ func TestAWholeRequestRoundTripsFromProxyToSealedChunk(t *testing.T) {
 		t.Fatalf("uploaded %d objects, %d bytes, for a chunk declaring %d", len(puts), puts[0].bytes, posts[0].bytes)
 	}
 
-	// What leaves the proxy is ciphertext. If the records ever went out in the clear, the host and the
-	// path would be readable right here.
 	if bytes.Contains(puts[0].body, []byte("/v1/thing")) || bytes.Contains(puts[0].body, []byte("\"method\"")) {
 		t.Fatal("the uploaded chunk contains readable record fields; it was not sealed")
 	}

@@ -14,9 +14,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
-// These swap the config.INFISICAL_URL global, so they cannot run in parallel with each other or with the
-// other API-level tests in this package.
-
 func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	var (
 		mu         sync.Mutex
@@ -85,19 +82,15 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	if postedPath != "/api/v1/agent-vault/proxy/sessions/sess-1/activity/chunks" {
 		t.Fatalf("posted to %q", postedPath)
 	}
-	// The presigned URL is itself the authorization. Sending the proxy's bearer token to a customer's
-	// bucket would hand a third party a working Infisical credential.
 	if putAuth != "" {
 		t.Fatalf("the bucket saw an Authorization header: %q", putAuth)
 	}
-	// The presign signs Content-Length in, so a mismatch is refused by S3.
 	if putLength != strconv.Itoa(len(ciphertext)) {
 		t.Fatalf("the upload declared Content-Length %q for %d bytes", putLength, len(ciphertext))
 	}
 	if putType != "application/octet-stream" {
 		t.Fatalf("the upload declared Content-Type %q", putType)
 	}
-	// Signed into the link by Infisical, so S3 refuses the upload unless it is sent.
 	if putIfNone != "*" {
 		t.Fatalf("the upload sent If-None-Match %q; it must be create-only", putIfNone)
 	}
@@ -123,7 +116,6 @@ func TestABucketRefusalIsAnErrorThatNamesNoURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 403 from the bucket was treated as a successful upload")
 	}
-	// A presigned URL carries a working signature, so it must never reach a log line.
 	if got := err.Error(); strings.Contains(got, "X-Amz-Signature") || strings.Contains(got, bucket.URL) {
 		t.Fatalf("the error names the signed url: %q", got)
 	}
@@ -192,14 +184,12 @@ func TestAnUnreachableBucketIsAnErrorThatNamesNoSignature(t *testing.T) {
 	if err == nil {
 		t.Fatal("an upload to a closed server succeeded")
 	}
-	// This is the error logged on every S3 timeout, so it is the one most likely to leak the signature.
 	if strings.Contains(err.Error(), "X-Amz-Signature") {
 		t.Fatalf("the error names the signed url: %q", err.Error())
 	}
 }
 
 func TestAChunkAlreadyStoredCountsAsUploaded(t *testing.T) {
-	// S3 answers 412 to a create-only PUT when the object exists, which means an earlier attempt landed.
 	bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusPreconditionFailed)
 	}))
