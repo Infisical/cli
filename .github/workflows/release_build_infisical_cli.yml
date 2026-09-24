@@ -141,7 +141,7 @@ jobs:
   goreleaser:
     runs-on: ubuntu-latest-8-cores
     outputs:
-      publish: ${{ steps.artifacts.outputs.publish }}
+      repos-published: ${{ steps.invalidate.outputs.completed }}
     needs:
       - validate-tag-branch
       - cli-tests
@@ -362,6 +362,7 @@ jobs:
       # Waits for completion so verify-published-repos installs from the new
       # indexes instead of stale ones still cached at the edge.
       - name: Invalidate Cloudfront cache
+        id: invalidate
         if: steps.artifacts.outputs.publish == 'true'
         run: |
           set -euo pipefail
@@ -371,6 +372,7 @@ jobs:
           echo "Waiting for CloudFront invalidation $ID to complete..."
           aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$ID"
           echo "Invalidation $ID completed."
+          echo "completed=true" >> "$GITHUB_OUTPUT"
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
@@ -386,8 +388,8 @@ jobs:
 
   # Installs the just-published release from the public repos in clean
   # containers, as a customer would, so a missing, unsigned or stale index
-  # fails the run. Runs even if goreleaser failed later, as long as the
-  # publish happened.
+  # fails the run. Gated on the invalidation completing, which implies the
+  # upload succeeded; a goreleaser publisher error alone does not skip it.
   verify-published-repos:
     name: Verify published repos (${{ matrix.image }})
     runs-on: ubuntu-latest
@@ -398,7 +400,7 @@ jobs:
     if: |
       always() &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
-      needs.goreleaser.outputs.publish == 'true'
+      needs.goreleaser.outputs.repos-published == 'true'
     strategy:
       fail-fast: false
       # nfpm stamps rpm packages with release 1 and deb/apk packages with no
