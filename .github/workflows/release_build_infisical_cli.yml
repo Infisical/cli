@@ -467,14 +467,15 @@ jobs:
           grep -qFw \"\$VERSION\" /tmp/infisical-version"
           container="verify-infisical-$$"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
-          started=false
           prepared=false
           max_attempts=5
           for attempt in $(seq 1 "$max_attempts"); do
-            if ! $started && docker run -d --name "$container" -e VERSION="$VERSION" "$IMAGE" tail -f /dev/null >/dev/null; then
-              started=true
+            if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+              prepared=false
+              docker run -d --name "$container" -e VERSION="$VERSION" "$IMAGE" tail -f /dev/null >/dev/null || true
             fi
-            if $started && ! $prepared && docker exec "$container" sh -c "set -eu
+            if ! $prepared && docker exec "$container" sh -c "set -eu
           $PREPARE"; then
               prepared=true
             fi
