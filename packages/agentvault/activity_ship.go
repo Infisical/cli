@@ -116,6 +116,8 @@ func (c *activityShipperClient) putObject(ctx context.Context, uploadURL string,
 	req.ContentLength = int64(len(ciphertext))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", strconv.Itoa(len(ciphertext)))
+	// Signed in too: the link is create-only, so it can finish an upload but never replace a stored chunk.
+	req.Header.Set("If-None-Match", "*")
 
 	res, err := c.put.Do(req)
 	if err != nil {
@@ -123,6 +125,11 @@ func (c *activityShipperClient) putObject(ctx context.Context, uploadURL string,
 	}
 	defer res.Body.Close()
 
+	// The object is already there: an earlier PUT landed but its response never arrived. The chunk is stored,
+	// which is all a retry wanted.
+	if res.StatusCode == http.StatusPreconditionFailed {
+		return nil
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		// The body can carry an S3 error document; the status is enough to decide, and the URL is signed
 		// so it never goes in a log line.

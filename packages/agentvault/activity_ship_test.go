@@ -24,6 +24,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 		putAuth    string
 		putLength  string
 		putType    string
+		putIfNone  string
 		putBody    []byte
 		postedPath string
 	)
@@ -33,6 +34,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 		putAuth = r.Header.Get("Authorization")
 		putLength = r.Header.Get("Content-Length")
 		putType = r.Header.Get("Content-Type")
+		putIfNone = r.Header.Get("If-None-Match")
 		buf := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(buf)
 		putBody = buf
@@ -94,6 +96,10 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	}
 	if putType != "application/octet-stream" {
 		t.Fatalf("the upload declared Content-Type %q", putType)
+	}
+	// Signed into the link by Infisical, so S3 refuses the upload unless it is sent.
+	if putIfNone != "*" {
+		t.Fatalf("the upload sent If-None-Match %q; it must be create-only", putIfNone)
 	}
 	if string(putBody) != string(ciphertext) {
 		t.Fatalf("the bucket received %q", string(putBody))
@@ -189,5 +195,23 @@ func TestAnUnreachableBucketIsAnErrorThatNamesNoSignature(t *testing.T) {
 	// This is the error logged on every S3 timeout, so it is the one most likely to leak the signature.
 	if strings.Contains(err.Error(), "X-Amz-Signature") {
 		t.Fatalf("the error names the signed url: %q", err.Error())
+	}
+}
+
+func TestAChunkAlreadyStoredCountsAsUploaded(t *testing.T) {
+	// S3 answers 412 to a create-only PUT when the object exists, which means an earlier attempt landed.
+	bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+	}))
+	defer bucket.Close()
+
+	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipper.put.Transport = bucket.Client().Transport
+
+	if err := shipper.putObject(context.Background(), bucket.URL+"/object", []byte("bytes")); err != nil {
+		t.Fatalf("a chunk that is already stored was treated as a failed upload: %v", err)
 	}
 }
