@@ -444,6 +444,34 @@ func TestARefusedChunkIsCountedOnTheNextOne(t *testing.T) {
 	}
 }
 
+func TestAClockSkewRefusalIsDroppedCountedAndLoggedOnce(t *testing.T) {
+	skew := scriptedResult{err: apiErr(http.StatusBadRequest, activityClockSkewName)}
+	shipper := &fakeShipper{postResults: []scriptedResult{skew, skew}}
+	log, _, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	if len(log.spools["s1"].pending) != 0 {
+		t.Fatal("a chunk refused for clock skew was kept")
+	}
+	if !log.clockSkewReported {
+		t.Fatal("the first clock skew refusal was not reported")
+	}
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+
+	posts := shipper.posts()
+	if len(posts) != 3 || posts[2].dropped != 2 {
+		t.Fatalf("posts were %+v, expected the third to carry both refused records", posts)
+	}
+	if log.clockSkewReported {
+		t.Fatal("an accepted chunk did not end the clock skew episode")
+	}
+}
+
 func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 	shipper := &fakeShipper{postDefault: scriptedResult{err: errors.New("infisical unreachable")}}
 	log, _, tick := newTestLog(shipper)

@@ -28,6 +28,7 @@ const (
 
 	activityCeilingReachedName = "AgentVaultActivityCeilingReached"
 	activityDisabledName       = "AgentVaultActivityDisabled"
+	activityClockSkewName      = "AgentVaultActivityClockSkew"
 )
 
 type activityGrant struct {
@@ -63,6 +64,8 @@ type activityLog struct {
 
 	s3Down        bool
 	infisicalDown bool
+
+	clockSkewReported bool
 
 	closed bool
 	wake   chan struct{}
@@ -356,6 +359,9 @@ func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk
 		if err != nil {
 			return a.handleCreateFailure(spool, chunk, err)
 		}
+		a.mu.Lock()
+		a.clockSkewReported = false
+		a.mu.Unlock()
 		chunk.posted = true
 		chunk.uploadURL = res.UploadURL
 		chunk.urlExpires = a.now().Add(time.Duration(res.ExpiresInSeconds) * time.Second)
@@ -412,15 +418,19 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 		log.Warn().Msg("agent-vault: activity logging is switched off for this project, pausing for 15m")
 		return false
 
-	case isPoisonChunk(err):
+	case isActivityErrorNamed(err, activityClockSkewName):
+		a.dropRefused(spool, chunk)
 		a.mu.Lock()
-		if len(spool.pending) > 0 && spool.pending[0] == chunk {
-			spool.pending = spool.pending[1:]
-			a.sealedBytes -= len(chunk.ciphertext)
-			// Counted as dropped, or an agent that gets its own chunk refused could erase what it did.
-			spool.ring.dropped += chunk.lostCount()
-		}
+		reported := a.clockSkewReported
+		a.clockSkewReported = true
 		a.mu.Unlock()
+		if !reported {
+			log.Error().Err(err).Msg("agent-vault: activity is being refused because this machine's clock is wrong; fix the clock to resume recording")
+		}
+		return false
+
+	case isPoisonChunk(err):
+		a.dropRefused(spool, chunk)
 		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.meta.RecordCount).
 			Msg("agent-vault: Infisical rejected an activity chunk as malformed, dropping it")
 		return false
@@ -432,5 +442,16 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).
 			Msg("agent-vault: could not record activity, will retry")
 		return false
+	}
+}
+
+func (a *activityLog) dropRefused(spool *activitySpool, chunk *sealedChunk) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(spool.pending) > 0 && spool.pending[0] == chunk {
+		spool.pending = spool.pending[1:]
+		a.sealedBytes -= len(chunk.ciphertext)
+		// Counted as dropped, or an agent that gets its own chunk refused could erase what it did.
+		spool.ring.dropped += chunk.lostCount()
 	}
 }
