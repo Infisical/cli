@@ -13,8 +13,11 @@
 package adcs
 
 import (
+	"bytes"
 	"context"
+	"crypto"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -41,6 +44,7 @@ import (
 	_ "github.com/oiweiwei/go-msrpc/msrpc/erref/ntstatus"
 	_ "github.com/oiweiwei/go-msrpc/msrpc/erref/win32"
 
+	"github.com/rs/zerolog/log"
 	"go.mozilla.org/pkcs7"
 )
 
@@ -59,12 +63,29 @@ var clsidCertAdminD = uuid.MustParse("d99e6e73-fc88-11d0-b498-00a0c90312f3")
 // host/port is never echoed back to the control plane.
 var ErrConnect = errors.New("failed to connect to the ADCS host")
 
+// errCARejected marks a GetCAProperty call the CA answered with a failure HRESULT (e.g.
+// E_INVALIDARG for a signing certificate index it does not have), as opposed to a transport
+// or decoding failure.
+var errCARejected = errors.New("rejected by the CA")
+
 const (
+	crPropCASigCertCount = 0x0000000B
 	crPropCASigCertChain = 0x0000000D
 	crPropTemplates      = 0x0000001D
 
+	propTypeLong   = 0x00000001
 	propTypeBinary = 0x00000003
 	propTypeString = 0x00000004
+
+	// AD CS numbers CA signing certificates from 0 (the original) upward, incrementing on
+	// every CA renewal, and treats PropIndex -1 (0xFFFFFFFF in MS-WCCE) as "the current
+	// one". A zero PropIndex returns the original certificate's chain, which cannot
+	// validate anything issued after a renewal with a new key.
+	propIndexCurrent int32 = -1
+
+	// maxSigningCertCount bounds CR_PROP_CASIGCERTCOUNT, which arrives from the CA unchecked
+	// and drives one RPC per index during the fallback scan.
+	maxSigningCertCount int32 = 256
 
 	// dwFlags for a binary DER PKCS#10 request.
 	crInBinary = 0x00000002
@@ -295,20 +316,110 @@ func (c *Client) getStringProperty(ctx context.Context, caName string, propID in
 	return utf16le(resp.PropertyValue.Buffer), nil
 }
 
-func (c *Client) getChainPem(ctx context.Context, caName string) (string, error) {
+// getSigningCertChain reads the chain of the CA signing certificate at the given index.
+func (c *Client) getSigningCertChain(ctx context.Context, caName string, index int32) ([]*x509.Certificate, error) {
 	resp, err := c.d2.GetCAProperty(ctx, &icertrequestd2.GetCAPropertyRequest{
-		This: c.this, Authority: caName, PropertyID: crPropCASigCertChain, PropertyType: propTypeBinary,
+		This: c.this, Authority: caName, PropertyID: crPropCASigCertChain, PropertyIndex: index, PropertyType: propTypeBinary,
 	})
 	if err != nil {
-		return "", fmt.Errorf("read CA chain: %w", err)
+		return nil, fmt.Errorf("read CA chain: %w", err)
 	}
 	if resp.Return != 0 {
-		return "", fmt.Errorf("read CA chain: %s", hresult.FromCode(uint32(resp.Return)))
+		return nil, fmt.Errorf("read CA chain: %w: %s", errCARejected, hresult.FromCode(uint32(resp.Return)))
 	}
-	if resp.PropertyValue == nil {
-		return "", fmt.Errorf("read CA chain: empty response")
+	if resp.PropertyValue == nil || len(resp.PropertyValue.Buffer) == 0 {
+		return nil, fmt.Errorf("read CA chain: empty response")
 	}
-	return pkcs7ToPem(resp.PropertyValue.Buffer)
+	p7, err := pkcs7.Parse(resp.PropertyValue.Buffer)
+	if err != nil {
+		return nil, fmt.Errorf("parse PKCS#7 chain: %w", err)
+	}
+	return p7.Certificates, nil
+}
+
+// getSigningCertCount reads CR_PROP_CASIGCERTCOUNT, the number of signing certificates the
+// CA has had (original plus one per renewal).
+func (c *Client) getSigningCertCount(ctx context.Context, caName string) (int32, error) {
+	resp, err := c.d2.GetCAProperty(ctx, &icertrequestd2.GetCAPropertyRequest{
+		This: c.this, Authority: caName, PropertyID: crPropCASigCertCount, PropertyType: propTypeLong,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("read CA signing certificate count: %w", err)
+	}
+	if resp.Return != 0 {
+		return 0, fmt.Errorf("read CA signing certificate count: %s", hresult.FromCode(uint32(resp.Return)))
+	}
+	if resp.PropertyValue == nil || len(resp.PropertyValue.Buffer) < 4 {
+		return 0, fmt.Errorf("read CA signing certificate count: empty response")
+	}
+	count := int32(binary.LittleEndian.Uint32(resp.PropertyValue.Buffer))
+	if count <= 0 || count > maxSigningCertCount {
+		return 0, fmt.Errorf("read CA signing certificate count: CA reported %d signing certificates, expected 1 to %d", count, maxSigningCertCount)
+	}
+	return count, nil
+}
+
+// getChainPem returns the chain of the CA signing certificate that issued cert. A renewed
+// CA keeps every signing certificate it has ever had, so the current one is tried first
+// and, if it did not sign cert (or the CA rejects the index), the signing certificates are
+// checked from the newest to the original and the first one that issued cert wins.
+//
+// When no signing certificate issued cert, or a read fails midway, the error is returned
+// together with the current chain (if it was read) so callers can still hand out the
+// issued certificate with a best-effort chain.
+func (c *Client) getChainPem(ctx context.Context, caName string, cert *x509.Certificate) (string, error) {
+	current, err := c.getSigningCertChain(ctx, caName, propIndexCurrent)
+	switch {
+	case err == nil:
+		if chainIssued(current, cert) {
+			return certsToPem(current), nil
+		}
+	case errors.Is(err, errCARejected):
+		// The CA has no notion of "current"; fall through to the indexed scan.
+	default:
+		return "", err
+	}
+	fallback := certsToPem(current)
+
+	count, err := c.getSigningCertCount(ctx, caName)
+	if err != nil {
+		return fallback, err
+	}
+	// PropIndex -1 is the newest index (count-1); skip it when it was already read.
+	start := count - 1
+	if current != nil {
+		start = count - 2
+	}
+	for idx := start; idx >= 0; idx-- {
+		chain, err := c.getSigningCertChain(ctx, caName, idx)
+		if err != nil {
+			return fallback, err
+		}
+		if chainIssued(chain, cert) {
+			return certsToPem(chain), nil
+		}
+	}
+	return fallback, fmt.Errorf("none of the %d CA signing certificate(s) on %q issued the enrolled certificate", count, caName)
+}
+
+// chainIssued reports whether any certificate in chain is the issuer of cert. The signature
+// check is authoritative; only when Go refuses to verify the signature algorithm at all
+// (e.g. a SHA-1 CA) is the authority key identifier used instead. The backend verifies the
+// signature again on import.
+func chainIssued(chain []*x509.Certificate, cert *x509.Certificate) bool {
+	for _, ca := range chain {
+		err := cert.CheckSignatureFrom(ca)
+		if err == nil {
+			return true
+		}
+		var insecure x509.InsecureAlgorithmError
+		if errors.As(err, &insecure) && len(cert.AuthorityKeyId) > 0 && bytes.Equal(cert.AuthorityKeyId, ca.SubjectKeyId) {
+			log.Warn().Err(err).Str("issuer", ca.Subject.String()).
+				Msg("adcs: signature algorithm not verifiable, matched the CA chain by authority key identifier only")
+			return true
+		}
+	}
+	return false
 }
 
 // Templates lists the certificate templates published on the CA.
@@ -352,55 +463,68 @@ func (c *Client) Enroll(ctx context.Context, caName, template string, csrDER []b
 		return result, nil
 	}
 
-	certPem, err := issuedCertToPem(resp.EncodedCert.Buffer)
+	cert, err := parseIssuedCert(resp.EncodedCert.Buffer, csrDER)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (request ID %d)", err, resp.RequestID)
 	}
-	result.CertificatePem = certPem
+	result.CertificatePem = string(certToPem(cert))
 
-	chain, err := c.getChainPem(ctx, caName)
+	// The CA has already issued the certificate and consumed the request, so a chain lookup
+	// failure must not discard it: return whatever chain could be read and let the control
+	// plane's own chain validation report the mismatch.
+	chain, err := c.getChainPem(ctx, caName, cert)
 	if err != nil {
-		return nil, err
+		log.Warn().Err(err).Uint32("requestId", resp.RequestID).Str("ca", caName).
+			Msg("adcs: could not resolve the CA chain that issued the certificate, returning a best-effort chain")
 	}
 	result.ChainPem = chain
 	return result, nil
 }
 
-// issuedCertToPem accepts either a bare DER certificate or a PKCS#7 bundle and
-// returns the leaf certificate as PEM.
-func issuedCertToPem(b []byte) (string, error) {
+// parseIssuedCert accepts either a bare DER certificate or a PKCS#7 bundle and returns
+// the certificate issued for csrDER. A PKCS#7 response carries the issued certificate
+// alongside the CA chain in no guaranteed order, so the certificate is identified by the
+// CSR's public key. A bundle holding no certificate for that key is an error, since
+// returning any other certificate would hand the caller a key it does not own; the first
+// non-CA certificate (then the first certificate) is used only when the CSR cannot be parsed.
+func parseIssuedCert(b []byte, csrDER []byte) (*x509.Certificate, error) {
 	if cert, err := x509.ParseCertificate(b); err == nil {
-		return string(certToPem(cert)), nil
+		return cert, nil
 	}
 	p7, err := pkcs7.Parse(b)
 	if err != nil {
-		return "", fmt.Errorf("parse issued certificate: %w", err)
+		return nil, fmt.Errorf("parse issued certificate: %w", err)
 	}
 	if len(p7.Certificates) == 0 {
-		return "", fmt.Errorf("issued certificate response contained no certificates")
+		return nil, fmt.Errorf("issued certificate response contained no certificates")
+	}
+	if csr, err := x509.ParseCertificateRequest(csrDER); err == nil {
+		for _, cert := range p7.Certificates {
+			if publicKeysEqual(cert.PublicKey, csr.PublicKey) {
+				return cert, nil
+			}
+		}
+		return nil, fmt.Errorf("issued certificate response contained %d certificate(s), none for the CSR's public key", len(p7.Certificates))
 	}
 	for _, cert := range p7.Certificates {
 		if !cert.IsCA {
-			return string(certToPem(cert)), nil
+			return cert, nil
 		}
 	}
-	return string(certToPem(p7.Certificates[0])), nil
+	return p7.Certificates[0], nil
 }
 
-// pkcs7ToPem converts a PKCS#7 (CERTTRANSBLOB) chain into concatenated PEM certs.
-func pkcs7ToPem(der []byte) (string, error) {
-	if len(der) == 0 {
-		return "", nil
-	}
-	p7, err := pkcs7.Parse(der)
-	if err != nil {
-		return "", fmt.Errorf("parse PKCS#7 chain: %w", err)
-	}
+func publicKeysEqual(a, b crypto.PublicKey) bool {
+	k, ok := a.(interface{ Equal(crypto.PublicKey) bool })
+	return ok && k.Equal(b)
+}
+
+func certsToPem(certs []*x509.Certificate) string {
 	var sb strings.Builder
-	for _, cert := range p7.Certificates {
+	for _, cert := range certs {
 		sb.Write(certToPem(cert))
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 func certToPem(cert *x509.Certificate) []byte {
