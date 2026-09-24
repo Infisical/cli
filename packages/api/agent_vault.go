@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -161,10 +162,11 @@ type CreateAgentVaultActivityChunkResponse struct {
 	ExpiresInSeconds int    `json:"expiresInSeconds"`
 }
 
-func CallCreateAgentVaultActivityChunk(httpClient *resty.Client, sessionID string, request CreateAgentVaultActivityChunkRequest) (CreateAgentVaultActivityChunkResponse, error) {
+func CallCreateAgentVaultActivityChunk(ctx context.Context, httpClient *resty.Client, sessionID string, request CreateAgentVaultActivityChunkRequest) (CreateAgentVaultActivityChunkResponse, error) {
 	var res CreateAgentVaultActivityChunkResponse
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).

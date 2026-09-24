@@ -54,7 +54,7 @@ type forgottenSpool struct {
 }
 
 type activityShipper interface {
-	createChunk(final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error)
+	createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error)
 	putObject(ctx context.Context, url string, ciphertext []byte) error
 }
 
@@ -435,8 +435,12 @@ func (a *activityLog) ackUploadReport(snapshot uint64) {
 
 func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk *sealedChunk, final bool) bool {
 	if chunk.uploadURL == "" || a.now().Add(10*time.Second).After(chunk.urlExpires) {
+		// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
+		if ctx.Err() != nil {
+			return false
+		}
 		grantsIssuedAtSend := activityGrantsIssued.Load()
-		res, err := a.shipper.createChunk(final, spool.sessionID, chunk.meta)
+		res, err := a.shipper.createChunk(ctx, final, spool.sessionID, chunk.meta)
 		if err != nil {
 			return a.handleCreateFailure(spool, chunk, err, grantsIssuedAtSend)
 		}

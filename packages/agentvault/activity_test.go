@@ -43,7 +43,7 @@ type fakeShipper struct {
 	nextURL int
 }
 
-func (f *fakeShipper) createChunk(final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error) {
+func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -863,6 +863,20 @@ func TestAnUnreachableControlPlaneStopsTheTickAfterOneTimeout(t *testing.T) {
 		if len(log.spools[fmt.Sprintf("s%d", i)].pending) == 0 {
 			t.Fatalf("spool s%d sealed nothing during the outage", i)
 		}
+	}
+}
+
+func TestShutdownPastItsBudgetStartsNoNewChunk(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, _, _ := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	spent, cancel := context.WithCancel(context.Background())
+	cancel()
+	log.close(spent)
+
+	if len(shipper.posts()) != 0 {
+		t.Fatal("a chunk was posted after the shutdown budget ran out, leaving a row that can never be uploaded")
 	}
 }
 

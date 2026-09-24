@@ -61,7 +61,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	shipper.put.Transport = bucket.Client().Transport
 
 	ciphertext := []byte("sealed-bytes")
-	res, err := shipper.createChunk(false, "sess-1", api.CreateAgentVaultActivityChunkRequest{
+	res, err := shipper.createChunk(context.Background(), false, "sess-1", api.CreateAgentVaultActivityChunkRequest{
 		ChunkID:         "01K5ABCDEFGHJKMNPQRSTVWXYZ",
 		RecordCount:     1,
 		CiphertextBytes: len(ciphertext),

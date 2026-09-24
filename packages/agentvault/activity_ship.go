@@ -73,12 +73,12 @@ func scrubURLError(err error) error {
 	return err
 }
 
-func (c *activityShipperClient) createChunk(final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error) {
+func (c *activityShipperClient) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error) {
 	client := c.steady
 	if final {
 		client = c.final
 	}
-	return api.CallCreateAgentVaultActivityChunk(client, sessionID, req)
+	return api.CallCreateAgentVaultActivityChunk(ctx, client, sessionID, req)
 }
 
 func (c *activityShipperClient) putObject(ctx context.Context, uploadURL string, ciphertext []byte) error {
