@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -97,17 +99,35 @@ func degeneratePKCS7(t *testing.T, certs ...*x509.Certificate) []byte {
 
 // fakeD2 answers GetCAProperty(CR_PROP_CASIGCERTCHAIN) from a fixed set of chains keyed
 // by PropIndex, the way a CA that has been renewed keeps one chain per signing
-// certificate. Indexes it does not know return E_INVALIDARG.
+// certificate, and CR_PROP_CASIGCERTCOUNT with the number of non-negative indexes it
+// knows. Indexes it does not know return E_INVALIDARG; an index in broken returns a
+// transport error.
 type fakeD2 struct {
 	icertrequestd2.CertRequestD2Client
 	chains map[int32][]byte
+	broken map[int32]bool
 	calls  []int32
 }
 
 func (f *fakeD2) GetCAProperty(_ context.Context, req *icertrequestd2.GetCAPropertyRequest, _ ...dcerpc.CallOption) (*icertrequestd2.GetCAPropertyResponse, error) {
+	if req.PropertyID == crPropCASigCertCount && req.PropertyType == propTypeLong {
+		var count uint32
+		for idx := range f.chains {
+			if idx >= 0 {
+				count++
+			}
+		}
+		buf := binary.LittleEndian.AppendUint32(nil, count)
+		return &icertrequestd2.GetCAPropertyResponse{
+			PropertyValue: &wcce.CertTransportBlob{Length: uint32(len(buf)), Buffer: buf},
+		}, nil
+	}
 	f.calls = append(f.calls, req.PropertyIndex)
 	if req.PropertyID != crPropCASigCertChain || req.PropertyType != propTypeBinary {
 		return &icertrequestd2.GetCAPropertyResponse{Return: hrInvalidArg}, nil
+	}
+	if f.broken[req.PropertyIndex] {
+		return nil, errors.New("rpc: connection reset")
 	}
 	blob, ok := f.chains[req.PropertyIndex]
 	if !ok {
@@ -176,6 +196,9 @@ func TestGetChainPem(t *testing.T) {
 		if subjects := pemSubjects(t, got); strings.Join(subjects, ",") != "issuing-v1,root" {
 			t.Fatalf("chain subjects = %v, want [issuing-v1 root]", subjects)
 		}
+		if len(d2.calls) != 2 || d2.calls[0] != propIndexCurrent || d2.calls[1] != 1 {
+			t.Fatalf("GetCAProperty indexes = %v, want [%d 1]", d2.calls, propIndexCurrent)
+		}
 	})
 
 	t.Run("falls back to an older signing certificate that issued the certificate", func(t *testing.T) {
@@ -228,6 +251,23 @@ func TestGetChainPem(t *testing.T) {
 		}
 	})
 
+	t.Run("surfaces a read failure during the scan instead of settling for an older chain", func(t *testing.T) {
+		d2 := &fakeD2{
+			chains: map[int32][]byte{
+				0: degeneratePKCS7(t, original.cert, root.cert),
+				1: degeneratePKCS7(t, renewed.cert, root.cert),
+				2: degeneratePKCS7(t, renewed.cert, root.cert),
+			},
+			broken: map[int32]bool{2: true},
+		}
+		c := &Client{d2: d2}
+
+		_, err := c.getChainPem(context.Background(), "CA", issueLeaf(t, original))
+		if err == nil || !strings.Contains(err.Error(), "connection reset") {
+			t.Fatalf("err = %v, want the transport error", err)
+		}
+	})
+
 	t.Run("errors when no signing certificate issued the certificate", func(t *testing.T) {
 		d2 := &fakeD2{chains: map[int32][]byte{
 			propIndexCurrent: degeneratePKCS7(t, original.cert, root.cert),
@@ -241,12 +281,16 @@ func TestGetChainPem(t *testing.T) {
 		}
 	})
 
-	t.Run("surfaces the CA error when no chain can be read at all", func(t *testing.T) {
-		c := &Client{d2: &fakeD2{chains: map[int32][]byte{}}}
+	t.Run("errors when the CA reports no signing certificates", func(t *testing.T) {
+		d2 := &fakeD2{chains: map[int32][]byte{}}
+		c := &Client{d2: d2}
 
 		_, err := c.getChainPem(context.Background(), "CA", issueLeaf(t, renewed))
-		if err == nil || !strings.HasPrefix(err.Error(), "read CA chain:") {
-			t.Fatalf("err = %v, want read CA chain error", err)
+		if err == nil || !strings.Contains(err.Error(), "no CA signing certificate") {
+			t.Fatalf("err = %v, want no-issuer error", err)
+		}
+		if len(d2.calls) != 1 || d2.calls[0] != propIndexCurrent {
+			t.Fatalf("GetCAProperty indexes = %v, want [%d]", d2.calls, propIndexCurrent)
 		}
 	})
 }

@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -61,9 +62,11 @@ var clsidCertAdminD = uuid.MustParse("d99e6e73-fc88-11d0-b498-00a0c90312f3")
 var ErrConnect = errors.New("failed to connect to the ADCS host")
 
 const (
+	crPropCASigCertCount = 0x0000000B
 	crPropCASigCertChain = 0x0000000D
 	crPropTemplates      = 0x0000001D
 
+	propTypeLong   = 0x00000001
 	propTypeBinary = 0x00000003
 	propTypeString = 0x00000004
 
@@ -72,10 +75,6 @@ const (
 	// one". A zero PropIndex returns the original certificate's chain, which cannot
 	// validate anything issued after a renewal with a new key.
 	propIndexCurrent int32 = -1
-
-	// maxSigningCertIndex bounds the scan over signing certificate indexes when the
-	// current chain does not contain the issuer of the certificate being enrolled.
-	maxSigningCertIndex int32 = 64
 
 	// dwFlags for a binary DER PKCS#10 request.
 	crInBinary = 0x00000002
@@ -327,35 +326,46 @@ func (c *Client) getSigningCertChain(ctx context.Context, caName string, index i
 	return p7.Certificates, nil
 }
 
+// getSigningCertCount reads CR_PROP_CASIGCERTCOUNT, the number of signing certificates the
+// CA has had (original plus one per renewal).
+func (c *Client) getSigningCertCount(ctx context.Context, caName string) (int32, error) {
+	resp, err := c.d2.GetCAProperty(ctx, &icertrequestd2.GetCAPropertyRequest{
+		This: c.this, Authority: caName, PropertyID: crPropCASigCertCount, PropertyType: propTypeLong,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("read CA signing certificate count: %w", err)
+	}
+	if resp.Return != 0 {
+		return 0, fmt.Errorf("read CA signing certificate count: %s", hresult.FromCode(uint32(resp.Return)))
+	}
+	if resp.PropertyValue == nil || len(resp.PropertyValue.Buffer) < 4 {
+		return 0, fmt.Errorf("read CA signing certificate count: empty response")
+	}
+	return int32(binary.LittleEndian.Uint32(resp.PropertyValue.Buffer)), nil
+}
+
 // getChainPem returns the chain of the CA signing certificate that issued cert. A renewed
 // CA keeps every signing certificate it has ever had, so the current one is tried first
-// and, if it did not sign cert (or the CA rejects the index), each index from the original
-// upward is checked and the newest matching chain wins.
+// and, if it did not sign cert (or the CA rejects the index), the signing certificates are
+// checked from the newest to the original and the first one that issued cert wins.
 func (c *Client) getChainPem(ctx context.Context, caName string, cert *x509.Certificate) (string, error) {
 	chain, err := c.getSigningCertChain(ctx, caName, propIndexCurrent)
 	if err == nil && chainIssued(chain, cert) {
 		return certsToPem(chain), nil
 	}
 
-	var match []*x509.Certificate
-	for idx := int32(0); idx <= maxSigningCertIndex; idx++ {
-		chain, err = c.getSigningCertChain(ctx, caName, idx)
-		if err != nil {
-			if idx > 0 {
-				// Past the last signing certificate.
-				err = nil
-			}
-			break
-		}
-		if chainIssued(chain, cert) {
-			match = chain
-		}
-	}
-	if match != nil {
-		return certsToPem(match), nil
-	}
+	count, err := c.getSigningCertCount(ctx, caName)
 	if err != nil {
 		return "", err
+	}
+	for idx := count - 1; idx >= 0; idx-- {
+		chain, err = c.getSigningCertChain(ctx, caName, idx)
+		if err != nil {
+			return "", err
+		}
+		if chainIssued(chain, cert) {
+			return certsToPem(chain), nil
+		}
 	}
 	return "", fmt.Errorf("read CA chain: no CA signing certificate on %q issued the enrolled certificate", caName)
 }
