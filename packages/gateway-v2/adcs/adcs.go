@@ -66,7 +66,7 @@ const (
 	propTypeBinary = 0x00000003
 	propTypeString = 0x00000004
 
-	propIndexCurrentCACert int32 = -1
+	propCurrentCACertIndex int32 = -1
 
 	// dwFlags for a binary DER PKCS#10 request.
 	crInBinary = 0x00000002
@@ -299,7 +299,7 @@ func (c *Client) getStringProperty(ctx context.Context, caName string, propID in
 
 func (c *Client) getChainPem(ctx context.Context, caName string) (string, error) {
 	resp, err := c.d2.GetCAProperty(ctx, &icertrequestd2.GetCAPropertyRequest{
-		This: c.this, Authority: caName, PropertyID: crPropCASigCertChain, PropertyIndex: propIndexCurrentCACert, PropertyType: propTypeBinary,
+		This: c.this, Authority: caName, PropertyID: crPropCASigCertChain, PropertyIndex: propCurrentCACertIndex, PropertyType: propTypeBinary,
 	})
 	if err != nil {
 		return "", fmt.Errorf("read CA chain: %w", err)
