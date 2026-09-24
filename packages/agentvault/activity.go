@@ -12,6 +12,7 @@ import (
 
 const (
 	activityFlushInterval     = 60 * time.Second
+	activityFlushSlack        = time.Second
 	activityFlushRecords      = 1000
 	activityMaxChunkPlaintext = 4 << 20
 
@@ -204,11 +205,10 @@ func (a *activityLog) close(ctx context.Context) {
 	}
 }
 
-func (a *activityLog) dueSpools(final bool) []*activitySpool {
+func (a *activityLog) dueSpools(final bool, now time.Time) []*activitySpool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	now := a.now()
 	due := make([]*activitySpool, 0, len(a.spools))
 	for id, spool := range a.spools {
 		if spool.ring.len() == 0 && len(spool.pending) == 0 {
@@ -217,8 +217,9 @@ func (a *activityLog) dueSpools(final bool) []*activitySpool {
 			}
 			continue
 		}
+		// The slack absorbs ticker jitter: without it a spool stamped at one tick is a hair short of due at the next.
 		if final || spool.ring.len() >= activityFlushRecords || len(spool.pending) > 0 ||
-			(spool.ring.len() > 0 && now.Sub(spool.lastFlushAt) >= activityFlushInterval) {
+			(spool.ring.len() > 0 && now.Sub(spool.lastFlushAt) >= activityFlushInterval-activityFlushSlack) {
 			due = append(due, spool)
 		}
 	}
@@ -291,17 +292,19 @@ func (a *activityLog) flushAll(ctx context.Context, final bool) {
 	a.infisicalDown = false
 	a.mu.Unlock()
 
-	for _, spool := range a.dueSpools(final) {
-		a.flushSpool(ctx, spool, final)
+	// One start time for every spool, so shipping the earlier ones doesn't make the later ones late for the next tick.
+	started := a.now()
+	for _, spool := range a.dueSpools(final, started) {
+		a.flushSpool(ctx, spool, final, started)
 	}
 }
 
-func (a *activityLog) sealRing(spool *activitySpool) {
+func (a *activityLog) sealRing(spool *activitySpool, started time.Time) {
 	for {
 		a.mu.Lock()
 		records := spool.ring.drain(activityFlushRecords)
 		if len(records) == 0 {
-			spool.lastFlushAt = a.now()
+			spool.lastFlushAt = started
 			a.mu.Unlock()
 			return
 		}
@@ -384,8 +387,8 @@ func (a *activityLog) evictOldestLocked(spool *activitySpool) {
 		Msg("agent-vault: dropped an unshipped activity chunk, the buffer is full")
 }
 
-func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, final bool) {
-	a.sealRing(spool)
+func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, final bool, started time.Time) {
+	a.sealRing(spool, started)
 	if a.holding() {
 		return
 	}

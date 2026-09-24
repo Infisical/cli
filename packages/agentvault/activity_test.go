@@ -910,3 +910,62 @@ func TestShutdownDoesNotRaceTheRunLoop(t *testing.T) {
 		}
 	}
 }
+
+type slowPutShipper struct {
+	*fakeShipper
+	advance func(time.Duration)
+}
+
+func (s *slowPutShipper) putObject(ctx context.Context, url string, ciphertext []byte) error {
+	s.advance(2 * time.Second)
+	return s.fakeShipper.putObject(ctx, url, ciphertext)
+}
+
+func TestEverySessionShipsOnEveryTickWhileEarlierOnesTakeTimeToUpload(t *testing.T) {
+	shipper := &slowPutShipper{fakeShipper: &fakeShipper{}}
+	log, advance, _ := newTestLog(shipper)
+	shipper.advance = advance
+
+	tickAt := log.now()
+	for i := 1; i <= 3; i++ {
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+		log.record(testGrant("s2"), aRecord("api.github.com"))
+		tickAt = tickAt.Add(activityFlushInterval)
+		advance(tickAt.Sub(log.now()))
+		log.flushAll(context.Background(), false)
+
+		if got := len(shipper.puts()); got != 2*i {
+			t.Fatalf("after tick %d there were %d uploads; every session should ship on every tick", i, got)
+		}
+	}
+}
+
+func TestASessionShipsAtATickThatLandsJustShortOfAMinute(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, advance, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	advance(activityFlushInterval - 10*time.Millisecond)
+	log.flushAll(context.Background(), false)
+
+	if got := len(shipper.puts()); got != 2 {
+		t.Fatalf("there were %d uploads; a tick a few milliseconds early skipped the session", got)
+	}
+}
+
+func TestASessionDoesNotShipAgainHalfwayToTheNextTick(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, advance, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	advance(activityFlushInterval / 2)
+	log.flushAll(context.Background(), false)
+
+	if got := len(shipper.puts()); got != 1 {
+		t.Fatalf("there were %d uploads; a session shipped twice within one interval", got)
+	}
+}
