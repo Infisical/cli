@@ -15,6 +15,7 @@ package adcs
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
@@ -43,6 +44,7 @@ import (
 	_ "github.com/oiweiwei/go-msrpc/msrpc/erref/ntstatus"
 	_ "github.com/oiweiwei/go-msrpc/msrpc/erref/win32"
 
+	"github.com/rs/zerolog/log"
 	"go.mozilla.org/pkcs7"
 )
 
@@ -61,6 +63,11 @@ var clsidCertAdminD = uuid.MustParse("d99e6e73-fc88-11d0-b498-00a0c90312f3")
 // host/port is never echoed back to the control plane.
 var ErrConnect = errors.New("failed to connect to the ADCS host")
 
+// errCARejected marks a GetCAProperty call the CA answered with a failure HRESULT (e.g.
+// E_INVALIDARG for a signing certificate index it does not have), as opposed to a transport
+// or decoding failure.
+var errCARejected = errors.New("rejected by the CA")
+
 const (
 	crPropCASigCertCount = 0x0000000B
 	crPropCASigCertChain = 0x0000000D
@@ -75,6 +82,10 @@ const (
 	// one". A zero PropIndex returns the original certificate's chain, which cannot
 	// validate anything issued after a renewal with a new key.
 	propIndexCurrent int32 = -1
+
+	// maxSigningCertCount bounds CR_PROP_CASIGCERTCOUNT, which arrives from the CA unchecked
+	// and drives one RPC per index during the fallback scan.
+	maxSigningCertCount int32 = 256
 
 	// dwFlags for a binary DER PKCS#10 request.
 	crInBinary = 0x00000002
@@ -314,7 +325,7 @@ func (c *Client) getSigningCertChain(ctx context.Context, caName string, index i
 		return nil, fmt.Errorf("read CA chain: %w", err)
 	}
 	if resp.Return != 0 {
-		return nil, fmt.Errorf("read CA chain: %s", hresult.FromCode(uint32(resp.Return)))
+		return nil, fmt.Errorf("read CA chain: %w: %s", errCARejected, hresult.FromCode(uint32(resp.Return)))
 	}
 	if resp.PropertyValue == nil || len(resp.PropertyValue.Buffer) == 0 {
 		return nil, fmt.Errorf("read CA chain: empty response")
@@ -341,33 +352,54 @@ func (c *Client) getSigningCertCount(ctx context.Context, caName string) (int32,
 	if resp.PropertyValue == nil || len(resp.PropertyValue.Buffer) < 4 {
 		return 0, fmt.Errorf("read CA signing certificate count: empty response")
 	}
-	return int32(binary.LittleEndian.Uint32(resp.PropertyValue.Buffer)), nil
+	count := int32(binary.LittleEndian.Uint32(resp.PropertyValue.Buffer))
+	if count <= 0 || count > maxSigningCertCount {
+		return 0, fmt.Errorf("read CA signing certificate count: CA reported %d signing certificates, expected 1 to %d", count, maxSigningCertCount)
+	}
+	return count, nil
 }
 
 // getChainPem returns the chain of the CA signing certificate that issued cert. A renewed
 // CA keeps every signing certificate it has ever had, so the current one is tried first
 // and, if it did not sign cert (or the CA rejects the index), the signing certificates are
 // checked from the newest to the original and the first one that issued cert wins.
+//
+// When no signing certificate issued cert, or a read fails midway, the error is returned
+// together with the current chain (if it was read) so callers can still hand out the
+// issued certificate with a best-effort chain.
 func (c *Client) getChainPem(ctx context.Context, caName string, cert *x509.Certificate) (string, error) {
-	chain, err := c.getSigningCertChain(ctx, caName, propIndexCurrent)
-	if err == nil && chainIssued(chain, cert) {
-		return certsToPem(chain), nil
+	current, err := c.getSigningCertChain(ctx, caName, propIndexCurrent)
+	switch {
+	case err == nil:
+		if chainIssued(current, cert) {
+			return certsToPem(current), nil
+		}
+	case errors.Is(err, errCARejected):
+		// The CA has no notion of "current"; fall through to the indexed scan.
+	default:
+		return "", err
 	}
+	fallback := certsToPem(current)
 
 	count, err := c.getSigningCertCount(ctx, caName)
 	if err != nil {
-		return "", err
+		return fallback, err
 	}
-	for idx := count - 1; idx >= 0; idx-- {
-		chain, err = c.getSigningCertChain(ctx, caName, idx)
+	// PropIndex -1 is the newest index (count-1); skip it when it was already read.
+	start := count - 1
+	if current != nil {
+		start = count - 2
+	}
+	for idx := start; idx >= 0; idx-- {
+		chain, err := c.getSigningCertChain(ctx, caName, idx)
 		if err != nil {
-			return "", err
+			return fallback, err
 		}
 		if chainIssued(chain, cert) {
 			return certsToPem(chain), nil
 		}
 	}
-	return "", fmt.Errorf("read CA chain: no CA signing certificate on %q issued the enrolled certificate", caName)
+	return fallback, fmt.Errorf("none of the %d CA signing certificate(s) on %q issued the enrolled certificate", count, caName)
 }
 
 // chainIssued reports whether any certificate in chain is the issuer of cert. The signature
@@ -382,6 +414,8 @@ func chainIssued(chain []*x509.Certificate, cert *x509.Certificate) bool {
 		}
 		var insecure x509.InsecureAlgorithmError
 		if errors.As(err, &insecure) && len(cert.AuthorityKeyId) > 0 && bytes.Equal(cert.AuthorityKeyId, ca.SubjectKeyId) {
+			log.Warn().Err(err).Str("issuer", ca.Subject.String()).
+				Msg("adcs: signature algorithm not verifiable, matched the CA chain by authority key identifier only")
 			return true
 		}
 	}
@@ -429,23 +463,30 @@ func (c *Client) Enroll(ctx context.Context, caName, template string, csrDER []b
 		return result, nil
 	}
 
-	cert, err := parseIssuedCert(resp.EncodedCert.Buffer)
+	cert, err := parseIssuedCert(resp.EncodedCert.Buffer, csrDER)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (request ID %d)", err, resp.RequestID)
 	}
 	result.CertificatePem = string(certToPem(cert))
 
+	// The CA has already issued the certificate and consumed the request, so a chain lookup
+	// failure must not discard it: return whatever chain could be read and let the control
+	// plane's own chain validation report the mismatch.
 	chain, err := c.getChainPem(ctx, caName, cert)
 	if err != nil {
-		return nil, err
+		log.Warn().Err(err).Uint32("requestId", resp.RequestID).Str("ca", caName).
+			Msg("adcs: could not resolve the CA chain that issued the certificate, returning a best-effort chain")
 	}
 	result.ChainPem = chain
 	return result, nil
 }
 
-// parseIssuedCert accepts either a bare DER certificate or a PKCS#7 bundle and
-// returns the leaf certificate.
-func parseIssuedCert(b []byte) (*x509.Certificate, error) {
+// parseIssuedCert accepts either a bare DER certificate or a PKCS#7 bundle and returns
+// the certificate issued for csrDER. A PKCS#7 response carries the issued certificate
+// alongside the CA chain in no guaranteed order, so the certificate is identified by the
+// CSR's public key; only if that yields nothing (e.g. an unparsable CSR) is the first
+// non-CA certificate, then the first certificate, used.
+func parseIssuedCert(b []byte, csrDER []byte) (*x509.Certificate, error) {
 	if cert, err := x509.ParseCertificate(b); err == nil {
 		return cert, nil
 	}
@@ -456,12 +497,24 @@ func parseIssuedCert(b []byte) (*x509.Certificate, error) {
 	if len(p7.Certificates) == 0 {
 		return nil, fmt.Errorf("issued certificate response contained no certificates")
 	}
+	if csr, err := x509.ParseCertificateRequest(csrDER); err == nil {
+		for _, cert := range p7.Certificates {
+			if publicKeysEqual(cert.PublicKey, csr.PublicKey) {
+				return cert, nil
+			}
+		}
+	}
 	for _, cert := range p7.Certificates {
 		if !cert.IsCA {
 			return cert, nil
 		}
 	}
 	return p7.Certificates[0], nil
+}
+
+func publicKeysEqual(a, b crypto.PublicKey) bool {
+	k, ok := a.(interface{ Equal(crypto.PublicKey) bool })
+	return ok && k.Equal(b)
 }
 
 func certsToPem(certs []*x509.Certificate) string {
