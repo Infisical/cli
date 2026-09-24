@@ -30,6 +30,7 @@ import (
 // certificates for the relay and gateway hops, and when the session stops being usable.
 type LiveSession struct {
 	SessionId              string
+	GatewayId              string
 	DirectAddress          string
 	RelayHost              string
 	RelayClientCert        string
@@ -57,6 +58,7 @@ type SessionProvider interface {
 // BaseProxyServer contains common functionality for all local proxy types
 type BaseProxyServer struct {
 	httpClient             *resty.Client
+	gatewayId              string
 	directAddress          string
 	relayHost              string
 	relayClientCert        string
@@ -89,6 +91,7 @@ type BaseProxyServer struct {
 func (b *BaseProxyServer) staticSession() LiveSession {
 	return LiveSession{
 		SessionId:              b.sessionId,
+		GatewayId:              b.gatewayId,
 		DirectAddress:          b.directAddress,
 		RelayHost:              b.relayHost,
 		RelayClientCert:        b.relayClientCert,
@@ -188,6 +191,28 @@ const (
 	directRetryInterval    = 60 * time.Second
 	directHandshakeTimeout = 3 * time.Second
 )
+
+const gatewayIdentityURIPrefix = "urn:infisical:gateway:"
+
+func verifyGatewayIdentity(gatewayId string) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		if gatewayId == "" || len(state.PeerCertificates) == 0 {
+			return nil
+		}
+		hasIdentity := false
+		for _, uri := range state.PeerCertificates[0].URIs {
+			identity := uri.String()
+			if identity == gatewayIdentityURIPrefix+gatewayId {
+				return nil
+			}
+			hasIdentity = hasIdentity || strings.HasPrefix(identity, gatewayIdentityURIPrefix)
+		}
+		if !hasIdentity {
+			return nil
+		}
+		return fmt.Errorf("the connection reached a gateway other than '%s'", gatewayId)
+	}
+}
 
 func (b *BaseProxyServer) createRelayOnlyConnection(session LiveSession) (net.Conn, error) {
 	if session.RelayHost == "" {
@@ -371,12 +396,13 @@ func (b *BaseProxyServer) handshakeGatewayConnection(relayConn net.Conn, alpn AL
 	}
 
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caCertPool,
-		MinVersion:   tls.VersionTLS12,
-		MaxVersion:   tls.VersionTLS13,
-		NextProtos:   []string{string(alpn)},
-		ServerName:   serverName,
+		Certificates:     []tls.Certificate{cert},
+		RootCAs:          caCertPool,
+		MinVersion:       tls.VersionTLS12,
+		MaxVersion:       tls.VersionTLS13,
+		NextProtos:       []string{string(alpn)},
+		ServerName:       serverName,
+		VerifyConnection: verifyGatewayIdentity(session.GatewayId),
 	}
 
 	gatewayConn := tls.Client(relayConn, tlsConfig)
