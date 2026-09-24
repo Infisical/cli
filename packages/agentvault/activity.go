@@ -3,6 +3,7 @@ package agentvault
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -35,6 +36,20 @@ type activityGrant struct {
 	sessionID string
 	projectID string
 	key       []byte
+
+	issued uint64
+}
+
+// Counts every grant the proxy is handed, so a refusal can be told apart from a key issued after it.
+var activityGrantsIssued atomic.Uint64
+
+func newActivityGrant(sessionID, projectID string, key []byte) *activityGrant {
+	return &activityGrant{sessionID: sessionID, projectID: projectID, key: key, issued: activityGrantsIssued.Add(1)}
+}
+
+type forgottenSpool struct {
+	nextSeq uint64
+	dropped uint64
 }
 
 type activityShipper interface {
@@ -53,14 +68,16 @@ type activityLog struct {
 	mu     sync.Mutex
 	spools map[string]*activitySpool
 
-	seqBySession map[string]uint64
+	forgotten map[string]forgottenSpool
 
 	total         int
 	sealedBytes   int
 	nextSealOrder uint64
 
-	pauseUntil  time.Time
-	pauseReason string
+	pauseUntil time.Time
+
+	switchedOff        bool
+	switchedOffThrough uint64
 
 	s3Down        bool
 	infisicalDown bool
@@ -73,12 +90,12 @@ type activityLog struct {
 
 func newActivityLog(proxyID string, shipper activityShipper) *activityLog {
 	return &activityLog{
-		proxyID:      proxyID,
-		shipper:      shipper,
-		now:          time.Now,
-		spools:       make(map[string]*activitySpool),
-		seqBySession: make(map[string]uint64),
-		wake:         make(chan struct{}, 1),
+		proxyID:   proxyID,
+		shipper:   shipper,
+		now:       time.Now,
+		spools:    make(map[string]*activitySpool),
+		forgotten: make(map[string]forgottenSpool),
+		wake:      make(chan struct{}, 1),
 	}
 }
 
@@ -96,7 +113,10 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 	spool, ok := a.spools[g.sessionID]
 	if !ok {
 		spool = newActivitySpool(g, a.now())
-		spool.nextSeq = a.seqBySession[g.sessionID]
+		if prior, ok := a.forgotten[g.sessionID]; ok {
+			spool.nextSeq, spool.ring.dropped = prior.nextSeq, prior.dropped
+			delete(a.forgotten, g.sessionID)
+		}
 		a.spools[g.sessionID] = spool
 	}
 
@@ -105,6 +125,15 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 	rec.ProxyID = a.proxyID
 	rec.Ts = a.now().UTC().Format(time.RFC3339Nano)
 	spool.lastRecordAt = a.now()
+
+	if a.switchedOff {
+		if g.issued <= a.switchedOffThrough {
+			spool.ring.dropped++
+			return
+		}
+		a.switchedOff = false
+		log.Info().Msg("agent-vault: activity logging is back on, recording again")
+	}
 
 	if !a.pauseUntil.IsZero() && a.now().Before(a.pauseUntil) {
 		spool.ring.dropped++
@@ -192,28 +221,57 @@ func (a *activityLog) dueSpools(final bool) []*activitySpool {
 	return due
 }
 
+// Keeps the drop count too, so a spool forgotten while logging was off still reports what it lost.
 func (a *activityLog) forgetSpoolLocked(sessionID string, spool *activitySpool) {
-	if len(a.seqBySession) >= maxSessionCacheEntries {
-		a.seqBySession = make(map[string]uint64)
+	if len(a.forgotten) >= maxSessionCacheEntries {
+		a.forgotten = make(map[string]forgottenSpool)
 	}
-	a.seqBySession[sessionID] = spool.nextSeq
+	a.forgotten[sessionID] = forgottenSpool{nextSeq: spool.nextSeq, dropped: spool.ring.dropped}
 	delete(a.spools, sessionID)
 }
 
-func (a *activityLog) paused() (bool, string) {
+func (a *activityLog) holding() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.pauseUntil.IsZero() || !a.now().Before(a.pauseUntil) {
-		return false, ""
-	}
-	return true, a.pauseReason
+	return a.switchedOff || (!a.pauseUntil.IsZero() && a.now().Before(a.pauseUntil))
 }
 
-func (a *activityLog) pause(reason string) {
+func (a *activityLog) pause() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.pauseUntil = a.now().Add(activityPauseBackoff)
-	a.pauseReason = reason
+}
+
+// Drops everything held and counts it. A key issued after the refused request went out means logging may already
+// be back on, so then the refusal is stale and nothing is dropped.
+func (a *activityLog) switchOff(grantsIssuedAtSend uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if activityGrantsIssued.Load() > grantsIssuedAtSend {
+		return
+	}
+
+	var lost int
+	for _, spool := range a.spools {
+		held := spool.ring.len()
+		spool.ring.drain(held)
+		spool.ring.dropped += uint64(held)
+		a.total -= held
+		lost += held
+		for _, chunk := range spool.pending {
+			spool.ring.dropped += chunk.lostCount()
+			a.sealedBytes -= len(chunk.ciphertext)
+			lost += chunk.meta.RecordCount
+		}
+		spool.pending = nil
+	}
+
+	if !a.switchedOff {
+		log.Warn().Int("records", lost).
+			Msg("agent-vault: activity logging is switched off for this project, dropping what was held until it is back on")
+	}
+	a.switchedOff = true
+	a.switchedOffThrough = grantsIssuedAtSend
 }
 
 func (a *activityLog) flushAll(ctx context.Context, final bool) {
@@ -323,13 +381,10 @@ func (a *activityLog) evictOldestLocked(spool *activitySpool) {
 }
 
 func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, final bool) {
-	if paused, reason := a.paused(); paused {
-		a.sealRing(spool)
-		_ = reason
+	a.sealRing(spool)
+	if a.holding() {
 		return
 	}
-
-	a.sealRing(spool)
 
 	for {
 		a.mu.Lock()
@@ -355,9 +410,10 @@ func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, fina
 
 func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk *sealedChunk, final bool) bool {
 	if chunk.uploadURL == "" || a.now().Add(10*time.Second).After(chunk.urlExpires) {
+		grantsIssuedAtSend := activityGrantsIssued.Load()
 		res, err := a.shipper.createChunk(final, spool.sessionID, chunk.meta)
 		if err != nil {
-			return a.handleCreateFailure(spool, chunk, err)
+			return a.handleCreateFailure(spool, chunk, err, grantsIssuedAtSend)
 		}
 		a.mu.Lock()
 		a.clockSkewReported = false
@@ -387,7 +443,7 @@ func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk
 	return true
 }
 
-func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChunk, err error) bool {
+func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChunk, err error, grantsIssuedAtSend uint64) bool {
 	switch {
 	case isProxyTokenRejected(err):
 		log.Warn().Err(err).Msg("agent-vault: Infisical rejected this proxy's token, holding activity")
@@ -402,20 +458,19 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 			a.sealedBytes -= len(held.ciphertext)
 		}
 		a.forgetSpoolLocked(spool.sessionID, spool)
-		delete(a.seqBySession, spool.sessionID)
+		delete(a.forgotten, spool.sessionID)
 		a.mu.Unlock()
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).Int("records", lost).
 			Msg("agent-vault: Infisical no longer accepts activity for this session, dropping what was held")
 		return false
 
 	case isActivityErrorNamed(err, activityCeilingReachedName):
-		a.pause(activityCeilingReachedName)
+		a.pause()
 		log.Error().Err(err).Msg("agent-vault: activity logging has reached its limit for this organization, retrying in 15m")
 		return false
 
 	case isActivityErrorNamed(err, activityDisabledName):
-		a.pause(activityDisabledName)
-		log.Warn().Msg("agent-vault: activity logging is switched off for this project, pausing for 15m")
+		a.switchOff(grantsIssuedAtSend)
 		return false
 
 	case isActivityErrorNamed(err, activityClockSkewName):

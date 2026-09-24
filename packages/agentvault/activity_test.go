@@ -118,7 +118,7 @@ func apiErr(status int, name string) error {
 }
 
 func testGrant(sessionID string) *activityGrant {
-	return &activityGrant{sessionID: sessionID, projectID: "proj-1", key: make([]byte, 32)}
+	return newActivityGrant(sessionID, "proj-1", make([]byte, 32))
 }
 
 func newTestLog(shipper activityShipper) (log *activityLog, advance func(time.Duration), tick func()) {
@@ -362,8 +362,8 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	if paused, reason := log.paused(); !paused || reason != activityCeilingReachedName {
-		t.Fatalf("expected a ceiling pause, got paused=%v reason=%q", paused, reason)
+	if !log.holding() || log.switchedOff {
+		t.Fatal("expected a ceiling pause")
 	}
 
 	log.record(testGrant("s2"), aRecord("api.github.com"))
@@ -379,18 +379,91 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 	}
 }
 
-func TestBeingSwitchedOffPausesRatherThanDiscards(t *testing.T) {
+func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	log, _, tick := newTestLog(shipper)
+	grant := testGrant("s1")
+
+	log.record(grant, aRecord("api.github.com"))
+	log.record(grant, aRecord("api.github.com"))
+	tick()
+
+	spool := log.spools["s1"]
+	if !log.switchedOff || len(spool.pending) != 0 || spool.ring.len() != 0 {
+		t.Fatalf("switched off=%v, pending=%d, ring=%d; expected everything held to be dropped",
+			log.switchedOff, len(spool.pending), spool.ring.len())
+	}
+	if spool.ring.dropped != 2 {
+		t.Fatalf("%d records were counted as dropped, expected 2", spool.ring.dropped)
+	}
+	if log.total != 0 || log.sealedBytes != 0 {
+		t.Fatalf("totals not restored: records=%d sealed bytes=%d", log.total, log.sealedBytes)
+	}
+
+	log.record(grant, aRecord("api.github.com"))
+	tick()
+	if len(shipper.posts()) != 1 {
+		t.Fatal("the proxy kept sending while logging was switched off")
+	}
+	if spool.ring.dropped != 3 {
+		t.Fatalf("a record made with the old key was not counted as dropped, got %d", spool.ring.dropped)
+	}
+}
+
+func TestAKeyIssuedAfterTheSwitchOffResumesRecordingAtOnce(t *testing.T) {
 	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
 	log, _, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	if paused, reason := log.paused(); !paused || reason != activityDisabledName {
-		t.Fatalf("expected a disabled pause, got paused=%v reason=%q", paused, reason)
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	if log.switchedOff {
+		t.Fatal("a key issued after the refusal did not end the switch-off")
 	}
-	if len(log.spools["s1"].pending) != 1 {
-		t.Fatal("the sealed chunk was discarded when logging was switched off")
+	tick()
+
+	posts := shipper.posts()
+	if len(posts) != 2 || len(shipper.puts()) != 1 {
+		t.Fatalf("posts=%d uploads=%d, expected the new record to ship", len(posts), len(shipper.puts()))
+	}
+	if posts[1].dropped != 1 {
+		t.Fatalf("the chunk after the switch-off carried %d dropped, expected 1", posts[1].dropped)
+	}
+}
+
+func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	log, _, _ := newTestLog(shipper)
+	grant := testGrant("s1")
+
+	log.record(grant, aRecord("api.github.com"))
+	log.switchOff(activityGrantsIssued.Load() - 1)
+
+	if log.switchedOff || log.spools["s1"].ring.len() != 1 {
+		t.Fatal("a refusal sent before a newer key was issued still dropped what was held")
+	}
+}
+
+func TestDropsAreStillReportedAfterAnIdleSpoolIsForgotten(t *testing.T) {
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	log, advance, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+
+	advance(activityIdleClose + time.Minute)
+	log.flushAll(context.Background(), false)
+	if _, ok := log.spools["s1"]; ok {
+		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
+	}
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+
+	posts := shipper.posts()
+	if len(posts) != 2 || posts[1].dropped != 1 {
+		t.Fatalf("posts were %+v, expected the drop to survive the spool being forgotten", posts)
 	}
 }
 
@@ -747,7 +820,7 @@ func TestASessionThatIsGoneDoesNotReserveItsSequenceNumbers(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	if _, ok := log.seqBySession["s1"]; ok {
+	if _, ok := log.forgotten["s1"]; ok {
 		t.Fatal("a session the server has forgotten is still holding a sequence number")
 	}
 }
