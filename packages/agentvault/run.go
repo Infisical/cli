@@ -334,7 +334,8 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err == nil {
 		httpClient.SetAuthToken(ps.opts.ProxyToken()).SetTimeout(controlPlaneTimeout)
-		res, hbErr := api.CallAgentVaultHeartbeat(httpClient)
+		uploads, uploaded := ps.activity.uploadReport()
+		res, hbErr := api.CallAgentVaultHeartbeat(httpClient, api.AgentVaultHeartbeatRequest{ActivityUploaded: uploaded})
 		if hbErr != nil {
 			tokenRejected = isTokenRejected(hbErr)
 			log.Warn().Err(hbErr).Msg("agent-vault: heartbeat failed")
@@ -344,7 +345,11 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 				AllowedHosts:  res.Config.AllowedHosts,
 				PollInterval:  res.Config.PollInterval,
 			}
-			if !usableProxyConfig(next) {
+			usable := usableProxyConfig(next)
+			if usable {
+				ps.activity.ackUploadReport(uploads)
+			}
+			if !usable {
 				log.Warn().
 					Str("trafficPolicy", next.TrafficPolicy).
 					Int("pollInterval", next.PollInterval).
