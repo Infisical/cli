@@ -389,14 +389,17 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 
 	case isSessionGone(err):
 		a.mu.Lock()
+		lost := spool.ring.len()
 		a.total -= spool.ring.len()
 		for _, held := range spool.pending {
+			lost += held.meta.RecordCount
 			a.sealedBytes -= len(held.ciphertext)
 		}
 		a.forgetSpoolLocked(spool.sessionID, spool)
 		delete(a.seqBySession, spool.sessionID)
 		a.mu.Unlock()
-		log.Debug().Str("sessionId", spool.sessionID).Msg("agent-vault: session gone, dropping its activity")
+		log.Warn().Err(err).Str("sessionId", spool.sessionID).Int("records", lost).
+			Msg("agent-vault: Infisical no longer accepts activity for this session, dropping what was held")
 		return false
 
 	case isActivityErrorNamed(err, activityCeilingReachedName):
