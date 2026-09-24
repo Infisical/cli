@@ -53,16 +53,10 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		// Non-interactive path: we already know the project. Skip the org
-		// and workspace pickers and just write .infisical.json. Subsequent
-		// commands (secrets, run) will surface auth or org-scope errors if
-		// the logged-in session cannot reach this project.
-		if projectID != "" {
-			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
-				util.HandleError(err)
-			}
-			Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION).Set("nonInteractive", true))
-			return
+		// Without a terminal the org and project pickers below cannot run, so
+		// fail with the flag that makes this command non-interactive instead.
+		if projectID == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
+			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (see `infisical projects list`).")
 		}
 
 		userCreds, err := util.GetCurrentLoggedInUserDetails(true)
@@ -72,6 +66,21 @@ var initCmd = &cobra.Command{
 
 		if userCreds.LoginExpired {
 			userCreds = util.EstablishUserLoginSession()
+		}
+
+		// Non-interactive path: we already know the project. Skip the org
+		// and workspace pickers and just write .infisical.json. Subsequent
+		// commands (secrets, run) will surface auth errors if the logged-in
+		// session cannot reach this project.
+		if projectID != "" {
+			if userCreds.OrganizationID != "" {
+				rejectTransientOrgOverride(userCreds)
+			}
+			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
+				util.HandleError(err)
+			}
+			Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION).Set("nonInteractive", true))
+			return
 		}
 
 		httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -134,26 +143,7 @@ var initCmd = &cobra.Command{
 				util.HandleError(err, "Unable to store your user credentials")
 			}
 		} else {
-			orgDisplay := userCreds.OrganizationName
-			if orgDisplay == "" {
-				orgDisplay = selectedOrgID
-			}
-
-			// An --org override is per command, so a project linked under it
-			// would not resolve on later runs that use the profile's default.
-			// That would surface later as an unrelated-looking "project not
-			// found", and a warning here can be silenced, so refuse and point
-			// at the two ways to make the organization stick.
-			if userCreds.OrganizationSource != util.OrgSourceProfileDefault && userCreds.Profile.OrganizationID != "" && userCreds.OrganizationID != userCreds.Profile.ScopedOrganizationID() {
-				profileOrg := userCreds.Profile.OrganizationName
-				if profileOrg == "" {
-					profileOrg = userCreds.Profile.ScopedOrganizationID()
-				}
-				util.PrintErrorMessageAndExit(
-					fmt.Sprintf("Profile '%s' defaults to organization %s, so a project linked here under %s (selected via %s) would not be found by later commands unless they also pass --org.", userCreds.ProfileName, profileOrg, orgDisplay, userCreds.OrganizationSource),
-					fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile create <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
-			}
-
+			orgDisplay := rejectTransientOrgOverride(userCreds)
 			util.PrintlnStderr(fmt.Sprintf("Using organization %s from profile '%s'. Pass --org to pick a different one.", orgDisplay, userCreds.ProfileName))
 		}
 
@@ -185,6 +175,32 @@ var initCmd = &cobra.Command{
 		Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION))
 
 	},
+}
+
+// rejectTransientOrgOverride exits when the session's organization comes from
+// a per-command --org override that differs from the profile's default, and
+// otherwise returns the organization's display name.
+//
+// An --org override is per command, so a project linked under it would not
+// resolve on later runs that use the profile's default. That would surface
+// later as an unrelated-looking "project not found", and a warning here can be
+// silenced, so refuse and point at the two ways to make the organization stick.
+func rejectTransientOrgOverride(userCreds util.LoggedInUserDetails) string {
+	orgDisplay := userCreds.OrganizationName
+	if orgDisplay == "" {
+		orgDisplay = userCreds.OrganizationID
+	}
+
+	if userCreds.OrganizationSource != util.OrgSourceProfileDefault && userCreds.Profile.OrganizationID != "" && userCreds.OrganizationID != userCreds.Profile.ScopedOrganizationID() {
+		profileOrg := userCreds.Profile.OrganizationName
+		if profileOrg == "" {
+			profileOrg = userCreds.Profile.ScopedOrganizationID()
+		}
+		util.PrintErrorMessageAndExit(
+			fmt.Sprintf("Profile '%s' defaults to organization %s, so a project linked here under %s (selected via %s) would not be found by later commands unless they also pass --org.", userCreds.ProfileName, profileOrg, orgDisplay, userCreds.OrganizationSource),
+			fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile create <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
+	}
+	return orgDisplay
 }
 
 // offerDirectoryProfileBinding asks (only when multiple profiles exist)

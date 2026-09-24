@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -19,17 +21,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Well-known env file names an AI-agent bootstrap should surface. Nothing in
-// this list is auto-mapped to a specific environment: the caller picks one env
-// slug (via --env or .infisical.json) and every discovered file goes there.
-// Splitting files across environments requires running `import` per file,
-// which keeps the mental model of the command simple.
-var envFileCandidates = []string{
-	".env",
-	".env.local",
-	".env.development",
-	".env.staging",
-	".env.production",
+// Well-known env file names an AI-agent bootstrap should surface. Files
+// without a stage suffix go to whichever env slug the caller picks (via --env
+// or .infisical.json). A stage-specific file is only imported when its stage
+// matches that env, so a default of "dev" never swallows .env.production.
+// Importing another stage means running `import --env=<stage>`, which keeps
+// the mental model of the command simple.
+var envFileCandidates = []struct {
+	Name   string
+	Stages []string // env slugs this file belongs to; empty means any
+}{
+	{Name: ".env"},
+	{Name: ".env.local"},
+	{Name: ".env.development", Stages: []string{"dev", "development"}},
+	{Name: ".env.staging", Stages: []string{"staging", "stage"}},
+	{Name: ".env.production", Stages: []string{"prod", "production"}},
 }
 
 var importCmd = &cobra.Command{
@@ -52,56 +58,81 @@ type importedFileResult struct {
 	Error    string   `json:"error,omitempty"`
 }
 
+type skippedFile struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
+}
+
 type importResult struct {
 	Files            []importedFileResult `json:"files"`
+	Skipped          []skippedFile        `json:"skipped,omitempty"`
 	GitignoreUpdated []string             `json:"gitignoreUpdated,omitempty"`
 	GitignoreMissing []string             `json:"gitignoreMissing,omitempty"`
+	GitignoreError   string               `json:"gitignoreError,omitempty"`
 	Cancelled        bool                 `json:"cancelled,omitempty"`
 }
 
 func runImport(cmd *cobra.Command, args []string) {
-	path, _ := cmd.Flags().GetString("path")
+	dir, _ := cmd.Flags().GetString("path")
 	envSlug, _ := cmd.Flags().GetString("env")
 	yes, _ := cmd.Flags().GetBool("yes")
 	jsonOut, _ := cmd.Flags().GetBool("json")
 	addGitignore, _ := cmd.Flags().GetBool("add-gitignore")
 
-	if path == "" {
-		path = "."
+	if dir == "" {
+		dir = "."
 	}
 
-	// --env wins, else the env from .infisical.json, else "dev".
+	// Resolve the project from the scanned directory, not the working
+	// directory: in a monorepo --path may point at an app linked to a
+	// different project than the root.
+	workspaceFile, err := findWorkspaceFileFrom(dir)
+	if err != nil {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Cannot resolve project for %q. Run `infisical init` (or `infisical init --project-id <id>`) in that directory first.", dir))
+	}
+	projectId := workspaceFile.WorkspaceId
+
+	// --env wins, else the env from that .infisical.json, else "dev".
 	if envSlug == "" {
-		if envFromWorkspace := util.GetEnvFromWorkspaceFile(); envFromWorkspace != "" {
-			envSlug = envFromWorkspace
+		if env := util.GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
+			envSlug = env
+		} else if workspaceFile.DefaultEnvironment != "" {
+			envSlug = workspaceFile.DefaultEnvironment
 		} else {
 			envSlug = "dev"
 		}
 	}
 
-	workspaceFile, err := util.GetWorkSpaceFromFile()
-	if err != nil {
-		util.PrintErrorMessageAndExit("Cannot resolve project. Run `infisical init` (or `infisical init --project-id <id>`) in this directory first.")
-	}
-	projectId := workspaceFile.WorkspaceId
+	result := importResult{}
 
 	// Explicit list rather than a dotfile scan: a wide scan would pick up
 	// .envrc and other files that people don't want their vault to swallow.
 	var found []string
-	for _, name := range envFileCandidates {
-		p := filepath.Join(path, name)
+	var candidateNames []string
+	for _, c := range envFileCandidates {
+		candidateNames = append(candidateNames, c.Name)
+		p := filepath.Join(dir, c.Name)
 		info, err := os.Stat(p)
-		if err != nil {
+		if err != nil || info.IsDir() {
 			continue
 		}
-		if info.IsDir() {
+		if len(c.Stages) > 0 && !containsFold(c.Stages, envSlug) {
+			reason := fmt.Sprintf("belongs to %s, not %q; run with --env=%s to import it", c.Stages[0], envSlug, c.Stages[0])
+			result.Skipped = append(result.Skipped, skippedFile{File: p, Reason: reason})
+			if !jsonOut {
+				util.PrintfStderr("Skipping %s: %s\n", p, reason)
+			}
 			continue
 		}
 		found = append(found, p)
 	}
 
 	if len(found) == 0 {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("No .env-style files found under %q. Looked for: %s", path, strings.Join(envFileCandidates, ", ")))
+		if jsonOut && len(result.Skipped) > 0 {
+			emitImportJSON(result)
+			os.Exit(1)
+		}
+		util.PrintErrorMessageAndExit(fmt.Sprintf("No .env-style files to import into %q under %q. Looked for: %s", envSlug, dir, strings.Join(candidateNames, ", ")))
 	}
 
 	type fileScan struct {
@@ -109,17 +140,35 @@ func runImport(cmd *cobra.Command, args []string) {
 		Keys []string
 	}
 	var scans []fileScan
+	invalid := false
 	for _, f := range found {
 		keys, err := extractEnvKeyNames(f)
 		if err != nil {
-			util.PrintfStderr("Skipping %s: %v\n", f, err)
+			// Reject the whole import before anything is uploaded: the upload
+			// parser would exit partway through otherwise.
+			invalid = true
+			result.Files = append(result.Files, importedFileResult{File: f, Env: envSlug, Error: err.Error()})
+			if !jsonOut {
+				util.PrintfStderr("Cannot import %s: %v\n", f, err)
+			}
 			continue
 		}
 		if len(keys) == 0 {
-			util.PrintfStderr("Skipping %s (no keys found)\n", f)
+			result.Skipped = append(result.Skipped, skippedFile{File: f, Reason: "no keys found"})
+			if !jsonOut {
+				util.PrintfStderr("Skipping %s (no keys found)\n", f)
+			}
 			continue
 		}
 		scans = append(scans, fileScan{Path: f, Keys: keys})
+	}
+
+	if invalid {
+		if jsonOut {
+			emitImportJSON(result)
+			os.Exit(1)
+		}
+		util.PrintErrorMessageAndExit("Fix the files above and re-run. Nothing was uploaded.")
 	}
 
 	if len(scans) == 0 {
@@ -136,7 +185,6 @@ func runImport(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	result := importResult{}
 	if !yes {
 		prompt := promptui.Prompt{
 			Label:     "Proceed with import",
@@ -156,10 +204,12 @@ func runImport(cmd *cobra.Command, args []string) {
 	userCreds := requireUserSession()
 	tokenDetails := &models.TokenDetails{Type: "", Token: userCreds.UserCredentials.JTWToken}
 
+	uploadFailed := false
 	for _, s := range scans {
 		r := importedFileResult{File: s.Path, Env: envSlug, Keys: s.Keys}
 		ops, err := util.SetRawSecrets(nil, util.SECRET_TYPE_SHARED, envSlug, "/", projectId, tokenDetails, s.Path, nil)
 		if err != nil {
+			uploadFailed = true
 			r.Error = err.Error()
 			result.Files = append(result.Files, r)
 			if !jsonOut {
@@ -174,11 +224,11 @@ func runImport(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	gitignorePath := filepath.Join(path, ".gitignore")
+	gitignorePath := filepath.Join(dir, ".gitignore")
 	existingLines := readGitignoreLines(gitignorePath)
 	var missing []string
 	for _, s := range scans {
-		rel, err := filepath.Rel(path, s.Path)
+		rel, err := filepath.Rel(dir, s.Path)
 		if err != nil {
 			rel = filepath.Base(s.Path)
 		}
@@ -189,7 +239,11 @@ func runImport(cmd *cobra.Command, args []string) {
 	if len(missing) > 0 {
 		if addGitignore {
 			if err := appendToGitignore(gitignorePath, missing); err != nil {
-				util.PrintfStderr("Warning: failed to update %s: %v\n", gitignorePath, err)
+				result.GitignoreMissing = missing
+				result.GitignoreError = err.Error()
+				if !jsonOut {
+					util.PrintfStderr("Warning: failed to update %s: %v. These files are still not ignored: %s\n", gitignorePath, err, strings.Join(missing, ", "))
+				}
 			} else {
 				result.GitignoreUpdated = missing
 				if !jsonOut {
@@ -213,6 +267,10 @@ func runImport(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:import", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("filesScanned", len(scans)))
+
+	if uploadFailed {
+		os.Exit(1)
+	}
 }
 
 func emitImportJSON(r importResult) {
@@ -223,9 +281,39 @@ func emitImportJSON(r importResult) {
 	util.PrintlnStdout(string(out))
 }
 
-// extractEnvKeyNames returns key names only (never values) using the same
-// comment and key=value rules as util.parseSecrets so the preview and the
-// eventual upload agree on what constitutes a line.
+// findWorkspaceFileFrom looks for .infisical.json in dir and its parents,
+// mirroring util.FindWorkspaceConfigFile but anchored at dir instead of the
+// working directory.
+func findWorkspaceFileFrom(dir string) (models.WorkspaceConfigFile, error) {
+	current, err := filepath.Abs(dir)
+	if err != nil {
+		return models.WorkspaceConfigFile{}, err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(current, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)); err == nil {
+			return util.GetWorkSpaceFromFilePath(current)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return models.WorkspaceConfigFile{}, fmt.Errorf("file not found: %s", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		}
+		current = parent
+	}
+}
+
+func containsFold(values []string, target string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractEnvKeyNames returns key names only (never values) and rejects the
+// file under the same rules util.SetRawSecrets applies, so the preview and the
+// upload agree on what is importable. Errors cite line numbers and key names
+// but never line contents, since a malformed line may hold a secret.
 func extractEnvKeyNames(file string) ([]string, error) {
 	f, err := os.Open(file)
 	if err != nil {
@@ -239,18 +327,32 @@ func extractEnvKeyNames(file string) ([]string, error) {
 	// PEM-style values run long; give the scanner room so a bad line
 	// doesn't cap the preview well below what SetRawSecrets will accept.
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
-			continue
+			return nil, fmt.Errorf("line %d: expected KEY=VALUE", lineNo)
 		}
-		key := strings.TrimSpace(parts[0])
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 		if key == "" {
-			continue
+			return nil, fmt.Errorf("line %d: key is empty", lineNo)
+		}
+		if unicode.IsNumber(rune(key[0])) {
+			return nil, fmt.Errorf("line %d: key %q cannot start with a number", lineNo, key)
+		}
+		if strings.Contains(key, " ") {
+			return nil, fmt.Errorf("line %d: key %q cannot contain spaces", lineNo, key)
+		}
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			value = value[1 : len(value)-1]
+		}
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("line %d: key %q has an empty value", lineNo, key)
 		}
 		if _, dup := seen[key]; dup {
 			continue
@@ -280,23 +382,37 @@ func readGitignoreLines(path string) []string {
 	return lines
 }
 
-// gitignoreCovers is deliberately conservative: it matches only exact entries
-// and the common .env glob patterns. The narrow question this answers is
-// "will git commit this file by accident?" — the answer is worth surfacing
-// even without a full gitignore-pattern matcher.
+// gitignoreCovers answers the narrow question "will git commit this file by
+// accident?" for a file next to the .gitignore. It handles globs, anchored
+// and "**/" patterns, and negation (last match wins), and skips
+// directory-only patterns. It is not a full gitignore implementation, so when
+// in doubt it reports the file as uncovered.
 func gitignoreCovers(lines []string, rel string) bool {
+	rel = filepath.ToSlash(rel)
+	base := path.Base(rel)
+	covered := false
 	for _, l := range lines {
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
 		}
-		if l == rel || l == "/"+rel {
-			return true
+		negate := strings.HasPrefix(l, "!")
+		pattern := strings.TrimPrefix(l, "!")
+		if strings.HasSuffix(pattern, "/") {
+			continue
 		}
-		if l == ".env*" || l == "*.env" || l == "**/.env*" {
-			return true
+		pattern = strings.TrimPrefix(pattern, "**/")
+
+		var matched bool
+		if strings.Contains(pattern, "/") {
+			matched, _ = path.Match(strings.TrimPrefix(pattern, "/"), rel)
+		} else {
+			matched, _ = path.Match(pattern, base)
+		}
+		if matched {
+			covered = !negate
 		}
 	}
-	return false
+	return covered
 }
 
 func appendToGitignore(path string, entries []string) error {

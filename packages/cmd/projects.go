@@ -53,15 +53,15 @@ var projectsCreateCmd = &cobra.Command{
 	Run: runProjectsCreate,
 }
 
-func projectsAuthedClient() (*resty.Client, error) {
+func projectsAuthedClient() (*resty.Client, util.LoggedInUserDetails, error) {
 	userCreds := requireUserSession()
 
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
-		return nil, err
+		return nil, userCreds, err
 	}
 	httpClient.SetAuthToken(userCreds.UserCredentials.JTWToken)
-	return httpClient, nil
+	return httpClient, userCreds, nil
 }
 
 type projectListEntry struct {
@@ -73,7 +73,7 @@ type projectListEntry struct {
 func runProjectsList(cmd *cobra.Command, args []string) {
 	jsonOut, _ := cmd.Flags().GetBool("json")
 
-	httpClient, err := projectsAuthedClient()
+	httpClient, userCreds, err := projectsAuthedClient()
 	if err != nil {
 		util.HandleError(err, "Unable to build authenticated HTTP client")
 	}
@@ -83,13 +83,20 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to list projects")
 	}
 
-	if jsonOut {
-		// Workspace's JSON tags mirror the API (_id, __v); emit the same field
-		// names as `projects create --json` so agents can chain either command.
-		projects := make([]projectListEntry, 0, len(resp.Workspaces))
-		for _, w := range resp.Workspaces {
+	// The endpoint returns projects across every organization the user
+	// belongs to; keep only the session's organization, as `init` does, so a
+	// script never picks a project it cannot link here.
+	//
+	// Workspace's JSON tags mirror the API (_id, __v); emit the same field
+	// names as `projects create --json` so agents can chain either command.
+	projects := make([]projectListEntry, 0, len(resp.Workspaces))
+	for _, w := range resp.Workspaces {
+		if userCreds.OrganizationID == "" || w.OrganizationId == userCreds.OrganizationID {
 			projects = append(projects, projectListEntry{ID: w.ID, Name: w.Name, OrgID: w.OrganizationId})
 		}
+	}
+
+	if jsonOut {
 		out, err := json.MarshalIndent(projects, "", "  ")
 		if err != nil {
 			util.HandleError(err, "Unable to encode JSON")
@@ -98,13 +105,13 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if len(resp.Workspaces) == 0 {
+	if len(projects) == 0 {
 		util.PrintlnStdout("No projects found for the currently selected organization.")
 		return
 	}
 	util.PrintlnStdout("ID\tNAME\tORG ID")
-	for _, w := range resp.Workspaces {
-		util.PrintfStdout("%s\t%s\t%s\n", w.ID, w.Name, w.OrganizationId)
+	for _, p := range projects {
+		util.PrintfStdout("%s\t%s\t%s\n", util.SanitizeDisplay(p.ID), util.SanitizeDisplay(p.Name), util.SanitizeDisplay(p.OrgID))
 	}
 	Telemetry.CaptureEvent("cli-command:projects list", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
@@ -119,7 +126,7 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit("--name is required")
 	}
 
-	httpClient, err := projectsAuthedClient()
+	httpClient, _, err := projectsAuthedClient()
 	if err != nil {
 		util.HandleError(err, "Unable to build authenticated HTTP client")
 	}
@@ -141,14 +148,15 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 		}
 		util.PrintlnStdout(string(out))
 	} else {
-		util.PrintSuccessMessage(fmt.Sprintf("Created project %q (id: %s)", project.Name, project.ID))
+		projectID := util.SanitizeDisplay(project.ID)
+		util.PrintSuccessMessage(fmt.Sprintf("Created project %q (id: %s)", util.SanitizeDisplay(project.Name), projectID))
 		if len(project.Environments) > 0 {
 			util.PrintlnStdout("Environments:")
 			for _, e := range project.Environments {
-				util.PrintfStdout("  - %s (%s)\n", e.Name, e.Slug)
+				util.PrintfStdout("  - %s (%s)\n", util.SanitizeDisplay(e.Name), util.SanitizeDisplay(e.Slug))
 			}
 		}
-		util.PrintlnStdout("\nRun `infisical init --project-id " + project.ID + "` to link this directory.")
+		util.PrintlnStdout("\nRun `infisical init --project-id " + projectID + "` to link this directory.")
 	}
 
 	Telemetry.CaptureEvent("cli-command:projects create", posthog.NewProperties().Set("version", util.CLI_VERSION))
