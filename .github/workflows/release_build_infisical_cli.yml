@@ -140,6 +140,8 @@ jobs:
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
+    outputs:
+      repos-published: ${{ steps.invalidate.outputs.completed }}
     needs:
       - validate-tag-branch
       - cli-tests
@@ -357,9 +359,20 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
+      # Waits for completion so verify-published-repos installs from the new
+      # indexes instead of stale ones still cached at the edge.
       - name: Invalidate Cloudfront cache
+        id: invalidate
         if: steps.artifacts.outputs.publish == 'true'
-        run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/*' '/deb/dists/stable/*' '/apk/stable/main/*'
+        run: |
+          set -euo pipefail
+          ID=$(aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths '/rpm/*' '/deb/dists/stable/*' '/apk/stable/main/*' \
+            --query 'Invalidation.Id' --output text)
+          echo "Waiting for CloudFront invalidation $ID to complete..."
+          aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$ID"
+          echo "Invalidation $ID completed."
+          echo "completed=true" >> "$GITHUB_OUTPUT"
         env:
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
@@ -372,6 +385,112 @@ jobs:
       - name: Fail if GoReleaser reported errors
         if: steps.goreleaser.outcome == 'failure'
         run: exit 1
+
+  # Installs the just-published release from the public repos in clean
+  # containers, as a customer would, so a missing, unsigned or stale index
+  # fails the run. Gated on the invalidation completing, which implies the
+  # upload succeeded; a goreleaser publisher error alone does not skip it.
+  verify-published-repos:
+    name: Verify published repos (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs:
+      - goreleaser
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
+      needs.goreleaser.outputs.repos-published == 'true'
+    strategy:
+      fail-fast: false
+      # nfpm stamps rpm packages with release 1 and deb/apk packages with no
+      # revision, so only rpm carries a suffix.
+      matrix:
+        include:
+          - image: debian:12
+            prepare: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y curl ca-certificates
+              curl -fsSL https://artifacts-cli.infisical.com/setup.deb.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -o Dir::Etc::sourcelist=sources.list.d/infisical.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+              apt-get install -y "infisical=${VERSION}"
+          - image: ubuntu:24.04
+            prepare: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y curl ca-certificates
+              curl -fsSL https://artifacts-cli.infisical.com/setup.deb.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -o Dir::Etc::sourcelist=sources.list.d/infisical.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+              apt-get install -y "infisical=${VERSION}"
+          - image: rockylinux:9
+            prepare: |
+              curl -fsSL https://artifacts-cli.infisical.com/setup.rpm.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              dnf install -y --refresh --disablerepo='*' --enablerepo=infisical-cli "infisical-${VERSION}-1"
+          - image: amazonlinux:2023
+            prepare: |
+              curl -fsSL https://artifacts-cli.infisical.com/setup.rpm.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              dnf install -y --refresh --disablerepo='*' --enablerepo=infisical-cli "infisical-${VERSION}-1"
+          - image: alpine:3.21
+            prepare: |
+              apk add --no-cache curl ca-certificates
+              curl -fsSL https://artifacts-cli.infisical.com/setup.apk.sh -o /tmp/setup.sh
+              sh /tmp/setup.sh
+            install: |
+              apk update
+              apk add "infisical=${VERSION}"
+    steps:
+      - name: Install released version from public repo
+        env:
+          TAG: ${{ github.ref_name }}
+          IMAGE: ${{ matrix.image }}
+          PREPARE: ${{ matrix.prepare }}
+          INSTALL: ${{ matrix.install }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          echo "Verifying infisical $VERSION on $IMAGE"
+          CHECK="set -eu
+          $INSTALL
+          infisical --version > /tmp/infisical-version
+          cat /tmp/infisical-version
+          grep -qFw \"\$VERSION\" /tmp/infisical-version"
+          container="verify-infisical-$$"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          prepared=false
+          max_attempts=5
+          for attempt in $(seq 1 "$max_attempts"); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+              prepared=false
+              docker run -d --name "$container" -e VERSION="$VERSION" "$IMAGE" tail -f /dev/null >/dev/null || true
+            fi
+            if ! $prepared && docker exec "$container" sh -c "set -eu
+          $PREPARE"; then
+              prepared=true
+            fi
+            if $prepared && docker exec "$container" sh -c "$CHECK"; then
+              echo "infisical $VERSION installed and verified on $IMAGE (attempt $attempt)."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              delay=$((attempt * 30))
+              echo "::warning::Attempt $attempt/$max_attempts to install infisical $VERSION on $IMAGE failed, retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::Could not install and verify infisical $VERSION from https://artifacts-cli.infisical.com on $IMAGE after $max_attempts attempts"
+          exit 1
 
   goreleaser-darwin:
     runs-on: macos-latest
@@ -551,6 +670,7 @@ jobs:
       - goreleaser-darwin
       - goreleaser-windows
       - npm-release
+      - verify-published-repos
     if: |
       always() &&
       contains(needs.*.result, 'failure') &&
