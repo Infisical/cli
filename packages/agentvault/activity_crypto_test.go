@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/oklog/ulid"
 )
 
 const (
@@ -159,7 +161,7 @@ func TestChunkIDsAreULIDsThatSortByTime(t *testing.T) {
 	if !(earlier < later) {
 		t.Fatalf("%q did not sort before %q", earlier, later)
 	}
-	if _, err := parseActivityChunkID(earlier); err != nil {
+	if _, err := ulid.Parse(earlier); err != nil {
 		t.Fatalf("a minted chunk id did not parse: %v", err)
 	}
 }

@@ -54,11 +54,3 @@ func newActivityChunkID(now time.Time) string {
 }
 
 func newULIDEntropy() io.Reader { return rand.Reader }
-
-func parseActivityChunkID(id string) (time.Time, error) {
-	parsed, err := ulid.Parse(id)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return ulid.Time(parsed.Time()), nil
-}
