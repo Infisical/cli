@@ -727,7 +727,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			// The body names which ports to probe; the signed certificate still decides which are allowed.
 			for _, port := range []int{params.HttpPort, params.NativePort} {
 				if port > 0 && !target.allows(port) {
-					return fmt.Errorf("port %d is not authorised for this connection test", port)
+					return connectFailure(fmt.Errorf("port %d is not authorised for this connection test", port))
 				}
 			}
 
@@ -745,11 +745,20 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			if params.NativePort > 0 {
 				probes++
 			}
+			if probes == 0 {
+				return connectFailure(errors.New("no ClickHouse port was supplied for this connection test"))
+			}
+
+			remaining := probes
 			probeCtx := func() (context.Context, context.CancelFunc) {
-				if deadline, ok := ctx.Deadline(); ok && probes > 1 {
-					return context.WithTimeout(ctx, time.Until(deadline)/time.Duration(probes))
+				deadline, ok := ctx.Deadline()
+				if !ok || remaining <= 1 {
+					remaining--
+					return context.WithCancel(ctx)
 				}
-				return context.WithCancel(ctx)
+				slice := time.Until(deadline) / time.Duration(remaining)
+				remaining--
+				return context.WithTimeout(ctx, slice)
 			}
 
 			if httpPort > 0 {

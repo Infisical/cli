@@ -78,6 +78,52 @@ func (t *tap) discard() {
 	t.buf = nil
 }
 
+// ch-go allocates a declared string length before it reads a single byte, so an unauthenticated client could
+// name a terabyte and take the process down with it. Every handshake field is a short identifier.
+const maxHandshakeStringLen = 64 << 10
+
+func readBoundedStr(r *proto.Reader) (string, error) {
+	n, err := r.UVarInt()
+	if err != nil {
+		return "", err
+	}
+	if n > maxHandshakeStringLen {
+		return "", fmt.Errorf("handshake field of %d bytes exceeds the %d byte cap", n, maxHandshakeStringLen)
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func decodeBoundedClientHello(r *proto.Reader) (proto.ClientHello, error) {
+	var h proto.ClientHello
+	var err error
+	if h.Name, err = readBoundedStr(r); err != nil {
+		return h, fmt.Errorf("name: %w", err)
+	}
+	if h.Major, err = r.Int(); err != nil {
+		return h, fmt.Errorf("major: %w", err)
+	}
+	if h.Minor, err = r.Int(); err != nil {
+		return h, fmt.Errorf("minor: %w", err)
+	}
+	if h.ProtocolVersion, err = r.Int(); err != nil {
+		return h, fmt.Errorf("protocol version: %w", err)
+	}
+	if h.Database, err = readBoundedStr(r); err != nil {
+		return h, fmt.Errorf("database: %w", err)
+	}
+	if h.User, err = readBoundedStr(r); err != nil {
+		return h, fmt.Errorf("user: %w", err)
+	}
+	if h.Password, err = readBoundedStr(r); err != nil {
+		return h, fmt.Errorf("password: %w", err)
+	}
+	return h, nil
+}
+
 // A refusal ends the session: the stream is mid-packet, so carrying on would let a later packet flush the
 // refused bytes upstream.
 var errSessionRefused = errors.New("the session was refused")
@@ -226,8 +272,8 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 		return fmt.Errorf("expected Hello, got client packet %d", code)
 	}
 
-	var hello proto.ClientHello
-	if err := hello.Decode(r); err != nil {
+	hello, err := decodeBoundedClientHello(r)
+	if err != nil {
 		return fmt.Errorf("decode client hello: %w", err)
 	}
 	t.discard()
@@ -277,6 +323,11 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	if err := serverHello.DecodeAware(serverReader, s.rev); err != nil {
 		return fmt.Errorf("decode server hello: %w", err)
 	}
+	// The upstream can be older than the revision pinned from the client, and anything above what it
+	// speaks puts feature-gated bytes on the wire it never reads, desynchronising the stream.
+	if serverHello.Revision > 0 && serverHello.Revision < s.rev {
+		s.rev = serverHello.Revision
+	}
 	serverHello.Revision = s.rev
 
 	s.upstreamTap.discard()
@@ -289,7 +340,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 
 	// At rev >= 54458 the quota key follows the handshake as a bare string. Ours is empty: not the client's to pick.
 	if proto.FeatureAddendum.In(s.rev) {
-		if _, err := r.Str(); err != nil {
+		if _, err := readBoundedStr(r); err != nil {
 			return fmt.Errorf("read client addendum: %w", err)
 		}
 		t.discard()
@@ -598,7 +649,12 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 	}
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(nativeHandshakeTimeout))
+	// The probe's own budget wins when it is shorter, so a slow handshake cannot outlive the test.
+	deadline := time.Now().Add(nativeHandshakeTimeout)
+	if probeDeadline, ok := ctx.Deadline(); ok && probeDeadline.Before(deadline) {
+		deadline = probeDeadline
+	}
+	_ = conn.SetDeadline(deadline)
 
 	var b proto.Buffer
 	proto.ClientHello{
@@ -619,8 +675,8 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return fmt.Errorf("the port accepted the connection but did not answer ClickHouse's native "+
-				"handshake within %s, which is what the HTTP port does when it is entered as the native one",
-				nativeHandshakeTimeout)
+				"handshake within %s, which is what the HTTP port does when it is entered as the native one: %w",
+				nativeHandshakeTimeout, err)
 		}
 		return fmt.Errorf("read hello response: %w", err)
 	}
