@@ -512,14 +512,7 @@ func GetSecretPathFromWorkspaceFile() string {
 }
 
 func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
-	return GetEnvironmentBasedOnGitBranchIn(workspaceFile, "")
-}
-
-// GetEnvironmentBasedOnGitBranchIn is GetEnvelopmentBasedOnGitBranch for the
-// repository containing dir rather than the working directory, for commands
-// that read a workspace file from somewhere other than where they run.
-func GetEnvironmentBasedOnGitBranchIn(workspaceFile models.WorkspaceConfigFile, dir string) string {
-	branch, err := getCurrentBranchIn(dir)
+	branch, err := getCurrentBranch()
 	if err != nil {
 		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
 	}
