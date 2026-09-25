@@ -228,6 +228,34 @@ type Project struct {
 	Slug string `json:"slug"`
 }
 
+type CreateProjectRequest struct {
+	ProjectName             string `json:"projectName"`
+	ProjectDescription      string `json:"projectDescription,omitempty"`
+	Slug                    string `json:"slug,omitempty"`
+	Template                string `json:"template,omitempty"`
+	Type                    string `json:"type,omitempty"`
+	ShouldCreateDefaultEnvs bool   `json:"shouldCreateDefaultEnvs"`
+	HasDeleteProtection     bool   `json:"hasDeleteProtection,omitempty"`
+}
+
+type CreatedProjectEnvironment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type CreatedProject struct {
+	ID           string                      `json:"id"`
+	Name         string                      `json:"name"`
+	Slug         string                      `json:"slug"`
+	OrgID        string                      `json:"orgId,omitempty"`
+	Environments []CreatedProjectEnvironment `json:"environments,omitempty"`
+}
+
+type CreateProjectResponse struct {
+	Project CreatedProject `json:"project"`
+}
+
 type RawSecret struct {
 	SecretKey     string   `json:"secretKey,omitempty"`
 	SecretValue   string   `json:"secretValue,omitempty"`

@@ -33,6 +33,7 @@ const (
 	operationCallSelectOrganization                = "CallSelectOrganization"
 	operationCallGetAllWorkSpacesUserBelongsTo     = "CallGetAllWorkSpacesUserBelongsTo"
 	operationCallGetProjectById                    = "CallGetProjectById"
+	operationCallCreateProject                     = "CallCreateProject"
 	operationCallIsAuthenticated                   = "CallIsAuthenticated"
 	operationCallGetNewAccessTokenWithRefreshToken = "CallGetNewAccessTokenWithRefreshToken"
 	operationCallGetFoldersV1                      = "CallGetFoldersV1"
@@ -336,6 +337,26 @@ func CallGetAllWorkSpacesUserBelongsTo(httpClient *resty.Client) (GetWorkSpacesR
 	}
 
 	return workSpacesResponse, nil
+}
+
+func CallCreateProject(httpClient *resty.Client, request CreateProjectRequest) (CreatedProject, error) {
+	var resp CreateProjectResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&resp).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/workspace", config.INFISICAL_URL))
+
+	if err != nil {
+		return CreatedProject{}, NewGenericRequestError(operationCallCreateProject, err)
+	}
+
+	if response.IsError() {
+		return CreatedProject{}, NewAPIErrorWithResponse(operationCallCreateProject, response, nil)
+	}
+
+	return resp.Project, nil
 }
 
 func CallGetProjectById(httpClient *resty.Client, id string) (Project, error) {
