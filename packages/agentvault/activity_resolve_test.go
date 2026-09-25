@@ -8,7 +8,7 @@ import (
 )
 
 func enabledGrantWire(key string) api.AgentVaultActivityGrant {
-	return api.AgentVaultActivityGrant{Enabled: true, SessionKey: key, ProjectID: "proj-1"}
+	return api.AgentVaultActivityGrant{Enabled: true, SessionKey: key}
 }
 
 func aKey(b byte) []byte {
@@ -26,8 +26,8 @@ func TestTheFirstResolveTakesTheKeyOffTheWire(t *testing.T) {
 	if got == nil {
 		t.Fatal("activity was enabled but no grant was built")
 	}
-	if got.sessionID != "s1" || got.projectID != "proj-1" {
-		t.Fatalf("grant names session %q project %q", got.sessionID, got.projectID)
+	if got.sessionID != "s1" {
+		t.Fatalf("grant names session %q", got.sessionID)
 	}
 	if string(got.key) != string(want) {
 		t.Fatal("the key on the grant is not the key Infisical sent")
@@ -35,7 +35,7 @@ func TestTheFirstResolveTakesTheKeyOffTheWire(t *testing.T) {
 }
 
 func TestACachedKeySurvivesAResolveThatOmitsIt(t *testing.T) {
-	held := &activityGrant{sessionID: "s1", projectID: "proj-1", key: aKey(9)}
+	held := &activityGrant{sessionID: "s1", key: aKey(9)}
 
 	got := toActivityGrant("s1", enabledGrantWire(""), held)
 
@@ -54,7 +54,7 @@ func TestNoKeyAndNoCachedCopyMeansNoRecording(t *testing.T) {
 }
 
 func TestActivityBeingOffClearsAnyCachedGrant(t *testing.T) {
-	held := &activityGrant{sessionID: "s1", projectID: "proj-1", key: aKey(9)}
+	held := &activityGrant{sessionID: "s1", key: aKey(9)}
 
 	if got := toActivityGrant("s1", api.AgentVaultActivityGrant{Enabled: false}, held); got != nil {
 		t.Fatal("the proxy kept recording after logging was switched off")
@@ -73,12 +73,5 @@ func TestAnUnusableKeyIsRefusedRatherThanUsed(t *testing.T) {
 		if got := toActivityGrant("s1", enabledGrantWire(wire.key), nil); got != nil {
 			t.Fatalf("a key that is %s was accepted", wire.name)
 		}
-	}
-}
-
-func TestAGrantWithoutAProjectIsRefused(t *testing.T) {
-	wire := api.AgentVaultActivityGrant{Enabled: true, SessionKey: base64.StdEncoding.EncodeToString(aKey(7))}
-	if got := toActivityGrant("s1", wire, nil); got != nil {
-		t.Fatal("a grant was built with no project named")
 	}
 }

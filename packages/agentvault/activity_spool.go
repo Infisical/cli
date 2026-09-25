@@ -114,7 +114,6 @@ func (c *sealedChunk) lostCount() uint64 {
 
 type activitySpool struct {
 	sessionID string
-	projectID string
 	key       []byte
 
 	ring    activityRing
@@ -129,7 +128,6 @@ type activitySpool struct {
 func newActivitySpool(g *activityGrant, now time.Time) *activitySpool {
 	return &activitySpool{
 		sessionID:    g.sessionID,
-		projectID:    g.projectID,
 		key:          g.key,
 		ring:         newActivityRing(activitySpoolCapacity),
 		lastRecordAt: now,
@@ -174,9 +172,9 @@ func packActivityRecords(records []activityRecord) ([]activityGroup, error) {
 	return groups, nil
 }
 
-func (s *activitySpool) sealSlice(proxyID string, records []activityRecord, plaintext []byte, dropped uint64, now time.Time) (*sealedChunk, error) {
+func (s *activitySpool) sealSlice(records []activityRecord, plaintext []byte, dropped uint64, now time.Time) (*sealedChunk, error) {
 	chunkID := newActivityChunkID(now)
-	aad := buildActivityAAD(s.projectID, s.sessionID, proxyID, chunkID)
+	aad := buildActivityAAD(s.sessionID, chunkID)
 	ciphertext, iv, err := sealActivity(s.key, plaintext, aad)
 	if err != nil {
 		return nil, err

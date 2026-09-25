@@ -106,7 +106,6 @@ type AgentVaultService struct {
 type AgentVaultActivityGrant struct {
 	Enabled    bool   `json:"enabled"`
 	SessionKey string `json:"sessionKey"`
-	ProjectID  string `json:"projectId"`
 }
 
 type ResolveAgentVaultSessionRequest struct {

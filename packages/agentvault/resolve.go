@@ -86,14 +86,9 @@ func toActivityGrant(sessionID string, wire api.AgentVaultActivityGrant, held *a
 	if !wire.Enabled {
 		return nil
 	}
-	if wire.ProjectID == "" {
-		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: activity is enabled but no project was named, not recording")
-		return nil
-	}
-
 	if wire.SessionKey == "" {
 		if held != nil {
-			return newActivityGrant(sessionID, wire.ProjectID, held.key)
+			return newActivityGrant(sessionID, held.key)
 		}
 		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: activity is enabled but no key was sent, not recording")
 		return nil
@@ -105,7 +100,7 @@ func toActivityGrant(sessionID string, wire api.AgentVaultActivityGrant, held *a
 		return nil
 	}
 
-	return newActivityGrant(sessionID, wire.ProjectID, key)
+	return newActivityGrant(sessionID, key)
 }
 
 func toCredential(wire api.AgentVaultCredential) credential {

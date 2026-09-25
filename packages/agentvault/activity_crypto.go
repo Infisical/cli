@@ -18,8 +18,8 @@ const activityAADVersion = "v1"
 const activityIVBytes = 12
 
 // Must byte-match frontend activityDecrypt.ts and the vector pinned in agent-vault-activity-crypto.test.ts.
-func buildActivityAAD(projectID, sessionID, proxyID, chunkID string) []byte {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s|%s", projectID, sessionID, proxyID, chunkID, activityAADVersion)))
+func buildActivityAAD(sessionID, chunkID string) []byte {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s", sessionID, chunkID, activityAADVersion)))
 	return sum[:]
 }
 

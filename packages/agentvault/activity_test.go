@@ -118,7 +118,7 @@ func apiErr(status int, name string) error {
 }
 
 func testGrant(sessionID string) *activityGrant {
-	return newActivityGrant(sessionID, "proj-1", make([]byte, 32))
+	return newActivityGrant(sessionID, make([]byte, 32))
 }
 
 func newTestLog(shipper activityShipper) (log *activityLog, advance func(time.Duration), tick func()) {
@@ -829,7 +829,7 @@ func TestRecordsLostToASealFailureAreStillCounted(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, tick := newTestLog(shipper)
 
-	grant := &activityGrant{sessionID: "s1", projectID: "proj-1", key: make([]byte, 7)}
+	grant := &activityGrant{sessionID: "s1", key: make([]byte, 7)}
 	for i := 0; i < 3; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}

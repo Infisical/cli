@@ -19,7 +19,7 @@ func (g grantingResolver) resolve(string, *activityGrant) (*resolveResult, error
 	return &resolveResult{
 		SessionID: "s1",
 		Services:  g.services,
-		Activity:  &activityGrant{sessionID: "s1", projectID: "proj-1", key: make([]byte, 32)},
+		Activity:  &activityGrant{sessionID: "s1", key: make([]byte, 32)},
 	}, nil
 }
 

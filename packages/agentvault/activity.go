@@ -36,7 +36,6 @@ const (
 
 type activityGrant struct {
 	sessionID string
-	projectID string
 	key       []byte
 
 	issued uint64
@@ -45,8 +44,8 @@ type activityGrant struct {
 // Counts every grant the proxy is handed, so a refusal can be told apart from a key issued after it.
 var activityGrantsIssued atomic.Uint64
 
-func newActivityGrant(sessionID, projectID string, key []byte) *activityGrant {
-	return &activityGrant{sessionID: sessionID, projectID: projectID, key: key, issued: activityGrantsIssued.Add(1)}
+func newActivityGrant(sessionID string, key []byte) *activityGrant {
+	return &activityGrant{sessionID: sessionID, key: key, issued: activityGrantsIssued.Add(1)}
 }
 
 type forgottenSpool struct {
@@ -321,7 +320,7 @@ func (a *activityLog) sealRing(spool *activitySpool, started time.Time) {
 				groupDropped = dropped
 			}
 
-			chunk, err := spool.sealSlice(a.proxyID, group.records, group.plaintext, groupDropped, now)
+			chunk, err := spool.sealSlice(group.records, group.plaintext, groupDropped, now)
 			if err != nil {
 				a.dropUnsealed(spool, len(group.records), groupDropped, err)
 				continue

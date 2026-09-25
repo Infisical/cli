@@ -17,15 +17,13 @@ import (
 const (
 	vectorKeyHex     = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	vectorIVHex      = "aabbccddeeff001122334455"
-	vectorAADHex     = "ba75c71ef714535e84246066ca0a34685c42a03a130dd92fe1d795ad40908a7c"
+	vectorAADHex     = "0bc4c5b3d6ea7cd6bfc440da46d6ce9b73f17c5efa64e90e88373ee8ba09a837"
 	vectorIVBase64   = "qrvM3e7/ABEiM0RV"
-	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6rCvav2ddgiSoqXrTvwiXaUgv"
+	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6rCu64JVIU0dTBbrrs+2AuZxL"
 )
 
-var vectorContext = struct{ projectID, sessionID, proxyID, chunkID string }{
-	projectID: "proj-1",
+var vectorContext = struct{ sessionID, chunkID string }{
 	sessionID: "sess-1",
-	proxyID:   "proxy-1",
 	chunkID:   "01K5ABCDEFGHJKMNPQRSTVWXYZ",
 }
 
@@ -56,7 +54,7 @@ func mustHex(t *testing.T, s string) []byte {
 }
 
 func TestActivityAADMatchesTheBackendVector(t *testing.T) {
-	got := buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, vectorContext.proxyID, vectorContext.chunkID)
+	got := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
 	if hex.EncodeToString(got) != vectorAADHex {
 		t.Fatalf("AAD is %s, the backend and the browser build %s", hex.EncodeToString(got), vectorAADHex)
 	}
@@ -69,7 +67,7 @@ func TestSealMatchesNodeVector(t *testing.T) {
 	}
 
 	iv := mustHex(t, vectorIVHex)
-	aad := buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, vectorContext.proxyID, vectorContext.chunkID)
+	aad := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
 	ciphertext, gotIV, err := sealActivityWithRand(bytes.NewReader(iv), mustHex(t, vectorKeyHex), plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
@@ -84,8 +82,9 @@ func TestSealMatchesNodeVector(t *testing.T) {
 }
 
 func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
-	spool := newActivitySpool(newActivityGrant("sess-1", "proj-1", make([]byte, 32)), time.Now())
-	chunk, err := spool.sealSlice("proxy-1", vectorRecords(), []byte("[]"), 0, time.Now())
+	key := make([]byte, 32)
+	spool := newActivitySpool(newActivityGrant("sess-1", key), time.Now())
+	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"), 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,11 +95,21 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	if len(chunk.meta.CiphertextSha256) != 43 {
 		t.Fatalf("the digest is %d characters, the backend expects 43", len(chunk.meta.CiphertextSha256))
 	}
+
+	iv, err := base64.RawStdEncoding.DecodeString(chunk.meta.IV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	if _, err := gcm.Open(nil, iv, chunk.ciphertext, buildActivityAAD("sess-1", chunk.meta.ChunkID)); err != nil {
+		t.Fatalf("the chunk does not open under its session and chunk ID: %v", err)
+	}
 }
 
 func TestSealedChunkOpensWithTheTagAppended(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
-	aad := buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, vectorContext.proxyID, vectorContext.chunkID)
+	aad := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
 	plaintext, _ := json.Marshal(vectorRecords())
 
 	ciphertext, iv, err := sealActivity(key, plaintext, aad)
@@ -125,7 +134,7 @@ func TestSealedChunkOpensWithTheTagAppended(t *testing.T) {
 func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	plaintext, _ := json.Marshal(vectorRecords())
-	aad := buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, vectorContext.proxyID, vectorContext.chunkID)
+	aad := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
 	ciphertext, iv, err := sealActivity(key, plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
@@ -138,10 +147,8 @@ func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 		name string
 		aad  []byte
 	}{
-		{"another project", buildActivityAAD("other", vectorContext.sessionID, vectorContext.proxyID, vectorContext.chunkID)},
-		{"another session", buildActivityAAD(vectorContext.projectID, "other", vectorContext.proxyID, vectorContext.chunkID)},
-		{"another proxy", buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, "other", vectorContext.chunkID)},
-		{"another chunk", buildActivityAAD(vectorContext.projectID, vectorContext.sessionID, vectorContext.proxyID, "other")},
+		{"another session", buildActivityAAD("other", vectorContext.chunkID)},
+		{"another chunk", buildActivityAAD(vectorContext.sessionID, "other")},
 	} {
 		if _, err := gcm.Open(nil, iv, ciphertext, wrong.aad); err == nil {
 			t.Fatalf("a chunk opened under %s", wrong.name)
