@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -79,6 +80,21 @@ func TestSealMatchesNodeVector(t *testing.T) {
 	}
 	if base64.StdEncoding.EncodeToString(ciphertext) != vectorCiphertext {
 		t.Fatal("the sealed bytes differ from the vector Infisical and the browser are checked against")
+	}
+}
+
+func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
+	spool := newActivitySpool(newActivityGrant("sess-1", "proj-1", make([]byte, 32)), time.Now())
+	chunk, err := spool.sealSlice("proxy-1", vectorRecords(), []byte("[]"), 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(chunk.ciphertext)
+	if want := base64.RawStdEncoding.EncodeToString(sum[:]); chunk.meta.CiphertextSha256 != want {
+		t.Fatalf("the chunk reports digest %q, its ciphertext hashes to %q", chunk.meta.CiphertextSha256, want)
+	}
+	if len(chunk.meta.CiphertextSha256) != 43 {
+		t.Fatalf("the digest is %d characters, the backend expects 43", len(chunk.meta.CiphertextSha256))
 	}
 }
 

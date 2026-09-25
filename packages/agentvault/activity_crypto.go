@@ -49,6 +49,13 @@ func encodeActivityIV(iv []byte) string {
 	return base64.RawStdEncoding.EncodeToString(iv)
 }
 
+// The browser checks the downloaded object against this before decrypting, so an edited object reads as
+// changed rather than as a decryption failure.
+func activityCiphertextSHA256(ciphertext []byte) string {
+	sum := sha256.Sum256(ciphertext)
+	return base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
 func newActivityChunkID(now time.Time) string {
 	return ulid.MustNew(ulid.Timestamp(now), newULIDEntropy()).String()
 }

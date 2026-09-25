@@ -185,15 +185,16 @@ func (s *activitySpool) sealSlice(proxyID string, records []activityRecord, plai
 	first, last := records[0], records[len(records)-1]
 	return &sealedChunk{
 		meta: api.CreateAgentVaultActivityChunkRequest{
-			ChunkID:         chunkID,
-			StartedAt:       first.Ts,
-			EndedAt:         last.Ts,
-			FirstSeq:        first.Seq,
-			LastSeq:         last.Seq,
-			RecordCount:     len(records),
-			DroppedCount:    dropped,
-			CiphertextBytes: len(ciphertext),
-			IV:              encodeActivityIV(iv),
+			ChunkID:          chunkID,
+			StartedAt:        first.Ts,
+			EndedAt:          last.Ts,
+			FirstSeq:         first.Seq,
+			LastSeq:          last.Seq,
+			RecordCount:      len(records),
+			DroppedCount:     dropped,
+			CiphertextBytes:  len(ciphertext),
+			IV:               encodeActivityIV(iv),
+			CiphertextSha256: activityCiphertextSHA256(ciphertext),
 		},
 		ciphertext: ciphertext,
 	}, nil
