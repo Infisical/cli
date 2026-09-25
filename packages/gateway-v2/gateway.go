@@ -14,14 +14,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/Infisical/infisical-merge/packages/pam"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
@@ -33,9 +37,17 @@ const (
 	ForwardModeHTTP            ForwardMode = "HTTP"
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
+	ForwardModePAMRDPBrowser   ForwardMode = "PAM_RDP_BROWSER"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
+	ForwardModeHealth          ForwardMode = "HEALTH"
+	ForwardModePkcs11          ForwardMode = "PKCS11"
+	ForwardModeADCS            ForwardMode = "ADCS"
+	ForwardModeDiscovery       ForwardMode = "DISCOVERY"
+	ForwardModeConnectionTest  ForwardMode = "CONNECTION_TEST"
+	ForwardModeWinRM           ForwardMode = "WINRM"
+	ForwardModeSQL             ForwardMode = "SQL"
 )
 
 type ActorType string
@@ -44,6 +56,18 @@ const (
 	ActorTypePlatform ActorType = "platform"
 	ActorTypeUser     ActorType = "user"
 )
+
+const heartbeatInterval = 3 * time.Minute
+
+// Kept off the heartbeat because that handler probes back through the relay and writes to the
+// platform's database, which is far too costly at this cadence.
+const metricsReportInterval = 10 * time.Second
+
+// Below the interval, so a stalled endpoint cannot hold the loop past the next tick or block shutdown.
+const metricsReportTimeout = 5 * time.Second
+
+const metricsReportFailuresBeforeBackoff = 5
+const metricsReportBackoff = 5 * time.Minute
 
 const GATEWAY_ROUTING_INFO_OID = "1.3.6.1.4.1.12345.100.1"
 const GATEWAY_ACTOR_OID = "1.3.6.1.4.1.12345.100.2"
@@ -76,11 +100,25 @@ type ActorDetails struct {
 }
 
 type GatewayConfig struct {
-	Name           string
-	RelayName      string
-	IdentityToken  string
-	SSHPort        int
-	ReconnectDelay time.Duration
+	Name             string
+	RelayName        string
+	IdentityToken    string
+	SSHPort          int
+	ReconnectDelay   time.Duration
+	UseV3Connect     bool // Use V3 /connect endpoint instead of V2 /gateways for cert refresh
+	Pkcs11ModulePath string
+	ListenAddress    string
+	BindAddress      string
+	// RelaySelector, when non-nil, is called to re-select a relay during failover.
+	// nil means relay was explicitly selected and failover is disabled.
+	RelaySelector func(httpClient *resty.Client) (string, error)
+}
+
+type pamSessionEntry struct {
+	cancel       context.CancelFunc
+	conn         *tls.Conn
+	done         chan struct{} // closed when HandlePAMProxy has fully returned for this entry
+	lastActivity atomic.Int64
 }
 
 type Gateway struct {
@@ -89,9 +127,10 @@ type Gateway struct {
 	httpClient *resty.Client
 	config     *GatewayConfig
 	sshClient  *ssh.Client
+	relayName  string // active relay name, protected by mu
 
-	// Certificate storage
-	certificates *api.RegisterGatewayResponse
+	// Replaced wholesale by cert renewal while other goroutines read it, so reads go through certs().
+	certificates atomic.Pointer[api.RegisterGatewayResponse]
 
 	// PAM credentials manager
 	pamCredentialsManager *session.CredentialsManager
@@ -100,7 +139,7 @@ type Gateway struct {
 	pamSessionUploader *session.SessionUploader
 
 	// mTLS server components
-	tlsConfig *tls.Config
+	tlsConfig atomic.Pointer[tls.Config]
 
 	// Connection management
 	mu               sync.RWMutex
@@ -110,6 +149,32 @@ type Gateway struct {
 	heartbeatStarted bool
 	heartbeatMu      sync.Mutex
 	notifyOnce       sync.Once
+	relayDownOnce    sync.Once
+	// Set when the direct listener is actually bound, so log routing cannot claim a listener
+	// the server never granted.
+	directListening atomic.Bool
+
+	// PAM session registry for active proxy connections (multiple connections per session)
+	pamSessions   map[string][]*pamSessionEntry
+	pamSessionsMu sync.Mutex
+
+	// MongoDB proxy registry: one topology per session, shared across connections
+	mongoProxies   map[string]*mongoProxyEntry
+	mongoProxiesMu sync.Mutex
+	pkcs11Module   Pkcs11Module
+
+	activeChannels       atomic.Int64
+	directActiveChannels atomic.Int64
+	// Bumped per relay connection, so a handler cannot release a count it did not acquire.
+	channelGeneration atomic.Int64
+}
+
+// mongoProxyEntry holds a session-level MongoDB proxy with a ready signal.
+// The first connection creates the proxy; concurrent connections wait on the channel.
+type mongoProxyEntry struct {
+	proxy *mongodb.MongoDBProxy
+	err   error
+	ready chan struct{} // closed when proxy creation completes (success or failure)
 }
 
 // NewGateway creates a new gateway instance
@@ -130,19 +195,277 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 
 	pamCredentialsManager := session.NewCredentialsManager(httpClient)
 
+	pkcs11Module, err := setupPkcs11ModuleForConfig(config.Pkcs11ModulePath)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to load PKCS#11 module: %w", err)
+	}
+
 	return &Gateway{
 		httpClient:            httpClient,
 		config:                config,
+		relayName:             config.RelayName,
 		ctx:                   ctx,
 		cancel:                cancel,
 		pamCredentialsManager: pamCredentialsManager,
 		pamSessionUploader:    session.NewSessionUploader(httpClient, pamCredentialsManager),
+		pamSessions:           make(map[string][]*pamSessionEntry),
+		mongoProxies:          make(map[string]*mongoProxyEntry),
+		pkcs11Module:          pkcs11Module,
 	}, nil
+}
+
+// RegisterPAMSession registers an active PAM proxy connection for cancellation support
+// Returns a function that handlers should call when data flows through the connection
+func (g *Gateway) RegisterPAMSession(sessionID string, cancel context.CancelFunc, conn *tls.Conn) func() {
+	entry := &pamSessionEntry{cancel: cancel, conn: conn, done: make(chan struct{})}
+	entry.lastActivity.Store(time.Now().Unix())
+
+	g.pamSessionsMu.Lock()
+	defer g.pamSessionsMu.Unlock()
+	g.pamSessions[sessionID] = append(g.pamSessions[sessionID], entry)
+
+	return func() {
+		entry.lastActivity.Store(time.Now().Unix())
+	}
+}
+
+// DeregisterPAMSession removes a specific connection from the session registry.
+// Returns true if this was the last connection for the session.
+// The MongoDB proxy (if any) is NOT closed here — it persists across connections
+// so that subsequent client connections (e.g. mongosh retries) find a warm topology.
+// The proxy is cleaned up on session cancellation or gateway shutdown.
+func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) bool {
+	g.pamSessionsMu.Lock()
+	entries, exists := g.pamSessions[sessionID]
+	if !exists {
+		g.pamSessionsMu.Unlock()
+		return false
+	}
+	var removed *pamSessionEntry
+	for i, e := range entries {
+		if e.conn == conn {
+			removed = e
+			g.pamSessions[sessionID] = append(entries[:i], entries[i+1:]...)
+			break
+		}
+	}
+	isLast := len(g.pamSessions[sessionID]) == 0
+	if isLast {
+		delete(g.pamSessions, sessionID)
+	}
+	g.pamSessionsMu.Unlock()
+	if removed != nil {
+		close(removed.done)
+	}
+	return isLast
+}
+
+// Cancels prior entries and waits for them to clean up. RDP needs serial
+// bridges so drain writes don't interleave into the recording file.
+func (g *Gateway) evictExistingPAMSessions(sessionID string, timeout time.Duration) {
+	g.pamSessionsMu.Lock()
+	prior := g.pamSessions[sessionID]
+	g.pamSessionsMu.Unlock()
+	if len(prior) == 0 {
+		return
+	}
+	log.Info().Str("sessionId", sessionID).Int("priorCount", len(prior)).
+		Msg("Evicting existing PAM connections before starting new RDP bridge")
+	for _, e := range prior {
+		_ = e.conn.Close()
+		e.cancel()
+	}
+	deadline := time.After(timeout)
+	for _, e := range prior {
+		select {
+		case <-e.done:
+		case <-deadline:
+			log.Warn().Str("sessionId", sessionID).
+				Msg("Timed out waiting for prior PAM connection to clean up; proceeding anyway")
+			return
+		}
+	}
+}
+
+// CancelPAMSession kills all active connections for a PAM session
+func (g *Gateway) CancelPAMSession(sessionID string) bool {
+	g.pamSessionsMu.Lock()
+	entries, ok := g.pamSessions[sessionID]
+	if ok {
+		delete(g.pamSessions, sessionID)
+	}
+	g.pamSessionsMu.Unlock()
+	if !ok {
+		return false
+	}
+	for _, e := range entries {
+		e.conn.Close()
+		e.cancel()
+		close(e.done)
+	}
+	g.closeMongoProxy(sessionID)
+	return true
+}
+
+// GetOrCreateMongoProxy returns a session-level MongoDB proxy, creating it on first call.
+// The topology is shared across all client connections in the same PAM session.
+// Concurrent callers for the same session wait for the first creation to complete.
+func (g *Gateway) GetOrCreateMongoProxy(ctx context.Context, sessionID string, config mongodb.MongoDBProxyConfig) (*mongodb.MongoDBProxy, error) {
+	g.mongoProxiesMu.Lock()
+	entry, ok := g.mongoProxies[sessionID]
+	if ok {
+		g.mongoProxiesMu.Unlock()
+		// Wait for the creating goroutine to finish
+		<-entry.ready
+		return entry.proxy, entry.err
+	}
+
+	// First caller: create entry with pending signal, release lock, then create topology
+	entry = &mongoProxyEntry{ready: make(chan struct{})}
+	g.mongoProxies[sessionID] = entry
+	g.mongoProxiesMu.Unlock()
+
+	// Topology creation is slow (SRV, TLS, auth) — runs outside the lock.
+	// Other goroutines for this session will wait on entry.ready.
+	proxy, err := mongodb.NewMongoDBProxy(ctx, config)
+	entry.proxy = proxy
+	entry.err = err
+	close(entry.ready) // Signal all waiters
+
+	if err != nil {
+		// Creation failed — remove from registry so next attempt retries
+		g.mongoProxiesMu.Lock()
+		delete(g.mongoProxies, sessionID)
+		g.mongoProxiesMu.Unlock()
+		return nil, err
+	}
+
+	return proxy, nil
+}
+
+// closeMongoProxy closes and removes the MongoDB proxy for a session if one exists.
+func (g *Gateway) closeMongoProxy(sessionID string) {
+	g.mongoProxiesMu.Lock()
+	entry, ok := g.mongoProxies[sessionID]
+	if ok {
+		delete(g.mongoProxies, sessionID)
+	}
+	g.mongoProxiesMu.Unlock()
+
+	if ok {
+		// Wait for creation to finish before closing
+		<-entry.ready
+		if entry.proxy != nil {
+			entry.proxy.Close(context.Background()) //nolint:errcheck
+		}
+	}
+}
+
+const pamIdleTimeout = 30 * time.Minute
+
+// startIdleReaper periodically scans the PAM session registry and cancels
+// sessions whose connections have had no data flow for pamIdleTimeout
+func (g *Gateway) startIdleReaper(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g.reapIdleSessions()
+		}
+	}
+}
+
+func (g *Gateway) reapIdleSessions() {
+	cutoff := time.Now().Add(-pamIdleTimeout).Unix()
+
+	g.pamSessionsMu.Lock()
+	var stale []string
+	for sessionID, entries := range g.pamSessions {
+		allIdle := true
+		for _, e := range entries {
+			if e.lastActivity.Load() > cutoff {
+				allIdle = false
+				break
+			}
+		}
+		if allIdle {
+			stale = append(stale, sessionID)
+		}
+	}
+	g.pamSessionsMu.Unlock()
+
+	for _, sessionID := range stale {
+		log.Info().Str("sessionId", sessionID).Dur("idleTimeout", pamIdleTimeout).Msg("Reaping idle PAM session")
+		g.CancelPAMSession(sessionID)
+		if err := g.pamSessionUploader.CleanupPAMSession(sessionID, "idle_timeout"); err != nil {
+			log.Error().Err(err).Str("sessionId", sessionID).Msg("Failed to cleanup reaped PAM session")
+		}
+	}
+}
+
+func (g *Gateway) sendMetricsReport(ctx context.Context, count int64) error {
+	reqCtx, cancel := context.WithTimeout(ctx, metricsReportTimeout)
+	defer cancel()
+	return api.CallGatewayMetricsReportV2(reqCtx, g.httpClient, api.GatewayMetricsReportRequest{ActiveChannels: count})
+}
+
+// A gateway that stops reporting takes its whole pool off load-aware selection.
+func (g *Gateway) startMetricsReport(ctx context.Context) {
+	go func() {
+		// Report immediately: until one lands the pool has nothing to compare and selects at random.
+		delay := time.Duration(0)
+		failures := 0
+
+		var last int64 = -1
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			delay = metricsReportInterval
+
+			count := g.activeChannels.Load() + g.directActiveChannels.Load()
+			// Republish unchanged, so a quiet gateway is distinguishable from a silent one.
+			if err := g.sendMetricsReport(ctx, count); err != nil {
+				failures++
+				if failures == metricsReportFailuresBeforeBackoff {
+					log.Warn().Err(err).Msgf("Metrics report failing; backing off to %s. Pools containing this gateway will select at random until it succeeds", metricsReportBackoff)
+				}
+				if failures >= metricsReportFailuresBeforeBackoff {
+					delay = metricsReportBackoff
+				}
+				continue
+			}
+
+			if failures >= metricsReportFailuresBeforeBackoff {
+				log.Info().Msg("Metrics report recovered")
+			}
+			failures = 0
+			if count != last {
+				log.Debug().Msgf("Reported %d active channels", count)
+				last = count
+			}
+		}
+	}()
 }
 
 func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 	sendHeartbeat := func() error {
-		if err := api.CallGatewayHeartBeatV2(g.httpClient); err != nil {
+		capabilities := map[string]any{
+			// Absence is how the platform spots a gateway too old to honour the setting.
+			CapabilitySessionLogMaskingBuiltInDetection: true,
+		}
+		if g.pkcs11Module != nil {
+			capabilities[CapabilityPkcs11] = true
+		}
+		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
+		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
+		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
 			select {
 			case errCh <- err:
@@ -167,20 +490,19 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			defer retryTicker.Stop()
 
 			for {
+				if err := sendHeartbeat(); err == nil {
+					return
+				}
 				select {
 				case <-ctx.Done():
 					return
 				case <-retryTicker.C:
-					if err := sendHeartbeat(); err == nil {
-						// First success! Exit retry phase
-						return
-					}
 				}
 			}
 		}()
 
-		// Phase 2: Regular heartbeat every 30 minutes
-		regularTicker := time.NewTicker(30 * time.Minute)
+		// Phase 2: Regular heartbeat
+		regularTicker := time.NewTicker(heartbeatInterval)
 		defer regularTicker.Stop()
 
 		for {
@@ -197,13 +519,46 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
 
+	// Bound WinRM HTTP response bodies before serving.
+	winrm.InstallHTTPResponseCap()
+
 	errCh := make(chan error, 1)
+	listenerFatal := make(chan error, 1)
+	if err := g.registerGateway(); err != nil {
+		if g.config.RelaySelector == nil {
+			return fmt.Errorf("failed to register gateway: %v", err)
+		}
+		g.tryRelayFailover()
+		if g.getRelayName() == "" {
+			return fmt.Errorf("failed to register gateway: %v", err)
+		}
+		if retryErr := g.registerGateway(); retryErr != nil {
+			return fmt.Errorf("failed to register gateway: %v", retryErr)
+		}
+	}
+
+	if g.config.ListenAddress != "" && g.certs().DirectAddress == "" {
+		return fmt.Errorf(
+			"this Infisical instance did not accept --listen-address, so it does not support direct gateway connections. Upgrade the instance, or start the gateway with --target-relay-name instead")
+	}
+
+	if g.certs().DirectAddress != "" {
+		if err := g.startDirectListener(ctx, listenerFatal); err != nil {
+			return err
+		}
+		g.startHeartbeatOnce(ctx, errCh)
+		g.notifyOnce.Do(func() {
+			systemd.SdNotify(false, systemd.SdNotifyReady)
+		})
+	}
 
 	// Start certificate renewal goroutine
 	go g.startCertificateRenewal(ctx)
 
 	// Start session uploader goroutine for PAM
 	g.pamSessionUploader.Start()
+
+	go g.startIdleReaper(ctx)
 
 	go func() {
 		for {
@@ -216,17 +571,54 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}()
 
+	if g.certs().SSH.ClientCertificate == "" {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-listenerFatal:
+			return err
+		}
+	}
+
+	// The relay loop blocks for the life of the connection, so it runs alongside the listener
+	// rather than ahead of it, and whichever fails first returns.
+	relayLoopErr := make(chan error, 1)
+	go func() { relayLoopErr <- g.runRelayLoop(ctx, errCh) }()
+
+	select {
+	case <-ctx.Done():
+		log.Info().Msgf("Gateway stopped by context cancellation")
+		return nil
+	case err := <-listenerFatal:
+		return err
+	case err := <-relayLoopErr:
+		return err
+	}
+}
+
+func (g *Gateway) runRelayLoop(ctx context.Context, errCh chan error) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msgf("Gateway stopped by context cancellation")
 			return nil
 		default:
-			if err := g.connectAndServe(ctx, errCh); err != nil {
-				log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+			if err := g.connectWithRetry(ctx, errCh); err != nil {
+				// Direct listen is already serving traffic, so a dead relay is degraded, not broken.
+				if g.hasDirectListener() {
+					g.relayDownOnce.Do(func() {
+						log.Warn().Msgf("Relay is unreachable (%v). Direct connections are unaffected; retrying the relay quietly.", err)
+					})
+					log.Debug().Msgf("Relay connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				} else {
+					log.Error().Msgf("Connection failed: %v, retrying in %v...", err, g.config.ReconnectDelay)
+				}
+				g.tryRelayFailover()
+				if registerErr := g.registerGateway(); registerErr != nil {
+					log.Warn().Msgf("Failed to refresh gateway registration: %v", registerErr)
+				}
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil
 				case <-time.After(g.config.ReconnectDelay):
 					continue
 				}
@@ -235,7 +627,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			log.Info().Msgf("Connection closed, reconnecting in 10 seconds...")
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil
 			case <-time.After(10 * time.Second):
 				continue
 			}
@@ -258,6 +650,17 @@ func (g *Gateway) Stop() {
 	g.isConnected = false
 	g.mu.Unlock()
 
+	// Close all MongoDB proxies
+	g.mongoProxiesMu.Lock()
+	for id, entry := range g.mongoProxies {
+		<-entry.ready
+		if entry.proxy != nil {
+			entry.proxy.Close(context.Background()) //nolint:errcheck
+		}
+		delete(g.mongoProxies, id)
+	}
+	g.mongoProxiesMu.Unlock()
+
 	// Shutdown PAM session uploader and credentials manager
 	if g.pamSessionUploader != nil {
 		g.pamSessionUploader.Stop()
@@ -265,6 +668,43 @@ func (g *Gateway) Stop() {
 	if g.pamCredentialsManager != nil {
 		g.pamCredentialsManager.Shutdown()
 	}
+
+	if g.pkcs11Module != nil {
+		if err := g.pkcs11Module.Finalize(); err != nil {
+			log.Warn().Err(err).Msg("PKCS#11 module Finalize returned an error")
+		}
+		g.pkcs11Module = nil
+	}
+}
+
+func (g *Gateway) getRelayName() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.relayName
+}
+
+func (g *Gateway) setRelayName(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.relayName = name
+}
+
+func (g *Gateway) tryRelayFailover() {
+	if g.config.RelaySelector == nil {
+		return
+	}
+	oldRelay := g.getRelayName()
+	newRelay, err := g.config.RelaySelector(g.httpClient)
+	if err != nil {
+		log.Warn().Err(err).Str("currentRelay", oldRelay).Msg("Relay re-selection failed, will retry current relay")
+		return
+	}
+	if newRelay == oldRelay {
+		log.Info().Str("relay", oldRelay).Msg("Re-selection returned same relay")
+		return
+	}
+	log.Info().Str("oldRelay", oldRelay).Str("newRelay", newRelay).Msg("Failing over to new relay")
+	g.setRelayName(newRelay)
 }
 
 func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
@@ -272,23 +712,97 @@ func (g *Gateway) startHeartbeatOnce(ctx context.Context, errCh chan error) {
 	defer g.heartbeatMu.Unlock()
 	if !g.heartbeatStarted {
 		g.registerHeartBeat(ctx, errCh)
+		g.startMetricsReport(ctx)
 		g.heartbeatStarted = true
 	}
 }
 
-func (g *Gateway) connectAndServe(ctx context.Context, errCh chan error) error {
-	if err := g.registerGateway(); err != nil {
-		return fmt.Errorf("failed to register gateway: %v", err)
+func (g *Gateway) startDirectListener(ctx context.Context, fatal chan<- error) error {
+	directAddress := g.certs().DirectAddress
+	_, advertisedPort, err := net.SplitHostPort(directAddress)
+	if err != nil {
+		return fmt.Errorf("invalid direct gateway address %q: %w", directAddress, err)
 	}
 
-	return g.connectWithRetry(ctx, errCh)
+	bindAddress := g.config.BindAddress
+	if bindAddress == "" {
+		bindAddress = net.JoinHostPort("", advertisedPort)
+	} else if _, bindPort, splitErr := net.SplitHostPort(bindAddress); splitErr == nil && bindPort != advertisedPort {
+		// Legitimate behind a load balancer that remaps the port, and a silent outage otherwise.
+		log.Warn().Msgf(
+			"Listening on port %s but registered with Infisical as port %s. Connections will fail unless something forwards %s to %s.",
+			bindPort, advertisedPort, advertisedPort, bindPort)
+	}
+
+	listener, err := net.Listen("tcp", bindAddress)
+	if err != nil {
+		return fmt.Errorf("failed to listen for direct gateway connections on %s: %w", bindAddress, err)
+	}
+
+	g.directListening.Store(true)
+	log.Info().Str("address", g.certs().DirectAddress).Str("bind", listener.Addr().String()).Msg("Direct gateway listener started")
+	pending := make(chan struct{}, maxPendingDirectHandshakes)
+	go func() {
+		go func() {
+			<-ctx.Done()
+			_ = listener.Close()
+		}()
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				if ctx.Err() == nil {
+					log.Error().Err(acceptErr).Msg("Direct gateway listener stopped")
+					// systemd was already told ready, so supervision has to hear about this.
+					select {
+					case fatal <- fmt.Errorf("direct gateway listener stopped accepting: %w", acceptErr):
+					default:
+					}
+				}
+				return
+			}
+			// Shed rather than queue: queueing would let a slow peer exhaust descriptors anyway.
+			select {
+			case pending <- struct{}{}:
+			default:
+				log.Warn().Str("peer", conn.RemoteAddr().String()).Msg("Too many direct gateway handshakes in flight, rejecting connection")
+				_ = conn.Close()
+				continue
+			}
+			g.directActiveChannels.Add(1)
+			go func() {
+				defer g.directActiveChannels.Add(-1)
+				g.handleGatewayConnection(conn, func() { <-pending })
+			}()
+		}
+	}()
+
+	return nil
+}
+
+// A relay that is down while direct listen is serving traffic is a degraded state, not a failure,
+// so its retry chatter drops to debug rather than repeating at info and error every cycle.
+func relayLog(hasDirect bool) *zerolog.Event {
+	if hasDirect {
+		return log.Debug()
+	}
+	return log.Info()
+}
+
+func (g *Gateway) hasDirectListener() bool {
+	return g.directListening.Load()
 }
 
 func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error {
-	for attempt := 1; attempt <= 6; attempt++ {
-		// Re-register after 5 failed attempts to handle potential relay IP change
-		if attempt == 6 {
-			log.Info().Msg("Re-registering gateway to handle potential relay IP change...")
+	// With auto-failover enabled, try once then let Start() pick a new relay.
+	// With an explicit relay, retry 6 times since there's no fallback.
+	maxAttempts := 6
+	if g.config.RelaySelector != nil {
+		maxAttempts = 1
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt == maxAttempts && maxAttempts > 1 {
+			relayLog(g.hasDirectListener()).Msg("Re-registering gateway to handle potential relay IP change...")
 			if err := g.registerGateway(); err != nil {
 				return fmt.Errorf("failed to re-register gateway: %v", err)
 			}
@@ -301,17 +815,22 @@ func (g *Gateway) connectWithRetry(ctx context.Context, errCh chan error) error 
 		}
 
 		// Connect to Relay server
-		log.Info().Msgf("Connecting to relay server %s on %s:%d... (attempt %d/6)", g.config.RelayName, g.certificates.RelayHost, g.config.SSHPort, attempt)
-		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", g.certificates.RelayHost, g.config.SSHPort), sshConfig)
+		relayHost := g.certs().RelayHost
+		if relayHost == "" {
+			// Dialing ":port" would reach this machine rather than a relay.
+			return fmt.Errorf("gateway has no relay host to connect to")
+		}
+		relayLog(g.hasDirectListener()).Msgf("Connecting to relay server %s on %s:%d... (attempt %d/%d)", g.getRelayName(), relayHost, g.config.SSHPort, attempt, maxAttempts)
+		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", relayHost, g.config.SSHPort), sshConfig)
 		if err != nil {
-			log.Warn().Msgf("SSH connection attempt %d/6 failed: %v", attempt, err)
-			if attempt < 6 {
+			relayLog(g.hasDirectListener()).Msgf("SSH connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
+			if attempt < maxAttempts {
 				retryDelay := time.Duration(attempt) * 2 * time.Second
-				log.Info().Msgf("Retrying in %v...", retryDelay)
+				relayLog(g.hasDirectListener()).Msgf("Retrying in %v...", retryDelay)
 				time.Sleep(retryDelay)
 				continue
 			}
-			return fmt.Errorf("failed to connect to SSH server after 6 attempts: %v", err)
+			return fmt.Errorf("failed to connect to SSH server after %d attempts: %v", maxAttempts, err)
 		}
 
 		g.startHeartbeatOnce(ctx, errCh)
@@ -341,6 +860,10 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 		client.Close()
 	}()
 
+	// Channels do not outlive their connection, so anything still counted is a handler that hung.
+	generation := g.channelGeneration.Add(1)
+	g.activeChannels.Store(0)
+
 	// Handle incoming channels from the server
 	channels := client.HandleChannelOpen("direct-tcpip")
 	if channels == nil {
@@ -354,6 +877,25 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 		client.Close()
 	}()
 
+	// Keepalive on the relay SSH connection. If the relay drops silently,
+	// this closes the client so the reconnect loop in connectWithRetry kicks in
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := util.SSHKeepalive(client, 15*time.Second); err != nil {
+					log.Warn().Err(err).Msg("Relay SSH keepalive failed, closing connection")
+					client.Close()
+					return
+				}
+			case <-g.ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Process incoming channels with context cancellation support
 	for {
 		select {
@@ -365,18 +907,30 @@ func (g *Gateway) handleConnection(client *ssh.Client) error {
 				log.Info().Msg("SSH channels closed")
 				return nil
 			}
-			go g.handleIncomingChannel(newChannel)
+			// Counted here, not in the handler: its goroutine could load a later generation.
+			g.activeChannels.Add(1)
+			go g.handleIncomingChannel(newChannel, generation)
 		}
 	}
 }
 
 func (g *Gateway) registerGateway() error {
-	body := api.RegisterGatewayRequest{
-		RelayName: g.config.RelayName,
-		Name:      g.config.Name,
-	}
+	var certResp api.RegisterGatewayResponse
+	var err error
 
-	certResp, err := api.CallRegisterGateway(g.httpClient, body)
+	relayName := g.getRelayName()
+	if g.config.UseV3Connect {
+		certResp, err = api.CallConnectGateway(g.httpClient, api.ConnectGatewayRequest{
+			RelayName:     relayName,
+			DirectAddress: g.config.ListenAddress,
+		})
+	} else {
+		certResp, err = api.CallRegisterGateway(g.httpClient, api.RegisterGatewayRequest{
+			RelayName:     relayName,
+			DirectAddress: g.config.ListenAddress,
+			Name:          g.config.Name,
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("failed to register gateway: %v", err)
 	}
@@ -386,7 +940,7 @@ func (g *Gateway) registerGateway() error {
 	}
 
 	g.GatewayID = certResp.GatewayID
-	g.certificates = &certResp
+	g.certificates.Store(&certResp)
 	log.Info().Msgf("Successfully registered gateway and received certificates")
 
 	// Setup mTLS config
@@ -397,13 +951,18 @@ func (g *Gateway) registerGateway() error {
 	return nil
 }
 
+func (g *Gateway) certs() *api.RegisterGatewayResponse {
+	return g.certificates.Load()
+}
+
 func (g *Gateway) setupTLSConfig() error {
-	serverCertBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerCertificate))
+	certs := g.certs()
+	serverCertBlock, _ := pem.Decode([]byte(certs.PKI.ServerCertificate))
 	if serverCertBlock == nil {
 		return fmt.Errorf("failed to decode server certificate")
 	}
 
-	serverKeyBlock, _ := pem.Decode([]byte(g.certificates.PKI.ServerPrivateKey))
+	serverKeyBlock, _ := pem.Decode([]byte(certs.PKI.ServerPrivateKey))
 	if serverKeyBlock == nil {
 		return fmt.Errorf("failed to decode server private key")
 	}
@@ -415,7 +974,7 @@ func (g *Gateway) setupTLSConfig() error {
 
 	clientCAPool := x509.NewCertPool()
 	var chainCerts [][]byte
-	chainData := []byte(g.certificates.PKI.ClientCertificateChain)
+	chainData := []byte(certs.PKI.ClientCertificateChain)
 	for {
 		block, rest := pem.Decode(chainData)
 		if block == nil {
@@ -434,7 +993,7 @@ func (g *Gateway) setupTLSConfig() error {
 		clientCAPool.AddCert(cert)
 	}
 
-	g.tlsConfig = &tls.Config{
+	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{serverCertBlock.Bytes},
@@ -444,20 +1003,22 @@ func (g *Gateway) setupTLSConfig() error {
 		ClientCAs:  clientCAPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"infisical-http-proxy", "infisical-tcp-proxy", "infisical-ping", "infisical-pam-proxy", "infisical-pam-session-cancellation", "infisical-pam-capabilities"},
+		NextProtos: nextProtosForGateway(g.pkcs11Module != nil),
 	}
+	g.tlsConfig.Store(tlsConfig)
 
 	return nil
 }
 
 func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
-	privateKey, err := ssh.ParsePrivateKey([]byte(g.certificates.SSH.ClientPrivateKey))
+	certs := g.certs()
+	privateKey, err := ssh.ParsePrivateKey([]byte(certs.SSH.ClientPrivateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH private key: %v", err)
 	}
 
 	// Parse certificate
-	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ClientCertificate))
+	cert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(certs.SSH.ClientCertificate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate: %v", err)
 	}
@@ -503,7 +1064,7 @@ func (g *Gateway) createSSHConfig() (*ssh.ClientConfig, error) {
 }
 
 func (g *Gateway) createHostKeyCallback() ssh.HostKeyCallback {
-	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certificates.SSH.ServerCAPublicKey))
+	caKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(g.certs().SSH.ServerCAPublicKey))
 	if err != nil {
 		return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			return fmt.Errorf("failed to parse CA public key: %v", err)
@@ -540,37 +1101,70 @@ func (g *Gateway) validateHostCertificate(cert *ssh.Certificate, hostname string
 	return nil
 }
 
-func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
+func (g *Gateway) releaseChannel(generation int64) {
+	// A handler outliving its connection would otherwise decrement a count it never contributed to.
+	if g.channelGeneration.Load() != generation {
+		return
+	}
+	for {
+		current := g.activeChannels.Load()
+		if current <= 0 {
+			return
+		}
+		if g.activeChannels.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
+func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel, generation int64) {
+	defer g.releaseChannel(generation)
+
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
 		log.Info().Msgf("Failed to accept channel: %v", err)
 		return
 	}
-	defer channel.Close()
 
 	go ssh.DiscardRequests(requests)
 
-	// Create mTLS server configuration
-	tlsConfig := g.tlsConfig
+	// handleGatewayConnection closes the conn, which closes the channel, so no defer here.
+	g.handleGatewayConnection(&virtualConnection{channel: channel}, nil)
+}
+
+// onHandshakeSettled fires once the handshake resolves either way. The direct listener releases its
+// pre-auth slot there, since holding it for the session would cap sessions at the pre-auth limit.
+func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func()) {
+	settled := false
+	settle := func() {
+		if onHandshakeSettled == nil || settled {
+			return
+		}
+		settled = true
+		onHandshakeSettled()
+	}
+	// Covers every return before the handshake resolves.
+	defer settle()
+
+	tlsConfig := g.tlsConfig.Load()
 	if tlsConfig == nil {
 		log.Info().Msgf("TLS config not initialized, cannot create mTLS server")
+		_ = conn.Close()
 		return
 	}
-
-	// Create a virtual connection that pipes data between SSH channel and TLS
-	virtualConn := &virtualConnection{
-		channel: channel,
-	}
-
-	// Wrap the virtual connection with TLS
-	tlsConn := tls.Server(virtualConn, tlsConfig)
+	defer conn.Close()
+	tlsConn := tls.Server(conn, tlsConfig)
 
 	// Perform TLS handshake
 	log.Info().Msg("Received incoming connection, starting TLS handshake")
+	// A peer that never completes the handshake would otherwise hold this goroutine forever.
+	_ = tlsConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
 	if err := tlsConn.Handshake(); err != nil {
 		log.Info().Msgf("TLS handshake failed: %v", err)
 		return
 	}
+	_ = tlsConn.SetDeadline(time.Time{})
+	settle()
 	log.Info().Msg("TLS handshake completed successfully")
 
 	// Create reader for the TLS connection
@@ -607,8 +1201,21 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Info().Msg("TCP proxy handler completed")
 		}
 		return
-	} else if forwardConfig.Mode == ForwardModePAM {
-		if err := pam.HandlePAMProxy(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+	} else if forwardConfig.Mode == ForwardModePAM || forwardConfig.Mode == ForwardModePAMRDPBrowser {
+		// RDP only: prior bridge must fully tear down before the new one starts,
+		// else overlapping drains write non-monotonic elapsedMs to the recording.
+		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows {
+			g.evictExistingPAMSessions(forwardConfig.PAMConfig.SessionId, 5*time.Second)
+		}
+		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
+		touchSession := g.RegisterPAMSession(forwardConfig.PAMConfig.SessionId, sessionCancel, tlsConn)
+		defer func() {
+			sessionCancel()
+			g.DeregisterPAMSession(forwardConfig.PAMConfig.SessionId, tlsConn)
+		}()
+		forwardConfig.PAMConfig.OnActivity = touchSession
+		browserRDP := forwardConfig.Mode == ForwardModePAMRDPBrowser
+		if err := pam.HandlePAMProxy(sessionCtx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, browserRDP); err != nil {
 			if err.Error() == "unexpected EOF" {
 				log.Debug().Err(err).Msg("PAM proxy handler ended with unexpected connection termination")
 			} else {
@@ -617,7 +1224,7 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
-		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient); err != nil {
+		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
 		}
 		return
@@ -635,6 +1242,70 @@ func (g *Gateway) handleIncomingChannel(newChannel ssh.NewChannel) {
 			log.Error().Err(err).Msg("Ping handler ended with error")
 		} else {
 			log.Info().Msg("Ping handler completed")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeHealth {
+		log.Info().Msg("Starting health handler")
+		if err := handleHealth(g.ctx, tlsConn, reader, int(heartbeatInterval.Seconds())); err != nil {
+			log.Error().Err(err).Msg("Health handler ended with error")
+		} else {
+			log.Info().Msg("Health handler completed")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModePkcs11 {
+		log.Info().Msg("Starting PKCS#11 handler")
+		if err := servePkcs11OverTLS(g.ctx, tlsConn, reader, g.pkcs11Module); err != nil {
+			log.Error().Err(err).Msg("PKCS#11 handler ended with error")
+		} else {
+			log.Info().Msg("PKCS#11 handler completed")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeADCS {
+		log.Info().Msg("Starting ADCS/MS-WCCE handler")
+		if err := serveAdcsOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost); err != nil {
+			log.Error().Err(err).Msg("ADCS handler ended with error")
+		} else {
+			log.Info().Msg("ADCS handler completed")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeDiscovery {
+		// discovery (ssh-exec + port sweep) is platform-initiated only; reject user certs so they can't scan the network
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting discovery request from non-platform actor")
+			return
+		}
+		if err := serveDiscoveryOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Discovery handler ended with error")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeConnectionTest {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting connection-test request from non-platform actor")
+			return
+		}
+		if err := serveConnectionTestOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Connection-test handler ended with error")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeSQL {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting SQL request from non-platform actor")
+			return
+		}
+		if err := serveSQLOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("SQL handler ended with error")
+		}
+		return
+	} else if forwardConfig.Mode == ForwardModeWinRM {
+		if forwardConfig.ActorType != ActorTypePlatform {
+			log.Warn().Msg("Rejecting WinRM request from non-platform actor")
+			return
+		}
+		log.Info().Msg("Starting WinRM handler")
+		if err := serveWinrmOverTLS(g.ctx, tlsConn, reader, forwardConfig.TargetHost, forwardConfig.TargetPort); err != nil {
+			log.Error().Err(err).Msg("WinRM handler ended with error")
+		} else {
+			log.Info().Msg("WinRM handler completed")
 		}
 		return
 	}
@@ -671,6 +1342,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 		config.Mode = ForwardModePAM
 		return config, nil
 
+	case "infisical-pam-rdp-browser":
+		config.Mode = ForwardModePAMRDPBrowser
+		return config, nil
+
 	case "infisical-pam-session-cancellation":
 		config.Mode = ForwardModePAMCancellation
 		return config, nil
@@ -681,6 +1356,34 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-ping":
 		config.Mode = ForwardModePing
+		return config, nil
+
+	case "infisical-health":
+		config.Mode = ForwardModeHealth
+		return config, nil
+
+	case "infisical-pkcs11":
+		config.Mode = ForwardModePkcs11
+		return config, nil
+
+	case "infisical-discovery":
+		config.Mode = ForwardModeDiscovery
+		return config, nil
+
+	case "infisical-connection-test":
+		config.Mode = ForwardModeConnectionTest
+		return config, nil
+
+	case "infisical-adcs":
+		config.Mode = ForwardModeADCS
+		return config, nil
+
+	case "infisical-winrm":
+		config.Mode = ForwardModeWinRM
+		return config, nil
+
+	case "infisical-sql":
+		config.Mode = ForwardModeSQL
 		return config, nil
 
 	default:
@@ -769,6 +1472,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 				ExpiryTime:         clientCert.NotAfter,
 				CredentialsManager: g.pamCredentialsManager,
 				SessionUploader:    g.pamSessionUploader,
+				GetMongoProxy:      g.GetOrCreateMongoProxy,
 			}
 		}
 	}
@@ -801,6 +1505,8 @@ func (vc *virtualConnection) RemoteAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
 }
 
+// SSH channels have no deadlines, so the handshake timeout is inert on relay connections.
+// Implementing it here would impose that timeout on every relay channel.
 func (vc *virtualConnection) SetDeadline(t time.Time) error {
 	return nil
 }
@@ -843,4 +1549,26 @@ func (g *Gateway) renewCertificates() error {
 	}
 
 	return nil
+}
+
+func nextProtosForGateway(pkcs11Loaded bool) []string {
+	base := []string{
+		"infisical-http-proxy",
+		"infisical-tcp-proxy",
+		"infisical-health",
+		"infisical-ping",
+		"infisical-pam-proxy",
+		"infisical-pam-rdp-browser",
+		"infisical-pam-session-cancellation",
+		"infisical-pam-capabilities",
+		"infisical-adcs",
+		"infisical-discovery",
+		"infisical-connection-test",
+		"infisical-winrm",
+		"infisical-sql",
+	}
+	if pkcs11Loaded {
+		base = append(base, "infisical-pkcs11")
+	}
+	return base
 }

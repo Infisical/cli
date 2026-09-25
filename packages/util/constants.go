@@ -1,5 +1,11 @@
 package util
 
+import (
+	"fmt"
+
+	"github.com/Infisical/infisical-merge/packages/api"
+)
+
 const (
 	CONFIG_FILE_NAME                           = "infisical-config.json"
 	CONFIG_FOLDER_NAME                         = ".infisical"
@@ -7,8 +13,15 @@ const (
 	INFISICAL_DEFAULT_EU_URL                   = "https://eu.infisical.com"
 	INFISICAL_WORKSPACE_CONFIG_FILE_NAME       = ".infisical.json"
 	INFISICAL_TOKEN_NAME                       = "INFISICAL_TOKEN"
+	INFISICAL_PROJECT_ID_NAME                  = "INFISICAL_PROJECT_ID"
+	INFISICAL_ENVIRONMENT_NAME                 = "INFISICAL_ENVIRONMENT"
+	INFISICAL_SECRET_PATH_NAME                 = "INFISICAL_SECRET_PATH"
 	INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME = "INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN"
-	INFISICAL_VAULT_FILE_PASSPHRASE_ENV_NAME   = "INFISICAL_VAULT_FILE_PASSPHRASE" // This works because we've forked the keyring package and added support for this env variable. This explains why you won't find any occurrences of it in the CLI codebase.
+
+	// Agent proxy (connect)
+	INFISICAL_AGENT_PROXY_ADDRESS_NAME                         = "INFISICAL_AGENT_PROXY_ADDRESS"
+	INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME = "INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS"
+	INFISICAL_VAULT_FILE_PASSPHRASE_ENV_NAME                   = "INFISICAL_VAULT_FILE_PASSPHRASE" // This works because we've forked the keyring package and added support for this env variable. This explains why you won't find any occurrences of it in the CLI codebase.
 
 	INFISICAL_BOOTSTRAP_EMAIL_NAME        = "INFISICAL_ADMIN_EMAIL"
 	INFISICAL_BOOTSTRAP_PASSWORD_NAME     = "INFISICAL_ADMIN_PASSWORD"
@@ -46,9 +59,18 @@ const (
 
 	INFISICAL_GATEWAY_TOKEN_NAME_LEGACY = "TOKEN" // backwards compatibility with gateway helm chart, where token was the only supported auth method
 
+	// Selects the login profile for a single shell/invocation without changing
+	// the global default (mirrors AWS_PROFILE / OP_ACCOUNT semantics).
+	INFISICAL_PROFILE_ENV_NAME = "INFISICAL_PROFILE"
+
+	// Selects the organization for a single shell/invocation without changing
+	// the profile's default organization (mirrors kubectl's namespace scoping).
+	INFISICAL_ORG_ENV_NAME = "INFISICAL_ORG"
+
 	// Generic env variable used for auth methods that require a machine identity ID
 	INFISICAL_MACHINE_IDENTITY_ID_NAME = "INFISICAL_MACHINE_IDENTITY_ID"
-	INFISICAL_API_URL_ENV_NAME         = "INFISICAL_API_URL"
+	INFISICAL_DOMAIN_ENV_NAME          = "INFISICAL_DOMAIN"
+	LEGACY_INFISICAL_API_URL_ENV_NAME  = "INFISICAL_API_URL" // superseded by INFISICAL_DOMAIN; kept for backwards compatibility
 
 	SECRET_TYPE_PERSONAL      = "personal"
 	SECRET_TYPE_SHARED        = "shared"
@@ -73,3 +95,7 @@ const (
 var (
 	CLI_VERSION = "devel"
 )
+
+func init() {
+	api.USER_AGENT = fmt.Sprintf("cli/%s", CLI_VERSION)
+}

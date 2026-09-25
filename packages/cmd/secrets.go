@@ -18,6 +18,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// maskSecretValue redacts a secret value so it is not echoed to stdout.
+// The value has just been provided by the caller, so there is no need to
+// print it back; doing so risks leaking it into logs, terminals, or agents.
+func maskSecretValue(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "******"
+}
+
 var secretsCmd = &cobra.Command{
 	Example:               `infisical secrets`,
 	Short:                 "Used to create, read update and delete secrets",
@@ -38,7 +48,7 @@ var secretsCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -84,13 +94,14 @@ var secretsCmd = &cobra.Command{
 		}
 
 		request := models.GetAllSecretsParameters{
-			Environment:            environmentName,
-			WorkspaceId:            projectId,
-			TagSlugs:               tagSlugs,
-			SecretsPath:            secretsPath,
-			IncludeImport:          includeImports,
-			Recursive:              recursive,
-			ExpandSecretReferences: shouldExpandSecrets,
+			Environment:              environmentName,
+			WorkspaceId:              projectId,
+			TagSlugs:                 tagSlugs,
+			SecretsPath:              secretsPath,
+			IncludeImport:            includeImports,
+			Recursive:                recursive,
+			ExpandSecretReferences:   shouldExpandSecrets,
+			IncludePersonalOverrides: secretOverriding,
 		}
 
 		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -102,12 +113,6 @@ var secretsCmd = &cobra.Command{
 		secrets, err := util.GetAllEnvironmentVariables(request, "")
 		if err != nil {
 			util.HandleError(err)
-		}
-
-		if secretOverriding {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-		} else {
-			secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 		}
 
 		// Sort the secrets by key so we can create a consistent output
@@ -191,7 +196,7 @@ var secretsSetCmd = &cobra.Command{
 			}
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -214,6 +219,16 @@ var secretsSetCmd = &cobra.Command{
 		}
 
 		outputFormat, err := cmd.Flags().GetString("output")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag")
+		}
+
+		tags, err := cmd.Flags().GetStringArray("tag")
+		if err != nil {
+			util.HandleError(err, `Unable to parse "tag" flag`)
+		}
+
+		showValues, err := cmd.Flags().GetBool("show-values")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -253,7 +268,7 @@ var secretsSetCmd = &cobra.Command{
 				util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 			}
 
-			secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file)
+			secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 			if err != nil {
 				util.HandleError(err, "Unable to set secrets")
@@ -280,7 +295,7 @@ var secretsSetCmd = &cobra.Command{
 			secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
 				Type:  "",
 				Token: loggedInUserDetails.UserCredentials.JTWToken,
-			}, file)
+			}, file, tags)
 
 			if err != nil {
 				util.HandleError(err, "Unable to set secrets")
@@ -291,7 +306,11 @@ var secretsSetCmd = &cobra.Command{
 		headers := [...]string{"SECRET NAME", "SECRET VALUE", "STATUS"}
 		rows := [][3]string{}
 		for _, secretOperation := range secretOperations {
-			rows = append(rows, [...]string{secretOperation.SecretKey, secretOperation.SecretValue, secretOperation.SecretOperation})
+			secretValue := secretOperation.SecretValue
+			if !showValues {
+				secretValue = maskSecretValue(secretValue)
+			}
+			rows = append(rows, [...]string{secretOperation.SecretKey, secretValue, secretOperation.SecretOperation})
 		}
 
 		if outputFormat != "" {
@@ -341,7 +360,7 @@ var secretsDeleteCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		projectId, err := cmd.Flags().GetString("projectId")
+		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -454,7 +473,7 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -500,13 +519,14 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 	}
 
 	request := models.GetAllSecretsParameters{
-		Environment:            environmentName,
-		WorkspaceId:            projectId,
-		TagSlugs:               tagSlugs,
-		SecretsPath:            secretsPath,
-		IncludeImport:          includeImports,
-		Recursive:              recursive,
-		ExpandSecretReferences: shouldExpand,
+		Environment:              environmentName,
+		WorkspaceId:              projectId,
+		TagSlugs:                 tagSlugs,
+		SecretsPath:              secretsPath,
+		IncludeImport:            includeImports,
+		Recursive:                recursive,
+		ExpandSecretReferences:   shouldExpand,
+		IncludePersonalOverrides: secretOverriding,
 	}
 
 	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
@@ -518,12 +538,6 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 	secrets, err := util.GetAllEnvironmentVariables(request, "")
 	if err != nil {
 		util.HandleError(err, "To fetch all secrets")
-	}
-
-	if secretOverriding {
-		secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_PERSONAL)
-	} else {
-		secrets = util.OverrideSecrets(secrets, util.SECRET_TYPE_SHARED)
 	}
 
 	requestedSecrets := []models.SingleEnvironmentVariable{}
@@ -597,7 +611,7 @@ func generateExampleEnv(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	projectId, err := cmd.Flags().GetString("projectId")
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
 	}
@@ -835,6 +849,8 @@ func init() {
 	secretsSetCmd.Flags().String("path", "/", "set secrets within a folder path")
 	secretsSetCmd.Flags().String("type", util.SECRET_TYPE_SHARED, "the type of secret to create: personal or shared")
 	secretsSetCmd.Flags().String("file", "", "Load secrets from the specified file. File format: .env or YAML (comments: # or //). This option is mutually exclusive with command-line secrets arguments.")
+	secretsSetCmd.Flags().StringArray("tag", []string{}, "Tags to associate with the secret. Can be specified multiple times (e.g. --tag backend --tag production). When updating an existing secret, the provided tags will replace any existing tags")
+	secretsSetCmd.Flags().Bool("show-values", false, "reveal secret values in the output table instead of masking them")
 	util.AddOutputFlagsToCmd(secretsSetCmd, "The output to format the secrets in.")
 
 	secretsDeleteCmd.Flags().String("type", "personal", "the type of secret to delete: personal or shared  (default: personal)")

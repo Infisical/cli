@@ -7,6 +7,11 @@
   <b>The official Infisical CLI</b>: Inject secrets into applications and manage your Infisical infrastructure.
 </p>
 
+> [!IMPORTANT]
+> **The Infisical CLI Linux package repository has moved off Cloudsmith.** To keep up with download volume, we migrated the Linux package repository to our own host at `artifacts-cli.infisical.com`. Cloudsmith stopped being served on **September 16th, 2026**, so installs and updates from the old URL will fail.
+>
+> Every release, including all older versions, is available on the new host. If you're on an existing setup, you don't need to change anything else, just repoint your machine to the new artifact URL by following the [migration steps](https://infisical.com/docs/cli/cloudsmith-migration).
+
 ## Introduction
 
 The **[Infisical CLI](https://infisical.com/docs/cli/overview)** is a powerful command-line tool for secret management that allows you to:
@@ -116,7 +121,7 @@ The Infisical CLI is available under the [MIT License](LICENSE).
 
 ## Security
 
-Please do not file GitHub issues for security vulnerabilities. Instead, contact us at security@infisical.com.
+Please do not file GitHub issues or post on public forums for security vulnerabilities, as they are public. Report them privately through our vulnerability disclosure policy at <https://infisical.com/vulnerability-disclosure>. Scope, safe harbour and disclosure terms are all set out there. See also [SECURITY.md](./SECURITY.md).
 
 ---
 

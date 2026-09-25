@@ -1,25 +1,3 @@
-// MIT License
-
-// Copyright (c) 2019 Zachary Rice
-
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
 package detect
 
 import (
@@ -28,38 +6,20 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/Infisical/infisical-merge/detect/cmd/scm"
 	"github.com/Infisical/infisical-merge/detect/logging"
 	"github.com/Infisical/infisical-merge/detect/report"
-
-	"github.com/charmbracelet/lipgloss"
-	"github.com/gitleaks/go-gitdiff/gitdiff"
+	"github.com/Infisical/infisical-merge/detect/sources"
+	"github.com/Infisical/infisical-merge/detect/sources/scm"
 )
 
-// augmentGitFinding updates the start and end line numbers of a finding to include the
-// delta from the git diff
-func augmentGitFinding(remote *RemoteInfo, finding report.Finding, textFragment *gitdiff.TextFragment, f *gitdiff.File) report.Finding {
-	if !strings.HasPrefix(finding.Match, "file detected") {
-		finding.StartLine += int(textFragment.NewPosition)
-		finding.EndLine += int(textFragment.NewPosition)
-	}
-
-	if f.PatchHeader != nil {
-		finding.Commit = f.PatchHeader.SHA
-		if f.PatchHeader.Author != nil {
-			finding.Author = f.PatchHeader.Author.Name
-			finding.Email = f.PatchHeader.Author.Email
-		}
-		finding.Date = f.PatchHeader.AuthorDate.UTC().Format(time.RFC3339)
-		finding.Message = f.PatchHeader.Message()
-		// Results from `git diff` shouldn't have a link.
-		if finding.Commit != "" {
-			finding.Link = createScmLink(remote.Platform, remote.Url, finding)
-		}
-	}
-	return finding
+// samePath reports whether two file paths refer to the same location, tolerating
+// OS separator differences. The file source normalizes fragment paths to forward
+// slashes (filepath.ToSlash), whereas config/baseline paths keep the native
+// separator, so a raw == comparison misses on Windows and the config or baseline
+// file ends up being scanned against itself.
+func samePath(a, b string) bool {
+	return filepath.ToSlash(filepath.Clean(a)) == filepath.ToSlash(filepath.Clean(b))
 }
 
 var linkCleaner = strings.NewReplacer(
@@ -67,20 +27,25 @@ var linkCleaner = strings.NewReplacer(
 	"%", "%25",
 )
 
-func createScmLink(scmPlatform scm.Platform, remoteUrl string, finding report.Finding) string {
-	if scmPlatform == scm.UnknownPlatform || scmPlatform == scm.NoPlatform {
+func createScmLink(platform, remoteURL string, finding report.Finding) string {
+	p, _ := scm.PlatformFromString(platform)
+	commitSha := finding.Attr(sources.AttrGitSHA)
+	path := finding.Attr(sources.AttrPath)
+	if p == scm.UnknownPlatform || p == scm.NoPlatform || commitSha == "" || path == "" {
 		return ""
 	}
 
 	// Clean the path.
-	var (
-		filePath = linkCleaner.Replace(finding.File)
-		ext      = strings.ToLower(filepath.Ext(filePath))
-	)
+	filePath, _, hasInnerPath := strings.Cut(path, sources.InnerPathSeparator)
+	filePath = linkCleaner.Replace(filePath)
 
-	switch scmPlatform {
+	switch p {
 	case scm.GitHubPlatform:
-		link := fmt.Sprintf("%s/blob/%s/%s", remoteUrl, finding.Commit, filePath)
+		link := fmt.Sprintf("%s/blob/%s/%s", remoteURL, commitSha, filePath)
+		if hasInnerPath {
+			return link
+		}
+		ext := strings.ToLower(filepath.Ext(filePath))
 		if ext == ".ipynb" || ext == ".md" {
 			link += "?plain=1"
 		}
@@ -92,7 +57,10 @@ func createScmLink(scmPlatform scm.Platform, remoteUrl string, finding report.Fi
 		}
 		return link
 	case scm.GitLabPlatform:
-		link := fmt.Sprintf("%s/blob/%s/%s", remoteUrl, finding.Commit, filePath)
+		link := fmt.Sprintf("%s/blob/%s/%s", remoteURL, commitSha, filePath)
+		if hasInnerPath {
+			return link
+		}
 		if finding.StartLine != 0 {
 			link += fmt.Sprintf("#L%d", finding.StartLine)
 		}
@@ -101,8 +69,11 @@ func createScmLink(scmPlatform scm.Platform, remoteUrl string, finding report.Fi
 		}
 		return link
 	case scm.AzureDevOpsPlatform:
-		link := fmt.Sprintf("%s/commit/%s?path=/%s", remoteUrl, finding.Commit, filePath)
+		link := fmt.Sprintf("%s/commit/%s?path=/%s", remoteURL, commitSha, filePath)
 		// Add line information if applicable
+		if hasInnerPath {
+			return link
+		}
 		if finding.StartLine != 0 {
 			link += fmt.Sprintf("&line=%d", finding.StartLine)
 		}
@@ -112,8 +83,27 @@ func createScmLink(scmPlatform scm.Platform, remoteUrl string, finding report.Fi
 		// This is a bit dirty, but Azure DevOps does not highlight the line when the lineStartColumn and lineEndColumn are not provided
 		link += "&lineStartColumn=1&lineEndColumn=10000000&type=2&lineStyle=plain&_a=files"
 		return link
-	case scm.BitBucketPlatform:
-		link := fmt.Sprintf("%s/src/%s/%s", remoteUrl, finding.Commit, filePath)
+	case scm.GiteaPlatform:
+		link := fmt.Sprintf("%s/src/commit/%s/%s", remoteURL, commitSha, filePath)
+		if hasInnerPath {
+			return link
+		}
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if ext == ".ipynb" || ext == ".md" {
+			link += "?display=source"
+		}
+		if finding.StartLine != 0 {
+			link += fmt.Sprintf("#L%d", finding.StartLine)
+		}
+		if finding.EndLine != finding.StartLine {
+			link += fmt.Sprintf("-L%d", finding.EndLine)
+		}
+		return link
+	case scm.BitbucketPlatform:
+		link := fmt.Sprintf("%s/src/%s/%s", remoteURL, commitSha, filePath)
+		if hasInnerPath {
+			return link
+		}
 		if finding.StartLine != 0 {
 			link += fmt.Sprintf("#lines-%d", finding.StartLine)
 		}
@@ -152,30 +142,33 @@ func shannonEntropy(data string) (entropy float64) {
 }
 
 // filter will dedupe and redact findings
-func filter(findings []report.Finding, redact uint) []report.Finding {
+func filter(findings []report.Finding) []report.Finding {
+	// Collect every component finding's (rule, line, secret) identity so the
+	// corresponding top-level finding can be suppressed.
+	componentSet := make(map[string]struct{})
+	for _, f := range findings {
+		for _, set := range f.ComponentSets {
+			for _, comp := range set.Components {
+				componentSet[fmt.Sprintf("%s:%d:%d:%d:%d:%s", comp.RuleID, comp.StartLine, comp.StartColumn, comp.EndLine, comp.EndColumn, comp.Secret)] = struct{}{}
+			}
+		}
+	}
+
 	var retFindings []report.Finding
 	for _, f := range findings {
 		include := true
-		if strings.Contains(strings.ToLower(f.RuleID), "generic") {
-			for _, fPrime := range findings {
-				if f.StartLine == fPrime.StartLine &&
-					f.Commit == fPrime.Commit &&
-					f.RuleID != fPrime.RuleID &&
-					strings.Contains(fPrime.Secret, f.Secret) &&
-					!strings.Contains(strings.ToLower(fPrime.RuleID), "generic") {
 
-					genericMatch := strings.Replace(f.Match, f.Secret, "REDACTED", -1)
-					betterMatch := strings.Replace(fPrime.Match, fPrime.Secret, "REDACTED", -1)
-					logging.Trace().Msgf("skipping %s finding (%s), %s rule takes precedence (%s)", f.RuleID, genericMatch, fPrime.RuleID, betterMatch)
-					include = false
-					break
-				}
-			}
+		// Skip findings already surfaced as the same rule's component of a
+		// composite finding in this batch.
+		_, isComponent := componentSet[fmt.Sprintf("%s:%d:%d:%d:%d:%s", f.RuleID, f.StartLine, f.StartColumn, f.EndLine, f.EndColumn, f.Secret)]
+		if isComponent {
+			redactedMatch := strings.ReplaceAll(f.Match, f.Secret, "REDACTED")
+			logging.Trace().Msgf("skipping %s finding (%s), already a component of another finding", f.RuleID, redactedMatch)
+			include = false
+		} else if isSuppressedByHigherSpecificityFinding(f, findings) {
+			include = false
 		}
 
-		if redact > 0 {
-			f.Redact(redact)
-		}
 		if include {
 			retFindings = append(retFindings, f)
 		}
@@ -183,98 +176,77 @@ func filter(findings []report.Finding, redact uint) []report.Finding {
 	return retFindings
 }
 
-func printFinding(f report.Finding, noColor bool) {
-	// trim all whitespace and tabs
-	f.Line = strings.TrimSpace(f.Line)
-	f.Secret = strings.TrimSpace(f.Secret)
-	f.Match = strings.TrimSpace(f.Match)
-
-	isFileMatch := strings.HasPrefix(f.Match, "file detected:")
-	skipColor := noColor
-	finding := ""
-	var secret lipgloss.Style
-
-	// Matches from filenames do not have a |line| or |secret|
-	if !isFileMatch {
-		matchInLineIDX := strings.Index(f.Line, f.Match)
-		secretInMatchIdx := strings.Index(f.Match, f.Secret)
-
-		skipColor = false
-
-		if matchInLineIDX == -1 || noColor {
-			skipColor = true
-			matchInLineIDX = 0
+func isSuppressedByHigherSpecificityFinding(f report.Finding, findings []report.Finding) bool {
+	for _, fPrime := range findings {
+		if f.StartLine == fPrime.StartLine &&
+			f.Attributes[sources.AttrGitSHA] == fPrime.Attributes[sources.AttrGitSHA] &&
+			f.RuleID != fPrime.RuleID &&
+			strings.Contains(fPrime.Secret, f.Secret) &&
+			fPrime.RuleSpecificity > f.RuleSpecificity {
+			genericMatch := strings.ReplaceAll(f.Match, f.Secret, "REDACTED")
+			betterMatch := strings.ReplaceAll(fPrime.Match, fPrime.Secret, "REDACTED")
+			logging.Debug().Msgf("skipping %s finding (%s), %s rule takes precedence (%s)", f.RuleID, genericMatch, fPrime.RuleID, betterMatch)
+			return true
 		}
-
-		start := f.Line[0:matchInLineIDX]
-		startMatchIdx := 0
-		if matchInLineIDX > 20 {
-			startMatchIdx = matchInLineIDX - 20
-			start = "..." + f.Line[startMatchIdx:matchInLineIDX]
+		for _, set := range fPrime.ComponentSets {
+			for _, comp := range set.Components {
+				if f.RuleID != fPrime.RuleID &&
+					f.StartLine == comp.StartLine &&
+					f.RuleID != comp.RuleID &&
+					strings.Contains(comp.Secret, f.Secret) &&
+					comp.RuleSpecificity > f.RuleSpecificity {
+					genericMatch := strings.ReplaceAll(f.Match, f.Secret, "REDACTED")
+					betterMatch := strings.ReplaceAll(comp.Match, comp.Secret, "REDACTED")
+					logging.Trace().Msgf("skipping %s finding (%s), %s component takes precedence (%s)", f.RuleID, genericMatch, comp.RuleID, betterMatch)
+					return true
+				}
+			}
 		}
-
-		matchBeginning := lipgloss.NewStyle().SetString(f.Match[0:secretInMatchIdx]).Foreground(lipgloss.Color("#f5d445"))
-		secret = lipgloss.NewStyle().SetString(f.Secret).
-			Bold(true).
-			Italic(true).
-			Foreground(lipgloss.Color("#f05c07"))
-		matchEnd := lipgloss.NewStyle().SetString(f.Match[secretInMatchIdx+len(f.Secret):]).Foreground(lipgloss.Color("#f5d445"))
-
-		lineEndIdx := matchInLineIDX + len(f.Match)
-		if len(f.Line)-1 <= lineEndIdx {
-			lineEndIdx = len(f.Line)
-		}
-
-		lineEnd := f.Line[lineEndIdx:]
-
-		if len(f.Secret) > 100 {
-			secret = lipgloss.NewStyle().SetString(f.Secret[0:100] + "...").
-				Bold(true).
-				Italic(true).
-				Foreground(lipgloss.Color("#f05c07"))
-		}
-		if len(lineEnd) > 20 {
-			lineEnd = lineEnd[0:20] + "..."
-		}
-
-		finding = fmt.Sprintf("%s%s%s%s%s\n", strings.TrimPrefix(strings.TrimLeft(start, " "), "\n"), matchBeginning, secret, matchEnd, lineEnd)
 	}
-
-	if skipColor || isFileMatch {
-		fmt.Printf("%-12s %s\n", "Finding:", f.Match)
-		fmt.Printf("%-12s %s\n", "Secret:", f.Secret)
-	} else {
-		fmt.Printf("%-12s %s", "Finding:", finding)
-		fmt.Printf("%-12s %s\n", "Secret:", secret)
-	}
-
-	fmt.Printf("%-12s %s\n", "RuleID:", f.RuleID)
-	fmt.Printf("%-12s %f\n", "Entropy:", f.Entropy)
-	if f.File == "" {
-		fmt.Println("")
-		return
-	}
-	if len(f.Tags) > 0 {
-		fmt.Printf("%-12s %s\n", "Tags:", f.Tags)
-	}
-	fmt.Printf("%-12s %s\n", "File:", f.File)
-	fmt.Printf("%-12s %d\n", "Line:", f.StartLine)
-	if f.Commit == "" {
-		fmt.Printf("%-12s %s\n", "Fingerprint:", f.Fingerprint)
-		fmt.Println("")
-		return
-	}
-	fmt.Printf("%-12s %s\n", "Commit:", f.Commit)
-	fmt.Printf("%-12s %s\n", "Author:", f.Author)
-	fmt.Printf("%-12s %s\n", "Email:", f.Email)
-	fmt.Printf("%-12s %s\n", "Date:", f.Date)
-	fmt.Printf("%-12s %s\n", "Fingerprint:", f.Fingerprint)
-	if f.Link != "" {
-		fmt.Printf("%-12s %s\n", "Link:", f.Link)
-	}
-	fmt.Println("")
+	return false
 }
 
-func isWhitespace(ch byte) bool {
-	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+func printFinding(f report.Finding, noColor bool, redact uint, legacyPrint bool) {
+	if legacyPrint {
+		f.PrintLegacy(noColor, redact)
+		return
+	}
+	f.Print(noColor, redact)
+}
+
+// stripEmptyMeta removes keys whose value is an empty string or nil.
+func stripEmptyMeta(m map[string]any) map[string]any {
+	if len(m) == 0 {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		if v == nil {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// containsAllowSignature checks if the line contains any of the allow signatures
+func containsAllowSignature(line string) bool {
+	for _, sig := range allowSignatures {
+		if strings.Contains(line, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+func RedactFindings(findings []report.Finding, percent uint) {
+	if percent == 0 {
+		return
+	}
+	for i := range findings {
+		findings[i].Redact(percent)
+	}
 }

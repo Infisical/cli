@@ -31,13 +31,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4.3.0
         with:
-          go-version: "1.21.x"
+          go-version: "1.25.14"
       - name: Install dependencies
         run: go get .
+      - name: Race-check the Agent Vault packages
+        run: go test -race -count=1 ./packages/agentvault/ ./packages/api/
       - name: Test with the Go CLI
         env:
           CLI_TESTS_UA_CLIENT_ID: ${{ secrets.CLI_TESTS_UA_CLIENT_ID }}

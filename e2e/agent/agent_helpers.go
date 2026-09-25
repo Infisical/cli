@@ -25,71 +25,71 @@ import (
 )
 
 type CertAgentTestHelper struct {
-	T              *testing.T
-	ProjectID      string
-	ProjectSlug    string
-	ProfileSlug    string
-	ProfileID      string
-	PolicyID       string
-	CaID           string
-	AdminToken     string
-	InfisicalURL   string
-	TempDir        string
-	ClientID       string
-	ClientSecret   string
-	IdentityClient *client.ClientWithResponses
-	AdminClient    *client.ClientWithResponses
+	T               *testing.T
+	ProjectID       string
+	ProjectSlug     string
+	ProfileSlug     string
+	ProfileID       string
+	PolicyID        string
+	CaID            string
+	ApplicationID   string
+	ApplicationName string
+	AdminToken      string
+	IdentityToken   string
+	InfisicalURL    string
+	TempDir         string
+	ClientID        string
+	ClientSecret    string
+	IdentityClient  *client.ClientWithResponses
+	AdminClient     *client.ClientWithResponses
+}
+
+// jsonBodyWith marshals a request body and merges in extra top-level fields. projectId,
+// enrollmentType and apiConfig are still accepted by the cert-manager routes but are
+// openApiHidden(), so the generated client has no fields for them.
+func jsonBodyWith(t *testing.T, body interface{}, extra map[string]interface{}) io.Reader {
+	encoded, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	var merged map[string]interface{}
+	require.NoError(t, json.Unmarshal(encoded, &merged))
+	for k, v := range extra {
+		merged[k] = v
+	}
+
+	out, err := json.Marshal(merged)
+	require.NoError(t, err)
+	return bytes.NewReader(out)
 }
 
 func (h *CertAgentTestHelper) CreateInternalCA() {
 	t := h.T
 	ctx := context.Background()
 
-	friendlyName := "Test Root CA"
-	commonName := "Test Root CA"
-	organization := "Test Org"
-	ou := ""
-	country := "US"
-	province := ""
-	locality := ""
-	maxPathLength := float32(-1)
-	notAfter := time.Now().AddDate(10, 0, 0).UTC().Format(time.RFC3339)
-
-	resp, err := h.IdentityClient.CreateInternalCertificateAuthorityV1WithResponse(ctx, client.CreateInternalCertificateAuthorityV1JSONRequestBody{
-		Name:      "test-root-ca",
-		ProjectId: uuid.MustParse(h.ProjectID),
-		Status:    client.Active,
-		Configuration: struct {
-			ActiveCaCertId *openapi_types.UUID                                                          `json:"activeCaCertId"`
-			CommonName     *string                                                                      `json:"commonName,omitempty"`
-			Country        *string                                                                      `json:"country,omitempty"`
-			Dn             *string                                                                      `json:"dn"`
-			FriendlyName   *string                                                                      `json:"friendlyName,omitempty"`
-			KeyAlgorithm   client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithm `json:"keyAlgorithm"`
-			Locality       *string                                                                      `json:"locality,omitempty"`
-			MaxPathLength  *float32                                                                     `json:"maxPathLength"`
-			NotAfter       *string                                                                      `json:"notAfter,omitempty"`
-			NotBefore      *string                                                                      `json:"notBefore,omitempty"`
-			Organization   *string                                                                      `json:"organization,omitempty"`
-			Ou             *string                                                                      `json:"ou,omitempty"`
-			ParentCaId     *openapi_types.UUID                                                          `json:"parentCaId"`
-			Province       *string                                                                      `json:"province,omitempty"`
-			SerialNumber   *string                                                                      `json:"serialNumber"`
-			Type           client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationType         `json:"type"`
-		}{
-			Type:          client.Root,
-			FriendlyName:  &friendlyName,
-			CommonName:    &commonName,
-			Organization:  &organization,
-			Ou:            &ou,
-			Country:       &country,
-			Province:      &province,
-			Locality:      &locality,
-			MaxPathLength: &maxPathLength,
-			KeyAlgorithm:  client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA2048,
-			NotAfter:      &notAfter,
+	// A map, not the generated struct: configuration is an inline anonymous struct, so a literal
+	// has to restate every field and breaks whenever the CA schema gains one.
+	body := map[string]interface{}{
+		"name":      "test-root-ca",
+		"projectId": h.ProjectID,
+		"status":    string(client.Active),
+		"configuration": map[string]interface{}{
+			"type":          string(client.Root),
+			"friendlyName":  "Test Root CA",
+			"commonName":    "Test Root CA",
+			"organization":  "Test Org",
+			"ou":            "",
+			"country":       "US",
+			"province":      "",
+			"locality":      "",
+			"maxPathLength": -1,
+			"keyAlgorithm":  string(client.CreateInternalCertificateAuthorityV1JSONBodyConfigurationKeyAlgorithmRSA2048),
+			"notAfter":      time.Now().AddDate(10, 0, 0).UTC().Format(time.RFC3339),
 		},
-	})
+	}
+
+	resp, err := h.IdentityClient.CreateInternalCertificateAuthorityV1WithBodyWithResponse(
+		ctx, "application/json", jsonBodyWith(t, body, nil),
+	)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create internal CA: %s", string(resp.Body))
 	require.NotNil(t, resp.JSON200)
@@ -148,8 +148,7 @@ func (h *CertAgentTestHelper) CreateCertificatePolicy(name string, opts ...Certi
 
 	allAllowed := []string{"*"}
 	reqBody := client.CreateCertificatePolicyJSONRequestBody{
-		ProjectId: h.ProjectID,
-		Name:      name,
+		Name: name,
 		Subject: &[]struct {
 			Allowed  *[]string                                         `json:"allowed,omitempty"`
 			Denied   *[]string                                         `json:"denied,omitempty"`
@@ -219,7 +218,10 @@ func (h *CertAgentTestHelper) CreateCertificatePolicy(name string, opts ...Certi
 		}
 	}
 
-	resp, err := h.IdentityClient.CreateCertificatePolicyWithResponse(ctx, reqBody)
+	resp, err := h.IdentityClient.CreateCertificatePolicyWithBodyWithResponse(
+		ctx, "application/json",
+		jsonBodyWith(t, reqBody, map[string]interface{}{"projectId": h.ProjectID}),
+	)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create certificate policy: %s", string(resp.Body))
 	require.NotNil(t, resp.JSON200)
@@ -235,20 +237,21 @@ func (h *CertAgentTestHelper) CreateCertificateProfile(slug string) {
 	autoRenew := false
 	issuerType := client.CreateCertificateProfileJSONBodyIssuerType("ca")
 
-	resp, err := h.IdentityClient.CreateCertificateProfileWithResponse(ctx, client.CreateCertificateProfileJSONRequestBody{
-		ProjectId:           h.ProjectID,
+	body := client.CreateCertificateProfileJSONRequestBody{
 		CaId:                &caID,
 		CertificatePolicyId: uuid.MustParse(h.PolicyID),
 		Slug:                slug,
-		EnrollmentType:      client.CreateCertificateProfileJSONBodyEnrollmentType("api"),
 		IssuerType:          &issuerType,
-		ApiConfig: &struct {
-			AutoRenew       *bool    `json:"autoRenew,omitempty"`
-			RenewBeforeDays *float32 `json:"renewBeforeDays,omitempty"`
-		}{
-			AutoRenew: &autoRenew,
-		},
-	})
+	}
+
+	resp, err := h.IdentityClient.CreateCertificateProfileWithBodyWithResponse(
+		ctx, "application/json",
+		jsonBodyWith(t, body, map[string]interface{}{
+			"projectId":      h.ProjectID,
+			"enrollmentType": "api",
+			"apiConfig":      map[string]interface{}{"autoRenew": autoRenew},
+		}),
+	)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create certificate profile: %s", string(resp.Body))
 	require.NotNil(t, resp.JSON200)
@@ -290,14 +293,101 @@ func (h *CertAgentTestHelper) SetupUniversalAuth(identityID string) {
 	h.ClientSecret = csResp.JSON200.ClientSecret
 }
 
+func (h *CertAgentTestHelper) doRequestWithToken(method, path string, body interface{}, token string) []byte {
+	t := h.T
+
+	var bodyReader io.Reader
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		require.NoError(t, err)
+		bodyReader = bytes.NewReader(jsonBody)
+	}
+
+	url := h.InfisicalURL + "/api" + path
+	req, err := http.NewRequest(method, url, bodyReader)
+	require.NoError(t, err)
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.True(t, resp.StatusCode >= 200 && resp.StatusCode < 300,
+		"API %s %s failed with status %d: %s", method, path, resp.StatusCode, string(respBody))
+
+	return respBody
+}
+
+func (h *CertAgentTestHelper) SetActiveCertManagerProject() {
+	h.doRequestWithToken(
+		"POST",
+		"/v1/cert-manager/instance/active-project",
+		map[string]string{"projectId": h.ProjectID},
+		h.AdminToken,
+	)
+}
+
+func (h *CertAgentTestHelper) CreateApplicationWithProfile(name string) {
+	t := h.T
+
+	respBody := h.doRequestWithToken(
+		"POST",
+		"/v1/cert-manager/applications",
+		map[string]interface{}{
+			"name":       name,
+			"profileIds": []string{h.ProfileID},
+		},
+		h.IdentityToken,
+	)
+
+	var parsed struct {
+		Application struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"application"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotEmpty(t, parsed.Application.ID, "create application returned empty id: %s", string(respBody))
+
+	h.ApplicationID = parsed.Application.ID
+	h.ApplicationName = parsed.Application.Name
+
+	h.doRequestWithToken(
+		"PUT",
+		fmt.Sprintf("/v1/cert-manager/applications/%s/profiles/%s/enrollment/api", h.ApplicationID, h.ProfileID),
+		map[string]interface{}{"autoRenew": false},
+		h.IdentityToken,
+	)
+}
+
+func (h *CertAgentTestHelper) AttachProfileWithApiEnrollment(profileID string) {
+	h.doRequestWithToken(
+		"POST",
+		fmt.Sprintf("/v1/cert-manager/applications/%s/profiles", h.ApplicationID),
+		map[string]interface{}{"profileIds": []string{profileID}},
+		h.IdentityToken,
+	)
+	h.doRequestWithToken(
+		"PUT",
+		fmt.Sprintf("/v1/cert-manager/applications/%s/profiles/%s/enrollment/api", h.ApplicationID, profileID),
+		map[string]interface{}{"autoRenew": false},
+		h.IdentityToken,
+	)
+}
+
 func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string) {
 	t := h.T
 	ctx := context.Background()
 
-	resp, err := h.IdentityClient.CreateAcmeCertificateAuthorityV1WithResponse(ctx, client.CreateAcmeCertificateAuthorityV1JSONRequestBody{
-		Name:      "test-acme-ca",
-		ProjectId: uuid.MustParse(h.ProjectID),
-		Status:    client.CreateAcmeCertificateAuthorityV1JSONBodyStatusActive,
+	body := client.CreateAcmeCertificateAuthorityV1JSONRequestBody{
+		Name:   "test-acme-ca",
+		Status: client.CreateAcmeCertificateAuthorityV1JSONBodyStatusActive,
 		Configuration: struct {
 			AccountEmail       string             `json:"accountEmail"`
 			DirectoryUrl       string             `json:"directoryUrl"`
@@ -306,8 +396,9 @@ func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string)
 				HostedZoneId string                                                                                `json:"hostedZoneId"`
 				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
-			EabHmacKey *string `json:"eabHmacKey,omitempty"`
-			EabKid     *string `json:"eabKid,omitempty"`
+			DnsResolver *string `json:"dnsResolver,omitempty"`
+			EabHmacKey  *string `json:"eabHmacKey,omitempty"`
+			EabKid      *string `json:"eabKid,omitempty"`
 		}{
 			DnsAppConnectionId: uuid.MustParse(dnsConnectionID),
 			DnsProviderConfig: struct {
@@ -320,7 +411,12 @@ func (h *CertAgentTestHelper) CreateAcmeCA(dnsConnectionID, directoryUrl string)
 			DirectoryUrl: directoryUrl,
 			AccountEmail: "test@example.com",
 		},
-	})
+	}
+
+	resp, err := h.IdentityClient.CreateAcmeCertificateAuthorityV1WithBodyWithResponse(
+		ctx, "application/json",
+		jsonBodyWith(t, body, map[string]interface{}{"projectId": h.ProjectID}),
+	)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode(), "Failed to create ACME CA: %s", string(resp.Body))
 	require.NotNil(t, resp.JSON200)
@@ -372,10 +468,9 @@ func (h *CertAgentTestHelper) CreateAcmeCARaw(name, dnsConnectionID, directoryUr
 	t := h.T
 	ctx := context.Background()
 
-	resp, err := h.IdentityClient.CreateAcmeCertificateAuthorityV1WithResponse(ctx, client.CreateAcmeCertificateAuthorityV1JSONRequestBody{
-		Name:      name,
-		ProjectId: uuid.MustParse(h.ProjectID),
-		Status:    client.CreateAcmeCertificateAuthorityV1JSONBodyStatusActive,
+	body := client.CreateAcmeCertificateAuthorityV1JSONRequestBody{
+		Name:   name,
+		Status: client.CreateAcmeCertificateAuthorityV1JSONBodyStatusActive,
 		Configuration: struct {
 			AccountEmail       string             `json:"accountEmail"`
 			DirectoryUrl       string             `json:"directoryUrl"`
@@ -384,8 +479,9 @@ func (h *CertAgentTestHelper) CreateAcmeCARaw(name, dnsConnectionID, directoryUr
 				HostedZoneId string                                                                                `json:"hostedZoneId"`
 				Provider     client.CreateAcmeCertificateAuthorityV1JSONBodyConfigurationDnsProviderConfigProvider `json:"provider"`
 			} `json:"dnsProviderConfig"`
-			EabHmacKey *string `json:"eabHmacKey,omitempty"`
-			EabKid     *string `json:"eabKid,omitempty"`
+			DnsResolver *string `json:"dnsResolver,omitempty"`
+			EabHmacKey  *string `json:"eabHmacKey,omitempty"`
+			EabKid      *string `json:"eabKid,omitempty"`
 		}{
 			DnsAppConnectionId: uuid.MustParse(dnsConnectionID),
 			DnsProviderConfig: struct {
@@ -398,7 +494,12 @@ func (h *CertAgentTestHelper) CreateAcmeCARaw(name, dnsConnectionID, directoryUr
 			DirectoryUrl: directoryUrl,
 			AccountEmail: accountEmail,
 		},
-	})
+	}
+
+	resp, err := h.IdentityClient.CreateAcmeCertificateAuthorityV1WithBodyWithResponse(
+		ctx, "application/json",
+		jsonBodyWith(t, body, map[string]interface{}{"projectId": h.ProjectID}),
+	)
 	require.NoError(t, err)
 
 	return resp.StatusCode(), resp.Body
@@ -465,14 +566,16 @@ type agentUniversalAuthConfig struct {
 }
 
 type agentCertificateConfig struct {
-	ProjectSlug string                      `yaml:"project-slug"`
-	ProfileName string                      `yaml:"profile-name"`
-	CSR         string                      `yaml:"csr,omitempty"`
-	CSRPath     string                      `yaml:"csr-path,omitempty"`
-	Attributes  *agentCertificateAttributes `yaml:"attributes,omitempty"`
-	Lifecycle   agentCertificateLifecycle   `yaml:"lifecycle"`
-	FileOutput  agentCertificateFileOutput  `yaml:"file-output"`
-	PostHooks   *agentCertificatePostHooks  `yaml:"post-hooks,omitempty"`
+	ProjectSlug     string                      `yaml:"project-slug,omitempty"`
+	ApplicationName string                      `yaml:"application-name,omitempty"`
+	ProfileName     string                      `yaml:"profile-name,omitempty"`
+	CertificateID   string                      `yaml:"certificate-id,omitempty"`
+	CSR             string                      `yaml:"csr,omitempty"`
+	CSRPath         string                      `yaml:"csr-path,omitempty"`
+	Attributes      *agentCertificateAttributes `yaml:"attributes,omitempty"`
+	Lifecycle       agentCertificateLifecycle   `yaml:"lifecycle"`
+	FileOutput      agentCertificateFileOutput  `yaml:"file-output"`
+	PostHooks       *agentCertificatePostHooks  `yaml:"post-hooks,omitempty"`
 }
 
 type agentCertificateAttributes struct {
@@ -486,8 +589,9 @@ type agentCertificateAttributes struct {
 }
 
 type agentCertificateLifecycle struct {
-	RenewBeforeExpiry   string `yaml:"renew-before-expiry"`
-	StatusCheckInterval string `yaml:"status-check-interval"`
+	RenewBeforeExpiry   string `yaml:"renew-before-expiry,omitempty"`
+	StatusCheckInterval string `yaml:"status-check-interval,omitempty"`
+	ReplaceOnRenewals   bool   `yaml:"replace-on-renewals,omitempty"`
 }
 
 type agentCertificateFileOutput struct {
@@ -518,10 +622,12 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 	var certs []agentCertificateConfig
 	for _, cert := range opts.Certificates {
 		c := agentCertificateConfig{
-			ProjectSlug: cert.ProjectSlug,
-			ProfileName: cert.ProfileSlug,
-			CSR:         cert.CSR,
-			CSRPath:     cert.CSRPath,
+			ProjectSlug:     cert.ProjectSlug,
+			ApplicationName: cert.ApplicationName,
+			ProfileName:     cert.ProfileSlug,
+			CertificateID:   cert.CertificateID,
+			CSR:             cert.CSR,
+			CSRPath:         cert.CSRPath,
 			Attributes: &agentCertificateAttributes{
 				CommonName:         cert.CommonName,
 				TTL:                cert.TTL,
@@ -534,6 +640,7 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			Lifecycle: agentCertificateLifecycle{
 				RenewBeforeExpiry:   cert.RenewBeforeExpiry,
 				StatusCheckInterval: cert.StatusCheckInterval,
+				ReplaceOnRenewals:   cert.ReplaceOnRenewals,
 			},
 			FileOutput: agentCertificateFileOutput{
 				Certificate: agentFileOutputEntry{Path: cert.CertPath, Permission: cert.CertPermission},
@@ -555,11 +662,19 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			}
 		}
 
+		if cert.CertificateID != "" {
+			c.Attributes = nil
+		}
+
 		certs = append(certs, c)
 	}
 
+	version := opts.Version
+	if version == "" {
+		version = "v2"
+	}
 	cfg := agentConfig{
-		Version: "v1",
+		Version: version,
 		Infisical: agentInfisicalConfig{
 			Address: h.InfisicalURL,
 		},
@@ -584,6 +699,9 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 }
 
 type AgentConfigOptions struct {
+	// Version selects the agent schema: "v1" (legacy project-based) or "v2" (application-based).
+	// Empty defaults to "v2".
+	Version          string
 	ClientIDPath     string
 	ClientSecretPath string
 	Certificates     []CertificateConfigEntry
@@ -591,6 +709,7 @@ type AgentConfigOptions struct {
 
 type CertificateConfigEntry struct {
 	ProjectSlug         string
+	ApplicationName     string
 	ProfileSlug         string
 	CommonName          string
 	TTL                 string
@@ -606,6 +725,8 @@ type CertificateConfigEntry struct {
 	KeyPermission       string
 	ChainPermission     string
 	PostHookOnFailure   string
+	CertificateID       string
+	ReplaceOnRenewals   bool
 	CSR                 string
 	CSRPath             string
 	KeyAlgorithm        string
@@ -903,4 +1024,65 @@ func GenerateCSR(t *testing.T, commonName string) (csrPEM string, keyPEM string)
 	keyBuf := pem.EncodeToMemory(keyBlock)
 
 	return string(csrBuf), string(keyBuf)
+}
+
+func (h *CertAgentTestHelper) IssueCertificateDirectly(commonName string) string {
+	t := h.T
+
+	respBody := h.doRequestWithToken("POST", "/v1/cert-manager/certificates", map[string]interface{}{
+		"profileId": h.ProfileID,
+		"attributes": map[string]interface{}{
+			"commonName":         commonName,
+			"keyAlgorithm":       "RSA_2048",
+			"signatureAlgorithm": "RSA-SHA256",
+			"ttl":                "30d",
+		},
+	}, h.IdentityToken)
+
+	var parsed struct {
+		Certificate *struct {
+			CertificateID string `json:"certificateId"`
+		} `json:"certificate"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotNil(t, parsed.Certificate, "issue response did not include a certificate: %s", string(respBody))
+	require.NotEmpty(t, parsed.Certificate.CertificateID)
+
+	return parsed.Certificate.CertificateID
+}
+
+func (h *CertAgentTestHelper) RenewCertificateDirectly(certificateID string) string {
+	t := h.T
+
+	respBody := h.doRequestWithToken("POST", "/v1/cert-manager/certificates/"+certificateID+"/renew", map[string]interface{}{}, h.IdentityToken)
+
+	var parsed struct {
+		CertificateID string `json:"certificateId"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotEmpty(t, parsed.CertificateID, "renew response did not include a certificate id: %s", string(respBody))
+
+	return parsed.CertificateID
+}
+
+func (h *CertAgentTestHelper) RevokeCertificateDirectly(certificateID string) {
+	h.doRequestWithToken("POST", "/v1/cert-manager/certificates/"+certificateID+"/revoke", map[string]interface{}{
+		"revocationReason": "UNSPECIFIED",
+	}, h.IdentityToken)
+}
+
+func (h *CertAgentTestHelper) CertificateSerialNumber(certificateID string) string {
+	t := h.T
+
+	respBody := h.doRequestWithToken("GET", "/v1/cert-manager/certificates/"+certificateID, nil, h.IdentityToken)
+
+	var parsed struct {
+		Certificate struct {
+			SerialNumber string `json:"serialNumber"`
+		} `json:"certificate"`
+	}
+	require.NoError(t, json.Unmarshal(respBody, &parsed))
+	require.NotEmpty(t, parsed.Certificate.SerialNumber)
+
+	return parsed.Certificate.SerialNumber
 }

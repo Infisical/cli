@@ -5,14 +5,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -21,41 +22,42 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 )
 
-type PAMAccessParams struct {
-	ResourceName string
-	AccountName  string
+// LiveSession is everything needed to dial one active PAM session: where the relay is, the mTLS
+// certificates for the relay and gateway hops, and when the session stops being usable.
+type LiveSession struct {
+	SessionId              string
+	DirectAddress          string
+	RelayHost              string
+	RelayClientCert        string
+	RelayClientKey         string
+	RelayServerCertChain   string
+	GatewayClientCert      string
+	GatewayClientKey       string
+	GatewayServerCertChain string
+	Expiry                 time.Time
 }
 
-// GetDisplayName returns a user-friendly display name for the access params
-func (p PAMAccessParams) GetDisplayName() string {
-	return fmt.Sprintf("%s/%s", p.ResourceName, p.AccountName)
-}
-
-// ToAPIRequest converts PAMAccessParams to an api.PAMAccessRequest
-func (p PAMAccessParams) ToAPIRequest(projectID, duration string) api.PAMAccessRequest {
-	return api.PAMAccessRequest{
-		Duration:     duration,
-		ResourceName: p.ResourceName,
-		AccountName:  p.AccountName,
-		ProjectId:    projectID,
-	}
-}
-
-// ToApprovalRequestData converts PAMAccessParams to api.PAMAccessApprovalRequestPayloadRequestData
-func (p PAMAccessParams) ToApprovalRequestData(duration string) api.PAMAccessApprovalRequestPayloadRequestData {
-	return api.PAMAccessApprovalRequestPayloadRequestData{
-		ResourceName:   p.ResourceName,
-		AccountName:    p.AccountName,
-		AccessDuration: duration,
-	}
+// SessionProvider supplies the live session a proxy dials through. Proxies launched by
+// `pam access` hold a
+// session for their whole lifetime and do not set one, falling back to the fields on
+// BaseProxyServer. The agent runner supplies a provider that creates the session on the first
+// connection, so an account nobody touches never opens one.
+type SessionProvider interface {
+	// Ensure returns the live session, creating one if there is not already a usable one.
+	Ensure(ctx context.Context) (LiveSession, error)
+	// Current returns the live session without creating one. Termination paths use this so
+	// that shutting down an untouched proxy doesn't create a session just to end it.
+	Current() (LiveSession, bool)
 }
 
 // BaseProxyServer contains common functionality for all local proxy types
 type BaseProxyServer struct {
 	httpClient             *resty.Client
+	directAddress          string
 	relayHost              string
 	relayClientCert        string
 	relayClientKey         string
@@ -71,17 +73,133 @@ type BaseProxyServer struct {
 	activeConnections      sync.WaitGroup
 	shutdownOnce           sync.Once
 	shutdownCh             chan struct{}
+
+	// provider, when set, resolves the session lazily instead of using the fields above.
+	provider SessionProvider
+	// keepProcessAlive suppresses the os.Exit(0) at the end of graceful shutdown. The agent
+	// runner sets it so one proxy shutting down cannot kill the agent it launched.
+	keepProcessAlive bool
+
+	// The direct address that failed, so later connections skip it. Keyed by address because a
+	// refreshed session can carry a new one.
+	failedDirect atomic.Pointer[directFailure]
+}
+
+// staticSession builds a LiveSession from the fields set at construction time.
+func (b *BaseProxyServer) staticSession() LiveSession {
+	return LiveSession{
+		SessionId:              b.sessionId,
+		DirectAddress:          b.directAddress,
+		RelayHost:              b.relayHost,
+		RelayClientCert:        b.relayClientCert,
+		RelayClientKey:         b.relayClientKey,
+		RelayServerCertChain:   b.relayServerCertChain,
+		GatewayClientCert:      b.gatewayClientCert,
+		GatewayClientKey:       b.gatewayClientKey,
+		GatewayServerCertChain: b.gatewayServerCertChain,
+		Expiry:                 b.sessionExpiry,
+	}
+}
+
+// session returns the live session, creating one first if the proxy is lazy.
+func (b *BaseProxyServer) session() (LiveSession, error) {
+	if b.provider != nil {
+		return b.provider.Ensure(b.ctx)
+	}
+	return b.staticSession(), nil
+}
+
+// currentSession returns the live session only if one already exists.
+func (b *BaseProxyServer) currentSession() (LiveSession, bool) {
+	if b.provider != nil {
+		return b.provider.Current()
+	}
+	return b.staticSession(), b.sessionId != ""
+}
+
+// exitAfterShutdown reports whether graceful shutdown should end the process.
+func (b *BaseProxyServer) exitAfterShutdown() bool {
+	return !b.keepProcessAlive
 }
 
 // CreateRelayConnection establishes a TLS connection to the relay server
 func (b *BaseProxyServer) CreateRelayConnection() (net.Conn, error) {
+	session, err := b.session()
+	if err != nil {
+		return nil, err
+	}
+	return b.createRelayConnectionWith(session)
+}
+
+// createRelayConnectionWith dials the relay using an already-resolved session, so callers that must
+// not create a session (such as termination) can pass what they already hold.
+func (b *BaseProxyServer) createRelayConnectionWith(session LiveSession) (net.Conn, error) {
+	if session.DirectAddress != "" && !b.skipDirect(session) {
+		conn, err := net.DialTimeout("tcp", session.DirectAddress, directDialTimeout)
+		if err == nil {
+			return &gatewayTransportConn{Conn: conn, direct: true}, nil
+		}
+		b.markDirectUnavailable(session, err, "Direct gateway connection failed")
+	}
+
+	return b.createRelayOnlyConnection(session)
+}
+
+// A failure is remembered per address and expires, so a transient blip cannot pin a long-lived
+// proxy to the relay for the rest of its life.
+type directFailure struct {
+	address    string
+	retryAfter time.Time
+}
+
+// With no relay to fall back to, direct is retried regardless: failing fast gains nothing.
+func (b *BaseProxyServer) skipDirect(session LiveSession) bool {
+	if session.RelayHost == "" {
+		return false
+	}
+	failed := b.failedDirect.Load()
+	return failed != nil && failed.address == session.DirectAddress && time.Now().Before(failed.retryAfter)
+}
+
+func (b *BaseProxyServer) markDirectUnavailable(session LiveSession, err error, msg string) {
+	if session.RelayHost == "" {
+		log.Debug().Err(err).Str("address", session.DirectAddress).Msg(msg)
+		return
+	}
+	failure := &directFailure{address: session.DirectAddress, retryAfter: time.Now().Add(directRetryInterval)}
+	previous := b.failedDirect.Swap(failure)
+	if previous == nil || previous.address != failure.address || time.Now().After(previous.retryAfter) {
+		log.Warn().Err(err).Str("address", failure.address).Msgf("%s, using the relay until it recovers", msg)
+		return
+	}
+	log.Debug().Err(err).Str("address", failure.address).Msg(msg)
+}
+
+type gatewayTransportConn struct {
+	net.Conn
+	direct bool
+}
+
+const (
+	// The relay path terminates locally, and the gateway cert carries localhost as a SAN.
+	relayServerName   = "localhost"
+	directDialTimeout = 3 * time.Second
+	// How long a failed direct address stays demoted before it is tried again.
+	directRetryInterval    = 60 * time.Second
+	directHandshakeTimeout = 3 * time.Second
+)
+
+func (b *BaseProxyServer) createRelayOnlyConnection(session LiveSession) (net.Conn, error) {
+	if session.RelayHost == "" {
+		return nil, fmt.Errorf("direct gateway connection failed and no relay fallback is available")
+	}
 	var host string
 	var port int = 8443
 
-	if strings.Contains(b.relayHost, ":") {
+	if strings.Contains(session.RelayHost, ":") {
 		var portStr string
 		var err error
-		host, portStr, err = net.SplitHostPort(b.relayHost)
+		host, portStr, err = net.SplitHostPort(session.RelayHost)
 		if err != nil {
 			return nil, fmt.Errorf("invalid relay host format: %w", err)
 		}
@@ -90,17 +208,17 @@ func (b *BaseProxyServer) CreateRelayConnection() (net.Conn, error) {
 			return nil, fmt.Errorf("invalid port in relay host: %w", err)
 		}
 	} else {
-		host = b.relayHost
+		host = session.RelayHost
 	}
 
 	// Load relay certificates
-	cert, err := tls.X509KeyPair([]byte(b.relayClientCert), []byte(b.relayClientKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load relay client certificate: %w", err)
+	cert, certErr := tls.X509KeyPair([]byte(session.RelayClientCert), []byte(session.RelayClientKey))
+	if certErr != nil {
+		return nil, fmt.Errorf("failed to load relay client certificate: %w", certErr)
 	}
 
 	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM([]byte(b.relayServerCertChain)) {
+	if !caCertPool.AppendCertsFromPEM([]byte(session.RelayServerCertChain)) {
 		return nil, fmt.Errorf("failed to parse relay server certificate chain")
 	}
 
@@ -191,14 +309,64 @@ The Gateway upgrade guide can be found at: https://infisical.com/docs/documentat
 
 // CreateGatewayConnection establishes a mTLS connection to the gateway over the relay
 func (b *BaseProxyServer) CreateGatewayConnection(relayConn net.Conn, alpn ALPN) (net.Conn, error) {
+	session, err := b.session()
+	if err != nil {
+		return nil, err
+	}
+	return b.createGatewayConnectionWith(relayConn, alpn, session)
+}
+
+// createGatewayConnectionWith performs the gateway mTLS handshake using an already-resolved session.
+func (b *BaseProxyServer) createGatewayConnectionWith(relayConn net.Conn, alpn ALPN, session LiveSession) (net.Conn, error) {
+	transport, isDirect := relayConn.(*gatewayTransportConn)
+	isDirect = isDirect && transport.direct
+
+	serverName := relayServerName
+	if isDirect {
+		host, _, splitErr := net.SplitHostPort(session.DirectAddress)
+		if splitErr != nil {
+			return nil, fmt.Errorf("invalid direct gateway address: %w", splitErr)
+		}
+		serverName = host
+	}
+
+	gatewayConn, err := b.handshakeGatewayConnection(relayConn, alpn, session, serverName, isDirect)
+	if err == nil {
+		return gatewayConn, nil
+	}
+	if !isDirect || session.RelayHost == "" {
+		return nil, err
+	}
+
+	_ = relayConn.Close()
+	b.markDirectUnavailable(session, err, "Direct gateway TLS handshake failed")
+	relayFallback, relayErr := b.createRelayOnlyConnection(session)
+	if relayErr != nil {
+		return nil, relayErr
+	}
+	gatewayConn, relayErr = b.handshakeGatewayConnection(relayFallback, alpn, session, relayServerName, false)
+	if relayErr != nil {
+		_ = relayFallback.Close()
+		return nil, relayErr
+	}
+	return gatewayConn, nil
+}
+
+func (b *BaseProxyServer) handshakeGatewayConnection(relayConn net.Conn, alpn ALPN, session LiveSession, serverName string, isDirect bool) (net.Conn, error) {
+	// Keyed off the transport, not the server name, which can legitimately be "localhost".
+	if isDirect {
+		_ = relayConn.SetDeadline(time.Now().Add(directHandshakeTimeout))
+		defer relayConn.SetDeadline(time.Time{})
+	}
+
 	// Load gateway certificates
-	cert, err := tls.X509KeyPair([]byte(b.gatewayClientCert), []byte(b.gatewayClientKey))
+	cert, err := tls.X509KeyPair([]byte(session.GatewayClientCert), []byte(session.GatewayClientKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load gateway client certificate: %w", err)
 	}
 
 	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM([]byte(b.gatewayServerCertChain)) {
+	if !caCertPool.AppendCertsFromPEM([]byte(session.GatewayServerCertChain)) {
 		return nil, fmt.Errorf("failed to parse gateway server certificate chain")
 	}
 
@@ -208,7 +376,7 @@ func (b *BaseProxyServer) CreateGatewayConnection(relayConn net.Conn, alpn ALPN)
 		MinVersion:   tls.VersionTLS12,
 		MaxVersion:   tls.VersionTLS13,
 		NextProtos:   []string{string(alpn)},
-		ServerName:   "localhost",
+		ServerName:   serverName,
 	}
 
 	gatewayConn := tls.Client(relayConn, tlsConfig)
@@ -227,25 +395,42 @@ func (b *BaseProxyServer) CreateGatewayConnection(relayConn net.Conn, alpn ALPN)
 	return gatewayConn, nil
 }
 
-// NotifySessionTermination sends a termination notification through the gateway
+// NotifySessionTermination sends a termination notification through the gateway.
+// If no session was ever created (a lazy proxy nobody connected to), there is nothing to end.
 func (b *BaseProxyServer) NotifySessionTermination() {
-	log.Debug().Msgf("Notifying session termination for session ID: %s", b.sessionId)
+	session, ok := b.currentSession()
+	if !ok {
+		log.Debug().Msg("No live session to terminate")
+		return
+	}
+	b.TerminateSession(session)
+}
+
+// TerminateSession ends one specific session, over the gateway if it can and through the API if
+// not. Callers that hold a session the proxy is no longer tracking use this: a lazy proxy retires
+// sessions it will not hand out again, and each of those still has to be ended.
+func (b *BaseProxyServer) TerminateSession(session LiveSession) {
+	if session.SessionId == "" {
+		return
+	}
+
+	log.Debug().Msgf("Notifying session termination for session ID: %s", session.SessionId)
 
 	// Try to notify via gateway connection first
-	relayConn, err := b.CreateRelayConnection()
+	relayConn, err := b.createRelayConnectionWith(session)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to relay for termination notification")
 		// Fallback to API call if relay connection fails
-		b.FallbackToAPITermination()
+		b.fallbackToAPITerminationWith(session)
 		return
 	}
 	defer relayConn.Close()
 
-	gatewayConn, err := b.CreateGatewayConnection(relayConn, ALPNInfisicalPAMCancellation)
+	gatewayConn, err := b.createGatewayConnectionWith(relayConn, ALPNInfisicalPAMCancellation, session)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to gateway for termination notification")
 		// Fallback to API call if gateway connection fails
-		b.FallbackToAPITermination()
+		b.fallbackToAPITerminationWith(session)
 		return
 	}
 	defer gatewayConn.Close()
@@ -254,11 +439,37 @@ func (b *BaseProxyServer) NotifySessionTermination() {
 
 // FallbackToAPITermination terminates the session via API call
 func (b *BaseProxyServer) FallbackToAPITermination() {
-	err := api.CallPAMSessionTermination(b.httpClient, b.sessionId)
+	session, ok := b.currentSession()
+	if !ok {
+		return
+	}
+	b.fallbackToAPITerminationWith(session)
+}
+
+func (b *BaseProxyServer) fallbackToAPITerminationWith(session LiveSession) {
+	err := api.CallPAMSessionTermination(b.httpClient, session.SessionId)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to terminate session via API fallback")
 	} else {
 		log.Debug().Msg("Session terminated successfully via API fallback")
+	}
+}
+
+// NewDisconnectChannels creates the error channels a proxied connection uses to report which side
+// finished first.
+func (b *BaseProxyServer) NewDisconnectChannels() (gatewayErrCh, clientErrCh chan error) {
+	return make(chan error, 1), make(chan error, 1)
+}
+
+// WaitForConnectionClose blocks until either side of one proxied connection finishes, and ends
+// only that connection. A gateway-side close is not a session-level event: the gateway closes a
+// stream whenever the resource does, which is routine for pooled clients and for exchanges the
+// server answers by closing, such as a Postgres CancelRequest.
+func (b *BaseProxyServer) WaitForConnectionClose(gatewayErrCh, clientErrCh <-chan error, connCtx context.Context) {
+	select {
+	case <-gatewayErrCh:
+	case <-clientErrCh:
+	case <-connCtx.Done():
 	}
 }
 
@@ -278,28 +489,61 @@ func (b *BaseProxyServer) WaitForConnectionsWithTimeout(timeout time.Duration) {
 	}
 }
 
-// CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required
-// This is a shared function used by all PAM proxies
-func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequest) (api.PAMAccessResponse, error) {
-	// Initial request
+func PromptForReason(required bool) (string, error) {
+	label := "Reason for access"
+	prompt := promptui.Prompt{
+		Label: label,
+		Validate: func(input string) error {
+			if required && strings.TrimSpace(input) == "" {
+				return fmt.Errorf("a reason is required")
+			}
+			return nil
+		},
+	}
+	result, err := prompt.Run()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result), nil
+}
+
+const reasonRequiredErrorName = "PAM_REASON_REQUIRED"
+
+// CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required.
+// This is used by the legacy proxy implementations.
+func CallPAMAccessWithMFA(
+	httpClient *resty.Client,
+	pamRequest api.PAMAccessRequest,
+	interactive bool,
+) (api.PAMAccessResponse, error) {
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
 	if err != nil {
-		// Check if MFA is required
 		if apiErr, ok := err.(*api.APIError); ok {
+			if apiErr.Name == reasonRequiredErrorName {
+				if !interactive || !isatty.IsTerminal(os.Stdin.Fd()) {
+					return api.PAMAccessResponse{}, fmt.Errorf(
+						"a reason is required to access this account — pass one with --reason")
+				}
+				log.Info().Msg("A reason is required to access this account.")
+				reason, promptErr := PromptForReason(true)
+				if promptErr != nil {
+					return api.PAMAccessResponse{}, fmt.Errorf("reason prompt cancelled: %w", promptErr)
+				}
+				pamRequest.Reason = reason
+				return CallPAMAccessWithMFA(httpClient, pamRequest, interactive)
+			}
+
 			if apiErr.Name == "SESSION_MFA_REQUIRED" {
-				// Extract MFA details from error
 				if details, ok := apiErr.Details.(map[string]interface{}); ok {
 					mfaSessionId, _ := details["mfaSessionId"].(string)
 					mfaMethod, _ := details["mfaMethod"].(string)
 
 					if mfaSessionId != "" {
-						// Handle MFA flow
 						err := util.HandleMFASession(httpClient, mfaSessionId, mfaMethod, config.INFISICAL_URL)
 						if err != nil {
 							return api.PAMAccessResponse{}, fmt.Errorf("MFA verification failed: %w", err)
 						}
 
-						// Retry request with MFA session ID
 						log.Debug().Msg("Retrying PAM access with MFA session...")
 						pamRequest.MfaSessionId = mfaSessionId
 						pamResponse, err = api.CallPAMAccess(httpClient, pamRequest)
@@ -312,75 +556,8 @@ func CallPAMAccessWithMFA(httpClient *resty.Client, pamRequest api.PAMAccessRequ
 				}
 			}
 		}
-		// Return original error if not MFA-related
 		return api.PAMAccessResponse{}, err
 	}
 
 	return pamResponse, nil
-}
-
-// HandleApprovalWorkflow checks if an error is due to an approval policy and handles the approval request flow.
-// Returns true if the error was handled (either approval request created or user declined), false otherwise.
-func HandleApprovalWorkflow(httpClient *resty.Client, err error, projectID string, accessParams PAMAccessParams, durationStr string) bool {
-	var apiErr *api.APIError
-	if !errors.As(err, &apiErr) || apiErr.ErrorMessage != "A policy is in place for this resource" {
-		return false
-	}
-
-	details, ok := apiErr.Details.(map[string]any)
-	if !ok {
-		return false
-	}
-
-	log.Info().Msgf("Account is protected by approval policy: %s", details["policyName"])
-
-	shouldSendRequest, promptErr := askForApprovalRequestTrigger()
-	if promptErr != nil {
-		if errors.Is(promptErr, promptui.ErrAbort) {
-			log.Info().Msgf("Approval request was not created.")
-		} else {
-			util.HandleError(promptErr, "Failed to send PAM account request")
-		}
-		return true
-	}
-
-	if !shouldSendRequest {
-		log.Info().Msgf("Approval request was not created.")
-		return true
-	}
-
-	approvalReq, reqErr := api.CallPAMAccessApprovalRequest(httpClient, api.PAMAccessApprovalRequest{
-		ProjectId:   projectID,
-		RequestData: accessParams.ToApprovalRequestData(durationStr),
-	})
-	if reqErr != nil {
-		util.HandleError(reqErr, "Failed to send PAM account request")
-		return true
-	}
-
-	url := fmt.Sprintf("%s/organizations/%s/projects/pam/%s/approval-requests/%s",
-		strings.TrimSuffix(config.INFISICAL_URL, "/api"),
-		approvalReq.Request.OrgId,
-		approvalReq.Request.ProjectId,
-		approvalReq.Request.ID)
-
-	if browserErr := util.OpenBrowser(url); browserErr != nil {
-		log.Error().Msgf("Failed to do browser redirect: %v", browserErr)
-	}
-
-	log.Info().Msgf("Approval request created.")
-	log.Info().Msgf("View details at: %s", url)
-	return true
-}
-
-func askForApprovalRequestTrigger() (bool, error) {
-	prompt := promptui.Prompt{
-		Label:     "This action requires approval. You may create an approval request now. Continue?",
-		IsConfirm: true,
-	}
-	result, err := prompt.Run()
-	if err != nil {
-		return false, err
-	}
-	return strings.ToLower(result) == "y", nil
 }

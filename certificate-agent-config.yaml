@@ -1,4 +1,4 @@
-version: v1
+version: v2 # v2 issues from a profile attached to an Application. Use v1 for the legacy project-based flow.
 
 infisical:
   address: "https://app.infisical.com/"
@@ -11,8 +11,8 @@ auth:
     remove_client_secret_on_read: false
 
 certificates:
-  - profile-name: "my-profile-name"
-    project-slug: "my-project-slug"
+  - application-name: "my-application-name"
+    profile-name: "my-profile-name"
 
     # Certificate parameters
     attributes:
@@ -29,8 +29,8 @@ certificates:
         - "server_auth"
       ttl: "30d"
     lifecycle:
-      renew-before-expiry: "1d"            # When to start checking for renewal before expiration
-      status-check-interval: "6h"          # How often to check certificate status and renewal needs
+      renew-before-expiry: "1d" # When to start checking for renewal before expiration
+      status-check-interval: "6h" # How often to check certificate status and renewal needs
 
     # Post-hooks for automation
     post-hooks:
@@ -55,3 +55,24 @@ certificates:
         path: "./certs/web-server/chain.crt"
         permission: "0644"
         omit-root: true
+
+  # Distribution mode: deliver a certificate that already exists in Infisical instead of issuing one,
+  # so several hosts can share it. https://infisical.com/docs/integrations/platforms/certificate-agent
+  # - certificate-id: "00000000-0000-0000-0000-000000000000"
+  #   lifecycle:
+  #     status-check-interval: "6h"
+  #     replace-on-renewals: true # Also deliver renewals made in Infisical
+  #   post-hooks:
+  #     on-renewal:
+  #       command: "systemctl reload nginx"
+  #       timeout: 30
+  #   file-output:
+  #     certificate:
+  #       path: "./certs/existing/certificate.crt"
+  #       permission: "0644"
+  #     chain:
+  #       path: "./certs/existing/chain.crt"
+  #       permission: "0644"
+  #     private-key:
+  #       path: "./certs/existing/private.key"
+  #       permission: "0600"

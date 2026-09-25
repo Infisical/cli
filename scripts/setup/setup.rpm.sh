@@ -371,7 +371,7 @@ function fetch_config {
     cat <<EOF
 [infisical-cli]
 name=Infisical CLI
-baseurl=${PKG_URL}/rpm
+baseurl=${PKG_URL}/rpm/\$basearch
 enabled=1
 gpgcheck=1
 gpgkey=${GPG_KEY_URL}

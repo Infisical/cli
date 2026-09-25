@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
 	"github.com/Infisical/infisical-merge/packages/relay"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -39,9 +41,18 @@ var relayStartCmd = &cobra.Command{
 			util.HandleError(err, fmt.Sprintf("unable to get name flag or %s env", gatewayv2.RELAY_NAME_ENV_NAME))
 		}
 
-		host, err := util.GetCmdFlagOrEnv(cmd, "host", []string{gatewayv2.RELAY_HOST_ENV_NAME})
-		if err != nil || host == "" {
-			util.HandleError(err, fmt.Sprintf("unable to get host flag or %s env", gatewayv2.RELAY_HOST_ENV_NAME))
+		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+		if enrollMethod == "" {
+			enrollMethod = os.Getenv("INFISICAL_RELAY_ENROLL_METHOD")
+		}
+		if enrollMethod != "" && enrollMethod != relay.EnrollMethodToken && enrollMethod != relay.EnrollMethodAws {
+			util.HandleError(fmt.Errorf("invalid --enroll-method %q: supported values are %q and %q",
+				enrollMethod, relay.EnrollMethodToken, relay.EnrollMethodAws))
+		}
+
+		host, _ := util.GetCmdFlagOrEnv(cmd, "host", []string{gatewayv2.RELAY_HOST_ENV_NAME})
+		if host == "" && enrollMethod == "" {
+			util.HandleError(fmt.Errorf("please provide host flag"), fmt.Sprintf("unable to get host flag or %s env", gatewayv2.RELAY_HOST_ENV_NAME))
 		}
 
 		instanceType, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "type", []string{gatewayv2.RELAY_TYPE_ENV_NAME}, "org")
@@ -49,19 +60,134 @@ var relayStartCmd = &cobra.Command{
 			util.HandleError(err, fmt.Sprintf("unable to get type flag or %s env", gatewayv2.RELAY_TYPE_ENV_NAME))
 		}
 
+		if flagDomain, _ := cmd.Flags().GetString("domain"); flagDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(flagDomain)
+		} else if storedDomain, _ := relay.LoadStoredDomain(relayName); storedDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(storedDomain)
+		} else if profileDomain := util.ActiveProfileDomain(); profileDomain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(profileDomain)
+		}
+
+		var enrolledAccessToken string
+
+		// --- AWS Auth path ---
+		if enrollMethod == relay.EnrollMethodAws {
+			relayID, _ := cmd.Flags().GetString("relay-id")
+			if relayID == "" {
+				relayID = os.Getenv(relay.INFISICAL_RELAY_ID_KEY)
+			}
+			if relayID == "" {
+				stored, _ := relay.LoadStoredRelayID(relayName)
+				relayID = stored
+			}
+			if relayID == "" {
+				util.HandleError(errors.New("--relay-id is required when --enroll-method=aws"))
+			}
+
+			httpClient, err := util.GetRestyClientWithCustomHeaders()
+			if err != nil {
+				util.HandleError(err, "unable to create HTTP client")
+			}
+
+			log.Info().Msg("Authenticating relay via AWS Auth (STS GetCallerIdentity)...")
+			accessTokenStr, err := relay.LoginRelayWithAws(cmd.Context(), httpClient, relayID)
+			if err != nil {
+				util.HandleError(err, "AWS Auth login failed")
+			}
+
+			enrolledAccessToken = accessTokenStr
+
+			if err := relay.SaveRelayID(relayName, relayID); err != nil {
+				util.HandleError(err, "failed to save relay id to config")
+			}
+
+			if err := relay.SaveDomain(relayName, config.INFISICAL_URL); err != nil {
+				util.HandleError(err, "failed to save domain to config")
+			}
+
+			log.Info().Msgf("Relay authenticated via AWS Auth. State saved to %s", relay.GetConfPathDisplay(relayName))
+			log.Info().Msg("Starting relay...")
+		}
+
+		// --- Enrollment token path ---
+		if enrollMethod == relay.EnrollMethodToken {
+			enrollToken, _ := cmd.Flags().GetString("token")
+
+			if enrollToken != "" {
+				// same one-time token already exchanged: reuse stored access token
+				storedEnrollToken, _ := relay.LoadStoredEnrollmentToken(relayName)
+				storedAccessToken, _ := relay.LoadStoredAccessToken(relayName)
+				if storedEnrollToken != "" && storedEnrollToken == enrollToken && storedAccessToken != "" {
+					enrolledAccessToken = storedAccessToken
+					log.Info().Msg("Enrollment token matches stored token. Using stored access token...")
+				} else {
+					httpClient, err := util.GetRestyClientWithCustomHeaders()
+					if err != nil {
+						util.HandleError(err, "unable to create HTTP client")
+					}
+
+					log.Info().Msg("Enrolling relay with enrollment token...")
+					enrollResp, err := api.CallRelayLogin(httpClient, api.RelayLoginRequest{
+						Method: "token",
+						Token:  enrollToken,
+					})
+					if err != nil {
+						util.HandleError(err, "enrollment failed")
+					}
+
+					enrolledAccessToken = enrollResp.AccessToken
+					if err := relay.SaveAccessToken(relayName, enrollResp.AccessToken); err != nil {
+						util.HandleError(err, "failed to save relay access token")
+					}
+					if err := relay.SaveEnrollmentToken(relayName, enrollToken); err != nil {
+						util.HandleError(err, "failed to save enrollment token to config")
+					}
+
+					if err := relay.SaveDomain(relayName, config.INFISICAL_URL); err != nil {
+						util.HandleError(err, "failed to save domain to config")
+					}
+
+					log.Info().Msgf("Relay enrolled successfully. Access token saved to %s", relay.GetConfPathDisplay(relayName))
+				}
+			} else {
+				storedAccessToken, _ := relay.LoadStoredAccessToken(relayName)
+				if storedAccessToken == "" {
+					util.HandleError(errors.New("--token is required when --enroll-method=token (no stored access token found)"))
+				}
+				enrolledAccessToken = storedAccessToken
+				log.Info().Msg("Using stored access token...")
+			}
+
+			log.Info().Msg("Starting relay...")
+		}
+
+		isResourceAuth := enrollMethod == relay.EnrollMethodToken || enrollMethod == relay.EnrollMethodAws
+
 		relayInstance, err := relay.NewRelay(&relay.RelayConfig{
-			RelayName: relayName,
-			SSHPort:   "2222",
-			TLSPort:   "8443",
-			Host:      host,
-			Type:      instanceType,
+			RelayName:    relayName,
+			SSHPort:      "2222",
+			TLSPort:      "8443",
+			Host:         host,
+			Type:         instanceType,
+			EnrollMethod: enrollMethod,
 		})
 
 		if err != nil {
 			util.HandleError(err, "unable to create relay instance")
 		}
 
-		if instanceType == "instance" {
+		if isResourceAuth {
+			// Use the freshly enrolled token, or load the stored one.
+			if enrolledAccessToken != "" {
+				relayInstance.SetToken(enrolledAccessToken)
+			} else {
+				storedToken, err := relay.LoadStoredAccessToken(relayName)
+				if err != nil || storedToken == "" {
+					util.HandleError(errors.New("no stored access token found — re-run with enrollment token"))
+				}
+				relayInstance.SetToken(storedToken)
+			}
+		} else if instanceType == "instance" {
 			relayAuthSecret := os.Getenv(gatewayv2.RELAY_AUTH_SECRET_ENV_NAME)
 			if relayAuthSecret == "" {
 				util.HandleError(fmt.Errorf("%s is not set", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME), "unable to get relay auth secret")
@@ -96,7 +222,6 @@ var relayStartCmd = &cobra.Command{
 				cancelCmd()
 				cancelSdk()
 
-				// Give graceful shutdown 10 seconds, then force exit on second signal
 				select {
 				case <-sigCh:
 					log.Warn().Msg("Second signal received, force exit triggered")
@@ -107,7 +232,6 @@ var relayStartCmd = &cobra.Command{
 				}
 			}()
 
-			// Token refresh goroutine - runs every 10 seconds
 			go func() {
 				tokenRefreshTicker := time.NewTicker(10 * time.Second)
 				defer tokenRefreshTicker.Stop()
@@ -143,21 +267,34 @@ var relaySystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd service for Infisical relay",
 	Long:  "Manage systemd service for Infisical relay. Use 'systemd install' to install and enable the service.",
-	Example: `sudo infisical relay systemd install --token=<token> --name=<name> --host=<host>
-  sudo infisical relay systemd install --type=instance --name=<name> --host=<host> --relay-auth-secret=<secret>
-  sudo infisical relay systemd uninstall`,
+	Example: `# Org relay - Token enrollment
+  sudo infisical relay systemd install my-relay --enroll-method=token --token=<enrollment-token> --domain=<domain>
+
+  # Org relay - AWS Auth
+  sudo infisical relay systemd install my-relay --enroll-method=aws --relay-id=<relay-id> --domain=<domain>
+
+  # Instance relay
+  sudo infisical relay systemd install my-relay --type=instance --host=<host> --relay-auth-secret=<secret>
+
+  sudo infisical relay systemd uninstall my-relay`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 }
 
 var relaySystemdInstallCmd = &cobra.Command{
-	Use:   "install",
+	Use:   "install [name]",
 	Short: "Install and enable systemd service for the relay (requires sudo)",
 	Long:  "Install and enable systemd service for the relay. Must be run with sudo on Linux.",
-	Example: `sudo infisical relay systemd install --token=<token> --name=<name> --host=<host>
-  sudo infisical relay systemd install --type=instance --name=<name> --host=<host> --relay-auth-secret=<secret>`,
+	Example: `# Org relay - Token enrollment
+  sudo infisical relay systemd install my-relay --enroll-method=token --token=<enrollment-token> --domain=<domain>
+
+  # Org relay - AWS Auth (relay authenticates via STS on each start)
+  sudo infisical relay systemd install my-relay --enroll-method=aws --relay-id=<relay-id> --domain=<domain>
+
+  # Instance relay
+  sudo infisical relay systemd install my-relay --type=instance --host=<host> --relay-auth-secret=<secret>`,
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
 			util.HandleError(fmt.Errorf("systemd service installation is only supported on Linux"))
@@ -167,43 +304,21 @@ var relaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("systemd service installation requires root/sudo privileges"))
 		}
 
-		token, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "token", []string{gatewayv2.INFISICAL_TOKEN_ENV_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse token flag or env")
-		}
-
 		domain, err := cmd.Flags().GetString("domain")
 		if err != nil {
 			util.HandleError(err, "Unable to parse domain flag")
 		}
 
-		name, err := cmd.Flags().GetString("name")
-		if err != nil {
-			util.HandleError(err, "Unable to parse name flag")
-		}
-		if name == "" {
-			util.HandleError(fmt.Errorf("name flag is required"), "name is required")
+		if domain != "" {
+			config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 		}
 
-		host, err := cmd.Flags().GetString("host")
-		if err != nil {
-			util.HandleError(err, "Unable to parse host flag")
-		}
-		if host == "" {
-			util.HandleError(fmt.Errorf("host flag is required"), "host is required")
-		}
-
-		instanceType, err := cmd.Flags().GetString("type")
-		if err != nil {
-			util.HandleError(err, "Unable to parse type flag")
-		}
-		if instanceType == "" {
-			util.HandleError(fmt.Errorf("type flag is required"), "type is required")
-		}
-
-		relayAuthSecret, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay-auth-secret", []string{gatewayv2.RELAY_AUTH_SECRET_ENV_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse relay-auth-secret flag")
+		// Resolve relay name: positional arg > --name flag (deprecated) > env var
+		var relayName string
+		if len(args) > 0 {
+			relayName = args[0]
+		} else {
+			relayName, _ = cmd.Flags().GetString("name")
 		}
 
 		serviceLogFile, err := cmd.Flags().GetString("log-file")
@@ -211,35 +326,144 @@ var relaySystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse log-file flag")
 		}
 
-		if instanceType == "instance" && relayAuthSecret == "" {
-			util.HandleError(fmt.Errorf("for type 'instance', --relay-auth-secret flag or %s env must be set", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
+		enrollMethod, _ := cmd.Flags().GetString("enroll-method")
+
+		var installedServiceName string
+
+		if enrollMethod == relay.EnrollMethodToken {
+			// --- Enrollment token path ---
+			if relayName == "" {
+				util.HandleError(errors.New("relay name is required (provide as positional argument or --name flag)"))
+			}
+
+			enrollToken, flagErr := cmd.Flags().GetString("token")
+			if flagErr != nil || enrollToken == "" {
+				util.HandleError(errors.New("--token is required when --enroll-method=token"))
+			}
+
+			httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
+			if clientErr != nil {
+				util.HandleError(clientErr, "unable to create HTTP client")
+			}
+
+			log.Info().Msg("Enrolling relay with enrollment token...")
+			enrollResp, enrollErr := api.CallRelayLogin(httpClient, api.RelayLoginRequest{
+				Method: "token",
+				Token:  enrollToken,
+			})
+			if enrollErr != nil {
+				util.HandleError(enrollErr, "enrollment failed")
+			}
+
+			svcName, installErr := relay.InstallEnrolledRelaySystemdService(enrollResp.AccessToken, domain, relayName, serviceLogFile)
+			if installErr != nil {
+				util.HandleError(installErr, "Failed to install relay systemd service")
+			}
+			installedServiceName = svcName
+		} else if enrollMethod == relay.EnrollMethodAws {
+			// --- AWS Auth path ---
+			if relayName == "" {
+				util.HandleError(errors.New("relay name is required (provide as positional argument or --name flag)"))
+			}
+
+			relayID, _ := cmd.Flags().GetString("relay-id")
+			if relayID == "" {
+				util.HandleError(errors.New("--relay-id is required when --enroll-method=aws"))
+			}
+
+			svcName, installErr := relay.InstallAwsAuthRelaySystemdService(relayID, domain, relayName, serviceLogFile)
+			if installErr != nil {
+				util.HandleError(installErr, "Failed to install relay systemd service")
+			}
+			installedServiceName = svcName
+		} else {
+			// Check relay type
+			instanceType, typeErr := cmd.Flags().GetString("type")
+			if typeErr != nil {
+				util.HandleError(typeErr, "Unable to parse type flag")
+			}
+			if instanceType == "" {
+				instanceType = "org"
+			}
+
+			if instanceType == "instance" {
+				// --- Instance relay path ---
+				if relayName == "" {
+					util.HandleError(errors.New("relay name is required (provide as positional argument or --name flag)"))
+				}
+
+				host, hostErr := cmd.Flags().GetString("host")
+				if hostErr != nil {
+					util.HandleError(hostErr, "Unable to parse host flag")
+				}
+				if host == "" {
+					util.HandleError(fmt.Errorf("--host flag is required for instance relays"))
+				}
+
+				relayAuthSecret, secretErr := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "relay-auth-secret", []string{gatewayv2.RELAY_AUTH_SECRET_ENV_NAME}, "")
+				if secretErr != nil {
+					util.HandleError(secretErr, "Unable to parse relay-auth-secret flag")
+				}
+				if relayAuthSecret == "" {
+					util.HandleError(fmt.Errorf("--relay-auth-secret flag or %s env must be set for instance relays", gatewayv2.RELAY_AUTH_SECRET_ENV_NAME))
+				}
+
+				svcName, installErr := relay.InstallRelaySystemdService("", domain, relayName, host, instanceType, relayAuthSecret, serviceLogFile)
+				if installErr != nil {
+					util.HandleError(installErr, "Failed to install relay systemd service")
+				}
+				installedServiceName = svcName
+			} else {
+				// --- Legacy org-level machine identity token path (backward compatibility) ---
+				if relayName == "" {
+					util.HandleError(errors.New("relay name is required (provide as positional argument or --name flag)"))
+				}
+
+				host, hostErr := cmd.Flags().GetString("host")
+				if hostErr != nil {
+					util.HandleError(hostErr, "Unable to parse host flag")
+				}
+				if host == "" {
+					util.HandleError(fmt.Errorf("--host flag is required"))
+				}
+
+				token, tokenErr := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "token", []string{gatewayv2.INFISICAL_TOKEN_ENV_NAME}, "")
+				if tokenErr != nil {
+					util.HandleError(tokenErr, "Unable to parse token flag or env")
+				}
+				if token == "" {
+					util.HandleError(fmt.Errorf("--token flag or %s env must be set", gatewayv2.INFISICAL_TOKEN_ENV_NAME))
+				}
+
+				svcName, installErr := relay.InstallRelaySystemdService(token, domain, relayName, host, instanceType, "", serviceLogFile)
+				if installErr != nil {
+					util.HandleError(installErr, "Failed to install relay systemd service")
+				}
+				installedServiceName = svcName
+			}
 		}
 
-		if instanceType != "instance" && token == "" {
-			util.HandleError(fmt.Errorf("for type '%s', --token flag or %s env must be set", instanceType, gatewayv2.INFISICAL_TOKEN_ENV_NAME))
+		if installedServiceName == "" {
+			return
 		}
 
-		if err := relay.InstallRelaySystemdService(token, domain, name, host, instanceType, relayAuthSecret, serviceLogFile); err != nil {
-			util.HandleError(err, "Failed to install relay systemd service")
-		}
-
-		enableCmd := exec.Command("systemctl", "enable", "infisical-relay")
+		enableCmd := exec.Command("systemctl", "enable", installedServiceName)
 		if err := enableCmd.Run(); err != nil {
 			util.HandleError(err, "Failed to enable relay systemd service")
 		}
 
-		log.Info().Msg("Successfully installed and enabled infisical-relay service")
-		log.Info().Msg("To start the service, run: sudo systemctl start infisical-relay")
+		log.Info().Msgf("Successfully installed and enabled %s service", installedServiceName)
+		log.Info().Msgf("To start the service, run: sudo systemctl start %s", installedServiceName)
 	},
 }
 
 var relaySystemdUninstallCmd = &cobra.Command{
-	Use:                   "uninstall",
+	Use:                   "uninstall [name]",
 	Short:                 "Uninstall and remove systemd service for the relay (requires sudo)",
 	Long:                  "Uninstall and remove systemd service for the relay. Must be run with sudo on Linux.",
-	Example:               "sudo infisical relay systemd uninstall",
+	Example:               "sudo infisical relay systemd uninstall my-relay",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if runtime.GOOS != "linux" {
 			util.HandleError(fmt.Errorf("systemd service uninstallation is only supported on Linux"))
@@ -249,7 +473,13 @@ var relaySystemdUninstallCmd = &cobra.Command{
 			util.HandleError(fmt.Errorf("systemd service uninstallation requires root/sudo privileges"))
 		}
 
-		if err := relay.UninstallRelaySystemdService(); err != nil {
+		// No name falls back to the legacy hardcoded service for backwards compatibility
+		var relayName string
+		if len(args) > 0 {
+			relayName = args[0]
+		}
+
+		if err := relay.UninstallRelaySystemdService(relayName); err != nil {
 			util.HandleError(err, "Failed to uninstall relay systemd service")
 		}
 	},
@@ -259,8 +489,11 @@ func init() {
 	relayStartCmd.Flags().String("type", "", "The type of relay to run. Defaults to 'org'")
 	relayStartCmd.Flags().String("host", "", "The IP or hostname for the relay")
 	relayStartCmd.Flags().String("name", "", "The name of the relay")
-	relayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token. if not provided, you must set the auth-method flag")
+	relayStartCmd.Flags().String("token", "", "connect with Infisical using machine identity access token, or a one-time enrollment token when --enroll-method=token")
 	relayStartCmd.Flags().String("auth-method", "", "login method [universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth]. if not provided, you must set the token flag")
+	relayStartCmd.Flags().String("enroll-method", "", "relay auth method [token, aws]. when set to 'token', uses --token as a one-time enrollment token. when set to 'aws', authenticates via signed STS GetCallerIdentity using --relay-id")
+	relayStartCmd.Flags().String("relay-id", "", "relay id (required when --enroll-method=aws)")
+	relayStartCmd.Flags().String("domain", "", "domain of your self-hosted Infisical instance (used with --enroll-method)")
 	relayStartCmd.Flags().String("client-id", "", "client id for universal auth")
 	relayStartCmd.Flags().String("client-secret", "", "client secret for universal auth")
 	relayStartCmd.Flags().String("machine-identity-id", "", "machine identity id for kubernetes, azure, gcp-id-token, gcp-iam, and aws-iam auth methods")
@@ -269,13 +502,17 @@ func init() {
 	relayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
 
 	// systemd install command flags
-	relaySystemdInstallCmd.Flags().String("token", "", "Connect with Infisical using machine identity access token (org type)")
-	relaySystemdInstallCmd.Flags().String("log-file", "", "The file to write the service logs to. Example: /var/log/infisical/relay.log. If not provided, logs will not be written to a file.")
-	relaySystemdInstallCmd.Flags().String("domain", "", "Domain of your self-hosted Infisical instance")
-	relaySystemdInstallCmd.Flags().String("name", "", "The name of the relay")
-	relaySystemdInstallCmd.Flags().String("host", "", "The IP or hostname for the relay")
-	relaySystemdInstallCmd.Flags().String("type", "org", "The type of relay to run. Defaults to 'org'")
-	relaySystemdInstallCmd.Flags().String("relay-auth-secret", "", "Relay auth secret (required for type=instance if env not set)")
+	relaySystemdInstallCmd.Flags().String("token", "", "enrollment token for authenticating with Infisical")
+	relaySystemdInstallCmd.Flags().String("enroll-method", "", "relay auth method [token, aws]")
+	relaySystemdInstallCmd.Flags().String("relay-id", "", "relay id (required when --enroll-method=aws)")
+	relaySystemdInstallCmd.Flags().String("log-file", "", "path to write service logs (e.g. /var/log/infisical/relay.log)")
+	relaySystemdInstallCmd.Flags().String("domain", "", "domain of your Infisical instance")
+	relaySystemdInstallCmd.Flags().String("type", "org", "type of relay [org, instance]")
+	relaySystemdInstallCmd.Flags().String("host", "", "IP or hostname for the relay (required for --type=instance)")
+	relaySystemdInstallCmd.Flags().String("relay-auth-secret", "", "relay auth secret (required for --type=instance)")
+	// Hidden flag for backward compatibility with legacy org-level machine identity flow
+	relaySystemdInstallCmd.Flags().String("name", "", "")
+	_ = relaySystemdInstallCmd.Flags().MarkHidden("name")
 
 	relaySystemdCmd.AddCommand(relaySystemdInstallCmd)
 	relaySystemdCmd.AddCommand(relaySystemdUninstallCmd)

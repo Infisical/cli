@@ -2,6 +2,12 @@ name: Build and release CLI
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Do a dry-run (no artifacts are published and no release is created)
+        type: boolean
+        default: true
 
   push:
     # run only against tags
@@ -10,13 +16,20 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # Required for NPM OIDC auth for releases
+  id-token: write # Required for NPM OIDC auth for releases
 
 jobs:
   validate-tag-branch:
+    # Tag validation only makes sense on actual tag push. Skipped on
+    # workflow_dispatch runs (dry-run or manual real release from any branch).
+    if: github.event_name == 'push'
     uses: ./.github/workflows/pre-tag-validation.yml
   cli-tests:
     uses: ./.github/workflows/run-cli-e2e-tests.yml
+    secrets: inherit
+
+  build-rdp-bridge:
+    uses: ./.github/workflows/build-rdp-bridge.yml
 
   # cli-integration-tests:
   #   name: Run tests before deployment
@@ -32,16 +45,24 @@ jobs:
   #     CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE: ${{ secrets.CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE }}
 
   npm-release:
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
+      needs.goreleaser.result != 'skipped' && needs.goreleaser.result != 'cancelled' &&
+      needs.goreleaser-darwin.result != 'skipped' && needs.goreleaser-darwin.result != 'cancelled' &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     runs-on: ubuntu-latest
     env:
       working-directory: ./npm
     needs:
       # - cli-integration-tests
       - goreleaser
+      - goreleaser-darwin
       - validate-tag-branch
       - cli-tests
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
 
@@ -54,10 +75,41 @@ jobs:
       - name: Print version
         run: echo ${{ env.CLI_VERSION }}
 
+      # The real gate for this job. `npm install -g @infisical/cli` runs
+      # npm/src/index.cjs at preinstall, which downloads
+      # cli_<version>_<platform>_<arch>.<ext> from this release, so publishing
+      # before those assets exist ships a package that 404s on install.
+      # Keep in sync with getPlatform()/getArchitecture() in npm/src/index.cjs.
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort > /tmp/release-assets.txt
+          echo "Release $TAG has $(wc -l < /tmp/release-assets.txt) asset(s)."
+          missing=()
+          required=0
+          for combo in \
+            linux_amd64:tar.gz linux_arm64:tar.gz linux_386:tar.gz linux_armv6:tar.gz linux_armv7:tar.gz \
+            darwin_amd64:tar.gz darwin_arm64:tar.gz \
+            windows_amd64:zip windows_arm64:zip \
+            freebsd_amd64:tar.gz freebsd_arm64:tar.gz freebsd_armv6:tar.gz freebsd_armv7:tar.gz; do
+            required=$((required + 1))
+            name="cli_${CLI_VERSION}_${combo%%:*}.${combo##*:}"
+            grep -qxF "$name" /tmp/release-assets.txt || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Release $TAG is missing ${#missing[@]} of $required asset(s) that the npm preinstall downloads, refusing to publish: ${missing[*]}"
+            exit 1
+          fi
+          echo "All $required assets required by the npm preinstall are present."
+
       - name: Setup Node
         uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
         with:
-          node-version: '24.14.0'
+          node-version: "24.14.0"
           cache: "npm"
           cache-dependency-path: ./npm/package-lock.json
           registry-url: "https://registry.npmjs.org"
@@ -74,34 +126,50 @@ jobs:
         working-directory: ${{ env.working-directory }}
         run: npm pack
 
+      # npm publish returns E403 for a version that already exists, which would
+      # make a re-run of an otherwise-recoverable release fail here. Skip if the
+      # version is already on the registry.
       - name: Publish NPM
         working-directory: ${{ env.working-directory }}
-        run: npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public
+        run: |
+          if npm view "@infisical/cli@${{ env.CLI_VERSION }}" version >/dev/null 2>&1; then
+            echo "@infisical/cli@${{ env.CLI_VERSION }} already published, skipping"
+            exit 0
+          fi
+          npm publish --tarball=./infisical-sdk-${{github.ref_name}} --access public
 
   goreleaser:
     runs-on: ubuntu-latest-8-cores
+    outputs:
+      repos-published: ${{ steps.invalidate.outputs.completed }}
     needs:
       - validate-tag-branch
       - cli-tests
+      - build-rdp-bridge
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
       - name: 🐋 Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
       - name: 🔧 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@885d1462b80bc1c1c7f0b00334ad271f09369c55 # v2.10.0
       - run: git fetch --force --tags
       - run: echo "Ref name ${{github.ref_name}}"
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@be3c94b385c4f180051c996d336f57a34c397495 # v3.6.1
         with:
-          go-version: "1.24.13"
+          go-version: "1.25.14"
           cache: true
           cache-dependency-path: go.sum
       - name: Setup for libssl1.0-dev
@@ -110,11 +178,89 @@ jobs:
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
           sudo apt update
           sudo apt-get install -y libssl1.0-dev
-      - name: OSXCross for CGO Support
+      - name: Install glibc cross-compilers for PKCS#11 (HSM) builds
         run: |
-          mkdir ../../osxcross
-          git clone https://github.com/plentico/osxcross-target.git ../../osxcross/target
-      - uses: goreleaser/goreleaser-action@v4
+          set -euo pipefail
+          # PKCS#11 driver loading uses dlopen; the artifact must be dynamically
+          # linked against glibc. We use the system gcc for amd64 (native) and
+          # gcc-aarch64-linux-gnu for arm64.
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install cross-compile toolchains for RDP tier
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          MUSL_CROSS_TAG=20260430
+          sudo mkdir -p /opt/musl-cross
+          for triple in \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            i686-unknown-linux-musl \
+            arm-unknown-linux-musleabi \
+            armv7-unknown-linux-musleabihf; do
+            case "$triple" in
+              x86_64-unknown-linux-musl)       sha=2495cfe18fc1f406d5cab93d902176af75a78f0ae93137f3e8b2df7708ec32fa ;;
+              aarch64-unknown-linux-musl)      sha=9303385fc29f8197004f641f96382196d56e4ec6dd975bff8ddd66641378628d ;;
+              i686-unknown-linux-musl)         sha=94dad4ea891b8ac701f9b590dc6db37461c3606ccc20f1c3dfe3901b1e248729 ;;
+              arm-unknown-linux-musleabi)      sha=8799be632cd66469a269f5aefbdb0266bf240b37194fc9cc3a34351c932bae2b ;;
+              armv7-unknown-linux-musleabihf)  sha=1b7d3fb5fbbe94357c094116e6fbf441e5074fc9c512415d8d9c758309705f1d ;;
+            esac
+            tarball="/tmp/${triple}.tar.xz"
+            curl --retry 5 --retry-delay 10 --retry-all-errors \
+                 --connect-timeout 30 --max-time 240 \
+                 -fsSL "https://github.com/cross-tools/musl-cross/releases/download/${MUSL_CROSS_TAG}/${triple}.tar.xz" \
+                 -o "$tarball"
+            echo "${sha}  ${tarball}" | sha256sum -c -
+            sudo tar -xJ -f "$tarball" -C /opt/musl-cross
+            rm -f "$tarball"
+            echo "/opt/musl-cross/${triple}/bin" >> "$GITHUB_PATH"
+          done
+      - name: Download RDP bridge static libs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: rdp-bridge-*
+          path: /tmp/rdp-bridge-artifacts/
+      - name: Stage RDP bridge static libs into cargo target dirs
+        run: |
+          set -euo pipefail
+          for triple in \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            i686-unknown-linux-musl \
+            arm-unknown-linux-musleabi \
+            armv7-unknown-linux-musleabihf \
+            x86_64-pc-windows-gnu; do
+            target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
+            mkdir -p "$target_dir"
+            cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
+          done
+      - name: GoReleaser (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: goreleaser-dist-linux
+          path: dist/
+          retention-days: 7
+      # continue-on-error: without --fail-fast, goreleaser collects publisher
+      # errors and keeps going, so one failing publisher (e.g. an AUR outage)
+      # still leaves Docker and the GitHub release assets published
+      - name: GoReleaser (release)
+        id: goreleaser
+        continue-on-error: true
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -125,16 +271,25 @@ jobs:
           FURY_TOKEN: ${{ secrets.FURYPUSHTOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
-          python-version: "3.12"
+          python-version: "3.9"
       - name: Install mkrepo and dependencies
-        run: pip install mkrepo univers boto3
-      - name: Install AWS CLI
-        run: pip install awscli
-      - name: Install rpm-sign
-        run: sudo apt-get install -y rpm
-      - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252
+        run: |
+          python -m venv /opt/mkrepo-venv
+          /opt/mkrepo-venv/bin/pip install mkrepo==1.0.2 univers==30.9.0 boto3==1.17.5 botocore==1.20.5
+          echo "/opt/mkrepo-venv/bin" >> "$GITHUB_PATH"
+      - name: Install rpm-sign and unzip
+        run: sudo apt-get update && sudo apt-get install -y rpm unzip
+      # AWS CLI v2 (pinned), kept outside the pip env: awscli (pip, v1) cannot
+      # coexist with mkrepo's boto3 1.17.5 (different s3transfer). v2 is bundled.
+      - name: Install AWS CLI v2 (pinned)
+        run: |
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.15.0.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          rm -rf /tmp/aws /tmp/awscliv2.zip
+      - uses: ruby/setup-ruby@354a1ad156761f5ee2b7b13fa8e09943a5e8d252 # v1.229.0
         with:
           ruby-version: "3.3" # Not needed with a .ruby-version, .tool-versions or mise.toml
           bundler-cache: true # runs 'bundle install' and caches installed gems automatically
@@ -151,29 +306,284 @@ jobs:
           chmod 600 /tmp/infisical-apk.rsa
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+      # The publish below no longer depends on goreleaser's exit code, so it can
+      # be reached with a dist/ that a failed build left empty or partial.
+      # upload_to_s3.sh globs (`for i in *.deb`) and would treat that as a
+      # no-op success, so require the packages we expect before touching the
+      # repos.
+      - name: Check release artifacts are present
+        id: artifacts
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        env:
+          GORELEASER_OUTCOME: ${{ steps.goreleaser.outcome }}
+        run: |
+          set -euo pipefail
+          # Keep in sync with the `builds:`
+          # list of the `infisical` nfpm in .goreleaser.yaml.
+          ARCHES="386 amd64 arm64 armv6 armv7"
+          missing=()
+          for ext in deb rpm apk; do
+            for arch in $ARCHES; do
+              count=$(find dist -maxdepth 1 -type f -name "infisical_*_linux_${arch}.${ext}" 2>/dev/null | wc -l | tr -d ' ' || true)
+              [ "$count" -gt 0 ] || missing+=("linux_${arch}.${ext}")
+            done
+          done
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All 15 expected linux packages present in dist/."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+          echo "::error::dist/ is missing ${#missing[@]} expected package(s) - skipping the repository publish: ${missing[*]}"
+          # If goreleaser reported success, an empty dist/ is an unexplained
+          # failure that nothing downstream would catch, so fail here.
+          if [ "$GORELEASER_OUTCOME" = "success" ]; then
+            exit 1
+          fi
+
+      # upload_to_s3.sh syncs the whole apk repo down before rebuilding the index, and
+      # that repo holds the full backfilled history.
+      - name: Free disk space before publish
+        if: steps.artifacts.outputs.publish == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
       - name: Publish packages to repositories
+        if: steps.artifacts.outputs.publish == 'true'
         run: bash upload_to_s3.sh
         env:
+          AWS_DEFAULT_REGION: us-east-1
           INFISICAL_CLI_S3_BUCKET: ${{ secrets.INFISICAL_CLI_S3_BUCKET }}
           INFISICAL_CLI_REPO_SIGNING_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_SIGNING_KEY_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           APK_PRIVATE_KEY_PATH: /tmp/infisical-apk.rsa
+      # Waits for completion so verify-published-repos installs from the new
+      # indexes instead of stale ones still cached at the edge.
       - name: Invalidate Cloudfront cache
-        run: aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths '/rpm/Packages/*' '/rpm/repodata/*' '/deb/dists/stable/*' '/apk/stable/main/*'
+        id: invalidate
+        if: steps.artifacts.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          ID=$(aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths '/rpm/*' '/deb/dists/stable/*' '/apk/stable/main/*' \
+            --query 'Invalidation.Id' --output text)
+          echo "Waiting for CloudFront invalidation $ID to complete..."
+          aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$ID"
+          echo "Invalidation $ID completed."
+          echo "completed=true" >> "$GITHUB_OUTPUT"
         env:
+          AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: ${{ secrets.INFISICAL_CLI_REPO_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.INFISICAL_CLI_REPO_AWS_SECRET_ACCESS_KEY }}
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.INFISICAL_CLI_REPO_CLOUDFRONT_DISTRIBUTION_ID }}
 
-  # Currently only supports Windows amd64
+      # Must stay the last step in this job: everything above is allowed to run
+      # despite a goreleaser publisher failure, and this is what keeps the run
+      # red so the failure is still visible and alerted on.
+      - name: Fail if GoReleaser reported errors
+        if: steps.goreleaser.outcome == 'failure'
+        run: exit 1
+
+  # Installs the just-published release from the public repos in clean
+  # containers, as a customer would, so a missing, unsigned or stale index
+  # fails the run. Gated on the invalidation completing, which implies the
+  # upload succeeded; a goreleaser publisher error alone does not skip it.
+  verify-published-repos:
+    name: Verify published repos (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs:
+      - goreleaser
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) &&
+      needs.goreleaser.outputs.repos-published == 'true'
+    strategy:
+      fail-fast: false
+      # nfpm stamps rpm packages with release 1 and deb/apk packages with no
+      # revision, so only rpm carries a suffix.
+      matrix:
+        include:
+          - image: debian:12
+            prepare: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y curl ca-certificates
+              curl -fsSL https://artifacts-cli.infisical.com/setup.deb.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -o Dir::Etc::sourcelist=sources.list.d/infisical.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+              apt-get install -y "infisical=${VERSION}"
+          - image: ubuntu:24.04
+            prepare: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y curl ca-certificates
+              curl -fsSL https://artifacts-cli.infisical.com/setup.deb.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -o Dir::Etc::sourcelist=sources.list.d/infisical.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+              apt-get install -y "infisical=${VERSION}"
+          - image: rockylinux:9
+            prepare: |
+              curl -fsSL https://artifacts-cli.infisical.com/setup.rpm.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              dnf install -y --refresh --disablerepo='*' --enablerepo=infisical-cli "infisical-${VERSION}-1"
+          - image: amazonlinux:2023
+            prepare: |
+              curl -fsSL https://artifacts-cli.infisical.com/setup.rpm.sh -o /tmp/setup.sh
+              bash /tmp/setup.sh
+            install: |
+              dnf install -y --refresh --disablerepo='*' --enablerepo=infisical-cli "infisical-${VERSION}-1"
+          - image: alpine:3.21
+            prepare: |
+              apk add --no-cache curl ca-certificates
+              curl -fsSL https://artifacts-cli.infisical.com/setup.apk.sh -o /tmp/setup.sh
+              sh /tmp/setup.sh
+            install: |
+              apk update
+              apk add "infisical=${VERSION}"
+    steps:
+      - name: Install released version from public repo
+        env:
+          TAG: ${{ github.ref_name }}
+          IMAGE: ${{ matrix.image }}
+          PREPARE: ${{ matrix.prepare }}
+          INSTALL: ${{ matrix.install }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          echo "Verifying infisical $VERSION on $IMAGE"
+          CHECK="set -eu
+          $INSTALL
+          infisical --version > /tmp/infisical-version
+          cat /tmp/infisical-version
+          grep -qFw \"\$VERSION\" /tmp/infisical-version"
+          container="verify-infisical-$$"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          prepared=false
+          max_attempts=5
+          for attempt in $(seq 1 "$max_attempts"); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+              prepared=false
+              docker run -d --name "$container" -e VERSION="$VERSION" "$IMAGE" tail -f /dev/null >/dev/null || true
+            fi
+            if ! $prepared && docker exec "$container" sh -c "set -eu
+          $PREPARE"; then
+              prepared=true
+            fi
+            if $prepared && docker exec "$container" sh -c "$CHECK"; then
+              echo "infisical $VERSION installed and verified on $IMAGE (attempt $attempt)."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              delay=$((attempt * 30))
+              echo "::warning::Attempt $attempt/$max_attempts to install infisical $VERSION on $IMAGE failed, retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::Could not install and verify infisical $VERSION from https://artifacts-cli.infisical.com on $IMAGE after $max_attempts attempts"
+          exit 1
+
+  goreleaser-darwin:
+    runs-on: macos-latest
+    needs:
+      - validate-tag-branch
+      - cli-tests
+      - build-rdp-bridge
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      needs.build-rdp-bridge.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --force --tags
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.25.14"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download darwin RDP bridge static libs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: rdp-bridge-*-apple-darwin
+          path: /tmp/rdp-bridge-artifacts/
+
+      - name: Stage darwin RDP bridge static libs
+        run: |
+          set -euo pipefail
+          for triple in x86_64-apple-darwin aarch64-apple-darwin; do
+            target_dir="packages/pam/handlers/rdp/native/target/$triple/release"
+            mkdir -p "$target_dir"
+            cp "/tmp/rdp-bridge-artifacts/rdp-bridge-$triple/libinfisical_rdp_bridge.a" "$target_dir/"
+          done
+
+      - name: GoReleaser Darwin (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-darwin.yaml --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: GoReleaser Darwin (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-darwin.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: goreleaser-dist-darwin
+          path: dist/
+          retention-days: 7
+
+  # Builds the Windows Server container images (→ Docker Hub). The
+  # binary baked in is RDP-enabled via MinGW CGO, matching the
+  # user-facing Windows zip.
+  #
+  # The Rust bridge is built here natively rather than downloaded from
+  # build-rdp-bridge: cross-rs's MinGW produces MSVCRT-ABI archives,
+  # but windows-2022's MinGW 14 is UCRT-based, which doesn't resolve
+  # MSVCRT-only symbols like __iob_func. Building both the .a and the
+  # Go binary on the same runner guarantees the ABIs match.
   goreleaser-windows:
     runs-on: windows-2022
     needs:
       - validate-tag-branch
       - cli-tests
+    if: |
+      always() &&
+      needs.cli-tests.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.validate-tag-branch.result == 'success')
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
 
@@ -181,19 +591,55 @@ jobs:
         run: git fetch --force --tags
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@be3c94b385c4f180051c996d336f57a34c397495 # v3.6.1
         with:
-          go-version: "1.24.13"
+          go-version: "1.25.14"
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Cache cargo registry + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/pam/handlers/rdp/native/target
+          key: rdp-bridge-windows-cargo-${{ hashFiles('packages/pam/handlers/rdp/native/Cargo.lock') }}
+          restore-keys: rdp-bridge-windows-cargo-
+
+      - name: Install pinned Rust toolchain + gnu target
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: |
+          rustup show active-toolchain
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Build Rust bridge for x86_64-pc-windows-gnu
+        working-directory: packages/pam/handlers/rdp/native
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
       - name: 🐋 Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v4
+      - name: GoReleaser Windows (dry-run snapshot)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
+        with:
+          distribution: goreleaser-pro
+          version: v1.26.2-pro
+          args: release --clean --config .goreleaser-windows.yaml --skip-validate --snapshot --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GO_RELEASER_GITHUB_TOKEN }}
+          POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: GoReleaser Windows (release)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        uses: goreleaser/goreleaser-action@5fdedb94abba051217030cc86d4523cf3f02243d # v4.6.0
         with:
           distribution: goreleaser-pro
           version: v1.26.2-pro
@@ -203,5 +649,75 @@ jobs:
           POSTHOG_API_KEY_FOR_CLI: ${{ secrets.POSTHOG_API_KEY_FOR_CLI }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      - name: Upload dry-run dist as workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: goreleaser-dist-windows
+          path: dist/
+          retention-days: 7
 
+  # Dry runs are excluded: those are manual tests with an operator already
+  # watching the run, so a failure there shouldn't page anyone.
+  notify-pipeline-blocked:
+    name: Notify incident.io if pipeline blocked
+    runs-on: ubuntu-latest
+    needs:
+      - validate-tag-branch
+      - cli-tests
+      - build-rdp-bridge
+      - goreleaser
+      - goreleaser-darwin
+      - goreleaser-windows
+      - npm-release
+      - verify-published-repos
+    if: |
+      always() &&
+      contains(needs.*.result, 'failure') &&
+      (github.event_name == 'push' || !inputs.dry_run)
+    steps:
+      - name: Send blocked alert to incident.io
+        env:
+          ALERT_URL: ${{ secrets.INCIDENT_IO_DEPLOY_ALERT_URL }}
+          ALERT_TOKEN: ${{ secrets.INCIDENT_IO_DEPLOY_ALERT_TOKEN }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
 
+          # Guard against a misconfigured/rotated secret redirecting the POST (and the
+          # bearer token) to an unintended host: only allow the incident.io API origin.
+          case "$ALERT_URL" in
+            https://api.incident.io/*) ;;
+            *)
+              echo "::error::ALERT_URL does not point at https://api.incident.io/ — refusing to send alert."
+              exit 1
+              ;;
+          esac
+
+          FAILED=$(echo "$NEEDS_JSON" | jq -r 'to_entries | map(select(.value.result == "failure") | .key) | join(", ")')
+          BLOCKED=$(echo "$NEEDS_JSON" | jq -r 'to_entries | map(select(.value.result == "cancelled" or .value.result == "skipped") | .key) | join(", ")')
+          jq -n \
+            --arg title "[${REPO}] Build and release CLI pipeline blocked" \
+            --arg failed "${FAILED:-unknown}" \
+            --arg blocked "${BLOCKED:-none}" \
+            --arg dedup "cli-release-${RUN_ID}" \
+            --arg url "$RUN_URL" \
+            --arg tag "${RELEASE_TAG:-unknown}" \
+            --arg actor "$ACTOR" \
+            '{
+              title: $title,
+              description: ("Failed stage(s): " + $failed + "."),
+              deduplication_key: $dedup,
+              status: "firing",
+              source_url: $url,
+              metadata: { failed_stages: $failed, blocked_stages: $blocked, release_tag: $tag, actor: $actor }
+            }' \
+          | curl -sS --fail-with-body --connect-timeout 10 --max-time 30 -X POST "$ALERT_URL" \
+              -H "Authorization: Bearer $ALERT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d @-

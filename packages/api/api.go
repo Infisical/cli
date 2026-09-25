@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -12,7 +15,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const USER_AGENT = "cli"
+// USER_AGENT carries the CLI version so the platform can tell which features a caller
+// supports. packages/util sets the version, because that is where ldflags injects it and
+// importing util from here would be an import cycle.
+var USER_AGENT = "cli"
 
 const (
 	operationCallGetRawSecretsV3                   = "CallGetRawSecretsV3"
@@ -39,28 +45,40 @@ const (
 	operationCallFetchSingleSecretByName           = "CallFetchSingleSecretByName"
 	operationCallCreateRawSecretsV3                = "CallCreateRawSecretsV3"
 	operationCallUpdateRawSecretsV3                = "CallUpdateRawSecretsV3"
-	operationCallRegisterGatewayIdentityV1         = "CallRegisterGatewayIdentityV1"
-	operationCallExchangeRelayCertV1               = "CallExchangeRelayCertV1"
-	operationCallGatewayHeartBeatV1                = "CallGatewayHeartBeatV1"
 	operationCallGatewayHeartBeatV2                = "CallGatewayHeartBeatV2"
+	operationCallGatewayMetricsReportV2            = "CallGatewayMetricsReportV2"
 	operationCallBootstrapInstance                 = "CallBootstrapInstance"
 	operationCallRegisterInstanceRelay             = "CallRegisterInstanceRelay"
 	operationCallRegisterOrgRelay                  = "CallRegisterOrgRelay"
 	operationCallGetOrgRelays                      = "CallGetOrgRelays"
 	operationCallRegisterGateway                   = "CallRegisterGateway"
+	operationCallConnectGateway                    = "CallConnectGateway"
+	operationCallEnrollGateway                     = "CallEnrollGateway"
+	operationCallGatewayLogin                      = "CallGatewayLogin"
 	operationCallPAMAccess                         = "CallPAMAccess"
+	operationCallPAMListAccessibleAccounts         = "CallPAMListAccessibleAccounts"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
+	operationCallPAMCreateAccessRequest            = "CallPAMCreateAccessRequest"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
 	operationCallPAMSessionTermination             = "CallPAMSessionTermination"
+	operationCallUploadPamSessionEventBatch        = "CallUploadPamSessionEventBatch"
+	operationCallPAMSessionChunkPresignedPut       = "CallPAMSessionChunkPresignedPut"
+	operationCallPAMSessionChunkMetadata           = "CallPAMSessionChunkMetadata"
 	operationCallGetMFASessionStatus               = "CallGetMFASessionStatus"
 	operationCallOrgRelayHeartBeat                 = "CallOrgRelayHeartBeat"
 	operationCallInstanceRelayHeartBeat            = "CallInstanceRelayHeartBeat"
+	operationCallRelayLogin                        = "CallRelayLogin"
+	operationCallKmipServerLogin                   = "CallKmipServerLogin"
+	operationCallRelayConnect                      = "CallRelayConnect"
+	operationCallRelayHeartbeatV2                  = "CallRelayHeartbeatV2"
 	operationCallIssueCertificate                  = "CallIssueCertificate"
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
+	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
+	operationCallRevokeUserSession                 = "CallRevokeUserSession"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -142,6 +160,25 @@ func CallLoginV3(httpClient *resty.Client, request GetLoginV3Request) (GetLoginV
 	}
 
 	return loginV3Response, nil
+}
+
+// CallRevokeUserSession revokes a single server-side login session by its id
+// (the tokenVersionId claim carried in every session JWT).
+func CallRevokeUserSession(httpClient *resty.Client, sessionID string) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v2/users/me/sessions/%v", config.INFISICAL_URL, url.PathEscape(sessionID)))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallRevokeUserSession, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallRevokeUserSession, response, nil)
+	}
+
+	return nil
 }
 
 func CallVerifyMfaToken(httpClient *resty.Client, request VerifyMfaTokenRequest) (*VerifyMfaTokenResponse, *VerifyMfaTokenErrorResponse, error) {
@@ -326,7 +363,7 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 		R().
 		SetResult(&projectResponse).
 		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, slug))
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
 
 	if err != nil {
 		return Project{}, NewGenericRequestError("CallGetProjectBySlug", err)
@@ -339,6 +376,25 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error
 	return Project(projectResponse), nil
 }
 
+func CallGetPkiApplicationByName(httpClient *resty.Client, name string) (PkiApplication, error) {
+	var applicationResponse GetPkiApplicationResponse
+	response, err := httpClient.
+		R().
+		SetResult(&applicationResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/by-name/%s", config.INFISICAL_URL, url.PathEscape(name)))
+
+	if err != nil {
+		return PkiApplication{}, NewGenericRequestError("CallGetPkiApplicationByName", err)
+	}
+
+	if response.IsError() {
+		return PkiApplication{}, NewAPIErrorWithResponse("CallGetPkiApplicationByName", response, nil)
+	}
+
+	return applicationResponse.Application, nil
+}
+
 func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug string) (CertificateProfile, error) {
 	var profileResponse GetCertificateProfileResponse
 	response, err := httpClient.
@@ -346,7 +402,7 @@ func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug s
 		SetResult(&profileResponse).
 		SetHeader("User-Agent", USER_AGENT).
 		SetQueryParam("projectId", projectId).
-		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, slug))
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
 
 	if err != nil {
 		return CertificateProfile{}, NewGenericRequestError("CallGetCertificateProfileBySlug", err)
@@ -357,6 +413,25 @@ func CallGetCertificateProfileBySlug(httpClient *resty.Client, projectId, slug s
 	}
 
 	return profileResponse.CertificateProfile, nil
+}
+
+func CallListPkiApplicationProfiles(httpClient *resty.Client, applicationId string) ([]PkiApplicationProfile, error) {
+	var listResponse ListPkiApplicationProfilesResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/%s/profiles", config.INFISICAL_URL, url.PathEscape(applicationId)))
+
+	if err != nil {
+		return nil, NewGenericRequestError("CallListPkiApplicationProfiles", err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse("CallListPkiApplicationProfiles", response, nil)
+	}
+
+	return listResponse.Profiles, nil
 }
 
 func CallIsAuthenticated(httpClient *resty.Client) bool {
@@ -548,36 +623,31 @@ func CallMachineIdentityRefreshAccessToken(httpClient *resty.Client, request Uni
 	return universalAuthRefreshResponse, nil
 }
 
-func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Request) (GetRawSecretsV3Response, error) {
-	var getRawSecretsV3Response GetRawSecretsV3Response
+func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (GetSecretsV4Response, error) {
+	var getRawSecretsV4Response GetSecretsV4Response
 	req := httpClient.
 		R().
-		SetResult(&getRawSecretsV3Response).
+		SetResult(&getRawSecretsV4Response).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		SetQueryParam("workspaceId", request.WorkspaceId).
+		SetQueryParam("projectId", request.WorkspaceId).
 		SetQueryParam("environment", request.Environment).
-		SetQueryParam("secretPath", request.SecretPath)
+		SetQueryParam("secretPath", request.SecretPath).
+		// v4 defaults these to true, so they must always be sent explicitly to honor a false flag
+		SetQueryParam("includeImports", strconv.FormatBool(request.IncludeImport)).
+		SetQueryParam("recursive", strconv.FormatBool(request.Recursive)).
+		SetQueryParam("expandSecretReferences", strconv.FormatBool(request.ExpandSecretReferences)).
+		// v4 resolves personal overrides server-side (Priority when true, NeverInclude when false)
+		SetQueryParam("includePersonalOverrides", strconv.FormatBool(request.IncludePersonalOverrides))
 
 	if request.TagSlugs != "" {
 		req.SetQueryParam("tagSlugs", request.TagSlugs)
 	}
 
-	if request.IncludeImport {
-		req.SetQueryParam("include_imports", "true")
-	}
-	if request.Recursive {
-		req.SetQueryParam("recursive", "true")
-	}
-
-	if request.ExpandSecretReferences {
-		req.SetQueryParam("expandSecretReferences", "true")
-	}
-
-	response, err := req.Get(fmt.Sprintf("%v/v3/secrets/raw", config.INFISICAL_URL))
+	response, err := req.Get(fmt.Sprintf("%v/v4/secrets", config.INFISICAL_URL))
 
 	if err != nil {
-		return GetRawSecretsV3Response{}, NewGenericRequestError(operationCallGetRawSecretsV3, err)
+		return GetSecretsV4Response{}, NewGenericRequestError(operationCallGetRawSecretsV3, err)
 	}
 
 	if response.IsError() &&
@@ -585,44 +655,44 @@ func CallGetRawSecretsV3(httpClient *resty.Client, request GetRawSecretsV3Reques
 			strings.Contains(strings.ToLower(response.String()), "failed to find bot key") ||
 			strings.Contains(strings.ToLower(response.String()), "bot is not active")) {
 		additionalContext := fmt.Sprintf(`Project with id %s is incompatible with your current CLI version. Upgrade your project by visiting the project settings page. If you're self-hosting and project upgrade option isn't yet available, contact your administrator to upgrade your Infisical instance to the latest release.`, request.WorkspaceId)
-		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, &additionalContext)
+		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, &additionalContext)
 	}
 
 	if response.IsError() {
-		return GetRawSecretsV3Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
+		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
 	}
 
-	getRawSecretsV3Response.ETag = response.Header().Get(("etag"))
+	getRawSecretsV4Response.ETag = response.Header().Get(("etag"))
 
-	return getRawSecretsV3Response, nil
+	return getRawSecretsV4Response, nil
 }
 
-func CallFetchSingleSecretByName(httpClient *resty.Client, request GetRawSecretV3ByNameRequest) (GetRawSecretV3ByNameResponse, error) {
-	var getRawSecretV3ByNameResponse GetRawSecretV3ByNameResponse
+func CallFetchSingleSecretByName(httpClient *resty.Client, request GetSecretV4ByNameRequest) (GetSecretV4ByNameResponse, error) {
+	var getSecretV4ByNameResponse GetSecretV4ByNameResponse
 	response, err := httpClient.
 		R().
 		SetHeader("User-Agent", USER_AGENT).
-		SetResult(&getRawSecretV3ByNameResponse).
+		SetResult(&getSecretV4ByNameResponse).
 		SetBody(request).
 		SetQueryParam("expandSecretReferences", "true").
-		SetQueryParam("include_imports", "true").
+		SetQueryParam("includeImports", "true").
 		SetQueryParam("environment", request.Environment).
 		SetQueryParam("secretPath", request.SecretPath).
-		SetQueryParam("workspaceId", request.WorkspaceID).
+		SetQueryParam("projectId", request.WorkspaceID).
 		SetQueryParam("type", "shared").
-		Get(fmt.Sprintf("%v/v3/secrets/raw/%s", config.INFISICAL_URL, request.SecretName))
+		Get(fmt.Sprintf("%v/v4/secrets/%s", config.INFISICAL_URL, request.SecretName))
 
 	if err != nil {
-		return GetRawSecretV3ByNameResponse{}, NewGenericRequestError(operationCallFetchSingleSecretByName, err)
+		return GetSecretV4ByNameResponse{}, NewGenericRequestError(operationCallFetchSingleSecretByName, err)
 	}
 
 	if response.IsError() {
-		return GetRawSecretV3ByNameResponse{}, NewAPIErrorWithResponse(operationCallFetchSingleSecretByName, response, nil)
+		return GetSecretV4ByNameResponse{}, NewAPIErrorWithResponse(operationCallFetchSingleSecretByName, response, nil)
 	}
 
-	getRawSecretV3ByNameResponse.ETag = response.Header().Get(("etag"))
+	getSecretV4ByNameResponse.ETag = response.Header().Get(("etag"))
 
-	return getRawSecretV3ByNameResponse, nil
+	return getSecretV4ByNameResponse, nil
 }
 
 func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDynamicSecretLeaseV1Request) (CreateDynamicSecretLeaseV1Response, error) {
@@ -643,6 +713,24 @@ func CallCreateDynamicSecretLeaseV1(httpClient *resty.Client, request CreateDyna
 	}
 
 	return createDynamicSecretLeaseResponse, nil
+}
+
+func CallRevokeDynamicSecretLeaseV1(httpClient *resty.Client, request RevokeDynamicSecretLeaseV1Request) (RevokeDynamicSecretLeaseV1Response, error) {
+	var res RevokeDynamicSecretLeaseV1Response
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Delete(fmt.Sprintf("%v/v1/dynamic-secrets/leases/%s", config.INFISICAL_URL, request.LeaseID))
+
+	if err != nil {
+		return RevokeDynamicSecretLeaseV1Response{}, NewGenericRequestError("CallRevokeDynamicSecretLeaseV1", err)
+	}
+	if response.IsError() {
+		return RevokeDynamicSecretLeaseV1Response{}, NewAPIErrorWithResponse("CallRevokeDynamicSecretLeaseV1", response, nil)
+	}
+	return res, nil
 }
 
 func CallGetDynamicSecretLeaseV1(httpClient *resty.Client, request GetDynamicSecretLeaseV1Request) (GetDynamicSecretLeaseV1Response, error) {
@@ -706,66 +794,11 @@ func CallUpdateRawSecretsV3(httpClient *resty.Client, request UpdateRawSecretByN
 	return nil
 }
 
-func CallRegisterGatewayIdentityV1(httpClient *resty.Client) (*GetRelayCredentialsResponseV1, error) {
-	var resBody GetRelayCredentialsResponseV1
+func CallGatewayHeartBeatV2(httpClient *resty.Client, request GatewayHeartbeatRequest) error {
 	response, err := httpClient.
 		R().
-		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/register-identity", config.INFISICAL_URL))
-
-	if err != nil {
-		return nil, NewGenericRequestError(operationCallRegisterGatewayIdentityV1, err)
-	}
-
-	if response.IsError() {
-		return nil, NewAPIErrorWithResponse(operationCallRegisterGatewayIdentityV1, response, nil)
-	}
-
-	return &resBody, nil
-}
-
-func CallExchangeRelayCertV1(httpClient *resty.Client, request ExchangeRelayCertRequestV1) (*ExchangeRelayCertResponseV1, error) {
-	var resBody ExchangeRelayCertResponseV1
-	response, err := httpClient.
-		R().
-		SetResult(&resBody).
 		SetBody(request).
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/exchange-cert", config.INFISICAL_URL))
-
-	if err != nil {
-		return nil, NewGenericRequestError(operationCallExchangeRelayCertV1, err)
-	}
-
-	if response.IsError() {
-		return nil, NewAPIErrorWithResponse(operationCallExchangeRelayCertV1, response, nil)
-	}
-
-	return &resBody, nil
-}
-
-func CallGatewayHeartBeatV1(httpClient *resty.Client) error {
-	response, err := httpClient.
-		R().
-		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v1/gateways/heartbeat", config.INFISICAL_URL))
-
-	if err != nil {
-		return NewGenericRequestError(operationCallGatewayHeartBeatV1, err)
-	}
-
-	if response.IsError() {
-		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV1, response, nil)
-	}
-
-	return nil
-}
-
-func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
-	response, err := httpClient.
-		R().
-		SetHeader("User-Agent", USER_AGENT).
 		Post(fmt.Sprintf("%v/v2/gateways/heartbeat", config.INFISICAL_URL))
 
 	if err != nil {
@@ -774,6 +807,25 @@ func CallGatewayHeartBeatV2(httpClient *resty.Client) error {
 
 	if response.IsError() {
 		return NewAPIErrorWithResponse(operationCallGatewayHeartBeatV2, response, nil)
+	}
+
+	return nil
+}
+
+func CallGatewayMetricsReportV2(ctx context.Context, httpClient *resty.Client, request GatewayMetricsReportRequest) error {
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/gateways/metrics", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallGatewayMetricsReportV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallGatewayMetricsReportV2, response, nil)
 	}
 
 	return nil
@@ -894,6 +946,102 @@ func CallGetRelays(httpClient *resty.Client) (GetRelaysResponse, error) {
 	return resBody, nil
 }
 
+func CallRelayLogin(httpClient *resty.Client, request RelayLoginRequest) (RelayLoginResponse, error) {
+	var resBody RelayLoginResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v2/relays/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return RelayLoginResponse{}, NewGenericRequestError(operationCallRelayLogin, err)
+	}
+
+	if response.IsError() {
+		return RelayLoginResponse{}, NewAPIErrorWithResponse(operationCallRelayLogin, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallKmipServerLogin(httpClient *resty.Client, request KmipServerLoginRequest) (KmipServerLoginResponse, error) {
+	var resBody KmipServerLoginResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/kmip/servers/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return KmipServerLoginResponse{}, NewGenericRequestError(operationCallKmipServerLogin, err)
+	}
+
+	if response.IsError() {
+		return KmipServerLoginResponse{}, NewAPIErrorWithResponse(operationCallKmipServerLogin, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRelayConnect(httpClient *resty.Client) (RelayConnectResponse, error) {
+	var resBody RelayConnectResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/relays/connect", config.INFISICAL_URL))
+
+	if err != nil {
+		return RelayConnectResponse{}, NewGenericRequestError(operationCallRelayConnect, err)
+	}
+
+	if response.IsError() {
+		return RelayConnectResponse{}, NewAPIErrorWithResponse(operationCallRelayConnect, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallRelayHeartbeatV2(httpClient *resty.Client) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/relays/heartbeat", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallRelayHeartbeatV2, err)
+	}
+
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallRelayHeartbeatV2, response, nil)
+	}
+
+	return nil
+}
+
+func CallConnectGateway(httpClient *resty.Client, request ConnectGatewayRequest) (RegisterGatewayResponse, error) {
+	var resBody RegisterGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/connect", config.INFISICAL_URL))
+
+	if err != nil {
+		return RegisterGatewayResponse{}, NewGenericRequestError(operationCallConnectGateway, err)
+	}
+
+	if response.IsError() {
+		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallConnectGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
 func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayRequest) (RegisterGatewayResponse, error) {
 	var resBody RegisterGatewayResponse
 	response, err := httpClient.
@@ -909,6 +1057,46 @@ func CallRegisterGateway(httpClient *resty.Client, request RegisterGatewayReques
 
 	if response.IsError() {
 		return RegisterGatewayResponse{}, NewAPIErrorWithResponse(operationCallRegisterGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallEnrollGateway(httpClient *resty.Client, request EnrollGatewayRequest) (EnrollGatewayResponse, error) {
+	var resBody EnrollGatewayResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/token-auth/enroll", config.INFISICAL_URL))
+
+	if err != nil {
+		return EnrollGatewayResponse{}, NewGenericRequestError(operationCallEnrollGateway, err)
+	}
+
+	if response.IsError() {
+		return EnrollGatewayResponse{}, NewAPIErrorWithResponse(operationCallEnrollGateway, response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallGatewayLogin(httpClient *resty.Client, request any) (GatewayLoginResponse, error) {
+	var resBody GatewayLoginResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v3/gateways/login", config.INFISICAL_URL))
+
+	if err != nil {
+		return GatewayLoginResponse{}, NewGenericRequestError(operationCallGatewayLogin, err)
+	}
+
+	if response.IsError() {
+		return GatewayLoginResponse{}, NewAPIErrorWithResponse(operationCallGatewayLogin, response, nil)
 	}
 
 	return resBody, nil
@@ -934,6 +1122,32 @@ func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAcces
 	return pamAccessResponse, nil
 }
 
+// CallPAMListAccessibleAccounts lists the PAM accounts the caller can see, one page at a time.
+// This is a read-only lookup: it does not create a session. The PAM project is resolved
+// server-side from the caller's organization, so no project ID is sent.
+func CallPAMListAccessibleAccounts(httpClient *resty.Client, offset, limit int) (PAMAccessibleAccountsResponse, error) {
+	var accessibleAccountsResponse PAMAccessibleAccountsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&accessibleAccountsResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParams(map[string]string{
+			"offset": strconv.Itoa(offset),
+			"limit":  strconv.Itoa(limit),
+		}).
+		Get(fmt.Sprintf("%v/v1/pam/accounts/accessible", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMAccessibleAccountsResponse{}, NewGenericRequestError(operationCallPAMListAccessibleAccounts, err)
+	}
+
+	if response.IsError() {
+		return PAMAccessibleAccountsResponse{}, NewAPIErrorWithResponse(operationCallPAMListAccessibleAccounts, response, nil)
+	}
+
+	return accessibleAccountsResponse, nil
+}
+
 func CallPAMAccessApprovalRequest(httpClient *resty.Client, request PAMAccessApprovalRequest) (PAMAccessApprovalRequestResponse, error) {
 	var pamAccessApprovalRequestResponse PAMAccessApprovalRequestResponse
 	response, err := httpClient.
@@ -952,6 +1166,26 @@ func CallPAMAccessApprovalRequest(httpClient *resty.Client, request PAMAccessApp
 	}
 
 	return pamAccessApprovalRequestResponse, nil
+}
+
+func CallPAMCreateAccessRequest(httpClient *resty.Client, request PAMCreateAccessRequestBody) (PAMCreateAccessRequestResponse, error) {
+	var pamCreateAccessRequestResponse PAMCreateAccessRequestResponse
+	response, err := httpClient.
+		R().
+		SetResult(&pamCreateAccessRequestResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/pam/access-requests", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMCreateAccessRequestResponse{}, NewGenericRequestError(operationCallPAMCreateAccessRequest, err)
+	}
+
+	if response.IsError() {
+		return PAMCreateAccessRequestResponse{}, NewAPIErrorWithResponse(operationCallPAMCreateAccessRequest, response, nil)
+	}
+
+	return pamCreateAccessRequestResponse, nil
 }
 
 func CallPAMSessionCredentials(httpClient *resty.Client, sessionId string) (PAMSessionCredentialsResponse, error) {
@@ -1005,6 +1239,65 @@ func CallUploadPamSessionLogs(httpClient *resty.Client, sessionId string, reques
 		return NewAPIErrorWithResponse(operationCallUploadPamSessionLog, response, nil)
 	}
 
+	return nil
+}
+
+func CallPAMSessionChunkPresignedPut(
+	httpClient *resty.Client,
+	sessionId, uploadToken string,
+	req ChunkPresignedPutRequest,
+) (ChunkPresignedPutResponse, error) {
+	var resp ChunkPresignedPutResponse
+	httpResp, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("X-Gateway-Upload-Token", uploadToken).
+		SetBody(req).
+		SetResult(&resp).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/chunks/presigned-put", config.INFISICAL_URL, sessionId))
+	if err != nil {
+		return ChunkPresignedPutResponse{}, NewGenericRequestError(operationCallPAMSessionChunkPresignedPut, err)
+	}
+	if httpResp.IsError() {
+		return ChunkPresignedPutResponse{}, NewAPIErrorWithResponse(operationCallPAMSessionChunkPresignedPut, httpResp, nil)
+	}
+	return resp, nil
+}
+
+func CallPAMSessionChunkMetadata(
+	httpClient *resty.Client,
+	sessionId, uploadToken string,
+	req ChunkMetadataRequest,
+) error {
+	httpResp, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("X-Gateway-Upload-Token", uploadToken).
+		SetBody(req).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/chunks", config.INFISICAL_URL, sessionId))
+	if err != nil {
+		return NewGenericRequestError(operationCallPAMSessionChunkMetadata, err)
+	}
+	if httpResp.IsError() {
+		return NewAPIErrorWithResponse(operationCallPAMSessionChunkMetadata, httpResp, nil)
+	}
+	return nil
+}
+
+func CallUploadPamSessionEventBatch(httpClient *resty.Client, sessionId string, startOffset int64, data []byte) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader("Content-Type", "application/octet-stream").
+		SetBody(data).
+		Post(fmt.Sprintf("%v/v1/pam/sessions/%s/event-batches?startOffset=%d", config.INFISICAL_URL, sessionId, startOffset))
+
+	if err != nil {
+		return NewGenericRequestError(operationCallUploadPamSessionEventBatch, err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse(operationCallUploadPamSessionEventBatch, response, nil)
+	}
 	return nil
 }
 
@@ -1083,6 +1376,25 @@ func CallRetrieveCertificate(httpClient *resty.Client, certificateId string) (*R
 	return &resBody, nil
 }
 
+func CallGetCertificateBundle(httpClient *resty.Client, certificateId string) (*CertificateBundleResponse, error) {
+	var resBody CertificateBundleResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/%s/bundle", config.INFISICAL_URL, certificateId))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallGetCertificateBundle, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallGetCertificateBundle, response, nil)
+	}
+
+	return &resBody, nil
+}
+
 func CallRenewCertificate(httpClient *resty.Client, certificateId string, request RenewCertificateRequest) (*RenewCertificateResponse, error) {
 	var resBody RenewCertificateResponse
 	response, err := httpClient.
@@ -1120,4 +1432,43 @@ func CallGetCertificateRequest(httpClient *resty.Client, certificateRequestId st
 	}
 
 	return &resBody, nil
+}
+
+func GetTagBySlug(httpClient *resty.Client, projectId string, tagSlug string) (SecretTag, error) {
+	var resBody GetTagBySlugResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/%s/tags/slug/%s", config.INFISICAL_URL, url.PathEscape(projectId), url.PathEscape(tagSlug)))
+
+	if err != nil {
+		return SecretTag{}, NewGenericRequestError("GetTagBySlug", err)
+	}
+
+	if response.IsError() {
+		return SecretTag{}, NewAPIErrorWithResponse("GetTagBySlug", response, nil)
+	}
+
+	return resBody.Tag, nil
+}
+
+func CreateTag(httpClient *resty.Client, projectId string, request CreateTagRequest) (SecretTag, error) {
+	var resBody CreateTagResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%s/v1/projects/%s/tags", config.INFISICAL_URL, url.PathEscape(projectId)))
+
+	if err != nil {
+		return SecretTag{}, NewGenericRequestError("CreateTag", err)
+	}
+
+	if response.IsError() {
+		return SecretTag{}, NewAPIErrorWithResponse("CreateTag", response, nil)
+	}
+
+	return resBody.Tag, nil
 }

@@ -6,19 +6,36 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
+	"regexp"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/azure"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/clickhouse"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/gcp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mssql"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/oracle"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/rdp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
+
+// MongoProxyGetter returns a session-level MongoDBProxy, creating it on first call.
+// This allows the topology to be shared across multiple client connections in the same session.
+type MongoProxyGetter func(ctx context.Context, sessionID string, config mongodb.MongoDBProxyConfig) (*mongodb.MongoDBProxy, error)
 
 type GatewayPAMConfig struct {
 	SessionId          string
@@ -26,6 +43,8 @@ type GatewayPAMConfig struct {
 	ExpiryTime         time.Time
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
+	GetMongoProxy      MongoProxyGetter // Session-level MongoDB proxy sharing
+	OnActivity         func()           // Called on data flow
 }
 
 type PAMCapabilitiesResponse struct {
@@ -34,14 +53,27 @@ type PAMCapabilitiesResponse struct {
 }
 
 func GetSupportedResourceTypes() []string {
-	return []string{
+	types := []string{
 		session.ResourceTypePostgres,
 		session.ResourceTypeMysql,
 		session.ResourceTypeMssql,
 		session.ResourceTypeSSH,
 		session.ResourceTypeKubernetes,
 		session.ResourceTypeRedis,
+		session.ResourceTypeMongodb,
+		session.ResourceTypeOracledb,
+		session.ResourceTypeGcpServiceAccount,
+		session.ResourceTypeAzureCli,
+		session.ResourceTypeSnowflake,
+		session.ResourceTypeClickhouse,
 	}
+	// Only advertise RDP when the real bridge is compiled in. A stub
+	// build would otherwise accept RDP session routing and fail every
+	// session at connect time with ErrRdpUnavailable.
+	if rdp.IsSupported() {
+		types = append(types, session.ResourceTypeWindows)
+	}
+	return types
 }
 
 // HandlePAMCapabilities handles the capabilities request from the client
@@ -78,9 +110,20 @@ func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn, gatewayName stri
 	return nil
 }
 
-func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
+func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, cancelSession func(string) bool) error {
 	log.Info().Str("sessionId", pamConfig.SessionId).Msg("Received session termination message")
 
+	// Kill the active proxy connection if it exists in the registry
+	if cancelled := cancelSession(pamConfig.SessionId); cancelled {
+		log.Info().Str("sessionId", pamConfig.SessionId).Msg("Active proxy session cancelled via registry")
+	} else {
+		log.Info().Str("sessionId", pamConfig.SessionId).Msg("No active proxy session found in registry (may have already ended)")
+	}
+
+	// Always run cleanup on explicit cancellation. RDP keeps sessions alive
+	// across client disconnects to support .rdp-file reconnects, so when the
+	// CLI ctrl-C arrives the registry is already empty but the platform-side
+	// session is still active and needs to be terminated.
 	if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "cancellation"); err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session")
 	}
@@ -90,8 +133,91 @@ func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *Gatew
 	return nil
 }
 
-func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client) error {
-	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
+// activityConn wraps a net.Conn and calls onActivity on every successful read or write
+type activityConn struct {
+	net.Conn
+	onActivity func()
+}
+
+func (c *activityConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.onActivity()
+	}
+	return n, err
+}
+
+func (c *activityConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.onActivity()
+	}
+	return n, err
+}
+
+// Only the fields that are secret. Host, username, database and the like appear throughout normal
+// output, so redacting them would gut the recording without protecting anything.
+func credentialValues(c *session.PAMCredentials) []string {
+	if c == nil {
+		return nil
+	}
+	values := []string{
+		c.Password,
+		c.PrivateKey,
+		c.PrivateKeyPassphrase,
+		c.Token,
+		c.ServiceAccountToken,
+		c.ConnectionString,
+	}
+	for _, token := range c.Tokens {
+		values = append(values, token)
+	}
+	return values
+}
+
+func rulePatterns(rule *api.PAMPolicyRuleConfig) []string {
+	if rule == nil {
+		return nil
+	}
+	return rule.Patterns
+}
+
+// compilePolicyPatterns compiles regex pattern strings, logging warnings for any that fail.
+func compilePolicyPatterns(patterns []string, sessionID string, ruleType string) []*regexp.Regexp {
+	if len(patterns) == 0 {
+		return nil
+	}
+	var compiled []*regexp.Regexp
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("sessionID", sessionID).
+				Str("ruleType", ruleType).
+				Str("pattern", pattern).
+				Msg("Failed to compile policy pattern, skipping")
+			continue
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled
+}
+
+// HandlePAMProxy handles a PAM session connection. `browserRDP` selects
+// the browser RDP flow (RDCleanPath over the inbound stream) when the
+// resource is Windows; ignored for other resource types.
+func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
+	credentialExpiryTime := pamConfig.ExpiryTime
+	if pamConfig.ResourceType == session.ResourceTypeGcpServiceAccount ||
+		pamConfig.ResourceType == session.ResourceTypeAzureCli {
+		cloudTokenMaxLifetime := time.Now().Add(1 * time.Hour)
+		if cloudTokenMaxLifetime.Before(credentialExpiryTime) {
+			credentialExpiryTime = cloudTokenMaxLifetime
+		}
+	}
+
+	credentials, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, credentialExpiryTime)
 	if err != nil {
 		log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to retrieve PAM session credentials")
 		return fmt.Errorf("failed to retrieve PAM session credentials: %w", err)
@@ -112,10 +238,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 					Time("expiryTime", pamConfig.ExpiryTime).
 					Msg("PAM session expired, closing connection")
 
-				if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "expiry"); err != nil {
-					log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup PAM session on expiry")
-				}
-
 				conn.Close()
 			case <-ctx.Done():
 				// Context cancelled, exit gracefully
@@ -128,10 +250,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 				Time("expiryTime", pamConfig.ExpiryTime).
 				Msg("PAM session already expired, closing connection immediately")
 
-			if err := pamConfig.SessionUploader.CleanupPAMSession(pamConfig.SessionId, "already_expired"); err != nil {
-				log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to cleanup already expired PAM session")
-			}
-
 			conn.Close()
 		}
 	}()
@@ -140,18 +258,43 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	if err != nil {
 		return fmt.Errorf("failed to get PAM session encryption key: %w", err)
 	}
-	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType)
+
+	masker := masking.Nop()
+	if credentials.PolicyRules != nil && credentials.PolicyRules.SessionLogMasking != nil {
+		rule := credentials.PolicyRules.SessionLogMasking
+		masker = masking.New(
+			compilePolicyPatterns(rule.Patterns, pamConfig.SessionId, "session-log-masking"),
+			rule.BuiltInDetection,
+			credentialValues(credentials),
+			pamConfig.SessionId,
+		)
+	}
+
+	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, masker)
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
 	}
+	defer func() {
+		if err := sessionLogger.Close(); err != nil {
+			log.Error().Err(err).Str("sessionId", pamConfig.SessionId).Msg("Failed to close session logger")
+		}
+	}()
+	pamConfig.SessionUploader.RegisterSession(pamConfig.SessionId)
 
 	serverName := credentials.Host
-	if pamConfig.ResourceType == session.ResourceTypeKubernetes {
+	switch pamConfig.ResourceType {
+	case session.ResourceTypeKubernetes:
 		parsed, err := url.Parse(credentials.Url)
 		if err != nil {
 			return fmt.Errorf("failed to parse URL: %w", err)
 		}
 		serverName = parsed.Hostname()
+	case session.ResourceTypeMongodb:
+		// For MongoDB, don't set ServerName — the driver's topology sets it
+		// correctly per server (each replica set member has its own hostname).
+		// The Host field may be a URI, a bare SRV hostname, or host:port,
+		// none of which are valid TLS server names.
+		serverName = ""
 	}
 
 	tlsConfig := &tls.Config{
@@ -173,6 +316,12 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		}
 	}
 
+	// Wrap the connection so every read/write resets the idle reaper timer
+	var handlerConn net.Conn = conn
+	if pamConfig.OnActivity != nil {
+		handlerConn = &activityConn{Conn: conn, onActivity: pamConfig.OnActivity}
+	}
+
 	switch pamConfig.ResourceType {
 	case session.ResourceTypePostgres:
 		proxyConfig := handlers.PostgresProxyConfig{
@@ -191,7 +340,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", proxyConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting PostgreSQL PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeMysql:
 		mysqlConfig := mysql.MysqlProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
@@ -210,13 +359,18 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mysqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MySQL PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeMssql:
 		mssqlConfig := mssql.MssqlProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
 			InjectUsername: credentials.Username,
 			InjectPassword: credentials.Password,
 			InjectDatabase: credentials.Database,
+			InjectDomain:   credentials.Domain,
+			InjectRealm:    credentials.Realm,
+			InjectKDCAddr:  credentials.KDCAddress,
+			InjectSPN:      credentials.SPN,
+			AuthMethod:     credentials.AuthMethod,
 			EnableTLS:      credentials.SSLEnabled,
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,
@@ -229,7 +383,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", mssqlConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting MSSQL PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeRedis:
 		redisConfig := redis.RedisProxyConfig{
 			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
@@ -247,17 +401,25 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("target", redisConfig.TargetAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting Redis PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeSSH:
+		// Compile command blocking patterns from policy rules
+		var blockedCommandPatterns []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			blockedCommandPatterns = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
+		}
+
 		sshConfig := ssh.SSHProxyConfig{
-			TargetAddr:        fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
-			AuthMethod:        credentials.AuthMethod,
-			InjectUsername:    credentials.Username,
-			InjectPassword:    credentials.Password,
-			InjectPrivateKey:  credentials.PrivateKey,
-			InjectCertificate: credentials.Certificate,
-			SessionID:         pamConfig.SessionId,
-			SessionLogger:     sessionLogger,
+			TargetAddr:             fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			AuthMethod:             credentials.AuthMethod,
+			InjectUsername:         credentials.Username,
+			InjectPassword:         credentials.Password,
+			InjectPrivateKey:       credentials.PrivateKey,
+			InjectCertificate:      credentials.Certificate,
+			SessionID:              pamConfig.SessionId,
+			SessionLogger:          sessionLogger,
+			BlockedCommandPatterns: blockedCommandPatterns,
+			OnActivity:             pamConfig.OnActivity,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
 		log.Info().
@@ -275,12 +437,190 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:                 pamConfig.SessionId,
 			SessionLogger:             sessionLogger,
 		}
+
+		// For gateway-kubernetes-auth, override target URL and TLS with pod's in-cluster credentials
+		if credentials.AuthMethod == "gateway-kubernetes-auth" {
+			kubernetesConfig.ImpersonateNamespace = credentials.Namespace
+			kubernetesConfig.ImpersonateServiceAccount = credentials.ServiceAccountName
+			if credentials.Namespace == "" || credentials.ServiceAccountName == "" {
+				return fmt.Errorf("gateway-kubernetes-auth requires non-empty namespace and service account name")
+			}
+
+			// Auto-discover K8s API URL from env vars
+			host, port := os.Getenv(util.KUBERNETES_SERVICE_HOST_ENV_NAME), os.Getenv(util.KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME)
+			if host == "" || port == "" {
+				return fmt.Errorf("gateway-kubernetes-auth requires KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT_HTTPS to be set; gateway must run inside a Kubernetes pod")
+			}
+			kubernetesConfig.TargetApiServer = fmt.Sprintf("https://%s", net.JoinHostPort(host, port))
+
+			// Use pod's in-cluster CA cert with strict TLS (ignore resource SSL settings)
+			caCert, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_CA_CERT_PATH)
+			if err != nil {
+				return fmt.Errorf("gateway-kubernetes-auth: failed to read pod CA cert for strict TLS: %w", err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("gateway-kubernetes-auth: pod CA cert PEM is invalid or empty; cannot establish strict TLS")
+			}
+			kubernetesConfig.TLSConfig = &tls.Config{
+				RootCAs: caCertPool,
+			}
+		}
+
 		proxy := kubernetes.NewKubernetesProxy(kubernetesConfig)
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Str("target", kubernetesConfig.TargetApiServer).
+			Str("authMethod", credentials.AuthMethod).
 			Msg("Starting Kubernetes PAM proxy")
-		return proxy.HandleConnection(ctx, conn)
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeOracledb:
+		oracleConfig := oracle.OracleProxyConfig{
+			TargetAddr:     fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+			SessionLogger:  sessionLogger,
+		}
+		proxy := oracle.NewOracleProxy(oracleConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", oracleConfig.TargetAddr).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting Oracle PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeMongodb:
+		mongoConfig := mongodb.MongoDBProxyConfig{
+			Host:           credentials.ConnectionString,
+			InjectUsername: credentials.Username,
+			InjectPassword: credentials.Password,
+			InjectDatabase: credentials.Database,
+			EnableTLS:      credentials.SSLEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      pamConfig.SessionId,
+		}
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("connectionString", credentials.ConnectionString).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting MongoDB PAM proxy")
+
+		// Get or create session-level proxy (shared across connections).
+		// The topology is created once on the first connection and reused
+		// for subsequent connections, avoiding per-connection SRV/TLS/SCRAM overhead.
+		proxy, err := pamConfig.GetMongoProxy(ctx, pamConfig.SessionId, mongoConfig)
+		if err != nil {
+			return fmt.Errorf("MongoDB proxy init: %w", err)
+		}
+
+		return proxy.HandleConnection(ctx, handlerConn, sessionLogger)
+	case session.ResourceTypeWindows:
+		if credentials.Port <= 0 || credentials.Port > 65535 {
+			return fmt.Errorf("rdp: target port %d out of range", credentials.Port)
+		}
+		rdpConfig := rdp.RDPProxyConfig{
+			TargetHost:      credentials.Host,
+			TargetPort:      uint16(credentials.Port),
+			InjectUsername:  credentials.Username,
+			InjectPassword:  credentials.Password,
+			InjectDomain:    credentials.Domain,
+			SessionID:       pamConfig.SessionId,
+			SessionLogger:   sessionLogger,
+			PriorElapsedNs:  pamConfig.SessionUploader.GetPriorElapsedNs(pamConfig.SessionId),
+			SessionUploader: pamConfig.SessionUploader,
+		}
+		proxy := rdp.NewRDPProxy(rdpConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
+			Bool("browser", browserRDP).
+			Msg("Starting RDP PAM proxy")
+		if browserRDP {
+			return proxy.HandleConnectionRDCleanPath(ctx, handlerConn)
+		}
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeGcpServiceAccount:
+		gcpConfig := gcp.GCPProxyConfig{
+			Token:         credentials.Token,
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+		}
+		proxy := gcp.NewGCPProxy(gcpConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("serviceAccountEmail", credentials.ServiceAccountEmail).
+			Msg("Starting GCP Service Account PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeSnowflake:
+		var blockedCommands []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			blockedCommands = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
+		}
+
+		proxy := snowflake.NewSnowflakeProxy(snowflake.SnowflakeProxyConfig{
+			Account:         credentials.Account,
+			Username:        credentials.Username,
+			AuthMethod:      credentials.AuthMethod,
+			Password:        credentials.Password,
+			Token:           credentials.Token,
+			PrivateKey:      credentials.PrivateKey,
+			PrivateKeyPass:  credentials.PrivateKeyPassphrase,
+			Warehouse:       credentials.Warehouse,
+			Database:        credentials.Database,
+			Schema:          credentials.Schema,
+			Role:            credentials.Role,
+			SessionID:       pamConfig.SessionId,
+			SessionExpiry:   pamConfig.ExpiryTime,
+			SessionLogger:   sessionLogger,
+			BlockedCommands: blockedCommands,
+		})
+		if err := proxy.Connect(ctx); err != nil {
+			return err
+		}
+		defer proxy.Close()
+
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("account", credentials.Account).
+			Msg("Starting Snowflake PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeClickhouse:
+		var blockedCommands []*regexp.Regexp
+		if credentials.PolicyRules != nil {
+			blockedCommands = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
+		}
+
+		proxy := clickhouse.NewClickHouseProxy(clickhouse.ClickHouseProxyConfig{
+			TargetAddr:      fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			Username:        credentials.Username,
+			Password:        credentials.Password,
+			Database:        credentials.Database,
+			EnableTLS:       credentials.SSLEnabled,
+			TLSConfig:       tlsConfig,
+			SessionID:       pamConfig.SessionId,
+			SessionLogger:   sessionLogger,
+			BlockedCommands: blockedCommands,
+		})
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
+			Bool("sslEnabled", credentials.SSLEnabled).
+			Msg("Starting ClickHouse PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeAzureCli:
+		azureConfig := azure.AzureProxyConfig{
+			Tokens:        credentials.Tokens,
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+		}
+		proxy := azure.NewAzureProxy(azureConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Msg("Starting Azure CLI PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
 	}

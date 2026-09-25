@@ -55,6 +55,11 @@ func GetRelayName(cmd *cobra.Command, forceRefetch bool, accessToken string) (st
 		return relayName, nil
 	}
 
+	return SelectRelay(httpClient, forceRefetch)
+}
+
+// SelectRelay fetches available relays, filters for healthy ones, pings them, and returns the best one.
+func SelectRelay(httpClient *resty.Client, forceRefetch bool) (string, error) {
 	allRelays, err := api.CallGetRelays(httpClient)
 	if err != nil {
 		log.Debug().Err(err).Msg("Failed to call GetRelays API")
@@ -329,10 +334,6 @@ func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuth
 		return api.UniversalAuthLoginResponse{}, err
 	}
 
-	httpClient.SetRetryCount(10000).
-		SetRetryMaxWaitTime(20 * time.Second).
-		SetRetryWaitTime(5 * time.Second)
-
 	tokenResponse, err := api.CallUniversalAuthLogin(httpClient, api.UniversalAuthLoginRequest{ClientId: clientId, ClientSecret: clientSecret})
 	if err != nil {
 		return api.UniversalAuthLoginResponse{}, err
@@ -342,15 +343,13 @@ func UniversalAuthLogin(clientId string, clientSecret string) (api.UniversalAuth
 }
 
 func RenewMachineIdentityAccessToken(accessToken string) (string, error) {
+	policy := DefaultRetryPolicy()
+	policy.ReplaySafe = true // renewal extends the presented token, so a replay cannot double-apply
 
-	httpClient, err := GetRestyClientWithCustomHeaders()
+	httpClient, err := GetRestyClientWithPolicy(policy)
 	if err != nil {
 		return "", err
 	}
-
-	httpClient.SetRetryCount(10000).
-		SetRetryMaxWaitTime(20 * time.Second).
-		SetRetryWaitTime(5 * time.Second)
 
 	request := api.UniversalAuthRefreshRequest{
 		AccessToken: accessToken,
@@ -375,17 +374,19 @@ func ConfigContainsEmail(users []models.LoggedInUser, email string) bool {
 }
 
 func RequireLogin() {
-	// get the config file that stores the current logged in user email
+	// get the config file that stores login profiles
 	configFile, _ := GetConfigFile()
+	MigrateConfigProfiles(&configFile)
 
-	if configFile.LoggedInUserEmail == "" {
+	if ResolveProfile(configFile).Name == "" {
 		EstablishUserLoginSession()
 	}
 }
 
 func IsLoggedIn() bool {
 	configFile, _ := GetConfigFile()
-	return configFile.LoggedInUserEmail != ""
+	MigrateConfigProfiles(&configFile)
+	return ResolveProfile(configFile).Name != ""
 }
 
 func RequireServiceToken() {
@@ -456,16 +457,33 @@ func getCurrentBranch() (string, error) {
 	return path.Base(strings.TrimSpace(out.String())), nil
 }
 
+// DomainEnvNames lists the env vars that configure the Infisical domain, in
+// precedence order: INFISICAL_DOMAIN first, then the legacy INFISICAL_API_URL.
+var DomainEnvNames = []string{INFISICAL_DOMAIN_ENV_NAME, LEGACY_INFISICAL_API_URL_ENV_NAME}
+
+// GetEnvDomainSource returns the Infisical domain configured via environment
+// variables and the env var name it came from, preferring INFISICAL_DOMAIN
+// over the legacy INFISICAL_API_URL.
+func GetEnvDomainSource() (domain string, envName string, ok bool) {
+	for _, env := range DomainEnvNames {
+		if domain := strings.TrimSpace(os.Getenv(env)); domain != "" {
+			return domain, env, true
+		}
+	}
+	return "", "", false
+}
+
+// GetEnvDomain returns the Infisical domain configured via environment
+// variables, preferring INFISICAL_DOMAIN over the legacy INFISICAL_API_URL.
+func GetEnvDomain() (string, bool) {
+	domain, _, ok := GetEnvDomainSource()
+	return domain, ok
+}
+
 func AppendAPIEndpoint(address string) string {
-	// if it's empty return as it is
-	// Ensure the address does not already end with "/api"
+	address = strings.TrimRight(address, "/")
 	if address == "" || strings.HasSuffix(address, "/api") {
 		return address
-	}
-
-	// Check if the address ends with a slash and append accordingly
-	if address[len(address)-1] == '/' {
-		return address + "api"
 	}
 	return address + "/api"
 }
@@ -535,6 +553,76 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 	}
 
 	return value, nil
+}
+
+// ResolveEnvironmentName resolves the environment slug for `agent-proxy connect`, in order:
+// the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.json
+// (git-branch mapping, then defaultEnvironment) > the flag's own default value.
+// It keys off cmd.Flags().Changed rather than an empty-value check so env and workspace
+// are still consulted when --env is left at its default.
+func ResolveEnvironmentName(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("env") {
+		value, _ := cmd.Flags().GetString("env")
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv(INFISICAL_ENVIRONMENT_NAME)); value != "" {
+		return value
+	}
+	if value := GetEnvFromWorkspaceFile(); value != "" {
+		return value
+	}
+	value, _ := cmd.Flags().GetString("env")
+	return value
+}
+
+// ResolveSecretPath resolves the secret path (folder) for a command, in order:
+// the --path flag (if explicitly set) > INFISICAL_SECRET_PATH > .infisical.json
+// defaultSecretPath > the flag's own default value ("/").
+func ResolveSecretPath(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("path") {
+		value, _ := cmd.Flags().GetString("path")
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv(INFISICAL_SECRET_PATH_NAME)); value != "" {
+		return value
+	}
+	if value := GetSecretPathFromWorkspaceFile(); value != "" {
+		return value
+	}
+	value, _ := cmd.Flags().GetString("path")
+	return value
+}
+
+// ResolveAgentProxyAddress resolves the agent proxy address for `agent-proxy connect`, in order:
+// the --proxy flag (if explicitly set) > INFISICAL_AGENT_PROXY_ADDRESS > empty (the caller
+// requires a non-empty result). It is deliberately NOT sourced from .infisical.json: that file
+// is usually committed to a repo, so a poisoned proxy address would silently route all agent
+// traffic and its auth token through an attacker-controlled host.
+func ResolveAgentProxyAddress(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("proxy") {
+		value, _ := cmd.Flags().GetString("proxy")
+		return value
+	}
+	return strings.TrimSpace(os.Getenv(INFISICAL_AGENT_PROXY_ADDRESS_NAME))
+}
+
+// GetBoolFlagOrEnv resolves a boolean flag from the flag (if explicitly set), then the given
+// environment variable, then the flag's default. An unparseable env value fails closed to false.
+func GetBoolFlagOrEnv(cmd *cobra.Command, flag string, envName string) bool {
+	if cmd.Flags().Changed(flag) {
+		value, _ := cmd.Flags().GetBool(flag)
+		return value
+	}
+	if raw := strings.TrimSpace(os.Getenv(envName)); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			log.Warn().Msgf("Ignoring %s: %q is not a valid boolean", envName, raw)
+			return false
+		}
+		return parsed
+	}
+	value, _ := cmd.Flags().GetBool(flag)
+	return value
 }
 
 func GenerateRandomString(length int) string {
@@ -678,4 +766,15 @@ func ParseTimeDurationString(pollingInterval string, allowLessThanOneSecond bool
 	default:
 		return 0, fmt.Errorf("invalid time unit")
 	}
+}
+
+func ParsePrincipals(s string) []string {
+	var principals []string
+	for _, p := range strings.Split(s, ",") {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			principals = append(principals, trimmed)
+		}
+	}
+	return principals
 }

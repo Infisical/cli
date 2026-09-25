@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,10 @@ type ProxyTestConfig struct {
 	TLSKeyFile                   string
 	AccessTokenCheckInterval     string
 	StaticSecretsRefreshInterval string
+	PollingFallbackInterval      string
+	UseSSE                       bool
+	ClientID                     string
+	ClientSecret                 string
 }
 
 // DefaultProxyTestConfig returns default test configuration
@@ -35,6 +40,14 @@ func DefaultProxyTestConfig() ProxyTestConfig {
 		AccessTokenCheckInterval:     "5s",
 		StaticSecretsRefreshInterval: "5s",
 	}
+}
+
+// SSEProxyTestConfig returns test configuration with SSE enabled
+func SSEProxyTestConfig() ProxyTestConfig {
+	config := DefaultProxyTestConfig()
+	config.UseSSE = true
+	config.PollingFallbackInterval = "10s"
+	return config
 }
 
 // startProxy starts the proxy command and returns it
@@ -52,6 +65,15 @@ func startProxy(t *testing.T, ctx context.Context, infisicalURL string, config P
 	if config.TLSEnabled && config.TLSCertFile != "" && config.TLSKeyFile != "" {
 		args = append(args, "--tls-cert-file", config.TLSCertFile)
 		args = append(args, "--tls-key-file", config.TLSKeyFile)
+	}
+
+	if config.UseSSE {
+		args = append(args, "--enable-event-subscriptions")
+		args = append(args, "--client-id", config.ClientID)
+		args = append(args, "--client-secret", config.ClientSecret)
+		if config.PollingFallbackInterval != "" {
+			args = append(args, "--polling-fallback-interval", config.PollingFallbackInterval)
+		}
 	}
 
 	proxyCmd := helpers.Command{
@@ -73,13 +95,24 @@ func startProxy(t *testing.T, ctx context.Context, infisicalURL string, config P
 }
 
 // setupProxyTest sets up the common test
-func setupProxyTest(t *testing.T, ctx context.Context, proxyConfig ProxyTestConfig) (*helpers.InfisicalService, *proxyHelpers.ProxyTestHelper, *helpers.Command) {
+func setupProxyTest(t *testing.T, ctx context.Context, proxyConfig ProxyTestConfig) (*helpers.InfisicalService, *proxyHelpers.ProxyTestHelper, *helpers.Command, string, string, helpers.MachineIdentity) {
 	infisical := helpers.NewInfisicalService().Up(t, ctx)
 
-	// create machine identity with token auth
-	identity := infisical.CreateMachineIdentity(t, ctx, helpers.WithTokenAuth())
+	// create machine identity with token auth (and universal auth if SSE is enabled)
+	identityOpts := []helpers.MachineIdentityOption{helpers.WithTokenAuth()}
+	if proxyConfig.UseSSE {
+		identityOpts = append(identityOpts, helpers.WithUniversalAuth())
+	}
+	identity := infisical.CreateMachineIdentity(t, ctx, identityOpts...)
 	require.NotNil(t, identity.TokenAuthToken)
 	identityToken := *identity.TokenAuthToken
+
+	if proxyConfig.UseSSE {
+		require.NotNil(t, identity.UniversalAuthClientId)
+		require.NotNil(t, identity.UniversalAuthClientSecret)
+		proxyConfig.ClientID = *identity.UniversalAuthClientId
+		proxyConfig.ClientSecret = *identity.UniversalAuthClientSecret
+	}
 
 	// create API client with identity token to create the project
 	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(identityToken)
@@ -117,14 +150,14 @@ func setupProxyTest(t *testing.T, ctx context.Context, proxyConfig ProxyTestConf
 	// create test helper with both proxy and direct API clients
 	helper := proxyHelpers.NewProxyTestHelper(t, proxyURL, infisical.ApiUrl(t), identityToken, projectID)
 
-	return infisical, helper, proxyCmd
+	return infisical, helper, proxyCmd, identityToken, proxyURL, identity
 }
 
 func TestProxy_CacheHitMiss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -181,7 +214,7 @@ func TestProxy_MutationPurging(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	initialSecret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
 		Prefix: "MUTATION_TEST_",
@@ -253,7 +286,7 @@ func TestProxy_DeleteMutationPurging(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -310,7 +343,7 @@ func TestProxy_TokenInvalidation(t *testing.T) {
 	config := DefaultProxyTestConfig()
 	config.AccessTokenCheckInterval = "2s"
 
-	_, helper, proxyCmd := setupProxyTest(t, ctx, config)
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, config)
 
 	// create and cache a secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -349,7 +382,7 @@ func TestProxy_HighAvailability(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	infisical, helper, proxyCmd := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	infisical, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create and cache a secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -423,7 +456,7 @@ func TestProxy_BackgroundRefresh(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test initialSecret
 	initialSecret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -492,7 +525,7 @@ func TestProxy_MultipleSecrets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, _, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	var secrets []proxyHelpers.Secret
 	for i := 0; i < 3; i++ {
@@ -529,7 +562,7 @@ func TestProxy_SingleSecretEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	_, helper, proxyCmd := setupProxyTest(t, ctx, DefaultProxyTestConfig())
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, DefaultProxyTestConfig())
 
 	// create a test secret
 	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
@@ -557,4 +590,302 @@ func TestProxy_SingleSecretEndpoint(t *testing.T) {
 	require.Equal(t, helpers.WaitSuccess, result)
 
 	require.Equal(t, http.StatusOK, resp2.StatusCode())
+}
+
+func TestProxy_SSECacheUpdate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	_, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
+
+	// wait for SSE manager initialization
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE manager initialized",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// create secret via API (not proxy)
+	initialSecret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		Prefix: "SSE_UPDATE_TEST_",
+	})
+	helper.CreateSecretWithApi(ctx, initialSecret)
+
+	// fetch via proxy -> cache miss, now cached
+	slog.Info("Fetching secret via proxy (expecting cache miss)")
+	resp1 := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp1.StatusCode())
+	require.NotNil(t, resp1.JSON200)
+
+	var foundInitial bool
+	for _, s := range resp1.JSON200.Secrets {
+		if s.SecretKey == initialSecret.SecretKey {
+			assert.Equal(t, initialSecret.SecretValue, s.SecretValue)
+			foundInitial = true
+			break
+		}
+	}
+	require.True(t, foundInitial, "Initial secret not found in response")
+
+	// fetch again -> cache hit
+	helper.GetSecretsWithProxy(ctx)
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "Cache hit",
+		Timeout:          10 * time.Second,
+		Interval:         200 * time.Millisecond,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// wait for SSE connection (demand-driven, triggered by first fetch)
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection established",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// update secret via API (not proxy) -> SSE event fires
+	slog.Info("Updating secret via API (expecting SSE event)")
+	updatedSecret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		PresetName: initialSecret.SecretKey,
+	})
+	helper.UpdateSecretWithApi(ctx, updatedSecret)
+
+	// wait for SSE event processing
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "Processing SSE event",
+		Timeout:          15 * time.Second,
+		Interval:         500 * time.Millisecond,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// wait for refetch to complete
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE refetch completed",
+		Timeout:          15 * time.Second,
+		Interval:         500 * time.Millisecond,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// fetch via proxy -> should return updated value (repopulated by SSE refetch)
+	slog.Info("Fetching secret via proxy after SSE update")
+	resp3 := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp3.StatusCode())
+	require.NotNil(t, resp3.JSON200)
+
+	var foundUpdated bool
+	for _, s := range resp3.JSON200.Secrets {
+		if s.SecretKey == initialSecret.SecretKey {
+			assert.Equal(t, updatedSecret.SecretValue, s.SecretValue, "Cache should reflect SSE-driven update")
+			foundUpdated = true
+			break
+		}
+	}
+	require.True(t, foundUpdated, "Updated secret not found after SSE event")
+}
+
+func TestProxy_SSEConnectionRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	infisical, helper, proxyCmd, _, _, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
+
+	// create and cache a secret to trigger SSE subscription
+	secret := helper.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		Prefix: "SSE_RECOVERY_",
+	})
+	helper.CreateSecretWithApi(ctx, secret)
+
+	slog.Info("Caching secret via proxy")
+	resp1 := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp1.StatusCode())
+	require.NotEmpty(t, resp1.JSON200.Secrets)
+
+	// wait for SSE connection established
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection established",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// stop the Infisical backend container (SSE connection drops)
+	slog.Info("Stopping Infisical backend to break SSE connection")
+	backendContainer, err := infisical.Compose().ServiceContainer(ctx, "backend")
+	require.NoError(t, err)
+	err = backendContainer.Stop(ctx, nil)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		state, err := backendContainer.State(ctx)
+		if err != nil {
+			return false
+		}
+		return !state.Running
+	}, 60*time.Second, 200*time.Millisecond, "Backend container should have stopped")
+	slog.Info("Backend stopped")
+
+	// wait for SSE connection loss
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection lost",
+		Timeout:          30 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "SSE connection loss should be detected")
+
+	// restart the backend container
+	slog.Info("Restarting Infisical backend")
+	err = backendContainer.Start(ctx)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		state, err := backendContainer.State(ctx)
+		if err != nil {
+			return false
+		}
+		return state.Running
+	}, 60*time.Second, 200*time.Millisecond, "Backend container should have restarted")
+	slog.Info("Backend restarted")
+
+	// trigger normal client traffic so EnsureSubscription can recreate SSE if retries were exhausted
+	slog.Info("Fetching secrets after backend restart to trigger SSE re-subscription")
+	respAfterRestart := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, respAfterRestart.StatusCode())
+
+	// wait for SSE re-subscription after the fetch trigger
+	slog.Info("Waiting for SSE re-subscription after fetch trigger")
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE connection established",
+		Timeout:          120 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "SSE should re-subscribe after backend restart and a trigger fetch")
+
+	// verify proxy is still functional
+	slog.Info("Verifying proxy still works after SSE reconnection")
+	respAfterReconnect := helper.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, respAfterReconnect.StatusCode())
+
+	require.True(t, proxyCmd.IsRunning(), "Proxy should still be running")
+
+	// tear down compose stack for clean state in subsequent tests
+	slog.Info("Tearing down compose stack for clean state")
+	err = infisical.DownWithForce(ctx)
+	require.NoError(t, err, "Failed to tear down compose stack")
+}
+
+func TestProxy_SSEMultipleProjects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	infisical, helper1, proxyCmd, identityToken, proxyURL, _ := setupProxyTest(t, ctx, SSEProxyTestConfig())
+
+	// create a second project using the same identity
+	bearerAuth, err := securityprovider.NewSecurityProviderBearerToken(identityToken)
+	require.NoError(t, err)
+
+	identityClient, err := client.NewClientWithResponses(
+		infisical.ApiUrl(t),
+		client.WithHTTPClient(&http.Client{}),
+		client.WithRequestEditorFn(bearerAuth.Intercept),
+	)
+	require.NoError(t, err)
+
+	projectType := client.SecretManager
+	project2Resp, err := identityClient.CreateProjectWithResponse(ctx, client.CreateProjectJSONRequestBody{
+		ProjectName: "proxy-sse-test-2-" + helpers.RandomSlug(2),
+		Type:        &projectType,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, project2Resp.StatusCode(), "Failed to create project 2: %s", string(project2Resp.Body))
+	project2ID := project2Resp.JSON200.Project.Id
+	slog.Info("Created project 2", "id", project2ID)
+
+	// create helper2 for project 2, pointed at the same proxy
+	helper2 := proxyHelpers.NewProxyTestHelper(t, proxyURL, infisical.ApiUrl(t), identityToken, project2ID)
+
+	// create secrets in each project
+	secret1 := helper1.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		Prefix: "SSE_MULTI_P1_",
+	})
+	helper1.CreateSecretWithApi(ctx, secret1)
+
+	secret2 := helper2.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		Prefix: "SSE_MULTI_P2_",
+	})
+	helper2.CreateSecretWithApi(ctx, secret2)
+
+	// fetch from each project via proxy -> triggers SSE subscription for each
+	slog.Info("Fetching secrets from project 1 via proxy")
+	resp1 := helper1.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp1.StatusCode())
+
+	slog.Info("Fetching secrets from project 2 via proxy")
+	resp2 := helper2.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp2.StatusCode())
+
+	// verify two separate SSE connections established (one per project)
+	slog.Info("Waiting for two SSE connections to be established")
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		EnsureCmdRunning: proxyCmd,
+		Timeout:          30 * time.Second,
+		Interval:         1 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			if strings.Count(proxyCmd.Stderr(), "SSE connection established") >= 2 {
+				return helpers.ConditionSuccess
+			}
+			return helpers.ConditionWait
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, waitResult, "Two SSE connections should be established")
+
+	// update secret in project 1 via API
+	slog.Info("Updating secret in project 1 via API")
+	updatedSecret1 := helper1.GenerateSecret(proxyHelpers.GenerateSecretOptions{
+		PresetName: secret1.SecretKey,
+	})
+	helper1.UpdateSecretWithApi(ctx, updatedSecret1)
+
+	// wait for SSE event processing
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: proxyCmd,
+		ExpectedString:   "SSE refetch completed",
+		Timeout:          15 * time.Second,
+		Interval:         500 * time.Millisecond,
+	})
+	require.Equal(t, helpers.WaitSuccess, result)
+
+	// verify project 1 has updated value
+	slog.Info("Verifying project 1 has updated value")
+	resp1After := helper1.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp1After.StatusCode())
+
+	var foundUpdated bool
+	for _, s := range resp1After.JSON200.Secrets {
+		if s.SecretKey == secret1.SecretKey {
+			assert.Equal(t, updatedSecret1.SecretValue, s.SecretValue, "Project 1 secret should be updated via SSE")
+			foundUpdated = true
+			break
+		}
+	}
+	require.True(t, foundUpdated, "Updated secret not found in project 1")
+
+	// verify project 2 still has original value (not invalidated)
+	slog.Info("Verifying project 2 still has original value")
+	resp2After := helper2.GetSecretsWithProxy(ctx)
+	require.Equal(t, http.StatusOK, resp2After.StatusCode())
+
+	var foundOriginal bool
+	for _, s := range resp2After.JSON200.Secrets {
+		if s.SecretKey == secret2.SecretKey {
+			assert.Equal(t, secret2.SecretValue, s.SecretValue, "Project 2 secret should be unchanged")
+			foundOriginal = true
+			break
+		}
+	}
+	require.True(t, foundOriginal, "Original secret not found in project 2")
 }

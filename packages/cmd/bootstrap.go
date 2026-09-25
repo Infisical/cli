@@ -171,11 +171,9 @@ var bootstrapCmd = &cobra.Command{
 			return
 		}
 
-		domain, _ := cmd.Flags().GetString("domain")
-		if domain == "" {
-			if envDomain, ok := os.LookupEnv("INFISICAL_API_URL"); ok {
-				domain = envDomain
-			}
+		domain, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "domain", util.DomainEnvNames, "")
+		if err != nil {
+			util.HandleError(err, "Unable to parse domain")
 		}
 
 		if domain == "" {

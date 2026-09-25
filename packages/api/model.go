@@ -138,17 +138,34 @@ type GetProjectByIdResponse struct {
 
 type GetProjectBySlugResponse Project
 
+type PkiApplication struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type GetPkiApplicationResponse struct {
+	Application PkiApplication `json:"application"`
+}
+
 type CertificateProfile struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Description           string `json:"description"`
-	ProjectID             string `json:"projectId"`
-	CaID                  string `json:"caId"`
-	CertificateTemplateID string `json:"certificateTemplateId"`
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	ProjectID   string `json:"projectId,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type GetCertificateProfileResponse struct {
 	CertificateProfile CertificateProfile `json:"certificateProfile"`
+}
+
+type PkiApplicationProfile struct {
+	ApplicationID string `json:"applicationId"`
+	ProfileID     string `json:"profileId"`
+	ProfileSlug   string `json:"profileSlug"`
+}
+
+type ListPkiApplicationProfilesResponse struct {
+	Profiles []PkiApplicationProfile `json:"profiles"`
 }
 
 type Organization struct {
@@ -212,11 +229,12 @@ type Project struct {
 }
 
 type RawSecret struct {
-	SecretKey     string `json:"secretKey,omitempty"`
-	SecretValue   string `json:"secretValue,omitempty"`
-	Type          string `json:"type,omitempty"`
-	SecretComment string `json:"secretComment,omitempty"`
-	ID            string `json:"id,omitempty"`
+	SecretKey     string   `json:"secretKey,omitempty"`
+	SecretValue   string   `json:"secretValue,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	SecretComment string   `json:"secretComment,omitempty"`
+	ID            string   `json:"id,omitempty"`
+	TagIDs        []string `json:"tagIds,omitempty"`
 }
 
 type GetEncryptedWorkspaceKeyRequest struct {
@@ -470,14 +488,15 @@ type CreateSecretV3Request struct {
 }
 
 type CreateRawSecretV3Request struct {
-	SecretName            string `json:"-"`
-	WorkspaceID           string `json:"workspaceId"`
-	Type                  string `json:"type,omitempty"`
-	Environment           string `json:"environment"`
-	SecretPath            string `json:"secretPath,omitempty"`
-	SecretValue           string `json:"secretValue"`
-	SecretComment         string `json:"secretComment,omitempty"`
-	SkipMultilineEncoding bool   `json:"skipMultilineEncoding,omitempty"`
+	SecretName            string   `json:"-"`
+	WorkspaceID           string   `json:"workspaceId"`
+	Type                  string   `json:"type,omitempty"`
+	Environment           string   `json:"environment"`
+	SecretPath            string   `json:"secretPath,omitempty"`
+	SecretValue           string   `json:"secretValue"`
+	SecretComment         string   `json:"secretComment,omitempty"`
+	SkipMultilineEncoding bool     `json:"skipMultilineEncoding,omitempty"`
+	TagIDs                []string `json:"tagIds,omitempty"`
 }
 
 type DeleteSecretV3Request struct {
@@ -499,12 +518,13 @@ type UpdateSecretByNameV3Request struct {
 }
 
 type UpdateRawSecretByNameV3Request struct {
-	SecretName  string `json:"-"`
-	WorkspaceID string `json:"workspaceId"`
-	Environment string `json:"environment"`
-	SecretPath  string `json:"secretPath,omitempty"`
-	SecretValue string `json:"secretValue"`
-	Type        string `json:"type,omitempty"`
+	SecretName  string   `json:"-"`
+	WorkspaceID string   `json:"workspaceId"`
+	Environment string   `json:"environment"`
+	SecretPath  string   `json:"secretPath,omitempty"`
+	SecretValue string   `json:"secretValue"`
+	Type        string   `json:"type,omitempty"`
+	TagIDs      []string `json:"tagIds,omitempty"`
 }
 
 type GetSingleSecretByNameV3Request struct {
@@ -598,11 +618,25 @@ type UniversalAuthRefreshResponse struct {
 }
 
 type CreateDynamicSecretLeaseV1Request struct {
-	Environment       string `json:"environmentSlug"`
-	ProjectSlug       string `json:"projectSlug"`
-	SecretPath        string `json:"secretPath,omitempty"`
-	DynamicSecretName string `json:"dynamicSecretName"`
-	TTL               string `json:"ttl,omitempty"`
+	Environment       string                 `json:"environmentSlug"`
+	ProjectSlug       string                 `json:"projectSlug"`
+	SecretPath        string                 `json:"path,omitempty"`
+	DynamicSecretName string                 `json:"dynamicSecretName"`
+	TTL               string                 `json:"ttl,omitempty"`
+	Config            map[string]interface{} `json:"config,omitempty"`
+}
+
+type RevokeDynamicSecretLeaseV1Request struct {
+	LeaseID     string `json:"-"`
+	Environment string `json:"environmentSlug"`
+	ProjectSlug string `json:"projectSlug"`
+	SecretPath  string `json:"path,omitempty"`
+}
+
+type RevokeDynamicSecretLeaseV1Response struct {
+	Lease struct {
+		Id string `json:"id"`
+	} `json:"lease"`
 }
 
 type CreateDynamicSecretLeaseV1Response struct {
@@ -643,17 +677,18 @@ type GetLoginV3Response struct {
 	AccessToken string `json:"accessToken"`
 }
 
-type GetRawSecretsV3Request struct {
-	Environment            string `json:"environment"`
-	WorkspaceId            string `json:"workspaceId"`
-	SecretPath             string `json:"secretPath"`
-	IncludeImport          bool   `json:"include_imports"`
-	Recursive              bool   `json:"recursive"`
-	TagSlugs               string `json:"tagSlugs,omitempty"`
-	ExpandSecretReferences bool   `json:"expandSecretReferences,omitempty"`
+type GetSecretsV4Request struct {
+	Environment              string `json:"environment"`
+	WorkspaceId              string `json:"projectId"`
+	SecretPath               string `json:"secretPath"`
+	IncludeImport            bool   `json:"includeImports"`
+	Recursive                bool   `json:"recursive"`
+	TagSlugs                 string `json:"tagSlugs,omitempty"`
+	ExpandSecretReferences   bool   `json:"expandSecretReferences"`
+	IncludePersonalOverrides bool   `json:"includePersonalOverrides"`
 }
 
-type GetRawSecretsV3Response struct {
+type GetSecretsV4Response struct {
 	Secrets []struct {
 		ID                    string       `json:"_id"`
 		Version               int          `json:"version"`
@@ -671,7 +706,7 @@ type GetRawSecretsV3Response struct {
 	ETag    string
 }
 
-type GetRawSecretV3ByNameRequest struct {
+type GetSecretV4ByNameRequest struct {
 	SecretName  string `json:"secretName"`
 	WorkspaceID string `json:"workspaceId"`
 	Type        string `json:"type,omitempty"`
@@ -679,7 +714,7 @@ type GetRawSecretV3ByNameRequest struct {
 	SecretPath  string `json:"secretPath,omitempty"`
 }
 
-type GetRawSecretV3ByNameResponse struct {
+type GetSecretV4ByNameResponse struct {
 	Secret struct {
 		ID                    string `json:"_id"`
 		Version               int    `json:"version"`
@@ -693,25 +728,6 @@ type GetRawSecretV3ByNameResponse struct {
 		SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
 	} `json:"secret"`
 	ETag string
-}
-
-type GetRelayCredentialsResponseV1 struct {
-	TurnServerUsername string `json:"turnServerUsername"`
-	TurnServerPassword string `json:"turnServerPassword"`
-	TurnServerRealm    string `json:"turnServerRealm"`
-	TurnServerAddress  string `json:"turnServerAddress"`
-	InfisicalStaticIp  string `json:"infisicalStaticIp"`
-}
-
-type ExchangeRelayCertRequestV1 struct {
-	RelayAddress string `json:"relayAddress"`
-}
-
-type ExchangeRelayCertResponseV1 struct {
-	SerialNumber     string `json:"serialNumber"`
-	PrivateKey       string `json:"privateKey"`
-	Certificate      string `json:"certificate"`
-	CertificateChain string `json:"certificateChain"`
 }
 
 type BootstrapInstanceRequest struct {
@@ -786,14 +802,56 @@ type Relay struct {
 type GetRelaysResponse []Relay
 
 type RegisterGatewayRequest struct {
-	RelayName string `json:"relayName"`
-	Name      string `json:"name"`
+	RelayName     string `json:"relayName,omitempty"`
+	DirectAddress string `json:"directAddress,omitempty"`
+	Name          string `json:"name,omitempty"`
+}
+
+type ConnectGatewayRequest struct {
+	RelayName     string `json:"relayName,omitempty"`
+	DirectAddress string `json:"directAddress,omitempty"`
+}
+
+type EnrollGatewayRequest struct {
+	Token string `json:"token"`
+}
+
+type EnrollGatewayResponse struct {
+	AccessToken string `json:"accessToken"`
+	GatewayID   string `json:"gatewayId"`
+}
+
+// Every gateway login method posts to the same endpoint and gets the same body back.
+type GatewayLoginResponse struct {
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+}
+
+type AwsAuthLoginGatewayRequest struct {
+	Method            string `json:"method"`
+	GatewayID         string `json:"gatewayId"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod"`
+	IamRequestBody    string `json:"iamRequestBody"`
+	IamRequestHeaders string `json:"iamRequestHeaders"`
+}
+
+type KubernetesAuthLoginGatewayRequest struct {
+	Method    string `json:"method"`
+	GatewayID string `json:"gatewayId"`
+	JWT       string `json:"jwt"`
+}
+
+type GcpAuthLoginGatewayRequest struct {
+	Method    string `json:"method"`
+	GatewayID string `json:"gatewayId"`
+	JWT       string `json:"jwt"`
 }
 
 type RegisterGatewayResponse struct {
-	GatewayID string `json:"gatewayId"`
-	RelayHost string `json:"relayHost"`
-	PKI       struct {
+	GatewayID     string `json:"gatewayId"`
+	DirectAddress string `json:"directAddress,omitempty"`
+	RelayHost     string `json:"relayHost,omitempty"`
+	PKI           struct {
 		ServerCertificate      string `json:"serverCertificate"`
 		ServerPrivateKey       string `json:"serverPrivateKey"`
 		ClientCertificateChain string `json:"clientCertificateChain"`
@@ -806,23 +864,33 @@ type RegisterGatewayResponse struct {
 }
 
 type PAMAccessRequest struct {
-	Duration     string `json:"duration,omitempty"`
+	// New path-based fields (PAM revamp)
+	Path string `json:"path,omitempty"`
+
+	// Legacy resource-based fields (kept so we can temporarily keep the other proxy files for furtherr revamp)
 	ResourceName string `json:"resourceName,omitempty"`
 	AccountName  string `json:"accountName,omitempty"`
 	ProjectId    string `json:"projectId,omitempty"`
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
+
+	// Common fields
+	Duration   string `json:"duration,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	TargetHost string `json:"targetHost,omitempty"`
 }
 
 type PAMAccessResponse struct {
 	SessionId                     string            `json:"sessionId"`
+	AccountType                   string            `json:"accountType"`
 	ResourceType                  string            `json:"resourceType"`
+	RelayHost                     string            `json:"relayHost"`
+	DirectAddress                 string            `json:"directAddress,omitempty"`
 	RelayClientCertificate        string            `json:"relayClientCertificate"`
 	RelayClientPrivateKey         string            `json:"relayClientPrivateKey"`
 	RelayServerCertificateChain   string            `json:"relayServerCertificateChain"`
 	GatewayClientCertificate      string            `json:"gatewayClientCertificate"`
 	GatewayClientPrivateKey       string            `json:"gatewayClientPrivateKey"`
 	GatewayServerCertificateChain string            `json:"gatewayServerCertificateChain"`
-	RelayHost                     string            `json:"relayHost"`
 	Metadata                      map[string]string `json:"metadata,omitempty"`
 }
 
@@ -845,24 +913,124 @@ type PAMAccessApprovalRequestResponse struct {
 	} `json:"request"`
 }
 
+type PAMCreateAccessRequestBody struct {
+	Path     string `json:"path"`
+	Reason   string `json:"reason,omitempty"`
+	Duration string `json:"duration"`
+}
+
+type PAMCreateAccessRequestResponse struct {
+	Request struct {
+		ID        string `json:"id"`
+		ProjectId string `json:"projectId"`
+		OrgId     string `json:"organizationId"`
+	} `json:"request"`
+}
+
+// PAMAccessibleAccount is one entry from the accessible-accounts listing. It carries everything
+// needed to decide whether a session could be launched, without creating one.
+type PAMAccessibleAccount struct {
+	Id               string  `json:"id"`
+	Name             string  `json:"name"`
+	Description      string  `json:"description"`
+	FolderName       string  `json:"folderName"`
+	AccountType      string  `json:"accountType"`
+	CanLaunch        bool    `json:"canLaunch"`
+	RequiresApproval bool    `json:"requiresApproval"`
+	RequireReason    bool    `json:"requireReason"`
+	RequireMfa       bool    `json:"requireMfa"`
+	AccessStatus     string  `json:"accessStatus"` // none | pending | granted
+	DisabledReason   *string `json:"disabledReason"`
+}
+
+type PAMAccessibleAccountsResponse struct {
+	Accounts   []PAMAccessibleAccount `json:"accounts"`
+	TotalCount int                    `json:"totalCount"`
+}
+
+type PAMPolicyRuleConfig struct {
+	Patterns []string `json:"patterns"`
+}
+
+// An older backend omits builtInDetection, which decodes as false.
+type PAMSessionLogMaskingConfig struct {
+	Patterns         []string `json:"patterns"`
+	BuiltInDetection bool     `json:"builtInDetection"`
+}
+
+type PAMPolicyRules struct {
+	CommandBlocking   *PAMPolicyRuleConfig        `json:"command-blocking,omitempty"`
+	SessionLogMasking *PAMSessionLogMaskingConfig `json:"session-log-masking,omitempty"`
+}
+
 type PAMSessionCredentialsResponse struct {
 	Credentials PAMSessionCredentials `json:"credentials"`
+	PolicyRules *PAMPolicyRules       `json:"policyRules,omitempty"`
+	Recording   *PAMRecordingResponse `json:"recording,omitempty"`
+}
+
+type PAMRecordingResponse struct {
+	SessionKey     string `json:"sessionKey"`
+	UploadToken    string `json:"uploadToken"`
+	StorageBackend string `json:"storageBackend"`
+	ProjectId      string `json:"projectId"`
+	SessionId      string `json:"sessionId"`
+}
+
+type ChunkPresignedPutRequest struct {
+	ChunkIndex      int   `json:"chunkIndex"`
+	CiphertextBytes int64 `json:"ciphertextBytes"`
+	IsKeyframe      bool  `json:"isKeyframe,omitempty"`
+}
+
+type ChunkPresignedPutResponse struct {
+	URL              string `json:"url"`
+	ObjectKey        string `json:"objectKey"`
+	Method           string `json:"method"`
+	ExpiresInSeconds int    `json:"expiresInSeconds"`
+}
+
+type ChunkMetadataRequest struct {
+	ChunkIndex        int    `json:"chunkIndex"`
+	StartElapsedMs    int64  `json:"startElapsedMs"`
+	EndElapsedMs      int64  `json:"endElapsedMs"`
+	CiphertextSha256  string `json:"ciphertextSha256"`
+	CiphertextBytes   int64  `json:"ciphertextBytes"`
+	IV                string `json:"iv"`
+	KeyframeObjectKey string `json:"keyframeObjectKey,omitempty"`
+	KeyframeSizeBytes int64  `json:"keyframeSizeBytes,omitempty"`
+	Ciphertext        string `json:"ciphertext,omitempty"`
 }
 
 type PAMSessionCredentials struct {
-	Host                  string `json:"host"`
-	Port                  int    `json:"port"`
-	Database              string `json:"database"`
-	SSLEnabled            bool   `json:"sslEnabled"`
-	SSLRejectUnauthorized bool   `json:"sslRejectUnauthorized"`
-	SSLCertificate        string `json:"sslCertificate,omitempty"`
-	Username              string `json:"username"`
-	Password              string `json:"password"`
-	AuthMethod            string `json:"authMethod,omitempty"`
-	PrivateKey            string `json:"privateKey,omitempty"`
-	Certificate           string `json:"certificate,omitempty"`
-	Url                   string `json:"url,omitempty"`
-	ServiceAccountToken   string `json:"serviceAccountToken,omitempty"`
+	Host                  string            `json:"host"`
+	Port                  int               `json:"port"`
+	Database              string            `json:"database"`
+	ConnectionString      string            `json:"connectionString,omitempty"` // MongoDB: full URI (mongodb[+srv]://...)
+	SSLEnabled            bool              `json:"sslEnabled"`
+	SSLRejectUnauthorized bool              `json:"sslRejectUnauthorized"`
+	SSLCertificate        string            `json:"sslCertificate,omitempty"`
+	Username              string            `json:"username"`
+	Password              string            `json:"password"`
+	AuthMethod            string            `json:"authMethod,omitempty"`
+	PrivateKey            string            `json:"privateKey,omitempty"`
+	Certificate           string            `json:"certificate,omitempty"`
+	Url                   string            `json:"url,omitempty"`
+	ServiceAccountToken   string            `json:"serviceAccountToken,omitempty"`
+	ServiceAccountName    string            `json:"serviceAccountName,omitempty"`
+	Namespace             string            `json:"namespace,omitempty"`
+	Domain                string            `json:"domain,omitempty"`
+	Realm                 string            `json:"realm,omitempty"`
+	KDCAddress            string            `json:"kdcAddress,omitempty"`
+	SPN                   string            `json:"spn,omitempty"`
+	Token                 string            `json:"token,omitempty"`
+	Tokens                map[string]string `json:"tokens,omitempty"`
+	ServiceAccountEmail   string            `json:"serviceAccountEmail,omitempty"`
+	Account               string            `json:"account,omitempty"`
+	Warehouse             string            `json:"warehouse,omitempty"`
+	Schema                string            `json:"schema,omitempty"`
+	Role                  string            `json:"role,omitempty"`
+	PrivateKeyPassphrase  string            `json:"privateKeyPassphrase,omitempty"`
 }
 
 type MFASessionStatus string
@@ -883,10 +1051,10 @@ type UploadSessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-// UploadTerminalEvent represents a terminal session event for upload
-type UploadTerminalEvent struct {
+type UploadSessionEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"eventType"`
+	ChannelType string    `json:"channelType,omitempty"`
 	Data        []byte    `json:"data"`
 	ElapsedTime float64   `json:"elapsedTime"`
 }
@@ -903,11 +1071,63 @@ type UploadHttpEvent struct {
 }
 
 type UploadPAMSessionLogsRequest struct {
-	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadTerminalEvent
+	Logs interface{} `json:"logs"` // Can be []UploadSessionLogEntry or []UploadSessionEvent
 }
 
 type RelayHeartbeatRequest struct {
 	Name string `json:"name"`
+}
+
+type GatewayHeartbeatRequest struct {
+	Capabilities map[string]any `json:"capabilities,omitempty"`
+}
+
+type GatewayMetricsReportRequest struct {
+	ActiveChannels int64 `json:"activeChannels"`
+}
+
+type RelayLoginRequest struct {
+	Method            string `json:"method"`
+	Token             string `json:"token,omitempty"`
+	RelayID           string `json:"relayId,omitempty"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod,omitempty"`
+	IamRequestBody    string `json:"iamRequestBody,omitempty"`
+	IamRequestHeaders string `json:"iamRequestHeaders,omitempty"`
+}
+
+type RelayLoginResponse struct {
+	AccessToken string `json:"accessToken"`
+	RelayID     string `json:"relayId"`
+	TokenType   string `json:"tokenType"`
+}
+
+type KmipServerLoginRequest struct {
+	Method            string `json:"method"`
+	Token             string `json:"token,omitempty"`
+	KmipServerID      string `json:"kmipServerId,omitempty"`
+	HTTPRequestMethod string `json:"iamHttpRequestMethod,omitempty"`
+	IamRequestBody    string `json:"iamRequestBody,omitempty"`
+	IamRequestHeaders string `json:"iamRequestHeaders,omitempty"`
+}
+
+type KmipServerLoginResponse struct {
+	AccessToken  string `json:"accessToken"`
+	KmipServerID string `json:"kmipServerId"`
+	TokenType    string `json:"tokenType"`
+}
+
+type RelayConnectResponse struct {
+	RelayID string `json:"relayId"`
+	PKI     struct {
+		ServerCertificate      string `json:"serverCertificate"`
+		ServerPrivateKey       string `json:"serverPrivateKey"`
+		ClientCertificateChain string `json:"clientCertificateChain"`
+	} `json:"pki"`
+	SSH struct {
+		ServerCertificate string `json:"serverCertificate"`
+		ServerPrivateKey  string `json:"serverPrivateKey"`
+		ClientCAPublicKey string `json:"clientCAPublicKey"`
+	} `json:"ssh"`
 }
 
 type AltName struct {
@@ -929,9 +1149,10 @@ type CertificateAttributes struct {
 }
 
 type IssueCertificateRequest struct {
-	ProfileID  string                 `json:"profileId"`
-	CSR        string                 `json:"csr,omitempty"`
-	Attributes *CertificateAttributes `json:"attributes,omitempty"`
+	ProfileID     string                 `json:"profileId"`
+	ApplicationID string                 `json:"applicationId,omitempty"`
+	CSR           string                 `json:"csr,omitempty"`
+	Attributes    *CertificateAttributes `json:"attributes,omitempty"`
 }
 
 type CertificateData struct {
@@ -948,24 +1169,40 @@ type CertificateResponse struct {
 	CertificateRequestID string           `json:"certificateRequestId"`
 }
 
+type CertificateStatus string
+
+const (
+	CertificateStatusActive  CertificateStatus = "active"
+	CertificateStatusRevoked CertificateStatus = "revoked"
+	CertificateStatusExpired CertificateStatus = "expired"
+)
+
 type RetrieveCertificateResponse struct {
 	Certificate struct {
-		ID                string    `json:"id"`
-		CreatedAt         time.Time `json:"createdAt"`
-		UpdatedAt         time.Time `json:"updatedAt"`
-		Status            string    `json:"status"`
-		SerialNumber      string    `json:"serialNumber"`
-		CommonName        string    `json:"commonName"`
-		NotBefore         time.Time `json:"notBefore"`
-		NotAfter          time.Time `json:"notAfter"`
-		ProjectId         string    `json:"projectId"`
-		CaId              string    `json:"caId"`
-		KeyUsages         []string  `json:"keyUsages"`
-		ExtendedKeyUsages []string  `json:"extendedKeyUsages"`
-		Certificate       string    `json:"certificate,omitempty"`
-		CertificateChain  string    `json:"certificateChain,omitempty"`
-		PrivateKey        string    `json:"privateKey,omitempty"`
+		ID                         string    `json:"id"`
+		CreatedAt                  time.Time `json:"createdAt"`
+		UpdatedAt                  time.Time `json:"updatedAt"`
+		Status                     string    `json:"status"`
+		SerialNumber               string    `json:"serialNumber"`
+		CommonName                 string    `json:"commonName"`
+		NotBefore                  time.Time `json:"notBefore"`
+		NotAfter                   time.Time `json:"notAfter"`
+		CaId                       string    `json:"caId"`
+		KeyUsages                  []string  `json:"keyUsages"`
+		ExtendedKeyUsages          []string  `json:"extendedKeyUsages"`
+		Certificate                string    `json:"certificate,omitempty"`
+		CertificateChain           string    `json:"certificateChain,omitempty"`
+		PrivateKey                 string    `json:"privateKey,omitempty"`
+		RenewedByCertificateID     string    `json:"renewedByCertificateId,omitempty"`
+		LatestRenewalCertificateID string    `json:"latestRenewalCertificateId,omitempty"`
 	} `json:"certificate"`
+}
+
+type CertificateBundleResponse struct {
+	Certificate      string `json:"certificate"`
+	CertificateChain string `json:"certificateChain"`
+	PrivateKey       string `json:"privateKey,omitempty"`
+	SerialNumber     string `json:"serialNumber"`
 }
 
 type RenewCertificateRequest struct {
@@ -987,7 +1224,6 @@ type GetCertificateRequestResponse struct {
 	CreatedAt            time.Time `json:"createdAt"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 	CommonName           string    `json:"commonName,omitempty"`
-	ProjectID            string    `json:"projectId,omitempty"`
 	ProfileID            string    `json:"profileId,omitempty"`
 	Certificate          *string   `json:"certificate,omitempty"`
 	IssuingCaCertificate *string   `json:"issuingCaCertificate,omitempty"`
@@ -996,4 +1232,23 @@ type GetCertificateRequestResponse struct {
 	SerialNumber         *string   `json:"serialNumber,omitempty"`
 	CertificateID        *string   `json:"certificateId,omitempty"`
 	ErrorMessage         *string   `json:"errorMessage,omitempty"`
+}
+
+type SecretTag struct {
+	ID   string `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type GetTagBySlugResponse struct {
+	Tag SecretTag `json:"tag"`
+}
+
+type CreateTagRequest struct {
+	Slug  string `json:"slug"`
+	Color string `json:"color"`
+}
+
+type CreateTagResponse struct {
+	Tag SecretTag `json:"tag"`
 }

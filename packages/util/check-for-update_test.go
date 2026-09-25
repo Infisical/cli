@@ -17,6 +17,106 @@ func init() {
 	color.NoColor = true
 }
 
+func TestGetUpdateInstructions(t *testing.T) {
+	tests := []struct {
+		name        string
+		goos        string
+		execPath    string
+		expected    string
+		expectEmpty bool // true means assert empty result (vs. skipping runtime-dependent cases)
+	}{
+		// darwin
+		{
+			name:     "darwin brew",
+			goos:     "darwin",
+			execPath: "/opt/homebrew/bin/infisical",
+			expected: "brew update && brew upgrade infisical",
+		},
+		{
+			name:     "darwin npm",
+			goos:     "darwin",
+			execPath: "/opt/homebrew/lib/node_modules/@infisical/cli/bin/infisical",
+			expected: "npm update -g @infisical/cli",
+		},
+		{
+			name:     "darwin cellar",
+			goos:     "darwin",
+			execPath: "/usr/local/Cellar/infisical/0.1.0/bin/infisical",
+			expected: "brew update && brew upgrade infisical",
+		},
+		{
+			name:        "darwin nix returns empty",
+			goos:        "darwin",
+			execPath:    "/nix/store/abc123-infisical/bin/infisical",
+			expectEmpty: true,
+		},
+		{
+			name:        "darwin direct binary returns empty",
+			goos:        "darwin",
+			execPath:    "/usr/local/bin/infisical",
+			expectEmpty: true,
+		},
+
+		// windows
+		{
+			name:     "windows scoop",
+			goos:     "windows",
+			execPath: `C:\Users\user\scoop\apps\infisical\current\infisical.exe`,
+			expected: "scoop update infisical",
+		},
+		{
+			name:     "windows npm",
+			goos:     "windows",
+			execPath: `C:\Users\user\AppData\Roaming\npm\node_modules\@infisical\cli\bin\infisical.exe`,
+			expected: "npm update -g @infisical/cli",
+		},
+		{
+			name:     "windows winget",
+			goos:     "windows",
+			execPath: `C:\Users\user\AppData\Local\Microsoft\WinGet\Links\infisical.exe`,
+			expected: "winget upgrade Infisical.Infisical",
+		},
+		{
+			name:        "windows unknown returns empty",
+			goos:        "windows",
+			execPath:    `C:\infisical\infisical.exe`,
+			expectEmpty: true,
+		},
+
+		// linux
+		{
+			name:     "linux apt",
+			goos:     "linux",
+			execPath: "/usr/bin/infisical",
+			expected: "", // apt detection is runtime — tested in integration
+		},
+		{
+			name:     "linux npm",
+			goos:     "linux",
+			execPath: "/home/user/.npm-global/lib/node_modules/@infisical/cli/bin/infisical",
+			expected: "npm update -g @infisical/cli",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getUpdateInstructions(tt.goos, tt.execPath)
+			if tt.expectEmpty {
+				if result != "" {
+					t.Errorf("expected empty result, got %q", result)
+				}
+				return
+			}
+			if tt.expected == "" {
+				return // skip runtime-dependent cases
+			}
+			if !strings.Contains(result, tt.expected) {
+				t.Errorf("expected %q to contain %q", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestIsCacheFresh(t *testing.T) {
 	tests := []struct {
 		name     string

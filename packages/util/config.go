@@ -5,73 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/rs/zerolog/log"
 )
-
-func WriteInitalConfig(userCredentials *models.UserCredentials) error {
-	fullConfigFilePath, fullConfigFileDirPath, err := GetFullConfigFilePath()
-	if err != nil {
-		return err
-	}
-
-	// create directory
-	if _, err := os.Stat(fullConfigFileDirPath); errors.Is(err, os.ErrNotExist) {
-		err := os.Mkdir(fullConfigFileDirPath, os.ModePerm)
-		if err != nil {
-			return err
-		}
-	}
-
-	// get existing config
-	existingConfigFile, err := GetConfigFile()
-	if err != nil {
-		return fmt.Errorf("writeInitalConfig: unable to write config file because [err=%s]", err)
-	}
-
-	//if profiles exists
-	loggedInUser := models.LoggedInUser{
-		Email:  userCredentials.Email,
-		Domain: config.INFISICAL_URL,
-	}
-	//if empty or if email not in loggedinUsers
-	if len(existingConfigFile.LoggedInUsers) == 0 || !ConfigContainsEmail(existingConfigFile.LoggedInUsers, userCredentials.Email) {
-		existingConfigFile.LoggedInUsers = append(existingConfigFile.LoggedInUsers, loggedInUser)
-	} else {
-		//if exists update domain of loggedin users
-		for idx, user := range existingConfigFile.LoggedInUsers {
-			if user.Email == userCredentials.Email {
-				existingConfigFile.LoggedInUsers[idx] = loggedInUser
-			}
-		}
-	}
-
-	configFile := models.ConfigFile{
-		LoggedInUserEmail:      userCredentials.Email,
-		LoggedInUserDomain:     config.INFISICAL_URL,
-		LoggedInUsers:          existingConfigFile.LoggedInUsers,
-		VaultBackendType:       existingConfigFile.VaultBackendType,
-		VaultBackendPassphrase: existingConfigFile.VaultBackendPassphrase,
-		Domains:                existingConfigFile.Domains,
-	}
-
-	configFileMarshalled, err := json.Marshal(configFile)
-	if err != nil {
-		return err
-	}
-
-	// Create file in directory
-	err = WriteToFile(fullConfigFilePath, configFileMarshalled, 0600)
-	if err != nil {
-		return err
-	}
-
-	return err
-}
 
 func ConfigFileExists() bool {
 	fullConfigFileURI, _, err := GetFullConfigFilePath()
@@ -114,6 +55,21 @@ func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
 	}
 
 	return workspaceConfigFile, nil
+}
+
+func GetDomainFromFile() (domain string, valid bool) {
+	workspaceFile, err := GetWorkSpaceFromFile()
+	if err != nil {
+		log.Debug().Msgf("GetDomainFromFile: [err=%s]", err)
+		return "", false
+	}
+
+	domain = strings.TrimSpace(workspaceFile.Domain)
+	parsed, err := url.Parse(domain)
+	valid = err == nil &&
+		(parsed.Scheme == "http" || parsed.Scheme == "https") &&
+		parsed.Host != ""
+	return domain, valid
 }
 
 func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile, error) {
