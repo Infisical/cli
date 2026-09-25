@@ -511,3 +511,21 @@ func TestNativeRevisionPinning(t *testing.T) {
 	require.NoError(t, err, out)
 	require.Equal(t, queryDirect(t, "SELECT version()"), strings.TrimSpace(out))
 }
+
+func TestAccountWithoutHTTPPortRefusesHTTPClients(t *testing.T) {
+	itOnly(t)
+
+	config := baseConfig(&recordingLogger{})
+	config.TargetAddr = ""
+	port := startProxy(t, config)
+
+	status, body := postStatement(t, "127.0.0.1:"+port, "SELECT 1")
+	require.Equal(t, http.StatusBadGateway, status)
+	require.Contains(t, body, "does not have ClickHouse's HTTP port configured")
+	require.NotContains(t, body, "no Host in request URL", "the internal proxy error should not reach the client")
+
+	// The native protocol still works on the same port.
+	out, err := runClient(t, port, "SELECT 'native-still-works';")
+	require.NoError(t, err, out)
+	require.Contains(t, out, "native-still-works")
+}

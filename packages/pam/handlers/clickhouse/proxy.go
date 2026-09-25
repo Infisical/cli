@@ -210,6 +210,16 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 			return
 		}
 
+		// Without an HTTP upstream the reverse proxy would fail on an empty host, which reads as a network
+		// fault rather than an account that does not serve this protocol.
+		if p.config.TargetAddr == "" {
+			l.Info().Msg("Refused an HTTP connection on an account with no HTTP port")
+			writeClickHouseError(w, http.StatusBadGateway, codeNotImplemented,
+				"This account does not have ClickHouse's HTTP port configured, so only the native protocol is "+
+					"available in this session. Connect with a native client such as clickhouse-client.")
+			return
+		}
+
 		r.Body = body
 		state := &requestState{statement: statement, started: time.Now()}
 		p.reverse.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stateKey{}, state)))
