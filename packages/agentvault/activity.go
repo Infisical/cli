@@ -86,9 +86,6 @@ type activityLog struct {
 
 	clockSkewReported bool
 
-	uploads         uint64
-	uploadsReported uint64
-
 	closed bool
 	wake   chan struct{}
 }
@@ -411,29 +408,8 @@ func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, fina
 			spool.pending = spool.pending[1:]
 			a.sealedBytes -= len(chunk.ciphertext)
 		}
-		a.uploads++
 		a.mu.Unlock()
 	}
-}
-
-// What the next heartbeat reports. It is acknowledged only once Infisical has answered, so a heartbeat that
-// fails reports the same uploads again.
-func (a *activityLog) uploadReport() (snapshot uint64, uploaded bool) {
-	if a == nil {
-		return 0, false
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.uploads, a.uploads > a.uploadsReported
-}
-
-func (a *activityLog) ackUploadReport(snapshot uint64) {
-	if a == nil {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.uploadsReported = max(a.uploadsReported, snapshot)
 }
 
 func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk *sealedChunk, final bool) bool {

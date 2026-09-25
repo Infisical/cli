@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -160,69 +159,5 @@ func TestTickKeepsTheCurrentSettingsWhenTheHeartbeatCarriesNone(t *testing.T) {
 	back, _, _ := st.loadState()
 	if back.Config != loaded.Config {
 		t.Fatalf("a heartbeat with no settings was persisted: %+v", back.Config)
-	}
-}
-
-func TestHeartbeatsReportUploadsUntilInfisicalAnswers(t *testing.T) {
-	answered, err := json.Marshal(api.AgentVaultHeartbeatResponse{
-		Config: api.AgentVaultProxyConfig{TrafficPolicy: TrafficPolicyAnyHost, PollInterval: 60},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var mu sync.Mutex
-	var reported bool
-	reply := []byte(`{"message":"no"}`)
-	status := http.StatusBadRequest
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req api.AgentVaultHeartbeatRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		mu.Lock()
-		reported = req.ActivityUploaded
-		code, body := status, reply
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		_, _ = w.Write(body)
-	}))
-	t.Cleanup(srv.Close)
-	prev := config.INFISICAL_URL
-	config.INFISICAL_URL = srv.URL
-	t.Cleanup(func() { config.INFISICAL_URL = prev })
-
-	ps := &proxyServer{
-		opts:     Options{ProxyToken: func() string { return "tok" }},
-		config:   ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost, PollInterval: 60},
-		activity: newActivityLog("p1", &fakeShipper{}),
-	}
-	resolver, err := newInfisicalResolver(ps.opts.ProxyToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ps.cache = newSessionCache(resolver, ps.pollInterval)
-	st := newStore(t.TempDir())
-	ps.activity.uploads = 1
-
-	tickReports := func(code int, body []byte) bool {
-		mu.Lock()
-		status, reply = code, body
-		mu.Unlock()
-		ps.tick(st)
-		mu.Lock()
-		defer mu.Unlock()
-		return reported
-	}
-
-	if !tickReports(http.StatusBadRequest, []byte(`{"message":"no"}`)) {
-		t.Fatal("an upload was not reported")
-	}
-	if !tickReports(http.StatusOK, []byte(`{"ok":true}`)) {
-		t.Fatal("a failed heartbeat acknowledged the upload")
-	}
-	if !tickReports(http.StatusOK, answered) {
-		t.Fatal("a reply that was not Infisical's acknowledged the upload")
-	}
-	if tickReports(http.StatusOK, answered) {
-		t.Fatal("an upload Infisical already acknowledged was reported again")
 	}
 }
