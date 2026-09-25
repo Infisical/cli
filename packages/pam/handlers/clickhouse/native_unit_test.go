@@ -557,6 +557,7 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "did not answer ClickHouse's native handshake")
+		require.Contains(t, err.Error(), "within 1s", "the message must name the budget that was applied")
 		// The heartbeat stops scheduling on a rejected credential, so a silent port has to stay a
 		// transport failure rather than being read as one.
 		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
@@ -590,4 +591,29 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), "did not answer ClickHouse's native handshake")
 	})
+}
+
+func TestNativeAnchoredRuleStillBlocksAStatementCarryingParameters(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+
+	conn := dialProxy(t, ClickHouseProxyConfig{
+		NativeAddr:      upstream.addr(),
+		Username:        "account",
+		SessionID:       "unit",
+		SessionLogger:   &recordingLogger{},
+		BlockedCommands: []*regexp.Regexp{regexp.MustCompile(`(?i)^DROP TABLE important$`)},
+	})
+	r := clientHandshake(t, conn, "someone", "whatever")
+
+	writeQuery(t, conn, proto.Query{
+		Body:       "DROP TABLE important",
+		Parameters: []proto.Parameter{{Key: "who", Value: "someone"}},
+	})
+
+	code, message := decodeException(t, r)
+	require.Equal(t, codeAccessDenied, code)
+	require.Contains(t, message, "blocked by the command blocking policy")
+
+	_, _, queries, _ := upstream.snapshot()
+	require.Empty(t, queries, "the blocked statement must not reach the upstream")
 }

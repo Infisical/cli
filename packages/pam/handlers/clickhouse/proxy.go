@@ -196,13 +196,13 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 			return
 		}
 
-		statement, body, err := p.inspect(r)
+		sql, statement, body, err := p.inspect(r)
 		if err != nil {
 			writeClickHouseError(w, http.StatusBadRequest, codeNotImplemented, err.Error())
 			return
 		}
 
-		if blocked := p.blockedBy(statement); blocked != nil {
+		if blocked := p.blockedBy(sql, statement); blocked != nil {
 			p.logStatement(statement, fmt.Sprintf("BLOCKED: %s", blocked.String()))
 			l.Info().Str("pattern", blocked.String()).Msg("Blocked a statement by policy")
 			writeClickHouseError(w, http.StatusForbidden, codeAccessDenied,
@@ -232,16 +232,16 @@ type bodyReadCloser struct {
 }
 
 // Returns the statement and a body that still replays in full. ClickHouse concatenates `query` and the body.
-func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error) {
+func (p *ClickHouseProxy) inspect(r *http.Request) (sql string, recorded string, body io.ReadCloser, err error) {
 	queryParam := strings.TrimSpace(r.URL.Query().Get("query"))
 
 	if r.Body == nil || r.ContentLength == 0 {
-		return queryParam + parameterSuffix(r.URL.Query()), http.NoBody, nil
+		return queryParam, queryParam + parameterSuffix(r.URL.Query()), http.NoBody, nil
 	}
 
 	// ClickHouse's own block compression is opaque to anything but a ClickHouse client
 	if r.URL.Query().Get("decompress") == "1" {
-		return "", nil, fmt.Errorf(
+		return "", "", nil, fmt.Errorf(
 			"this session cannot read a ClickHouse-compressed request body, so decompress=1 is not supported here. " +
 				"Send the statement uncompressed or with Content-Encoding: gzip")
 	}
@@ -250,7 +250,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 	switch encoding {
 	case "", "identity", "gzip", "deflate":
 	default:
-		return "", nil, fmt.Errorf(
+		return "", "", nil, fmt.Errorf(
 			"this session cannot read a %q-encoded request body, so the command blocking policy could not be applied to it. "+
 				"Use gzip, deflate, or no compression", encoding)
 	}
@@ -259,7 +259,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 	head := make([]byte, maxInspectBytes+1)
 	n, err := io.ReadFull(r.Body, head)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return "", nil, fmt.Errorf("the gateway could not read the request body: %v", err)
+		return "", "", nil, fmt.Errorf("the gateway could not read the request body: %v", err)
 	}
 	head = head[:n]
 
@@ -267,18 +267,19 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 
 	decoded, decodedOverflow, decodeErr := decodeHead(head, encoding)
 	if decodeErr != nil {
-		return "", nil, fmt.Errorf(
+		return "", "", nil, fmt.Errorf(
 			"the gateway could not decompress the request body to apply the command blocking policy: %v", decodeErr)
 	}
 
 	if (len(head) > maxInspectBytes || decodedOverflow) && len(p.config.BlockedCommands) > 0 {
-		return "", nil, fmt.Errorf(
+		return "", "", nil, fmt.Errorf(
 			"this account blocks commands, so a request body larger than %d MB is refused: the gateway has to read "+
 				"the whole statement to apply the policy. Send the data in smaller batches",
 			maxInspectBytes>>20)
 	}
 
-	return joinStatement(queryParam, string(decoded)) + parameterSuffix(r.URL.Query()), forwarded, nil
+	joined := joinStatement(queryParam, string(decoded))
+	return joined, joined + parameterSuffix(r.URL.Query()), forwarded, nil
 }
 
 func parameterSuffix(query url.Values) string {
@@ -468,13 +469,14 @@ func (p *ClickHouseProxy) handleUpstreamError(w http.ResponseWriter, r *http.Req
 		fmt.Sprintf("The gateway could not reach ClickHouse: %v", err))
 }
 
-func (p *ClickHouseProxy) blockedBy(statement string) *regexp.Regexp {
-	if statement == "" {
-		return nil
-	}
+// The recorded form carries a "-- parameters:" suffix, so an end-anchored rule stops matching the moment
+// a client attaches one. Both the executable SQL and the recorded form are checked.
+func (p *ClickHouseProxy) blockedBy(statements ...string) *regexp.Regexp {
 	for _, pattern := range p.config.BlockedCommands {
-		if pattern.MatchString(statement) {
-			return pattern
+		for _, statement := range statements {
+			if statement != "" && pattern.MatchString(statement) {
+				return pattern
+			}
 		}
 	}
 	return nil

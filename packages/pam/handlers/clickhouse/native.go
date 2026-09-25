@@ -420,7 +420,7 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 
 	statement := q.Body + nativeParameterSuffix(q.Parameters)
 
-	if blocked := s.proxy.blockedBy(statement); blocked != nil {
+	if blocked := s.proxy.blockedBy(q.Body, statement); blocked != nil {
 		s.proxy.logStatement(statement, fmt.Sprintf("BLOCKED: %s", blocked.String()))
 		s.log.Info().Str("pattern", blocked.String()).Msg("Blocked a statement by policy")
 		return s.refuse(t, codeAccessDenied,
@@ -650,11 +650,13 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 	defer conn.Close()
 
 	// The probe's own budget wins when it is shorter, so a slow handshake cannot outlive the test.
-	deadline := time.Now().Add(nativeHandshakeTimeout)
-	if probeDeadline, ok := ctx.Deadline(); ok && probeDeadline.Before(deadline) {
-		deadline = probeDeadline
+	budget := nativeHandshakeTimeout
+	if probeDeadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(probeDeadline); remaining < budget {
+			budget = remaining
+		}
 	}
-	_ = conn.SetDeadline(deadline)
+	_ = conn.SetDeadline(time.Now().Add(budget))
 
 	var b proto.Buffer
 	proto.ClientHello{
@@ -676,7 +678,7 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return fmt.Errorf("the port accepted the connection but did not answer ClickHouse's native "+
 				"handshake within %s, which is what the HTTP port does when it is entered as the native one: %w",
-				nativeHandshakeTimeout, err)
+				budget.Round(time.Second), err)
 		}
 		return fmt.Errorf("read hello response: %w", err)
 	}

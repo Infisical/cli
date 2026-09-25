@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/ch-go"
+	"github.com/ClickHouse/ch-go/proto"
 	"github.com/docker/docker/api/types/container"
 	"github.com/infisical/cli/e2e-tests/packages/client"
 	helpers "github.com/infisical/cli/e2e-tests/util"
@@ -66,28 +68,40 @@ func startClickHouseContainer(t *testing.T, ctx context.Context) (testcontainers
 	return ctr, host, httpPort.Int(), nativePort.Int()
 }
 
-// clickhouseClientIn runs the container's own clickhouse-client, which is what makes this an interop
-// check rather than a test of our own encoder.
-func clickhouseClientIn(t *testing.T, ctx context.Context, ctr testcontainers.Container,
-	host string, port int, sql string, extra ...string) (int, string) {
+// queryOverNative drives the session with ch-go's client, which performs a real native handshake and
+// query exchange. It runs on this host because a PAM proxy binds loopback only
+// (TestLocalProxiesBindLoopback), so nothing inside a container can reach it.
+func queryOverNative(t *testing.T, ctx context.Context, proxyPort int, sql string, compress bool) (string, error) {
 	t.Helper()
 
-	args := []string{
-		"clickhouse-client",
-		"--host", host,
-		"--port", fmt.Sprintf("%d", port),
-		"--database", clickhouseDatabase,
+	options := ch.Options{
+		Address:  fmt.Sprintf("127.0.0.1:%d", proxyPort),
+		Database: clickhouseDatabase,
 		// The proxy injects the account's credentials, so whatever the client sends is discarded.
-		"--user", "not-the-account", "--password", "not-the-password",
-		"--query", sql,
+		User:     "not-the-account",
+		Password: "not-the-password",
 	}
-	args = append(args, extra...)
+	if compress {
+		options.Compression = ch.CompressionLZ4
+	}
 
-	exitCode, reader, err := ctr.Exec(ctx, args)
-	require.NoError(t, err)
-	out, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	return exitCode, string(out)
+	client, err := ch.Dial(ctx, options)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+
+	var answer proto.ColStr
+	if err := client.Do(ctx, ch.Query{
+		Body:   sql,
+		Result: proto.Results{{Name: "answer", Data: &answer}},
+	}); err != nil {
+		return "", err
+	}
+	if answer.Rows() == 0 {
+		return "", fmt.Errorf("no rows returned")
+	}
+	return answer.First(), nil
 }
 
 func seedClickHouse(t *testing.T, ctx context.Context, ctr testcontainers.Container) {
@@ -216,9 +230,7 @@ func TestPAM_ClickHouse(t *testing.T) {
 	templateId := CreatePamTemplate(t, ctx, infra, "clickhouse-template",
 		client.CreatePamAccountTemplateJSONBodyType("clickhouse"))
 
-	ctr, chHost, chHTTPPort, chNativePort := startClickHouseContainer(t, ctx)
-	// The container reaches the proxy running on this host, so a loopback address will not do.
-	hostIP := getOutboundIP(t)
+	_, chHost, chHTTPPort, chNativePort := startClickHouseContainer(t, ctx)
 
 	t.Run("both interfaces on one session port", func(t *testing.T) {
 		accountName := "clickhouse-dual-account"
@@ -233,9 +245,9 @@ func TestPAM_ClickHouse(t *testing.T) {
 		require.Equal(t, "alpha\nbeta\ngamma", strings.TrimSpace(body))
 		slog.Info("HTTP interface answered through the proxy")
 
-		exitCode, out := clickhouseClientIn(t, ctx, ctr, hostIP, proxyPort, "SELECT count() FROM events")
-		require.Zero(t, exitCode, out)
-		require.Equal(t, "3", strings.TrimSpace(out))
+		answer, err := queryOverNative(t, ctx, proxyPort, "SELECT toString(count()) AS answer FROM events", false)
+		require.NoError(t, err)
+		require.Equal(t, "3", answer)
 		slog.Info("native interface answered the same session port")
 	})
 
@@ -247,11 +259,11 @@ func TestPAM_ClickHouse(t *testing.T) {
 		proxyPort, pamCmd := startClickHouseProxy(t, ctx, infra, folderName, accountName)
 		waitForProxyHTTP(t, ctx, pamCmd, proxyPort)
 
-		for _, compression := range []string{"1", "0"} {
-			exitCode, out := clickhouseClientIn(t, ctx, ctr, hostIP, proxyPort,
-				"SELECT count() FROM events", "--compression", compression)
-			require.Zero(t, exitCode, out)
-			require.Equal(t, "3", strings.TrimSpace(out), "compression=%s", compression)
+		for _, compression := range []bool{true, false} {
+			answer, err := queryOverNative(t, ctx, proxyPort,
+				"SELECT toString(count()) AS answer FROM events", compression)
+			require.NoError(t, err, "compression=%v", compression)
+			require.Equal(t, "3", answer, "compression=%v", compression)
 		}
 	})
 
@@ -267,8 +279,8 @@ func TestPAM_ClickHouse(t *testing.T) {
 			Interval:         2 * time.Second,
 			Timeout:          60 * time.Second,
 			Condition: func() helpers.ConditionResult {
-				exitCode, out := clickhouseClientIn(t, ctx, ctr, hostIP, proxyPort, "SELECT count() FROM events")
-				if exitCode == 0 && strings.TrimSpace(out) == "3" {
+				answer, err := queryOverNative(t, ctx, proxyPort, "SELECT toString(count()) AS answer FROM events", false)
+				if err == nil && answer == "3" {
 					return helpers.ConditionSuccess
 				}
 				return helpers.ConditionWait
@@ -290,9 +302,9 @@ func TestPAM_ClickHouse(t *testing.T) {
 		proxyPort, pamCmd := startClickHouseProxy(t, ctx, infra, folderName, accountName)
 		waitForProxyHTTP(t, ctx, pamCmd, proxyPort)
 
-		exitCode, out := clickhouseClientIn(t, ctx, ctr, hostIP, proxyPort, "SELECT count() FROM events")
-		require.NotZero(t, exitCode, out)
-		require.Contains(t, out, "native port",
+		_, err := queryOverNative(t, ctx, proxyPort, "SELECT toString(count()) AS answer FROM events", false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "native port",
 			"a native client must be told why, not left with a transport error")
 	})
 }

@@ -490,3 +490,20 @@ func TestRefusesADeflatedBodyItCannotDecode(t *testing.T) {
 	require.False(t, reached, "a body the gateway could not read must not be forwarded uninspected")
 	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 }
+
+// The recorded form carries a parameter suffix, so an end-anchored rule would stop matching as soon as
+// a client attached a parameter and the blocked statement would run.
+func TestAnAnchoredRuleStillBlocksAStatementCarryingParameters(t *testing.T) {
+	reached := false
+	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}, `(?i)^DROP TABLE important$`)
+	defer closeUpstream()
+
+	req := httptest.NewRequest(http.MethodPost, "/?param_who=someone", strings.NewReader("DROP TABLE important"))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.False(t, reached, "the blocked statement must not reach the upstream")
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
