@@ -38,8 +38,7 @@ func TestSplitFormatClause(t *testing.T) {
 		},
 		{name: "a column named format", sql: "SELECT format FROM t", wantBody: "SELECT format FROM t"},
 		{name: "format with no name", sql: "SELECT 1 FORMAT", wantBody: "SELECT 1 FORMAT"},
-		// A trailing identifier that merely starts with "format" is not a clause, and splitting it would
-		// throw away the operand in front of it.
+		// A trailing identifier that merely starts with "format" is not a clause, and splitting it would throw...
 		{name: "a table whose name starts with format", sql: "SELECT * FROM format_events", wantBody: "SELECT * FROM format_events"},
 		{name: "an alias that starts with format", sql: "SELECT 1 AS format_id", wantBody: "SELECT 1 AS format_id"},
 		{name: "ordering by a column called formatted", sql: "SELECT x FROM t ORDER BY formatted", wantBody: "SELECT x FROM t ORDER BY formatted"},
@@ -104,8 +103,6 @@ func TestCheckSpliceable(t *testing.T) {
 	}
 }
 
-// The bridge has to answer what ClickHouse's own HTTP interface answers, so both are asked the same thing
-// and the envelopes compared.
 func TestBridgeMatchesHTTPInterface(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -177,7 +174,6 @@ func TestBridgeRecordsStatements(t *testing.T) {
 	require.Contains(t, recorder.dump(), "1 row(s) returned")
 }
 
-// A native-only account has no HTTP upstream, so TargetAddr is deliberately empty.
 func startBridgeProxy(t *testing.T, blocked []string, logger *recordingLogger) string {
 	t.Helper()
 
@@ -263,7 +259,6 @@ func queryRealHTTP(t *testing.T, statement string, format string) bridgeEnvelope
 	return envelope
 }
 
-// The bridge exists for a server with HTTP genuinely turned off, so it is also exercised against one.
 func TestBridgeAgainstHTTPDisabledServer(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -312,8 +307,6 @@ func TestBridgeAgainstHTTPDisabledServer(t *testing.T) {
 	require.JSONEq(t, `[{"n":1,"m":{"k":"v"}}]`, string(envelope.Data))
 }
 
-// The SQL editor asks for its format with the default_format setting rather than a FORMAT clause, which is
-// a different code path and was returning nothing at all.
 func TestBridgeHonoursDefaultFormatSetting(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -339,7 +332,6 @@ func TestBridgeHonoursDefaultFormatSetting(t *testing.T) {
 	}
 }
 
-// A statement whose last line is a comment would otherwise swallow the wrapper's closing parenthesis.
 func TestBridgeHandlesATrailingComment(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -351,7 +343,6 @@ func TestBridgeHandlesATrailingComment(t *testing.T) {
 	require.Contains(t, body, `"n":1`)
 }
 
-// A result bigger than one block used to fail because ch-go refuses a second block with no handler.
 func TestBridgeHandlesAMultiBlockResult(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -393,7 +384,6 @@ func TestBridgeRefusesAResultBeyondTheRowCap(t *testing.T) {
 	require.NotContains(t, body, "decode block", "ch-go's internal wrapping should not reach the client")
 }
 
-// /ping is a health check, and on a native-only account it used to be refused as an empty statement.
 func TestBridgeAnswersPing(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -405,7 +395,6 @@ func TestBridgeAnswersPing(t *testing.T) {
 	require.Contains(t, body, "Ok.")
 }
 
-// A parameter is data. Values that are awkward to quote must survive unchanged.
 func TestBridgeParameterRoundTrip(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -432,9 +421,7 @@ func TestBridgeParameterRoundTrip(t *testing.T) {
 	}
 }
 
-// @clickhouse/client.insert() sends `INSERT INTO t FORMAT JSONEachRow` with the rows in the body, which goes
-// down the no-format path as one native query carrying inline data. It must complete rather than sit until
-// the server's receive timeout, and the rows have to actually land.
+// @clickhouse/client.insert() sends `INSERT INTO t FORMAT JSONEachRow` with the rows in the body, which...
 func TestBridgeInsertWithInlineData(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")

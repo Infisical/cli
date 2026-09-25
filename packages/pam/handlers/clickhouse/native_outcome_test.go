@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The recorder decides what an auditor reads, and it joins two goroutines, so its queue behaviour is worth
-// pinning down without needing a database.
 func newTestRecorder() (*outcomeRecorder, *recordingLogger) {
 	logger := &recordingLogger{}
 	return newOutcomeRecorder(&ClickHouseProxy{config: ClickHouseProxyConfig{SessionLogger: logger}}), logger

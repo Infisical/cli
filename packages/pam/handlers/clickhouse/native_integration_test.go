@@ -11,11 +11,6 @@ import (
 	"time"
 )
 
-// Exercises the native handler against a real ClickHouse over the real clickhouse-client, which is the only way
-// to cover revision pinning, the addendum and block framing. Opt in with PAM_CLICKHOUSE_NATIVE_IT=1.
-//
-//	docker run -d --name pam-clickhouse-target -p 8123:8123 -p 9000:9000 \
-//	  -e CLICKHOUSE_PASSWORD=clickhouse -e CLICKHOUSE_DB=analytics clickhouse/clickhouse-server:24.8
 func TestNativeIntegration(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -95,8 +90,6 @@ func TestNativeIntegration(t *testing.T) {
 	}
 }
 
-// TestNativeRecordsEveryStatement proves the packet loop keeps inspecting after the first statement, which a
-// handler that degrades into a raw relay would silently stop doing.
 func TestNativeRecordsEveryStatement(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -120,8 +113,6 @@ func TestNativeRecordsEveryStatement(t *testing.T) {
 	}
 }
 
-// TestNativeRecordsFailedStatement proves a statement ClickHouse rejects is recorded with its error rather
-// than as a success.
 func TestNativeRecordsFailedStatement(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
@@ -141,7 +132,6 @@ func TestNativeRecordsFailedStatement(t *testing.T) {
 	}
 }
 
-// A column type ch-go cannot infer costs the outcome of that statement, never the statement or the session.
 func TestNativeDegradesOnUnreadableResultBlock(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")

@@ -48,7 +48,6 @@ func TestSniffProtocol(t *testing.T) {
 	}
 }
 
-// The HTTP interface has to keep working now that a connection is routed by its first byte.
 func TestHandleConnectionRoutesHTTP(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
@@ -76,7 +75,6 @@ func TestHandleConnectionRoutesHTTP(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-// A native client reaching an account with no native port has to get a native exception, not a dead socket.
 func TestHandleConnectionRefusesNativeWithoutPort(t *testing.T) {
 	proxy := NewClickHouseProxy(ClickHouseProxyConfig{
 		TargetAddr: "127.0.0.1:1",

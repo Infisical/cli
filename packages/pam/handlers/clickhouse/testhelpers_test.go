@@ -15,8 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// runClient drives the real clickhouse-client against the session's port, which is the only way to cover
-// revision pinning, the addendum and block framing as a real driver produces them.
 func runClient(t *testing.T, port string, sql string, extra ...string) (string, error) {
 	t.Helper()
 
@@ -27,7 +25,7 @@ func runClient(t *testing.T, port string, sql string, extra ...string) (string, 
 		"run", "--rm", "-i", "clickhouse/clickhouse-server:24.8", "clickhouse-client",
 		"--host", envOr("PAM_CLICKHOUSE_CLIENT_HOST", "host.docker.internal"),
 		"--port", port,
-		// Deliberately wrong: the gateway replaces them with the account's.
+		// Deliberately wrong:
 		"--user", "not-the-account", "--password", "not-the-password",
 		"--multiquery",
 	}
@@ -40,8 +38,6 @@ func runClient(t *testing.T, port string, sql string, extra ...string) (string, 
 	return string(out), err
 }
 
-// postStatementE is the non-asserting form. require.* calls t.FailNow, which is illegal off the test
-// goroutine, so anything running in parallel has to report failures over a channel instead.
 func postStatementE(addr string, sql string) (int, string, error) {
 	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/", strings.NewReader(sql))
 	if err != nil {

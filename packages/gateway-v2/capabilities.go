@@ -6,7 +6,5 @@ const CapabilitySessionLogMaskingBuiltInDetection = "sessionLogMaskingBuiltInDet
 
 const CapabilitySupportedAccountTypes = "supported_account_types"
 
-// Reported separately from the account type, because a gateway can support ClickHouse accounts and still
-// predate the native protocol. Without it the platform cannot tell the difference, and an account with a
-// native port would save against an old gateway and then fail every native client at session time.
+// Separate from the account type: a gateway can support ClickHouse accounts and still predate native.
 const CapabilityClickhouseNativeProtocol = "clickhouseNativeProtocol"

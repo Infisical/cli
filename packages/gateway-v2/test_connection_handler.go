@@ -724,12 +724,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 				TLSConfig: tlsConfig,
 			}
 
-			// A server can have either interface turned off, so only the ones the account names are tested.
-			// Both are checked up front, so an account that would only ever fail for one kind of client is
-			// caught here rather than at the first session.
-			// One ClickHouse account can expose two ports, so the body names which to probe. The signed
-			// certificate still decides which are allowed, so the body cannot point the gateway at a port
-			// the platform did not authorise.
+			// The body names which ports to probe; the signed certificate still decides which are allowed.
 			for _, port := range []int{params.HttpPort, params.NativePort} {
 				if port > 0 && !target.allows(port) {
 					return fmt.Errorf("port %d is not authorised for this connection test", port)
@@ -738,12 +733,11 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 			httpPort := params.HttpPort
 			if httpPort <= 0 && params.NativePort <= 0 {
-				// An API old enough not to send the ports still means the cert-bound one.
+				// An API too old to send the ports still means the cert-bound one.
 				httpPort = target.port
 			}
 
-			// Each probe gets its own slice of the budget. Sharing one deadline across up to four network
-			// round trips means a slow first probe swallows the second one's specific error message.
+			// One shared deadline would let a slow first probe swallow the second one's specific error.
 			probes := 0
 			if httpPort > 0 {
 				probes++
@@ -835,8 +829,7 @@ func redactProbeSecrets(msg string, secrets ...string) string {
 	return urlUserinfoPattern.ReplaceAllString(msg, "${1}******@")
 }
 
-// A server can be reachable over HTTP and not over the native protocol, so the failure has to say which port
-// it was and that the account can be saved without one.
+// The failure has to name the port, and say the account can be saved without one.
 func nativePortError(port int, err error, httpWorks bool) error {
 	if !httpWorks {
 		return fmt.Errorf("ClickHouse's native port %d did not answer: %w", port, err)

@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The degrade path stops decoding and relays the rest of the stream. Anything the tap's buffered reader
-// already pulled off the socket has to go with it, or the client gets a truncated packet.
 func TestTapRelaysWhatItHasAlreadyBuffered(t *testing.T) {
 	upstreamRead, upstreamWrite := net.Pipe()
 	defer upstreamRead.Close()

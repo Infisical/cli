@@ -8,7 +8,6 @@ import (
 )
 
 // The backend builds this request in TypeScript, so nothing checks the field names match at compile time.
-// These payloads were captured from buildGatewayConnectionTest itself.
 func TestClickhouseTestParamsContract(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -56,8 +55,7 @@ func TestClickhouseTestParamsContract(t *testing.T) {
 	}
 }
 
-// The ports to probe come from the request body, so the signed certificate is what stops a caller pointing
-// the gateway at a port the platform never authorised.
+// The ports to probe come from the request body, so the signed certificate is what stops a caller pointing...
 func TestRPCTargetAllows(t *testing.T) {
 	t.Run("a certificate naming one port authorises only that port", func(t *testing.T) {
 		target := rpcTarget{host: "db.internal", port: 8123}

@@ -594,7 +594,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			blockedCommands = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
 		}
 
-		// Either interface can be absent: an empty address is what tells the handler that one is not served.
+		// An empty address is what tells the handler an interface is not served.
 		nativeAddr := ""
 		if credentials.NativePort > 0 {
 			nativeAddr = net.JoinHostPort(credentials.Host, strconv.Itoa(credentials.NativePort))

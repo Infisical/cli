@@ -80,17 +80,15 @@ type ForwardConfig struct {
 	VerifyTLS     bool   // Whether to verify TLS certificates
 	TargetHost    string
 	TargetPort    int
-	// Additional ports the certificate authorises, empty when it names only TargetPort.
-	TargetPorts []int
-	ActorType   ActorType
-	PAMConfig   pam.GatewayPAMConfig
+	TargetPorts   []int
+	ActorType     ActorType
+	PAMConfig     pam.GatewayPAMConfig
 }
 
 // RoutingInfo represents the routing information embedded in client certificates
 type RoutingInfo struct {
 	TargetHost string `json:"targetHost"`
 	TargetPort int    `json:"targetPort"`
-	// Every port this certificate authorises, for the account types that reach one host on more than one.
 	// Absent from a certificate minted by an older platform, which means TargetPort is the only one.
 	TargetPorts []int `json:"targetPorts,omitempty"`
 }

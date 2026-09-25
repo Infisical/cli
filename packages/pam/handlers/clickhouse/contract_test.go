@@ -8,8 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The API and the gateway agree on these shapes only by convention, and a renamed field would not fail to
-// compile in either repo. The payloads below were captured from the backend's own builders.
+// The API and the gateway agree on these shapes only by convention, and a renamed field would not fail to...
 func TestSessionCredentialsContract(t *testing.T) {
 	cases := []struct {
 		name                   string

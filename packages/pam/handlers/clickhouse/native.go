@@ -18,25 +18,17 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Native brokers ClickHouse's TCP protocol on 9000/9440, which the HTTP interface cannot serve: clickhouse-client,
-// clickhouse-driver and clickhouse-go all speak it exclusively. A statement arrives length-prefixed in its own
-// Query packet, so unlike HTTP there is no inspection window to overrun and an INSERT's rows never reach the policy.
-//
-// Only the client direction is parsed. The server direction is relayed byte for byte, because nothing in it is
-// inspected and decoding it would make a SELECT fail on any column type ch-go cannot infer.
+// Only the client direction gates anything. The server direction is read solely to pair an outcome with a
+// statement, and gives that up rather than fail a SELECT on a column type ch-go cannot infer.
 
 const (
-	// ch-go decodes up to its own revision, and a newer server sends Hello fields it cannot read. Both sides are
-	// pinned to what we can parse, which downgrades the client too.
+	// A newer server sends Hello fields ch-go cannot read, so both sides are pinned to what we can parse.
 	maxNativeRevision = proto.Version
 
-	nativeDialTimeout  = 30 * time.Second
-	nativeWriteTimeout = 60 * time.Second
-	// A port that accepts TCP and then says nothing is the symptom of the HTTP port entered as the native one,
-	// so the handshake gives up well before the dial would.
+	nativeDialTimeout      = 30 * time.Second
+	nativeWriteTimeout     = 60 * time.Second
 	nativeHandshakeTimeout = 10 * time.Second
-	// Long enough that a slow client is not dropped mid-statement, short enough to reap an abandoned session.
-	nativeIdleTimeout = 12 * time.Hour
+	nativeIdleTimeout      = 12 * time.Hour
 )
 
 type nativeProxy struct {
@@ -47,8 +39,8 @@ func newNativeProxy(owner *ClickHouseProxy) *nativeProxy {
 	return &nativeProxy{ClickHouseProxy: owner}
 }
 
-// tap records every byte a decoder consumes so the exact wire bytes can be replayed upstream. Reads are handed
-// out one at a time: proto.Reader buffers 128 KB, which would swallow packets we have not parsed yet.
+// tap records every byte a decoder consumes so the exact wire bytes can be replayed upstream. One byte at a
+// time, because proto.Reader buffers 128 KB and would swallow packets we have not parsed yet.
 type tap struct {
 	src *bufio.Reader
 	buf []byte
@@ -71,15 +63,13 @@ func (t *tap) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
-// take returns the bytes consumed since the last call and starts a new run.
 func (t *tap) take() []byte {
 	b := t.buf
 	t.buf = nil
 	return b
 }
 
-// rest is the reader the tap is draining, buffered bytes included. Relaying from the socket directly would
-// silently drop whatever the buffer already holds.
+// Relaying from the socket instead would drop whatever the tap's buffer already holds.
 func (t *tap) rest() io.Reader {
 	return t.src
 }
@@ -88,9 +78,8 @@ func (t *tap) discard() {
 	t.buf = nil
 }
 
-// Writing an exception ends the session. The client's stream is mid-packet once a refusal happens, so
-// carrying on would parse garbage, and anything still in the tap could be flushed upstream by a later
-// packet: a refused statement would reach ClickHouse after being refused.
+// A refusal ends the session: the stream is mid-packet, so carrying on would let a later packet flush the
+// refused bytes upstream.
 var errSessionRefused = errors.New("the session was refused")
 
 type nativeSession struct {
@@ -100,23 +89,19 @@ type nativeSession struct {
 	upstream net.Conn
 	rev      int
 
-	// One tap over the upstream, shared by the handshake and the server loop. A second tap would start its
-	// own buffer and lose whatever the first had already read off the socket.
+	// One tap for both the handshake and the server loop; a second would lose what the first buffered.
 	upstreamTap    *tap
 	upstreamReader *proto.Reader
 
 	outcomes *outcomeRecorder
 
-	// Both directions write to the client, so a refusal must not land inside a packet the server loop is
-	// still writing. Once refused, the server loop stops writing entirely.
+	// Both directions write to the client, so a refusal must not land inside a packet mid-write.
 	writeMu sync.Mutex
 	refused atomic.Bool
 
-	// Set by the Query packet and read by the data-block decoder
 	compressed atomic.Bool
 }
 
-// writeToClient serialises the two directions and bounds a client that has stopped reading.
 func (s *nativeSession) writeToClient(payload []byte) error {
 	if len(payload) == 0 {
 		return nil
@@ -144,7 +129,6 @@ func (s *nativeSession) writeToUpstream(payload []byte) error {
 
 func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn, l zerolog.Logger) error {
 	defer clientConn.Close()
-	// A malformed packet must not take the gateway, and every other session with it, down.
 	defer func() {
 		if r := recover(); r != nil {
 			l.Error().Interface("panic", r).Msg("Recovered from a panic in the ClickHouse native handler")
@@ -173,8 +157,7 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	clientTap := newTap(clientConn)
 	clientReader := proto.NewReader(clientTap)
 
-	// A port that accepts TCP and then says nothing is the symptom of the HTTP port entered as the native
-	// one, so the handshake gives up rather than holding both sockets until the session expires.
+	// A port that accepts TCP then says nothing is the HTTP port entered as the native one.
 	deadline := time.Now().Add(nativeHandshakeTimeout)
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
@@ -187,8 +170,6 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	_ = clientConn.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
 
-	// Nothing in the server direction gates a statement, so a packet it cannot read costs only the outcome of
-	// that statement: it flushes what it read and streams the rest untouched.
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
@@ -204,8 +185,7 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 		l.Debug().Err(err).Msg("ClickHouse native session ended")
 	}
 
-	// Closing the upstream unblocks the server loop. Its outcomes have to land before the recorder drains,
-	// or a statement that finished is written to the recording as interrupted.
+	// Outcomes must land before the recorder drains, or a finished statement is recorded as interrupted.
 	upstream.Close()
 	select {
 	case <-serverDone:
@@ -216,12 +196,10 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	return nil
 }
 
-// refuse reports the refusal to the client and ends the session.
 func (s *nativeSession) refuse(t *tap, code int, message string) error {
 	if t != nil {
 		t.discard()
 	}
-	// Set before writing, so the server loop cannot interleave a packet with the exception.
 	s.refused.Store(true)
 
 	if err := s.writeToClient(nativeErrorPacket(s.rev, code, message)); err != nil {
@@ -238,8 +216,7 @@ func (p *nativeProxy) dialUpstream(ctx context.Context) (net.Conn, error) {
 	return (&tls.Dialer{NetDialer: dialer, Config: p.config.TLSConfig}).DialContext(ctx, "tcp", p.config.NativeAddr)
 }
 
-// handshake swaps the client's credentials for the account's, so nothing the client holds works outside a
-// recorded session, and pins the protocol revision both ways.
+// handshake swaps the client's credentials for the account's and pins the revision both ways.
 func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	code, err := r.UVarInt()
 	if err != nil {
@@ -255,8 +232,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	}
 	t.discard()
 
-	// The revision drives feature gating on both sides, and it is unvalidated client input: a huge uvarint
-	// decodes to a negative int, which would be re-encoded upstream as an enormous revision.
+	// Unvalidated client input: a huge uvarint decodes negative and would be re-encoded as an enormous revision.
 	if hello.ProtocolVersion <= 0 {
 		return s.refuse(t, codeNotImplemented,
 			fmt.Sprintf("This session could not read the protocol revision %d the client asked for.",
@@ -301,7 +277,6 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	if err := serverHello.DecodeAware(serverReader, s.rev); err != nil {
 		return fmt.Errorf("decode server hello: %w", err)
 	}
-	// The client keys its own encoding off the revision it is told, so it has to see the pinned one.
 	serverHello.Revision = s.rev
 
 	s.upstreamTap.discard()
@@ -312,8 +287,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 		return fmt.Errorf("write client hello response: %w", err)
 	}
 
-	// At rev >= 54458 the client follows the handshake with its quota key, written as a bare string rather than
-	// a coded packet. Ours is empty: the account's quota is not the client's to choose.
+	// At rev >= 54458 the quota key follows the handshake as a bare string. Ours is empty: not the client's to pick.
 	if proto.FeatureAddendum.In(s.rev) {
 		if _, err := r.Str(); err != nil {
 			return fmt.Errorf("read client addendum: %w", err)
@@ -334,8 +308,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	return nil
 }
 
-// clientLoop parses every packet the client sends. A statement that is never parsed is a statement the policy
-// never sees, so an unreadable stream ends the session rather than being relayed blind.
+// A statement that is never parsed is one the policy never sees, so an unreadable stream ends the session.
 func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 	for {
 		_ = s.client.SetReadDeadline(time.Now().Add(nativeIdleTimeout))
@@ -352,8 +325,7 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 			}
 
 		case proto.ClientTablesStatusRequest:
-			// This one carries a table list the loop does not decode. Forwarding just the code would leave
-			// the stream one packet out of step and every later statement unreadable.
+			// Carries a table list the loop does not decode; forwarding just the code would desync the stream.
 			return s.refuse(t, codeNotImplemented,
 				"This session does not support ClickHouse's tables-status request.")
 
@@ -386,8 +358,7 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	}
 	t.discard()
 
-	// EncodeAware always writes StageComplete, so a client asking for a partial stage would have its query
-	// silently upgraded to a full execution. Refusing is the honest answer.
+	// EncodeAware always writes StageComplete, so a partial stage would be silently upgraded to a full run.
 	if q.Stage != proto.StageComplete {
 		return s.refuse(t, codeNotImplemented,
 			fmt.Sprintf("This session only runs statements to completion, and this client asked for stage %d.",
@@ -407,10 +378,8 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 
 	s.outcomes.begin(statement)
 
-	// The identities a client could otherwise choose for itself, matching the set the HTTP interface strips.
-	// An inter-server secret in particular must never be something a session gets to pick.
-	// InitialUser and InitialAddress are deliberately left alone: forcing the query kind to Initial already
-	// makes ClickHouse authorise as the account, and it asserts on an empty initial address.
+	// The identities a client could otherwise pick for itself. InitialAddress is left alone: ClickHouse
+	// asserts on an empty one, and forcing the kind to Initial already authorises as the account.
 	q.Info.QuotaKey = ""
 	q.Info.Query = proto.ClientQueryInitial
 	q.Secret = ""
@@ -420,8 +389,8 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	return s.forward(b.Buf)
 }
 
-// handleData decodes a block only far enough to find where it ends, then replays the client's own bytes. The
-// decoded values are discarded: re-encoding them would have to reproduce a serialization we do not own.
+// Decodes a block only far enough to find its end, then replays the client's bytes: re-encoding would mean
+// reproducing a serialization we do not own.
 func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	table, err := r.Str()
 	if err != nil {
@@ -453,8 +422,7 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	return s.forward(t.take())
 }
 
-// serverLoop reads the server direction for the sake of the recording only. Every packet is replayed to the
-// client byte for byte, and the first one it cannot read ends the parsing rather than the session.
+// Read for the recording only: the first packet it cannot read ends the parsing, not the session.
 func (s *nativeSession) serverLoop() {
 	t := s.upstreamTap
 	r := s.upstreamReader
@@ -467,8 +435,6 @@ func (s *nativeSession) serverLoop() {
 		if err := s.writeToClient(t.take()); err != nil {
 			return
 		}
-		// Reading the socket directly here would skip whatever the tap has already buffered off it, which
-		// is most of the in-flight response.
 		_, _ = io.Copy(newRefusalAwareWriter(s), t.rest())
 	}
 
@@ -542,8 +508,7 @@ func (s *nativeSession) serverLoop() {
 	}
 }
 
-// refusalAwareWriter stops relaying once the client loop has refused the session, so a raw relay cannot
-// append bytes after the exception the client was just sent.
+// Stops the raw relay appending bytes after the exception the client was just sent.
 type refusalAwareWriter struct{ s *nativeSession }
 
 func newRefusalAwareWriter(s *nativeSession) io.Writer { return refusalAwareWriter{s: s} }
@@ -585,8 +550,7 @@ func (s *nativeSession) forward(payload []byte) error {
 	return nil
 }
 
-// nativeParameterSuffix mirrors the HTTP handler, so a parameterized statement reads the same in a recording
-// whichever interface ran it.
+// Mirrors the HTTP handler, so a parameterized statement reads the same in either recording.
 func nativeParameterSuffix(parameters []proto.Parameter) string {
 	if len(parameters) == 0 {
 		return ""
@@ -598,8 +562,7 @@ func nativeParameterSuffix(parameters []proto.Parameter) string {
 	return "\n-- parameters: " + strings.Join(pairs, " ")
 }
 
-// writeNativeError reports a gateway refusal the way ClickHouse reports its own, so a driver surfaces it as a
-// server exception rather than a broken connection.
+// Reports a gateway refusal as ClickHouse would, so a driver surfaces it rather than a broken connection.
 func writeNativeError(w io.Writer, revision int, code int, message string) error {
 	if _, err := w.Write(nativeErrorPacket(revision, code, message)); err != nil {
 		return fmt.Errorf("write native exception: %w", err)
@@ -607,7 +570,6 @@ func writeNativeError(w io.Writer, revision int, code int, message string) error
 	return nil
 }
 
-// nativeErrorPacket builds the exception and the end-of-stream that closes it out.
 func nativeErrorPacket(revision int, code int, message string) []byte {
 	if revision <= 0 {
 		revision = maxNativeRevision
@@ -625,8 +587,7 @@ func nativeErrorPacket(revision int, code int, message string) []byte {
 	return b.Buf
 }
 
-// TestNativeConnection proves the account can log in over the native port. ClickHouse validates credentials
-// during the handshake, so a successful Hello exchange is a real auth check rather than a reachability probe.
+// ClickHouse validates credentials during the handshake, so a Hello exchange is a real auth check.
 func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) error {
 	dialCtx, cancel := context.WithTimeout(ctx, nativeDialTimeout)
 	defer cancel()

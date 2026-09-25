@@ -12,8 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeClickHouse stands in for a server so the security-critical parts of the handshake and packet loop can
-// be tested without docker: what the gateway sends upstream is recorded, and nothing needs a real database.
+// fakeClickHouse stands in for a server so the security-critical parts of the handshake and packet loop...
 type fakeClickHouse struct {
 	listener net.Listener
 
@@ -114,7 +113,6 @@ func (f *fakeClickHouse) snapshot() (proto.ClientHello, string, []proto.Query, i
 	return f.hello, f.quotaKey, append([]proto.Query(nil), f.queries...), f.bytesAfterHandshake
 }
 
-// dialProxy runs one session against a proxy configured to reach the fake server.
 func dialProxy(t *testing.T, config ClickHouseProxyConfig) net.Conn {
 	t.Helper()
 
@@ -177,7 +175,6 @@ func clientHandshake(t *testing.T, conn net.Conn, user, password string) *proto.
 	return r
 }
 
-// The whole point of the proxy: what the client presents is dropped and the account's own identity is used.
 func TestNativeHandshakeInjectsAccountCredentials(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 
@@ -203,7 +200,6 @@ func TestNativeHandshakeInjectsAccountCredentials(t *testing.T) {
 	require.Empty(t, quotaKey, "the client's quota key is not the account's to choose")
 }
 
-// A packet the loop cannot read must end the session, and nothing may reach the server after it.
 func TestNativeUnreadablePacketFailsClosed(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 
@@ -228,7 +224,6 @@ func TestNativeUnreadablePacketFailsClosed(t *testing.T) {
 	require.Zero(t, seen, "no packet may reach ClickHouse after a refusal")
 }
 
-// A blocked statement must be refused before it is forwarded, and must end the session.
 func TestNativeBlockedStatementNeverReachesUpstream(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 	recorder := &recordingLogger{}
@@ -254,7 +249,6 @@ func TestNativeBlockedStatementNeverReachesUpstream(t *testing.T) {
 	require.Contains(t, recorder.dump(), "BLOCKED")
 }
 
-// The client's quota key rides on the Query packet as well as the addendum, and both are the account's.
 func TestNativeStripsTheClientQuotaKeyFromTheQuery(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 
@@ -280,8 +274,6 @@ func TestNativeStripsTheClientQuotaKeyFromTheQuery(t *testing.T) {
 	require.Empty(t, queries[0].Info.QuotaKey)
 }
 
-// The revision is pinned to what ch-go can parse, and the client has to be told the pinned one so it
-// encodes to match.
 func TestNativeHandshakePinsTheRevision(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 
@@ -350,8 +342,7 @@ func decodeException(t *testing.T, r *proto.Reader) (int, string) {
 	return int(e.Code), e.Message
 }
 
-// ch-go trailing the server is the reason the handshake pins a revision at all. If ch-go ever catches up,
-// the pinning becomes a no-op and this is the reminder to re-check it.
+// ch-go trailing the server is the reason the handshake pins a revision at all.
 func TestChGoRevisionIsStillBehindTheServers(t *testing.T) {
 	require.LessOrEqual(t, maxNativeRevision, 54469,
 		"ch-go has caught up with ClickHouse; revision pinning needs revisiting")

@@ -7,11 +7,8 @@ import (
 	"time"
 )
 
-// outcomeRecorder pairs a statement with how it ended. The two directions of a native session are read by
-// separate goroutines, and ClickHouse answers statements in order, so the queue is what joins them back up.
-//
-// Reading the server direction is best effort: a block it cannot decode costs the outcome, never the statement.
-// Once that happens the recorder degrades and every later statement is written as soon as it is sent.
+// Pairs a statement with how it ended. The two directions are separate goroutines and ClickHouse answers in
+// order, so the queue is what joins them back up. Best effort: a block it cannot decode costs only the outcome.
 type outcomeRecorder struct {
 	proxy *ClickHouseProxy
 
@@ -42,7 +39,6 @@ func (r *outcomeRecorder) begin(statement string) {
 	r.mu.Unlock()
 }
 
-// progress folds ClickHouse's running counters into the statement in flight.
 func (r *outcomeRecorder) progress(rows uint64, bytes uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -74,8 +70,7 @@ func (p pendingStatement) describe(outcome string) string {
 	return strings.Join(append(parts, fmt.Sprintf("%dms", time.Since(p.started).Milliseconds())), ", ")
 }
 
-// degrade stops pairing outcomes for the rest of the session and says so in the recording, so a log that
-// carries outcomes for some statements and not others is never read as if the rest simply did nothing.
+// Says so in the recording, so a log with outcomes for only some statements is not read as the rest doing nothing.
 func (r *outcomeRecorder) degrade(reason string) {
 	r.mu.Lock()
 	if r.degraded {

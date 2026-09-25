@@ -15,32 +15,25 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Serves ClickHouse's HTTP interface over the native protocol, for a server that has HTTP disabled. Web Access
-// reaches the gateway over HTTP and @clickhouse/client cannot speak native, so without this a native-only
-// account would work from the CLI and nowhere else.
+// Serves ClickHouse's HTTP interface over the native protocol, for a server with HTTP disabled. ClickHouse
+// serialises the values through formatRow, so every column type works without this decoding one.
 //
-// ClickHouse serialises the values itself through formatRow, so every column type keeps working without this
-// having to decode one.
-//
-// Only the two envelopes Web Access asks for are produced, and that is the intended scope rather than a gap.
-// A native-only account is reached by native clients; a third-party HTTP client such as JDBC, which
-// negotiates a binary format, is expected to fail against it rather than be translated for.
+// Only the two envelopes Web Access asks for are produced. That is the intended scope: a third-party HTTP
+// client such as JDBC is expected to fail against a native-only account rather than be translated for.
 
 const (
 	formatJSON        = "JSON"
 	formatJSONCompact = "JSONCompact"
 
-	// What formatRow is asked for, so each row arrives as the exact fragment the envelope needs.
 	rowFormatJSON        = "JSONEachRow"
 	rowFormatJSONCompact = "JSONCompactEachRow"
 
 	bridgeReadTimeout = 5 * time.Minute
 	maxBridgeRows     = 100_000
-	// A row count alone does not bound memory: one row can be hundreds of megabytes, and the envelope is
-	// assembled in memory. The gateway is shared, so one session must not be able to exhaust it.
+	// A row count alone does not bound memory, and the gateway is shared across sessions.
 	maxBridgeResultBytes = 64 << 20
 
-	// The formatted column has to be named, because its default name is the whole call expression.
+	// Needs a name: the default is the whole call expression.
 	formattedRowAlias = "__infisical_row"
 )
 
@@ -81,9 +74,8 @@ func (p *ClickHouseProxy) dialNative(ctx context.Context) (*ch.Client, error) {
 	return ch.Dial(ctx, options)
 }
 
-// serveBridge answers one HTTP request by running its statement over the native protocol.
 func (p *ClickHouseProxy) serveBridge(w http.ResponseWriter, r *http.Request, state *requestState, l zerolog.Logger) {
-	// The health endpoint carries no statement, so it would otherwise be refused as an empty one.
+	// Carries no statement, so it would otherwise be refused as an empty one.
 	if r.URL.Path == pingPath {
 		w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
@@ -91,8 +83,7 @@ func (p *ClickHouseProxy) serveBridge(w http.ResponseWriter, r *http.Request, st
 		return
 	}
 
-	// The statement was already decoded during inspection, compression and all, so it is used rather than
-	// the body, which the bridge cannot hand to ClickHouse the way the reverse proxy can.
+	// Already decoded during inspection, compression and all; the raw body cannot be handed to ClickHouse.
 	if state.truncated {
 		message := fmt.Sprintf(
 			"this account reaches ClickHouse over the native protocol, so a statement larger than %d MB is "+
@@ -104,7 +95,7 @@ func (p *ClickHouseProxy) serveBridge(w http.ResponseWriter, r *http.Request, st
 
 	body, format := splitFormatClause(state.sql)
 	if format == "" {
-		// A client can ask for the format as a setting instead of a clause, which is what the SQL editor does.
+		// The SQL editor asks for the format as a setting rather than a clause.
 		format = r.URL.Query().Get("default_format")
 	}
 	if body == "" {
@@ -174,14 +165,12 @@ func bridgeParameters(r *http.Request) []proto.Parameter {
 	return parameters
 }
 
-// The native protocol carries a query parameter as a custom setting, whose value ClickHouse reads as a Field
-// dump rather than as the plain string the HTTP interface takes. An unquoted value is rejected outright.
+// Native carries a parameter as a custom setting, read as a Field dump rather than the plain string HTTP takes.
 func quoteFieldDump(value string) string {
 	var quoted strings.Builder
 	quoted.Grow(len(value) + 2)
 	quoted.WriteByte('\'')
-	// Byte-wise, because ranging over the string would turn every invalid byte into U+FFFD and silently
-	// change the value. The two escapes are ASCII, and UTF-8 is self-synchronising.
+	// Byte-wise: ranging would turn every invalid byte into U+FFFD and silently change the value.
 	for i := 0; i < len(value); i++ {
 		if c := value[i]; c == '\\' || c == '\'' {
 			quoted.WriteByte('\\')
@@ -192,8 +181,7 @@ func quoteFieldDump(value string) string {
 	return quoted.String()
 }
 
-// splitFormatClause peels off the trailing FORMAT clause @clickhouse/client appends, which decides the
-// envelope rather than anything the server should see. The scan runs over the original bytes: uppercasing
+// Peels off the trailing FORMAT clause, which decides the envelope. Scans the original bytes: uppercasing
 // first would shift offsets, because some runes shrink when folded.
 func splitFormatClause(sql string) (string, string) {
 	trimmed := trimTrailingSemicolons(sql)
@@ -202,8 +190,7 @@ func splitFormatClause(sql string) (string, string) {
 	if idx <= 0 {
 		return trimmed, ""
 	}
-	// A word boundary is needed on both sides, or a trailing identifier such as `format_events` is read as
-	// the clause and the operand before it is thrown away.
+	// Boundary on both sides, or a trailing identifier such as `format_events` is read as the clause.
 	if !isSQLSpace(trimmed[idx-1]) {
 		return trimmed, ""
 	}
@@ -220,7 +207,7 @@ func splitFormatClause(sql string) (string, string) {
 	return trimTrailingSemicolons(trimmed[:idx]), name
 }
 
-// A format name is a bare identifier. Anything else means the word FORMAT was part of the statement.
+// Anything but a bare identifier means FORMAT was part of the statement.
 func isFormatName(name string) bool {
 	if name == "" {
 		return false
@@ -239,8 +226,7 @@ func isSQLSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
-// trimTrailingSemicolons removes any run of trailing semicolons and the whitespace around them, so
-// `SELECT 1 ; ;` does not end up inside the subquery wrapper.
+// So `SELECT 1 ; ;` does not end up inside the subquery wrapper.
 func trimTrailingSemicolons(sql string) string {
 	trimmed := strings.TrimSpace(sql)
 	for strings.HasSuffix(trimmed, ";") {
@@ -249,7 +235,6 @@ func trimTrailingSemicolons(sql string) string {
 	return trimmed
 }
 
-// lastIndexFold is strings.LastIndex with ASCII case folding, returning an offset into s itself.
 func lastIndexFold(s string, substr string) int {
 	for i := len(s) - len(substr); i >= 0; i-- {
 		if strings.EqualFold(s[i:i+len(substr)], substr) {
@@ -259,8 +244,8 @@ func lastIndexFold(s string, substr string) int {
 	return -1
 }
 
-// checkSpliceable rejects a statement that would not stay inside the parentheses it is wrapped in. Quotes
-// and comments are tracked so that a semicolon or bracket inside a string literal is left alone.
+// Rejects a statement that would not stay inside its wrapper. Quotes and comments are tracked so a
+// semicolon or bracket inside a string literal is left alone.
 func checkSpliceable(body string) error {
 	depth := 0
 	for i := 0; i < len(body); i++ {
@@ -309,7 +294,6 @@ func checkSpliceable(body string) error {
 	return nil
 }
 
-// skipQuoted returns the index of the closing quote, honouring doubled and backslash escapes.
 func skipQuoted(body string, start int, quote byte) int {
 	for i := start + 1; i < len(body); i++ {
 		switch body[i] {
@@ -326,7 +310,7 @@ func skipQuoted(body string, start int, quote byte) int {
 	return -1
 }
 
-// humanList renders an allowlist the way the error messages read, so the message and the list cannot drift.
+// Keeps the error message and the allowlist from drifting apart.
 func humanList(items []string) string {
 	switch len(items) {
 	case 0:
@@ -353,8 +337,7 @@ func rowFormatFor(format string) (string, error) {
 	}
 }
 
-// Settings a client sends to bound a statement. They are forwarded so a browser session costs the server no
-// more over the native protocol than it does over HTTP; anything else a client asks for is dropped.
+// Forwarded so a browser session costs the server no more over native than over HTTP; anything else is dropped.
 var forwardedSettings = map[string]bool{
 	"max_execution_time":   true,
 	"max_result_rows":      true,
@@ -385,7 +368,7 @@ func (p *ClickHouseProxy) runBridgeQuery(
 ) (*bridgeEnvelope, error) {
 	envelope := &bridgeEnvelope{Meta: []bridgeColumn{}, Data: json.RawMessage("[]")}
 
-	// A statement with no FORMAT clause is one nothing reads the rows of, so it only has to run.
+	// Nothing reads the rows, so it only has to run.
 	if format == "" {
 		var discard proto.Results
 		return envelope, client.Do(ctx, ch.Query{
@@ -393,8 +376,7 @@ func (p *ClickHouseProxy) runBridgeQuery(
 			Parameters: parameters,
 			Settings:   settings,
 			Result:     discard.Auto(),
-			// ch-go refuses a second data block unless a handler is present, so a statement that returns
-			// more than one block would fail even though nothing here reads the rows.
+			// ch-go refuses a second data block unless a handler is present.
 			OnResult: func(context.Context, proto.Block) error { return nil },
 			OnProgress: func(_ context.Context, pr proto.Progress) error {
 				envelope.Statistics.RowsRead += pr.Rows
@@ -431,7 +413,7 @@ func (p *ClickHouseProxy) runBridgeQuery(
 	return envelope, nil
 }
 
-// Only these can sit inside a subquery, which is what both halves of the bridge rely on.
+// Only these can sit inside a subquery, which both halves of the bridge rely on.
 var wrappableStatements = []string{"SELECT", "WITH", "EXPLAIN"}
 
 func isWrappable(body string) bool {
@@ -440,7 +422,7 @@ func isWrappable(body string) bool {
 		if len(rest) < len(prefix) || !strings.EqualFold(rest[:len(prefix)], prefix) {
 			continue
 		}
-		// A prefix match is not a keyword match: SELECTFOO is an identifier, not a SELECT.
+		// SELECTFOO is an identifier, not a SELECT.
 		if len(rest) == len(prefix) || !isIdentifierByte(rest[len(prefix)]) {
 			return true
 		}
@@ -452,8 +434,7 @@ func isIdentifierByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
-// stripLeadingNoise drops a byte-order mark, whitespace and leading comments, which editors add freely and
-// which would otherwise make a perfectly ordinary SELECT look like something the bridge cannot serve.
+// Editors add leading comments freely, which would otherwise make an ordinary SELECT look unservable.
 func stripLeadingNoise(body string) string {
 	rest := strings.TrimPrefix(body, "\ufeff")
 	for {
@@ -478,7 +459,8 @@ func stripLeadingNoise(body string) string {
 	}
 }
 
-// DESCRIBE resolves the statement's header without running it, so the column types are the server's own.
+// DESCRIBE resolves the header, so the column types are the server's own. It is not free: schema inference
+// for a table function such as url() or s3() does fetch.
 func describeStatement(
 	ctx context.Context,
 	client *ch.Client,
@@ -486,8 +468,7 @@ func describeStatement(
 	parameters []proto.Parameter,
 	settings []ch.Setting,
 ) ([]bridgeColumn, error) {
-	// DESCRIBE returns more columns than are needed here and the set has grown between versions, so they are
-	// inferred and picked by name rather than bound positionally.
+	// The column set has grown between versions, so they are picked by name rather than position.
 	var described proto.Results
 	columns := []bridgeColumn{}
 
@@ -580,8 +561,7 @@ func selectFormattedRows(
 	return rows, nil
 }
 
-// bridgeRefusal is something the gateway decided about the request itself, so it carries its own ClickHouse
-// code and is reported as a bad request rather than as a network error wrapped in ch-go's decoding context.
+// A refusal the gateway made itself, so it reports its own code rather than ch-go's decoding context.
 type bridgeRefusal struct {
 	code    int
 	message string
@@ -593,7 +573,6 @@ func refuseBridge(code int, format string, args ...any) error {
 	return &bridgeRefusal{code: code, message: fmt.Sprintf(format, args...)}
 }
 
-// classifyNativeError turns a ch-go error back into the code, message and status a ClickHouse client expects.
 func classifyNativeError(err error) (int, int, string) {
 	var refusal *bridgeRefusal
 	if errors.As(err, &refusal) {

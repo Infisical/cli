@@ -27,10 +27,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Brokers both of ClickHouse's interfaces: HTTP on TargetAddr and the native TCP protocol on NativeAddr. A
-// session listens on one local port and routes by the first byte the client sends, so the driver decides the
-// protocol rather than the user. The client's own credentials are dropped and the account's injected on either
-// path, so nothing it holds works outside a recorded session.
+// Brokers both of ClickHouse's interfaces on one local port, routed by the first byte the client sends. The
+// client's own credentials are dropped and the account's injected on either path.
 type ClickHouseProxyConfig struct {
 	TargetAddr string
 	NativeAddr string
@@ -99,8 +97,7 @@ type stateKey struct{}
 
 type requestState struct {
 	statement string
-	// The statement without the recorded parameter suffix, and whether it was cut short by the inspection
-	// window. The bridge runs this rather than re-reading a body that may be compressed.
+	// The bridge runs this rather than re-reading a body that may be compressed.
 	sql       string
 	truncated bool
 	started   time.Time
@@ -386,7 +383,7 @@ func (p *ClickHouseProxy) rewrite(pr *httputil.ProxyRequest) {
 	for _, param := range append(append([]string{}, strippedAuthParams...), strippedExecutionParams...) {
 		query.Del(param)
 	}
-	// ClickHouse's health endpoint refuses any query string, so a database parameter turns it into a 404.
+	// ClickHouse's health endpoint refuses any query string, so a parameter turns it into a 404.
 	if req.URL.Path == pingPath {
 		query = nil
 		req.URL.ForceQuery = false

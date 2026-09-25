@@ -27,7 +27,6 @@ func itOnly(t *testing.T) {
 	}
 }
 
-// startProxy serves one local port for whatever config it is given, which is what a session does.
 func startProxy(t *testing.T, config ClickHouseProxyConfig) string {
 	t.Helper()
 
@@ -70,10 +69,6 @@ func baseConfig(logger *recordingLogger, blocked ...string) ClickHouseProxyConfi
 	}
 }
 
-// ---------- compression ----------
-
-// clickhouse-client compresses data blocks by default, which is a different decode path from an
-// uncompressed session. Both have to keep inspecting every statement.
 func TestNativeCompressionBothWays(t *testing.T) {
 	itOnly(t)
 
@@ -94,7 +89,6 @@ func TestNativeCompressionBothWays(t *testing.T) {
 	}
 }
 
-// An INSERT pushes binary rows from the client, so it exercises block decoding rather than framing alone.
 func TestNativeInsertWithCompressionBothWays(t *testing.T) {
 	itOnly(t)
 
@@ -112,10 +106,7 @@ func TestNativeInsertWithCompressionBothWays(t *testing.T) {
 	}
 }
 
-// ---------- the documented fail-closed path ----------
-
-// A column type ch-go cannot infer can only appear in the client direction on an INSERT. That has to fail
-// closed with a message naming the type, never relay uninspected.
+// A column type ch-go cannot infer can only appear in the client direction on an INSERT.
 func TestNativeInsertIntoUnreadableColumnFailsClosed(t *testing.T) {
 	itOnly(t)
 
@@ -131,12 +122,10 @@ func TestNativeInsertIntoUnreadableColumnFailsClosed(t *testing.T) {
 	require.Contains(t, out, "Map(String, UInt64)", "the message should name the offending type")
 	require.Contains(t, out, "HTTP interface", "the message should point at the way that works")
 
-	// Refusing has to mean the rows never reach ClickHouse. A refusal that still commits the INSERT is
-	// worse than no check at all.
+	// Refusing has to mean the rows never reach ClickHouse.
 	require.Equal(t, 0, countExotic(t, 99), "the refused rows should not have been written")
 }
 
-// countExotic reads straight from ClickHouse rather than through the proxy.
 func countExotic(t *testing.T, id int) int {
 	t.Helper()
 
@@ -161,8 +150,6 @@ func countExotic(t *testing.T, id int) int {
 	return count
 }
 
-// A refusal ends the session. Anything else leaves the parser reading a stream it has lost its place in,
-// where a later packet can flush the refused bytes upstream and run the statement that was just refused.
 func TestBlockedStatementEndsTheSession(t *testing.T) {
 	itOnly(t)
 
@@ -205,8 +192,6 @@ func countWriteTest(t *testing.T) int {
 	return count
 }
 
-// ---------- TLS ----------
-
 func tlsConfigFor(t *testing.T, insecure bool) *tls.Config {
 	t.Helper()
 	config := &tls.Config{ServerName: "localhost", InsecureSkipVerify: insecure}
@@ -241,7 +226,6 @@ func tlsConfigSkipOrConfig(t *testing.T) (ClickHouseProxyConfig, bool) {
 	}, true
 }
 
-// One SSL toggle covers both interfaces, because ClickHouse shares the certificate between them.
 func TestTLSUpstream(t *testing.T) {
 	itOnly(t)
 
@@ -301,8 +285,6 @@ func TestTLSUpstream(t *testing.T) {
 	})
 }
 
-// ---------- account shapes ----------
-
 func TestAccountWithoutNativePortRefusesNativeClients(t *testing.T) {
 	itOnly(t)
 
@@ -344,13 +326,10 @@ func TestAccountWithNeitherPortFailsClearly(t *testing.T) {
 	config.NativeAddr = ""
 	port := startProxy(t, config)
 
-	// The session layer rejects this config before a handler ever runs, so the handler's own guard simply
-	// refuses the connection rather than answering it.
+	// The session layer rejects this config before a handler ever runs, so the handler's own guard simply...
 	_, _, err := postStatementE("127.0.0.1:"+port, "SELECT 1")
 	require.Error(t, err, "a session with neither port must not serve anything")
 }
-
-// ---------- bridge edge cases ----------
 
 func TestBridgeEdgeCases(t *testing.T) {
 	itOnly(t)
@@ -407,7 +386,6 @@ func TestBridgeEdgeCases(t *testing.T) {
 	}
 }
 
-// A parameterized statement has to run and be recorded with its values, the same as over HTTP.
 func TestBridgePassesQueryParameters(t *testing.T) {
 	itOnly(t)
 
@@ -423,8 +401,6 @@ func TestBridgePassesQueryParameters(t *testing.T) {
 	require.Contains(t, recorder.dump(), "wanted=7", "the parameter belongs in the recording")
 }
 
-// A gzipped body has to work on both paths. The reverse proxy hands it to ClickHouse untouched, while the
-// bridge has to run the decoded statement itself.
 func TestCompressedRequestBodies(t *testing.T) {
 	itOnly(t)
 
@@ -443,16 +419,13 @@ func TestCompressedRequestBodies(t *testing.T) {
 			status, body := postGzipped(t, "127.0.0.1:"+port, "SELECT 5 AS five \nFORMAT JSON")
 			require.Equal(t, http.StatusOK, status, body)
 
-			// ClickHouse pretty-prints its JSON and the bridge writes it compact, so the rows are compared
-			// rather than the bytes.
+			// ClickHouse pretty-prints its JSON and the bridge writes it compact, so the rows are compared rather than...
 			var envelope bridgeEnvelope
 			require.NoError(t, json.Unmarshal([]byte(body), &envelope), body)
 			require.JSONEq(t, `[{"five":5}]`, string(envelope.Data))
 		})
 	}
 }
-
-// ---------- sniffing ----------
 
 func TestSnifferEdgeCases(t *testing.T) {
 	itOnly(t)
@@ -478,8 +451,7 @@ func TestSnifferEdgeCases(t *testing.T) {
 		defer conn.Close()
 		_, err = conn.Write([]byte{0xFF, 0xFE, 0xFD, 0xFC})
 		require.NoError(t, err)
-		// Bytes that are not a request line leave net/http waiting for headers, so the bound here is its
-		// ReadHeaderTimeout rather than the sniff timeout.
+		// Bytes that are not a request line leave net/http waiting for headers, so the bound here is its...
 		require.NoError(t, conn.SetReadDeadline(time.Now().Add(45*time.Second)))
 
 		buf := make([]byte, 256)
@@ -507,10 +479,6 @@ func TestSnifferEdgeCases(t *testing.T) {
 	})
 }
 
-// ---------- concurrency ----------
-
-// A session hands out one port that many clients share, so the handler has to hold up under parallel use
-// of both protocols at once.
 func TestConcurrentMixedProtocolSessions(t *testing.T) {
 	itOnly(t)
 
@@ -558,8 +526,6 @@ func TestConcurrentMixedProtocolSessions(t *testing.T) {
 	}
 }
 
-// ---------- volume ----------
-
 func TestNativeLargeResultSet(t *testing.T) {
 	itOnly(t)
 
@@ -586,7 +552,6 @@ func TestNativeWideRowsStreamThrough(t *testing.T) {
 	require.Equal(t, direct, strings.TrimSpace(out), "the proxied total must match the server's")
 }
 
-// queryDirect bypasses the proxy so a test can state what the answer should be.
 func queryDirect(t *testing.T, sql string) string {
 	t.Helper()
 
@@ -605,8 +570,6 @@ func queryDirect(t *testing.T, sql string) string {
 	require.NoError(t, err)
 	return strings.TrimSpace(string(raw))
 }
-
-// ---------- upstream failures ----------
 
 func TestUpstreamUnreachable(t *testing.T) {
 	itOnly(t)
@@ -647,8 +610,6 @@ func TestWrongAccountCredentialsSurfaceCleanly(t *testing.T) {
 	require.Contains(t, out, "refused the account")
 }
 
-// ---------- recording ----------
-
 func TestNativeRecordingCapturesOutcomes(t *testing.T) {
 	itOnly(t)
 
@@ -667,7 +628,6 @@ func TestNativeRecordingCapturesOutcomes(t *testing.T) {
 	require.Equal(t, 1, strings.Count(dump, "ERROR:"), "the failed statement is recorded once")
 }
 
-// The revision the client speaks is newer than ch-go's, so the handshake has to pin it and say so.
 func TestNativeRevisionPinning(t *testing.T) {
 	itOnly(t)
 
@@ -693,8 +653,7 @@ func TestQuoteFieldDump(t *testing.T) {
 	}
 }
 
-// A parameter is data, so a value full of quotes has to come back as that value rather than changing
-// the statement around it.
+// A parameter is data, so a value full of quotes has to come back as that value rather than changing the...
 func TestBridgeParameterCannotEscapeItsQuotes(t *testing.T) {
 	itOnly(t)
 

@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// clickhouse-client is one native implementation. Python's clickhouse-driver is an independent one, so it
-// catches assumptions that happen to match ClickHouse's own client.
 func TestPythonClickHouseDriver(t *testing.T) {
 	if os.Getenv("PAM_CLICKHOUSE_NATIVE_IT") != "1" {
 		t.Skip("set PAM_CLICKHOUSE_NATIVE_IT=1 to run")
