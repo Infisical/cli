@@ -397,9 +397,9 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		TypeLabel:   "ClickHouse",
 		DefaultPort: 8123,
 		Note: []string{
-			"This is ClickHouse's HTTP interface, so a client that only speaks the",
-			"native protocol, clickhouse-client included, cannot use this port.",
-			"JDBC, clickhouse-connect and curl all can.",
+			"This port serves whichever of ClickHouse's two interfaces the account",
+			"has configured, detected per connection. JDBC, clickhouse-connect and",
+			"curl use the HTTP one; clickhouse-client needs a native port set.",
 		},
 		ConnectionString: func(username, database string, port int) string {
 			return fmt.Sprintf("jdbc:clickhouse://127.0.0.1:%d/%s", port, database)
@@ -407,6 +407,8 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
 				fmt.Sprintf("curl 'http://127.0.0.1:%d/?database=%s&query=SELECT+1'", port, url.QueryEscape(database)),
+				fmt.Sprintf("clickhouse-client --host 127.0.0.1 --port %d --database %s   # needs a native port",
+					port, database),
 			}
 		},
 	},

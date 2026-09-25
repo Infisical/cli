@@ -124,6 +124,8 @@ type clickhouseTestParams struct {
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Database              string `json:"database"`
+	HttpPort              int    `json:"httpPort"`
+	NativePort            int    `json:"nativePort"`
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
@@ -714,17 +716,78 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 					return connectFailure(err)
 				}
 			}
-			if err := dialTarget(ctx, target.host, target.port); err != nil {
-				return connectFailure(err)
+			config := clickhousehandler.ClickHouseProxyConfig{
+				Username:  params.Username,
+				Password:  params.Password,
+				Database:  params.Database,
+				EnableTLS: params.SslEnabled,
+				TLSConfig: tlsConfig,
 			}
-			return authFailure(clickhousehandler.TestConnection(ctx, clickhousehandler.ClickHouseProxyConfig{
-				TargetAddr: net.JoinHostPort(target.host, strconv.Itoa(target.port)),
-				Username:   params.Username,
-				Password:   params.Password,
-				Database:   params.Database,
-				EnableTLS:  params.SslEnabled,
-				TLSConfig:  tlsConfig,
-			}))
+
+			// A server can have either interface turned off, so only the ones the account names are tested.
+			// Both are checked up front, so an account that would only ever fail for one kind of client is
+			// caught here rather than at the first session.
+			// One ClickHouse account can expose two ports, so the body names which to probe. The signed
+			// certificate still decides which are allowed, so the body cannot point the gateway at a port
+			// the platform did not authorise.
+			for _, port := range []int{params.HttpPort, params.NativePort} {
+				if port > 0 && !target.allows(port) {
+					return fmt.Errorf("port %d is not authorised for this connection test", port)
+				}
+			}
+
+			httpPort := params.HttpPort
+			if httpPort <= 0 && params.NativePort <= 0 {
+				// An API old enough not to send the ports still means the cert-bound one.
+				httpPort = target.port
+			}
+
+			// Each probe gets its own slice of the budget. Sharing one deadline across up to four network
+			// round trips means a slow first probe swallows the second one's specific error message.
+			probes := 0
+			if httpPort > 0 {
+				probes++
+			}
+			if params.NativePort > 0 {
+				probes++
+			}
+			probeCtx := func() (context.Context, context.CancelFunc) {
+				if deadline, ok := ctx.Deadline(); ok && probes > 1 {
+					return context.WithTimeout(ctx, time.Until(deadline)/time.Duration(probes))
+				}
+				return context.WithCancel(ctx)
+			}
+
+			if httpPort > 0 {
+				httpCtx, cancel := probeCtx()
+				err := func() error {
+					defer cancel()
+					if err := dialTarget(httpCtx, target.host, httpPort); err != nil {
+						return connectFailure(err)
+					}
+					config.TargetAddr = net.JoinHostPort(target.host, strconv.Itoa(httpPort))
+					if err := clickhousehandler.TestConnection(httpCtx, config); err != nil {
+						return authFailure(err)
+					}
+					return nil
+				}()
+				if err != nil {
+					return err
+				}
+			}
+
+			if params.NativePort > 0 {
+				nativeCtx, cancel := probeCtx()
+				defer cancel()
+				if err := dialTarget(nativeCtx, target.host, params.NativePort); err != nil {
+					return connectFailure(nativePortError(params.NativePort, err, httpPort > 0))
+				}
+				config.NativeAddr = net.JoinHostPort(target.host, strconv.Itoa(params.NativePort))
+				if err := clickhousehandler.TestNativeConnection(nativeCtx, config); err != nil {
+					return authFailure(nativePortError(params.NativePort, err, httpPort > 0))
+				}
+			}
+			return nil
 		}
 	case testConnModeSSH:
 		var params sshTestParams
@@ -770,4 +833,14 @@ func redactProbeSecrets(msg string, secrets ...string) string {
 		}
 	}
 	return urlUserinfoPattern.ReplaceAllString(msg, "${1}******@")
+}
+
+// A server can be reachable over HTTP and not over the native protocol, so the failure has to say which port
+// it was and that the account can be saved without one.
+func nativePortError(port int, err error, httpWorks bool) error {
+	if !httpWorks {
+		return fmt.Errorf("ClickHouse's native port %d did not answer: %w", port, err)
+	}
+	return fmt.Errorf("the HTTP interface works, but ClickHouse's native port %d did not: %w. "+
+		"Clear the native port to use this account over HTTP only, which clickhouse-client cannot do", port, err)
 }

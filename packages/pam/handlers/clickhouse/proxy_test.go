@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -17,12 +18,36 @@ import (
 )
 
 type recordingLogger struct {
+	mu      sync.Mutex
 	entries []session.SessionLogEntry
 }
 
 func (r *recordingLogger) LogEntry(entry session.SessionLogEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.entries = append(r.entries, entry)
 	return nil
+}
+
+func (r *recordingLogger) contains(want string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, entry := range r.entries {
+		if strings.Contains(entry.Input, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *recordingLogger) dump() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out strings.Builder
+	for _, entry := range r.entries {
+		out.WriteString(entry.Input + " => " + entry.Output + "\n")
+	}
+	return out.String()
 }
 func (r *recordingLogger) LogSessionEvent(session.SessionEvent) error { return nil }
 func (r *recordingLogger) LogHttpEvent(session.HttpEvent) error       { return nil }

@@ -26,6 +26,23 @@ const (
 type rpcTarget struct {
 	host string
 	port int
+	// Every port the signed certificate authorises. Empty means the certificate named only port, which is
+	// what a platform too old to send the list produces.
+	ports []int
+}
+
+// allows reports whether the certificate authorises this port. A certificate that named only one port keeps
+// the old behaviour, where that port is the only one a handler may reach.
+func (t rpcTarget) allows(port int) bool {
+	if port == t.port {
+		return true
+	}
+	for _, allowed := range t.ports {
+		if port == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 type rpcTargetContextKey struct{}
@@ -63,7 +80,8 @@ func serveRPCOverTLS(
 
 	opCtx, cancel := context.WithTimeout(ctx, requestDeadline)
 	defer cancel()
-	opCtx = context.WithValue(opCtx, rpcTargetContextKey{}, rpcTarget{forwardConfig.TargetHost, forwardConfig.TargetPort})
+	opCtx = context.WithValue(opCtx, rpcTargetContextKey{},
+		rpcTarget{forwardConfig.TargetHost, forwardConfig.TargetPort, forwardConfig.TargetPorts})
 	req = req.WithContext(opCtx)
 
 	rw := newBufferedResponseWriter()

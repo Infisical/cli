@@ -27,11 +27,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Brokered over ClickHouse's HTTP interface rather than the native protocol on 9000, where a statement is
-// text and can be blocked and recorded without parsing a version-gated binary format. The client's own
-// credentials are dropped and the account's injected, so nothing it holds works outside a recorded session.
+// Brokers both of ClickHouse's interfaces: HTTP on TargetAddr and the native TCP protocol on NativeAddr. A
+// session listens on one local port and routes by the first byte the client sends, so the driver decides the
+// protocol rather than the user. The client's own credentials are dropped and the account's injected on either
+// path, so nothing it holds works outside a recorded session.
 type ClickHouseProxyConfig struct {
 	TargetAddr string
+	NativeAddr string
 	Username   string
 	Password   string
 	Database   string
@@ -59,12 +61,14 @@ const (
 const (
 	codeNotImplemented = 48
 	codeNetworkError   = 210
+	codeTooManyRows    = 396
 	codeAccessDenied   = 497
 )
 
 var errorNames = map[int]string{
 	codeNotImplemented: "NOT_IMPLEMENTED",
 	codeNetworkError:   "NETWORK_ERROR",
+	codeTooManyRows:    "TOO_MANY_ROWS",
 	codeAccessDenied:   "ACCESS_DENIED",
 }
 
@@ -82,7 +86,9 @@ var strippedAuthParams = []string{"user", "password"}
 
 var strippedExecutionParams = []string{"role", "quota_key"}
 
-var allowedPaths = map[string]bool{"/": true, "/ping": true}
+const pingPath = "/ping"
+
+var allowedPaths = map[string]bool{"/": true, pingPath: true}
 
 type ClickHouseProxy struct {
 	config  ClickHouseProxyConfig
@@ -93,6 +99,10 @@ type stateKey struct{}
 
 type requestState struct {
 	statement string
+	// The statement without the recorded parameter suffix, and whether it was cut short by the inspection
+	// window. The bridge runs this rather than re-reading a body that may be compressed.
+	sql       string
+	truncated bool
 	started   time.Time
 }
 
@@ -134,12 +144,39 @@ func (p *ClickHouseProxy) HandleConnection(ctx context.Context, clientConn net.C
 
 	l := log.With().Str("sessionId", p.config.SessionID).Str("resourceType", "clickhouse").Logger()
 
+	if p.config.TargetAddr == "" && p.config.NativeAddr == "" {
+		l.Error().Msg("Refused a ClickHouse session with neither a HTTP nor a native port")
+		return nil
+	}
+
+	conn, isNative, err := sniffProtocol(clientConn)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			l.Debug().Msg("Client closed before sending anything")
+		} else {
+			l.Warn().Err(err).Msg("Could not read the first byte of a ClickHouse connection")
+		}
+		return nil
+	}
+
+	if isNative {
+		if p.config.NativeAddr == "" {
+			l.Info().Msg("Refused a native connection on an account with no native port")
+			return writeNativeError(conn, maxNativeRevision, codeNotImplemented,
+				"This account does not have ClickHouse's native port configured, so only the HTTP interface is "+
+					"available in this session.")
+		}
+		return newNativeProxy(p).HandleConnection(ctx, conn, l.With().Str("protocol", "native").Logger())
+	}
+
+	l = l.With().Str("protocol", "http").Logger()
+
 	server := &http.Server{
 		Handler:           p.handler(l),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 
-	listener := newSingleConnListener(clientConn)
+	listener := newSingleConnListener(conn)
 
 	done := make(chan struct{})
 	defer close(done)
@@ -167,11 +204,12 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 			return
 		}
 
-		statement, body, err := p.inspect(r)
+		inspected, body, err := p.inspect(r)
 		if err != nil {
 			writeClickHouseError(w, http.StatusBadRequest, codeNotImplemented, err.Error())
 			return
 		}
+		statement := inspected.statement
 
 		if blocked := p.blockedBy(statement); blocked != nil {
 			p.logStatement(statement, fmt.Sprintf("BLOCKED: %s", blocked.String()))
@@ -182,7 +220,19 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 		}
 
 		r.Body = body
-		state := &requestState{statement: statement, started: time.Now()}
+		state := &requestState{
+			statement: statement,
+			sql:       inspected.sql,
+			truncated: inspected.truncated,
+			started:   time.Now(),
+		}
+
+		// A server with HTTP disabled still has to serve Web Access, which only speaks HTTP.
+		if p.config.TargetAddr == "" {
+			p.serveBridge(w, r, state, l)
+			return
+		}
+
 		p.reverse.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stateKey{}, state)))
 	})
 }
@@ -192,17 +242,26 @@ type bodyReadCloser struct {
 	io.Closer
 }
 
+type inspectedRequest struct {
+	statement string
+	sql       string
+	truncated bool
+}
+
 // Returns the statement and a body that still replays in full. ClickHouse concatenates `query` and the body.
-func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error) {
+func (p *ClickHouseProxy) inspect(r *http.Request) (inspectedRequest, io.ReadCloser, error) {
 	queryParam := strings.TrimSpace(r.URL.Query().Get("query"))
 
 	if r.Body == nil || r.ContentLength == 0 {
-		return queryParam + parameterSuffix(r.URL.Query()), http.NoBody, nil
+		return inspectedRequest{
+			statement: queryParam + parameterSuffix(r.URL.Query()),
+			sql:       queryParam,
+		}, http.NoBody, nil
 	}
 
 	// ClickHouse's own block compression is opaque to anything but a ClickHouse client
 	if r.URL.Query().Get("decompress") == "1" {
-		return "", nil, fmt.Errorf(
+		return inspectedRequest{}, nil, fmt.Errorf(
 			"this session cannot read a ClickHouse-compressed request body, so decompress=1 is not supported here. " +
 				"Send the statement uncompressed or with Content-Encoding: gzip")
 	}
@@ -211,7 +270,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 	switch encoding {
 	case "", "identity", "gzip", "deflate":
 	default:
-		return "", nil, fmt.Errorf(
+		return inspectedRequest{}, nil, fmt.Errorf(
 			"this session cannot read a %q-encoded request body, so the command blocking policy could not be applied to it. "+
 				"Use gzip, deflate, or no compression", encoding)
 	}
@@ -220,7 +279,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 	head := make([]byte, maxInspectBytes+1)
 	n, err := io.ReadFull(r.Body, head)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return "", nil, fmt.Errorf("the gateway could not read the request body: %v", err)
+		return inspectedRequest{}, nil, fmt.Errorf("the gateway could not read the request body: %v", err)
 	}
 	head = head[:n]
 
@@ -228,18 +287,24 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error
 
 	decoded, decodedOverflow, decodeErr := decodeHead(head, encoding)
 	if decodeErr != nil {
-		return "", nil, fmt.Errorf(
+		return inspectedRequest{}, nil, fmt.Errorf(
 			"the gateway could not decompress the request body to apply the command blocking policy: %v", decodeErr)
 	}
 
-	if (len(head) > maxInspectBytes || decodedOverflow) && len(p.config.BlockedCommands) > 0 {
-		return "", nil, fmt.Errorf(
+	truncated := len(head) > maxInspectBytes || decodedOverflow
+	if truncated && len(p.config.BlockedCommands) > 0 {
+		return inspectedRequest{}, nil, fmt.Errorf(
 			"this account blocks commands, so a request body larger than %d MB is refused: the gateway has to read "+
 				"the whole statement to apply the policy. Send the data in smaller batches",
 			maxInspectBytes>>20)
 	}
 
-	return joinStatement(queryParam, string(decoded)) + parameterSuffix(r.URL.Query()), forwarded, nil
+	sql := joinStatement(queryParam, string(decoded))
+	return inspectedRequest{
+		statement: sql + parameterSuffix(r.URL.Query()),
+		sql:       sql,
+		truncated: truncated,
+	}, forwarded, nil
 }
 
 func parameterSuffix(query url.Values) string {
@@ -321,7 +386,11 @@ func (p *ClickHouseProxy) rewrite(pr *httputil.ProxyRequest) {
 	for _, param := range append(append([]string{}, strippedAuthParams...), strippedExecutionParams...) {
 		query.Del(param)
 	}
-	if p.config.Database != "" {
+	// ClickHouse's health endpoint refuses any query string, so a database parameter turns it into a 404.
+	if req.URL.Path == pingPath {
+		query = nil
+		req.URL.ForceQuery = false
+	} else if p.config.Database != "" {
 		query.Set("database", p.config.Database)
 	}
 	req.URL.RawQuery = query.Encode()

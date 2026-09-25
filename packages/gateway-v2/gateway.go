@@ -80,14 +80,19 @@ type ForwardConfig struct {
 	VerifyTLS     bool   // Whether to verify TLS certificates
 	TargetHost    string
 	TargetPort    int
-	ActorType     ActorType
-	PAMConfig     pam.GatewayPAMConfig
+	// Additional ports the certificate authorises, empty when it names only TargetPort.
+	TargetPorts []int
+	ActorType   ActorType
+	PAMConfig   pam.GatewayPAMConfig
 }
 
 // RoutingInfo represents the routing information embedded in client certificates
 type RoutingInfo struct {
 	TargetHost string `json:"targetHost"`
 	TargetPort int    `json:"targetPort"`
+	// Every port this certificate authorises, for the account types that reach one host on more than one.
+	// Absent from a certificate minted by an older platform, which means TargetPort is the only one.
+	TargetPorts []int `json:"targetPorts,omitempty"`
 }
 
 type PAMInfo struct {
@@ -464,6 +469,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 			capabilities[CapabilityPkcs11] = true
 		}
 		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
+		capabilities[CapabilityClickhouseNativeProtocol] = true
 		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
 		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
@@ -1451,6 +1457,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 
 			config.TargetHost = routingInfo.TargetHost
 			config.TargetPort = routingInfo.TargetPort
+			config.TargetPorts = routingInfo.TargetPorts
 		}
 		// Extract actor type from client certificate custom extension
 		if ext.Id.String() == GATEWAY_ACTOR_OID {
