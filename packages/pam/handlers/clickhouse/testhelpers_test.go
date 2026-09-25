@@ -56,6 +56,14 @@ func postStatementE(addr string, sql string) (int, string, error) {
 	return resp.StatusCode, string(body), nil
 }
 
+func postStatement(t *testing.T, addr string, sql string) (int, string) {
+	t.Helper()
+
+	status, body, err := postStatementE(addr, sql)
+	require.NoError(t, err)
+	return status, body
+}
+
 func postGET(t *testing.T, addr string, path string) (int, string) {
 	t.Helper()
 

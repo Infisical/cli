@@ -59,14 +59,12 @@ const (
 const (
 	codeNotImplemented = 48
 	codeNetworkError   = 210
-	codeTooManyRows    = 396
 	codeAccessDenied   = 497
 )
 
 var errorNames = map[int]string{
 	codeNotImplemented: "NOT_IMPLEMENTED",
 	codeNetworkError:   "NETWORK_ERROR",
-	codeTooManyRows:    "TOO_MANY_ROWS",
 	codeAccessDenied:   "ACCESS_DENIED",
 }
 
@@ -97,9 +95,6 @@ type stateKey struct{}
 
 type requestState struct {
 	statement string
-	// The bridge runs this rather than re-reading a body that may be compressed.
-	sql       string
-	truncated bool
 	started   time.Time
 }
 
@@ -201,12 +196,11 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 			return
 		}
 
-		inspected, body, err := p.inspect(r)
+		statement, body, err := p.inspect(r)
 		if err != nil {
 			writeClickHouseError(w, http.StatusBadRequest, codeNotImplemented, err.Error())
 			return
 		}
-		statement := inspected.statement
 
 		if blocked := p.blockedBy(statement); blocked != nil {
 			p.logStatement(statement, fmt.Sprintf("BLOCKED: %s", blocked.String()))
@@ -217,19 +211,7 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 		}
 
 		r.Body = body
-		state := &requestState{
-			statement: statement,
-			sql:       inspected.sql,
-			truncated: inspected.truncated,
-			started:   time.Now(),
-		}
-
-		// A server with HTTP disabled still has to serve Web Access, which only speaks HTTP.
-		if p.config.TargetAddr == "" {
-			p.serveBridge(w, r, state, l)
-			return
-		}
-
+		state := &requestState{statement: statement, started: time.Now()}
 		p.reverse.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stateKey{}, state)))
 	})
 }
@@ -239,26 +221,17 @@ type bodyReadCloser struct {
 	io.Closer
 }
 
-type inspectedRequest struct {
-	statement string
-	sql       string
-	truncated bool
-}
-
 // Returns the statement and a body that still replays in full. ClickHouse concatenates `query` and the body.
-func (p *ClickHouseProxy) inspect(r *http.Request) (inspectedRequest, io.ReadCloser, error) {
+func (p *ClickHouseProxy) inspect(r *http.Request) (string, io.ReadCloser, error) {
 	queryParam := strings.TrimSpace(r.URL.Query().Get("query"))
 
 	if r.Body == nil || r.ContentLength == 0 {
-		return inspectedRequest{
-			statement: queryParam + parameterSuffix(r.URL.Query()),
-			sql:       queryParam,
-		}, http.NoBody, nil
+		return queryParam + parameterSuffix(r.URL.Query()), http.NoBody, nil
 	}
 
 	// ClickHouse's own block compression is opaque to anything but a ClickHouse client
 	if r.URL.Query().Get("decompress") == "1" {
-		return inspectedRequest{}, nil, fmt.Errorf(
+		return "", nil, fmt.Errorf(
 			"this session cannot read a ClickHouse-compressed request body, so decompress=1 is not supported here. " +
 				"Send the statement uncompressed or with Content-Encoding: gzip")
 	}
@@ -267,7 +240,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (inspectedRequest, io.ReadClo
 	switch encoding {
 	case "", "identity", "gzip", "deflate":
 	default:
-		return inspectedRequest{}, nil, fmt.Errorf(
+		return "", nil, fmt.Errorf(
 			"this session cannot read a %q-encoded request body, so the command blocking policy could not be applied to it. "+
 				"Use gzip, deflate, or no compression", encoding)
 	}
@@ -276,7 +249,7 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (inspectedRequest, io.ReadClo
 	head := make([]byte, maxInspectBytes+1)
 	n, err := io.ReadFull(r.Body, head)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return inspectedRequest{}, nil, fmt.Errorf("the gateway could not read the request body: %v", err)
+		return "", nil, fmt.Errorf("the gateway could not read the request body: %v", err)
 	}
 	head = head[:n]
 
@@ -284,24 +257,18 @@ func (p *ClickHouseProxy) inspect(r *http.Request) (inspectedRequest, io.ReadClo
 
 	decoded, decodedOverflow, decodeErr := decodeHead(head, encoding)
 	if decodeErr != nil {
-		return inspectedRequest{}, nil, fmt.Errorf(
+		return "", nil, fmt.Errorf(
 			"the gateway could not decompress the request body to apply the command blocking policy: %v", decodeErr)
 	}
 
-	truncated := len(head) > maxInspectBytes || decodedOverflow
-	if truncated && len(p.config.BlockedCommands) > 0 {
-		return inspectedRequest{}, nil, fmt.Errorf(
+	if (len(head) > maxInspectBytes || decodedOverflow) && len(p.config.BlockedCommands) > 0 {
+		return "", nil, fmt.Errorf(
 			"this account blocks commands, so a request body larger than %d MB is refused: the gateway has to read "+
 				"the whole statement to apply the policy. Send the data in smaller batches",
 			maxInspectBytes>>20)
 	}
 
-	sql := joinStatement(queryParam, string(decoded))
-	return inspectedRequest{
-		statement: sql + parameterSuffix(r.URL.Query()),
-		sql:       sql,
-		truncated: truncated,
-	}, forwarded, nil
+	return joinStatement(queryParam, string(decoded)) + parameterSuffix(r.URL.Query()), forwarded, nil
 }
 
 func parameterSuffix(query url.Values) string {

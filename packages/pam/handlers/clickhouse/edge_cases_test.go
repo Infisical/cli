@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -253,20 +252,6 @@ func TestTLSUpstream(t *testing.T) {
 		require.NoError(t, TestNativeConnection(context.Background(), config))
 	})
 
-	t.Run("bridging over TLS for a server with no HTTP", func(t *testing.T) {
-		bridged := config
-		bridged.TargetAddr = ""
-		port := startProxy(t, bridged)
-
-		status, body := postStatement(t, "127.0.0.1:"+port, "SELECT id, note FROM t ORDER BY id \nFORMAT JSON")
-		require.Equal(t, http.StatusOK, status, body)
-
-		var envelope bridgeEnvelope
-		require.NoError(t, json.Unmarshal([]byte(body), &envelope), body)
-		require.Equal(t, 2, envelope.Rows)
-		require.JSONEq(t, `[{"id":1,"note":"tls-one"},{"id":2,"note":"tls-two"}]`, string(envelope.Data))
-	})
-
 	t.Run("a pinned CA verifies rather than skipping", func(t *testing.T) {
 		if os.Getenv("PAM_CLICKHOUSE_TLS_CERT") == "" {
 			t.Skip("set PAM_CLICKHOUSE_TLS_CERT to run")
@@ -302,22 +287,6 @@ func TestAccountWithoutNativePortRefusesNativeClients(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, body)
 }
 
-func TestAccountWithoutHTTPPortStillServesBothClients(t *testing.T) {
-	itOnly(t)
-
-	config := baseConfig(&recordingLogger{})
-	config.TargetAddr = ""
-	port := startProxy(t, config)
-
-	out, err := runClient(t, port, "SELECT 'native-on-bridged-account';")
-	require.NoError(t, err, out)
-	require.Contains(t, out, "native-on-bridged-account")
-
-	status, body := postStatement(t, "127.0.0.1:"+port, "SELECT 1 AS n \nFORMAT JSON")
-	require.Equal(t, http.StatusOK, status, body)
-	require.Contains(t, body, `"n":1`)
-}
-
 func TestAccountWithNeitherPortFailsClearly(t *testing.T) {
 	itOnly(t)
 
@@ -331,100 +300,14 @@ func TestAccountWithNeitherPortFailsClearly(t *testing.T) {
 	require.Error(t, err, "a session with neither port must not serve anything")
 }
 
-func TestBridgeEdgeCases(t *testing.T) {
-	itOnly(t)
-
-	config := baseConfig(&recordingLogger{})
-	config.TargetAddr = ""
-
-	cases := []struct {
-		name       string
-		sql        string
-		wantStatus int
-		wantBody   string
-	}{
-		{
-			name:       "a statement shape that cannot be wrapped says so",
-			sql:        "SHOW TABLES \nFORMAT JSON",
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "SELECT, WITH or EXPLAIN",
-		},
-		{
-			name:       "a format the bridge does not produce says so",
-			sql:        "SELECT 1 \nFORMAT TabSeparated",
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "JSON and JSONCompact",
-		},
-		{
-			name:       "a statement with no format runs and returns nothing to parse",
-			sql:        "CREATE TABLE IF NOT EXISTS bridge_ddl (a UInt8) ENGINE = Memory",
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "an empty statement is refused",
-			sql:        "",
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "No statement was sent",
-		},
-		{
-			name:       "a syntax error comes back as ClickHouse wrote it",
-			sql:        "SELECT FROM WHERE \nFORMAT JSON",
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "Syntax error",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			port := startProxy(t, config)
-			status, body := postStatement(t, "127.0.0.1:"+port, tc.sql)
-			require.Equal(t, tc.wantStatus, status, body)
-			if tc.wantBody != "" {
-				require.Contains(t, body, tc.wantBody)
-			}
-		})
-	}
-}
-
-func TestBridgePassesQueryParameters(t *testing.T) {
-	itOnly(t)
-
-	recorder := &recordingLogger{}
-	config := baseConfig(recorder)
-	config.TargetAddr = ""
-	port := startProxy(t, config)
-
-	status, body := postGET(t, "127.0.0.1:"+port,
-		"/?param_wanted=7&query="+urlEscape("SELECT {wanted:UInt8} AS got FORMAT JSON"))
-	require.Equal(t, http.StatusOK, status, body)
-	require.Contains(t, body, `"got":7`)
-	require.Contains(t, recorder.dump(), "wanted=7", "the parameter belongs in the recording")
-}
-
 func TestCompressedRequestBodies(t *testing.T) {
 	itOnly(t)
 
-	for _, native := range []bool{false, true} {
-		name := "http interface"
-		if native {
-			name = "bridged to native"
-		}
-		t.Run(name, func(t *testing.T) {
-			config := baseConfig(&recordingLogger{})
-			if native {
-				config.TargetAddr = ""
-			}
-			port := startProxy(t, config)
+	port := startProxy(t, baseConfig(&recordingLogger{}))
 
-			status, body := postGzipped(t, "127.0.0.1:"+port, "SELECT 5 AS five \nFORMAT JSON")
-			require.Equal(t, http.StatusOK, status, body)
-
-			// ClickHouse pretty-prints its JSON and the bridge writes it compact, so the rows are compared rather than...
-			var envelope bridgeEnvelope
-			require.NoError(t, json.Unmarshal([]byte(body), &envelope), body)
-			require.JSONEq(t, `[{"five":5}]`, string(envelope.Data))
-		})
-	}
+	status, body := postGzipped(t, "127.0.0.1:"+port, "SELECT 5 AS five \nFORMAT JSON")
+	require.Equal(t, http.StatusOK, status, body)
+	require.Contains(t, body, "\"five\": 5")
 }
 
 func TestSnifferEdgeCases(t *testing.T) {
@@ -585,16 +468,6 @@ func TestUpstreamUnreachable(t *testing.T) {
 		require.Contains(t, out, "could not reach ClickHouse")
 	})
 
-	t.Run("bridge reports a bad gateway", func(t *testing.T) {
-		config := baseConfig(&recordingLogger{})
-		config.TargetAddr = ""
-		config.NativeAddr = "127.0.0.1:1"
-		port := startProxy(t, config)
-
-		status, body := postStatement(t, "127.0.0.1:"+port, "SELECT 1 \nFORMAT JSON")
-		require.Equal(t, http.StatusBadGateway, status)
-		require.Contains(t, body, "could not reach ClickHouse")
-	})
 }
 
 func TestWrongAccountCredentialsSurfaceCleanly(t *testing.T) {
@@ -637,47 +510,4 @@ func TestNativeRevisionPinning(t *testing.T) {
 	out, err := runClient(t, port, "SELECT version();")
 	require.NoError(t, err, out)
 	require.Equal(t, queryDirect(t, "SELECT version()"), strings.TrimSpace(out))
-}
-
-func TestQuoteFieldDump(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"7", `'7'`},
-		{"plain", `'plain'`},
-		{"it's", `'it\'s'`},
-		{`back\slash`, `'back\\slash'`},
-		{`'; DROP TABLE users; --`, `'\'; DROP TABLE users; --'`},
-		{"", `''`},
-	}
-	for _, tc := range cases {
-		require.Equal(t, tc.want, quoteFieldDump(tc.in), tc.in)
-	}
-}
-
-// A parameter is data, so a value full of quotes has to come back as that value rather than changing the...
-func TestBridgeParameterCannotEscapeItsQuotes(t *testing.T) {
-	itOnly(t)
-
-	config := baseConfig(&recordingLogger{})
-	config.TargetAddr = ""
-	port := startProxy(t, config)
-
-	hostile := `'; DROP TABLE pam_write_test; --`
-	status, body := postGET(t, "127.0.0.1:"+port,
-		"/?param_v="+urlEscape(hostile)+"&query="+urlEscape("SELECT {v:String} AS got FORMAT JSON"))
-
-	require.Equal(t, http.StatusOK, status, body)
-
-	var envelope bridgeEnvelope
-	require.NoError(t, json.Unmarshal([]byte(body), &envelope), body)
-
-	var rows []struct {
-		Got string `json:"got"`
-	}
-	require.NoError(t, json.Unmarshal(envelope.Data, &rows))
-	require.Len(t, rows, 1)
-	require.Equal(t, hostile, rows[0].Got, "the value should survive intact, not be executed")
-
-	// The table the payload tried to drop is still there.
-	okStatus, okBody := postStatement(t, "127.0.0.1:"+port, "SELECT count() AS c FROM pam_write_test \nFORMAT JSON")
-	require.Equal(t, http.StatusOK, okStatus, okBody)
 }
