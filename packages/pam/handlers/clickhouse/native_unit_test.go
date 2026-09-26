@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -616,4 +617,44 @@ func TestNativeAnchoredRuleStillBlocksAStatementCarryingParameters(t *testing.T)
 
 	_, _, queries, _ := upstream.snapshot()
 	require.Empty(t, queries, "the blocked statement must not reach the upstream")
+}
+
+// An absurd declared length is a fatal allocation inside ch-go, not a panic anything can recover, so the
+// session has to refuse it before the decoder ever sees it.
+func TestNativeRefusesAnOversizedQueryBody(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+
+	conn := dialProxy(t, ClickHouseProxyConfig{
+		NativeAddr:    upstream.addr(),
+		Username:      "account",
+		SessionID:     "unit",
+		SessionLogger: &recordingLogger{},
+	})
+	r := clientHandshake(t, conn, "someone", "whatever")
+
+	var q proto.Query
+	q.ID = "id"
+	q.Info.Query = proto.ClientQueryInitial
+	q.Info.Interface = proto.InterfaceTCP
+	q.Info.InitialAddress = "127.0.0.1:0"
+	q.Info.Major, q.Info.Minor, q.Info.ProtocolVersion = 24, 8, proto.Version
+	q.Stage = proto.StageComplete
+	q.Body = "SELECT 1"
+
+	var full proto.Buffer
+	q.EncodeAware(&full, proto.Version)
+
+	// Everything up to the body, then a terabyte in place of its length.
+	var b proto.Buffer
+	b.Buf = append(b.Buf, full.Buf[:bytes.LastIndex(full.Buf, []byte("SELECT 1"))-1]...)
+	b.PutUVarInt(1 << 40)
+	_, err := conn.Write(b.Buf)
+	require.NoError(t, err)
+
+	code, message := decodeException(t, r)
+	require.Equal(t, codeNotImplemented, code)
+	require.Contains(t, message, "could not read the query packet")
+
+	_, _, queries, _ := upstream.snapshot()
+	require.Empty(t, queries, "nothing may be forwarded from a packet the gateway refused")
 }

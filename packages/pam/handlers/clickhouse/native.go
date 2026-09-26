@@ -78,52 +78,6 @@ func (t *tap) discard() {
 	t.buf = nil
 }
 
-// ch-go allocates a declared string length before it reads a single byte, so an unauthenticated client could
-// name a terabyte and take the process down with it. Every handshake field is a short identifier.
-const maxHandshakeStringLen = 64 << 10
-
-func readBoundedStr(r *proto.Reader) (string, error) {
-	n, err := r.UVarInt()
-	if err != nil {
-		return "", err
-	}
-	if n > maxHandshakeStringLen {
-		return "", fmt.Errorf("handshake field of %d bytes exceeds the %d byte cap", n, maxHandshakeStringLen)
-	}
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return "", err
-	}
-	return string(buf), nil
-}
-
-func decodeBoundedClientHello(r *proto.Reader) (proto.ClientHello, error) {
-	var h proto.ClientHello
-	var err error
-	if h.Name, err = readBoundedStr(r); err != nil {
-		return h, fmt.Errorf("name: %w", err)
-	}
-	if h.Major, err = r.Int(); err != nil {
-		return h, fmt.Errorf("major: %w", err)
-	}
-	if h.Minor, err = r.Int(); err != nil {
-		return h, fmt.Errorf("minor: %w", err)
-	}
-	if h.ProtocolVersion, err = r.Int(); err != nil {
-		return h, fmt.Errorf("protocol version: %w", err)
-	}
-	if h.Database, err = readBoundedStr(r); err != nil {
-		return h, fmt.Errorf("database: %w", err)
-	}
-	if h.User, err = readBoundedStr(r); err != nil {
-		return h, fmt.Errorf("user: %w", err)
-	}
-	if h.Password, err = readBoundedStr(r); err != nil {
-		return h, fmt.Errorf("password: %w", err)
-	}
-	return h, nil
-}
-
 // A refusal ends the session: the stream is mid-packet, so carrying on would let a later packet flush the
 // refused bytes upstream.
 var errSessionRefused = errors.New("the session was refused")
@@ -400,8 +354,8 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 }
 
 func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
-	var q proto.Query
-	if err := q.DecodeAware(r, s.rev); err != nil {
+	q, err := decodeBoundedQuery(r, s.rev)
+	if err != nil {
 		s.log.Warn().Err(err).Msg("Could not read a ClickHouse query packet")
 		return s.refuse(t, codeNotImplemented,
 			"This session could not read the query packet, so the command blocking policy could not be "+
@@ -443,7 +397,7 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 // Decodes a block only far enough to find its end, then replays the client's bytes: re-encoding would mean
 // reproducing a serialization we do not own.
 func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
-	table, err := r.Str()
+	table, err := readBoundedStr(r)
 	if err != nil {
 		s.log.Warn().Err(err).Msg("Could not read a ClickHouse data packet")
 		return s.refuse(t, codeNotImplemented,
