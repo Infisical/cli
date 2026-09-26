@@ -43,9 +43,16 @@ func startClickHouseContainer(t *testing.T, ctx context.Context) (testcontainers
 			HostConfigModifier: func(hc *container.HostConfig) {
 				hc.ExtraHosts = append(hc.ExtraHosts, "host.docker.internal:host-gateway")
 			},
+			// The ports listen before the entrypoint has created CLICKHOUSE_DB, so waiting on them alone
+			// races initialisation and seeding fails with UNKNOWN_DATABASE.
 			WaitingFor: wait.ForAll(
 				wait.ForListeningPort("8123/tcp"),
 				wait.ForListeningPort("9000/tcp"),
+				wait.ForExec([]string{
+					"clickhouse-client",
+					"--user", clickhouseUser, "--password", clickhousePassword,
+					"--database", clickhouseDatabase, "--query", "SELECT 1",
+				}).WithExitCode(0),
 			).WithStartupTimeout(180 * time.Second),
 		},
 		Started: true,
@@ -183,20 +190,32 @@ func startClickHouseProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra
 	return freePort, &pamCmd
 }
 
-func queryOverHTTP(t *testing.T, ctx context.Context, proxyPort int, sql string) (int, string) {
-	t.Helper()
-
+func tryQueryOverHTTP(ctx context.Context, proxyPort int, sql string) (int, string, error) {
 	url := fmt.Sprintf("http://127.0.0.1:%d/?database=%s", proxyPort, clickhouseDatabase)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(sql))
-	require.NoError(t, err)
+	if err != nil {
+		return 0, "", err
+	}
 
 	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
-	require.NoError(t, err)
+	if err != nil {
+		return 0, "", err
+	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, "", err
+	}
+	return resp.StatusCode, string(body), nil
+}
+
+func queryOverHTTP(t *testing.T, ctx context.Context, proxyPort int, sql string) (int, string) {
+	t.Helper()
+
+	status, body, err := tryQueryOverHTTP(ctx, proxyPort, sql)
 	require.NoError(t, err)
-	return resp.StatusCode, string(body)
+	return status, body
 }
 
 // waitForProxyHTTP absorbs the gap between the banner and the listener accepting.
@@ -208,8 +227,9 @@ func waitForProxyHTTP(t *testing.T, ctx context.Context, pamCmd *helpers.Command
 		Interval:         2 * time.Second,
 		Timeout:          60 * time.Second,
 		Condition: func() helpers.ConditionResult {
-			status, _ := queryOverHTTP(t, ctx, proxyPort, "SELECT 1")
-			if status == http.StatusOK {
+			// Must not assert: the proxy may not have bound the port yet and the wait has to retry.
+			status, _, err := tryQueryOverHTTP(ctx, proxyPort, "SELECT 1")
+			if err == nil && status == http.StatusOK {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
