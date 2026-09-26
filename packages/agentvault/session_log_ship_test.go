@@ -54,14 +54,14 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	config.INFISICAL_URL = infisical.URL + "/api"
 	defer func() { config.INFISICAL_URL = old }()
 
-	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
 	if err != nil {
 		t.Fatal(err)
 	}
 	shipper.put.Transport = bucket.Client().Transport
 
 	ciphertext := []byte("sealed-bytes")
-	res, err := shipper.createChunk(context.Background(), false, "sess-1", api.CreateAgentVaultActivityChunkRequest{
+	res, err := shipper.createChunk(context.Background(), false, "sess-1", api.CreateAgentVaultSessionLogChunkRequest{
 		ChunkID:         "01K5ABCDEFGHJKMNPQRSTVWXYZ",
 		RecordCount:     1,
 		CiphertextBytes: len(ciphertext),
@@ -79,7 +79,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	if postAuth != "Bearer proxy-token" {
 		t.Fatalf("Infisical saw Authorization %q", postAuth)
 	}
-	if postedPath != "/api/v1/agent-vault/proxy/sessions/sess-1/activity/chunks" {
+	if postedPath != "/api/v1/agent-vault/proxy/sessions/sess-1/logs/chunks" {
 		t.Fatalf("posted to %q", postedPath)
 	}
 	if putAuth != "" {
@@ -106,7 +106,7 @@ func TestABucketRefusalIsAnErrorThatNamesNoURL(t *testing.T) {
 	}))
 	defer bucket.Close()
 
-	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestAnUploadLinkThatIsNotHttpsIsRefused(t *testing.T) {
 	}))
 	defer bucket.Close()
 
-	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestARedirectFromTheBucketIsNotFollowed(t *testing.T) {
 	}))
 	defer bucket.Close()
 
-	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestAnUnreachableBucketIsAnErrorThatNamesNoSignature(t *testing.T) {
 	target := bucket.URL + "/object?X-Amz-Signature=secret"
 	bucket.Close()
 
-	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestAChunkAlreadyStoredCountsAsUploaded(t *testing.T) {
 	}))
 	defer bucket.Close()
 
-	shipper, err := newActivityShipper(func() string { return "proxy-token" })
+	shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
 	if err != nil {
 		t.Fatal(err)
 	}

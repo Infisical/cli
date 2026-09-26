@@ -27,9 +27,9 @@ var vectorContext = struct{ sessionID, chunkID string }{
 	chunkID:   "01K5ABCDEFGHJKMNPQRSTVWXYZ",
 }
 
-func vectorRecords() []activityRecord {
+func vectorRecords() []sessionLogRecord {
 	service, bundle := "github", "code-review"
-	return []activityRecord{{
+	return []sessionLogRecord{{
 		Ts:           "2026-09-16T10:31:04.221Z",
 		Seq:          1,
 		ProxyID:      "proxy-1",
@@ -53,8 +53,8 @@ func mustHex(t *testing.T, s string) []byte {
 	return b
 }
 
-func TestActivityAADMatchesTheBackendVector(t *testing.T) {
-	got := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
+func TestSessionLogAADMatchesTheBackendVector(t *testing.T) {
+	got := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
 	if hex.EncodeToString(got) != vectorAADHex {
 		t.Fatalf("AAD is %s, the backend and the browser build %s", hex.EncodeToString(got), vectorAADHex)
 	}
@@ -67,14 +67,14 @@ func TestSealMatchesNodeVector(t *testing.T) {
 	}
 
 	iv := mustHex(t, vectorIVHex)
-	aad := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
-	ciphertext, gotIV, err := sealActivityWithRand(bytes.NewReader(iv), mustHex(t, vectorKeyHex), plaintext, aad)
+	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
+	ciphertext, gotIV, err := sealSessionLogWithRand(bytes.NewReader(iv), mustHex(t, vectorKeyHex), plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if encodeActivityIV(gotIV) != vectorIVBase64 {
-		t.Fatalf("IV encodes as %q, the backend expects %q", encodeActivityIV(gotIV), vectorIVBase64)
+	if encodeSessionLogIV(gotIV) != vectorIVBase64 {
+		t.Fatalf("IV encodes as %q, the backend expects %q", encodeSessionLogIV(gotIV), vectorIVBase64)
 	}
 	if base64.StdEncoding.EncodeToString(ciphertext) != vectorCiphertext {
 		t.Fatal("the sealed bytes differ from the vector Infisical and the browser are checked against")
@@ -83,7 +83,7 @@ func TestSealMatchesNodeVector(t *testing.T) {
 
 func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	key := make([]byte, 32)
-	spool := newActivitySpool(newActivityGrant("sess-1", key), time.Now())
+	spool := newSessionLogSpool(newSessionLogGrant("sess-1", key), time.Now())
 	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"), 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -102,17 +102,17 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	}
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
-	if _, err := gcm.Open(nil, iv, chunk.ciphertext, buildActivityAAD("sess-1", chunk.meta.ChunkID)); err != nil {
+	if _, err := gcm.Open(nil, iv, chunk.ciphertext, buildSessionLogAAD("sess-1", chunk.meta.ChunkID)); err != nil {
 		t.Fatalf("the chunk does not open under its session and chunk ID: %v", err)
 	}
 }
 
 func TestSealedChunkOpensWithTheTagAppended(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
-	aad := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
+	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
 	plaintext, _ := json.Marshal(vectorRecords())
 
-	ciphertext, iv, err := sealActivity(key, plaintext, aad)
+	ciphertext, iv, err := sealSessionLog(key, plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +134,8 @@ func TestSealedChunkOpensWithTheTagAppended(t *testing.T) {
 func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	plaintext, _ := json.Marshal(vectorRecords())
-	aad := buildActivityAAD(vectorContext.sessionID, vectorContext.chunkID)
-	ciphertext, iv, err := sealActivity(key, plaintext, aad)
+	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
+	ciphertext, iv, err := sealSessionLog(key, plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +147,8 @@ func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 		name string
 		aad  []byte
 	}{
-		{"another session", buildActivityAAD("other", vectorContext.chunkID)},
-		{"another chunk", buildActivityAAD(vectorContext.sessionID, "other")},
+		{"another session", buildSessionLogAAD("other", vectorContext.chunkID)},
+		{"another chunk", buildSessionLogAAD(vectorContext.sessionID, "other")},
 	} {
 		if _, err := gcm.Open(nil, iv, ciphertext, wrong.aad); err == nil {
 			t.Fatalf("a chunk opened under %s", wrong.name)
@@ -160,12 +160,12 @@ func TestIVsDoNotRepeat(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	seen := make(map[string]bool, 256)
 	for i := 0; i < 256; i++ {
-		_, iv, err := sealActivity(key, []byte("[]"), nil)
+		_, iv, err := sealSessionLog(key, []byte("[]"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(iv) != activityIVBytes {
-			t.Fatalf("IV is %d bytes, the contract is %d", len(iv), activityIVBytes)
+		if len(iv) != sessionLogIVBytes {
+			t.Fatalf("IV is %d bytes, the contract is %d", len(iv), sessionLogIVBytes)
 		}
 		if seen[string(iv)] {
 			t.Fatal("an IV repeated, which would void GCM's guarantees for this key")
@@ -175,8 +175,8 @@ func TestIVsDoNotRepeat(t *testing.T) {
 }
 
 func TestChunkIDsAreULIDsThatSortByTime(t *testing.T) {
-	earlier := newActivityChunkID(time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC))
-	later := newActivityChunkID(time.Date(2026, 9, 16, 11, 0, 0, 0, time.UTC))
+	earlier := newSessionLogChunkID(time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC))
+	later := newSessionLogChunkID(time.Date(2026, 9, 16, 11, 0, 0, 0, time.UTC))
 
 	if len(earlier) != 26 {
 		t.Fatalf("a chunk id is %d characters, the server's column is 26", len(earlier))
@@ -193,7 +193,7 @@ func TestChunkIDsAreUniqueWithinAMillisecond(t *testing.T) {
 	now := time.Now()
 	seen := make(map[string]bool, 1000)
 	for i := 0; i < 1000; i++ {
-		id := newActivityChunkID(now)
+		id := newSessionLogChunkID(now)
 		if seen[id] {
 			t.Fatal("a chunk id repeated, which would collide with the server's unique index")
 		}

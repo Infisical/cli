@@ -104,7 +104,7 @@ func requestPath(req *http.Request) string {
 	path := req.URL.EscapedPath()
 	if path == "" {
 		// forward refuses an opaque target before any policy reads the path, so this branch is what the log
-		// line and the activity record show for one. A genuinely empty path is the root.
+		// line and the session log record show for one. A genuinely empty path is the root.
 		if req.URL.Opaque != "" {
 			return req.URL.Opaque
 		}

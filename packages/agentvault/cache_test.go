@@ -16,10 +16,10 @@ type stubResolver struct {
 	result   *resolveResult
 	err      error
 	delay    time.Duration
-	lastHeld *activityGrant
+	lastHeld *sessionLogGrant
 }
 
-func (s *stubResolver) resolve(_ string, held *activityGrant) (*resolveResult, error) {
+func (s *stubResolver) resolve(_ string, held *sessionLogGrant) (*resolveResult, error) {
 	s.mu.Lock()
 	s.calls++
 	s.lastHeld = held

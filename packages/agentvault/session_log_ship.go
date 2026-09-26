@@ -14,7 +14,7 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-func isActivityErrorNamed(err error, name string) bool {
+func isSessionLogErrorNamed(err error, name string) bool {
 	var apiErr *api.APIError
 	return errors.As(err, &apiErr) && apiErr.Name == name
 }
@@ -30,13 +30,13 @@ func isPoisonChunk(err error) bool {
 	return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 }
 
-type activityShipperClient struct {
+type sessionLogShipperClient struct {
 	steady *resty.Client
 	final  *resty.Client
 	put    *http.Client
 }
 
-func newActivityShipper(proxyToken func() string) (*activityShipperClient, error) {
+func newSessionLogShipper(proxyToken func() string) (*sessionLogShipperClient, error) {
 	steady, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
 	if err != nil {
 		return nil, err
@@ -49,21 +49,21 @@ func newActivityShipper(proxyToken func() string) (*activityShipperClient, error
 	if err != nil {
 		return nil, err
 	}
-	final.SetAuthToken(proxyToken()).SetTimeout(activityFinalTimeout)
+	final.SetAuthToken(proxyToken()).SetTimeout(sessionLogFinalTimeout)
 
-	return &activityShipperClient{
+	return &sessionLogShipperClient{
 		steady: steady,
 		final:  final,
 		// Not resty: this goes to the customer's bucket and must never carry the Infisical auth token.
 		put: &http.Client{
-			Timeout:       activityPutTimeout,
+			Timeout:       sessionLogPutTimeout,
 			Transport:     http.DefaultTransport.(*http.Transport).Clone(),
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
 }
 
-var errInsecureUploadURL = errors.New("agent-vault: refusing to upload activity to a link that is not https")
+var errInsecureUploadURL = errors.New("agent-vault: refusing to upload session logs to a link that is not https")
 
 func scrubURLError(err error) error {
 	var urlErr *url.Error
@@ -73,15 +73,15 @@ func scrubURLError(err error) error {
 	return err
 }
 
-func (c *activityShipperClient) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error) {
+func (c *sessionLogShipperClient) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
 	client := c.steady
 	if final {
 		client = c.final
 	}
-	return api.CallCreateAgentVaultActivityChunk(ctx, client, sessionID, req)
+	return api.CallCreateAgentVaultSessionLogChunk(ctx, client, sessionID, req)
 }
 
-func (c *activityShipperClient) putObject(ctx context.Context, uploadURL string, ciphertext []byte) error {
+func (c *sessionLogShipperClient) putObject(ctx context.Context, uploadURL string, ciphertext []byte) error {
 	target, err := url.Parse(uploadURL)
 	if err != nil {
 		return scrubURLError(err)

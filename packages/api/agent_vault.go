@@ -103,20 +103,20 @@ type AgentVaultService struct {
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 }
 
-type AgentVaultActivityGrant struct {
+type AgentVaultSessionLogGrant struct {
 	Enabled    bool   `json:"enabled"`
 	SessionKey string `json:"sessionKey"`
 }
 
 type ResolveAgentVaultSessionRequest struct {
-	HasActivityKey bool `json:"hasActivityKey"`
+	HasSessionLogKey bool `json:"hasSessionLogKey"`
 }
 
 type ResolveAgentVaultSessionResponse struct {
-	SessionID string                  `json:"sessionId"`
-	ExpiresAt string                  `json:"expiresAt"`
-	Services  []AgentVaultService     `json:"services"`
-	Activity  AgentVaultActivityGrant `json:"activity"`
+	SessionID   string                    `json:"sessionId"`
+	ExpiresAt   string                    `json:"expiresAt"`
+	Services    []AgentVaultService       `json:"services"`
+	SessionLogs AgentVaultSessionLogGrant `json:"sessionLogs"`
 }
 
 func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string, request ResolveAgentVaultSessionRequest) (ResolveAgentVaultSessionResponse, error) {
@@ -138,7 +138,7 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string,
 	return res, nil
 }
 
-type CreateAgentVaultActivityChunkRequest struct {
+type CreateAgentVaultSessionLogChunkRequest struct {
 	ChunkID          string `json:"chunkId"`
 	StartedAt        string `json:"startedAt"`
 	EndedAt          string `json:"endedAt"`
@@ -151,27 +151,27 @@ type CreateAgentVaultActivityChunkRequest struct {
 	CiphertextSha256 string `json:"ciphertextSha256"`
 }
 
-type CreateAgentVaultActivityChunkResponse struct {
+type CreateAgentVaultSessionLogChunkResponse struct {
 	ChunkID          string `json:"chunkId"`
 	UploadURL        string `json:"uploadUrl"`
 	ExpiresInSeconds int    `json:"expiresInSeconds"`
 }
 
-func CallCreateAgentVaultActivityChunk(ctx context.Context, httpClient *resty.Client, sessionID string, request CreateAgentVaultActivityChunkRequest) (CreateAgentVaultActivityChunkResponse, error) {
-	var res CreateAgentVaultActivityChunkResponse
+func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.Client, sessionID string, request CreateAgentVaultSessionLogChunkRequest) (CreateAgentVaultSessionLogChunkResponse, error) {
+	var res CreateAgentVaultSessionLogChunkResponse
 	response, err := httpClient.
 		R().
 		SetContext(ctx).
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/sessions/%s/activity/chunks", config.INFISICAL_URL, sessionID))
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/sessions/%s/logs/chunks", config.INFISICAL_URL, sessionID))
 
 	if err != nil {
-		return CreateAgentVaultActivityChunkResponse{}, NewGenericRequestError("CallCreateAgentVaultActivityChunk", err)
+		return CreateAgentVaultSessionLogChunkResponse{}, NewGenericRequestError("CallCreateAgentVaultSessionLogChunk", err)
 	}
 	if response.IsError() {
-		return CreateAgentVaultActivityChunkResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultActivityChunk", response, nil)
+		return CreateAgentVaultSessionLogChunkResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultSessionLogChunk", response, nil)
 	}
 	return res, nil
 }

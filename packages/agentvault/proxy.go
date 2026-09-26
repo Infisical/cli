@@ -75,11 +75,11 @@ type Options struct {
 }
 
 type proxyServer struct {
-	opts      Options
-	ca        *caManager
-	cache     *sessionCache
-	activity  *activityLog
-	transport http.RoundTripper
+	opts        Options
+	ca          *caManager
+	cache       *sessionCache
+	sessionLogs *sessionLogRecorder
+	transport   http.RoundTripper
 
 	configMu sync.RWMutex
 	config   ProxyConfig
@@ -420,12 +420,12 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	event.Msg("agent-vault: request")
 
 	// reqPath was taken before forward, so a credential substituted into the path never reaches the record.
-	if outcome.activity != nil {
+	if outcome.sessionLog != nil {
 		var service, bundle *string
 		if matched != nil {
 			service, bundle = &matched.name, &matched.accessBundleName
 		}
-		ps.activity.record(outcome.activity, activityRecord{
+		ps.sessionLogs.record(outcome.sessionLog, sessionLogRecord{
 			Method:       reqMethod,
 			Host:         hostname,
 			Port:         port,
@@ -476,7 +476,7 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 type forwardOutcome struct {
 	brokered    bool
 	substituted []string
-	activity    *activityGrant
+	sessionLog  *sessionLogGrant
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
@@ -486,7 +486,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	if err != nil {
 		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
-	outcome.activity = grant
+	outcome.sessionLog = grant
 
 	// TRACE and TRACK make the upstream reflect the injected credential back in the response body. Upper
 	// -cased like allowsMethod already was, or a lowercase "trace" walks past. Refused here rather than in

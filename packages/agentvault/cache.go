@@ -65,12 +65,12 @@ type resolvedService struct {
 }
 
 type sessionEntry struct {
-	sessionID string
-	expiresAt *time.Time
-	services  []*resolvedService
-	activity  *activityGrant
-	lastSeen  time.Time
-	fetchedAt time.Time
+	sessionID  string
+	expiresAt  *time.Time
+	services   []*resolvedService
+	sessionLog *sessionLogGrant
+	lastSeen   time.Time
+	fetchedAt  time.Time
 }
 
 // The map key is the sha256 of the token, never the token itself, so a heap dump yields no live credential.
@@ -80,7 +80,7 @@ func sessionKey(token string) string {
 }
 
 type sessionResolver interface {
-	resolve(sessionToken string, held *activityGrant) (*resolveResult, error)
+	resolve(sessionToken string, held *sessionLogGrant) (*resolveResult, error)
 }
 
 type sessionCache struct {
@@ -159,11 +159,11 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 }
 
 type cacheLookup struct {
-	services []*resolvedService
-	activity *activityGrant
+	services   []*resolvedService
+	sessionLog *sessionLogGrant
 }
 
-func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *activityGrant, error) {
+func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *sessionLogGrant, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -181,7 +181,7 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *activit
 			delete(c.tokens, key)
 		} else {
 			entry.lastSeen = time.Now()
-			svcs, grant := entry.services, entry.activity
+			svcs, grant := entry.services, entry.sessionLog
 			c.mu.Unlock()
 			return svcs, grant, nil
 		}
@@ -212,21 +212,21 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *activit
 		defer c.mu.Unlock()
 		c.evictIfFullLocked()
 		c.entries[key] = &sessionEntry{
-			sessionID: result.SessionID,
-			expiresAt: result.ExpiresAt,
-			services:  result.Services,
-			activity:  result.Activity,
-			lastSeen:  time.Now(),
-			fetchedAt: time.Now(),
+			sessionID:  result.SessionID,
+			expiresAt:  result.ExpiresAt,
+			services:   result.Services,
+			sessionLog: result.SessionLog,
+			lastSeen:   time.Now(),
+			fetchedAt:  time.Now(),
 		}
 		c.tokens[key] = sessionToken
-		return cacheLookup{services: result.Services, activity: result.Activity}, nil
+		return cacheLookup{services: result.Services, sessionLog: result.SessionLog}, nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	out := resolved.(cacheLookup)
-	return out.services, out.activity, nil
+	return out.services, out.sessionLog, nil
 }
 
 func (c *sessionCache) evictIfFullLocked() {
@@ -303,9 +303,9 @@ func (c *sessionCache) refresh() {
 
 func (c *sessionCache) refreshOne(key, token string) {
 	c.mu.Lock()
-	var held *activityGrant
+	var held *sessionLogGrant
 	if entry, ok := c.entries[key]; ok {
-		held = entry.activity
+		held = entry.sessionLog
 	}
 	c.mu.Unlock()
 
@@ -321,7 +321,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.sessionID = result.SessionID
 		entry.expiresAt = result.ExpiresAt
 		entry.services = result.Services
-		entry.activity = result.Activity
+		entry.sessionLog = result.SessionLog
 		entry.fetchedAt = time.Now()
 	}
 }

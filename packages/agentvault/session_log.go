@@ -11,30 +11,30 @@ import (
 )
 
 const (
-	activityFlushInterval     = 60 * time.Second
-	activityFlushSlack        = time.Second
-	activityFlushRecords      = 1000
-	activityMaxChunkPlaintext = 4 << 20
+	sessionLogFlushInterval     = 60 * time.Second
+	sessionLogFlushSlack        = time.Second
+	sessionLogFlushRecords      = 1000
+	sessionLogMaxChunkPlaintext = 4 << 20
 
-	activitySpoolCapacity = 5000
-	activityTotalCapacity = 200_000
+	sessionLogSpoolCapacity = 5000
+	sessionLogTotalCapacity = 200_000
 
-	activityPendingChunks    = 10
-	activityTotalSealedBytes = 64 << 20
+	sessionLogPendingChunks    = 10
+	sessionLogTotalSealedBytes = 64 << 20
 
-	activityIdleClose = 15 * time.Minute
+	sessionLogIdleClose = 15 * time.Minute
 
-	activityPauseBackoff = 15 * time.Minute
-	activityPutTimeout   = 10 * time.Second
-	activityFinalTimeout = 3 * time.Second
-	activityCloseTimeout = 5 * time.Second
+	sessionLogPauseBackoff = 15 * time.Minute
+	sessionLogPutTimeout   = 10 * time.Second
+	sessionLogFinalTimeout = 3 * time.Second
+	sessionLogCloseTimeout = 5 * time.Second
 
-	activityCeilingReachedName = "AgentVaultActivityCeilingReached"
-	activityDisabledName       = "AgentVaultActivityDisabled"
-	activityClockSkewName      = "AgentVaultActivityClockSkew"
+	sessionLogCeilingReachedName = "AgentVaultSessionLogCeilingReached"
+	sessionLogDisabledName       = "AgentVaultSessionLogDisabled"
+	sessionLogClockSkewName      = "AgentVaultSessionLogClockSkew"
 )
 
-type activityGrant struct {
+type sessionLogGrant struct {
 	sessionID string
 	key       []byte
 
@@ -42,10 +42,10 @@ type activityGrant struct {
 }
 
 // Counts every grant the proxy is handed, so a refusal can be told apart from a key issued after it.
-var activityGrantsIssued atomic.Uint64
+var sessionLogGrantsIssued atomic.Uint64
 
-func newActivityGrant(sessionID string, key []byte) *activityGrant {
-	return &activityGrant{sessionID: sessionID, key: key, issued: activityGrantsIssued.Add(1)}
+func newSessionLogGrant(sessionID string, key []byte) *sessionLogGrant {
+	return &sessionLogGrant{sessionID: sessionID, key: key, issued: sessionLogGrantsIssued.Add(1)}
 }
 
 type forgottenSpool struct {
@@ -53,21 +53,21 @@ type forgottenSpool struct {
 	dropped uint64
 }
 
-type activityShipper interface {
-	createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error)
+type sessionLogShipper interface {
+	createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error)
 	putObject(ctx context.Context, url string, ciphertext []byte) error
 }
 
-type activityLog struct {
+type sessionLogRecorder struct {
 	proxyID string
-	shipper activityShipper
+	shipper sessionLogShipper
 	now     func() time.Time
 
 	// close's flushAll can overlap the run loop's; unguarded, one chunk ships twice.
 	flushMu sync.Mutex
 
 	mu     sync.Mutex
-	spools map[string]*activitySpool
+	spools map[string]*sessionLogSpool
 
 	forgotten map[string]forgottenSpool
 
@@ -89,18 +89,18 @@ type activityLog struct {
 	wake   chan struct{}
 }
 
-func newActivityLog(proxyID string, shipper activityShipper) *activityLog {
-	return &activityLog{
+func newSessionLogRecorder(proxyID string, shipper sessionLogShipper) *sessionLogRecorder {
+	return &sessionLogRecorder{
 		proxyID:   proxyID,
 		shipper:   shipper,
 		now:       time.Now,
-		spools:    make(map[string]*activitySpool),
+		spools:    make(map[string]*sessionLogSpool),
 		forgotten: make(map[string]forgottenSpool),
 		wake:      make(chan struct{}, 1),
 	}
 }
 
-func (a *activityLog) record(g *activityGrant, rec activityRecord) {
+func (a *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	if a == nil || g == nil {
 		return
 	}
@@ -113,7 +113,7 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 
 	spool, ok := a.spools[g.sessionID]
 	if !ok {
-		spool = newActivitySpool(g, a.now())
+		spool = newSessionLogSpool(g, a.now())
 		if prior, ok := a.forgotten[g.sessionID]; ok {
 			spool.nextSeq, spool.ring.dropped = prior.nextSeq, prior.dropped
 			delete(a.forgotten, g.sessionID)
@@ -133,7 +133,7 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 			return
 		}
 		a.switchedOff = false
-		log.Info().Msg("agent-vault: activity logging is back on, recording again")
+		log.Info().Msg("agent-vault: session logs are back on, recording again")
 	}
 
 	if !a.pauseUntil.IsZero() && a.now().Before(a.pauseUntil) {
@@ -141,7 +141,7 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 		return
 	}
 
-	if a.total >= activityTotalCapacity {
+	if a.total >= sessionLogTotalCapacity {
 		spool.ring.dropped++
 		return
 	}
@@ -150,7 +150,7 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 		a.total++
 	}
 
-	if spool.ring.len() >= activityFlushRecords {
+	if spool.ring.len() >= sessionLogFlushRecords {
 		select {
 		case a.wake <- struct{}{}:
 		default:
@@ -158,11 +158,11 @@ func (a *activityLog) record(g *activityGrant, rec activityRecord) {
 	}
 }
 
-func (a *activityLog) run(stop <-chan struct{}) {
+func (a *sessionLogRecorder) run(stop <-chan struct{}) {
 	if a == nil {
 		return
 	}
-	ticker := time.NewTicker(activityFlushInterval)
+	ticker := time.NewTicker(sessionLogFlushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -177,7 +177,7 @@ func (a *activityLog) run(stop <-chan struct{}) {
 	}
 }
 
-func (a *activityLog) close(ctx context.Context) {
+func (a *sessionLogRecorder) close(ctx context.Context) {
 	if a == nil {
 		return
 	}
@@ -197,25 +197,25 @@ func (a *activityLog) close(ctx context.Context) {
 		}
 	}
 	if lost > 0 {
-		log.Warn().Int("records", lost).Msg("agent-vault: activity records were not shipped before shutdown")
+		log.Warn().Int("records", lost).Msg("agent-vault: session log records were not shipped before shutdown")
 	}
 }
 
-func (a *activityLog) dueSpools(final bool, now time.Time) []*activitySpool {
+func (a *sessionLogRecorder) dueSpools(final bool, now time.Time) []*sessionLogSpool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	due := make([]*activitySpool, 0, len(a.spools))
+	due := make([]*sessionLogSpool, 0, len(a.spools))
 	for id, spool := range a.spools {
 		if spool.ring.len() == 0 && len(spool.pending) == 0 {
-			if !final && now.Sub(spool.lastRecordAt) > activityIdleClose {
+			if !final && now.Sub(spool.lastRecordAt) > sessionLogIdleClose {
 				a.forgetSpoolLocked(id, spool)
 			}
 			continue
 		}
 		// The slack absorbs ticker jitter: without it a spool stamped at one tick is a hair short of due at the next.
-		if final || spool.ring.len() >= activityFlushRecords || len(spool.pending) > 0 ||
-			(spool.ring.len() > 0 && now.Sub(spool.lastFlushAt) >= activityFlushInterval-activityFlushSlack) {
+		if final || spool.ring.len() >= sessionLogFlushRecords || len(spool.pending) > 0 ||
+			(spool.ring.len() > 0 && now.Sub(spool.lastFlushAt) >= sessionLogFlushInterval-sessionLogFlushSlack) {
 			due = append(due, spool)
 		}
 	}
@@ -223,7 +223,7 @@ func (a *activityLog) dueSpools(final bool, now time.Time) []*activitySpool {
 }
 
 // Keeps the drop count too, so a spool forgotten while logging was off still reports what it lost.
-func (a *activityLog) forgetSpoolLocked(sessionID string, spool *activitySpool) {
+func (a *sessionLogRecorder) forgetSpoolLocked(sessionID string, spool *sessionLogSpool) {
 	if len(a.forgotten) >= maxSessionCacheEntries {
 		a.forgotten = make(map[string]forgottenSpool)
 	}
@@ -231,24 +231,24 @@ func (a *activityLog) forgetSpoolLocked(sessionID string, spool *activitySpool) 
 	delete(a.spools, sessionID)
 }
 
-func (a *activityLog) holding() bool {
+func (a *sessionLogRecorder) holding() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.switchedOff || (!a.pauseUntil.IsZero() && a.now().Before(a.pauseUntil))
 }
 
-func (a *activityLog) pause() {
+func (a *sessionLogRecorder) pause() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.pauseUntil = a.now().Add(activityPauseBackoff)
+	a.pauseUntil = a.now().Add(sessionLogPauseBackoff)
 }
 
 // Drops everything held and counts it. A key issued after the refused request went out means logging may already
 // be back on, so then the refusal is stale and nothing is dropped.
-func (a *activityLog) switchOff(grantsIssuedAtSend uint64) {
+func (a *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if activityGrantsIssued.Load() > grantsIssuedAtSend {
+	if sessionLogGrantsIssued.Load() > grantsIssuedAtSend {
 		return
 	}
 
@@ -269,13 +269,13 @@ func (a *activityLog) switchOff(grantsIssuedAtSend uint64) {
 
 	if !a.switchedOff {
 		log.Warn().Int("records", lost).
-			Msg("agent-vault: activity logging is switched off for this project, dropping what was held until it is back on")
+			Msg("agent-vault: session logs are off for this project, dropping what was held until they are back on")
 	}
 	a.switchedOff = true
 	a.switchedOffThrough = grantsIssuedAtSend
 }
 
-func (a *activityLog) flushAll(ctx context.Context, final bool) {
+func (a *sessionLogRecorder) flushAll(ctx context.Context, final bool) {
 	if a == nil {
 		return
 	}
@@ -295,10 +295,10 @@ func (a *activityLog) flushAll(ctx context.Context, final bool) {
 	}
 }
 
-func (a *activityLog) sealRing(spool *activitySpool, started time.Time) {
+func (a *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time) {
 	for {
 		a.mu.Lock()
-		records := spool.ring.drain(activityFlushRecords)
+		records := spool.ring.drain(sessionLogFlushRecords)
 		if len(records) == 0 {
 			spool.lastFlushAt = started
 			a.mu.Unlock()
@@ -309,7 +309,7 @@ func (a *activityLog) sealRing(spool *activitySpool, started time.Time) {
 		now := a.now()
 		a.mu.Unlock()
 
-		groups, err := packActivityRecords(records)
+		groups, err := packSessionLogRecords(records)
 		if err != nil {
 			a.dropUnsealed(spool, len(records), dropped, err)
 			continue
@@ -337,19 +337,19 @@ func (a *activityLog) sealRing(spool *activitySpool, started time.Time) {
 	}
 }
 
-func (a *activityLog) dropUnsealed(spool *activitySpool, records int, dropped uint64, err error) {
+func (a *sessionLogRecorder) dropUnsealed(spool *sessionLogSpool, records int, dropped uint64, err error) {
 	a.mu.Lock()
 	spool.ring.dropped += dropped + uint64(records)
 	a.mu.Unlock()
 	log.Error().Err(err).Str("sessionId", spool.sessionID).Int("records", records).
-		Msg("agent-vault: could not seal an activity chunk, dropping those records")
+		Msg("agent-vault: could not seal a session log chunk, dropping those records")
 }
 
-func (a *activityLog) enforcePendingCapsLocked(spool *activitySpool) {
-	for len(spool.pending) > activityPendingChunks {
+func (a *sessionLogRecorder) enforcePendingCapsLocked(spool *sessionLogSpool) {
+	for len(spool.pending) > sessionLogPendingChunks {
 		a.evictOldestLocked(spool)
 	}
-	for a.sealedBytes > activityTotalSealedBytes {
+	for a.sealedBytes > sessionLogTotalSealedBytes {
 		victim := a.oldestPendingLocked()
 		if victim == nil {
 			return
@@ -358,8 +358,8 @@ func (a *activityLog) enforcePendingCapsLocked(spool *activitySpool) {
 	}
 }
 
-func (a *activityLog) oldestPendingLocked() *activitySpool {
-	var oldest *activitySpool
+func (a *sessionLogRecorder) oldestPendingLocked() *sessionLogSpool {
+	var oldest *sessionLogSpool
 	for _, spool := range a.spools {
 		if len(spool.pending) == 0 {
 			continue
@@ -371,7 +371,7 @@ func (a *activityLog) oldestPendingLocked() *activitySpool {
 	return oldest
 }
 
-func (a *activityLog) evictOldestLocked(spool *activitySpool) {
+func (a *sessionLogRecorder) evictOldestLocked(spool *sessionLogSpool) {
 	oldest := spool.pending[0]
 	spool.pending = spool.pending[1:]
 	a.sealedBytes -= len(oldest.ciphertext)
@@ -380,10 +380,10 @@ func (a *activityLog) evictOldestLocked(spool *activitySpool) {
 		Str("sessionId", spool.sessionID).
 		Str("chunkId", oldest.meta.ChunkID).
 		Int("records", oldest.meta.RecordCount).
-		Msg("agent-vault: dropped an unshipped activity chunk, the buffer is full")
+		Msg("agent-vault: dropped an unshipped session log chunk, the buffer is full")
 }
 
-func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, final bool, started time.Time) {
+func (a *sessionLogRecorder) flushSpool(ctx context.Context, spool *sessionLogSpool, final bool, started time.Time) {
 	a.sealRing(spool, started)
 	if a.holding() {
 		return
@@ -411,13 +411,13 @@ func (a *activityLog) flushSpool(ctx context.Context, spool *activitySpool, fina
 	}
 }
 
-func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk *sealedChunk, final bool) bool {
+func (a *sessionLogRecorder) shipChunk(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, final bool) bool {
 	if chunk.uploadURL == "" || a.now().Add(10*time.Second).After(chunk.urlExpires) {
 		// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
 		if ctx.Err() != nil {
 			return false
 		}
-		grantsIssuedAtSend := activityGrantsIssued.Load()
+		grantsIssuedAtSend := sessionLogGrantsIssued.Load()
 		res, err := a.shipper.createChunk(ctx, final, spool.sessionID, chunk.meta)
 		if err != nil {
 			return a.handleCreateFailure(spool, chunk, err, grantsIssuedAtSend)
@@ -433,7 +433,7 @@ func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk
 	putCtx := ctx
 	if !final {
 		var cancel context.CancelFunc
-		putCtx, cancel = context.WithTimeout(ctx, activityPutTimeout)
+		putCtx, cancel = context.WithTimeout(ctx, sessionLogPutTimeout)
 		defer cancel()
 	}
 
@@ -443,17 +443,17 @@ func (a *activityLog) shipChunk(ctx context.Context, spool *activitySpool, chunk
 		a.s3Down = true
 		a.mu.Unlock()
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).Str("chunkId", chunk.meta.ChunkID).
-			Msg("agent-vault: could not upload an activity chunk, will retry")
+			Msg("agent-vault: could not upload a session log chunk, will retry")
 		return false
 	}
 
 	return true
 }
 
-func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChunk, err error, grantsIssuedAtSend uint64) bool {
+func (a *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *sealedChunk, err error, grantsIssuedAtSend uint64) bool {
 	switch {
 	case isProxyTokenRejected(err):
-		log.Warn().Err(err).Msg("agent-vault: Infisical rejected this proxy's token, holding activity")
+		log.Warn().Err(err).Msg("agent-vault: Infisical rejected this proxy's token, holding session logs")
 		return false
 
 	case isSessionGone(err):
@@ -468,33 +468,33 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 		delete(a.forgotten, spool.sessionID)
 		a.mu.Unlock()
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).Int("records", lost).
-			Msg("agent-vault: Infisical no longer accepts activity for this session, dropping what was held")
+			Msg("agent-vault: Infisical no longer accepts session logs for this session, dropping what was held")
 		return false
 
-	case isActivityErrorNamed(err, activityCeilingReachedName):
+	case isSessionLogErrorNamed(err, sessionLogCeilingReachedName):
 		a.pause()
-		log.Error().Err(err).Msg("agent-vault: activity logging has reached its limit for this organization, retrying in 15m")
+		log.Error().Err(err).Msg("agent-vault: session logs have reached their limit for this organization, retrying in 15m")
 		return false
 
-	case isActivityErrorNamed(err, activityDisabledName):
+	case isSessionLogErrorNamed(err, sessionLogDisabledName):
 		a.switchOff(grantsIssuedAtSend)
 		return false
 
-	case isActivityErrorNamed(err, activityClockSkewName):
+	case isSessionLogErrorNamed(err, sessionLogClockSkewName):
 		a.dropRefused(spool, chunk)
 		a.mu.Lock()
 		reported := a.clockSkewReported
 		a.clockSkewReported = true
 		a.mu.Unlock()
 		if !reported {
-			log.Error().Err(err).Msg("agent-vault: activity is being refused because this machine's clock is wrong; fix the clock to resume recording")
+			log.Error().Err(err).Msg("agent-vault: session logs are being refused because this machine's clock is wrong; fix the clock to resume recording")
 		}
 		return false
 
 	case isPoisonChunk(err):
 		a.dropRefused(spool, chunk)
 		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.meta.RecordCount).
-			Msg("agent-vault: Infisical rejected an activity chunk as malformed, dropping it")
+			Msg("agent-vault: Infisical rejected a session log chunk as malformed, dropping it")
 		return false
 
 	default:
@@ -502,12 +502,12 @@ func (a *activityLog) handleCreateFailure(spool *activitySpool, chunk *sealedChu
 		a.infisicalDown = true
 		a.mu.Unlock()
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).
-			Msg("agent-vault: could not record activity, will retry")
+			Msg("agent-vault: could not record session logs, will retry")
 		return false
 	}
 }
 
-func (a *activityLog) dropRefused(spool *activitySpool, chunk *sealedChunk) {
+func (a *sessionLogRecorder) dropRefused(spool *sessionLogSpool, chunk *sealedChunk) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(spool.pending) > 0 && spool.pending[0] == chunk {

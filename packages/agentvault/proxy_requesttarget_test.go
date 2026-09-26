@@ -134,7 +134,7 @@ func TestAnOpaqueRequestTargetIsRecordedAsBlocked(t *testing.T) {
 	ps := &proxyServer{transport: newUpstreamTransport(), ca: newCaManager(key, cert)}
 	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
 	ps.cache = newSessionCache(grantingResolver{}, ps.pollInterval)
-	ps.activity = newActivityLog("proxy-1", &fakeShipper{})
+	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
 	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
 	t.Cleanup(front.Close)
 	fu, _ := url.Parse(front.URL)
@@ -144,7 +144,7 @@ func TestAnOpaqueRequestTargetIsRecordedAsBlocked(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 
-	got := drainOneRecord(t, ps.activity)
+	got := drainOneRecord(t, ps.sessionLogs)
 	if got.Decision != decisionBlocked || got.Status != http.StatusBadRequest || got.Path != "admin/secrets" {
 		t.Fatalf("record is %+v, expected a blocked 400 for admin/secrets", got)
 	}

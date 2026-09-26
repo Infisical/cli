@@ -19,13 +19,13 @@ const (
 )
 
 type resolveResult struct {
-	SessionID string
-	ExpiresAt *time.Time
-	Services  []*resolvedService
-	Activity  *activityGrant
+	SessionID  string
+	ExpiresAt  *time.Time
+	Services   []*resolvedService
+	SessionLog *sessionLogGrant
 }
 
-const activityKeyBytes = 32
+const sessionLogKeyBytes = 32
 
 // A seam so the cache can be tested without a server, not because a second implementation is expected.
 type infisicalResolver struct {
@@ -44,9 +44,9 @@ func newInfisicalResolver(proxyToken func() string) (*infisicalResolver, error) 
 	return &infisicalResolver{client: client}, nil
 }
 
-func (r *infisicalResolver) resolve(sessionToken string, held *activityGrant) (*resolveResult, error) {
+func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) (*resolveResult, error) {
 	res, err := api.CallResolveAgentVaultSession(r.client, sessionToken, api.ResolveAgentVaultSessionRequest{
-		HasActivityKey: held != nil,
+		HasSessionLogKey: held != nil,
 	})
 	if err != nil {
 		return nil, err
@@ -75,32 +75,32 @@ func (r *infisicalResolver) resolve(sessionToken string, held *activityGrant) (*
 	}
 
 	return &resolveResult{
-		SessionID: res.SessionID,
-		ExpiresAt: expiresAt,
-		Services:  services,
-		Activity:  toActivityGrant(res.SessionID, res.Activity, held),
+		SessionID:  res.SessionID,
+		ExpiresAt:  expiresAt,
+		Services:   services,
+		SessionLog: toSessionLogGrant(res.SessionID, res.SessionLogs, held),
 	}, nil
 }
 
-func toActivityGrant(sessionID string, wire api.AgentVaultActivityGrant, held *activityGrant) *activityGrant {
+func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, held *sessionLogGrant) *sessionLogGrant {
 	if !wire.Enabled {
 		return nil
 	}
 	if wire.SessionKey == "" {
 		if held != nil {
-			return newActivityGrant(sessionID, held.key)
+			return newSessionLogGrant(sessionID, held.key)
 		}
-		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: activity is enabled but no key was sent, not recording")
+		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: session logs are on but no key was sent, not recording")
 		return nil
 	}
 
 	key, err := base64.StdEncoding.DecodeString(wire.SessionKey)
-	if err != nil || len(key) != activityKeyBytes {
-		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: the activity key Infisical sent is unusable, not recording")
+	if err != nil || len(key) != sessionLogKeyBytes {
+		log.Warn().Str("sessionId", sessionID).Msg("agent-vault: the session log key Infisical sent is unusable, not recording")
 		return nil
 	}
 
-	return newActivityGrant(sessionID, key)
+	return newSessionLogGrant(sessionID, key)
 }
 
 func toCredential(wire api.AgentVaultCredential) credential {

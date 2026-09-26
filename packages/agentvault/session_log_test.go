@@ -43,7 +43,7 @@ type fakeShipper struct {
 	nextURL int
 }
 
-func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID string, req api.CreateAgentVaultActivityChunkRequest) (api.CreateAgentVaultActivityChunkResponse, error) {
+func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -55,14 +55,14 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 		f.postResults = f.postResults[1:]
 	}
 	if result.err != nil {
-		return api.CreateAgentVaultActivityChunkResponse{}, result.err
+		return api.CreateAgentVaultSessionLogChunkResponse{}, result.err
 	}
 	url := result.url
 	if url == "" {
 		f.nextURL++
 		url = fmt.Sprintf("https://bucket.example/put/%d", f.nextURL)
 	}
-	return api.CreateAgentVaultActivityChunkResponse{ChunkID: req.ChunkID, UploadURL: url, ExpiresInSeconds: 300}, nil
+	return api.CreateAgentVaultSessionLogChunkResponse{ChunkID: req.ChunkID, UploadURL: url, ExpiresInSeconds: 300}, nil
 }
 
 func (f *fakeShipper) putObject(_ context.Context, url string, ciphertext []byte) error {
@@ -114,15 +114,15 @@ func (f *fakeShipper) puts() []shipperCall {
 }
 
 func apiErr(status int, name string) error {
-	return &api.APIError{StatusCode: status, Name: name, Operation: "CallCreateAgentVaultActivityChunk"}
+	return &api.APIError{StatusCode: status, Name: name, Operation: "CallCreateAgentVaultSessionLogChunk"}
 }
 
-func testGrant(sessionID string) *activityGrant {
-	return newActivityGrant(sessionID, make([]byte, 32))
+func testGrant(sessionID string) *sessionLogGrant {
+	return newSessionLogGrant(sessionID, make([]byte, 32))
 }
 
-func newTestLog(shipper activityShipper) (log *activityLog, advance func(time.Duration), tick func()) {
-	log = newActivityLog("proxy-1", shipper)
+func newTestLog(shipper sessionLogShipper) (log *sessionLogRecorder, advance func(time.Duration), tick func()) {
+	log = newSessionLogRecorder("proxy-1", shipper)
 	now := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
 	var mu sync.Mutex
 	log.now = func() time.Time {
@@ -136,18 +136,18 @@ func newTestLog(shipper activityShipper) (log *activityLog, advance func(time.Du
 		mu.Unlock()
 	}
 	tick = func() {
-		advance(activityFlushInterval)
+		advance(sessionLogFlushInterval)
 		log.flushAll(context.Background(), false)
 	}
 	return log, advance, tick
 }
 
-func aRecord(host string) activityRecord {
-	return activityRecord{Method: "GET", Host: host, Port: "443", Path: "/zen", Status: 200, Decision: decisionPassthrough}
+func aRecord(host string) sessionLogRecord {
+	return sessionLogRecord{Method: "GET", Host: host, Port: "443", Path: "/zen", Status: 200, Decision: decisionPassthrough}
 }
 
 func TestRecordingIsANoOpWithoutALogOrAGrant(t *testing.T) {
-	var nilLog *activityLog
+	var nilLog *sessionLogRecorder
 	nilLog.record(testGrant("s1"), aRecord("api.github.com"))
 
 	log, _, _ := newTestLog(&fakeShipper{})
@@ -158,9 +158,9 @@ func TestRecordingIsANoOpWithoutALogOrAGrant(t *testing.T) {
 }
 
 func TestTheRingDropsTheOldestAndCountsIt(t *testing.T) {
-	ring := newActivityRing(3)
+	ring := newSessionLogRing(3)
 	for i := 0; i < 5; i++ {
-		ring.push(activityRecord{Seq: uint64(i)})
+		ring.push(sessionLogRecord{Seq: uint64(i)})
 	}
 
 	if ring.len() != 3 {
@@ -177,11 +177,11 @@ func TestTheRingDropsTheOldestAndCountsIt(t *testing.T) {
 }
 
 func TestTheRingAllocatesOnlyWhatItHolds(t *testing.T) {
-	ring := newActivityRing(activitySpoolCapacity)
-	ring.push(activityRecord{Seq: 0})
+	ring := newSessionLogRing(sessionLogSpoolCapacity)
+	ring.push(sessionLogRecord{Seq: 0})
 
-	if got := cap(ring.buf); got > activityRingInitialSize {
-		t.Fatalf("one record reserved room for %d, expected at most %d", got, activityRingInitialSize)
+	if got := cap(ring.buf); got > sessionLogRingInitialSize {
+		t.Fatalf("one record reserved room for %d, expected at most %d", got, sessionLogRingInitialSize)
 	}
 
 	ring.drain(10)
@@ -191,22 +191,22 @@ func TestTheRingAllocatesOnlyWhatItHolds(t *testing.T) {
 }
 
 func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
-	ring := newActivityRing(activitySpoolCapacity)
+	ring := newSessionLogRing(sessionLogSpoolCapacity)
 	var next uint64
 	push := func(n int) {
 		for i := 0; i < n; i++ {
-			ring.push(activityRecord{Seq: next})
+			ring.push(sessionLogRecord{Seq: next})
 			next++
 		}
 	}
 
-	push(activityRingInitialSize)
+	push(sessionLogRingInitialSize)
 	ring.drain(10)
-	push(activityRingInitialSize * 3)
+	push(sessionLogRingInitialSize * 3)
 
-	drained := ring.drain(activitySpoolCapacity)
-	if len(drained) != activityRingInitialSize*4-10 {
-		t.Fatalf("drained %d records, expected %d", len(drained), activityRingInitialSize*4-10)
+	drained := ring.drain(sessionLogSpoolCapacity)
+	if len(drained) != sessionLogRingInitialSize*4-10 {
+		t.Fatalf("drained %d records, expected %d", len(drained), sessionLogRingInitialSize*4-10)
 	}
 	for i, rec := range drained {
 		if rec.Seq != uint64(10+i) {
@@ -219,16 +219,16 @@ func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
 }
 
 func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
-	ring := newActivityRing(activitySpoolCapacity)
+	ring := newSessionLogRing(sessionLogSpoolCapacity)
 	for i := 0; i < 2500; i++ {
-		ring.push(activityRecord{Seq: uint64(i)})
+		ring.push(sessionLogRecord{Seq: uint64(i)})
 	}
 
 	var slices int
 	for ring.len() > 0 {
-		got := ring.drain(activityFlushRecords)
-		if len(got) > activityFlushRecords {
-			t.Fatalf("a slice held %d records, the server's limit is %d", len(got), activityFlushRecords)
+		got := ring.drain(sessionLogFlushRecords)
+		if len(got) > sessionLogFlushRecords {
+			t.Fatalf("a slice held %d records, the server's limit is %d", len(got), sessionLogFlushRecords)
 		}
 		slices++
 	}
@@ -242,7 +242,7 @@ func TestTheDropCountIsReportedOnceAndRidesTheFirstChunk(t *testing.T) {
 	log, _, _ := newTestLog(shipper)
 	grant := testGrant("s1")
 
-	for i := 0; i < activitySpoolCapacity+50; i++ {
+	for i := 0; i < sessionLogSpoolCapacity+50; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
 	log.flushAll(context.Background(), true)
@@ -260,27 +260,27 @@ func TestASequenceNumberIsConsumedEvenWhenARecordIsDropped(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 	grant := testGrant("s1")
 
-	for i := 0; i < activitySpoolCapacity+10; i++ {
+	for i := 0; i < sessionLogSpoolCapacity+10; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
 
-	if got := log.spools["s1"].nextSeq; got != uint64(activitySpoolCapacity+10) {
-		t.Fatalf("nextSeq is %d after %d records; drops must still consume a number", got, activitySpoolCapacity+10)
+	if got := log.spools["s1"].nextSeq; got != uint64(sessionLogSpoolCapacity+10) {
+		t.Fatalf("nextSeq is %d after %d records; drops must still consume a number", got, sessionLogSpoolCapacity+10)
 	}
 }
 
 func TestTheProxyWideFuseDropsTheNewest(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
-	for i := 0; i < activityTotalCapacity/activitySpoolCapacity+2; i++ {
+	for i := 0; i < sessionLogTotalCapacity/sessionLogSpoolCapacity+2; i++ {
 		grant := testGrant(fmt.Sprintf("s%d", i))
-		for j := 0; j < activitySpoolCapacity; j++ {
+		for j := 0; j < sessionLogSpoolCapacity; j++ {
 			log.record(grant, aRecord("api.github.com"))
 		}
 	}
 
-	if log.total > activityTotalCapacity {
-		t.Fatalf("the proxy holds %d records, past the %d fuse", log.total, activityTotalCapacity)
+	if log.total > sessionLogTotalCapacity {
+		t.Fatalf("the proxy holds %d records, past the %d fuse", log.total, sessionLogTotalCapacity)
 	}
 }
 
@@ -356,7 +356,7 @@ func TestARejectedProxyTokenKeepsEverything(t *testing.T) {
 }
 
 func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityCeilingReachedName)}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogCeilingReachedName)}}}
 	log, advance, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
@@ -372,7 +372,7 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 		t.Fatalf("a second session posted while paused; the pause is proxy-wide")
 	}
 
-	advance(activityPauseBackoff + time.Second)
+	advance(sessionLogPauseBackoff + time.Second)
 	log.flushAll(context.Background(), false)
 	if len(shipper.posts()) < 2 {
 		t.Fatal("nothing was retried after the pause lifted")
@@ -380,7 +380,7 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 }
 
 func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
 
@@ -411,7 +411,7 @@ func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
 }
 
 func TestAKeyIssuedAfterTheSwitchOffResumesRecordingAtOnce(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
 	log, _, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
@@ -433,12 +433,12 @@ func TestAKeyIssuedAfterTheSwitchOffResumesRecordingAtOnce(t *testing.T) {
 }
 
 func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
 	log, _, _ := newTestLog(shipper)
 	grant := testGrant("s1")
 
 	log.record(grant, aRecord("api.github.com"))
-	log.switchOff(activityGrantsIssued.Load() - 1)
+	log.switchOff(sessionLogGrantsIssued.Load() - 1)
 
 	if log.switchedOff || log.spools["s1"].ring.len() != 1 {
 		t.Fatal("a refusal sent before a newer key was issued still dropped what was held")
@@ -446,13 +446,13 @@ func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
 }
 
 func TestDropsAreStillReportedAfterAnIdleSpoolIsForgotten(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityDisabledName)}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
 	log, advance, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	advance(activityIdleClose + time.Minute)
+	advance(sessionLogIdleClose + time.Minute)
 	log.flushAll(context.Background(), false)
 	if _, ok := log.spools["s1"]; ok {
 		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
@@ -468,7 +468,7 @@ func TestDropsAreStillReportedAfterAnIdleSpoolIsForgotten(t *testing.T) {
 }
 
 func TestRecordsArePausedAsCountedGapsNotSilentLosses(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, activityCeilingReachedName)}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogCeilingReachedName)}}}
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
 
@@ -518,7 +518,7 @@ func TestARefusedChunkIsCountedOnTheNextOne(t *testing.T) {
 }
 
 func TestAClockSkewRefusalIsDroppedCountedAndLoggedOnce(t *testing.T) {
-	skew := scriptedResult{err: apiErr(http.StatusBadRequest, activityClockSkewName)}
+	skew := scriptedResult{err: apiErr(http.StatusBadRequest, sessionLogClockSkewName)}
 	shipper := &fakeShipper{postResults: []scriptedResult{skew, skew}}
 	log, _, tick := newTestLog(shipper)
 
@@ -550,7 +550,7 @@ func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
 
-	for i := 0; i < activityFlushRecords; i++ {
+	for i := 0; i < sessionLogFlushRecords; i++ {
 		rec := aRecord("api.github.com")
 		rec.Path = truncatePath("/" + strings.Repeat("&", maxLoggedPathLen))
 		log.record(grant, rec)
@@ -565,8 +565,8 @@ func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 	var next uint64
 	var total int
 	for i, chunk := range pending {
-		if chunk.meta.CiphertextBytes-gcmTag > activityMaxChunkPlaintext {
-			t.Fatalf("chunk %d holds %d bytes of plaintext, over %d", i, chunk.meta.CiphertextBytes-gcmTag, activityMaxChunkPlaintext)
+		if chunk.meta.CiphertextBytes-gcmTag > sessionLogMaxChunkPlaintext {
+			t.Fatalf("chunk %d holds %d bytes of plaintext, over %d", i, chunk.meta.CiphertextBytes-gcmTag, sessionLogMaxChunkPlaintext)
 		}
 		if chunk.meta.FirstSeq != next {
 			t.Fatalf("chunk %d starts at seq %d, expected %d; a record was lost or reordered", i, chunk.meta.FirstSeq, next)
@@ -574,8 +574,8 @@ func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 		next = chunk.meta.LastSeq + 1
 		total += chunk.meta.RecordCount
 	}
-	if total != activityFlushRecords {
-		t.Fatalf("the chunks hold %d records, expected %d", total, activityFlushRecords)
+	if total != sessionLogFlushRecords {
+		t.Fatalf("the chunks hold %d records, expected %d", total, sessionLogFlushRecords)
 	}
 }
 
@@ -601,14 +601,14 @@ func TestThePendingCapEvictsTheOldestAndCountsIt(t *testing.T) {
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
 
-	for i := 0; i < activityPendingChunks+3; i++ {
+	for i := 0; i < sessionLogPendingChunks+3; i++ {
 		log.record(grant, aRecord("api.github.com"))
 		tick()
 	}
 
 	spool := log.spools["s1"]
-	if len(spool.pending) > activityPendingChunks {
-		t.Fatalf("pending holds %d chunks, the cap is %d", len(spool.pending), activityPendingChunks)
+	if len(spool.pending) > sessionLogPendingChunks {
+		t.Fatalf("pending holds %d chunks, the cap is %d", len(spool.pending), sessionLogPendingChunks)
 	}
 	if spool.ring.dropped == 0 {
 		t.Fatal("evicted chunks were not counted as dropped records")
@@ -619,14 +619,14 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
 	blob := make([]byte, 12<<20)
-	add := func(sessionID string, order uint64, posted bool, carried uint64) *activitySpool {
+	add := func(sessionID string, order uint64, posted bool, carried uint64) *sessionLogSpool {
 		spool, ok := log.spools[sessionID]
 		if !ok {
-			spool = newActivitySpool(testGrant(sessionID), log.now())
+			spool = newSessionLogSpool(testGrant(sessionID), log.now())
 			log.spools[sessionID] = spool
 		}
 		spool.pending = append(spool.pending, &sealedChunk{
-			meta:       api.CreateAgentVaultActivityChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100, DroppedCount: carried},
+			meta:       api.CreateAgentVaultSessionLogChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100, DroppedCount: carried},
 			ciphertext: blob,
 			sealOrder:  order,
 			posted:     posted,
@@ -638,15 +638,15 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	log.mu.Lock()
 	add("oldest", 0, false, 7)
 	add("posted", 1, true, 3)
-	var newest *activitySpool
+	var newest *sessionLogSpool
 	for i := 2; i < 7; i++ {
 		newest = add(fmt.Sprintf("s%d", i), uint64(i), false, 0)
 	}
 	log.enforcePendingCapsLocked(newest)
 	log.mu.Unlock()
 
-	if log.sealedBytes > activityTotalSealedBytes {
-		t.Fatalf("the proxy holds %d sealed bytes, past the %d cap", log.sealedBytes, activityTotalSealedBytes)
+	if log.sealedBytes > sessionLogTotalSealedBytes {
+		t.Fatalf("the proxy holds %d sealed bytes, past the %d cap", log.sealedBytes, sessionLogTotalSealedBytes)
 	}
 	if got := len(log.spools["oldest"].pending) + len(log.spools["posted"].pending); got != 0 {
 		t.Fatalf("the two oldest chunks were not evicted, %d remain", got)
@@ -690,7 +690,7 @@ func TestReachingTheSliceSizeWakesTheLoopOnce(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 	grant := testGrant("s1")
 
-	for i := 0; i < activityFlushRecords*2; i++ {
+	for i := 0; i < sessionLogFlushRecords*2; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
 
@@ -706,7 +706,7 @@ func TestAnIdleSpoolIsForgotten(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	advance(activityIdleClose + time.Minute)
+	advance(sessionLogIdleClose + time.Minute)
 	log.flushAll(context.Background(), false)
 
 	if _, ok := log.spools["s1"]; ok {
@@ -715,8 +715,8 @@ func TestAnIdleSpoolIsForgotten(t *testing.T) {
 }
 
 func TestIdleCloseOutlastsTheSessionCacheTTL(t *testing.T) {
-	if activityIdleClose <= sessionInactiveTTL {
-		t.Fatalf("idle close (%s) must outlast the session cache TTL (%s)", activityIdleClose, sessionInactiveTTL)
+	if sessionLogIdleClose <= sessionInactiveTTL {
+		t.Fatalf("idle close (%s) must outlast the session cache TTL (%s)", sessionLogIdleClose, sessionInactiveTTL)
 	}
 }
 
@@ -746,7 +746,7 @@ func TestABlockedHostIsStillRecorded(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)
 
-	log.record(testGrant("s1"), activityRecord{
+	log.record(testGrant("s1"), sessionLogRecord{
 		Method: "POST", Host: "evil.example", Port: "443", Path: "/collect", Status: 403, Decision: decisionBlocked,
 	})
 	log.flushAll(context.Background(), true)
@@ -800,7 +800,7 @@ func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
 	log.record(grant, aRecord("api.github.com"))
 	tick()
 
-	advance(activityIdleClose + time.Minute)
+	advance(sessionLogIdleClose + time.Minute)
 	log.flushAll(context.Background(), false)
 	if _, ok := log.spools["s1"]; ok {
 		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
@@ -829,7 +829,7 @@ func TestRecordsLostToASealFailureAreStillCounted(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, tick := newTestLog(shipper)
 
-	grant := &activityGrant{sessionID: "s1", key: make([]byte, 7)}
+	grant := &sessionLogGrant{sessionID: "s1", key: make([]byte, 7)}
 	for i := 0; i < 3; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
@@ -930,7 +930,7 @@ func TestEverySessionShipsOnEveryTickWhileEarlierOnesTakeTimeToUpload(t *testing
 	for i := 1; i <= 3; i++ {
 		log.record(testGrant("s1"), aRecord("api.github.com"))
 		log.record(testGrant("s2"), aRecord("api.github.com"))
-		tickAt = tickAt.Add(activityFlushInterval)
+		tickAt = tickAt.Add(sessionLogFlushInterval)
 		advance(tickAt.Sub(log.now()))
 		log.flushAll(context.Background(), false)
 
@@ -947,7 +947,7 @@ func TestASessionShipsAtATickThatLandsJustShortOfAMinute(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 	log.record(testGrant("s1"), aRecord("api.github.com"))
-	advance(activityFlushInterval - 10*time.Millisecond)
+	advance(sessionLogFlushInterval - 10*time.Millisecond)
 	log.flushAll(context.Background(), false)
 
 	if got := len(shipper.puts()); got != 2 {
@@ -962,7 +962,7 @@ func TestASessionDoesNotShipAgainHalfwayToTheNextTick(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 	log.record(testGrant("s1"), aRecord("api.github.com"))
-	advance(activityFlushInterval / 2)
+	advance(sessionLogFlushInterval / 2)
 	log.flushAll(context.Background(), false)
 
 	if got := len(shipper.puts()); got != 1 {

@@ -15,26 +15,26 @@ type grantingResolver struct {
 	services []*resolvedService
 }
 
-func (g grantingResolver) resolve(string, *activityGrant) (*resolveResult, error) {
+func (g grantingResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
 	return &resolveResult{
-		SessionID: "s1",
-		Services:  g.services,
-		Activity:  &activityGrant{sessionID: "s1", key: make([]byte, 32)},
+		SessionID:  "s1",
+		Services:   g.services,
+		SessionLog: &sessionLogGrant{sessionID: "s1", key: make([]byte, 32)},
 	}, nil
 }
 
-func newRecordingProxy(t *testing.T, policy string, services []*resolvedService) (*httptest.Server, *activityLog, *fakeShipper) {
+func newRecordingProxy(t *testing.T, policy string, services []*resolvedService) (*httptest.Server, *sessionLogRecorder, *fakeShipper) {
 	t.Helper()
 
 	shipper := &fakeShipper{}
 	ps := &proxyServer{transport: newUpstreamTransport()}
 	ps.setConfig(ProxyConfig{TrafficPolicy: policy})
 	ps.cache = newSessionCache(grantingResolver{services: services}, ps.pollInterval)
-	ps.activity = newActivityLog("proxy-1", shipper)
+	ps.sessionLogs = newSessionLogRecorder("proxy-1", shipper)
 
 	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
 	t.Cleanup(front.Close)
-	return front, ps.activity, shipper
+	return front, ps.sessionLogs, shipper
 }
 
 func proxiedGet(t *testing.T, front *httptest.Server, target string) *http.Response {
@@ -55,11 +55,11 @@ func proxiedGet(t *testing.T, front *httptest.Server, target string) *http.Respo
 	return res
 }
 
-func drainOneRecord(t *testing.T, log *activityLog) activityRecord {
+func drainOneRecord(t *testing.T, log *sessionLogRecorder) sessionLogRecord {
 	t.Helper()
 	spool, ok := log.spools["s1"]
 	if !ok {
-		t.Fatal("the request produced no activity spool")
+		t.Fatal("the request produced no session log spool")
 	}
 	records := spool.ring.drain(10)
 	if len(records) != 1 {

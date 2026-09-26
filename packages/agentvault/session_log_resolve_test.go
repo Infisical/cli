@@ -7,12 +7,12 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 )
 
-func enabledGrantWire(key string) api.AgentVaultActivityGrant {
-	return api.AgentVaultActivityGrant{Enabled: true, SessionKey: key}
+func enabledGrantWire(key string) api.AgentVaultSessionLogGrant {
+	return api.AgentVaultSessionLogGrant{Enabled: true, SessionKey: key}
 }
 
 func aKey(b byte) []byte {
-	key := make([]byte, activityKeyBytes)
+	key := make([]byte, sessionLogKeyBytes)
 	for i := range key {
 		key[i] = b
 	}
@@ -21,10 +21,10 @@ func aKey(b byte) []byte {
 
 func TestTheFirstResolveTakesTheKeyOffTheWire(t *testing.T) {
 	want := aKey(7)
-	got := toActivityGrant("s1", enabledGrantWire(base64.StdEncoding.EncodeToString(want)), nil)
+	got := toSessionLogGrant("s1", enabledGrantWire(base64.StdEncoding.EncodeToString(want)), nil)
 
 	if got == nil {
-		t.Fatal("activity was enabled but no grant was built")
+		t.Fatal("session logs were on but no grant was built")
 	}
 	if got.sessionID != "s1" {
 		t.Fatalf("grant names session %q", got.sessionID)
@@ -35,9 +35,9 @@ func TestTheFirstResolveTakesTheKeyOffTheWire(t *testing.T) {
 }
 
 func TestACachedKeySurvivesAResolveThatOmitsIt(t *testing.T) {
-	held := &activityGrant{sessionID: "s1", key: aKey(9)}
+	held := &sessionLogGrant{sessionID: "s1", key: aKey(9)}
 
-	got := toActivityGrant("s1", enabledGrantWire(""), held)
+	got := toSessionLogGrant("s1", enabledGrantWire(""), held)
 
 	if got == nil {
 		t.Fatal("the grant was cleared when the response carried no key; logging would stop after one poll")
@@ -48,15 +48,15 @@ func TestACachedKeySurvivesAResolveThatOmitsIt(t *testing.T) {
 }
 
 func TestNoKeyAndNoCachedCopyMeansNoRecording(t *testing.T) {
-	if got := toActivityGrant("s1", enabledGrantWire(""), nil); got != nil {
+	if got := toSessionLogGrant("s1", enabledGrantWire(""), nil); got != nil {
 		t.Fatal("a grant was built with no key at all")
 	}
 }
 
-func TestActivityBeingOffClearsAnyCachedGrant(t *testing.T) {
-	held := &activityGrant{sessionID: "s1", key: aKey(9)}
+func TestSessionLogBeingOffClearsAnyCachedGrant(t *testing.T) {
+	held := &sessionLogGrant{sessionID: "s1", key: aKey(9)}
 
-	if got := toActivityGrant("s1", api.AgentVaultActivityGrant{Enabled: false}, held); got != nil {
+	if got := toSessionLogGrant("s1", api.AgentVaultSessionLogGrant{Enabled: false}, held); got != nil {
 		t.Fatal("the proxy kept recording after logging was switched off")
 	}
 }
@@ -70,7 +70,7 @@ func TestAnUnusableKeyIsRefusedRatherThanUsed(t *testing.T) {
 		{"too short", base64.StdEncoding.EncodeToString(make([]byte, 16))},
 		{"too long", base64.StdEncoding.EncodeToString(make([]byte, 64))},
 	} {
-		if got := toActivityGrant("s1", enabledGrantWire(wire.key), nil); got != nil {
+		if got := toSessionLogGrant("s1", enabledGrantWire(wire.key), nil); got != nil {
 			t.Fatalf("a key that is %s was accepted", wire.name)
 		}
 	}

@@ -8,7 +8,7 @@ import (
 )
 
 // Never add headers, bodies or the query string: they can carry the injected credential.
-type activityRecord struct {
+type sessionLogRecord struct {
 	Ts           string  `json:"ts"`
 	Seq          uint64  `json:"seq"`
 	ProxyID      string  `json:"proxyId"`
@@ -22,23 +22,23 @@ type activityRecord struct {
 	AccessBundle *string `json:"accessBundle"`
 }
 
-const activityRingInitialSize = 64
+const sessionLogRingInitialSize = 64
 
-type activityRing struct {
-	buf      []activityRecord
+type sessionLogRing struct {
+	buf      []sessionLogRecord
 	capacity int
 	head     int
 	n        int
 	dropped  uint64
 }
 
-func newActivityRing(capacity int) activityRing {
-	return activityRing{capacity: capacity}
+func newSessionLogRing(capacity int) sessionLogRing {
+	return sessionLogRing{capacity: capacity}
 }
 
-func (r *activityRing) len() int { return r.n }
+func (r *sessionLogRing) len() int { return r.n }
 
-func (r *activityRing) push(rec activityRecord) (evicted bool) {
+func (r *sessionLogRing) push(rec sessionLogRecord) (evicted bool) {
 	if r.capacity == 0 {
 		r.dropped++
 		return true
@@ -57,10 +57,10 @@ func (r *activityRing) push(rec activityRecord) (evicted bool) {
 	return false
 }
 
-func (r *activityRing) grow() {
-	size := max(activityRingInitialSize, 2*len(r.buf))
+func (r *sessionLogRing) grow() {
+	size := max(sessionLogRingInitialSize, 2*len(r.buf))
 	size = min(size, r.capacity)
-	next := make([]activityRecord, size)
+	next := make([]sessionLogRecord, size)
 	for i := 0; i < r.n; i++ {
 		next[i] = r.buf[(r.head+i)%len(r.buf)]
 	}
@@ -68,14 +68,14 @@ func (r *activityRing) grow() {
 	r.head = 0
 }
 
-func (r *activityRing) drain(max int) []activityRecord {
+func (r *sessionLogRing) drain(max int) []sessionLogRecord {
 	if r.n == 0 || max <= 0 {
 		return nil
 	}
 	if max > r.n {
 		max = r.n
 	}
-	out := make([]activityRecord, max)
+	out := make([]sessionLogRecord, max)
 	for i := 0; i < max; i++ {
 		out[i] = r.buf[(r.head+i)%len(r.buf)]
 	}
@@ -88,14 +88,14 @@ func (r *activityRing) drain(max int) []activityRecord {
 	return out
 }
 
-func (r *activityRing) takeDropped() uint64 {
+func (r *sessionLogRing) takeDropped() uint64 {
 	dropped := r.dropped
 	r.dropped = 0
 	return dropped
 }
 
 type sealedChunk struct {
-	meta       api.CreateAgentVaultActivityChunkRequest
+	meta       api.CreateAgentVaultSessionLogChunkRequest
 	ciphertext []byte
 	uploadURL  string
 	urlExpires time.Time
@@ -112,11 +112,11 @@ func (c *sealedChunk) lostCount() uint64 {
 	return c.meta.DroppedCount + uint64(c.meta.RecordCount)
 }
 
-type activitySpool struct {
+type sessionLogSpool struct {
 	sessionID string
 	key       []byte
 
-	ring    activityRing
+	ring    sessionLogRing
 	nextSeq uint64
 
 	pending []*sealedChunk
@@ -125,31 +125,31 @@ type activitySpool struct {
 	lastFlushAt  time.Time
 }
 
-func newActivitySpool(g *activityGrant, now time.Time) *activitySpool {
-	return &activitySpool{
+func newSessionLogSpool(g *sessionLogGrant, now time.Time) *sessionLogSpool {
+	return &sessionLogSpool{
 		sessionID:    g.sessionID,
 		key:          g.key,
-		ring:         newActivityRing(activitySpoolCapacity),
+		ring:         newSessionLogRing(sessionLogSpoolCapacity),
 		lastRecordAt: now,
 		lastFlushAt:  now,
 	}
 }
 
-type activityGroup struct {
-	records   []activityRecord
+type sessionLogGroup struct {
+	records   []sessionLogRecord
 	plaintext []byte
 }
 
-func packActivityRecords(records []activityRecord) ([]activityGroup, error) {
+func packSessionLogRecords(records []sessionLogRecord) ([]sessionLogGroup, error) {
 	whole, err := json.Marshal(records)
 	if err != nil {
 		return nil, err
 	}
-	if len(whole) <= activityMaxChunkPlaintext {
-		return []activityGroup{{records: records, plaintext: whole}}, nil
+	if len(whole) <= sessionLogMaxChunkPlaintext {
+		return []sessionLogGroup{{records: records, plaintext: whole}}, nil
 	}
 
-	var groups []activityGroup
+	var groups []sessionLogGroup
 	var buf []byte
 	start := 0
 	for i, rec := range records {
@@ -157,8 +157,8 @@ func packActivityRecords(records []activityRecord) ([]activityGroup, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(buf) > 0 && len(buf)+1+len(part)+1 > activityMaxChunkPlaintext {
-			groups = append(groups, activityGroup{records: records[start:i], plaintext: append(buf, ']')})
+		if len(buf) > 0 && len(buf)+1+len(part)+1 > sessionLogMaxChunkPlaintext {
+			groups = append(groups, sessionLogGroup{records: records[start:i], plaintext: append(buf, ']')})
 			buf, start = nil, i
 		}
 		if len(buf) == 0 {
@@ -168,21 +168,21 @@ func packActivityRecords(records []activityRecord) ([]activityGroup, error) {
 		}
 		buf = append(buf, part...)
 	}
-	groups = append(groups, activityGroup{records: records[start:], plaintext: append(buf, ']')})
+	groups = append(groups, sessionLogGroup{records: records[start:], plaintext: append(buf, ']')})
 	return groups, nil
 }
 
-func (s *activitySpool) sealSlice(records []activityRecord, plaintext []byte, dropped uint64, now time.Time) (*sealedChunk, error) {
-	chunkID := newActivityChunkID(now)
-	aad := buildActivityAAD(s.sessionID, chunkID)
-	ciphertext, iv, err := sealActivity(s.key, plaintext, aad)
+func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte, dropped uint64, now time.Time) (*sealedChunk, error) {
+	chunkID := newSessionLogChunkID(now)
+	aad := buildSessionLogAAD(s.sessionID, chunkID)
+	ciphertext, iv, err := sealSessionLog(s.key, plaintext, aad)
 	if err != nil {
 		return nil, err
 	}
 
 	first, last := records[0], records[len(records)-1]
 	return &sealedChunk{
-		meta: api.CreateAgentVaultActivityChunkRequest{
+		meta: api.CreateAgentVaultSessionLogChunkRequest{
 			ChunkID:          chunkID,
 			StartedAt:        first.Ts,
 			EndedAt:          last.Ts,
@@ -191,8 +191,8 @@ func (s *activitySpool) sealSlice(records []activityRecord, plaintext []byte, dr
 			RecordCount:      len(records),
 			DroppedCount:     dropped,
 			CiphertextBytes:  len(ciphertext),
-			IV:               encodeActivityIV(iv),
-			CiphertextSha256: activityCiphertextSHA256(ciphertext),
+			IV:               encodeSessionLogIV(iv),
+			CiphertextSha256: sessionLogCiphertextSHA256(ciphertext),
 		},
 		ciphertext: ciphertext,
 	}, nil
