@@ -46,7 +46,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 		postedPath = r.URL.Path
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"chunkId":"01K5ABCDEFGHJKMNPQRSTVWXYZ","uploadUrl":"` + bucket.URL + `/object","expiresInSeconds":300}`))
+		_, _ = w.Write([]byte(`{"chunkId":"01a0a9c5-231d-7abc-8def-0123456789ab","uploadUrl":"` + bucket.URL + `/object","expiresInSeconds":300}`))
 	}))
 	defer infisical.Close()
 
@@ -62,7 +62,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 
 	ciphertext := []byte("sealed-bytes")
 	res, err := shipper.createChunk(context.Background(), false, "sess-1", api.CreateAgentVaultSessionLogChunkRequest{
-		ChunkID:         "01K5ABCDEFGHJKMNPQRSTVWXYZ",
+		ChunkID:         "01a0a9c5-231d-7abc-8def-0123456789ab",
 		RecordCount:     1,
 		CiphertextBytes: len(ciphertext),
 	})

@@ -306,7 +306,6 @@ func (a *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time)
 		}
 		a.total -= len(records)
 		dropped := spool.ring.takeDropped()
-		now := a.now()
 		a.mu.Unlock()
 
 		groups, err := packSessionLogRecords(records)
@@ -320,7 +319,7 @@ func (a *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time)
 				groupDropped = dropped
 			}
 
-			chunk, err := spool.sealSlice(group.records, group.plaintext, groupDropped, now)
+			chunk, err := spool.sealSlice(group.records, group.plaintext, groupDropped)
 			if err != nil {
 				a.dropUnsealed(spool, len(group.records), groupDropped, err)
 				continue

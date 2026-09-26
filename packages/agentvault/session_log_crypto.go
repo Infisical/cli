@@ -8,9 +8,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"time"
 
-	"github.com/oklog/ulid"
+	"github.com/google/uuid"
 )
 
 const sessionLogAADVersion = "v1"
@@ -56,8 +55,10 @@ func sessionLogCiphertextSHA256(ciphertext []byte) string {
 	return base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-func newSessionLogChunkID(now time.Time) string {
-	return ulid.MustNew(ulid.Timestamp(now), newULIDEntropy()).String()
+func newSessionLogChunkID() (string, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("agent-vault: could not mint a session log chunk id: %w", err)
+	}
+	return id.String(), nil
 }
-
-func newULIDEntropy() io.Reader { return rand.Reader }

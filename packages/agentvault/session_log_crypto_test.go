@@ -8,23 +8,24 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/oklog/ulid"
+	"github.com/google/uuid"
 )
 
 const (
 	vectorKeyHex     = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	vectorIVHex      = "aabbccddeeff001122334455"
-	vectorAADHex     = "0bc4c5b3d6ea7cd6bfc440da46d6ce9b73f17c5efa64e90e88373ee8ba09a837"
+	vectorAADHex     = "38d8f3b86fbbd1061f9d2a8bd91e6c49c51b6231936a7ecfc21c56e129f37a1c"
 	vectorIVBase64   = "qrvM3e7/ABEiM0RV"
-	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6rCu64JVIU0dTBbrrs+2AuZxL"
+	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6rCvRUkqg+3ST5GVMelW0mjOO"
 )
 
 var vectorContext = struct{ sessionID, chunkID string }{
 	sessionID: "sess-1",
-	chunkID:   "01K5ABCDEFGHJKMNPQRSTVWXYZ",
+	chunkID:   "01a0a9c5-231d-7abc-8def-0123456789ab",
 }
 
 func vectorRecords() []sessionLogRecord {
@@ -84,7 +85,7 @@ func TestSealMatchesNodeVector(t *testing.T) {
 func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	key := make([]byte, 32)
 	spool := newSessionLogSpool(newSessionLogGrant("sess-1", key), time.Now())
-	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"), 0, time.Now())
+	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,29 +175,27 @@ func TestIVsDoNotRepeat(t *testing.T) {
 	}
 }
 
-func TestChunkIDsAreULIDsThatSortByTime(t *testing.T) {
-	earlier := newSessionLogChunkID(time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC))
-	later := newSessionLogChunkID(time.Date(2026, 9, 16, 11, 0, 0, 0, time.UTC))
-
-	if len(earlier) != 26 {
-		t.Fatalf("a chunk id is %d characters, the server's column is 26", len(earlier))
+func TestChunkIDsAreLowercaseUUIDv7sThatSortInMintOrder(t *testing.T) {
+	earlier, err := newSessionLogChunkID()
+	if err != nil {
+		t.Fatal(err)
 	}
+	later, err := newSessionLogChunkID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if !(earlier < later) {
 		t.Fatalf("%q did not sort before %q", earlier, later)
 	}
-	if _, err := ulid.Parse(earlier); err != nil {
+	if earlier != strings.ToLower(earlier) {
+		t.Fatalf("%q is not lowercase, which is how Infisical returns it and the browser rebuilds the AAD", earlier)
+	}
+	parsed, err := uuid.Parse(earlier)
+	if err != nil {
 		t.Fatalf("a minted chunk id did not parse: %v", err)
 	}
-}
-
-func TestChunkIDsAreUniqueWithinAMillisecond(t *testing.T) {
-	now := time.Now()
-	seen := make(map[string]bool, 1000)
-	for i := 0; i < 1000; i++ {
-		id := newSessionLogChunkID(now)
-		if seen[id] {
-			t.Fatal("a chunk id repeated, which would collide with the server's unique index")
-		}
-		seen[id] = true
+	if parsed.Version() != 7 {
+		t.Fatalf("a chunk id is UUID version %d, the server only accepts 7", parsed.Version())
 	}
 }

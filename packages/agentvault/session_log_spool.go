@@ -172,8 +172,11 @@ func packSessionLogRecords(records []sessionLogRecord) ([]sessionLogGroup, error
 	return groups, nil
 }
 
-func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte, dropped uint64, now time.Time) (*sealedChunk, error) {
-	chunkID := newSessionLogChunkID(now)
+func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte, dropped uint64) (*sealedChunk, error) {
+	chunkID, err := newSessionLogChunkID()
+	if err != nil {
+		return nil, err
+	}
 	aad := buildSessionLogAAD(s.sessionID, chunkID)
 	ciphertext, iv, err := sealSessionLog(s.key, plaintext, aad)
 	if err != nil {
