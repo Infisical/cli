@@ -203,6 +203,12 @@ func Start(opts Options, enrollmentToken string) error {
 	}
 	ps.cache = newSessionCache(resolver, ps.pollInterval)
 
+	shipper, err := newSessionLogShipper(opts.ProxyToken)
+	if err != nil {
+		return err
+	}
+	ps.sessionLogs = newSessionLogRecorder(state.ProxyID, shipper)
+
 	// Port 0 is not "unset": it is the ordinary ask for any free port, so it is never substituted.
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", opts.Port))
 	if err != nil {
@@ -225,6 +231,7 @@ func Start(opts Options, enrollmentToken string) error {
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
 	go ps.pollLoop(st, stop, fatal)
+	go ps.sessionLogs.run(stop)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- front.Serve(limited) }()
@@ -241,9 +248,17 @@ func Start(opts Options, enrollmentToken string) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
+	// Its own budget: in-flight requests can spend all of the shutdown's, and this is the last minute of session logs.
+	closeSessionLogs := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), sessionLogCloseTimeout)
+		defer cancel()
+		ps.sessionLogs.close(ctx)
+	}
+
 	select {
 	case err := <-serveErr:
 		close(stop)
+		closeSessionLogs()
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -255,6 +270,7 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		closeSessionLogs()
 		ps.cache.close()
 		return nil
 	case err := <-fatal:
@@ -262,6 +278,7 @@ func Start(opts Options, enrollmentToken string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		closeSessionLogs()
 		ps.cache.close()
 		return err
 	}

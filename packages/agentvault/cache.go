@@ -65,11 +65,12 @@ type resolvedService struct {
 }
 
 type sessionEntry struct {
-	sessionID string
-	expiresAt *time.Time
-	services  []*resolvedService
-	lastSeen  time.Time
-	fetchedAt time.Time
+	sessionID  string
+	expiresAt  *time.Time
+	services   []*resolvedService
+	sessionLog *sessionLogGrant
+	lastSeen   time.Time
+	fetchedAt  time.Time
 }
 
 // The map key is the sha256 of the token, never the token itself, so a heap dump yields no live credential.
@@ -79,7 +80,7 @@ func sessionKey(token string) string {
 }
 
 type sessionResolver interface {
-	resolve(sessionToken string) (*resolveResult, error)
+	resolve(sessionToken string, held *sessionLogGrant) (*resolveResult, error)
 }
 
 type sessionCache struct {
@@ -153,6 +154,16 @@ func isSessionGone(err error) bool {
 }
 
 func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
+	services, _, err := c.lookup(sessionToken)
+	return services, err
+}
+
+type cacheLookup struct {
+	services   []*resolvedService
+	sessionLog *sessionLogGrant
+}
+
+func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *sessionLogGrant, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -162,7 +173,7 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 			delete(c.entries, key)
 			delete(c.tokens, key)
 			c.mu.Unlock()
-			return nil, errSessionGone
+			return nil, nil, errSessionGone
 		}
 		// Past the grace window the entry is a miss, so a stalled refresh loop cannot keep an old credential alive.
 		if time.Since(entry.fetchedAt) > c.grace() {
@@ -170,22 +181,22 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 			delete(c.tokens, key)
 		} else {
 			entry.lastSeen = time.Now()
-			svcs := entry.services
+			svcs, grant := entry.services, entry.sessionLog
 			c.mu.Unlock()
-			return svcs, nil
+			return svcs, grant, nil
 		}
 	}
 	if refused, ok := c.refused[key]; ok {
 		if time.Now().Before(refused.until) {
 			c.mu.Unlock()
-			return nil, refused.err
+			return nil, nil, refused.err
 		}
 		delete(c.refused, key)
 	}
 	c.mu.Unlock()
 
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
-		result, err := c.resolver.resolve(sessionToken)
+		result, err := c.resolver.resolve(sessionToken, nil)
 		if err != nil {
 			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but
 			// until then every agent request would otherwise cost a resolve.
@@ -201,19 +212,21 @@ func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
 		defer c.mu.Unlock()
 		c.evictIfFullLocked()
 		c.entries[key] = &sessionEntry{
-			sessionID: result.SessionID,
-			expiresAt: result.ExpiresAt,
-			services:  result.Services,
-			lastSeen:  time.Now(),
-			fetchedAt: time.Now(),
+			sessionID:  result.SessionID,
+			expiresAt:  result.ExpiresAt,
+			services:   result.Services,
+			sessionLog: result.SessionLog,
+			lastSeen:   time.Now(),
+			fetchedAt:  time.Now(),
 		}
 		c.tokens[key] = sessionToken
-		return result.Services, nil
+		return cacheLookup{services: result.Services, sessionLog: result.SessionLog}, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resolved.([]*resolvedService), nil
+	out := resolved.(cacheLookup)
+	return out.services, out.sessionLog, nil
 }
 
 func (c *sessionCache) evictIfFullLocked() {
@@ -289,7 +302,14 @@ func (c *sessionCache) refresh() {
 }
 
 func (c *sessionCache) refreshOne(key, token string) {
-	result, err := c.resolver.resolve(token)
+	c.mu.Lock()
+	var held *sessionLogGrant
+	if entry, ok := c.entries[key]; ok {
+		held = entry.sessionLog
+	}
+	c.mu.Unlock()
+
+	result, err := c.resolver.resolve(token, held)
 	if err != nil {
 		c.handleRefreshFailure(key, err)
 		return
@@ -301,6 +321,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.sessionID = result.SessionID
 		entry.expiresAt = result.ExpiresAt
 		entry.services = result.Services
+		entry.sessionLog = result.SessionLog
 		entry.fetchedAt = time.Now()
 	}
 }

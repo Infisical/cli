@@ -11,16 +11,18 @@ import (
 )
 
 type stubResolver struct {
-	mu     sync.Mutex
-	calls  int
-	result *resolveResult
-	err    error
-	delay  time.Duration
+	mu       sync.Mutex
+	calls    int
+	result   *resolveResult
+	err      error
+	delay    time.Duration
+	lastHeld *sessionLogGrant
 }
 
-func (s *stubResolver) resolve(string) (*resolveResult, error) {
+func (s *stubResolver) resolve(_ string, held *sessionLogGrant) (*resolveResult, error) {
 	s.mu.Lock()
 	s.calls++
+	s.lastHeld = held
 	result, err, delay := s.result, s.err, s.delay
 	s.mu.Unlock()
 	time.Sleep(delay)

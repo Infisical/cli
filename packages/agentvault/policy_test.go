@@ -49,6 +49,17 @@ func TestMethodPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("a refused method is capped before it reaches the log", func(t *testing.T) {
+		svc := serviceWithPolicy([]string{"GET"}, nil)
+		err := checkServicePolicy(svc, requestTo(t, strings.Repeat("A", 1<<20), "/x"))
+		if !errors.Is(err, errPolicyBlocked) {
+			t.Fatalf("an unlisted method should be blocked, got %v", err)
+		}
+		if len(err.Error()) > 200 {
+			t.Fatalf("the refusal carries %d bytes; the agent's method would fill the proxy log", len(err.Error()))
+		}
+	})
+
 	t.Run("a lower-case method is folded rather than blocked", func(t *testing.T) {
 		svc := serviceWithPolicy([]string{"GET"}, nil)
 		req := requestTo(t, "GET", "/x")

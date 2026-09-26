@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -102,19 +103,30 @@ type AgentVaultService struct {
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 }
 
-type ResolveAgentVaultSessionResponse struct {
-	SessionID string              `json:"sessionId"`
-	ExpiresAt string              `json:"expiresAt"`
-	Services  []AgentVaultService `json:"services"`
+type AgentVaultSessionLogGrant struct {
+	Enabled    bool   `json:"enabled"`
+	SessionKey string `json:"sessionKey"`
 }
 
-func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string) (ResolveAgentVaultSessionResponse, error) {
+type ResolveAgentVaultSessionRequest struct {
+	HasSessionLogKey bool `json:"hasSessionLogKey"`
+}
+
+type ResolveAgentVaultSessionResponse struct {
+	SessionID   string                    `json:"sessionId"`
+	ExpiresAt   string                    `json:"expiresAt"`
+	Services    []AgentVaultService       `json:"services"`
+	SessionLogs AgentVaultSessionLogGrant `json:"sessionLogs"`
+}
+
+func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string, request ResolveAgentVaultSessionRequest) (ResolveAgentVaultSessionResponse, error) {
 	var res ResolveAgentVaultSessionResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetHeader(AgentVaultSessionHeader, sessionToken).
+		SetBody(request).
 		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/resolve", config.INFISICAL_URL))
 
 	if err != nil {
@@ -122,6 +134,44 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string)
 	}
 	if response.IsError() {
 		return ResolveAgentVaultSessionResponse{}, NewAPIErrorWithResponse("CallResolveAgentVaultSession", response, nil)
+	}
+	return res, nil
+}
+
+type CreateAgentVaultSessionLogChunkRequest struct {
+	ChunkID          string `json:"chunkId"`
+	StartedAt        string `json:"startedAt"`
+	EndedAt          string `json:"endedAt"`
+	FirstSeq         uint64 `json:"firstSeq"`
+	LastSeq          uint64 `json:"lastSeq"`
+	RecordCount      int    `json:"recordCount"`
+	DroppedCount     uint64 `json:"droppedCount"`
+	CiphertextBytes  int    `json:"ciphertextBytes"`
+	IV               string `json:"iv"`
+	CiphertextSha256 string `json:"ciphertextSha256"`
+}
+
+type CreateAgentVaultSessionLogChunkResponse struct {
+	ChunkID          string `json:"chunkId"`
+	UploadURL        string `json:"uploadUrl"`
+	ExpiresInSeconds int    `json:"expiresInSeconds"`
+}
+
+func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.Client, sessionID string, request CreateAgentVaultSessionLogChunkRequest) (CreateAgentVaultSessionLogChunkResponse, error) {
+	var res CreateAgentVaultSessionLogChunkResponse
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/sessions/%s/logs/chunks", config.INFISICAL_URL, sessionID))
+
+	if err != nil {
+		return CreateAgentVaultSessionLogChunkResponse{}, NewGenericRequestError("CallCreateAgentVaultSessionLogChunk", err)
+	}
+	if response.IsError() {
+		return CreateAgentVaultSessionLogChunkResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultSessionLogChunk", response, nil)
 	}
 	return res, nil
 }

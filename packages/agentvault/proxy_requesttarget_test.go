@@ -119,6 +119,37 @@ func TestAnOpaqueRequestTargetIsRefusedInsideATunnel(t *testing.T) {
 	}
 }
 
+func TestAnOpaqueRequestTargetIsRecordedAsBlocked(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	uu, _ := url.Parse(upstream.URL)
+	upstreamHost := "127.0.0.1:" + uu.Port()
+
+	key, cert, err := generateRootCa()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := &proxyServer{transport: newUpstreamTransport(), ca: newCaManager(key, cert)}
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
+	ps.cache = newSessionCache(grantingResolver{}, ps.pollInterval)
+	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
+	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
+	t.Cleanup(front.Close)
+	fu, _ := url.Parse(front.URL)
+
+	resp, _ := rawProxyRequest(t, fu.Host, "GET http:admin/secrets HTTP/1.1", upstreamHost, upstreamHost)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+
+	got := drainOneRecord(t, ps.sessionLogs)
+	if got.Decision != decisionBlocked || got.Status != http.StatusBadRequest || got.Path != "admin/secrets" {
+		t.Fatalf("record is %+v, expected a blocked 400 for admin/secrets", got)
+	}
+}
+
 // The same two cases through a real CONNECT + TLS tunnel, which is how an agent actually arrives. The raw
 // dial is still required: a Go client escapes the brace before sending, which is the bug's blind spot.
 func TestTheRequestTargetHoldsThroughATLSTunnel(t *testing.T) {
