@@ -3,12 +3,14 @@ package clickhouse
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -17,12 +19,36 @@ import (
 )
 
 type recordingLogger struct {
+	mu      sync.Mutex
 	entries []session.SessionLogEntry
 }
 
 func (r *recordingLogger) LogEntry(entry session.SessionLogEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.entries = append(r.entries, entry)
 	return nil
+}
+
+func (r *recordingLogger) contains(want string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, entry := range r.entries {
+		if strings.Contains(entry.Input, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *recordingLogger) dump() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out strings.Builder
+	for _, entry := range r.entries {
+		out.WriteString(entry.Input + " => " + entry.Output + "\n")
+	}
+	return out.String()
 }
 func (r *recordingLogger) LogSessionEvent(session.SessionEvent) error { return nil }
 func (r *recordingLogger) LogHttpEvent(session.HttpEvent) error       { return nil }
@@ -420,4 +446,64 @@ func TestReportsAnUnreachableTargetAsAClickHouseError(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "(NETWORK_ERROR)")
 	require.Len(t, logger.entries, 1)
 	require.Contains(t, logger.entries[0].Output, "ERROR:")
+}
+
+func deflated(t *testing.T, payload string) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zlib.NewWriter(&buffer)
+	_, err := writer.Write([]byte(payload))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return buffer.Bytes()
+}
+
+// deflate is on the accepted-encoding list, so a statement hidden in one has to be inspected too.
+func TestBlocksAStatementInsideADeflatedBody(t *testing.T) {
+	reached := false
+	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}, `(?i)\btruncate\b`)
+	defer closeUpstream()
+
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(deflated(t, "TRUNCATE TABLE events")))
+	req.Header.Set("Content-Encoding", "deflate")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.False(t, reached, "a blocked statement must not reach the upstream")
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestRefusesADeflatedBodyItCannotDecode(t *testing.T) {
+	reached := false
+	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}, `(?i)\btruncate\b`)
+	defer closeUpstream()
+
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte{0x00, 0x01, 0x02, 0x03, 0x04}))
+	req.Header.Set("Content-Encoding", "deflate")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.False(t, reached, "a body the gateway could not read must not be forwarded uninspected")
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+}
+
+// The recorded form carries a parameter suffix, so an end-anchored rule would stop matching as soon as
+// a client attached a parameter and the blocked statement would run.
+func TestAnAnchoredRuleStillBlocksAStatementCarryingParameters(t *testing.T) {
+	reached := false
+	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}, `(?i)^DROP TABLE important$`)
+	defer closeUpstream()
+
+	req := httptest.NewRequest(http.MethodPost, "/?param_who=someone", strings.NewReader("DROP TABLE important"))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.False(t, reached, "the blocked statement must not reach the upstream")
+	require.Equal(t, http.StatusForbidden, recorder.Code)
 }

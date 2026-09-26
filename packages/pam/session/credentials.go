@@ -31,6 +31,7 @@ type PAMCredentials struct {
 	Certificate           string
 	Host                  string
 	Port                  int
+	NativePort            int
 	SSLEnabled            bool
 	SSLRejectUnauthorized bool
 	SSLCertificate        string
@@ -195,6 +196,7 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		Certificate:           response.Credentials.Certificate,
 		Host:                  response.Credentials.Host,
 		Port:                  response.Credentials.Port,
+		NativePort:            response.Credentials.NativePort,
 		SSLEnabled:            response.Credentials.SSLEnabled,
 		SSLRejectUnauthorized: response.Credentials.SSLRejectUnauthorized,
 		SSLCertificate:        response.Credentials.SSLCertificate,

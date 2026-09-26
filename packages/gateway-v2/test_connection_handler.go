@@ -124,6 +124,8 @@ type clickhouseTestParams struct {
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Database              string `json:"database"`
+	HttpPort              int    `json:"httpPort"`
+	NativePort            int    `json:"nativePort"`
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
@@ -714,17 +716,81 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 					return connectFailure(err)
 				}
 			}
-			if err := dialTarget(ctx, target.host, target.port); err != nil {
-				return connectFailure(err)
+			config := clickhousehandler.ClickHouseProxyConfig{
+				Username:  params.Username,
+				Password:  params.Password,
+				Database:  params.Database,
+				EnableTLS: params.SslEnabled,
+				TLSConfig: tlsConfig,
 			}
-			return authFailure(clickhousehandler.TestConnection(ctx, clickhousehandler.ClickHouseProxyConfig{
-				TargetAddr: net.JoinHostPort(target.host, strconv.Itoa(target.port)),
-				Username:   params.Username,
-				Password:   params.Password,
-				Database:   params.Database,
-				EnableTLS:  params.SslEnabled,
-				TLSConfig:  tlsConfig,
-			}))
+
+			// The body names which ports to probe; the signed certificate still decides which are allowed.
+			for _, port := range []int{params.HttpPort, params.NativePort} {
+				if port > 0 && !target.allows(port) {
+					return connectFailure(fmt.Errorf("port %d is not authorised for this connection test", port))
+				}
+			}
+
+			httpPort := params.HttpPort
+			if httpPort <= 0 && params.NativePort <= 0 {
+				// An API too old to send the ports still means the cert-bound one.
+				httpPort = target.port
+			}
+
+			// One shared deadline would let a slow first probe swallow the second one's specific error.
+			probes := 0
+			if httpPort > 0 {
+				probes++
+			}
+			if params.NativePort > 0 {
+				probes++
+			}
+			if probes == 0 {
+				return connectFailure(errors.New("no ClickHouse port was supplied for this connection test"))
+			}
+
+			remaining := probes
+			probeCtx := func() (context.Context, context.CancelFunc) {
+				deadline, ok := ctx.Deadline()
+				if !ok || remaining <= 1 {
+					remaining--
+					return context.WithCancel(ctx)
+				}
+				slice := time.Until(deadline) / time.Duration(remaining)
+				remaining--
+				return context.WithTimeout(ctx, slice)
+			}
+
+			if httpPort > 0 {
+				httpCtx, cancel := probeCtx()
+				err := func() error {
+					defer cancel()
+					if err := dialTarget(httpCtx, target.host, httpPort); err != nil {
+						return connectFailure(err)
+					}
+					config.TargetAddr = net.JoinHostPort(target.host, strconv.Itoa(httpPort))
+					if err := clickhousehandler.TestConnection(httpCtx, config); err != nil {
+						return authFailure(err)
+					}
+					return nil
+				}()
+				if err != nil {
+					return err
+				}
+			}
+
+			if params.NativePort > 0 {
+				nativeCtx, cancel := probeCtx()
+				defer cancel()
+				if err := dialTarget(nativeCtx, target.host, params.NativePort); err != nil {
+					return connectFailure(nativePortError(params.NativePort, err, httpPort > 0))
+				}
+				config.NativeAddr = net.JoinHostPort(target.host, strconv.Itoa(params.NativePort))
+				if err := clickhousehandler.TestNativeConnection(nativeCtx, config); err != nil {
+					return authFailure(nativePortError(params.NativePort, err, httpPort > 0))
+				}
+			}
+			return nil
 		}
 	case testConnModeSSH:
 		var params sshTestParams
@@ -770,4 +836,13 @@ func redactProbeSecrets(msg string, secrets ...string) string {
 		}
 	}
 	return urlUserinfoPattern.ReplaceAllString(msg, "${1}******@")
+}
+
+// The failure has to name the port, and say the account can be saved without one.
+func nativePortError(port int, err error, httpWorks bool) error {
+	if !httpWorks {
+		return fmt.Errorf("ClickHouse's native port %d did not answer: %w", port, err)
+	}
+	return fmt.Errorf("the HTTP interface works, but ClickHouse's native port %d did not: %w. "+
+		"Clear the native port to use this account over HTTP only, which clickhouse-client cannot do", port, err)
 }
