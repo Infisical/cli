@@ -2,6 +2,7 @@ package util
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,8 +70,10 @@ func HandleError(err error, messages ...string) {
 }
 
 func PrintErrorAndExit(exitCode int, err error, messages ...string) {
-	// Check if it's an API error for special formatting
-	if apiErr, ok := err.(*api.APIError); ok {
+	// Check if it's an API error for special formatting. errors.As is used so that
+	// API errors still get pretty printed when callers wrap them with additional context.
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
 		if len(messages) > 0 {
 			apiErr.ExtraMessages = messages
 		}
