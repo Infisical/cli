@@ -64,7 +64,7 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 		f.nextURL++
 		url = fmt.Sprintf("https://bucket.example/put/%d", f.nextURL)
 	}
-	return api.CreateAgentVaultSessionLogChunkResponse{ChunkID: req.ChunkID, UploadURL: url, ExpiresInSeconds: 300}, nil
+	return api.CreateAgentVaultSessionLogChunkResponse{UploadURL: url, ExpiresInSeconds: 300}, nil
 }
 
 func (f *fakeShipper) putObject(_ context.Context, url string, ciphertext []byte) error {

@@ -152,7 +152,6 @@ type CreateAgentVaultSessionLogChunkRequest struct {
 }
 
 type CreateAgentVaultSessionLogChunkResponse struct {
-	ChunkID          string `json:"chunkId"`
 	UploadURL        string `json:"uploadUrl"`
 	ExpiresInSeconds int    `json:"expiresInSeconds"`
 }

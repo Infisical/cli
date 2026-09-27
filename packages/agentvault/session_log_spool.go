@@ -39,10 +39,6 @@ func newSessionLogRing(capacity int) sessionLogRing {
 func (r *sessionLogRing) len() int { return r.n }
 
 func (r *sessionLogRing) push(rec sessionLogRecord) (evicted bool) {
-	if r.capacity == 0 {
-		r.dropped++
-		return true
-	}
 	if r.n == len(r.buf) && len(r.buf) < r.capacity {
 		r.grow()
 	}
