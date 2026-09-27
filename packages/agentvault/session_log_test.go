@@ -969,3 +969,25 @@ func TestASessionDoesNotShipAgainHalfwayToTheNextTick(t *testing.T) {
 		t.Fatalf("there were %d uploads; a session shipped twice within one interval", got)
 	}
 }
+
+func TestEveryWayAChunkLeavesReleasesWhatItHeld(t *testing.T) {
+	for _, outcome := range []struct {
+		name string
+		post scriptedResult
+	}{
+		{"uploaded", scriptedResult{}},
+		{"refused as bad", scriptedResult{err: apiErr(http.StatusUnprocessableEntity, "")}},
+		{"session gone", scriptedResult{err: apiErr(http.StatusNotFound, "")}},
+	} {
+		shipper := &fakeShipper{postResults: []scriptedResult{outcome.post}}
+		log, _, tick := newTestLog(shipper)
+
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+		tick()
+
+		if log.total != 0 || log.sealedBytes != 0 {
+			t.Fatalf("%s: the proxy still counts %d records and %d sealed bytes; the pending cap would fill and stop recording",
+				outcome.name, log.total, log.sealedBytes)
+		}
+	}
+}
