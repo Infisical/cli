@@ -19,6 +19,8 @@ type shipperCall struct {
 	chunkID   string
 	url       string
 	bytes     int
+	records   int
+	iv        string
 	dropped   uint64
 	body      []byte
 	final     bool
@@ -47,7 +49,7 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, dropped: req.DroppedCount, final: final})
+	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, records: req.RecordCount, iv: req.IV, dropped: req.DroppedCount, final: final})
 
 	result := f.postDefault
 	if len(f.postResults) > 0 {
@@ -880,37 +882,6 @@ func TestShutdownPastItsBudgetStartsNoNewChunk(t *testing.T) {
 	}
 }
 
-func TestShutdownDoesNotRaceTheRunLoop(t *testing.T) {
-	shipper := &fakeShipper{}
-	log, _, _ := newTestLog(shipper)
-	log.now = time.Now
-
-	stop := make(chan struct{})
-	go log.run(stop)
-
-	grant := testGrant("s1")
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := 0; i < 2000; i++ {
-			log.record(grant, aRecord("api.github.com"))
-		}
-	}()
-
-	<-done
-	close(stop)
-	log.close(context.Background())
-
-	if len(shipper.puts()) == 0 {
-		t.Fatal("shutdown shipped nothing")
-	}
-	for _, call := range shipper.puts() {
-		if call.bytes == 0 {
-			t.Fatal("an empty object was uploaded")
-		}
-	}
-}
-
 type slowPutShipper struct {
 	*fakeShipper
 	advance func(time.Duration)
@@ -989,5 +960,129 @@ func TestEveryWayAChunkLeavesReleasesWhatItHeld(t *testing.T) {
 			t.Fatalf("%s: the proxy still counts %d records and %d sealed bytes; the pending cap would fill and stop recording",
 				outcome.name, log.total, log.sealedBytes)
 		}
+	}
+}
+
+func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		kept   bool
+	}{
+		{http.StatusInternalServerError, true},
+		{http.StatusBadGateway, true},
+		{http.StatusServiceUnavailable, true},
+		{http.StatusTooManyRequests, true},
+		{http.StatusUnprocessableEntity, false},
+		{http.StatusConflict, false},
+	} {
+		shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(tc.status, "")}}}
+		log, _, tick := newTestLog(shipper)
+
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+		tick()
+
+		spool := log.spools["s1"]
+		if tc.kept {
+			if len(spool.pending) != 1 || !log.infisicalDown {
+				t.Fatalf("%d: the chunk was not kept for a retry (pending %d, infisicalDown %v)", tc.status, len(spool.pending), log.infisicalDown)
+			}
+			continue
+		}
+		if len(spool.pending) != 0 || spool.ring.dropped != 1 {
+			t.Fatalf("%d: a refused chunk was not dropped and counted (pending %d, dropped %d)", tc.status, len(spool.pending), spool.ring.dropped)
+		}
+	}
+}
+
+func TestTheRecorderShipsNoChunkOverTheServersRecordLimit(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, _, _ := newTestLog(shipper)
+
+	for i := 0; i < 2500; i++ {
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+	}
+	log.flushAll(context.Background(), true)
+
+	posts := shipper.posts()
+	if len(posts) != 3 {
+		t.Fatalf("2500 records shipped as %d chunks, expected 3", len(posts))
+	}
+	total := 0
+	for _, post := range posts {
+		if post.records > sessionLogFlushRecords {
+			t.Fatalf("a chunk carried %d records; the server refuses more than %d", post.records, sessionLogFlushRecords)
+		}
+		total += post.records
+	}
+	if total != 2500 {
+		t.Fatalf("the chunks carried %d records, expected 2500", total)
+	}
+}
+
+type blockingShipper struct {
+	fakeShipper
+	entered chan struct{}
+	release chan struct{}
+	again   chan struct{}
+	once    sync.Once
+	posted  int
+}
+
+func (b *blockingShipper) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
+	b.mu.Lock()
+	b.posted++
+	first := b.posted == 1
+	b.mu.Unlock()
+	if first {
+		close(b.entered)
+		<-b.release
+	} else {
+		b.once.Do(func() { close(b.again) })
+	}
+	return b.fakeShipper.createChunk(ctx, final, sessionID, req)
+}
+
+func TestShutdownWaitsForAFlushInProgressSoNoChunkShipsTwice(t *testing.T) {
+	shipper := &blockingShipper{entered: make(chan struct{}), release: make(chan struct{}), again: make(chan struct{})}
+	log, advance, _ := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	advance(sessionLogFlushInterval)
+
+	tickDone := make(chan struct{})
+	go func() {
+		defer close(tickDone)
+		log.flushAll(context.Background(), false)
+	}()
+	<-shipper.entered
+
+	closeDone := make(chan struct{})
+	go func() {
+		defer close(closeDone)
+		log.close(context.Background())
+	}()
+
+	select {
+	case <-shipper.again:
+		close(shipper.release)
+		t.Fatal("shutdown posted a chunk while the run loop was still shipping it")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(shipper.release)
+	<-tickDone
+	<-closeDone
+
+	seen := map[string]int{}
+	for _, post := range shipper.posts() {
+		seen[post.chunkID]++
+	}
+	for chunkID, n := range seen {
+		if n != 1 {
+			t.Fatalf("chunk %s was posted %d times", chunkID, n)
+		}
+	}
+	if len(seen) != 1 || len(shipper.puts()) != 1 {
+		t.Fatalf("one record shipped as %d chunks and %d uploads, expected 1 of each", len(seen), len(shipper.puts()))
 	}
 }
