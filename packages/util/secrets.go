@@ -367,7 +367,11 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		} else if params.UniversalAuthAccessToken != "" {
 
 			if params.WorkspaceId == "" {
-				PrintErrorMessageAndExit("Project ID is required when using machine identity")
+				resolved, err := ResolveWorkspaceIdForMachineIdentity(projectConfigFilePath, params.WorkspaceId)
+				if err != nil {
+					PrintErrorMessageAndExit("Project ID is required when using machine identity")
+				}
+				params.WorkspaceId = resolved
 			}
 
 			log.Debug().Msg("Trying to fetch secrets using universal auth")
