@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 func selfSignedPEM(t *testing.T, cn string) string {
@@ -205,5 +207,92 @@ func TestValidateProxyAddrNamesWhatFollowsThePort(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "nothing after the port") {
 			t.Errorf("%q: want the trailing-path message, got %v", addr, err)
 		}
+	}
+}
+
+func sessionTokenCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run", Run: func(*cobra.Command, []string) {}}
+	cmd.Flags().String("session-token", "", "")
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestResolveAgentVaultSessionTokenPrefersTheFlag(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "agv_from_env")
+
+	token, fromFlag, err := resolveAgentVaultSessionToken(sessionTokenCmd(t, "--session-token", "agv_from_flag"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "agv_from_flag" || !fromFlag {
+		t.Errorf("the flag should win over the environment, got %q fromFlag=%v", token, fromFlag)
+	}
+}
+
+func TestResolveAgentVaultSessionTokenFallsBackToTheEnvironment(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "  agv_from_env  ")
+
+	token, fromFlag, err := resolveAgentVaultSessionToken(sessionTokenCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "agv_from_env" {
+		t.Errorf("want the environment value trimmed, got %q", token)
+	}
+	if fromFlag {
+		t.Error("a token out of the environment must not report itself as coming from the flag")
+	}
+}
+
+func TestResolveAgentVaultSessionTokenIgnoresABlankEnvironmentValue(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "   ")
+
+	token, _, err := resolveAgentVaultSessionToken(sessionTokenCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		t.Errorf("a blank variable names no session, got %q", token)
+	}
+}
+
+func TestResolveAgentVaultSessionTokenRefusesAnEmptyFlag(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "agv_from_env")
+
+	if _, _, err := resolveAgentVaultSessionToken(sessionTokenCmd(t, "--session-token", "")); err == nil {
+		t.Fatal("an explicitly empty --session-token should be an error, not a fall back to the environment")
+	}
+}
+
+func TestResolveAgentVaultSessionTokenWithNeitherSourceIsEmpty(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "")
+
+	token, fromFlag, err := resolveAgentVaultSessionToken(sessionTokenCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" || fromFlag {
+		t.Errorf("want no token, got %q fromFlag=%v", token, fromFlag)
+	}
+}
+
+func TestBuildAgentVaultRunEnvDropsTheSessionTokenVariable(t *testing.T) {
+	parent := []string{agentVaultSessionTokenEnv + "=agv_stale", "PATH=/usr/bin"}
+
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_minted", "", "")
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, agentVaultSessionTokenEnv+"=") {
+			t.Fatalf("the agent must not inherit a session token the proxy URL did not give it, got %q", kv)
+		}
+		if strings.Contains(kv, "agv_stale") {
+			t.Fatalf("a stale token reached the agent through %q", kv)
+		}
+	}
+	if !strings.Contains(strings.Join(env, " "), "agv_minted") {
+		t.Error("the minted session should still reach the agent in the proxy URL")
 	}
 }
