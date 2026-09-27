@@ -16,7 +16,7 @@ const sessionLogAADVersion = "v1"
 
 const sessionLogIVBytes = 12
 
-// Must byte-match frontend sessionLogDecrypt.ts and the vector pinned in agent-vault-session-log-crypto.test.ts.
+// Must byte-match frontend sessionLogDecrypt.ts, whose test pins the same vector as session_log_crypto_test.go.
 func buildSessionLogAAD(sessionID, chunkID string) []byte {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s", sessionID, chunkID, sessionLogAADVersion)))
 	return sum[:]

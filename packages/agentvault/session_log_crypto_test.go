@@ -54,14 +54,14 @@ func mustHex(t *testing.T, s string) []byte {
 	return b
 }
 
-func TestSessionLogAADMatchesTheBackendVector(t *testing.T) {
+func TestSessionLogAADMatchesTheBrowserVector(t *testing.T) {
 	got := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
 	if hex.EncodeToString(got) != vectorAADHex {
-		t.Fatalf("AAD is %s, the backend and the browser build %s", hex.EncodeToString(got), vectorAADHex)
+		t.Fatalf("AAD is %s, the browser builds %s", hex.EncodeToString(got), vectorAADHex)
 	}
 }
 
-func TestSealMatchesNodeVector(t *testing.T) {
+func TestSealMatchesTheBrowserVector(t *testing.T) {
 	plaintext, err := json.Marshal(vectorRecords())
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestSealMatchesNodeVector(t *testing.T) {
 		t.Fatalf("IV encodes as %q, the backend expects %q", encodeSessionLogIV(gotIV), vectorIVBase64)
 	}
 	if base64.StdEncoding.EncodeToString(ciphertext) != vectorCiphertext {
-		t.Fatal("the sealed bytes differ from the vector Infisical and the browser are checked against")
+		t.Fatal("the sealed bytes differ from the vector the browser opens")
 	}
 }
 
