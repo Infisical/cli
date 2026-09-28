@@ -116,6 +116,12 @@ func TestGetUpdateInstructions(t *testing.T) {
 			expected: "brew update && brew upgrade infisical",
 		},
 		{
+			name:        "linux plain linuxbrew dir is not a brew install",
+			goos:        "linux",
+			execPath:    "/home/user/linuxbrew/bin/infisical",
+			notExpected: "brew",
+		},
+		{
 			name:        "linux linuxbrew-tools is not a brew install",
 			goos:        "linux",
 			execPath:    "/opt/linuxbrew-tools/bin/infisical",

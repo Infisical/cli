@@ -330,11 +330,11 @@ func getUpdateInstructions(goos string, execPath string) string {
 		if strings.Contains(p, "/nix/store/") {
 			return ""
 		}
-		// Trailing slash so this matches the linuxbrew prefix directory in both
-		// the multi-user (/home/linuxbrew/.linuxbrew) and single-user
-		// (~/.linuxbrew) layouts, without classifying unrelated paths such as
-		// /opt/linuxbrew-tools as a Homebrew install.
-		if strings.Contains(p, "linuxbrew/") {
+		// Match the .linuxbrew prefix shared by the multi-user
+		// (/home/linuxbrew/.linuxbrew) and single-user (~/.linuxbrew) layouts, so
+		// neither an unrelated directory named linuxbrew nor a path such as
+		// /opt/linuxbrew-tools is classified as a Homebrew install.
+		if strings.Contains(p, ".linuxbrew/") {
 			return "To update, run: brew update && brew upgrade infisical"
 		}
 		pkgManager := getLinuxPackageManager()
