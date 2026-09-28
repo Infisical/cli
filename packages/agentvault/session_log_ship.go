@@ -98,6 +98,8 @@ func (c *sessionLogShipperClient) putObject(ctx context.Context, uploadURL strin
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", strconv.Itoa(len(ciphertext)))
 	req.Header.Set("If-None-Match", "*")
+	// Signed into the link, so S3 refuses any body whose digest isn't the one Infisical recorded.
+	req.Header.Set("X-Amz-Checksum-Sha256", sessionLogPaddedSHA256(ciphertext))
 
 	res, err := c.put.Do(req)
 	if err != nil {

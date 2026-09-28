@@ -22,6 +22,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 		putLength  string
 		putType    string
 		putIfNone  string
+		putSHA256  string
 		putBody    []byte
 		postedPath string
 	)
@@ -32,6 +33,7 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 		putLength = r.Header.Get("Content-Length")
 		putType = r.Header.Get("Content-Type")
 		putIfNone = r.Header.Get("If-None-Match")
+		putSHA256 = r.Header.Get("X-Amz-Checksum-Sha256")
 		buf := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(buf)
 		putBody = buf
@@ -93,6 +95,9 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	}
 	if putIfNone != "*" {
 		t.Fatalf("the upload sent If-None-Match %q; it must be create-only", putIfNone)
+	}
+	if putSHA256 != sessionLogCiphertextSHA256(ciphertext)+"=" {
+		t.Fatalf("the upload sent X-Amz-Checksum-Sha256 %q; it must be the padded digest Infisical signed", putSHA256)
 	}
 	if string(putBody) != string(ciphertext) {
 		t.Fatalf("the bucket received %q", string(putBody))

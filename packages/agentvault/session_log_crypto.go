@@ -55,6 +55,11 @@ func sessionLogCiphertextSHA256(ciphertext []byte) string {
 	return base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
+func sessionLogPaddedSHA256(ciphertext []byte) string {
+	sum := sha256.Sum256(ciphertext)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
 func newSessionLogChunkID() (string, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
