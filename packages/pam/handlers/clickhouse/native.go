@@ -74,9 +74,6 @@ func (t *tap) discard() {
 	t.buf = nil
 }
 
-// peeker exposes the buffered source so a header can be inspected without consuming it.
-func (t *tap) peeker() *bufio.Reader { return t.src }
-
 // A refusal ends the session: the stream is mid-packet.
 var errSessionRefused = errors.New("the session was refused")
 
@@ -426,11 +423,6 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 
 	compressed := s.compressed.Load()
 
-	if reason := checkBlockHeader(t.peeker(), s.rev, compressed); reason != "" {
-		s.log.Warn().Str("table", table).Msg("Refused an oversized ClickHouse data block")
-		return s.refuse(t, codeNotImplemented, reason)
-	}
-
 	if compressed {
 		r.EnableCompression()
 	}
@@ -438,7 +430,7 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 		block   proto.Block
 		discard proto.Results
 	)
-	decodeErr := block.DecodeBlock(r, s.rev, discard.Auto())
+	decodeErr := block.DecodeBlock(r, s.rev, boundedResult{discard.Auto()})
 	if compressed {
 		r.DisableCompression()
 	}
