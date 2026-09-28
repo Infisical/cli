@@ -341,7 +341,7 @@ func TestASessionThatIsGoneIsDropped(t *testing.T) {
 	}
 }
 
-func TestA404ThatIsNotInfisicalsNotFoundDropsOnlyThatChunk(t *testing.T) {
+func TestA404ThatIsNotInfisicalsNotFoundIsRetried(t *testing.T) {
 	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, "")}}}
 	log, _, tick := newTestLog(shipper)
 
@@ -352,14 +352,13 @@ func TestA404ThatIsNotInfisicalsNotFoundDropsOnlyThatChunk(t *testing.T) {
 	if !ok {
 		t.Fatal("an unnamed 404 dropped the whole session")
 	}
-	if len(spool.pending) != 0 || spool.ring.dropped != 1 {
-		t.Fatalf("the refused chunk was not dropped and counted (pending %d, dropped %d)", len(spool.pending), spool.ring.dropped)
+	if len(spool.pending) != 1 || spool.ring.dropped != 0 {
+		t.Fatalf("the chunk was not kept for a retry (pending %d, dropped %d)", len(spool.pending), spool.ring.dropped)
 	}
 
-	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 	if len(shipper.puts()) != 1 {
-		t.Fatal("the session stopped shipping after an unnamed 404")
+		t.Fatal("the chunk was not shipped once the route answered again")
 	}
 }
 
@@ -995,6 +994,7 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 		{http.StatusServiceUnavailable, true},
 		{http.StatusTooManyRequests, true},
 		{http.StatusRequestTimeout, true},
+		{http.StatusNotFound, true},
 		{http.StatusUnprocessableEntity, false},
 		{http.StatusConflict, false},
 	} {

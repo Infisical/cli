@@ -27,7 +27,9 @@ func isPoisonChunk(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	if apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode == http.StatusTooManyRequests {
+	// Infisical's own NotFound is caught earlier as a gone session, so a 404 here is a route miss, as during a rollback.
+	if apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode == http.StatusTooManyRequests ||
+		apiErr.StatusCode == http.StatusNotFound {
 		return false
 	}
 	return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
