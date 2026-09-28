@@ -883,6 +883,7 @@ type PAMAccessResponse struct {
 	SessionId                     string            `json:"sessionId"`
 	AccountType                   string            `json:"accountType"`
 	ResourceType                  string            `json:"resourceType"`
+	GatewayId                     string            `json:"gatewayId,omitempty"`
 	RelayHost                     string            `json:"relayHost"`
 	DirectAddress                 string            `json:"directAddress,omitempty"`
 	RelayClientCertificate        string            `json:"relayClientCertificate"`

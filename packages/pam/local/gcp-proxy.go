@@ -333,6 +333,7 @@ func startGCPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 			gatewayClientCert:      response.GatewayClientCertificate,
 			gatewayClientKey:       response.GatewayClientPrivateKey,
 			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			gatewayId:              response.GatewayId,
 			sessionExpiry:          time.Now().Add(duration),
 			sessionId:              response.SessionId,
 			resourceType:           response.AccountType,
