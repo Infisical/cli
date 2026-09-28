@@ -108,7 +108,24 @@ func (s *nativeSession) writeToClient(payload []byte) error {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	return s.writeClientLocked(payload)
+}
 
+// A refusal can land between a caller's own check and its write, so the check belongs under the lock
+// that orders the writes, or a packet cleared a moment earlier still trails the exception.
+func (s *nativeSession) writeToClientUnlessRefused(payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.refused.Load() {
+		return errSessionRefused
+	}
+	return s.writeClientLocked(payload)
+}
+
+func (s *nativeSession) writeClientLocked(payload []byte) error {
 	_ = s.client.SetWriteDeadline(time.Now().Add(nativeWriteTimeout))
 	defer func() { _ = s.client.SetWriteDeadline(time.Time{}) }()
 
@@ -173,6 +190,13 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
+		// Nothing can answer the client once the upstream is gone, so end the session rather than
+		// leave the client loop blocked on a read until the idle deadline.
+		defer func() {
+			if !s.refused.Load() {
+				_ = clientConn.Close()
+			}
+		}()
 		defer func() {
 			if r := recover(); r != nil {
 				l.Error().Interface("panic", r).Msg("Recovered from a panic reading the ClickHouse server direction")
@@ -434,10 +458,7 @@ func (s *nativeSession) serverLoop() {
 
 	relayRest := func(reason string) {
 		s.outcomes.degrade(reason)
-		if s.refused.Load() {
-			return
-		}
-		if err := s.writeToClient(t.take()); err != nil {
+		if err := s.writeToClientUnlessRefused(t.take()); err != nil {
 			return
 		}
 		_, _ = io.Copy(newRefusalAwareWriter(s), t.rest())
@@ -504,10 +525,7 @@ func (s *nativeSession) serverLoop() {
 			return
 		}
 
-		if s.refused.Load() {
-			return
-		}
-		if err := s.writeToClient(t.take()); err != nil {
+		if err := s.writeToClientUnlessRefused(t.take()); err != nil {
 			return
 		}
 	}
@@ -519,10 +537,7 @@ type refusalAwareWriter struct{ s *nativeSession }
 func newRefusalAwareWriter(s *nativeSession) io.Writer { return refusalAwareWriter{s: s} }
 
 func (w refusalAwareWriter) Write(p []byte) (int, error) {
-	if w.s.refused.Load() {
-		return 0, errSessionRefused
-	}
-	if err := w.s.writeToClient(p); err != nil {
+	if err := w.s.writeToClientUnlessRefused(p); err != nil {
 		return 0, err
 	}
 	return len(p), nil

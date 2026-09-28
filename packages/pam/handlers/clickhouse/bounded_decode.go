@@ -20,15 +20,36 @@ const (
 	maxQueryStringLen = 16 << 20
 	// A settings or parameters list terminates on an empty key, so it also needs a count bound.
 	maxQuerySettings = 4096
+	// Individually legal fields still add up, so the packet carries one budget across all of them.
+	maxQueryPacketBytes = 32 << 20
 )
 
-func readCappedStr(r *proto.Reader, limit int) (string, error) {
+// budget bounds a whole packet, where the per-field caps only bound one field at a time.
+type budget struct{ remaining int }
+
+func newBudget() *budget { return &budget{remaining: maxQueryPacketBytes} }
+
+func (b *budget) take(n int) error {
+	if b == nil {
+		return nil
+	}
+	if n > b.remaining {
+		return fmt.Errorf("packet exceeds its %d byte budget", maxQueryPacketBytes)
+	}
+	b.remaining -= n
+	return nil
+}
+
+func readCappedStr(r *proto.Reader, limit int, b *budget) (string, error) {
 	n, err := r.UVarInt()
 	if err != nil {
 		return "", err
 	}
 	if n > uint64(limit) {
 		return "", fmt.Errorf("declared string of %d bytes exceeds the %d byte cap", n, limit)
+	}
+	if err := b.take(int(n)); err != nil {
+		return "", err
 	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(r, buf); err != nil {
@@ -38,7 +59,11 @@ func readCappedStr(r *proto.Reader, limit int) (string, error) {
 }
 
 func readBoundedStr(r *proto.Reader) (string, error) {
-	return readCappedStr(r, maxHandshakeStringLen)
+	return readCappedStr(r, maxHandshakeStringLen, nil)
+}
+
+func readBudgetedStr(r *proto.Reader, b *budget) (string, error) {
+	return readCappedStr(r, maxHandshakeStringLen, b)
 }
 
 func decodeBoundedClientHello(r *proto.Reader) (proto.ClientHello, error) {
@@ -69,10 +94,10 @@ func decodeBoundedClientHello(r *proto.Reader) (proto.ClientHello, error) {
 }
 
 // Mirrors proto.Setting.Decode. An empty key terminates the list and leaves the rest unread.
-func decodeBoundedSetting(r *proto.Reader) (proto.Setting, error) {
+func decodeBoundedSetting(r *proto.Reader, b *budget) (proto.Setting, error) {
 	var s proto.Setting
 
-	key, err := readBoundedStr(r)
+	key, err := readBudgetedStr(r, b)
 	if err != nil {
 		return s, fmt.Errorf("key: %w", err)
 	}
@@ -84,7 +109,7 @@ func decodeBoundedSetting(r *proto.Reader) (proto.Setting, error) {
 	if err != nil {
 		return s, fmt.Errorf("flags: %w", err)
 	}
-	value, err := readCappedStr(r, maxQueryStringLen)
+	value, err := readCappedStr(r, maxQueryStringLen, b)
 	if err != nil {
 		return s, fmt.Errorf("value (%s): %w", key, err)
 	}
@@ -98,7 +123,7 @@ func decodeBoundedSetting(r *proto.Reader) (proto.Setting, error) {
 }
 
 // Mirrors proto.ClientInfo.DecodeAware.
-func decodeBoundedClientInfo(r *proto.Reader, version int) (proto.ClientInfo, error) {
+func decodeBoundedClientInfo(r *proto.Reader, version int, b *budget) (proto.ClientInfo, error) {
 	var c proto.ClientInfo
 
 	kind, err := r.UInt8()
@@ -110,13 +135,13 @@ func decodeBoundedClientInfo(r *proto.Reader, version int) (proto.ClientInfo, er
 		return c, fmt.Errorf("unknown query kind %d", kind)
 	}
 
-	if c.InitialUser, err = readBoundedStr(r); err != nil {
+	if c.InitialUser, err = readBudgetedStr(r, b); err != nil {
 		return c, fmt.Errorf("initial user: %w", err)
 	}
-	if c.InitialQueryID, err = readBoundedStr(r); err != nil {
+	if c.InitialQueryID, err = readBudgetedStr(r, b); err != nil {
 		return c, fmt.Errorf("initial query id: %w", err)
 	}
-	if c.InitialAddress, err = readBoundedStr(r); err != nil {
+	if c.InitialAddress, err = readBudgetedStr(r, b); err != nil {
 		return c, fmt.Errorf("initial address: %w", err)
 	}
 
@@ -138,13 +163,13 @@ func decodeBoundedClientInfo(r *proto.Reader, version int) (proto.ClientInfo, er
 		return c, fmt.Errorf("only tcp interface is supported")
 	}
 
-	if c.OSUser, err = readBoundedStr(r); err != nil {
+	if c.OSUser, err = readBudgetedStr(r, b); err != nil {
 		return c, fmt.Errorf("os user: %w", err)
 	}
-	if c.ClientHostname, err = readBoundedStr(r); err != nil {
+	if c.ClientHostname, err = readBudgetedStr(r, b); err != nil {
 		return c, fmt.Errorf("client hostname: %w", err)
 	}
-	if c.ClientName, err = readBoundedStr(r); err != nil {
+	if c.ClientName, err = readBudgetedStr(r, b); err != nil {
 		return c, fmt.Errorf("client name: %w", err)
 	}
 	if c.Major, err = r.Int(); err != nil {
@@ -158,7 +183,7 @@ func decodeBoundedClientInfo(r *proto.Reader, version int) (proto.ClientInfo, er
 	}
 
 	if proto.FeatureQuotaKeyInClientInfo.In(version) {
-		if c.QuotaKey, err = readBoundedStr(r); err != nil {
+		if c.QuotaKey, err = readBudgetedStr(r, b); err != nil {
 			return c, fmt.Errorf("quota key: %w", err)
 		}
 	}
@@ -194,7 +219,7 @@ func decodeBoundedClientInfo(r *proto.Reader, version int) (proto.ClientInfo, er
 			bswap.Swap64(raw)
 			copy(cfg.SpanID[:], raw)
 
-			state, err := readBoundedStr(r)
+			state, err := readBudgetedStr(r, b)
 			if err != nil {
 				return c, fmt.Errorf("trace state: %w", err)
 			}
@@ -232,15 +257,16 @@ func decodeBoundedClientInfo(r *proto.Reader, version int) (proto.ClientInfo, er
 
 // Mirrors proto.Query.DecodeAware.
 func decodeBoundedQuery(r *proto.Reader, version int) (proto.Query, error) {
+	b := newBudget()
 	var q proto.Query
 	var err error
 
-	if q.ID, err = readBoundedStr(r); err != nil {
+	if q.ID, err = readBudgetedStr(r, b); err != nil {
 		return q, fmt.Errorf("query id: %w", err)
 	}
 
 	if proto.FeatureClientWriteInfo.In(version) {
-		if q.Info, err = decodeBoundedClientInfo(r, version); err != nil {
+		if q.Info, err = decodeBoundedClientInfo(r, version, b); err != nil {
 			return q, fmt.Errorf("client info: %w", err)
 		}
 	}
@@ -250,7 +276,7 @@ func decodeBoundedQuery(r *proto.Reader, version int) (proto.Query, error) {
 	}
 
 	for {
-		s, err := decodeBoundedSetting(r)
+		s, err := decodeBoundedSetting(r, b)
 		if err != nil {
 			return q, fmt.Errorf("setting: %w", err)
 		}
@@ -264,7 +290,7 @@ func decodeBoundedQuery(r *proto.Reader, version int) (proto.Query, error) {
 	}
 
 	if proto.FeatureInterServerSecret.In(version) {
-		if q.Secret, err = readBoundedStr(r); err != nil {
+		if q.Secret, err = readBudgetedStr(r, b); err != nil {
 			return q, fmt.Errorf("inter-server secret: %w", err)
 		}
 	}
@@ -287,13 +313,13 @@ func decodeBoundedQuery(r *proto.Reader, version int) (proto.Query, error) {
 		return q, fmt.Errorf("unknown compression %d", compression)
 	}
 
-	if q.Body, err = readCappedStr(r, maxQueryStringLen); err != nil {
+	if q.Body, err = readCappedStr(r, maxQueryStringLen, b); err != nil {
 		return q, fmt.Errorf("query body: %w", err)
 	}
 
 	if proto.FeatureParameters.In(version) {
 		for {
-			s, err := decodeBoundedSetting(r)
+			s, err := decodeBoundedSetting(r, b)
 			if err != nil {
 				return q, fmt.Errorf("parameter: %w", err)
 			}

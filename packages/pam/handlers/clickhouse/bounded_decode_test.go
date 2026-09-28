@@ -159,3 +159,26 @@ func TestBoundedQueryRefusesTooManySettings(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "more than")
 }
+
+// Each setting is individually legal, so only a whole-packet budget stops thousands of them adding up.
+func TestBoundedQueryRefusesAPacketPastItsBudget(t *testing.T) {
+	q := proto.Query{ID: "id", Body: "SELECT 1", Stage: proto.StageComplete}
+	q.Info.Query = proto.ClientQueryInitial
+	q.Info.Interface = proto.InterfaceTCP
+	q.Info.InitialAddress = "127.0.0.1:0"
+	q.Info.Major, q.Info.Minor, q.Info.ProtocolVersion = 24, 8, maxNativeRevision
+
+	// Well inside the per-setting cap and the count cap, but past the packet budget in aggregate.
+	value := strings.Repeat("x", 1<<20)
+	for i := 0; i < (maxQueryPacketBytes>>20)+2; i++ {
+		q.Settings = append(q.Settings, proto.Setting{Key: fmt.Sprintf("s%d", i), Value: value})
+	}
+	require.Less(t, len(q.Settings), maxQuerySettings, "must not trip the count cap instead")
+
+	var b proto.Buffer
+	q.EncodeAware(&b, maxNativeRevision)
+
+	_, err := decodeBoundedQuery(readerSkippingCode(t, b.Buf), maxNativeRevision)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "budget")
+}

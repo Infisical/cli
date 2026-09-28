@@ -35,6 +35,17 @@ type fakeClickHouse struct {
 	serverRevision int
 	// Non-empty answers the handshake with an exception instead of a hello.
 	refuseWith string
+	// The accepted connection, so a test can drop the upstream mid-session.
+	conn net.Conn
+}
+
+func (f *fakeClickHouse) disconnect() {
+	f.mu.Lock()
+	conn := f.conn
+	f.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 func startFakeClickHouse(t *testing.T, serverRevision ...int) *fakeClickHouse {
@@ -56,6 +67,9 @@ func startFakeClickHouse(t *testing.T, serverRevision ...int) *fakeClickHouse {
 			return
 		}
 		defer conn.Close()
+		f.mu.Lock()
+		f.conn = conn
+		f.mu.Unlock()
 		f.serve(conn)
 	}()
 
@@ -657,4 +671,27 @@ func TestNativeRefusesAnOversizedQueryBody(t *testing.T) {
 
 	_, _, queries, _ := upstream.snapshot()
 	require.Empty(t, queries, "nothing may be forwarded from a packet the gateway refused")
+}
+
+// Without this the client waits on a read until the idle deadline for a result that cannot arrive.
+func TestUpstreamDisconnectEndsTheClientSession(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+
+	conn := dialProxy(t, ClickHouseProxyConfig{
+		NativeAddr:    upstream.addr(),
+		Username:      "account",
+		SessionID:     "unit",
+		SessionLogger: &recordingLogger{},
+	})
+	clientHandshake(t, conn, "someone", "whatever")
+
+	upstream.disconnect()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	buf := make([]byte, 16)
+	started := time.Now()
+	_, err := conn.Read(buf)
+	require.Error(t, err, "the client must not be left waiting once the upstream is gone")
+	// The deadline would also produce an error, so the point is that it ends well before one.
+	require.Less(t, time.Since(started), 3*time.Second, "the session should end promptly, not on a timeout")
 }
