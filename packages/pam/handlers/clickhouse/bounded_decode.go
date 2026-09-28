@@ -1,3 +1,6 @@
+// ch-go allocates a client-declared length before reading it, so one packet could exhaust the shared gateway.
+// These mirror its Hello and Query decoders with every length capped. Re-check them on ch-go upgrades.
+
 package clickhouse
 
 import (
@@ -9,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Mirrors ch-go's decoders, but every string is read through a cap.
 const (
 	// Short identifiers: names, users, hostnames, the quota key.
 	maxHandshakeStringLen = 64 << 10
