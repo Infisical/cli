@@ -168,8 +168,8 @@ func TestTheRingDropsTheOldestAndCountsIt(t *testing.T) {
 	if ring.len() != 3 {
 		t.Fatalf("ring holds %d, capacity is 3", ring.len())
 	}
-	if ring.dropped != 2 {
-		t.Fatalf("ring counted %d drops, expected 2", ring.dropped)
+	if ring.unreportedDrops != 2 {
+		t.Fatalf("ring counted %d drops, expected 2", ring.unreportedDrops)
 	}
 
 	drained := ring.drain(10)
@@ -215,8 +215,8 @@ func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
 			t.Fatalf("record %d has seq %d, expected %d; growth reordered the ring", i, rec.Seq, 10+i)
 		}
 	}
-	if ring.dropped != 0 {
-		t.Fatalf("growth counted %d drops; nothing was over capacity", ring.dropped)
+	if ring.unreportedDrops != 0 {
+		t.Fatalf("growth counted %d drops; nothing was over capacity", ring.unreportedDrops)
 	}
 }
 
@@ -253,7 +253,7 @@ func TestTheDropCountIsReportedOnceAndRidesTheFirstChunk(t *testing.T) {
 	if len(posts) == 0 {
 		t.Fatal("nothing was shipped")
 	}
-	if log.spools["s1"].ring.dropped != 0 {
+	if log.spools["s1"].ring.unreportedDrops != 0 {
 		t.Fatal("the drop count was not reset after being reported")
 	}
 }
@@ -281,8 +281,8 @@ func TestTheProxyWideFuseDropsTheNewest(t *testing.T) {
 		}
 	}
 
-	if log.total > sessionLogTotalCapacity {
-		t.Fatalf("the proxy holds %d records, past the %d fuse", log.total, sessionLogTotalCapacity)
+	if log.unsealedRecords > sessionLogTotalCapacity {
+		t.Fatalf("the proxy holds %d records, past the %d fuse", log.unsealedRecords, sessionLogTotalCapacity)
 	}
 }
 
@@ -352,8 +352,8 @@ func TestA404ThatIsNotInfisicalsNotFoundIsRetried(t *testing.T) {
 	if !ok {
 		t.Fatal("an unnamed 404 dropped the whole session")
 	}
-	if len(spool.pending) != 1 || spool.ring.dropped != 0 {
-		t.Fatalf("the chunk was not kept for a retry (pending %d, dropped %d)", len(spool.pending), spool.ring.dropped)
+	if len(spool.pending) != 1 || spool.ring.unreportedDrops != 0 {
+		t.Fatalf("the chunk was not kept for a retry (pending %d, dropped %d)", len(spool.pending), spool.ring.unreportedDrops)
 	}
 
 	tick()
@@ -416,11 +416,11 @@ func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
 		t.Fatalf("switched off=%v, pending=%d, ring=%d; expected everything held to be dropped",
 			log.hold.off, len(spool.pending), spool.ring.len())
 	}
-	if spool.ring.dropped != 2 {
-		t.Fatalf("%d records were counted as dropped, expected 2", spool.ring.dropped)
+	if spool.ring.unreportedDrops != 2 {
+		t.Fatalf("%d records were counted as dropped, expected 2", spool.ring.unreportedDrops)
 	}
-	if log.total != 0 || log.sealedBytes != 0 {
-		t.Fatalf("totals not restored: records=%d sealed bytes=%d", log.total, log.sealedBytes)
+	if log.unsealedRecords != 0 || log.sealedBytes != 0 {
+		t.Fatalf("totals not restored: records=%d sealed bytes=%d", log.unsealedRecords, log.sealedBytes)
 	}
 
 	log.record(grant, aRecord("api.github.com"))
@@ -428,8 +428,8 @@ func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
 	if len(shipper.posts()) != 1 {
 		t.Fatal("the proxy kept sending while logging was switched off")
 	}
-	if spool.ring.dropped != 3 {
-		t.Fatalf("a record made with the old key was not counted as dropped, got %d", spool.ring.dropped)
+	if spool.ring.unreportedDrops != 3 {
+		t.Fatalf("a record made with the old key was not counted as dropped, got %d", spool.ring.unreportedDrops)
 	}
 }
 
@@ -498,11 +498,11 @@ func TestRecordsArePausedAsCountedGapsNotSilentLosses(t *testing.T) {
 	log.record(grant, aRecord("api.github.com"))
 	tick()
 
-	before := log.spools["s1"].ring.dropped
+	before := log.spools["s1"].ring.unreportedDrops
 	for i := 0; i < 5; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
-	if got := log.spools["s1"].ring.dropped - before; got != 5 {
+	if got := log.spools["s1"].ring.unreportedDrops - before; got != 5 {
 		t.Fatalf("%d records were counted as dropped while paused, expected 5", got)
 	}
 }
@@ -633,7 +633,7 @@ func TestThePendingCapEvictsTheOldestAndCountsIt(t *testing.T) {
 	if len(spool.pending) > sessionLogPendingChunks {
 		t.Fatalf("pending holds %d chunks, the cap is %d", len(spool.pending), sessionLogPendingChunks)
 	}
-	if spool.ring.dropped == 0 {
+	if spool.ring.unreportedDrops == 0 {
 		t.Fatal("evicted chunks were not counted as dropped records")
 	}
 }
@@ -679,10 +679,10 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 			t.Fatalf("s%d lost its chunk; only the oldest should go", i)
 		}
 	}
-	if got := log.spools["oldest"].ring.dropped; got != 107 {
+	if got := log.spools["oldest"].ring.unreportedDrops; got != 107 {
 		t.Fatalf("the unposted chunk counted %d dropped, expected 107", got)
 	}
-	if got := log.spools["posted"].ring.dropped; got != 0 {
+	if got := log.spools["posted"].ring.unreportedDrops; got != 0 {
 		t.Fatalf("the posted chunk counted %d dropped, expected 0", got)
 	}
 }
@@ -890,8 +890,8 @@ func TestRecordsLostToASealFailureAreStillCounted(t *testing.T) {
 	if spool == nil {
 		t.Fatal("the spool disappeared")
 	}
-	if spool.ring.dropped != 3 {
-		t.Fatalf("%d records were counted as dropped after a seal failure, expected 3", spool.ring.dropped)
+	if spool.ring.unreportedDrops != 3 {
+		t.Fatalf("%d records were counted as dropped after a seal failure, expected 3", spool.ring.unreportedDrops)
 	}
 	if len(shipper.posts()) != 0 {
 		t.Fatal("a chunk was shipped despite the seal failing")
@@ -1005,9 +1005,9 @@ func TestEveryWayAChunkLeavesReleasesWhatItHeld(t *testing.T) {
 		log.record(testGrant("s1"), aRecord("api.github.com"))
 		tick()
 
-		if log.total != 0 || log.sealedBytes != 0 {
+		if log.unsealedRecords != 0 || log.sealedBytes != 0 {
 			t.Fatalf("%s: the proxy still counts %d records and %d sealed bytes; the pending cap would fill and stop recording",
-				outcome.name, log.total, log.sealedBytes)
+				outcome.name, log.unsealedRecords, log.sealedBytes)
 		}
 	}
 }
@@ -1039,8 +1039,8 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 			}
 			continue
 		}
-		if len(spool.pending) != 0 || spool.ring.dropped != 1 {
-			t.Fatalf("%d: a refused chunk was not dropped and counted (pending %d, dropped %d)", tc.status, len(spool.pending), spool.ring.dropped)
+		if len(spool.pending) != 0 || spool.ring.unreportedDrops != 1 {
+			t.Fatalf("%d: a refused chunk was not dropped and counted (pending %d, dropped %d)", tc.status, len(spool.pending), spool.ring.unreportedDrops)
 		}
 	}
 }

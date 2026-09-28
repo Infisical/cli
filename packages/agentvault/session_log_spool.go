@@ -31,7 +31,8 @@ type sessionLogRing struct {
 	capacity int
 	head     int
 	n        int
-	dropped  uint64
+
+	unreportedDrops uint64
 }
 
 func newSessionLogRing(capacity int) sessionLogRing {
@@ -47,7 +48,7 @@ func (r *sessionLogRing) push(rec sessionLogRecord) (evicted bool) {
 	if r.n == r.capacity {
 		r.buf[r.head] = rec
 		r.head = (r.head + 1) % len(r.buf)
-		r.dropped++
+		r.unreportedDrops++
 		return true
 	}
 	r.buf[(r.head+r.n)%len(r.buf)] = rec
@@ -86,20 +87,21 @@ func (r *sessionLogRing) drain(max int) []sessionLogRecord {
 	return out
 }
 
-func (r *sessionLogRing) takeDropped() uint64 {
-	dropped := r.dropped
-	r.dropped = 0
+func (r *sessionLogRing) takeUnreportedDrops() uint64 {
+	dropped := r.unreportedDrops
+	r.unreportedDrops = 0
 	return dropped
 }
 
 type sealedChunk struct {
 	meta       api.CreateAgentVaultSessionLogChunkRequest
 	ciphertext []byte
+	sealOrder  uint64
+
+	// uploadURL, urlExpires and posted are guarded by the recorder's mu.
 	uploadURL  string
 	urlExpires time.Time
-
-	sealOrder uint64
-	posted    bool
+	posted     bool
 }
 
 // A posted chunk's row already reports its records and drops, so counting them here would double-report.
