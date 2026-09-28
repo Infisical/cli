@@ -39,3 +39,43 @@ func TestBoundedResultEnforcesTheBlockLimits(t *testing.T) {
 		})
 	}
 }
+
+func blockHeader(columns, rows uint64) []byte {
+	var b proto.Buffer
+	b.PutUVarInt(1)
+	b.PutBool(false)
+	b.PutUVarInt(2)
+	b.PutInt32(-1)
+	b.PutUVarInt(0)
+	b.PutUVarInt(columns)
+	b.PutUVarInt(rows)
+	return b.Buf
+}
+
+// Wires the limit to the packet path, which the unit test above cannot see.
+func TestNativeRefusesAnOversizedDataBlock(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+
+	conn := dialProxy(t, ClickHouseProxyConfig{
+		NativeAddr:    upstream.addr(),
+		Username:      "account",
+		SessionID:     "unit",
+		SessionLogger: &recordingLogger{},
+	})
+	r := clientHandshake(t, conn, "someone", "whatever")
+
+	var b proto.Buffer
+	proto.ClientCodeData.Encode(&b)
+	b.PutString("")
+	b.Buf = append(b.Buf, blockHeader(1, 100_000_000)...)
+	_, err := conn.Write(b.Buf)
+	require.NoError(t, err)
+
+	code, message := decodeException(t, r)
+	require.Equal(t, codeNotImplemented, code)
+	require.Contains(t, message, "rows")
+
+	_, _, queries, bytesAfter := upstream.snapshot()
+	require.Empty(t, queries)
+	require.Zero(t, bytesAfter, "a refused block must not be relayed upstream")
+}
