@@ -210,8 +210,6 @@ func (p *ClickHouseProxy) handler(l zerolog.Logger) http.Handler {
 			return
 		}
 
-		// Without an HTTP upstream the reverse proxy would fail on an empty host, which reads as a network
-		// fault rather than an account that does not serve this protocol.
 		if p.config.TargetAddr == "" {
 			l.Info().Msg("Refused an HTTP connection on an account with no HTTP port")
 			writeClickHouseError(w, http.StatusBadGateway, codeNotImplemented,
@@ -469,8 +467,7 @@ func (p *ClickHouseProxy) handleUpstreamError(w http.ResponseWriter, r *http.Req
 		fmt.Sprintf("The gateway could not reach ClickHouse: %v", err))
 }
 
-// The recorded form carries a "-- parameters:" suffix, so an end-anchored rule stops matching the moment
-// a client attaches one. Both the executable SQL and the recorded form are checked.
+// Also checks the bare SQL: the recorded suffix defeats end-anchored rules.
 func (p *ClickHouseProxy) blockedBy(statements ...string) *regexp.Regexp {
 	for _, pattern := range p.config.BlockedCommands {
 		for _, statement := range statements {

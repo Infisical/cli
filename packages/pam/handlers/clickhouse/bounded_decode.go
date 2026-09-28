@@ -9,10 +9,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ch-go allocates a declared string length before it reads a single byte, and rejects only a length that
-// goes negative. A client that names a terabyte therefore kills the process outright: the allocation is a
-// fatal runtime error rather than a panic anything can recover. These decoders mirror ch-go's field for
-// field and differ only in reading every string through a cap.
+// Mirrors ch-go's decoders, but every string is read through a cap.
 const (
 	// Short identifiers: names, users, hostnames, the quota key.
 	maxHandshakeStringLen = 64 << 10

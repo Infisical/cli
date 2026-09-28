@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// Pairs a statement with how it ended. The two directions are separate goroutines and ClickHouse answers in
-// order, so the queue is what joins them back up. Best effort: a block it cannot decode costs only the outcome.
 type outcomeRecorder struct {
 	proxy *ClickHouseProxy
 

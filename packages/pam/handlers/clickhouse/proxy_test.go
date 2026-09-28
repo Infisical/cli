@@ -491,8 +491,6 @@ func TestRefusesADeflatedBodyItCannotDecode(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 }
 
-// The recorded form carries a parameter suffix, so an end-anchored rule would stop matching as soon as
-// a client attached a parameter and the blocked statement would run.
 func TestAnAnchoredRuleStillBlocksAStatementCarryingParameters(t *testing.T) {
 	reached := false
 	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {

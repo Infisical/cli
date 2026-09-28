@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Which protocol a client speaks is decided by its driver, not the user, so one port serves both. A native
-// session opens with the Hello code, a uvarint 0; every HTTP request opens with an ASCII method letter.
+// Native opens with a uvarint 0; HTTP with an ASCII method letter.
 const nativeHelloByte = 0x00
 
 // The peek happens before any HTTP server exists, so ReadHeaderTimeout does not cover it.

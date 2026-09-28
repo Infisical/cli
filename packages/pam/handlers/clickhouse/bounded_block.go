@@ -6,10 +6,7 @@ import (
 	"fmt"
 )
 
-// ch-go sizes a column from the declared row count before it reads any of it: ColInt64.DecodeColumn does
-// make([]int64, rows) and only then blocks in ReadFull. Its own ceiling is 100M rows, so a ~30 byte header
-// commits 763 MB for Int64 and 3.2 GB for Int256 while the client sends nothing further. That allocation
-// succeeds, so unlike an oversized string it is not a panic the handler can recover from.
+// ch-go allocates declared rows before reading, which recover cannot catch.
 const (
 	maxBlockRows    = 4 << 20
 	maxBlockColumns = 4096
@@ -24,18 +21,14 @@ const (
 	blockInfoEnd       = 0
 )
 
-// checkBlockHeader inspects the block header without consuming it and reports a reason to refuse. The scan
-// is best-effort on purpose: anything it cannot parse returns "", leaving the real decoder to judge, so a
-// mistake here can only miss an attack and never reject legitimate traffic.
+// Best-effort: anything unparseable falls through to ch-go rather than being refused.
 func checkBlockHeader(src *bufio.Reader, revision int, compressed bool) string {
-	// Compressed blocks arrive as LZ4 frames, which these raw bytes are not, and ch-go already caps a
-	// compressed frame at maxDataSize.
+	// Compressed frames are already capped by ch-go.
 	if compressed {
 		return ""
 	}
 
-	// Peek only what has already arrived. A fixed size would block until that many bytes exist, which
-	// stalls a session whose next block is smaller than the window.
+	// Peek only what has arrived; a fixed window would stall on a small block.
 	if _, err := src.Peek(1); err != nil {
 		return ""
 	}
@@ -73,8 +66,6 @@ func checkBlockHeader(src *bufio.Reader, revision int, compressed bool) string {
 	return ""
 }
 
-// FeatureBlockInfo is 51903 in ch-go; every revision this proxy speaks is above it, but keep the gate
-// explicit so the scan stays aligned with DecodeBlock.
 func featureBlockInfo(revision int) bool { return revision >= 51903 }
 
 type peeker struct {

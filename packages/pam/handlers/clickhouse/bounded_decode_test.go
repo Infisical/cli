@@ -15,8 +15,7 @@ func readerOver(b []byte) *proto.Reader {
 	return proto.NewReader(bytes.NewReader(b))
 }
 
-// A field read in the wrong order desynchronises the stream, which is the failure this decoder exists to
-// prevent. Encoding with ch-go and decoding with ours is what pins the two together.
+// Round-trips against ch-go so a misordered field fails.
 func TestBoundedQueryDecodeMatchesChGo(t *testing.T) {
 	span := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    trace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},

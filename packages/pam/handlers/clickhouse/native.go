@@ -18,9 +18,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Only the client direction gates anything. The server direction is read solely to pair an outcome with a
-// statement, and gives that up rather than fail a SELECT on a column type ch-go cannot infer.
-
 const (
 	// A newer server sends Hello fields ch-go cannot read, so both sides are pinned to what we can parse.
 	maxNativeRevision = proto.Version
@@ -39,8 +36,7 @@ func newNativeProxy(owner *ClickHouseProxy) *nativeProxy {
 	return &nativeProxy{ClickHouseProxy: owner}
 }
 
-// tap records every byte a decoder consumes so the exact wire bytes can be replayed upstream. One byte at a
-// time, because proto.Reader buffers 128 KB and would swallow packets we have not parsed yet.
+// One byte at a time, or proto.Reader buffers past the packet.
 type tap struct {
 	src *bufio.Reader
 	buf []byte
@@ -81,8 +77,7 @@ func (t *tap) discard() {
 // peeker exposes the buffered source so a header can be inspected without consuming it.
 func (t *tap) peeker() *bufio.Reader { return t.src }
 
-// A refusal ends the session: the stream is mid-packet, so carrying on would let a later packet flush the
-// refused bytes upstream.
+// A refusal ends the session: the stream is mid-packet.
 var errSessionRefused = errors.New("the session was refused")
 
 type nativeSession struct {
@@ -114,8 +109,7 @@ func (s *nativeSession) writeToClient(payload []byte) error {
 	return s.writeClientLocked(payload)
 }
 
-// A refusal can land between a caller's own check and its write, so the check belongs under the lock
-// that orders the writes, or a packet cleared a moment earlier still trails the exception.
+// Checked under the lock, or a packet cleared just before a refusal trails it.
 func (s *nativeSession) writeToClientUnlessRefused(payload []byte) error {
 	if len(payload) == 0 {
 		return nil
@@ -193,8 +187,7 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		// Nothing can answer the client once the upstream is gone, so end the session rather than
-		// leave the client loop blocked on a read until the idle deadline.
+		// Upstream gone: end the session rather than block until the idle deadline.
 		defer func() {
 			if !s.refused.Load() {
 				_ = clientConn.Close()
@@ -208,8 +201,7 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 		s.serverLoop()
 	}()
 
-	// Deferred so a panic in the client loop still drains the recorder. Straight-line teardown would
-	// skip it and lose every in-flight statement from the session log.
+	// Deferred so a panic still drains the recorder.
 	defer func() {
 		// Outcomes must land before the recorder drains, or a finished statement is recorded as interrupted.
 		upstream.Close()
@@ -308,8 +300,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	if err := serverHello.DecodeAware(serverReader, s.rev); err != nil {
 		return fmt.Errorf("decode server hello: %w", err)
 	}
-	// The upstream can be older than the revision pinned from the client, and anything above what it
-	// speaks puts feature-gated bytes on the wire it never reads, desynchronising the stream.
+	// Clamp to the upstream's revision so it never gets fields it can't read.
 	if serverHello.Revision > 0 && serverHello.Revision < s.rev {
 		s.rev = serverHello.Revision
 	}
@@ -414,8 +405,7 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 
 	s.outcomes.begin(statement)
 
-	// The identities a client could otherwise pick for itself. InitialAddress is left alone: ClickHouse
-	// asserts on an empty one, and forcing the kind to Initial already authorises as the account.
+	// InitialAddress stays set: ClickHouse asserts on an empty one.
 	q.Info.QuotaKey = ""
 	q.Info.Query = proto.ClientQueryInitial
 	q.Secret = ""
@@ -425,8 +415,7 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	return s.forward(b.Buf)
 }
 
-// Decodes a block only far enough to find its end, then replays the client's bytes: re-encoding would mean
-// reproducing a serialization we do not own.
+// Replays the client's bytes rather than re-encoding a format we don't own.
 func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	table, err := readBoundedStr(r)
 	if err != nil {

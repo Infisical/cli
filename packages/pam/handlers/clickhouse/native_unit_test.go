@@ -463,8 +463,6 @@ func TestNativeHandshakeRefusesAnOversizedField(t *testing.T) {
 	require.Zero(t, bytesAfterHandshake)
 }
 
-// The server direction must stop writing once a statement has been refused, or the client sees bytes
-// trailing the exception the proxy just sent it.
 func newRefusedSession(t *testing.T, client net.Conn, upstream net.Conn) *nativeSession {
 	t.Helper()
 
@@ -556,8 +554,6 @@ func TestRefusalAwareWriterRefusesAfterARefusal(t *testing.T) {
 
 func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 	t.Run("an http port is named as a handshake timeout, not a rejected credential", func(t *testing.T) {
-		// An HTTP server accepts the connection and then waits for a request, which is exactly what a
-		// misconfigured native port looks like.
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		t.Cleanup(server.Close)
 
@@ -575,8 +571,6 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		// Capped by the probe, so it must name the remaining budget rather than blame the port.
 		require.Contains(t, err.Error(), "left of the connection test's budget")
 		require.NotContains(t, err.Error(), "entered as the native one")
-		// The heartbeat stops scheduling on a rejected credential, so a silent port has to stay a
-		// transport failure rather than being read as one.
 		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 	})
 
@@ -635,8 +629,6 @@ func TestNativeAnchoredRuleStillBlocksAStatementCarryingParameters(t *testing.T)
 	require.Empty(t, queries, "the blocked statement must not reach the upstream")
 }
 
-// An absurd declared length is a fatal allocation inside ch-go, not a panic anything can recover, so the
-// session has to refuse it before the decoder ever sees it.
 func TestNativeRefusesAnOversizedQueryBody(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 
@@ -687,8 +679,7 @@ func TestUpstreamDisconnectEndsTheClientSession(t *testing.T) {
 	})
 	clientHandshake(t, conn, "someone", "whatever")
 
-	// Set before the disconnect: the proxy may close this end first, which is the very teardown under
-	// test, and setting a deadline on a closed pipe errors.
+	// Set before disconnect: the proxy may close this end first.
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
 
 	upstream.disconnect()
