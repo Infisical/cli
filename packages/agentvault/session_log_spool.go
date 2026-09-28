@@ -93,20 +93,27 @@ func (r *sessionLogRing) takeUnreportedDrops() uint64 {
 	return dropped
 }
 
+type chunkState int
+
+const (
+	chunkSealed chunkState = iota
+	chunkPosted
+)
+
 type sealedChunk struct {
 	meta       api.CreateAgentVaultSessionLogChunkRequest
 	ciphertext []byte
 	sealOrder  uint64
 
-	// uploadURL, urlExpires and posted are guarded by the recorder's mu.
+	// uploadURL, urlExpires and state are guarded by the recorder's mu.
 	uploadURL  string
 	urlExpires time.Time
-	posted     bool
+	state      chunkState
 }
 
 // A posted chunk's row already reports its records and drops, so counting them here would double-report.
 func (c *sealedChunk) lostCount() uint64 {
-	if c.posted {
+	if c.state == chunkPosted {
 		return 0
 	}
 	return c.meta.DroppedCount + uint64(c.meta.RecordCount)

@@ -642,7 +642,7 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
 	blob := make([]byte, 12<<20)
-	add := func(sessionID string, order uint64, posted bool, carried uint64) *sessionLogSpool {
+	add := func(sessionID string, order uint64, state chunkState, carried uint64) *sessionLogSpool {
 		spool, ok := log.spools[sessionID]
 		if !ok {
 			spool = newSessionLogSpool(testGrant(sessionID), log.now())
@@ -652,18 +652,18 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 			meta:       api.CreateAgentVaultSessionLogChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100, DroppedCount: carried},
 			ciphertext: blob,
 			sealOrder:  order,
-			posted:     posted,
+			state:      state,
 		})
 		log.sealedBytes += len(blob)
 		return spool
 	}
 
 	log.mu.Lock()
-	add("oldest", 0, false, 7)
-	add("posted", 1, true, 3)
+	add("oldest", 0, chunkSealed, 7)
+	add("posted", 1, chunkPosted, 3)
 	var newest *sessionLogSpool
 	for i := 2; i < 7; i++ {
-		newest = add(fmt.Sprintf("s%d", i), uint64(i), false, 0)
+		newest = add(fmt.Sprintf("s%d", i), uint64(i), chunkSealed, 0)
 	}
 	log.enforcePendingCapsLocked(newest)
 	log.mu.Unlock()

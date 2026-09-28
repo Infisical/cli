@@ -16,11 +16,11 @@ const (
 	sessionLogFlushRecords      = 1000
 	sessionLogMaxChunkPlaintext = 4 << 20
 
-	sessionLogSpoolCapacity = 5000
-	sessionLogTotalCapacity = 200_000
-
-	sessionLogPendingChunks    = 10
-	sessionLogTotalSealedBytes = 64 << 20
+	sessionLogSpoolCapacity     = 5000                   // one session's ring; full: overwrite the oldest line, count it
+	sessionLogTotalCapacity     = 200_000                // all rings together; full: drop new lines, count them
+	sessionLogPendingChunks     = 10                     // one session's sealed chunks; full: drop the oldest, count it
+	sessionLogTotalSealedBytes  = 64 << 20               // all sealed chunks; full: drop the oldest chunk of any session
+	sessionLogForgottenCapacity = maxSessionCacheEntries // idle sessions remembered; full: forget the one forgotten longest
 
 	sessionLogIdleClose = 15 * time.Minute
 
@@ -41,6 +41,8 @@ type sessionLogGrant struct {
 // Resolve only hands out a grant while session logs are on. So a grant issued after a refused request went
 // out means logs came back on after that request, and the refusal is stale.
 var sessionLogGrantsIssued atomic.Uint64
+
+func grantIssuedSince(snapshot uint64) bool { return sessionLogGrantsIssued.Load() > snapshot }
 
 func newSessionLogGrant(sessionID string, key []byte) *sessionLogGrant {
 	return &sessionLogGrant{sessionID: sessionID, key: key, issued: sessionLogGrantsIssued.Add(1)}
@@ -159,21 +161,7 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	rec.Ts = rec.at.UTC().Format(time.RFC3339Nano)
 	spool.lastRecordAt = now
 
-	if r.hold.off {
-		if g.issued <= r.hold.offThrough {
-			spool.ring.unreportedDrops++
-			return
-		}
-		r.hold.off = false
-		log.Info().Msg("agent-vault: session logs are back on, recording again")
-	}
-
-	if now.Before(r.hold.pausedUntil) {
-		spool.ring.unreportedDrops++
-		return
-	}
-
-	if r.unsealedRecords >= sessionLogTotalCapacity {
+	if !r.admitLocked(g, now) {
 		spool.ring.unreportedDrops++
 		return
 	}
@@ -188,6 +176,24 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 		default:
 		}
 	}
+}
+
+// Also switches recording back on when a grant issued after logs went off arrives.
+func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant, now time.Time) bool {
+	if r.hold.off {
+		if g.issued <= r.hold.offThrough {
+			return false
+		}
+		r.hold.off = false
+		log.Info().Msg("agent-vault: session logs are back on, recording again")
+	}
+	if now.Before(r.hold.pausedUntil) {
+		return false
+	}
+	if r.unsealedRecords >= sessionLogTotalCapacity {
+		return false
+	}
+	return true
 }
 
 func (r *sessionLogRecorder) run(stop <-chan struct{}) {
@@ -268,7 +274,7 @@ func (r *sessionLogRecorder) forgetIdleSpoolsLocked(now time.Time) {
 
 // Keeps the drop count too, so a spool forgotten while logging was off still reports what it lost.
 func (r *sessionLogRecorder) forgetSpoolLocked(sessionID string, spool *sessionLogSpool) {
-	if len(r.forgotten) >= maxSessionCacheEntries {
+	if len(r.forgotten) >= sessionLogForgottenCapacity {
 		r.evictLongestForgottenLocked()
 	}
 	r.forgotten[sessionID] = forgottenSpool{nextSeq: spool.nextSeq, unreportedDrops: spool.ring.unreportedDrops, forgottenAt: r.now()}
@@ -291,25 +297,33 @@ func (r *sessionLogRecorder) dueSpools(pass flushPass, now time.Time) []*session
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	final := pass == flushFinal
 	due := make([]*sessionLogSpool, 0, len(r.spools))
 	for _, spool := range r.spools {
-		if pass == flushWake {
-			if spool.ring.len() >= sessionLogFlushRecords {
-				due = append(due, spool)
-			}
-			continue
-		}
-		if spool.ring.len() == 0 && len(spool.pending) == 0 {
-			continue
-		}
-		// The slack absorbs ticker jitter: without it a spool stamped at one tick is a hair short of due at the next.
-		if final || spool.ring.len() >= sessionLogFlushRecords || len(spool.pending) > 0 ||
-			(spool.ring.len() > 0 && now.Sub(spool.lastFlushAt) >= sessionLogFlushInterval-sessionLogFlushSlack) {
+		if r.isDueLocked(spool, pass, now) {
 			due = append(due, spool)
 		}
 	}
 	return due
+}
+
+func (r *sessionLogRecorder) isDueLocked(spool *sessionLogSpool, pass flushPass, now time.Time) bool {
+	if pass == flushWake {
+		return spool.ring.len() >= sessionLogFlushRecords
+	}
+	if spool.ring.len() == 0 && len(spool.pending) == 0 {
+		return false
+	}
+	if pass == flushFinal {
+		return true
+	}
+	if spool.ring.len() >= sessionLogFlushRecords {
+		return true
+	}
+	if len(spool.pending) > 0 {
+		return true
+	}
+	// The slack absorbs ticker jitter: without it a spool stamped at one tick is a hair short of due at the next.
+	return now.Sub(spool.lastFlushAt) >= sessionLogFlushInterval-sessionLogFlushSlack
 }
 
 func (r *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time) {
@@ -332,6 +346,7 @@ func (r *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time)
 		}
 		for i, group := range groups {
 			var groupDropped uint64
+			// Only the first chunk of a split batch carries the drop count, so drops aren't reported twice.
 			if i == 0 {
 				groupDropped = dropped
 			}
@@ -420,32 +435,44 @@ func (r *sessionLogRecorder) flushSpool(ctx context.Context, spool *sessionLogSp
 }
 
 func (r *sessionLogRecorder) shipChunk(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, pass flushPass) bool {
-	final := pass == flushFinal
+	uploadURL, ok := r.ensureUploadLink(ctx, spool, chunk, pass)
+	if !ok {
+		return false
+	}
+	return r.upload(ctx, spool, chunk, pass, uploadURL)
+}
+
+func (r *sessionLogRecorder) ensureUploadLink(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, pass flushPass) (uploadURL string, ok bool) {
 	r.mu.Lock()
 	uploadURL, urlExpires := chunk.uploadURL, chunk.urlExpires
 	r.mu.Unlock()
-	if uploadURL == "" || r.now().Add(sessionLogUploadURLMargin).After(urlExpires) {
-		// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
-		if ctx.Err() != nil {
-			return false
-		}
-		grantsIssuedAtSend := sessionLogGrantsIssued.Load()
-		res, err := r.shipper.createChunk(ctx, final, spool.sessionID, chunk.meta)
-		if err != nil {
-			r.handleCreateFailure(spool, chunk, err, grantsIssuedAtSend)
-			return false
-		}
-		r.mu.Lock()
-		r.clockSkewReported = false
-		chunk.posted = true
-		chunk.uploadURL = res.UploadURL
-		chunk.urlExpires = r.now().Add(time.Duration(res.ExpiresInSeconds) * time.Second)
-		uploadURL = chunk.uploadURL
-		r.mu.Unlock()
+	if uploadURL != "" && !r.now().Add(sessionLogUploadURLMargin).After(urlExpires) {
+		return uploadURL, true
 	}
 
+	// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
+	if ctx.Err() != nil {
+		return "", false
+	}
+	grantsIssuedAtSend := sessionLogGrantsIssued.Load()
+	res, err := r.shipper.createChunk(ctx, pass == flushFinal, spool.sessionID, chunk.meta)
+	if err != nil {
+		r.handleCreateFailure(spool, chunk, err, grantsIssuedAtSend)
+		return "", false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clockSkewReported = false
+	chunk.state = chunkPosted
+	chunk.uploadURL = res.UploadURL
+	chunk.urlExpires = r.now().Add(time.Duration(res.ExpiresInSeconds) * time.Second)
+	return chunk.uploadURL, true
+}
+
+func (r *sessionLogRecorder) upload(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, pass flushPass, uploadURL string) bool {
 	putCtx := ctx
-	if !final {
+	if pass != flushFinal {
 		var cancel context.CancelFunc
 		putCtx, cancel = context.WithTimeout(ctx, sessionLogPutTimeout)
 		defer cancel()
@@ -513,7 +540,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if sessionLogGrantsIssued.Load() > grantsIssuedAtSend {
+	if grantIssuedSince(grantsIssuedAtSend) {
 		return
 	}
 
