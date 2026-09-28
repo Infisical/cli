@@ -3,6 +3,7 @@ package agentvault
 import (
 	"container/list"
 	"context"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,8 @@ const (
 	sessionLogFinalTimeout    = 3 * time.Second
 	sessionLogCloseTimeout    = 5 * time.Second
 	sessionLogUploadURLMargin = 10 * time.Second // get a fresh link if the current one expires within this
+
+	sessionLogShipParallelism = 8 // chunks sent at once, one per session, like refreshParallelism
 )
 
 type sessionLogGrant struct {
@@ -241,17 +244,31 @@ func (r *sessionLogRecorder) run(stop <-chan struct{}) {
 	if r == nil {
 		return
 	}
+	// Cancelled on stop, so a pass in flight ends at once and close() can start the final flush.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-stop
+		cancel()
+	}()
+
 	ticker := time.NewTicker(sessionLogFlushInterval)
 	defer ticker.Stop()
 
 	for {
+		// Checked on its own first: select picks at random among ready cases, so a due tick could win over stop.
+		select {
+		case <-stop:
+			return
+		default:
+		}
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
-			r.flush(context.Background(), flushTick)
+			r.flush(ctx, flushTick)
 		case <-r.wake:
-			r.flush(context.Background(), flushWake)
+			r.flush(ctx, flushWake)
 		}
 	}
 }
@@ -300,8 +317,19 @@ func (r *sessionLogRecorder) flush(ctx context.Context, pass flushPass) {
 		r.forgetIdleSpoolsLocked(started)
 		r.mu.Unlock()
 	}
-	for _, spool := range r.dueSpools(pass, started) {
-		r.flushSpool(ctx, spool, pass, started)
+	due := r.dueSpools(pass, started)
+	// Everything is sealed before anything is sent, so evicting for the byte cap never hits a chunk in flight.
+	for _, spool := range due {
+		r.sealRing(spool, started)
+	}
+
+	stopped := make(map[*sessionLogSpool]bool)
+	for ctx.Err() == nil {
+		batch := r.nextShipments(due, stopped)
+		if len(batch) == 0 {
+			return
+		}
+		r.applyShipments(ctx, r.sendShipments(ctx, batch, pass), stopped)
 	}
 }
 
@@ -438,83 +466,147 @@ func (r *sessionLogRecorder) evictOldestLocked(spool *sessionLogSpool) {
 		Msg("agent-vault: dropped an unshipped session log chunk, the buffer is full")
 }
 
-func (r *sessionLogRecorder) flushSpool(ctx context.Context, spool *sessionLogSpool, pass flushPass, started time.Time) {
-	r.sealRing(spool, started)
-
-	for {
-		r.mu.Lock()
-		if len(spool.pending) == 0 || !r.hold.canShip(r.now()) {
-			r.mu.Unlock()
-			return
-		}
-		chunk := spool.pending[0]
-		r.mu.Unlock()
-
-		if !r.shipChunk(ctx, spool, chunk, pass) {
-			return
-		}
-
-		r.mu.Lock()
-		r.discardHeadLocked(spool, chunk, false)
-		r.mu.Unlock()
-	}
+// One chunk picked for a round, with the upload link it held when picked.
+type shipment struct {
+	spool      *sessionLogSpool
+	chunk      *sealedChunk
+	uploadURL  string
+	urlExpires time.Time
 }
 
-func (r *sessionLogRecorder) shipChunk(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, pass flushPass) bool {
-	uploadURL, ok := r.ensureUploadLink(ctx, spool, chunk, pass)
-	if !ok {
-		return false
-	}
-	return r.upload(ctx, spool, chunk, pass, uploadURL)
+// What the network said about one shipment. Only applyShipments turns it into state.
+type shipmentResult struct {
+	shipment
+
+	skipped bool
+
+	posted             bool
+	postedURL          string
+	postedExpires      time.Time
+	grantsIssuedAtSend uint64
+	createErr          error
+
+	putErr error
 }
 
-func (r *sessionLogRecorder) ensureUploadLink(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, pass flushPass) (uploadURL string, ok bool) {
-	r.mu.Lock()
-	uploadURL, urlExpires := chunk.uploadURL, chunk.urlExpires
-	r.mu.Unlock()
-	if uploadURL != "" && !r.now().Add(sessionLogUploadURLMargin).After(urlExpires) {
-		return uploadURL, true
-	}
+func (res shipmentResult) shipped() bool {
+	return !res.skipped && res.createErr == nil && res.putErr == nil
+}
 
-	// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
-	if ctx.Err() != nil {
-		return "", false
-	}
-	grantsIssuedAtSend := sessionLogGrantsIssued.Load()
-	res, err := r.shipper.createChunk(ctx, pass == flushFinal, spool.sessionID, chunk.meta)
-	if err != nil {
-		r.handleCreateFailure(spool, chunk, err, grantsIssuedAtSend)
-		return "", false
-	}
-
+// The next chunk of up to sessionLogShipParallelism sessions. A session that failed this pass is left for the next.
+func (r *sessionLogRecorder) nextShipments(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool) []shipment {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.clockSkewReported = false
-	chunk.state = chunkPosted
-	chunk.uploadURL = res.UploadURL
-	chunk.urlExpires = r.now().Add(time.Duration(res.ExpiresInSeconds) * time.Second)
-	return chunk.uploadURL, true
+	if !r.hold.canShip(r.now()) {
+		return nil
+	}
+
+	batch := make([]shipment, 0, sessionLogShipParallelism)
+	for _, spool := range due {
+		if stopped[spool] || len(spool.pending) == 0 {
+			continue
+		}
+		chunk := spool.pending[0]
+		batch = append(batch, shipment{spool: spool, chunk: chunk, uploadURL: chunk.uploadURL, urlExpires: chunk.urlExpires})
+		if len(batch) == sessionLogShipParallelism {
+			break
+		}
+	}
+	return batch
 }
 
-func (r *sessionLogRecorder) upload(ctx context.Context, spool *sessionLogSpool, chunk *sealedChunk, pass flushPass, uploadURL string) bool {
+// Network only: the recorder's state is never touched here, so the rest of it stays single-threaded.
+func (r *sessionLogRecorder) sendShipments(ctx context.Context, batch []shipment, pass flushPass) []shipmentResult {
+	results := make([]shipmentResult, len(batch))
+	var wg sync.WaitGroup
+	for i, next := range batch {
+		wg.Add(1)
+		go func(i int, next shipment) {
+			defer wg.Done()
+			results[i] = r.sendShipment(ctx, next, pass)
+		}(i, next)
+	}
+	wg.Wait()
+	return results
+}
+
+func (r *sessionLogRecorder) sendShipment(ctx context.Context, next shipment, pass flushPass) shipmentResult {
+	res := shipmentResult{shipment: next}
+	final := pass == flushFinal
+
+	uploadURL := next.uploadURL
+	if uploadURL == "" || r.now().Add(sessionLogUploadURLMargin).After(next.urlExpires) {
+		// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
+		if ctx.Err() != nil {
+			res.skipped = true
+			return res
+		}
+		res.grantsIssuedAtSend = sessionLogGrantsIssued.Load()
+		created, err := r.shipper.createChunk(ctx, final, next.spool.sessionID, next.chunk.meta)
+		if err != nil {
+			res.createErr = err
+			return res
+		}
+		res.posted = true
+		res.postedURL = created.UploadURL
+		res.postedExpires = r.now().Add(time.Duration(created.ExpiresInSeconds) * time.Second)
+		uploadURL = created.UploadURL
+	}
+
 	putCtx := ctx
-	if pass != flushFinal {
+	if !final {
 		var cancel context.CancelFunc
 		putCtx, cancel = context.WithTimeout(ctx, sessionLogPutTimeout)
 		defer cancel()
 	}
+	res.putErr = r.shipper.putObject(putCtx, uploadURL, next.chunk.ciphertext)
+	return res
+}
 
-	if err := r.shipper.putObject(putCtx, uploadURL, chunk.ciphertext); err != nil {
-		r.mu.Lock()
-		chunk.uploadURL = ""
-		r.hold.s3Down = true
-		r.mu.Unlock()
-		log.Warn().Err(err).Str("sessionId", spool.sessionID).Str("chunkId", chunk.meta.ChunkID).
-			Msg("agent-vault: could not upload a session log chunk, will retry")
-		return false
+func (r *sessionLogRecorder) applyShipments(ctx context.Context, results []shipmentResult, stopped map[*sessionLogSpool]bool) {
+	// Rows first, then successes, then failures: a refusal can switch logging off and discard every queue,
+	// and a chunk that already has its row, or has landed, must not be counted as dropped by that.
+	r.mu.Lock()
+	for _, res := range results {
+		if res.posted {
+			r.clockSkewReported = false
+			res.chunk.state = chunkPosted
+			res.chunk.uploadURL = res.postedURL
+			res.chunk.urlExpires = res.postedExpires
+		}
 	}
+	r.mu.Unlock()
+	sort.SliceStable(results, func(i, j int) bool { return results[i].shipped() && !results[j].shipped() })
 
-	return true
+	for _, res := range results {
+		if res.shipped() {
+			r.mu.Lock()
+			r.discardHeadLocked(res.spool, res.chunk, false)
+			r.mu.Unlock()
+			continue
+		}
+		stopped[res.spool] = true
+
+		switch {
+		case res.skipped:
+		case res.createErr != nil && ctx.Err() != nil:
+			// Cancelled by shutdown: the chunk stays queued for the final flush, which is no outage to report.
+			r.mu.Lock()
+			r.hold.infisicalDown = true
+			r.mu.Unlock()
+		case res.createErr != nil:
+			r.handleCreateFailure(res.spool, res.chunk, res.createErr, res.grantsIssuedAtSend)
+		default:
+			r.mu.Lock()
+			res.chunk.uploadURL = ""
+			r.hold.s3Down = true
+			r.mu.Unlock()
+			if ctx.Err() == nil {
+				log.Warn().Err(res.putErr).Str("sessionId", res.spool.sessionID).Str("chunkId", res.chunk.meta.ChunkID).
+					Msg("agent-vault: could not upload a session log chunk, will retry")
+			}
+		}
+	}
 }
 
 func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *sealedChunk, err error, grantsIssuedAtSend uint64) {

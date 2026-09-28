@@ -43,9 +43,12 @@ type fakeShipper struct {
 	putDefault  error
 
 	nextURL int
+
+	delay time.Duration
 }
 
 func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
+	time.Sleep(f.delay)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -68,6 +71,7 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 }
 
 func (f *fakeShipper) putObject(_ context.Context, url string, ciphertext []byte) error {
+	time.Sleep(f.delay)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -691,18 +695,20 @@ func TestTheTickBreakerStopsHammeringADeadBucket(t *testing.T) {
 	shipper := &fakeShipper{putDefault: errors.New("i/o timeout")}
 	log, _, tick := newTestLog(shipper)
 
-	for i := 0; i < 5; i++ {
+	sessions := 2*sessionLogShipParallelism + 1
+	for i := 0; i < sessions; i++ {
 		log.record(testGrant(fmt.Sprintf("s%d", i)), aRecord("api.github.com"))
 	}
 	tick()
 
-	if got := len(shipper.puts()); got != 1 {
-		t.Fatalf("%d uploads were attempted in one tick after the first failed", got)
+	// One round goes out at once; the breaker has to stop the rounds after it.
+	if got := len(shipper.puts()); got != sessionLogShipParallelism {
+		t.Fatalf("%d uploads were attempted in one tick, want one round of %d", got, sessionLogShipParallelism)
 	}
-	if got := len(shipper.posts()); got != 1 {
-		t.Fatalf("%d rows were written for objects that could not be uploaded", got)
+	if got := len(shipper.posts()); got != sessionLogShipParallelism {
+		t.Fatalf("%d rows were written for objects that could not be uploaded, want one round of %d", got, sessionLogShipParallelism)
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < sessions; i++ {
 		if len(log.spools[fmt.Sprintf("s%d", i)].pending) == 0 {
 			t.Fatalf("spool s%d sealed nothing during the outage", i)
 		}
@@ -902,15 +908,16 @@ func TestAnUnreachableControlPlaneStopsTheTickAfterOneTimeout(t *testing.T) {
 	shipper := &fakeShipper{postDefault: scriptedResult{err: errors.New("i/o timeout")}}
 	log, _, tick := newTestLog(shipper)
 
-	for i := 0; i < 5; i++ {
+	sessions := 2*sessionLogShipParallelism + 1
+	for i := 0; i < sessions; i++ {
 		log.record(testGrant(fmt.Sprintf("s%d", i)), aRecord("api.github.com"))
 	}
 	tick()
 
-	if got := len(shipper.posts()); got != 1 {
-		t.Fatalf("%d chunk POSTs were attempted in one tick after the first timed out", got)
+	if got := len(shipper.posts()); got != sessionLogShipParallelism {
+		t.Fatalf("%d chunk POSTs were attempted in one tick, want one round of %d", got, sessionLogShipParallelism)
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < sessions; i++ {
 		if len(log.spools[fmt.Sprintf("s%d", i)].pending) == 0 {
 			t.Fatalf("spool s%d sealed nothing during the outage", i)
 		}
@@ -1023,6 +1030,7 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 		{http.StatusTooManyRequests, true},
 		{http.StatusRequestTimeout, true},
 		{http.StatusNotFound, true},
+		{http.StatusUnauthorized, true},
 		{http.StatusUnprocessableEntity, false},
 		{http.StatusConflict, false},
 	} {
@@ -1208,5 +1216,100 @@ func TestAWakeShipsOnlyFullRings(t *testing.T) {
 	}
 	if got := log.spools["s1"].ring.len(); got != 1 {
 		t.Fatalf("s1 holds %d records after the wake, expected it to wait for the tick", got)
+	}
+}
+
+func TestAPassShipsSessionsInParallel(t *testing.T) {
+	shipper := &fakeShipper{delay: 100 * time.Millisecond}
+	log, _, tick := newTestLog(shipper)
+
+	for i := 0; i < sessionLogShipParallelism; i++ {
+		log.record(testGrant(fmt.Sprintf("s%d", i)), aRecord("api.github.com"))
+	}
+	started := time.Now()
+	tick()
+	took := time.Since(started)
+
+	if got := len(shipper.puts()); got != sessionLogShipParallelism {
+		t.Fatalf("%d chunks were uploaded, want %d", got, sessionLogShipParallelism)
+	}
+	// In series this is 16 calls of 100ms; one round is two.
+	if took > 800*time.Millisecond {
+		t.Fatalf("shipping %d sessions took %s, which is serial; want about one round trip", sessionLogShipParallelism, took)
+	}
+}
+
+func TestStopWinsOverAReadyWake(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, _, _ := newTestLog(shipper)
+	grant := testGrant("s1")
+	for i := 0; i < sessionLogFlushRecords; i++ {
+		log.record(grant, aRecord("api.github.com"))
+	}
+
+	stop := make(chan struct{})
+	close(stop)
+	log.run(stop)
+
+	if got := len(shipper.posts()); got != 0 {
+		t.Fatalf("a pass started after stop: %d chunks were posted", got)
+	}
+}
+
+type passBlockingShipper struct {
+	fakeShipper
+	entered chan struct{}
+}
+
+func (b *passBlockingShipper) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
+	if !final {
+		close(b.entered)
+		<-ctx.Done()
+		return api.CreateAgentVaultSessionLogChunkResponse{}, ctx.Err()
+	}
+	return b.fakeShipper.createChunk(ctx, final, sessionID, req)
+}
+
+func TestStopCancelsAPassInFlightSoTheFinalFlushShipsIt(t *testing.T) {
+	shipper := &passBlockingShipper{entered: make(chan struct{})}
+	log, _, _ := newTestLog(shipper)
+	grant := testGrant("s1")
+	for i := 0; i < sessionLogFlushRecords; i++ {
+		log.record(grant, aRecord("api.github.com"))
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		log.run(stop)
+		close(done)
+	}()
+	<-shipper.entered
+	close(stop)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the pass in flight was not cancelled by stop")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), sessionLogCloseTimeout)
+	defer cancel()
+	log.close(ctx)
+	if got := len(shipper.puts()); got != 1 {
+		t.Fatalf("the final flush uploaded %d chunks, want the one the cancelled pass left", got)
+	}
+}
+
+func TestATokenErrorHoldsTheChunk(t *testing.T) {
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusForbidden, sessionLogTokenErrorName)}}}
+	log, _, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+
+	spool := log.spools["s1"]
+	if len(spool.pending) != 1 || spool.ring.unreportedDrops != 0 {
+		t.Fatalf("a TokenError dropped the chunk (pending %d, dropped %d); it should be held until the proxy logs in again", len(spool.pending), spool.ring.unreportedDrops)
 	}
 }

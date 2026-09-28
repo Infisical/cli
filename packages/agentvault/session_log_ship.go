@@ -21,6 +21,8 @@ const (
 	sessionLogCeilingReachedName = "AgentVaultSessionLogCeilingReached"
 	sessionLogDisabledName       = "AgentVaultSessionLogDisabled"
 	sessionLogClockSkewName      = "AgentVaultSessionLogClockSkew"
+	// Infisical's 403 for a proxy JWT that no longer verifies, e.g. after its signing secret rotated.
+	sessionLogTokenErrorName = "TokenError"
 )
 
 type chunkRefusal int
@@ -37,7 +39,7 @@ const (
 
 func classifyChunkError(err error) chunkRefusal {
 	switch {
-	case isProxyTokenRejected(err):
+	case isProxyTokenRejected(err), isSessionLogErrorNamed(err, sessionLogTokenErrorName):
 		return chunkTokenRejected
 	case isSessionGone(err):
 		return chunkSessionGone
@@ -53,9 +55,10 @@ func classifyChunkError(err error) chunkRefusal {
 	if !errors.As(err, &apiErr) {
 		return chunkRetry
 	}
-	// Infisical's own NotFound is caught earlier as a gone session, so a 404 here is a route miss, as during a rollback.
+	// Infisical's own 401s and NotFound are caught above, so a 401 or 404 here came from a route miss (as during
+	// a rollback) or something in front of Infisical.
 	if apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode == http.StatusTooManyRequests ||
-		apiErr.StatusCode == http.StatusNotFound {
+		apiErr.StatusCode == http.StatusNotFound || apiErr.StatusCode == http.StatusUnauthorized {
 		return chunkRetry
 	}
 	if apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {

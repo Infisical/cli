@@ -97,7 +97,7 @@ func TestRefreshDropsAGoneSessionImmediately(t *testing.T) {
 				t.Fatalf("get: %v", err)
 			}
 
-			resolver.err = &api.APIError{StatusCode: status, Name: map[int]string{404: infisicalNotFoundName}[status]}
+			resolver.err = &api.APIError{StatusCode: status, Name: map[int]string{401: infisicalUnauthorizedName, 404: infisicalNotFoundName}[status]}
 			cache.refresh()
 
 			if len(cache.entries) != 0 {
@@ -207,7 +207,8 @@ func TestRefreshTreatsOnlyTheContractRefusalsAsTerminal(t *testing.T) {
 		name   string
 		kept   bool
 	}{
-		{401, "", false}, {404, infisicalNotFoundName, false},
+		{401, infisicalUnauthorizedName, false}, {404, infisicalNotFoundName, false},
+		{401, "", true}, {401, "Unauthorized", true},
 		{404, "", true}, {404, "Not Found", true},
 		{400, "", true}, {403, "", true}, {405, "", true}, {407, "", true}, {422, "", true},
 		{408, "", true}, {429, "", true}, {500, "", true}, {502, "", true},
