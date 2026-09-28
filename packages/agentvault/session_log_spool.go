@@ -133,6 +133,14 @@ func (s *sessionLogSpool) popPending() *sealedChunk {
 	return chunk
 }
 
+func (s *sessionLogSpool) heldRecords() int {
+	held := s.ring.len()
+	for _, chunk := range s.pending {
+		held += chunk.meta.RecordCount
+	}
+	return held
+}
+
 func newSessionLogSpool(g *sessionLogGrant, now time.Time) *sessionLogSpool {
 	return &sessionLogSpool{
 		sessionID:    g.sessionID,
@@ -213,7 +221,7 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 			DroppedCount:     dropped,
 			CiphertextBytes:  len(ciphertext),
 			IV:               encodeSessionLogIV(iv),
-			CiphertextSha256: sessionLogCiphertextSHA256(ciphertext),
+			CiphertextSha256: infisicalCiphertextSha256(ciphertext),
 		},
 		ciphertext: ciphertext,
 	}, nil

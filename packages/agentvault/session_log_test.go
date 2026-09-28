@@ -139,7 +139,7 @@ func newTestLog(shipper sessionLogShipper) (log *sessionLogRecorder, advance fun
 	}
 	tick = func() {
 		advance(sessionLogFlushInterval)
-		log.flushAll(context.Background(), false)
+		log.flush(context.Background(), flushTick)
 	}
 	return log, advance, tick
 }
@@ -247,7 +247,7 @@ func TestTheDropCountIsReportedOnceAndRidesTheFirstChunk(t *testing.T) {
 	for i := 0; i < sessionLogSpoolCapacity+50; i++ {
 		log.record(grant, aRecord("api.github.com"))
 	}
-	log.flushAll(context.Background(), true)
+	log.flush(context.Background(), flushFinal)
 
 	posts := shipper.posts()
 	if len(posts) == 0 {
@@ -291,7 +291,7 @@ func TestAChunkIsPostedBeforeItIsUploaded(t *testing.T) {
 	log, _, _ := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
-	log.flushAll(context.Background(), true)
+	log.flush(context.Background(), flushFinal)
 
 	if got := shipper.kinds(); len(got) != 2 || got[0] != "post" || got[1] != "put" {
 		t.Fatalf("call order was %v, expected post then put", got)
@@ -385,7 +385,7 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	if !log.holding() || log.switchedOff {
+	if !log.hold.dropsRecords(log.now()) || log.hold.off {
 		t.Fatal("expected a ceiling pause")
 	}
 
@@ -396,7 +396,7 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 	}
 
 	advance(sessionLogPauseBackoff + time.Second)
-	log.flushAll(context.Background(), false)
+	log.flush(context.Background(), flushTick)
 	if len(shipper.posts()) < 2 {
 		t.Fatal("nothing was retried after the pause lifted")
 	}
@@ -412,9 +412,9 @@ func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
 	tick()
 
 	spool := log.spools["s1"]
-	if !log.switchedOff || len(spool.pending) != 0 || spool.ring.len() != 0 {
+	if !log.hold.off || len(spool.pending) != 0 || spool.ring.len() != 0 {
 		t.Fatalf("switched off=%v, pending=%d, ring=%d; expected everything held to be dropped",
-			log.switchedOff, len(spool.pending), spool.ring.len())
+			log.hold.off, len(spool.pending), spool.ring.len())
 	}
 	if spool.ring.dropped != 2 {
 		t.Fatalf("%d records were counted as dropped, expected 2", spool.ring.dropped)
@@ -441,7 +441,7 @@ func TestAKeyIssuedAfterTheSwitchOffResumesRecordingAtOnce(t *testing.T) {
 	tick()
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
-	if log.switchedOff {
+	if log.hold.off {
 		t.Fatal("a key issued after the refusal did not end the switch-off")
 	}
 	tick()
@@ -463,7 +463,7 @@ func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
 	log.record(grant, aRecord("api.github.com"))
 	log.switchOff(sessionLogGrantsIssued.Load() - 1)
 
-	if log.switchedOff || log.spools["s1"].ring.len() != 1 {
+	if log.hold.off || log.spools["s1"].ring.len() != 1 {
 		t.Fatal("a refusal sent before a newer key was issued still dropped what was held")
 	}
 }
@@ -476,7 +476,7 @@ func TestDropsAreStillReportedAfterAnIdleSpoolIsForgotten(t *testing.T) {
 	tick()
 
 	advance(sessionLogIdleClose + time.Minute)
-	log.flushAll(context.Background(), false)
+	log.flush(context.Background(), flushTick)
 	if _, ok := log.spools["s1"]; ok {
 		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
 	}
@@ -730,7 +730,7 @@ func TestAnIdleSpoolIsForgotten(t *testing.T) {
 	tick()
 
 	advance(sessionLogIdleClose + time.Minute)
-	log.flushAll(context.Background(), false)
+	log.flush(context.Background(), flushTick)
 
 	if _, ok := log.spools["s1"]; ok {
 		t.Fatal("an idle spool was kept; a long-lived proxy would grow without bound")
@@ -759,7 +759,7 @@ func TestCloseFlushesAndThenStopsRecording(t *testing.T) {
 	}
 
 	log.record(grant, aRecord("api.github.com"))
-	log.flushAll(context.Background(), true)
+	log.flush(context.Background(), flushFinal)
 	if len(shipper.puts()) != 1 {
 		t.Fatal("a record was accepted after close")
 	}
@@ -772,7 +772,7 @@ func TestABlockedHostIsStillRecorded(t *testing.T) {
 	log.record(testGrant("s1"), sessionLogRecord{
 		Method: "POST", Host: "evil.example", Port: "443", Path: "/collect", Status: 403, Decision: decisionBlocked,
 	})
-	log.flushAll(context.Background(), true)
+	log.flush(context.Background(), flushFinal)
 
 	if len(shipper.puts()) != 1 {
 		t.Fatal("a blocked request was not recorded")
@@ -824,7 +824,7 @@ func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
 	tick()
 
 	advance(sessionLogIdleClose + time.Minute)
-	log.flushAll(context.Background(), false)
+	log.flush(context.Background(), flushTick)
 	if _, ok := log.spools["s1"]; ok {
 		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
 	}
@@ -833,6 +833,34 @@ func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
 	got := log.spools["s1"].ring.drain(1)[0]
 	if got.Seq != 2 {
 		t.Fatalf("seq restarted at %d after the spool was rebuilt, expected it to continue at 2", got.Seq)
+	}
+}
+
+func TestAFullForgottenListDropsOnlyTheLongestForgottenSession(t *testing.T) {
+	log, _, _ := newTestLog(&fakeShipper{})
+	now := log.now()
+	log.forgotten["oldest"] = forgottenSpool{nextSeq: 1, forgottenAt: now.Add(-2 * time.Hour)}
+	for i := 1; i < maxSessionCacheEntries; i++ {
+		log.forgotten[fmt.Sprintf("s%d", i)] = forgottenSpool{nextSeq: 1, forgottenAt: now.Add(-time.Hour)}
+	}
+
+	spool := newSessionLogSpool(testGrant("newest"), now)
+	log.spools["newest"] = spool
+	log.mu.Lock()
+	log.forgetSpoolLocked("newest", spool)
+	log.mu.Unlock()
+
+	if len(log.forgotten) != maxSessionCacheEntries {
+		t.Fatalf("the forgotten list holds %d sessions, want the cap of %d", len(log.forgotten), maxSessionCacheEntries)
+	}
+	if _, ok := log.forgotten["oldest"]; ok {
+		t.Fatal("the longest forgotten session was kept")
+	}
+	if _, ok := log.forgotten["s1"]; !ok {
+		t.Fatal("a more recently forgotten session was evicted too")
+	}
+	if _, ok := log.forgotten["newest"]; !ok {
+		t.Fatal("the session just forgotten was not kept")
 	}
 }
 
@@ -924,7 +952,7 @@ func TestEverySessionShipsOnEveryTickWhileEarlierOnesTakeTimeToUpload(t *testing
 		log.record(testGrant("s2"), aRecord("api.github.com"))
 		tickAt = tickAt.Add(sessionLogFlushInterval)
 		advance(tickAt.Sub(log.now()))
-		log.flushAll(context.Background(), false)
+		log.flush(context.Background(), flushTick)
 
 		if got := len(shipper.puts()); got != 2*i {
 			t.Fatalf("after tick %d there were %d uploads; every session should ship on every tick", i, got)
@@ -940,7 +968,7 @@ func TestASessionShipsAtATickThatLandsJustShortOfAMinute(t *testing.T) {
 	tick()
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	advance(sessionLogFlushInterval - 10*time.Millisecond)
-	log.flushAll(context.Background(), false)
+	log.flush(context.Background(), flushTick)
 
 	if got := len(shipper.puts()); got != 2 {
 		t.Fatalf("there were %d uploads; a tick a few milliseconds early skipped the session", got)
@@ -955,7 +983,7 @@ func TestASessionDoesNotShipAgainHalfwayToTheNextTick(t *testing.T) {
 	tick()
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	advance(sessionLogFlushInterval / 2)
-	log.flushAll(context.Background(), false)
+	log.flush(context.Background(), flushTick)
 
 	if got := len(shipper.puts()); got != 1 {
 		t.Fatalf("there were %d uploads; a session shipped twice within one interval", got)
@@ -1006,8 +1034,8 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 
 		spool := log.spools["s1"]
 		if tc.kept {
-			if len(spool.pending) != 1 || !log.infisicalDown {
-				t.Fatalf("%d: the chunk was not kept for a retry (pending %d, infisicalDown %v)", tc.status, len(spool.pending), log.infisicalDown)
+			if len(spool.pending) != 1 || !log.hold.infisicalDown {
+				t.Fatalf("%d: the chunk was not kept for a retry (pending %d, infisicalDown %v)", tc.status, len(spool.pending), log.hold.infisicalDown)
 			}
 			continue
 		}
@@ -1024,7 +1052,7 @@ func TestTheRecorderShipsNoChunkOverTheServersRecordLimit(t *testing.T) {
 	for i := 0; i < 2500; i++ {
 		log.record(testGrant("s1"), aRecord("api.github.com"))
 	}
-	log.flushAll(context.Background(), true)
+	log.flush(context.Background(), flushFinal)
 
 	posts := shipper.posts()
 	if len(posts) != 3 {
@@ -1075,7 +1103,7 @@ func TestShutdownWaitsForAFlushInProgressSoNoChunkShipsTwice(t *testing.T) {
 	tickDone := make(chan struct{})
 	go func() {
 		defer close(tickDone)
-		log.flushAll(context.Background(), false)
+		log.flush(context.Background(), flushTick)
 	}()
 	<-shipper.entered
 
@@ -1140,7 +1168,7 @@ func TestAWakeDoesNotResetTheBreakers(t *testing.T) {
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
-	if !log.s3Down {
+	if !log.hold.s3Down {
 		t.Fatal("a failed upload did not trip the breaker, so this test proves nothing")
 	}
 	putsAfterTick := len(shipper.puts())
@@ -1150,7 +1178,7 @@ func TestAWakeDoesNotResetTheBreakers(t *testing.T) {
 	}
 	log.flush(context.Background(), flushWake)
 
-	if !log.s3Down {
+	if !log.hold.s3Down {
 		t.Fatal("a wake reset the breaker")
 	}
 	if got := len(shipper.puts()); got != putsAfterTick {

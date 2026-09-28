@@ -17,22 +17,56 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-func isSessionLogErrorNamed(err error, name string) bool {
-	var apiErr *api.APIError
-	return errors.As(err, &apiErr) && apiErr.Name == name
-}
+const (
+	sessionLogCeilingReachedName = "AgentVaultSessionLogCeilingReached"
+	sessionLogDisabledName       = "AgentVaultSessionLogDisabled"
+	sessionLogClockSkewName      = "AgentVaultSessionLogClockSkew"
+)
 
-func isPoisonChunk(err error) bool {
+type chunkRefusal int
+
+const (
+	chunkRetry chunkRefusal = iota
+	chunkTokenRejected
+	chunkSessionGone
+	chunkOrgFull
+	chunkLoggingOff
+	chunkClockSkew
+	chunkRefused
+)
+
+func classifyChunkError(err error) chunkRefusal {
+	switch {
+	case isProxyTokenRejected(err):
+		return chunkTokenRejected
+	case isSessionGone(err):
+		return chunkSessionGone
+	case isSessionLogErrorNamed(err, sessionLogCeilingReachedName):
+		return chunkOrgFull
+	case isSessionLogErrorNamed(err, sessionLogDisabledName):
+		return chunkLoggingOff
+	case isSessionLogErrorNamed(err, sessionLogClockSkewName):
+		return chunkClockSkew
+	}
+
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
-		return false
+		return chunkRetry
 	}
 	// Infisical's own NotFound is caught earlier as a gone session, so a 404 here is a route miss, as during a rollback.
 	if apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode == http.StatusTooManyRequests ||
 		apiErr.StatusCode == http.StatusNotFound {
-		return false
+		return chunkRetry
 	}
-	return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
+	if apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+		return chunkRefused
+	}
+	return chunkRetry
+}
+
+func isSessionLogErrorNamed(err error, name string) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.Name == name
 }
 
 type sessionLogShipperClient struct {
@@ -104,7 +138,7 @@ func (c *sessionLogShipperClient) putObject(ctx context.Context, uploadURL strin
 	req.Header.Set("Content-Length", strconv.Itoa(len(ciphertext)))
 	req.Header.Set("If-None-Match", "*")
 	// Signed into the link, so S3 refuses any body whose digest isn't the one Infisical recorded.
-	req.Header.Set("X-Amz-Checksum-Sha256", sessionLogPaddedSHA256(ciphertext))
+	req.Header.Set("X-Amz-Checksum-Sha256", s3ChecksumHeader(ciphertext))
 
 	res, err := c.put.Do(req)
 	if err != nil {

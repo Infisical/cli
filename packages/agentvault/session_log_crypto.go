@@ -50,12 +50,13 @@ func encodeSessionLogIV(iv []byte) string {
 
 // The browser checks the downloaded object against this before decrypting, so an edited object reads as
 // changed rather than as a decryption failure.
-func sessionLogCiphertextSHA256(ciphertext []byte) string {
+func infisicalCiphertextSha256(ciphertext []byte) string {
 	sum := sha256.Sum256(ciphertext)
 	return base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-func sessionLogPaddedSHA256(ciphertext []byte) string {
+// S3 wants the digest in padded base64, while Infisical stores it unpadded.
+func s3ChecksumHeader(ciphertext []byte) string {
 	sum := sha256.Sum256(ciphertext)
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
