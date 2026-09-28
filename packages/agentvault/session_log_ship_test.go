@@ -124,6 +124,39 @@ func TestABucketRefusalIsAnErrorThatNamesNoURL(t *testing.T) {
 	if got := err.Error(); strings.Contains(got, "X-Amz-Signature") || strings.Contains(got, bucket.URL) {
 		t.Fatalf("the error names the signed url: %q", got)
 	}
+	if got := err.Error(); !strings.HasSuffix(got, "status 403 (AccessDenied)") {
+		t.Fatalf("the error does not name S3's error code: %q", got)
+	}
+}
+
+func TestABucketRefusalWithoutAnS3ErrorBodyStillNamesTheStatus(t *testing.T) {
+	for name, body := range map[string]string{
+		"not xml":       "upstream connect error",
+		"code too long": "<Error><Code>" + strings.Repeat("A", 65) + "</Code></Error>",
+		"odd code":      "<Error><Code>Access Denied?X-Amz-Signature=secret</Code></Error>",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bucket := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte(body))
+			}))
+			defer bucket.Close()
+
+			shipper, err := newSessionLogShipper(func() string { return "proxy-token" })
+			if err != nil {
+				t.Fatal(err)
+			}
+			shipper.put.Transport = bucket.Client().Transport
+
+			err = shipper.putObject(context.Background(), bucket.URL+"/object", []byte("bytes"))
+			if err == nil {
+				t.Fatal("a 502 from the bucket was treated as a successful upload")
+			}
+			if got := err.Error(); !strings.HasSuffix(got, "status 502") {
+				t.Fatalf("the error should end at the status, got %q", got)
+			}
+		})
+	}
 }
 
 func TestAnUploadLinkThatIsNotHttpsIsRefused(t *testing.T) {

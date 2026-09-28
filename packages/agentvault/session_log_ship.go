@@ -3,10 +3,13 @@ package agentvault
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -112,7 +115,26 @@ func (c *sessionLogShipperClient) putObject(ctx context.Context, uploadURL strin
 		return nil
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		if code := s3ErrorCode(res.Body); code != "" {
+			return fmt.Errorf("agent-vault: the bucket refused the upload with status %d (%s)", res.StatusCode, code)
+		}
 		return fmt.Errorf("agent-vault: the bucket refused the upload with status %d", res.StatusCode)
 	}
 	return nil
+}
+
+var s3ErrorCodePattern = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
+
+// Only the code: S3's Message can quote the signed request.
+func s3ErrorCode(body io.Reader) string {
+	var parsed struct {
+		Code string `xml:"Code"`
+	}
+	if err := xml.NewDecoder(io.LimitReader(body, 4<<10)).Decode(&parsed); err != nil {
+		return ""
+	}
+	if !s3ErrorCodePattern.MatchString(parsed.Code) {
+		return ""
+	}
+	return parsed.Code
 }
