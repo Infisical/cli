@@ -972,6 +972,7 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 		{http.StatusBadGateway, true},
 		{http.StatusServiceUnavailable, true},
 		{http.StatusTooManyRequests, true},
+		{http.StatusRequestTimeout, true},
 		{http.StatusUnprocessableEntity, false},
 		{http.StatusConflict, false},
 	} {
@@ -1084,5 +1085,29 @@ func TestShutdownWaitsForAFlushInProgressSoNoChunkShipsTwice(t *testing.T) {
 	}
 	if len(seen) != 1 || len(shipper.puts()) != 1 {
 		t.Fatalf("one record shipped as %d chunks and %d uploads, expected 1 of each", len(seen), len(shipper.puts()))
+	}
+}
+
+func TestAChunkSpansItsEarliestAndLatestRecordWhenTheClockSteps(t *testing.T) {
+	log, advance, _ := newTestLog(&fakeShipper{})
+	grant := testGrant("s1")
+
+	advance(100 * time.Millisecond)
+	log.record(grant, aRecord("api.github.com"))
+	advance(-100 * time.Millisecond)
+	log.record(grant, aRecord("api.github.com"))
+	advance(50 * time.Millisecond)
+	log.record(grant, aRecord("api.github.com"))
+
+	spool := log.spools["s1"]
+	chunk, err := spool.sealSlice(spool.ring.drain(3), []byte("[]"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chunk.meta.StartedAt != "2026-09-16T10:00:00Z" || chunk.meta.EndedAt != "2026-09-16T10:00:00.1Z" {
+		t.Fatalf("the chunk spans %s to %s, expected the earliest and latest record", chunk.meta.StartedAt, chunk.meta.EndedAt)
+	}
+	if chunk.meta.FirstSeq != 0 || chunk.meta.LastSeq != 2 {
+		t.Fatalf("the chunk spans seq %d to %d, expected the first and last record", chunk.meta.FirstSeq, chunk.meta.LastSeq)
 	}
 }

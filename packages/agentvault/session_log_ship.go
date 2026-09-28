@@ -24,7 +24,7 @@ func isPoisonChunk(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	if apiErr.StatusCode == http.StatusTooManyRequests {
+	if apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode == http.StatusTooManyRequests {
 		return false
 	}
 	return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500

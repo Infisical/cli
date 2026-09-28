@@ -124,8 +124,11 @@ func (a *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	rec.Seq = spool.nextSeq
 	spool.nextSeq++
 	rec.ProxyID = a.proxyID
-	rec.Ts = a.now().UTC().Format(time.RFC3339Nano)
-	spool.lastRecordAt = a.now()
+	now := a.now()
+	// Without the monotonic reading, Before and After compare wall time, which is what Ts shows.
+	rec.at = now.Round(0)
+	rec.Ts = rec.at.UTC().Format(time.RFC3339Nano)
+	spool.lastRecordAt = now
 
 	if a.switchedOff {
 		if g.issued <= a.switchedOffThrough {
@@ -371,8 +374,7 @@ func (a *sessionLogRecorder) oldestPendingLocked() *sessionLogSpool {
 }
 
 func (a *sessionLogRecorder) evictOldestLocked(spool *sessionLogSpool) {
-	oldest := spool.pending[0]
-	spool.pending = spool.pending[1:]
+	oldest := spool.popPending()
 	a.sealedBytes -= len(oldest.ciphertext)
 	spool.ring.dropped += oldest.lostCount()
 	log.Warn().
@@ -403,7 +405,7 @@ func (a *sessionLogRecorder) flushSpool(ctx context.Context, spool *sessionLogSp
 
 		a.mu.Lock()
 		if len(spool.pending) > 0 && spool.pending[0] == chunk {
-			spool.pending = spool.pending[1:]
+			spool.popPending()
 			a.sealedBytes -= len(chunk.ciphertext)
 		}
 		a.mu.Unlock()
@@ -510,7 +512,7 @@ func (a *sessionLogRecorder) dropRefused(spool *sessionLogSpool, chunk *sealedCh
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(spool.pending) > 0 && spool.pending[0] == chunk {
-		spool.pending = spool.pending[1:]
+		spool.popPending()
 		a.sealedBytes -= len(chunk.ciphertext)
 		// Counted as dropped, or an agent that gets its own chunk refused could erase what it did.
 		spool.ring.dropped += chunk.lostCount()

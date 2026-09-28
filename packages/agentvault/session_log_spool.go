@@ -20,6 +20,8 @@ type sessionLogRecord struct {
 	Decision     string  `json:"decision"`
 	Service      *string `json:"service"`
 	AccessBundle *string `json:"accessBundle"`
+
+	at time.Time
 }
 
 const sessionLogRingInitialSize = 64
@@ -121,6 +123,16 @@ type sessionLogSpool struct {
 	lastFlushAt  time.Time
 }
 
+func (s *sessionLogSpool) popPending() *sealedChunk {
+	chunk := s.pending[0]
+	s.pending[0] = nil
+	s.pending = s.pending[1:]
+	if len(s.pending) == 0 {
+		s.pending = nil
+	}
+	return chunk
+}
+
 func newSessionLogSpool(g *sessionLogGrant, now time.Time) *sessionLogSpool {
 	return &sessionLogSpool{
 		sessionID:    g.sessionID,
@@ -179,12 +191,22 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 		return nil, err
 	}
 
+	// The wall clock can step, so the first and last records are not always the earliest and latest.
+	earliest, latest := records[0], records[0]
+	for _, rec := range records[1:] {
+		if rec.at.Before(earliest.at) {
+			earliest = rec
+		}
+		if rec.at.After(latest.at) {
+			latest = rec
+		}
+	}
 	first, last := records[0], records[len(records)-1]
 	return &sealedChunk{
 		meta: api.CreateAgentVaultSessionLogChunkRequest{
 			ChunkID:          chunkID,
-			StartedAt:        first.Ts,
-			EndedAt:          last.Ts,
+			StartedAt:        earliest.Ts,
+			EndedAt:          latest.Ts,
 			FirstSeq:         first.Seq,
 			LastSeq:          last.Seq,
 			RecordCount:      len(records),
