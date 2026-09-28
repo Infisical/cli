@@ -78,6 +78,9 @@ func (t *tap) discard() {
 	t.buf = nil
 }
 
+// peeker exposes the buffered source so a header can be inspected without consuming it.
+func (t *tap) peeker() *bufio.Reader { return t.src }
+
 // A refusal ends the session: the stream is mid-packet, so carrying on would let a later packet flush the
 // refused bytes upstream.
 var errSessionRefused = errors.New("the session was refused")
@@ -205,18 +208,22 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 		s.serverLoop()
 	}()
 
+	// Deferred so a panic in the client loop still drains the recorder. Straight-line teardown would
+	// skip it and lose every in-flight statement from the session log.
+	defer func() {
+		// Outcomes must land before the recorder drains, or a finished statement is recorded as interrupted.
+		upstream.Close()
+		select {
+		case <-serverDone:
+		case <-time.After(nativeWriteTimeout):
+			l.Warn().Msg("The ClickHouse server direction did not stop in time")
+		}
+		s.outcomes.finish()
+	}()
+
 	if err := s.clientLoop(clientTap, clientReader); err != nil {
 		l.Debug().Err(err).Msg("ClickHouse native session ended")
 	}
-
-	// Outcomes must land before the recorder drains, or a finished statement is recorded as interrupted.
-	upstream.Close()
-	select {
-	case <-serverDone:
-	case <-time.After(nativeWriteTimeout):
-		l.Warn().Msg("The ClickHouse server direction did not stop in time")
-	}
-	s.outcomes.finish()
 	return nil
 }
 
@@ -429,6 +436,12 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	}
 
 	compressed := s.compressed.Load()
+
+	if reason := checkBlockHeader(t.peeker(), s.rev, compressed); reason != "" {
+		s.log.Warn().Str("table", table).Msg("Refused an oversized ClickHouse data block")
+		return s.refuse(t, codeNotImplemented, reason)
+	}
+
 	if compressed {
 		r.EnableCompression()
 	}
@@ -620,10 +633,16 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 
 	// The probe's own budget wins when it is shorter, so a slow handshake cannot outlive the test.
 	budget := nativeHandshakeTimeout
+	budgetWasCapped := false
 	if probeDeadline, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(probeDeadline); remaining < budget {
-			budget = remaining
+			budget, budgetWasCapped = remaining, true
 		}
+	}
+	// Too little left to tell a silent port from a probe that simply ran out of time.
+	if budget < time.Second {
+		return fmt.Errorf("the connection test ran out of time before ClickHouse's native port could be "+
+			"checked; %s remained of the budget", budget.Round(time.Millisecond))
 	}
 	_ = conn.SetDeadline(time.Now().Add(budget))
 
@@ -645,6 +664,10 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 	code, err := r.UVarInt()
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) {
+			if budgetWasCapped {
+				return fmt.Errorf("the port accepted the connection but did not answer ClickHouse's native "+
+					"handshake in the %s left of the connection test's budget: %w", budget.Round(time.Millisecond), err)
+			}
 			return fmt.Errorf("the port accepted the connection but did not answer ClickHouse's native "+
 				"handshake within %s, which is what the HTTP port does when it is entered as the native one: %w",
 				budget.Round(time.Second), err)

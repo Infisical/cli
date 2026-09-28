@@ -562,7 +562,7 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		t.Cleanup(server.Close)
 
 		// The probe's own deadline bounds the handshake, so this does not wait out nativeHandshakeTimeout.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		err := TestNativeConnection(ctx, ClickHouseProxyConfig{
@@ -572,7 +572,9 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "did not answer ClickHouse's native handshake")
-		require.Contains(t, err.Error(), "within 1s", "the message must name the budget that was applied")
+		// Capped by the probe, so it must name the remaining budget rather than blame the port.
+		require.Contains(t, err.Error(), "left of the connection test's budget")
+		require.NotContains(t, err.Error(), "entered as the native one")
 		// The heartbeat stops scheduling on a rejected credential, so a silent port has to stay a
 		// transport failure rather than being read as one.
 		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
@@ -685,13 +687,38 @@ func TestUpstreamDisconnectEndsTheClientSession(t *testing.T) {
 	})
 	clientHandshake(t, conn, "someone", "whatever")
 
+	// Set before the disconnect: the proxy may close this end first, which is the very teardown under
+	// test, and setting a deadline on a closed pipe errors.
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+
 	upstream.disconnect()
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
 	buf := make([]byte, 16)
 	started := time.Now()
 	_, err := conn.Read(buf)
 	require.Error(t, err, "the client must not be left waiting once the upstream is gone")
 	// The deadline would also produce an error, so the point is that it ends well before one.
 	require.Less(t, time.Since(started), 3*time.Second, "the session should end promptly, not on a timeout")
+}
+
+// A near-exhausted budget is not evidence that the port is misconfigured, so the message must not say so.
+func TestNativeConnectionTestDoesNotBlameThePortWhenTheBudgetRanOut(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(server.Close)
+
+	for _, budget := range []time.Duration{20 * time.Millisecond, 100 * time.Millisecond, 400 * time.Millisecond} {
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		err := TestNativeConnection(ctx, ClickHouseProxyConfig{
+			NativeAddr: strings.TrimPrefix(server.URL, "http://"),
+			Username:   "account",
+			Database:   "analytics",
+		})
+		cancel()
+
+		require.Error(t, err, "budget=%s", budget)
+		require.NotContains(t, err.Error(), "within 0s", "budget=%s: a rounded-to-zero duration is nonsense", budget)
+		require.NotContains(t, err.Error(), "entered as the native one",
+			"budget=%s: an exhausted budget must not be reported as a misconfigured port", budget)
+		require.Contains(t, err.Error(), "ran out of time", "budget=%s", budget)
+	}
 }
