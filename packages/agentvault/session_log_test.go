@@ -839,9 +839,9 @@ func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
 func TestAFullForgottenListDropsOnlyTheLongestForgottenSession(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 	now := log.now()
-	log.forgotten["oldest"] = forgottenSpool{nextSeq: 1, forgottenAt: now.Add(-2 * time.Hour)}
-	for i := 1; i < maxSessionCacheEntries; i++ {
-		log.forgotten[fmt.Sprintf("s%d", i)] = forgottenSpool{nextSeq: 1, forgottenAt: now.Add(-time.Hour)}
+	log.forgotten.remember("oldest", forgottenSpool{nextSeq: 1})
+	for i := 1; i < sessionLogForgottenCapacity; i++ {
+		log.forgotten.remember(fmt.Sprintf("s%d", i), forgottenSpool{nextSeq: 1})
 	}
 
 	spool := newSessionLogSpool(testGrant("newest"), now)
@@ -850,16 +850,16 @@ func TestAFullForgottenListDropsOnlyTheLongestForgottenSession(t *testing.T) {
 	log.forgetSpoolLocked("newest", spool)
 	log.mu.Unlock()
 
-	if len(log.forgotten) != maxSessionCacheEntries {
-		t.Fatalf("the forgotten list holds %d sessions, want the cap of %d", len(log.forgotten), maxSessionCacheEntries)
+	if log.forgotten.len() != sessionLogForgottenCapacity {
+		t.Fatalf("the forgotten list holds %d sessions, want the cap of %d", log.forgotten.len(), sessionLogForgottenCapacity)
 	}
-	if _, ok := log.forgotten["oldest"]; ok {
+	if _, ok := log.forgotten.byID["oldest"]; ok {
 		t.Fatal("the longest forgotten session was kept")
 	}
-	if _, ok := log.forgotten["s1"]; !ok {
+	if _, ok := log.forgotten.byID["s1"]; !ok {
 		t.Fatal("a more recently forgotten session was evicted too")
 	}
-	if _, ok := log.forgotten["newest"]; !ok {
+	if _, ok := log.forgotten.byID["newest"]; !ok {
 		t.Fatal("the session just forgotten was not kept")
 	}
 }
@@ -871,7 +871,7 @@ func TestASessionThatIsGoneDoesNotReserveItsSequenceNumbers(t *testing.T) {
 	log.record(testGrant("s1"), aRecord("api.github.com"))
 	tick()
 
-	if _, ok := log.forgotten["s1"]; ok {
+	if _, ok := log.forgotten.byID["s1"]; ok {
 		t.Fatal("a session the server has forgotten is still holding a sequence number")
 	}
 }
