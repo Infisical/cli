@@ -175,7 +175,7 @@ func (a *sessionLogRecorder) run(stop <-chan struct{}) {
 		case <-ticker.C:
 			a.flushAll(context.Background(), false)
 		case <-a.wake:
-			a.flushAll(context.Background(), false)
+			a.flush(context.Background(), flushWake)
 		}
 	}
 }
@@ -204,12 +204,19 @@ func (a *sessionLogRecorder) close(ctx context.Context) {
 	}
 }
 
-func (a *sessionLogRecorder) dueSpools(final bool, now time.Time) []*sessionLogSpool {
+func (a *sessionLogRecorder) dueSpools(pass flushPass, now time.Time) []*sessionLogSpool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	final := pass == flushFinal
 	due := make([]*sessionLogSpool, 0, len(a.spools))
 	for id, spool := range a.spools {
+		if pass == flushWake {
+			if spool.ring.len() >= sessionLogFlushRecords {
+				due = append(due, spool)
+			}
+			continue
+		}
 		if spool.ring.len() == 0 && len(spool.pending) == 0 {
 			if !final && now.Sub(spool.lastRecordAt) > sessionLogIdleClose {
 				a.forgetSpoolLocked(id, spool)
@@ -278,7 +285,23 @@ func (a *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	a.switchedOffThrough = grantsIssuedAtSend
 }
 
+type flushPass int
+
+const (
+	flushTick flushPass = iota
+	flushWake
+	flushFinal
+)
+
 func (a *sessionLogRecorder) flushAll(ctx context.Context, final bool) {
+	pass := flushTick
+	if final {
+		pass = flushFinal
+	}
+	a.flush(ctx, pass)
+}
+
+func (a *sessionLogRecorder) flush(ctx context.Context, pass flushPass) {
 	if a == nil {
 		return
 	}
@@ -286,14 +309,19 @@ func (a *sessionLogRecorder) flushAll(ctx context.Context, final bool) {
 	a.flushMu.Lock()
 	defer a.flushMu.Unlock()
 
-	a.mu.Lock()
-	a.s3Down = false
-	a.infisicalDown = false
-	a.mu.Unlock()
+	// A busy session wakes the loop every thousand records, so resetting here would retry a down bucket or
+	// Infisical that often instead of once a minute.
+	if pass != flushWake {
+		a.mu.Lock()
+		a.s3Down = false
+		a.infisicalDown = false
+		a.mu.Unlock()
+	}
 
+	final := pass == flushFinal
 	// One start time for every spool, so shipping the earlier ones doesn't make the later ones late for the next tick.
 	started := a.now()
-	for _, spool := range a.dueSpools(final, started) {
+	for _, spool := range a.dueSpools(pass, started) {
 		a.flushSpool(ctx, spool, final, started)
 	}
 }

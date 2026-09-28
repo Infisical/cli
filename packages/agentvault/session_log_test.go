@@ -325,7 +325,7 @@ func TestAFailedUploadRePostsTheSameChunkID(t *testing.T) {
 }
 
 func TestASessionThatIsGoneIsDropped(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, "")}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, infisicalNotFoundName)}}}
 	log, _, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
@@ -338,6 +338,28 @@ func TestASessionThatIsGoneIsDropped(t *testing.T) {
 	tick()
 	if len(shipper.posts()) != 1 {
 		t.Fatal("the dropped spool was retried")
+	}
+}
+
+func TestA404ThatIsNotInfisicalsNotFoundDropsOnlyThatChunk(t *testing.T) {
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, "")}}}
+	log, _, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+
+	spool, ok := log.spools["s1"]
+	if !ok {
+		t.Fatal("an unnamed 404 dropped the whole session")
+	}
+	if len(spool.pending) != 0 || spool.ring.dropped != 1 {
+		t.Fatalf("the refused chunk was not dropped and counted (pending %d, dropped %d)", len(spool.pending), spool.ring.dropped)
+	}
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	if len(shipper.puts()) != 1 {
+		t.Fatal("the session stopped shipping after an unnamed 404")
 	}
 }
 
@@ -816,7 +838,7 @@ func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
 }
 
 func TestASessionThatIsGoneDoesNotReserveItsSequenceNumbers(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, "")}}}
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, infisicalNotFoundName)}}}
 	log, _, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
@@ -948,7 +970,7 @@ func TestEveryWayAChunkLeavesReleasesWhatItHeld(t *testing.T) {
 	}{
 		{"uploaded", scriptedResult{}},
 		{"refused as bad", scriptedResult{err: apiErr(http.StatusUnprocessableEntity, "")}},
-		{"session gone", scriptedResult{err: apiErr(http.StatusNotFound, "")}},
+		{"session gone", scriptedResult{err: apiErr(http.StatusNotFound, infisicalNotFoundName)}},
 	} {
 		shipper := &fakeShipper{postResults: []scriptedResult{outcome.post}}
 		log, _, tick := newTestLog(shipper)
@@ -1109,5 +1131,54 @@ func TestAChunkSpansItsEarliestAndLatestRecordWhenTheClockSteps(t *testing.T) {
 	}
 	if chunk.meta.FirstSeq != 0 || chunk.meta.LastSeq != 2 {
 		t.Fatalf("the chunk spans seq %d to %d, expected the first and last record", chunk.meta.FirstSeq, chunk.meta.LastSeq)
+	}
+}
+
+func TestAWakeDoesNotResetTheBreakers(t *testing.T) {
+	shipper := &fakeShipper{putDefault: errors.New("bucket down")}
+	log, _, tick := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	tick()
+	if !log.s3Down {
+		t.Fatal("a failed upload did not trip the breaker, so this test proves nothing")
+	}
+	putsAfterTick := len(shipper.puts())
+
+	for i := 0; i < sessionLogFlushRecords; i++ {
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+	}
+	log.flush(context.Background(), flushWake)
+
+	if !log.s3Down {
+		t.Fatal("a wake reset the breaker")
+	}
+	if got := len(shipper.puts()); got != putsAfterTick {
+		t.Fatalf("a wake retried the bucket %d times while it was down", got-putsAfterTick)
+	}
+
+	tick()
+	if got := len(shipper.puts()); got == putsAfterTick {
+		t.Fatal("the next tick did not retry the bucket")
+	}
+}
+
+func TestAWakeShipsOnlyFullRings(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, advance, _ := newTestLog(shipper)
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	for i := 0; i < sessionLogFlushRecords; i++ {
+		log.record(testGrant("s2"), aRecord("api.github.com"))
+	}
+	advance(sessionLogFlushInterval)
+	log.flush(context.Background(), flushWake)
+
+	posts := shipper.posts()
+	if len(posts) != 1 || posts[0].sessionID != "s2" {
+		t.Fatalf("a wake shipped %d chunks, expected only the full ring of s2", len(posts))
+	}
+	if got := log.spools["s1"].ring.len(); got != 1 {
+		t.Fatalf("s1 holds %d records after the wake, expected it to wait for the tick", got)
 	}
 }

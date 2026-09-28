@@ -97,7 +97,7 @@ func TestRefreshDropsAGoneSessionImmediately(t *testing.T) {
 				t.Fatalf("get: %v", err)
 			}
 
-			resolver.err = &api.APIError{StatusCode: status}
+			resolver.err = &api.APIError{StatusCode: status, Name: map[int]string{404: infisicalNotFoundName}[status]}
 			cache.refresh()
 
 			if len(cache.entries) != 0 {
@@ -198,27 +198,30 @@ func TestStaleEntryIsNotServedFromTheCache(t *testing.T) {
 	}
 }
 
-// Only the statuses resolve answers by contract end a session. A 400, 403 or 422 cannot come from resolve
-// itself, so it is a proxy-side fault or a middlebox and rides the grace window like an outage.
+// Only the refusals resolve answers by contract end a session. A 400, 403 or 422, or a 404 that is not
+// Infisical's NotFound, cannot come from resolve itself, so it is a proxy-side fault or a middlebox and rides
+// the grace window like an outage.
 func TestRefreshTreatsOnlyTheContractRefusalsAsTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		status int
+		name   string
 		kept   bool
 	}{
-		{401, false}, {404, false},
-		{400, true}, {403, true}, {405, true}, {407, true}, {422, true},
-		{408, true}, {429, true}, {500, true}, {502, true},
+		{401, "", false}, {404, infisicalNotFoundName, false},
+		{404, "", true}, {404, "Not Found", true},
+		{400, "", true}, {403, "", true}, {405, "", true}, {407, "", true}, {422, "", true},
+		{408, "", true}, {429, "", true}, {500, "", true}, {502, "", true},
 	} {
 		resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
 		cache := newTestCache(resolver)
 		if _, err := cache.get("tok"); err != nil {
 			t.Fatal(err)
 		}
-		resolver.err = &api.APIError{StatusCode: tc.status}
+		resolver.err = &api.APIError{StatusCode: tc.status, Name: tc.name}
 		cache.refresh()
 		_, kept := cache.get("tok")
 		if (kept == nil) != tc.kept {
-			t.Fatalf("status %d: credential still served = %v, want %v", tc.status, kept == nil, tc.kept)
+			t.Fatalf("status %d %q: credential still served = %v, want %v", tc.status, tc.name, kept == nil, tc.kept)
 		}
 	}
 }
@@ -307,7 +310,7 @@ func TestOnlyOneRefreshRunsAtATime(t *testing.T) {
 }
 
 func TestADefinitiveRefusalIsNotReResolvedEveryRequest(t *testing.T) {
-	resolver := &stubResolver{err: &api.APIError{StatusCode: 404, Name: "NotFound"}}
+	resolver := &stubResolver{err: &api.APIError{StatusCode: 404, Name: infisicalNotFoundName}}
 	cache := newTestCache(resolver)
 
 	for i := 0; i < 20; i++ {
@@ -345,7 +348,7 @@ func TestAnOutageIsNotRememberedAsARefusal(t *testing.T) {
 }
 
 func TestARefusalExpires(t *testing.T) {
-	resolver := &stubResolver{err: &api.APIError{StatusCode: 404}}
+	resolver := &stubResolver{err: &api.APIError{StatusCode: 404, Name: infisicalNotFoundName}}
 	cache := newTestCache(resolver)
 	_, _ = cache.get("agv_dead")
 	cache.mu.Lock()

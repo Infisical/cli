@@ -138,17 +138,21 @@ func isProxyTokenRejected(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Name == proxyTokenRejectedName
 }
 
+// The name on Infisical's own 404s. A route miss or a middlebox answers 404 under another name or none.
+const infisicalNotFoundName = "NotFound"
+
 // Resolve answers 200, 401 or 404 by contract, and 401 with a name when the proxy's own token is the
-// problem. Only those two statuses are a verdict on the session; anything else from a 4xx is a proxy-side
-// fault or a middlebox, and the heartbeat classifier reads a 4xx the same way, so the two agree. A
-// rejected proxy token is not a verdict on the session and is reported separately.
+// problem. Only a 401 or a 404 named NotFound is a verdict on the session; any other 4xx, an unnamed 404
+// included, is a proxy-side fault or a middlebox, and the heartbeat classifier reads a 4xx the same way, so
+// the two agree. A rejected proxy token is not a verdict on the session and is reported separately.
 func isSessionGone(err error) bool {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
 		if isProxyTokenRejected(err) {
 			return false
 		}
-		return apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusNotFound
+		return apiErr.StatusCode == http.StatusUnauthorized ||
+			(apiErr.StatusCode == http.StatusNotFound && apiErr.Name == infisicalNotFoundName)
 	}
 	return errors.Is(err, errSessionGone)
 }
