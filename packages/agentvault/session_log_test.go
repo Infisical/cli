@@ -1420,3 +1420,92 @@ func TestATokenErrorHoldsTheChunk(t *testing.T) {
 		t.Fatalf("a TokenError dropped the chunk (pending %d, dropped %d); it should be held until the proxy logs in again", len(spool.pending), spool.ring.unreportedDrops)
 	}
 }
+
+// Stalls chosen calls until their context ends, the way a request that never returns does, and slows others.
+type stallingShipper struct {
+	*fakeShipper
+	mu        sync.Mutex
+	posts     int
+	putsSeen  int
+	stallPost func(n int) bool
+	stallPut  func(n int) bool
+	slowPut   func(n int) time.Duration
+}
+
+func (s *stallingShipper) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
+	s.mu.Lock()
+	s.posts++
+	n := s.posts
+	s.mu.Unlock()
+	if s.stallPost != nil && s.stallPost(n) {
+		<-ctx.Done()
+		return api.CreateAgentVaultSessionLogChunkResponse{}, ctx.Err()
+	}
+	return s.fakeShipper.createChunk(ctx, final, sessionID, req)
+}
+
+func (s *stallingShipper) putObject(ctx context.Context, url string, ciphertext []byte) error {
+	s.mu.Lock()
+	s.putsSeen++
+	n := s.putsSeen
+	s.mu.Unlock()
+	if s.stallPut != nil && s.stallPut(n) {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if s.slowPut != nil {
+		time.Sleep(s.slowPut(n))
+	}
+	return s.fakeShipper.putObject(ctx, url, ciphertext)
+}
+
+// Shipping at shutdown in rounds of eight let one stuck request hold the rest past the close budget.
+func TestOneStuckRequestAtShutdownDoesNotHoldBackTheOtherSessions(t *testing.T) {
+	const sessions = 60
+	cases := []struct {
+		name    string
+		shipper func() *stallingShipper
+	}{
+		{"an upload that never returns", func() *stallingShipper {
+			return &stallingShipper{fakeShipper: &fakeShipper{}, stallPut: func(n int) bool { return n == 1 }}
+		}},
+		{"a row request that never returns", func() *stallingShipper {
+			return &stallingShipper{fakeShipper: &fakeShipper{}, stallPost: func(n int) bool { return n == 1 }}
+		}},
+		{"one upload in eight taking a while", func() *stallingShipper {
+			return &stallingShipper{fakeShipper: &fakeShipper{}, slowPut: func(n int) time.Duration {
+				if n%8 == 0 {
+					return 300 * time.Millisecond
+				}
+				return 0
+			}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shipper := tc.shipper()
+			log, _, _ := newTestLog(shipper)
+			for i := 0; i < sessions; i++ {
+				log.record(testGrant(fmt.Sprintf("s%d", i)), aRecord("api.github.com"))
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			log.close(ctx)
+
+			held := 0
+			for _, spool := range log.spools {
+				if spool.heldRecords() > 0 {
+					held++
+				}
+			}
+			stuck := 0
+			if shipper.stallPut != nil || shipper.stallPost != nil {
+				stuck = 1
+			}
+			if held != stuck {
+				t.Fatalf("%d sessions were left unshipped at shutdown, want only the %d with the stuck request", held, stuck)
+			}
+		})
+	}
+}

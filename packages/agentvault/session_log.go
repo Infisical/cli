@@ -33,6 +33,9 @@ const (
 	sessionLogUploadURLMargin = 10 * time.Second // get a fresh link if the current one expires within this
 
 	sessionLogShipParallelism = 8 // chunks sent at once, one per session, like refreshParallelism
+	// At shutdown a round waits for its slowest upload inside a 5 s budget, so one round carries every session
+	// and a stuck upload can't keep the rest from their turn.
+	sessionLogFinalShipParallelism = 64
 )
 
 type sessionLogGrant struct {
@@ -324,10 +327,14 @@ func (r *sessionLogRecorder) flush(ctx context.Context, pass flushPass) {
 
 	// Sealed a round at a time, between rounds, so a healthy pass never holds more than one round against the
 	// byte cap, and evicting for it never hits a chunk in flight.
+	width := sessionLogShipParallelism
+	if pass == flushFinal {
+		width = sessionLogFinalShipParallelism
+	}
 	stopped := make(map[*sessionLogSpool]bool)
 	for ctx.Err() == nil {
-		r.sealNextRound(due, stopped, unsealed)
-		batch := r.nextShipments(due, stopped)
+		r.sealNextRound(due, stopped, unsealed, width)
+		batch := r.nextShipments(due, stopped, width)
 		if len(batch) == 0 {
 			break
 		}
@@ -401,12 +408,12 @@ func (r *sessionLogRecorder) startSealing(due []*sessionLogSpool, started time.T
 	return unsealed
 }
 
-// The next slice of up to sessionLogShipParallelism sessions, sealed only where nothing is queued, so each
-// session has a chunk for the round that is about to ship.
-func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, unsealed map[*sessionLogSpool]int) {
+// The next slice of up to width sessions, sealed only where nothing is queued, so each session has a chunk
+// for the round that is about to ship.
+func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, unsealed map[*sessionLogSpool]int, width int) {
 	ready := 0
 	for _, spool := range due {
-		if ready == sessionLogShipParallelism {
+		if ready == width {
 			return
 		}
 		if stopped[spool] {
@@ -542,22 +549,22 @@ func (res shipmentResult) shipped() bool {
 	return !res.skipped && res.createErr == nil && res.putErr == nil
 }
 
-// The next chunk of up to sessionLogShipParallelism sessions. A session that failed this pass is left for the next.
-func (r *sessionLogRecorder) nextShipments(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool) []shipment {
+// The next chunk of up to width sessions. A session that failed this pass is left for the next.
+func (r *sessionLogRecorder) nextShipments(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, width int) []shipment {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.hold.canShip(r.now()) {
 		return nil
 	}
 
-	batch := make([]shipment, 0, sessionLogShipParallelism)
+	batch := make([]shipment, 0, width)
 	for _, spool := range due {
 		if stopped[spool] || len(spool.pending) == 0 {
 			continue
 		}
 		chunk := spool.pending[0]
 		batch = append(batch, shipment{spool: spool, chunk: chunk, uploadURL: chunk.uploadURL, urlExpires: chunk.urlExpires})
-		if len(batch) == sessionLogShipParallelism {
+		if len(batch) == width {
 			break
 		}
 	}
