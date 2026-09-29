@@ -1287,6 +1287,65 @@ func TestAHealthyPassSealsOnlyTheRoundItShips(t *testing.T) {
 	}
 }
 
+// Resealing whatever arrived since the last round would ship a busy session one request per round, and never end
+// the pass while its agent keeps working.
+func TestRequestsArrivingDuringAPassWaitForTheNext(t *testing.T) {
+	var log *sessionLogRecorder
+	grant := testGrant("s1")
+	shipper := &observingShipper{fakeShipper: &fakeShipper{}, onPost: func() {
+		log.record(grant, aRecord("api.github.com"))
+	}}
+	log, _, tick := newTestLog(shipper)
+
+	for i := 0; i < 10; i++ {
+		log.record(grant, aRecord("api.github.com"))
+	}
+	tick()
+
+	posts := shipper.posts()
+	if len(posts) != 1 || posts[0].records != 10 {
+		t.Fatalf("the pass sent %d chunks, want one with the 10 records it started with", len(posts))
+	}
+	if got := log.spools["s1"].ring.len(); got != 1 {
+		t.Fatalf("the ring holds %d records, want the 1 that arrived during the upload", got)
+	}
+}
+
+func TestAWakeShipsWhatArrivedDuringThePassBeforeIt(t *testing.T) {
+	var log *sessionLogRecorder
+	var once sync.Once
+	grant := testGrant("s1")
+	shipper := &observingShipper{fakeShipper: &fakeShipper{}, onPost: func() {
+		once.Do(func() {
+			for i := 0; i < sessionLogFlushRecords; i++ {
+				log.record(grant, aRecord("api.github.com"))
+			}
+		})
+	}}
+	log, _, tick := newTestLog(shipper)
+
+	for i := 0; i < sessionLogFlushRecords; i++ {
+		log.record(grant, aRecord("api.github.com"))
+	}
+	<-log.wake
+	tick()
+	if got := len(shipper.puts()); got != 1 {
+		t.Fatalf("the tick uploaded %d chunks, want only the one it started with", got)
+	}
+	if len(log.wake) != 1 {
+		t.Fatal("the records that arrived during the upload didn't queue a wake")
+	}
+
+	<-log.wake
+	log.flush(context.Background(), flushWake)
+	if got := len(shipper.puts()); got != 2 {
+		t.Fatalf("%d chunks were uploaded after the wake, want 2", got)
+	}
+	if held := log.spools["s1"].heldRecords(); held != 0 {
+		t.Fatalf("the spool still holds %d records after the wake", held)
+	}
+}
+
 func TestStopWinsOverAReadyWake(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)

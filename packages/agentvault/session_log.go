@@ -318,12 +318,15 @@ func (r *sessionLogRecorder) flush(ctx context.Context, pass flushPass) {
 		r.mu.Unlock()
 	}
 	due := r.dueSpools(pass, started)
+	// Only what each ring held at the start, so requests arriving mid-pass wait for the next wake or tick instead
+	// of going out one tiny chunk per round and keeping the pass open.
+	unsealed := r.startSealing(due, started)
 
 	// Sealed a round at a time, between rounds, so a healthy pass never holds more than one round against the
 	// byte cap, and evicting for it never hits a chunk in flight.
 	stopped := make(map[*sessionLogSpool]bool)
 	for ctx.Err() == nil {
-		r.sealNextRound(due, stopped, started)
+		r.sealNextRound(due, stopped, unsealed)
 		batch := r.nextShipments(due, stopped)
 		if len(batch) == 0 {
 			break
@@ -331,9 +334,10 @@ func (r *sessionLogRecorder) flush(ctx context.Context, pass flushPass) {
 		r.applyShipments(ctx, r.sendShipments(ctx, batch, pass), stopped)
 	}
 
-	// Whatever this pass couldn't ship waits sealed, where the byte cap drops the oldest first.
+	// Only a failed or cancelled round leaves any: they wait sealed, where the byte cap drops the oldest first.
 	for _, spool := range due {
-		r.sealRing(spool, started)
+		for unsealed[spool] > 0 && r.sealNext(spool, unsealed) {
+		}
 	}
 }
 
@@ -384,9 +388,22 @@ func (r *sessionLogRecorder) isDueLocked(spool *sessionLogSpool, pass flushPass,
 	return now.Sub(spool.lastFlushAt) >= sessionLogFlushInterval-sessionLogFlushSlack
 }
 
+// How many records each due ring holds as the pass starts, which is all the pass seals. The spools count as
+// flushed now, so the next tick is a full interval away however long the pass takes.
+func (r *sessionLogRecorder) startSealing(due []*sessionLogSpool, started time.Time) map[*sessionLogSpool]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	unsealed := make(map[*sessionLogSpool]int, len(due))
+	for _, spool := range due {
+		unsealed[spool] = spool.ring.len()
+		spool.lastFlushAt = started
+	}
+	return unsealed
+}
+
 // The next slice of up to sessionLogShipParallelism sessions, sealed only where nothing is queued, so each
 // session has a chunk for the round that is about to ship.
-func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, started time.Time) {
+func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, unsealed map[*sessionLogSpool]int) {
 	ready := 0
 	for _, spool := range due {
 		if ready == sessionLogShipParallelism {
@@ -398,8 +415,8 @@ func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*
 		r.mu.Lock()
 		queued := len(spool.pending) > 0
 		r.mu.Unlock()
-		if !queued {
-			r.sealNextSlice(spool, started)
+		if !queued && unsealed[spool] > 0 {
+			r.sealNext(spool, unsealed)
 			r.mu.Lock()
 			queued = len(spool.pending) > 0
 			r.mu.Unlock()
@@ -410,20 +427,17 @@ func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*
 	}
 }
 
-func (r *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time) {
-	for r.sealNextSlice(spool, started) {
-	}
-}
-
-// False once the ring is empty, which is when the spool counts as flushed.
-func (r *sessionLogRecorder) sealNextSlice(spool *sessionLogSpool, started time.Time) bool {
+// Seals the next slice of what the pass took on for this spool. False once the ring has none of it left, which
+// happens early only if session logs were switched off mid-pass and the ring was discarded.
+func (r *sessionLogRecorder) sealNext(spool *sessionLogSpool, unsealed map[*sessionLogSpool]int) bool {
 	r.mu.Lock()
-	records := spool.ring.drain(sessionLogFlushRecords)
+	records := spool.ring.drain(min(unsealed[spool], sessionLogFlushRecords))
 	if len(records) == 0 {
-		spool.lastFlushAt = started
+		unsealed[spool] = 0
 		r.mu.Unlock()
 		return false
 	}
+	unsealed[spool] -= len(records)
 	r.unsealedRecords -= len(records)
 	dropped := spool.ring.takeUnreportedDrops()
 	r.mu.Unlock()
