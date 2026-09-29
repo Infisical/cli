@@ -1239,6 +1239,54 @@ func TestAPassShipsSessionsInParallel(t *testing.T) {
 	}
 }
 
+type observingShipper struct {
+	*fakeShipper
+	onPost func()
+}
+
+func (o *observingShipper) createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error) {
+	o.onPost()
+	return o.fakeShipper.createChunk(ctx, final, sessionID, req)
+}
+
+// Sealing every busy session before the first upload could pass the byte cap and evict chunks while the
+// bucket is fine, so a healthy pass holds no more than the round it is shipping.
+func TestAHealthyPassSealsOnlyTheRoundItShips(t *testing.T) {
+	var log *sessionLogRecorder
+	var mostQueued int
+	shipper := &observingShipper{fakeShipper: &fakeShipper{}, onPost: func() {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		queued := 0
+		for _, spool := range log.spools {
+			queued += len(spool.pending)
+		}
+		mostQueued = max(mostQueued, queued)
+	}}
+	log, _, tick := newTestLog(shipper)
+
+	sessions := 3 * sessionLogShipParallelism
+	for i := 0; i < sessions; i++ {
+		grant := testGrant(fmt.Sprintf("s%d", i))
+		for j := 0; j < 2*sessionLogFlushRecords; j++ {
+			log.record(grant, aRecord("api.github.com"))
+		}
+	}
+	tick()
+
+	if mostQueued > sessionLogShipParallelism {
+		t.Fatalf("%d chunks were sealed while a round was shipping, want at most one round of %d", mostQueued, sessionLogShipParallelism)
+	}
+	if got, want := len(shipper.puts()), 2*sessions; got != want {
+		t.Fatalf("%d chunks were uploaded, want %d", got, want)
+	}
+	for id, spool := range log.spools {
+		if spool.heldRecords() != 0 || spool.ring.unreportedDrops != 0 {
+			t.Fatalf("spool %s still holds %d records and %d drops after a healthy pass", id, spool.heldRecords(), spool.ring.unreportedDrops)
+		}
+	}
+}
+
 func TestStopWinsOverAReadyWake(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)

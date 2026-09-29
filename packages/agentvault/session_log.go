@@ -318,18 +318,22 @@ func (r *sessionLogRecorder) flush(ctx context.Context, pass flushPass) {
 		r.mu.Unlock()
 	}
 	due := r.dueSpools(pass, started)
-	// Everything is sealed before anything is sent, so evicting for the byte cap never hits a chunk in flight.
-	for _, spool := range due {
-		r.sealRing(spool, started)
-	}
 
+	// Sealed a round at a time, between rounds, so a healthy pass never holds more than one round against the
+	// byte cap, and evicting for it never hits a chunk in flight.
 	stopped := make(map[*sessionLogSpool]bool)
 	for ctx.Err() == nil {
+		r.sealNextRound(due, stopped, started)
 		batch := r.nextShipments(due, stopped)
 		if len(batch) == 0 {
-			return
+			break
 		}
 		r.applyShipments(ctx, r.sendShipments(ctx, batch, pass), stopped)
+	}
+
+	// Whatever this pass couldn't ship waits sealed, where the byte cap drops the oldest first.
+	for _, spool := range due {
+		r.sealRing(spool, started)
 	}
 }
 
@@ -380,46 +384,77 @@ func (r *sessionLogRecorder) isDueLocked(spool *sessionLogSpool, pass flushPass,
 	return now.Sub(spool.lastFlushAt) >= sessionLogFlushInterval-sessionLogFlushSlack
 }
 
-func (r *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time) {
-	for {
-		r.mu.Lock()
-		records := spool.ring.drain(sessionLogFlushRecords)
-		if len(records) == 0 {
-			spool.lastFlushAt = started
-			r.mu.Unlock()
+// The next slice of up to sessionLogShipParallelism sessions, sealed only where nothing is queued, so each
+// session has a chunk for the round that is about to ship.
+func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, started time.Time) {
+	ready := 0
+	for _, spool := range due {
+		if ready == sessionLogShipParallelism {
 			return
 		}
-		r.unsealedRecords -= len(records)
-		dropped := spool.ring.takeUnreportedDrops()
-		r.mu.Unlock()
-
-		groups, err := packSessionLogRecords(records)
-		if err != nil {
-			r.dropUnsealed(spool, len(records), dropped, err)
+		if stopped[spool] {
 			continue
 		}
-		for i, group := range groups {
-			var groupDropped uint64
-			// Only the first chunk of a split batch carries the drop count, so drops aren't reported twice.
-			if i == 0 {
-				groupDropped = dropped
-			}
-
-			chunk, err := spool.sealSlice(group.records, group.plaintext, groupDropped)
-			if err != nil {
-				r.dropUnsealed(spool, len(group.records), groupDropped, err)
-				continue
-			}
-
+		r.mu.Lock()
+		queued := len(spool.pending) > 0
+		r.mu.Unlock()
+		if !queued {
+			r.sealNextSlice(spool, started)
 			r.mu.Lock()
-			chunk.sealOrder = r.nextSealOrder
-			r.nextSealOrder++
-			spool.pending = append(spool.pending, chunk)
-			r.sealedBytes += len(chunk.ciphertext)
-			r.enforcePendingCapsLocked(spool)
+			queued = len(spool.pending) > 0
 			r.mu.Unlock()
 		}
+		if queued {
+			ready++
+		}
 	}
+}
+
+func (r *sessionLogRecorder) sealRing(spool *sessionLogSpool, started time.Time) {
+	for r.sealNextSlice(spool, started) {
+	}
+}
+
+// False once the ring is empty, which is when the spool counts as flushed.
+func (r *sessionLogRecorder) sealNextSlice(spool *sessionLogSpool, started time.Time) bool {
+	r.mu.Lock()
+	records := spool.ring.drain(sessionLogFlushRecords)
+	if len(records) == 0 {
+		spool.lastFlushAt = started
+		r.mu.Unlock()
+		return false
+	}
+	r.unsealedRecords -= len(records)
+	dropped := spool.ring.takeUnreportedDrops()
+	r.mu.Unlock()
+
+	groups, err := packSessionLogRecords(records)
+	if err != nil {
+		r.dropUnsealed(spool, len(records), dropped, err)
+		return true
+	}
+	for i, group := range groups {
+		var groupDropped uint64
+		// Only the first chunk of a split batch carries the drop count, so drops aren't reported twice.
+		if i == 0 {
+			groupDropped = dropped
+		}
+
+		chunk, err := spool.sealSlice(group.records, group.plaintext, groupDropped)
+		if err != nil {
+			r.dropUnsealed(spool, len(group.records), groupDropped, err)
+			continue
+		}
+
+		r.mu.Lock()
+		chunk.sealOrder = r.nextSealOrder
+		r.nextSealOrder++
+		spool.pending = append(spool.pending, chunk)
+		r.sealedBytes += len(chunk.ciphertext)
+		r.enforcePendingCapsLocked(spool)
+		r.mu.Unlock()
+	}
+	return true
 }
 
 func (r *sessionLogRecorder) dropUnsealed(spool *sessionLogSpool, records int, dropped uint64, err error) {
