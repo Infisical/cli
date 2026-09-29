@@ -718,7 +718,7 @@ func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 
 	if !r.hold.off {
 		log.Warn().Int("records", lost).
-			Msg("agent-vault: session logs are off for this project, dropping what was held until they are back on")
+			Msg("agent-vault: session logs are disabled, dropping what was held until they're turned back on")
 	}
 	r.hold.off = true
 	r.hold.offThrough = grantsIssuedAtSend
