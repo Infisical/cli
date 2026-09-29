@@ -46,10 +46,13 @@ const (
 
 	maxConcurrentConns = 512
 
-	maxLoggedPathLen = 2048
+	maxLoggedPathLen   = 2048
+	maxLoggedMethodLen = 32
 )
 
 var errHostBlocked = errors.New("host blocked by policy")
+
+var errOpaqueTarget = errors.New("the request target must be a path; opaque forms are not forwarded")
 
 // Wraps a resolve failure so the tunnel can tell it from an upstream failure without reading the text.
 var errSessionResolve = errors.New("failed to resolve the session")
@@ -72,10 +75,11 @@ type Options struct {
 }
 
 type proxyServer struct {
-	opts      Options
-	ca        *caManager
-	cache     *sessionCache
-	transport http.RoundTripper
+	opts        Options
+	ca          *caManager
+	cache       *sessionCache
+	sessionLogs *sessionLogRecorder
+	transport   http.RoundTripper
 
 	configMu sync.RWMutex
 	config   ProxyConfig
@@ -347,20 +351,13 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
-	// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive
-	// as a request-target with no leading slash. handlePlainForward refuses the shape already; the tunnel
-	// reaches this handler directly, so the refusal belongs here where both doors meet.
-	if r.URL.Opaque != "" {
-		http.Error(w, "the request target must be a path; opaque forms are not forwarded", http.StatusBadRequest)
-		return
-	}
-
 	// Before anything reads the path: the policy check, the substitutions and the forward all have to see
 	// the bytes the agent sent, not the ones Go rebuilds.
 	normalizeRequestTarget(r.URL)
 
 	// requestPath rather than EscapedPath, so a brokered request is never recorded with a blank path.
 	reqPath := truncatePath(requestPath(r))
+	reqMethod := truncateLogged(r.Method, maxLoggedMethodLen)
 
 	resp, matched, outcome, err := ps.forward(r, scheme, hostname, port, sessionToken)
 
@@ -376,6 +373,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	case errors.Is(err, errBodyUnreadable):
 		// The agent's upload broke, so this is its request to retry rather than an upstream or policy failure.
 		decision, status, body = decisionBlocked, http.StatusBadRequest, err.Error()
+	case errors.Is(err, errOpaqueTarget):
+		decision, status, body = decisionBlocked, http.StatusBadRequest, errOpaqueTarget.Error()
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
@@ -399,7 +398,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	case decisionError:
 		event = log.Error()
 	}
-	event.Str("method", r.Method).
+	event.Str("method", reqMethod).
 		Str("host", hostname).
 		Str("path", reqPath).
 		Str("decision", decision).
@@ -419,6 +418,24 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		event = event.Err(err)
 	}
 	event.Msg("agent-vault: request")
+
+	// reqPath was taken before forward, so a credential substituted into the path never reaches the record.
+	if outcome.sessionLog != nil {
+		var service, bundle *string
+		if matched != nil {
+			service, bundle = &matched.name, &matched.accessBundleName
+		}
+		ps.sessionLogs.record(outcome.sessionLog, sessionLogRecord{
+			Method:       reqMethod,
+			Host:         hostname,
+			Port:         port,
+			Path:         reqPath,
+			Status:       status,
+			Decision:     decision,
+			Service:      service,
+			AccessBundle: bundle,
+		})
+	}
 
 	if err != nil {
 		http.Error(w, body, status)
@@ -459,21 +476,30 @@ func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port 
 type forwardOutcome struct {
 	brokered    bool
 	substituted []string
+	sessionLog  *sessionLogGrant
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
 	var outcome forwardOutcome
 
-	services, err := ps.cache.get(sessionToken)
+	services, grant, err := ps.cache.lookup(sessionToken)
 	if err != nil {
 		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
+	outcome.sessionLog = grant
 
 	// TRACE and TRACK make the upstream reflect the injected credential back in the response body. Upper
 	// -cased like allowsMethod already was, or a lowercase "trace" walks past. Refused here rather than in
 	// the handler so it is logged like every other refusal.
 	if method := strings.ToUpper(req.Method); method == http.MethodTrace || method == "TRACK" {
 		return nil, nil, outcome, fmt.Errorf("method %s echoes headers back: %w", method, errPolicyBlocked)
+	}
+
+	// 'http:admin/secrets' parses to an empty path and a non-empty Opaque, which the upstream would receive
+	// as a request-target with no leading slash. handlePlainForward refuses the shape already; the tunnel
+	// reaches this handler directly, so the refusal belongs here where both doors meet.
+	if req.URL.Opaque != "" {
+		return nil, nil, outcome, errOpaqueTarget
 	}
 
 	matched := bestMatch(services, hostname, port)
@@ -620,11 +646,31 @@ const (
 
 var errHostTooLong = errors.New("the target host is longer than a DNS name can be")
 
+var errBadPort = errors.New("the target port must be a number from 1 to 65535")
+
+func validPort(port string) bool {
+	if len(port) == 0 || len(port) > 5 || port[0] == '0' {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(port); i++ {
+		c := port[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n <= 65535
+}
+
 func checkedTarget(hostname, port string) (string, string, error) {
 	// Normalised first: a host of only dots is non-empty until the trailing dots come off.
 	hostname = normalizeHostname(hostname)
 	if hostname == "" || port == "" {
 		return "", "", errNoHostInTarget
+	}
+	if !validPort(port) {
+		return "", "", errBadPort
 	}
 	if net.ParseIP(hostname) == nil {
 		if len(hostname) > maxHostnameBytes {

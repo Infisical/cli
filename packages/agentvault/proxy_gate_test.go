@@ -24,7 +24,7 @@ func TestGateDenialsAreLogged(t *testing.T) {
 		level    string
 		decision string
 	}{
-		{"revoked or expired session", &api.APIError{StatusCode: 401}, 403, "warn", decisionBlocked},
+		{"revoked or expired session", &api.APIError{StatusCode: 401, Name: infisicalUnauthorizedName}, 403, "warn", decisionBlocked},
 		{"infisical unreachable", errors.New("dial tcp: connection refused"), 502, "error", decisionError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

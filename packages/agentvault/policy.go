@@ -17,7 +17,7 @@ var errBodyUnreadable = errors.New("could not read the request body")
 
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	if !svc.allowsMethod(req.Method) {
-		return fmt.Errorf("service %q does not allow %s: %w", svc.name, req.Method, errPolicyBlocked)
+		return fmt.Errorf("service %q does not allow %s: %w", svc.name, truncateLogged(req.Method, maxLoggedMethodLen), errPolicyBlocked)
 	}
 	if len(svc.allowedPathPrefixes) > 0 {
 		path := requestPath(req)
@@ -103,8 +103,8 @@ func escapeInvalidPathBytes(raw string) string {
 func requestPath(req *http.Request) string {
 	path := req.URL.EscapedPath()
 	if path == "" {
-		// forwardHTTP refuses an opaque target before this runs, so the branch is a floor under that check
-		// rather than a shape expected here. A genuinely empty path is the root.
+		// forward refuses an opaque target before any policy reads the path, so this branch is what the log
+		// line and the session log record show for one. A genuinely empty path is the root.
 		if req.URL.Opaque != "" {
 			return req.URL.Opaque
 		}
@@ -114,10 +114,14 @@ func requestPath(req *http.Request) string {
 }
 
 func truncatePath(path string) string {
-	if len(path) > maxLoggedPathLen {
-		return path[:maxLoggedPathLen] + "...[truncated]"
+	return truncateLogged(path, maxLoggedPathLen)
+}
+
+func truncateLogged(value string, limit int) string {
+	if len(value) > limit {
+		return value[:limit] + "...[truncated]"
 	}
-	return path
+	return value
 }
 
 // Never decodes: anything whose meaning depends on the upstream's normalisation is refused outright, so the

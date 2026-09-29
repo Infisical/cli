@@ -19,7 +19,7 @@ import (
 
 type expiringResolver struct{ ttl time.Duration }
 
-func (r expiringResolver) resolve(string) (*resolveResult, error) {
+func (r expiringResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
 	exp := time.Now().Add(r.ttl)
 	return &resolveResult{SessionID: "s1", ExpiresAt: &exp}, nil
 }
@@ -94,7 +94,7 @@ func TestAnUpstreamFailureInsideTheTunnelKeepsTheDetailOutOfTheBody(t *testing.T
 
 type rejectedProxyResolver struct{}
 
-func (rejectedProxyResolver) resolve(string) (*resolveResult, error) {
+func (rejectedProxyResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
 	return nil, &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName, ErrorMessage: "Agent Vault proxy token has been revoked"}
 }
 

@@ -18,6 +18,23 @@ func TestTargetsWithoutAHostAreRefused(t *testing.T) {
 	}
 }
 
+func TestOnlyPlainPortNumbersAreAccepted(t *testing.T) {
+	for _, port := range []string{"0", "0443", "+443", "99999", "65536", "44a", strings.Repeat("0", 1<<20) + "443"} {
+		target := "api.example.com:" + port
+		if _, _, err := parseConnectTarget(target); err == nil {
+			t.Errorf("parseConnectTarget accepted port %.20q", port)
+		}
+		if _, _, err := parseForwardTarget(target); err == nil {
+			t.Errorf("parseForwardTarget accepted port %.20q", port)
+		}
+	}
+	for _, port := range []string{"1", "80", "443", "8443", "65535"} {
+		if _, _, err := parseConnectTarget("api.example.com:" + port); err != nil {
+			t.Errorf("parseConnectTarget refused port %q: %v", port, err)
+		}
+	}
+}
+
 func TestOrdinaryTargetsStillParse(t *testing.T) {
 	for _, tc := range []struct {
 		target, host, connectPort, forwardPort string

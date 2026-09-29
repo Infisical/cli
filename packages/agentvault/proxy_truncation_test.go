@@ -17,7 +17,7 @@ import (
 
 type sessionOnlyResolver struct{}
 
-func (sessionOnlyResolver) resolve(string) (*resolveResult, error) {
+func (sessionOnlyResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
 	return &resolveResult{SessionID: "s1"}, nil
 }
 
