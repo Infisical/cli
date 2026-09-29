@@ -337,7 +337,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true, params.IncludePersonalOverrides)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
-		if err == nil {
+		if err == nil && !IsSecretsBackupDisabled() {
 			backupEncryptionKey, err := GetBackupEncryptionKey()
 			if err != nil {
 				return nil, err
@@ -348,7 +348,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		secretsToReturn = res.Secrets
 		errorToReturn = err
 		// only attempt to serve cached secrets if no internet connection and if at least one secret cached
-		if !isConnected {
+		if !isConnected && !IsSecretsBackupDisabled() {
 			backupEncryptionKey, _ := GetBackupEncryptionKey()
 			if backupEncryptionKey != nil {
 				backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
@@ -379,6 +379,10 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 	}
 
 	return secretsToReturn, errorToReturn
+}
+
+func IsSecretsBackupDisabled() bool {
+	return os.Getenv(INFISICAL_DISABLE_SECRETS_BACKUP_NAME) != ""
 }
 
 func GetBackupEncryptionKey() ([]byte, error) {
