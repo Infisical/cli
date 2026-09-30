@@ -9,6 +9,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/google/uuid"
 	"github.com/posthog/posthog-go"
 	"github.com/spf13/cobra"
 )
@@ -116,15 +117,17 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to create project")
 	}
 
-	projectID := util.SanitizeDisplay(project.ID)
-	util.PrintSuccessMessage(fmt.Sprintf("Created project %q (id: %s)", util.SanitizeDisplay(project.Name), projectID))
+	util.PrintSuccessMessage(fmt.Sprintf("Created project %q (id: %s)", util.SanitizeDisplay(project.Name), util.SanitizeDisplay(project.ID)))
 	if len(project.Environments) > 0 {
 		util.PrintlnStdout("Environments:")
 		for _, e := range project.Environments {
 			util.PrintfStdout("  - %s (%s)\n", util.SanitizeDisplay(e.Name), util.SanitizeDisplay(e.Slug))
 		}
 	}
-	util.PrintlnStdout("\nRun `infisical init --project-id " + projectID + "` to link this directory.")
+	// Only print the hint after validating that it's a valid UUID 
+	if parsedID, err := uuid.Parse(project.ID); err == nil {
+		util.PrintlnStdout("\nRun `infisical init --project-id " + parsedID.String() + "` to link this directory.")
+	}
 
 	Telemetry.CaptureEvent("cli-command:projects create", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
