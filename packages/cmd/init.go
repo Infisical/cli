@@ -28,7 +28,7 @@ var initCmd = &cobra.Command{
 	Example: `# Pick an organization and project interactively
 infisical init
 
-# Link this directory to a known project without prompting (see infisical projects list)
+# Link this directory to a known project without prompting (the ID is in the project's settings in the dashboard)
 infisical init --project-id <project-id>`,
 	Args: cobra.ExactArgs(0),
 	PreRun: func(cmd *cobra.Command, args []string) {
@@ -57,7 +57,7 @@ infisical init --project-id <project-id>`,
 		// The org and project pickers below need a terminal. Without one, exit and
 		// point at --project-id instead of prompting.
 		if projectID == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
-			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (see `infisical projects list`).")
+			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (you can find it in your project's settings in the Infisical dashboard).")
 		}
 
 		userCreds, err := util.GetCurrentLoggedInUserDetails(true)
