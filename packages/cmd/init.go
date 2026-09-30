@@ -39,7 +39,7 @@ infisical init --project-id <project-id>`,
 
 		if util.WorkspaceConfigFileExistsInCurrentPath() {
 			if !isatty.IsTerminal(os.Stdin.Fd()) {
-				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). Remove it first to link a different project.")
+				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). To link a different project, change workspaceId in .infisical.json.")
 			}
 
 			shouldOverride, err := shouldOverrideWorkspacePrompt()
