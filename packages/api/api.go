@@ -346,7 +346,7 @@ func CallCreateProject(httpClient *resty.Client, request CreateProjectRequest) (
 		SetBody(request).
 		SetResult(&resp).
 		SetHeader("User-Agent", USER_AGENT).
-		Post(fmt.Sprintf("%v/v2/workspace", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v1/projects", config.INFISICAL_URL))
 
 	if err != nil {
 		return CreatedProject{}, NewGenericRequestError(operationCallCreateProject, err)
