@@ -25,36 +25,37 @@ var initCmd = &cobra.Command{
 	Use:                   "init",
 	Short:                 "Used to connect your local project with Infisical project",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical init\n  infisical init --project-id <project-id>\n  infisical init --project-id <project-id> --force",
-	Args:                  cobra.ExactArgs(0),
+	Example: `# Pick an organization and project interactively
+infisical init
+
+# Link this directory to a known project without prompting (see infisical projects list)
+infisical init --project-id <project-id>`,
+	Args: cobra.ExactArgs(0),
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		force, _ := cmd.Flags().GetBool("force")
 		projectID, _ := cmd.Flags().GetString("project-id")
 
 		if util.WorkspaceConfigFileExistsInCurrentPath() {
-			if force {
-				log.Info().Msg("A workspace config file already exists here; overwriting because --force was provided.")
-			} else if !isatty.IsTerminal(os.Stdin.Fd()) {
-				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). Pass --force to overwrite it.")
-			} else {
-				shouldOverride, err := shouldOverrideWorkspacePrompt()
-				if err != nil {
-					log.Error().Msg("Unable to parse your answer")
-					log.Debug().Err(err)
-					return
-				}
+			if !isatty.IsTerminal(os.Stdin.Fd()) {
+				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). Remove it first to link a different project.")
+			}
 
-				if !shouldOverride {
-					return
-				}
+			shouldOverride, err := shouldOverrideWorkspacePrompt()
+			if err != nil {
+				log.Error().Msg("Unable to parse your answer")
+				log.Debug().Err(err)
+				return
+			}
+
+			if !shouldOverride {
+				return
 			}
 		}
 
-		// Without a terminal the org and project pickers below cannot run, so
-		// fail with the flag that makes this command non-interactive instead.
+		// The org and project pickers below need a terminal. Without one, exit and
+		// point at --project-id instead of prompting.
 		if projectID == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
 			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (see `infisical projects list`).")
 		}
@@ -239,7 +240,6 @@ func offerDirectoryProfileBinding(profileName string) {
 }
 
 func init() {
-	initCmd.Flags().Bool("force", false, "Overwrite an existing .infisical.json without asking.")
 	initCmd.Flags().String("project-id", "", "Project ID to link this directory to. When set, skips the interactive org and project pickers and writes .infisical.json directly.")
 	RootCmd.AddCommand(initCmd)
 }
