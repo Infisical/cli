@@ -80,6 +80,7 @@ infisical init --project-id <project-id>`,
 			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
 				util.HandleError(err)
 			}
+			hintDirectoryProfileBinding(userCreds)
 			Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION).Set("nonInteractive", true))
 			return
 		}
@@ -237,6 +238,34 @@ func offerDirectoryProfileBinding(profileName string) {
 		return
 	}
 	util.PrintlnStderr(fmt.Sprintf("Directory %s now uses profile '%s'. Manage bindings with [infisical profile bind] and [infisical profile unbind].", cwd, profileName))
+}
+
+// hintDirectoryProfileBinding runs after a non-interactive init. If the profile
+// was chosen with --profile or INFISICAL_PROFILE and is not the default, later
+// commands in this directory will not use it unless they choose it again. In
+// that case, it prints a note suggesting that the user bind the directory to
+// the profile. The interactive path asks the same question in
+// offerDirectoryProfileBinding.
+func hintDirectoryProfileBinding(userCreds util.LoggedInUserDetails) {
+	if userCreds.ProfileSource != util.ProfileSourceFlag && userCreds.ProfileSource != util.ProfileSourceEnv {
+		return
+	}
+
+	configFile, err := util.GetMigratedConfigFile()
+	if err != nil || userCreds.ProfileName == "" || configFile.ActiveProfile == userCreds.ProfileName {
+		return
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	if boundProfile, _, ok := util.FindGoverningDirectoryProfile(configFile, cwd); ok && boundProfile == userCreds.ProfileName {
+		return
+	}
+
+	util.PrintlnStderr(fmt.Sprintf("This directory was linked using profile '%s', but later commands run here will use a different profile unless you choose '%s' again. To use it here automatically, run [infisical profile bind %s].", userCreds.ProfileName, userCreds.ProfileName, userCreds.ProfileName))
 }
 
 func init() {
