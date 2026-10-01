@@ -790,3 +790,31 @@ func TestNativeHandshakeDoesNotAllocateWhatItRefuses(t *testing.T) {
 	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20),
 		"a claimed 512MB must not be allocated before it arrives")
 }
+
+// A client that starts a packet and stops used to hold a share of a gateway-wide reservation, so a
+// handful of stalled connections refused everyone else. Each session is bounded on its own now.
+func TestNativeStalledSessionsDoNotStarveAnother(t *testing.T) {
+	const stalled = 8
+	for i := 0; i < stalled; i++ {
+		upstream := startFakeClickHouse(t)
+		conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+		clientHandshake(t, conn, "someone", "")
+
+		// A query packet code and nothing after it, so the decode waits mid-packet.
+		var b proto.Buffer
+		proto.ClientCodeQuery.Encode(&b)
+		_, err := conn.Write(b.Buf)
+		require.NoError(t, err)
+	}
+
+	upstream := startFakeClickHouse(t)
+	upstream.answerQueries = true
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+	reader := clientHandshake(t, conn, "someone", "")
+	writeQuery(t, conn, proto.Query{Body: "SELECT 1"})
+
+	code, err := reader.UVarInt()
+	require.NoError(t, err)
+	require.Equal(t, proto.ServerCodeProgress, proto.ServerCode(code),
+		"a session must be served while others sit mid-packet")
+}

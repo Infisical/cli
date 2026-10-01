@@ -178,18 +178,12 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
 
-	// The handshake decodes client-declared strings too, so it is bounded before the packet loop starts.
-	handshakeBudget := &packetBudget{}
-	if err := handshakeBudget.acquire(); err != nil {
-		l.Warn().Err(err).Msg("Refused a ClickHouse session the gateway had no room for")
-		return writeNativeError(clientConn, maxNativeRevision, codeNotImplemented, err.Error())
-	}
+	// The handshake decodes client-declared strings too, so it is bounded like any other packet.
 	clientReader.SetLimit(maxPacketBytes)
 	s.upstreamReader.SetLimit(maxPacketBytes)
 	err = s.handshake(clientTap, clientReader)
 	clientReader.SetLimit(0)
 	s.upstreamReader.SetLimit(0)
-	handshakeBudget.release()
 	if err != nil {
 		l.Debug().Err(err).Msg("ClickHouse native handshake ended")
 		return nil
@@ -368,15 +362,12 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 			return fmt.Errorf("client hung up: %w", err)
 		}
 
-		budget := &packetBudget{}
-		if err := budget.acquire(); err != nil {
-			s.log.Warn().Err(err).Msg("Refused a ClickHouse packet the gateway had no room for")
-			return s.refuse(t, codeNotImplemented, err.Error())
-		}
+		// The rest of a started packet is expected promptly, so a half-sent one cannot hold what
+		// it allocated for as long as an idle session may sit.
+		_ = s.client.SetReadDeadline(time.Now().Add(packetDeadline))
 		r.SetLimit(maxPacketBytes)
 		err = s.handlePacket(t, r, code)
 		r.SetLimit(0)
-		budget.release()
 		if err != nil {
 			return err
 		}
