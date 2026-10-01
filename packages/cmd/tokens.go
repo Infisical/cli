@@ -58,6 +58,12 @@ var tokensCreateCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
+		if resolved, err := util.ResolveProjectSlug(cmd); err != nil {
+			util.HandleError(err)
+		} else if resolved != "" {
+			workspaceId = resolved
+		}
+
 		if workspaceId == "" {
 			configFile, err := util.GetWorkSpaceFromFile()
 			if err != nil {
@@ -168,6 +174,7 @@ var tokensCreateCmd = &cobra.Command{
 
 func init() {
 	tokensCreateCmd.Flags().String("projectId", "", "The project ID you'd like to create the service token for. Default: will use linked Infisical project in .infisical.json")
+	tokensCreateCmd.Flags().String("project-slug", "", "use project slug instead of project ID")
 	tokensCreateCmd.Flags().StringSliceP("scope", "s", []string{}, "Environment and secret path. Example format: <env-slug>:<folder-path>")
 	tokensCreateCmd.Flags().StringP("name", "n", "Service token generated via CLI", "Service token name")
 	tokensCreateCmd.Flags().StringSliceP("access-level", "a", []string{}, "The type of access the service token should have. Can be 'read' and or 'write'")
