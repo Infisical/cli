@@ -13,6 +13,7 @@ type outcomeRecorder struct {
 	mu       sync.Mutex
 	pending  []pendingStatement
 	degraded bool
+	last     string
 }
 
 type pendingStatement struct {
@@ -28,6 +29,7 @@ func newOutcomeRecorder(proxy *ClickHouseProxy) *outcomeRecorder {
 
 func (r *outcomeRecorder) begin(statement string) {
 	r.mu.Lock()
+	r.last = statement
 	if r.degraded {
 		r.mu.Unlock()
 		r.proxy.logStatement(statement, "SENT")
@@ -66,6 +68,29 @@ func (p pendingStatement) describe(outcome string) string {
 		parts = append(parts, fmt.Sprintf("%d row(s) read", p.rows))
 	}
 	return strings.Join(append(parts, fmt.Sprintf("%dms", time.Since(p.started).Milliseconds())), ", ")
+}
+
+// The gateway knows a refusal first hand, so it is recorded even once the outcome reader has given
+// up on this session and stopped pairing.
+func (r *outcomeRecorder) refuse(reason string) {
+	r.mu.Lock()
+	var pending *pendingStatement
+	if len(r.pending) > 0 {
+		next := r.pending[0]
+		r.pending = r.pending[1:]
+		pending = &next
+	}
+	statement := r.last
+	r.mu.Unlock()
+
+	if pending != nil {
+		r.proxy.logStatement(pending.statement, pending.describe("REFUSED: "+reason))
+		return
+	}
+	if statement == "" {
+		return
+	}
+	r.proxy.logStatement(statement, "REFUSED: "+reason)
 }
 
 func (r *outcomeRecorder) degrade(reason string) {

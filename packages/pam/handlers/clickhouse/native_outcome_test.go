@@ -75,3 +75,36 @@ func TestNativeParameterSuffix(t *testing.T) {
 	require.Equal(t, "\n-- parameters: a=1 b=two",
 		nativeParameterSuffix([]proto.Parameter{{Key: "a", Value: "1"}, {Key: "b", Value: "two"}}))
 }
+
+func TestOutcomeRecorderRecordsARefusalItKnowsAbout(t *testing.T) {
+	t.Run("while it is still pairing", func(t *testing.T) {
+		recorder, logger := newTestRecorder()
+
+		recorder.begin("INSERT INTO exotic VALUES")
+		recorder.refuse("a data block could not be read, so it was not forwarded")
+
+		require.Contains(t, logger.dump(),
+			"INSERT INTO exotic VALUES => REFUSED: a data block could not be read, so it was not forwarded")
+	})
+
+	// ClickHouse answers an INSERT with the table's own columns, so a type the gateway cannot read
+	// makes the server direction give up before the client's block is even refused.
+	t.Run("after the server direction gave up", func(t *testing.T) {
+		recorder, logger := newTestRecorder()
+
+		recorder.begin("INSERT INTO exotic VALUES")
+		recorder.degrade("automatic column inference not supported")
+		recorder.refuse("a data block could not be read, so it was not forwarded")
+
+		dump := logger.dump()
+		require.Contains(t, dump, "REFUSED: a data block could not be read, so it was not forwarded",
+			"a refusal the gateway made itself must be recorded, not left as sent")
+		require.Contains(t, dump, "the outcome could not be read")
+	})
+
+	t.Run("with nothing to attach it to", func(t *testing.T) {
+		recorder, logger := newTestRecorder()
+		recorder.refuse("a data block could not be read")
+		require.Empty(t, logger.dump(), "a refusal with no statement must not invent one")
+	})
+}

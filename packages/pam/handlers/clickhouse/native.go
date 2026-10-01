@@ -539,7 +539,7 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 
 	if decodeErr != nil {
 		s.log.Warn().Err(decodeErr).Str("table", table).Msg("Could not read a ClickHouse data block")
-		s.outcomes.complete("INTERRUPTED: a data block could not be read, so the rest was not forwarded")
+		s.outcomes.refuse("a data block could not be read, so it was not forwarded")
 		return s.refuseDecode(t, decodeErr,
 			fmt.Sprintf("This session could not read the data block sent with this statement, so it was not "+
 				"forwarded: %v. Sending this data over ClickHouse's HTTP interface avoids the limitation.", decodeErr))
