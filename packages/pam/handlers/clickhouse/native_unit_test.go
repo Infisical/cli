@@ -202,10 +202,23 @@ func (f *fakeClickHouse) snapshot() (proto.ClientHello, string, []proto.Query, i
 }
 
 func dialProxy(t *testing.T, config ClickHouseProxyConfig) net.Conn {
+	return dialProxyOver(t, config, func(c net.Conn) net.Conn { return c })
+}
+
+// A relayed session reaches the gateway over an SSH channel, which ignores every deadline it is
+// given, so the handler cannot rely on one.
+type deadlineDeafConn struct{ net.Conn }
+
+func (deadlineDeafConn) SetDeadline(time.Time) error      { return nil }
+func (deadlineDeafConn) SetReadDeadline(time.Time) error  { return nil }
+func (deadlineDeafConn) SetWriteDeadline(time.Time) error { return nil }
+
+func dialProxyOver(t *testing.T, config ClickHouseProxyConfig, wrap func(net.Conn) net.Conn) net.Conn {
 	t.Helper()
 
 	proxy := NewClickHouseProxy(config)
-	client, server := net.Pipe()
+	client, rawServer := net.Pipe()
+	server := wrap(rawServer)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	handled := make(chan struct{})
@@ -827,15 +840,75 @@ func TestNativeStalledSessionsHoldNoMemory(t *testing.T) {
 		upstream := startFakeClickHouse(t)
 		conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
 		clientHandshake(t, conn, "someone", "")
-
-		var b proto.Buffer
-		proto.ClientCodeQuery.Encode(&b)
-		_, err := conn.Write(b.Buf)
-		require.NoError(t, err)
+		startPartialQuery(t, conn, 1<<10)
 	}
 	// Reserving a packet's worth up front would have held half a gigabyte across these eight.
 	require.Less(t, nativeBytesInFlight.Load()-before, int64(1<<20),
 		"a session mid-packet must hold what it sent, not what it might send")
+}
+
+// What a half-sent packet declared is charged while it waits, and given back when it never arrives.
+func TestNativeChargesAndReleasesAHalfSentPacket(t *testing.T) {
+	const declared = 8 << 20
+
+	before := nativeBytesInFlight.Load()
+	upstream := startFakeClickHouse(t)
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+	clientHandshake(t, conn, "someone", "")
+	startPartialQuery(t, conn, declared)
+
+	waitForBytesInFlight(t, func(held int64) bool { return held >= declared },
+		"the bytes a packet declared must be charged before they are allocated")
+
+	require.NoError(t, conn.Close())
+	waitForBytesInFlight(t, func(held int64) bool { return held <= before },
+		"a packet that never arrived must give its charge back")
+}
+
+// A relayed session gets no deadline from its transport, so a packet that stalls has to be cut off
+// by the handler or it holds its charge for as long as the session lives.
+func TestNativeCutsOffAStalledPacketWithoutDeadlines(t *testing.T) {
+	restore := packetIdleTimeout
+	packetIdleTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { packetIdleTimeout = restore })
+
+	before := nativeBytesInFlight.Load()
+	upstream := startFakeClickHouse(t)
+	conn := dialProxyOver(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"},
+		func(c net.Conn) net.Conn { return deadlineDeafConn{c} })
+	clientHandshake(t, conn, "someone", "")
+	startPartialQuery(t, conn, 8<<20)
+
+	waitForBytesInFlight(t, func(held int64) bool { return held >= 8<<20 },
+		"the bytes a packet declared must be charged before they are allocated")
+	waitForBytesInFlight(t, func(held int64) bool { return held <= before },
+		"a stalled packet must be cut off even when the transport ignores deadlines")
+}
+
+// Opens a Query packet declaring a query ID of the given length and sends one byte of it, so the
+// packet is charged and then waits for bytes that never come.
+func startPartialQuery(t *testing.T, conn net.Conn, declared int) {
+	t.Helper()
+
+	var b proto.Buffer
+	proto.ClientCodeQuery.Encode(&b)
+	b.PutUVarInt(uint64(declared))
+	b.Buf = append(b.Buf, 'q')
+	_, err := conn.Write(b.Buf)
+	require.NoError(t, err)
+}
+
+func waitForBytesInFlight(t *testing.T, ok func(held int64) bool, message string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok(nativeBytesInFlight.Load()) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("%s (holding %d)", message, nativeBytesInFlight.Load())
 }
 
 // The gateway's own share bounds every session together, however little each one asks for.
@@ -864,10 +937,12 @@ func TestNativeRefusesAPacketTheGatewayHasNoRoomFor(t *testing.T) {
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
 	reader := clientHandshake(t, conn, "someone", "")
 
-	nativeBytesInFlight.Add(maxNativeBytesInFlight)
-	t.Cleanup(func() { nativeBytesInFlight.Add(-maxNativeBytesInFlight) })
+	// Room enough for whatever the handshake is still charging, and not for the packet below.
+	const spare = 64 << 10
+	nativeBytesInFlight.Add(maxNativeBytesInFlight - spare)
+	t.Cleanup(func() { nativeBytesInFlight.Add(-(maxNativeBytesInFlight - spare)) })
 
-	writeQuery(t, conn, proto.Query{Body: "SELECT 1"})
+	startPartialQuery(t, conn, 1<<20)
 
 	code, message := decodeException(t, reader)
 	require.Equal(t, codeNotImplemented, code)

@@ -101,6 +101,10 @@ type nativeSession struct {
 
 	outcomes *outcomeRecorder
 
+	// One account per direction: each is charged from its own goroutine.
+	clientFrames   packetAccount
+	upstreamFrames packetAccount
+
 	// Both directions write to the client, so a refusal must not land inside a packet mid-write.
 	writeMu sync.Mutex
 	refused atomic.Bool
@@ -188,6 +192,16 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
 
+	// A frame's buffers are allocated from its header and are reused by every later frame, so they
+	// are charged for the session rather than for the packet that brought them.
+	defer s.clientFrames.release()
+	defer s.upstreamFrames.release()
+	clientReader.SetFrameAccount(s.clientFrames.charge)
+	s.upstreamReader.SetFrameAccount(s.upstreamFrames.charge)
+
+	handshakeGuard := newStallGuard(nativeHandshakeTimeout, clientConn, upstream)
+	handshakeGuard.arm()
+
 	// The handshake decodes client-declared strings too, so it is bounded like any other packet.
 	handshake := &packetAccount{}
 	clientReader.SetLimit(maxPacketBytes)
@@ -200,6 +214,7 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	s.upstreamReader.SetOnTake(nil)
 	s.upstreamReader.SetLimit(0)
 	handshake.release()
+	handshakeGuard.disarm()
 	if err != nil {
 		l.Debug().Err(err).Msg("ClickHouse native handshake ended")
 		return nil
@@ -378,6 +393,11 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 
 // A statement that is never parsed is one the policy never sees, so an unreadable stream ends the session.
 func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
+	// A half-sent packet must not hold what it allocated for as long as an idle session may sit,
+	// and a slow one must still finish, so the guard moves with the bytes.
+	guard := newStallGuard(packetIdleTimeout, s.client)
+	defer guard.disarm()
+
 	for {
 		_ = s.client.SetReadDeadline(time.Now().Add(nativeIdleTimeout))
 
@@ -386,11 +406,8 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 			return fmt.Errorf("client hung up: %w", err)
 		}
 
-		// A half-sent packet must not hold what it allocated for as long as an idle session may
-		// sit, and a slow one must still finish, so the deadline moves with the bytes.
-		pushDeadline := func() { _ = s.client.SetReadDeadline(time.Now().Add(packetIdleTimeout)) }
-		pushDeadline()
-		t.refresh, t.sinceRefresh = pushDeadline, 0
+		guard.arm()
+		t.refresh, t.sinceRefresh = guard.arm, 0
 
 		account := &packetAccount{}
 		r.SetLimit(maxPacketBytes)
@@ -399,6 +416,7 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 		r.SetOnTake(nil)
 		r.SetLimit(0)
 		account.release()
+		guard.disarm()
 		t.refresh = nil
 		if err != nil {
 			return err
