@@ -17,7 +17,8 @@ const (
 	maxServerPacketBytes   = 256 << 20
 	maxNativeBytesInFlight = 512 << 20
 	deadlineRefreshBytes   = 1 << 20
-	tapGrowthBytes         = 64 << 10
+	// A held packet is often a Ping, so the first step is small and the rest double from it.
+	tapGrowthBytes = 512
 )
 
 var packetIdleTimeout = 2 * time.Minute

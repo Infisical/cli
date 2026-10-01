@@ -64,15 +64,20 @@ func (t *tap) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	// Before the byte is taken off the reader, or a refusal here would consume one the relay then
+	// has no way to reach.
+	if t.holding {
+		if err := t.reserve(); err != nil {
+			return 0, err
+		}
+	}
+
 	b, err := t.src.ReadByte()
 	if err != nil {
 		return 0, err
 	}
 	p[0] = b
 	if t.holding {
-		if err := t.reserve(); err != nil {
-			return 0, err
-		}
 		t.buf = append(t.buf, b)
 	}
 	if t.refresh != nil {

@@ -65,3 +65,16 @@ func TestTapStopsHoldingBytesNothingWillRead(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tp.buf, 1, "the next packet is held again")
 }
+
+func TestTapLosesNothingWhenAChargeIsRefused(t *testing.T) {
+	tp := newTap(bytes.NewReader([]byte("abc")))
+	tp.charge = func(int) error { return errGatewayFull }
+
+	_, err := tp.Read(make([]byte, 1))
+	require.ErrorIs(t, err, errGatewayFull)
+	require.Empty(t, tp.buf)
+
+	rest, err := io.ReadAll(tp.rest())
+	require.NoError(t, err)
+	require.Equal(t, "abc", string(rest), "a refused charge must not swallow a byte the relay still owes")
+}
