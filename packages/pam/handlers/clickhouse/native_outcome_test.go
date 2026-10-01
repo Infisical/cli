@@ -107,4 +107,28 @@ func TestOutcomeRecorderRecordsARefusalItKnowsAbout(t *testing.T) {
 		recorder.refuse("a data block could not be read")
 		require.Empty(t, logger.dump(), "a refusal with no statement must not invent one")
 	})
+
+	t.Run("never onto a statement that already has an outcome", func(t *testing.T) {
+		recorder, logger := newTestRecorder()
+
+		recorder.begin("SELECT 1")
+		recorder.complete("OK")
+		recorder.refuse("a data block could not be read")
+
+		dump := logger.dump()
+		require.Contains(t, dump, "SELECT 1 => OK")
+		require.NotContains(t, dump, "REFUSED",
+			"a packet arriving after a statement finished must not be blamed on it")
+	})
+
+	t.Run("only once for one statement", func(t *testing.T) {
+		recorder, logger := newTestRecorder()
+
+		recorder.begin("INSERT INTO exotic VALUES")
+		recorder.degrade("automatic column inference not supported")
+		recorder.refuse("a data block could not be read")
+		recorder.refuse("a data block could not be read")
+
+		require.Equal(t, 1, strings.Count(logger.dump(), "REFUSED"))
+	})
 }

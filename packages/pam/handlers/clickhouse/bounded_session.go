@@ -17,6 +17,7 @@ const (
 	maxServerPacketBytes   = 256 << 20
 	maxNativeBytesInFlight = 512 << 20
 	deadlineRefreshBytes   = 1 << 20
+	tapGrowthBytes         = 64 << 10
 )
 
 var packetIdleTimeout = 2 * time.Minute

@@ -70,13 +70,10 @@ func (t *tap) Read(p []byte) (int, error) {
 	}
 	p[0] = b
 	if t.holding {
-		before := cap(t.buf)
-		t.buf = append(t.buf, b)
-		if grew := cap(t.buf) - before; grew > 0 && t.charge != nil {
-			if err := t.charge(grew); err != nil {
-				return 0, err
-			}
+		if err := t.reserve(); err != nil {
+			return 0, err
 		}
+		t.buf = append(t.buf, b)
 	}
 	if t.refresh != nil {
 		if t.sinceRefresh++; t.sinceRefresh >= deadlineRefreshBytes {
@@ -85,6 +82,29 @@ func (t *tap) Read(p []byte) (int, error) {
 		}
 	}
 	return 1, nil
+}
+
+// Growing the buffer here rather than leaving it to append is what lets a charge be made before
+// the memory is taken, instead of after it already has been.
+func (t *tap) reserve() error {
+	if len(t.buf) < cap(t.buf) {
+		return nil
+	}
+
+	grow := cap(t.buf)
+	if grow < tapGrowthBytes {
+		grow = tapGrowthBytes
+	}
+	if t.charge != nil {
+		if err := t.charge(grow); err != nil {
+			return err
+		}
+	}
+
+	grown := make([]byte, len(t.buf), cap(t.buf)+grow)
+	copy(grown, t.buf)
+	t.buf = grown
+	return nil
 }
 
 func (t *tap) take() []byte {
@@ -539,7 +559,7 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 
 	if decodeErr != nil {
 		s.log.Warn().Err(decodeErr).Str("table", table).Msg("Could not read a ClickHouse data block")
-		s.outcomes.refuse("a data block could not be read, so it was not forwarded")
+		s.outcomes.refuse("a data block for this statement could not be read, so it was not forwarded")
 		return s.refuseDecode(t, decodeErr,
 			fmt.Sprintf("This session could not read the data block sent with this statement, so it was not "+
 				"forwarded: %v. Sending this data over ClickHouse's HTTP interface avoids the limitation.", decodeErr))

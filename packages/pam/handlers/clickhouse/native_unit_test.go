@@ -36,6 +36,7 @@ type fakeClickHouse struct {
 	conn           net.Conn
 	answerQueries  bool
 	answerWith     []byte
+	addendumRead   bool
 	events         []string
 	dataPackets    [][]byte
 }
@@ -78,6 +79,17 @@ func startFakeClickHouse(t *testing.T, serverRevision ...int) *fakeClickHouse {
 }
 
 func (f *fakeClickHouse) addr() string { return f.listener.Addr().String() }
+
+// The gateway finishes its handshake by forwarding the addendum, so this is how a test knows the
+// handshake has stopped charging and is not racing it.
+func (f *fakeClickHouse) waitForHandshake(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.addendumRead || !proto.FeatureAddendum.In(proto.Version)
+	}, 5*time.Second, 5*time.Millisecond, "the gateway never finished its handshake")
+}
 
 func (f *fakeClickHouse) serve(conn net.Conn) {
 	tp := newTap(conn)
@@ -123,6 +135,7 @@ func (f *fakeClickHouse) serve(conn net.Conn) {
 		}
 		f.mu.Lock()
 		f.quotaKey = quotaKey
+		f.addendumRead = true
 		f.mu.Unlock()
 	}
 
@@ -861,6 +874,17 @@ func TestNativeCutsOffAStalledPacketWithoutDeadlines(t *testing.T) {
 		"a stalled packet must be cut off even when the transport ignores deadlines")
 }
 
+// The budget is a package global that every session in this package charges, so a test that wants
+// it at a known value sets it outright and puts back whatever was there.
+func setGatewayHeld(t *testing.T, held int64) {
+	t.Helper()
+	previous := nativeBytesInFlight.Swap(held)
+	t.Cleanup(func() { nativeBytesInFlight.Store(previous) })
+}
+
+func fillTheGateway(t *testing.T)  { setGatewayHeld(t, maxNativeBytesInFlight) }
+func emptyTheGateway(t *testing.T) { setGatewayHeld(t, 0) }
+
 func startPartialQuery(t *testing.T, conn net.Conn, declared int) {
 	t.Helper()
 
@@ -886,8 +910,7 @@ func waitForBytesInFlight(t *testing.T, ok func(held int64) bool, message string
 }
 
 func TestNativeRefusesWhatTheGatewayIsAlreadyHolding(t *testing.T) {
-	nativeBytesInFlight.Add(maxNativeBytesInFlight)
-	t.Cleanup(func() { nativeBytesInFlight.Add(-maxNativeBytesInFlight) })
+	fillTheGateway(t)
 
 	upstream := startFakeClickHouse(t)
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
@@ -906,15 +929,17 @@ func TestNativeRefusesWhatTheGatewayIsAlreadyHolding(t *testing.T) {
 }
 
 func TestNativeRefusesAPacketTheGatewayHasNoRoomFor(t *testing.T) {
+	emptyTheGateway(t)
+
 	upstream := startFakeClickHouse(t)
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
 	reader := clientHandshake(t, conn, "someone", "")
 
-	const spare = 64 << 10
-	nativeBytesInFlight.Add(maxNativeBytesInFlight - spare)
-	t.Cleanup(func() { nativeBytesInFlight.Add(-(maxNativeBytesInFlight - spare)) })
+	// Filled only once the handshake has stopped charging, or it is the handshake that is refused.
+	upstream.waitForHandshake(t)
+	nativeBytesInFlight.Store(maxNativeBytesInFlight)
 
-	startPartialQuery(t, conn, 1<<20)
+	startPartialQuery(t, conn, 8<<20)
 
 	code, message := decodeException(t, reader)
 	require.Equal(t, codeNotImplemented, code)

@@ -13,7 +13,10 @@ type outcomeRecorder struct {
 	mu       sync.Mutex
 	pending  []pendingStatement
 	degraded bool
-	last     string
+	// The newest statement, and whether it already has an outcome. A statement drained by degrade
+	// has none, which is what lets a refusal still be attributed to it.
+	last         string
+	lastResolved bool
 }
 
 type pendingStatement struct {
@@ -29,7 +32,7 @@ func newOutcomeRecorder(proxy *ClickHouseProxy) *outcomeRecorder {
 
 func (r *outcomeRecorder) begin(statement string) {
 	r.mu.Lock()
-	r.last = statement
+	r.last, r.lastResolved = statement, false
 	if r.degraded {
 		r.mu.Unlock()
 		r.proxy.logStatement(statement, "SENT")
@@ -57,6 +60,9 @@ func (r *outcomeRecorder) complete(outcome string) {
 	}
 	next := r.pending[0]
 	r.pending = r.pending[1:]
+	if next.statement == r.last {
+		r.lastResolved = true
+	}
 	r.mu.Unlock()
 
 	r.proxy.logStatement(next.statement, next.describe(outcome))
@@ -81,6 +87,11 @@ func (r *outcomeRecorder) refuse(reason string) {
 		pending = &next
 	}
 	statement := r.last
+	if pending != nil || !r.lastResolved {
+		r.lastResolved = true
+	} else {
+		statement = ""
+	}
 	r.mu.Unlock()
 
 	if pending != nil {
