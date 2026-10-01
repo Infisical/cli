@@ -253,8 +253,8 @@ func TestNativeRefusesAnOversizedDataBlock(t *testing.T) {
 
 	_, packets := upstream.received()
 	require.Empty(t, packets, "a refused block must not be relayed upstream")
-	require.Eventually(t, func() bool { return strings.Contains(recorder.dump(), "REFUSED") },
-		5*time.Second, 20*time.Millisecond, "the recording must say the gateway refused it")
+	require.Eventually(t, func() bool { return strings.Contains(recorder.dump(), "INTERRUPTED") },
+		5*time.Second, 20*time.Millisecond, "the recording must say the block was not forwarded")
 }
 
 func TestNativeBlockedStatementKeepsTheSession(t *testing.T) {

@@ -111,6 +111,18 @@ func NewClickHouseProxy(config ClickHouseProxyConfig) *ClickHouseProxy {
 	return proxy
 }
 
+// The port under test is the one the signed certificate authorised, so a redirect elsewhere is refused
+// rather than followed.
+func newTestClient(transport *http.Transport) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		Timeout:   testQueryTimeout,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			return fmt.Errorf("the port redirected to %s, which this connection test does not follow", req.URL.Host)
+		},
+	}
+}
+
 func newTransport(config ClickHouseProxyConfig) *http.Transport {
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -532,7 +544,7 @@ func TestConnection(ctx context.Context, config ClickHouseProxyConfig) error {
 	transport := newTransport(config)
 	defer transport.CloseIdleConnections()
 
-	client := &http.Client{Transport: transport, Timeout: testQueryTimeout}
+	client := newTestClient(transport)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -558,7 +570,7 @@ func ProbeHTTPInterface(ctx context.Context, config ClickHouseProxyConfig) error
 	transport := newTransport(config)
 	defer transport.CloseIdleConnections()
 
-	resp, err := (&http.Client{Transport: transport, Timeout: testQueryTimeout}).Do(req)
+	resp, err := newTestClient(transport).Do(req)
 	if err != nil {
 		return err
 	}

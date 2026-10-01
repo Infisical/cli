@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -760,4 +761,32 @@ func TestNativeConnectionTestDoesNotBlameThePortWhenTheBudgetRanOut(t *testing.T
 			"budget=%s: an exhausted budget must not be reported as a misconfigured port", budget)
 		require.Contains(t, err.Error(), "ran out of time", "budget=%s", budget)
 	}
+}
+
+// The handshake decodes client-declared strings before the packet loop runs, so it needs the same
+// bound: a claim must cost what arrived rather than what it asked for.
+func TestNativeHandshakeDoesNotAllocateWhatItRefuses(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+
+	var b proto.Buffer
+	proto.ClientCodeHello.Encode(&b)
+	b.PutString("unit-test client")
+	b.PutInt(24)
+	b.PutInt(8)
+	b.PutInt(proto.Version)
+	b.PutString("db")
+	b.PutUVarInt(512 << 20)
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := conn.Write(b.Buf)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	answer, _ := io.ReadAll(conn)
+	runtime.ReadMemStats(&after)
+
+	require.Empty(t, answer, "an oversized handshake field must not be answered")
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20),
+		"a claimed 512MB must not be allocated before it arrives")
 }

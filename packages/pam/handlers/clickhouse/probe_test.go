@@ -69,3 +69,32 @@ func TestProbeHTTPInterface(t *testing.T) {
 		require.Error(t, ProbeHTTPInterface(t.Context(), ClickHouseProxyConfig{TargetAddr: upstream.addr()}))
 	})
 }
+
+// The port under test is the one the signed certificate authorised, so a redirect must not take the
+// probe to an address nobody authorised.
+func TestConnectionProbesRefuseARedirect(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("Ok.\n"))
+	}))
+	t.Cleanup(elsewhere.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	addr := strings.TrimPrefix(redirector.URL, "http://")
+	for name, probe := range map[string]func() error{
+		"the interface probe": func() error {
+			return ProbeHTTPInterface(t.Context(), ClickHouseProxyConfig{TargetAddr: addr})
+		},
+		"the credential test": func() error {
+			return TestConnection(t.Context(), ClickHouseProxyConfig{TargetAddr: addr, Username: "account"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := probe()
+			require.ErrorContains(t, err, "redirected")
+		})
+	}
+}

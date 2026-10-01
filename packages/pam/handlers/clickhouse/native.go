@@ -178,7 +178,19 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
 
-	if err := s.handshake(clientTap, clientReader); err != nil {
+	// The handshake decodes client-declared strings too, so it is bounded before the packet loop starts.
+	handshakeBudget := &packetBudget{}
+	if err := handshakeBudget.acquire(); err != nil {
+		l.Warn().Err(err).Msg("Refused a ClickHouse session the gateway had no room for")
+		return writeNativeError(clientConn, maxNativeRevision, codeNotImplemented, err.Error())
+	}
+	clientReader.SetLimit(maxPacketBytes)
+	s.upstreamReader.SetLimit(maxPacketBytes)
+	err = s.handshake(clientTap, clientReader)
+	clientReader.SetLimit(0)
+	s.upstreamReader.SetLimit(0)
+	handshakeBudget.release()
+	if err != nil {
 		l.Debug().Err(err).Msg("ClickHouse native handshake ended")
 		return nil
 	}
@@ -477,7 +489,7 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 
 	if decodeErr != nil {
 		s.log.Warn().Err(decodeErr).Str("table", table).Msg("Could not read a ClickHouse data block")
-		s.outcomes.complete("REFUSED: the data block could not be read")
+		s.outcomes.complete("INTERRUPTED: a data block could not be read, so the rest was not forwarded")
 		return s.refuse(t, codeNotImplemented,
 			fmt.Sprintf("This session could not read the data block sent with this statement, so it was not "+
 				"forwarded: %v. Sending this data over ClickHouse's HTTP interface avoids the limitation.", decodeErr))
