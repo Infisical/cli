@@ -385,6 +385,6 @@ tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
 replace github.com/Infisical/infisical-merge => ../
 
-replace github.com/ClickHouse/ch-go => github.com/Infisical/ch-go v0.74.1-0.20261001034748-4120a410c213
+replace github.com/ClickHouse/ch-go => github.com/Infisical/ch-go v0.74.1-0.20261001142224-2f9d8b8599e4
 
 replace github.com/zalando/go-keyring => github.com/Infisical/go-keyring v1.0.2

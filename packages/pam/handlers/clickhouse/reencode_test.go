@@ -340,3 +340,32 @@ func TestNativeConnectionTestNamesAnHTTPPort(t *testing.T) {
 	require.Contains(t, err.Error(), "looks like ClickHouse's HTTP port")
 	require.False(t, bytes.Contains([]byte(err.Error()), []byte("packet 72")))
 }
+
+// A type nested deeply enough overflows the stack while being inferred, which is fatal in Go and
+// would take the whole gateway down with every other session on it.
+func TestNativeRefusesADeeplyNestedColumnType(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+	r := clientHandshake(t, conn, "someone", "")
+	writeQuery(t, conn, proto.Query{Body: "INSERT INTO t VALUES"})
+
+	const depth = 1 << 20
+	var b proto.Buffer
+	proto.ClientCodeData.Encode(&b)
+	b.PutString("")
+	proto.BlockInfo{BucketNum: -1}.Encode(&b)
+	b.PutUVarInt(1)
+	b.PutUVarInt(0)
+	b.PutString("c")
+	b.PutString(strings.Repeat("Array(", depth) + "UInt8" + strings.Repeat(")", depth))
+	b.PutBool(false)
+	_, err := conn.Write(b.Buf)
+	require.NoError(t, err)
+
+	code, message := decodeException(t, r)
+	require.Equal(t, codeNotImplemented, code)
+	require.Contains(t, message, "nests")
+
+	_, packets := upstream.received()
+	require.Empty(t, packets, "a refused block must not be relayed upstream")
+}
