@@ -591,9 +591,13 @@ func (s *nativeSession) serverLoop() {
 	t := s.upstreamTap
 	r := s.upstreamReader
 
-	relayRest := func(reason string) {
+	// The copy holds nothing of its own, so the charge goes back once the buffered bytes are gone
+	// rather than being kept for as long as the relay runs.
+	relayRest := func(reason string, release func()) {
 		s.outcomes.degrade(reason)
-		if err := s.writeToClientUnlessRefused(t.take()); err != nil {
+		err := s.writeToClientUnlessRefused(t.take())
+		release()
+		if err != nil {
 			return
 		}
 		_, _ = io.Copy(newRefusalAwareWriter(s), t.rest())
@@ -615,8 +619,7 @@ func (s *nativeSession) serverLoop() {
 		t.charge = nil
 
 		if err != nil {
-			relayRest(err.Error())
-			account.release()
+			relayRest(err.Error(), account.release)
 			return
 		}
 

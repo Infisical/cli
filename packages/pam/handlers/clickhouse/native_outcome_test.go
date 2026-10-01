@@ -132,3 +132,15 @@ func TestOutcomeRecorderRecordsARefusalItKnowsAbout(t *testing.T) {
 		require.Equal(t, 1, strings.Count(logger.dump(), "REFUSED"))
 	})
 }
+
+// A statement is kept for as long as the session lives, so only what a recording can hold is kept.
+func TestOutcomeRecorderKeepsOnlyWhatItCanRecord(t *testing.T) {
+	recorder, logger := newTestRecorder()
+
+	huge := "SELECT " + strings.Repeat("x", 4<<20)
+	recorder.begin(huge)
+	recorder.complete("OK")
+
+	require.LessOrEqual(t, len(recorder.last), maxLoggedStatementBytes+len("... [truncated]"))
+	require.Contains(t, logger.dump(), "... [truncated]")
+}

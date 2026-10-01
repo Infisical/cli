@@ -30,7 +30,18 @@ func newOutcomeRecorder(proxy *ClickHouseProxy) *outcomeRecorder {
 	return &outcomeRecorder{proxy: proxy}
 }
 
+func forLog(statement string) string {
+	if len(statement) <= maxLoggedStatementBytes {
+		return statement
+	}
+	return statement[:maxLoggedStatementBytes] + "... [truncated]"
+}
+
 func (r *outcomeRecorder) begin(statement string) {
+	// Only what a recording can hold: the rest would be kept for the life of the session and never
+	// written anywhere.
+	statement = forLog(statement)
+
 	r.mu.Lock()
 	r.last, r.lastResolved = statement, false
 	if r.degraded {
@@ -60,7 +71,7 @@ func (r *outcomeRecorder) complete(outcome string) {
 	}
 	next := r.pending[0]
 	r.pending = r.pending[1:]
-	if next.statement == r.last {
+	if len(r.pending) == 0 {
 		r.lastResolved = true
 	}
 	r.mu.Unlock()
