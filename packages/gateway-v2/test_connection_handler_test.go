@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The backend builds this request in TypeScript, so nothing checks the field names match at compile time.
 func TestClickhouseTestParamsContract(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -48,14 +47,12 @@ func TestClickhouseTestParamsContract(t *testing.T) {
 			require.Equal(t, "default", params.Username)
 			require.Equal(t, "analytics", params.Database)
 			require.Equal(t, "pw", params.Password)
-			// A rename here would decode as false and quietly disable TLS for the probe.
 			require.Equal(t, tc.wantSSL, params.SslEnabled)
 			require.NotNil(t, params.SslRejectUnauthorized)
 		})
 	}
 }
 
-// The ports to probe come from the request body, so the signed certificate is what stops a caller pointing...
 func TestRPCTargetAllows(t *testing.T) {
 	t.Run("a certificate naming one port authorises only that port", func(t *testing.T) {
 		target := rpcTarget{host: "db.internal", port: 8123}

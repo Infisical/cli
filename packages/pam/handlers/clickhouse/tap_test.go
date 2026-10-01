@@ -23,7 +23,6 @@ func TestTapRelaysWhatItHasAlreadyBuffered(t *testing.T) {
 
 	tp := newTap(upstreamRead)
 
-	// Consume 10 bytes through the tap, as a decoder would before it fails.
 	consumed := make([]byte, 10)
 	_, err := io.ReadFull(tp, consumed)
 	require.NoError(t, err)

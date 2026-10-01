@@ -21,29 +21,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeClickHouse stands in for a server so the security-critical parts of the handshake and packet loop...
 type fakeClickHouse struct {
 	listener net.Listener
 
-	mu       sync.Mutex
-	hello    proto.ClientHello
-	quotaKey string
-	queries  []proto.Query
-	// Bytes seen after the handshake, which is what proves nothing was relayed once a refusal happened.
+	mu                  sync.Mutex
+	hello               proto.ClientHello
+	quotaKey            string
+	queries             []proto.Query
 	bytesAfterHandshake int
 	done                chan struct{}
 
-	// Non-zero caps what this server claims to speak, standing in for a ClickHouse older than ch-go.
 	serverRevision int
-	// Non-empty answers the handshake with an exception instead of a hello.
-	refuseWith string
-	// The accepted connection, so a test can drop the upstream mid-session.
-	conn net.Conn
-	// Answers each query with a progress packet and an end of stream.
-	answerQueries bool
-	// What arrived after the handshake, in order, and the raw bytes of each data packet.
-	events      []string
-	dataPackets [][]byte
+	refuseWith     string
+	conn           net.Conn
+	answerQueries  bool
+	events         []string
+	dataPackets    [][]byte
 }
 
 func (f *fakeClickHouse) disconnect() {
@@ -205,8 +198,6 @@ func dialProxy(t *testing.T, config ClickHouseProxyConfig) net.Conn {
 	return dialProxyOver(t, config, func(c net.Conn) net.Conn { return c })
 }
 
-// A relayed session reaches the gateway over an SSH channel, which ignores every deadline it is
-// given, so the handler cannot rely on one.
 type deadlineDeafConn struct{ net.Conn }
 
 func (deadlineDeafConn) SetDeadline(time.Time) error      { return nil }
@@ -447,13 +438,11 @@ func decodeException(t *testing.T, r *proto.Reader) (int, string) {
 	return int(e.Code), e.Message
 }
 
-// ch-go trailing the server is the reason the handshake pins a revision at all.
 func TestChGoRevisionIsStillBehindTheServers(t *testing.T) {
 	require.LessOrEqual(t, maxNativeRevision, 54469,
 		"ch-go has caught up with ClickHouse; revision pinning needs revisiting")
 }
 
-// A server older than ch-go reads no addendum, so pinning above what it speaks desynchronises the stream.
 func TestNativeHandshakeClampsToAnOlderServer(t *testing.T) {
 	const oldRevision = 54455 // ClickHouse 22.3 LTS, below FeatureAddendum (54458)
 	require.False(t, proto.FeatureAddendum.In(oldRevision))
@@ -488,7 +477,6 @@ func TestNativeHandshakeClampsToAnOlderServer(t *testing.T) {
 	require.Equal(t, oldRevision, serverHello.Revision,
 		"the client must be told the upstream's revision, not one it cannot parse")
 
-	// The fake reads no quota key at this revision, so a query must land as the next packet it sees.
 	writeQueryAt(t, conn, proto.Query{Body: "SELECT 1"}, oldRevision)
 
 	require.Eventually(t, func() bool {
@@ -544,7 +532,6 @@ func newRefusedSession(t *testing.T, client net.Conn, upstream net.Conn) *native
 }
 
 func TestRefusedSessionRelaysNoServerBytes(t *testing.T) {
-	// A packet the loop can parse leaves by the per-iteration guard; one it cannot leaves by the relay.
 	for name, packet := range map[string][]byte{
 		"a parseable packet": func() []byte {
 			var b proto.Buffer
@@ -619,7 +606,6 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		t.Cleanup(server.Close)
 
-		// The probe's own deadline bounds the handshake, so this does not wait out nativeHandshakeTimeout.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
@@ -630,7 +616,6 @@ func TestNativeConnectionTestClassifiesFailures(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "did not answer ClickHouse's native handshake")
-		// Capped by the probe, so it must name the remaining budget rather than blame the port.
 		require.Contains(t, err.Error(), "left of the connection test's budget")
 		require.NotContains(t, err.Error(), "entered as the native one")
 		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
@@ -714,7 +699,6 @@ func TestNativeRefusesAnOversizedQueryBody(t *testing.T) {
 	var full proto.Buffer
 	q.EncodeAware(&full, proto.Version)
 
-	// Everything up to the body, then a terabyte in place of its length.
 	var b proto.Buffer
 	b.Buf = append(b.Buf, full.Buf[:bytes.LastIndex(full.Buf, []byte("SELECT 1"))-1]...)
 	b.PutUVarInt(1 << 40)
@@ -729,7 +713,6 @@ func TestNativeRefusesAnOversizedQueryBody(t *testing.T) {
 	require.Empty(t, queries, "nothing may be forwarded from a packet the gateway refused")
 }
 
-// Without this the client waits on a read until the idle deadline for a result that cannot arrive.
 func TestUpstreamDisconnectEndsTheClientSession(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 
@@ -741,7 +724,6 @@ func TestUpstreamDisconnectEndsTheClientSession(t *testing.T) {
 	})
 	clientHandshake(t, conn, "someone", "whatever")
 
-	// Set before disconnect: the proxy may close this end first.
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
 
 	upstream.disconnect()
@@ -750,11 +732,9 @@ func TestUpstreamDisconnectEndsTheClientSession(t *testing.T) {
 	started := time.Now()
 	_, err := conn.Read(buf)
 	require.Error(t, err, "the client must not be left waiting once the upstream is gone")
-	// The deadline would also produce an error, so the point is that it ends well before one.
 	require.Less(t, time.Since(started), 3*time.Second, "the session should end promptly, not on a timeout")
 }
 
-// A near-exhausted budget is not evidence that the port is misconfigured, so the message must not say so.
 func TestNativeConnectionTestDoesNotBlameThePortWhenTheBudgetRanOut(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	t.Cleanup(server.Close)
@@ -776,8 +756,6 @@ func TestNativeConnectionTestDoesNotBlameThePortWhenTheBudgetRanOut(t *testing.T
 	}
 }
 
-// The handshake decodes client-declared strings before the packet loop runs, so it needs the same
-// bound: a claim must cost what arrived rather than what it asked for.
 func TestNativeHandshakeDoesNotAllocateWhatItRefuses(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
@@ -804,8 +782,6 @@ func TestNativeHandshakeDoesNotAllocateWhatItRefuses(t *testing.T) {
 		"a claimed 512MB must not be allocated before it arrives")
 }
 
-// A client that starts a packet and stops used to hold a share of a gateway-wide reservation, so a
-// handful of stalled connections refused everyone else. Each session is bounded on its own now.
 func TestNativeStalledSessionsDoNotStarveAnother(t *testing.T) {
 	const stalled = 8
 	for i := 0; i < stalled; i++ {
@@ -813,7 +789,6 @@ func TestNativeStalledSessionsDoNotStarveAnother(t *testing.T) {
 		conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
 		clientHandshake(t, conn, "someone", "")
 
-		// A query packet code and nothing after it, so the decode waits mid-packet.
 		var b proto.Buffer
 		proto.ClientCodeQuery.Encode(&b)
 		_, err := conn.Write(b.Buf)
@@ -832,8 +807,6 @@ func TestNativeStalledSessionsDoNotStarveAnother(t *testing.T) {
 		"a session must be served while others sit mid-packet")
 }
 
-// Charged as a packet is read rather than reserved, so a session that sends nothing holds nothing
-// and cannot deny the gateway to anyone else.
 func TestNativeStalledSessionsHoldNoMemory(t *testing.T) {
 	before := nativeBytesInFlight.Load()
 	for i := 0; i < 8; i++ {
@@ -842,12 +815,10 @@ func TestNativeStalledSessionsHoldNoMemory(t *testing.T) {
 		clientHandshake(t, conn, "someone", "")
 		startPartialQuery(t, conn, 1<<10)
 	}
-	// Reserving a packet's worth up front would have held half a gigabyte across these eight.
 	require.Less(t, nativeBytesInFlight.Load()-before, int64(1<<20),
 		"a session mid-packet must hold what it sent, not what it might send")
 }
 
-// What a half-sent packet declared is charged while it waits, and given back when it never arrives.
 func TestNativeChargesAndReleasesAHalfSentPacket(t *testing.T) {
 	const declared = 8 << 20
 
@@ -865,8 +836,6 @@ func TestNativeChargesAndReleasesAHalfSentPacket(t *testing.T) {
 		"a packet that never arrived must give its charge back")
 }
 
-// A relayed session gets no deadline from its transport, so a packet that stalls has to be cut off
-// by the handler or it holds its charge for as long as the session lives.
 func TestNativeCutsOffAStalledPacketWithoutDeadlines(t *testing.T) {
 	restore := packetIdleTimeout
 	packetIdleTimeout = 150 * time.Millisecond
@@ -885,8 +854,6 @@ func TestNativeCutsOffAStalledPacketWithoutDeadlines(t *testing.T) {
 		"a stalled packet must be cut off even when the transport ignores deadlines")
 }
 
-// Opens a Query packet declaring a query ID of the given length and sends one byte of it, so the
-// packet is charged and then waits for bytes that never come.
 func startPartialQuery(t *testing.T, conn net.Conn, declared int) {
 	t.Helper()
 
@@ -911,7 +878,6 @@ func waitForBytesInFlight(t *testing.T, ok func(held int64) bool, message string
 	t.Fatalf("%s (holding %d)", message, nativeBytesInFlight.Load())
 }
 
-// The gateway's own share bounds every session together, however little each one asks for.
 func TestNativeRefusesWhatTheGatewayIsAlreadyHolding(t *testing.T) {
 	nativeBytesInFlight.Add(maxNativeBytesInFlight)
 	t.Cleanup(func() { nativeBytesInFlight.Add(-maxNativeBytesInFlight) })
@@ -937,7 +903,6 @@ func TestNativeRefusesAPacketTheGatewayHasNoRoomFor(t *testing.T) {
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
 	reader := clientHandshake(t, conn, "someone", "")
 
-	// Room enough for whatever the handshake is still charging, and not for the packet below.
 	const spare = 64 << 10
 	nativeBytesInFlight.Add(maxNativeBytesInFlight - spare)
 	t.Cleanup(func() { nativeBytesInFlight.Add(-(maxNativeBytesInFlight - spare)) })

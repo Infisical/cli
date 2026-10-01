@@ -5,8 +5,6 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 )
 
-// encodeDataPacket writes the block back from what was decoded, so the bytes ClickHouse reads are
-// the gateway's own rather than the client's.
 func encodeDataPacket(
 	rev int, table string, block proto.Block, decoded proto.Results, compressor *compress.Writer,
 ) ([]byte, error) {

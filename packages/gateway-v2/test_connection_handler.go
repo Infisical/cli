@@ -726,7 +726,6 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 				TLSConfig: tlsConfig,
 			}
 
-			// The body names which ports to probe; the signed certificate still decides which are allowed.
 			for _, port := range []int{params.HttpPort, params.NativePort} {
 				if port > 0 && !target.allows(port) {
 					return connectFailure(fmt.Errorf("port %d is not authorised for this connection test", port))
@@ -735,11 +734,9 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 			httpPort := params.HttpPort
 			if httpPort <= 0 && params.NativePort <= 0 {
-				// An API too old to send the ports still means the cert-bound one.
 				httpPort = target.port
 			}
 
-			// One shared deadline would let a slow first probe swallow the second one's specific error.
 			probes := 0
 			if httpPort > 0 {
 				probes++
@@ -852,7 +849,6 @@ func redactProbeSecrets(msg string, secrets ...string) string {
 	return urlUserinfoPattern.ReplaceAllString(msg, "${1}******@")
 }
 
-// The failure has to name the port, and say the account can be saved without one.
 func nativePortError(port int, err error, httpWorks bool) error {
 	if !httpWorks {
 		return fmt.Errorf("ClickHouse's native port %d did not answer: %w", port, err)

@@ -39,7 +39,6 @@ func TestSniffProtocol(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.wantNative, isNative)
 
-			// The byte used to decide has to still be readable by the handler that takes the connection.
 			buf := make([]byte, len(tc.first))
 			_, err = bufio.NewReader(conn).Read(buf[:1])
 			require.NoError(t, err)

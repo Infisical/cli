@@ -27,8 +27,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Brokers both of ClickHouse's interfaces on one local port, routed by the first byte the client sends. The
-// client's own credentials are dropped and the account's injected on either path.
 type ClickHouseProxyConfig struct {
 	TargetAddr string
 	NativeAddr string
@@ -111,8 +109,6 @@ func NewClickHouseProxy(config ClickHouseProxyConfig) *ClickHouseProxy {
 	return proxy
 }
 
-// The port under test is the one the signed certificate authorised, so a redirect elsewhere is refused
-// rather than followed.
 func newTestClient(transport *http.Transport) *http.Client {
 	return &http.Client{
 		Transport: transport,
@@ -479,7 +475,6 @@ func (p *ClickHouseProxy) handleUpstreamError(w http.ResponseWriter, r *http.Req
 		fmt.Sprintf("The gateway could not reach ClickHouse: %v", err))
 }
 
-// Also checks the bare SQL: the recorded suffix defeats end-anchored rules.
 func (p *ClickHouseProxy) blockedBy(statements ...string) *regexp.Regexp {
 	for _, pattern := range p.config.BlockedCommands {
 		for _, statement := range statements {
@@ -558,7 +553,6 @@ func TestConnection(ctx context.Context, config ClickHouseProxyConfig) error {
 	return nil
 }
 
-// ClickHouse answers /ping without a login, so this proves the interface while sending no credential.
 func ProbeHTTPInterface(ctx context.Context, config ClickHouseProxyConfig) error {
 	target := (&ClickHouseProxy{config: config}).scheme() + "://" + config.TargetAddr + "/ping"
 

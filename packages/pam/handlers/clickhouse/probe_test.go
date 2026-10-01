@@ -70,8 +70,6 @@ func TestProbeHTTPInterface(t *testing.T) {
 	})
 }
 
-// The port under test is the one the signed certificate authorised, so a redirect must not take the
-// probe to an address nobody authorised.
 func TestConnectionProbesRefuseARedirect(t *testing.T) {
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("Ok.\n"))

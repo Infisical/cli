@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The API and gateway share these field names by convention only; a rename would decode as zero, not fail.
 func TestSessionCredentialsContract(t *testing.T) {
 	cases := []struct {
 		name                   string
@@ -52,7 +51,6 @@ func TestSessionCredentialsContract(t *testing.T) {
 			require.Equal(t, "ch.example.com", credentials.Host)
 			require.Equal(t, "default", credentials.Username)
 			require.Equal(t, "pw", credentials.Password)
-			// A rename here would decode as false, silently dropping TLS and sending the password in clear.
 			require.Equal(t, tc.wantSSL, credentials.SSLEnabled)
 			require.Equal(t, tc.wantRejectUnauthorized, credentials.SSLRejectUnauthorized)
 		})

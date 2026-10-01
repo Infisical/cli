@@ -6,5 +6,4 @@ const CapabilitySessionLogMaskingBuiltInDetection = "sessionLogMaskingBuiltInDet
 
 const CapabilitySupportedAccountTypes = "supported_account_types"
 
-// Separate from the account type: a gateway can support ClickHouse accounts and still predate native.
 const CapabilityClickhouseNativeProtocol = "clickhouseNativeProtocol"

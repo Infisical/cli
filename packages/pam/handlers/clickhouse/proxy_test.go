@@ -458,7 +458,6 @@ func deflated(t *testing.T, payload string) []byte {
 	return buffer.Bytes()
 }
 
-// deflate is on the accepted-encoding list, so a statement hidden in one has to be inspected too.
 func TestBlocksAStatementInsideADeflatedBody(t *testing.T) {
 	reached := false
 	handler, _, closeUpstream := newTestProxy(t, func(w http.ResponseWriter, r *http.Request) {

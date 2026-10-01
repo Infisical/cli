@@ -68,7 +68,6 @@ func (p pendingStatement) describe(outcome string) string {
 	return strings.Join(append(parts, fmt.Sprintf("%dms", time.Since(p.started).Milliseconds())), ", ")
 }
 
-// Says so in the recording, so a log with outcomes for only some statements is not read as the rest doing nothing.
 func (r *outcomeRecorder) degrade(reason string) {
 	r.mu.Lock()
 	if r.degraded {

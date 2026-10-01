@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	// A newer server sends Hello fields ch-go cannot read, so both sides are pinned to what we can parse.
 	maxNativeRevision = proto.Version
 
 	nativeDialTimeout      = 30 * time.Second
@@ -42,7 +41,6 @@ type tap struct {
 	src *bufio.Reader
 	buf []byte
 
-	// Set while a packet is being read, to push its deadline out as bytes arrive.
 	refresh      func()
 	sinceRefresh int
 }
@@ -85,7 +83,6 @@ func (t *tap) discard() {
 	t.buf = nil
 }
 
-// A refusal ends the session: the stream is mid-packet.
 var errSessionRefused = errors.New("the session was refused")
 
 type nativeSession struct {
@@ -101,7 +98,6 @@ type nativeSession struct {
 
 	outcomes *outcomeRecorder
 
-	// One account per direction: each is charged from its own goroutine.
 	clientFrames   packetAccount
 	upstreamFrames packetAccount
 
@@ -187,13 +183,10 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	clientTap := newTap(clientConn)
 	clientReader := proto.NewReader(clientTap)
 
-	// The HTTP port entered as the native one usually never answers the handshake.
 	deadline := time.Now().Add(nativeHandshakeTimeout)
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
 
-	// A frame's buffers are allocated from its header and are reused by every later frame, so they
-	// are charged for the session rather than for the packet that brought them.
 	defer s.clientFrames.release()
 	defer s.upstreamFrames.release()
 	clientReader.SetFrameAccount(s.clientFrames.charge)
@@ -202,7 +195,6 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	handshakeGuard := newStallGuard(nativeHandshakeTimeout, clientConn, upstream)
 	handshakeGuard.arm()
 
-	// The handshake decodes client-declared strings too, so it is bounded like any other packet.
 	handshake := &packetAccount{}
 	clientReader.SetLimit(maxPacketBytes)
 	clientReader.SetOnTake(handshake.charge)
@@ -226,7 +218,6 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		// Upstream gone: end the session rather than block until the idle deadline.
 		defer func() {
 			if !s.refused.Load() {
 				_ = clientConn.Close()
@@ -240,7 +231,6 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 		s.serverLoop()
 	}()
 
-	// Deferred so a panic still drains the recorder.
 	defer func() {
 		// Outcomes must land before the recorder drains, or a finished statement is recorded as interrupted.
 		upstream.Close()
@@ -258,7 +248,6 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	return nil
 }
 
-// refuseDecode names the gateway running out of room rather than blaming the packet for it.
 func (s *nativeSession) refuseDecode(t *tap, err error, message string) error {
 	if errors.Is(err, errGatewayFull) {
 		return s.refuse(t, codeNotImplemented, errGatewayFull.Error())
@@ -278,7 +267,6 @@ func (s *nativeSession) refuse(t *tap, code int, message string) error {
 	return errSessionRefused
 }
 
-// For a fully read statement: the stream is still in sync, so the session carries on as ClickHouse's would.
 func (s *nativeSession) reject(t *tap, code int, message string) error {
 	t.discard()
 	s.droppingData = true
@@ -293,7 +281,6 @@ func (p *nativeProxy) dialUpstream(ctx context.Context) (net.Conn, error) {
 	return (&tls.Dialer{NetDialer: dialer, Config: p.config.TLSConfig}).DialContext(ctx, "tcp", p.config.NativeAddr)
 }
 
-// handshake swaps the client's credentials for the account's and pins the revision both ways.
 func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	code, err := r.UVarInt()
 	if err != nil {
@@ -356,7 +343,6 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	if err := serverHello.DecodeAware(serverReader, s.rev); err != nil {
 		return fmt.Errorf("decode server hello: %w", err)
 	}
-	// Clamp to the upstream's revision so it never gets fields it can't read.
 	if serverHello.Revision > 0 && serverHello.Revision < s.rev {
 		s.rev = serverHello.Revision
 	}
@@ -391,10 +377,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 	return nil
 }
 
-// A statement that is never parsed is one the policy never sees, so an unreadable stream ends the session.
 func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
-	// A half-sent packet must not hold what it allocated for as long as an idle session may sit,
-	// and a slow one must still finish, so the guard moves with the bytes.
 	guard := newStallGuard(packetIdleTimeout, s.client)
 	defer guard.disarm()
 
@@ -478,7 +461,6 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	s.droppingData = false
 	s.compressed.Store(q.Compression == proto.CompressionEnabled)
 
-	// EncodeAware always writes StageComplete, so a partial stage would be silently upgraded to a full run.
 	if q.Stage != proto.StageComplete {
 		return s.reject(t, codeNotImplemented,
 			fmt.Sprintf("This session only runs statements to completion, and this client asked for stage %d.",
@@ -506,7 +488,6 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	return s.forward(b.Buf)
 }
 
-// Re-encoded from what was parsed, so ClickHouse never reads bytes whose extent only it understood.
 func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	table, err := r.Str()
 	if err != nil {
@@ -558,7 +539,6 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	return s.forward(packet)
 }
 
-// Read for the recording only: the first packet it cannot read ends the parsing, not the session.
 func (s *nativeSession) serverLoop() {
 	t := s.upstreamTap
 	r := s.upstreamReader
@@ -638,7 +618,6 @@ func (s *nativeSession) serverLoop() {
 	}
 }
 
-// Stops the raw relay appending bytes after the exception the client was just sent.
 type refusalAwareWriter struct{ s *nativeSession }
 
 func newRefusalAwareWriter(s *nativeSession) io.Writer { return refusalAwareWriter{s: s} }
@@ -677,7 +656,6 @@ func (s *nativeSession) forward(payload []byte) error {
 	return nil
 }
 
-// Mirrors the HTTP handler, so a parameterized statement reads the same in either recording.
 func nativeParameterSuffix(parameters []proto.Parameter) string {
 	if len(parameters) == 0 {
 		return ""
@@ -689,7 +667,6 @@ func nativeParameterSuffix(parameters []proto.Parameter) string {
 	return "\n-- parameters: " + strings.Join(pairs, " ")
 }
 
-// Reports a gateway refusal as ClickHouse would, so a driver surfaces it rather than a broken connection.
 func writeNativeError(w io.Writer, revision int, code int, message string) error {
 	if _, err := w.Write(nativeErrorPacket(revision, code, message)); err != nil {
 		return fmt.Errorf("write native exception: %w", err)
@@ -704,7 +681,6 @@ func nativeErrorPacket(revision int, code int, message string) []byte {
 	return b.Buf
 }
 
-// No trailing EndOfStream: on a session that carries on, the client would read it as the next statement's end.
 func nativeExceptionPacket(revision int, code int, message string) []byte {
 	if revision <= 0 {
 		revision = maxNativeRevision
@@ -721,7 +697,6 @@ func nativeExceptionPacket(revision int, code int, message string) []byte {
 	return b.Buf
 }
 
-// A Hello that happens to hold a blank line gets "HTTP/1.1 400" from the HTTP port, read as packet 72.
 const httpResponseFirstByte = 'H'
 
 func unexpectedHandshakeReply(code uint64) string {
@@ -731,12 +706,10 @@ func unexpectedHandshakeReply(code uint64) string {
 	return fmt.Sprintf("it answered with packet %d, which is not ClickHouse's native protocol", code)
 }
 
-// ClickHouse validates credentials during the handshake, so a Hello exchange is a real auth check.
 func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) error {
 	return nativeHandshakeCheck(ctx, config, false)
 }
 
-// Sends no credential: any answer in the native protocol, a refused login included, proves the port.
 func ProbeNativeProtocol(ctx context.Context, config ClickHouseProxyConfig) error {
 	config.Username, config.Password = "", ""
 	return nativeHandshakeCheck(ctx, config, true)
@@ -752,7 +725,6 @@ func nativeHandshakeCheck(ctx context.Context, config ClickHouseProxyConfig, exc
 	}
 	defer conn.Close()
 
-	// The probe's own budget wins when it is shorter, so a slow handshake cannot outlive the test.
 	budget := nativeHandshakeTimeout
 	budgetWasCapped := false
 	if probeDeadline, ok := ctx.Deadline(); ok {
@@ -760,7 +732,6 @@ func nativeHandshakeCheck(ctx context.Context, config ClickHouseProxyConfig, exc
 			budget, budgetWasCapped = remaining, true
 		}
 	}
-	// Too little left to tell a silent port from a probe that simply ran out of time.
 	if budget < time.Second {
 		return fmt.Errorf("the connection test ran out of time before ClickHouse's native port could be "+
 			"checked; %s remained of the budget", budget.Round(time.Millisecond))

@@ -30,7 +30,6 @@ type rpcTarget struct {
 	ports []int
 }
 
-// A certificate naming only one port keeps the old behaviour: that port is the only one reachable.
 func (t rpcTarget) allows(port int) bool {
 	if port == t.port {
 		return true

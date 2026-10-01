@@ -30,7 +30,6 @@ func dataPacket(t *testing.T, block proto.Block, input proto.Input, compressor *
 	return b.Buf
 }
 
-// Independent of declaredColumn, so the round trip cannot pass by sharing its mistakes.
 type typedColumn struct {
 	proto.Column
 	declared proto.ColumnType
@@ -111,7 +110,6 @@ func sampleInput(t *testing.T) proto.Input {
 	}
 }
 
-// One byte at a time, so a buffered reader cannot count bytes the decoder never asked for.
 type countingReader struct {
 	src  []byte
 	read int
@@ -164,7 +162,6 @@ func TestNativeForwardsTheParsedBlockRatherThanTheClientsBytes(t *testing.T) {
 	require.Equal(t, canonical, packets[0])
 	require.NotEqual(t, sent.Buf, packets[0])
 
-	// The next forwarded packet must not carry the client's bytes along with it.
 	_, err = conn.Write([]byte{byte(proto.ClientCodePing)})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -196,13 +193,11 @@ func TestNativeRecompressesTheParsedBlock(t *testing.T) {
 	events, packets := upstream.received()
 	require.Equal(t, []string{"query: INSERT INTO t VALUES", "data: 3 rows"}, events)
 
-	// Code, empty table name, then the frame: a 16 byte checksum and the method byte.
 	const lz4Method, zstdMethod = 0x82, 0x90
 	require.Equal(t, byte(zstdMethod), packet[2+16])
 	require.Equal(t, byte(lz4Method), packets[0][2+16], "the forwarded block must be the gateway's own encoding")
 }
 
-// A frame's declared size is allocated before it is read, so the session's limit has to bound it.
 func TestNativeRefusesACompressedFrameTooLargeToTrust(t *testing.T) {
 	upstream := startFakeClickHouse(t)
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
@@ -269,7 +264,6 @@ func TestNativeBlockedStatementKeepsTheSession(t *testing.T) {
 	})
 	reader := clientHandshake(t, conn, "someone", "")
 
-	// Clients send the query and the empty block that ends its external data in one go.
 	writeStatement := func(body string) {
 		var b proto.Buffer
 		q := proto.Query{Body: body, Stage: proto.StageComplete}
@@ -291,7 +285,6 @@ func TestNativeBlockedStatementKeepsTheSession(t *testing.T) {
 
 	writeStatement("SELECT 1")
 
-	// A stray end of stream after the exception would be read here as the answer to SELECT 1.
 	next, err := reader.UVarInt()
 	require.NoError(t, err)
 	require.Equal(t, proto.ServerCodeProgress, proto.ServerCode(next))
