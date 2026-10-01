@@ -818,3 +818,61 @@ func TestNativeStalledSessionsDoNotStarveAnother(t *testing.T) {
 	require.Equal(t, proto.ServerCodeProgress, proto.ServerCode(code),
 		"a session must be served while others sit mid-packet")
 }
+
+// Charged as a packet is read rather than reserved, so a session that sends nothing holds nothing
+// and cannot deny the gateway to anyone else.
+func TestNativeStalledSessionsHoldNoMemory(t *testing.T) {
+	before := nativeBytesInFlight.Load()
+	for i := 0; i < 8; i++ {
+		upstream := startFakeClickHouse(t)
+		conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+		clientHandshake(t, conn, "someone", "")
+
+		var b proto.Buffer
+		proto.ClientCodeQuery.Encode(&b)
+		_, err := conn.Write(b.Buf)
+		require.NoError(t, err)
+	}
+	// Reserving a packet's worth up front would have held half a gigabyte across these eight.
+	require.Less(t, nativeBytesInFlight.Load()-before, int64(1<<20),
+		"a session mid-packet must hold what it sent, not what it might send")
+}
+
+// The gateway's own share bounds every session together, however little each one asks for.
+func TestNativeRefusesWhatTheGatewayIsAlreadyHolding(t *testing.T) {
+	nativeBytesInFlight.Add(maxNativeBytesInFlight)
+	t.Cleanup(func() { nativeBytesInFlight.Add(-maxNativeBytesInFlight) })
+
+	upstream := startFakeClickHouse(t)
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+
+	var b proto.Buffer
+	proto.ClientHello{Name: "unit-test client", Major: 24, Minor: 8, ProtocolVersion: proto.Version}.Encode(&b)
+	_, err := conn.Write(b.Buf)
+	require.NoError(t, err)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	answer, _ := io.ReadAll(conn)
+	require.Empty(t, answer, "a session the gateway has no memory for must not be answered")
+
+	hello, _, _, _ := upstream.snapshot()
+	require.Empty(t, hello.Name, "nothing may reach the upstream")
+}
+
+func TestNativeRefusesAPacketTheGatewayHasNoRoomFor(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+	reader := clientHandshake(t, conn, "someone", "")
+
+	nativeBytesInFlight.Add(maxNativeBytesInFlight)
+	t.Cleanup(func() { nativeBytesInFlight.Add(-maxNativeBytesInFlight) })
+
+	writeQuery(t, conn, proto.Query{Body: "SELECT 1"})
+
+	code, message := decodeException(t, reader)
+	require.Equal(t, codeNotImplemented, code)
+	require.Contains(t, message, "already holding its share")
+
+	_, _, queries, _ := upstream.snapshot()
+	require.Empty(t, queries, "a refused packet must not reach ClickHouse")
+}

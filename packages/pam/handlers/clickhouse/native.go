@@ -41,6 +41,10 @@ func newNativeProxy(owner *ClickHouseProxy) *nativeProxy {
 type tap struct {
 	src *bufio.Reader
 	buf []byte
+
+	// Set while a packet is being read, to push its deadline out as bytes arrive.
+	refresh      func()
+	sinceRefresh int
 }
 
 func newTap(r io.Reader) *tap {
@@ -57,6 +61,12 @@ func (t *tap) Read(p []byte) (int, error) {
 	}
 	p[0] = b
 	t.buf = append(t.buf, b)
+	if t.refresh != nil {
+		if t.sinceRefresh++; t.sinceRefresh >= deadlineRefreshBytes {
+			t.sinceRefresh = 0
+			t.refresh()
+		}
+	}
 	return 1, nil
 }
 
@@ -179,11 +189,17 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	_ = upstream.SetDeadline(deadline)
 
 	// The handshake decodes client-declared strings too, so it is bounded like any other packet.
+	handshake := &packetAccount{}
 	clientReader.SetLimit(maxPacketBytes)
+	clientReader.SetOnTake(handshake.charge)
 	s.upstreamReader.SetLimit(maxPacketBytes)
+	s.upstreamReader.SetOnTake(handshake.charge)
 	err = s.handshake(clientTap, clientReader)
+	clientReader.SetOnTake(nil)
 	clientReader.SetLimit(0)
+	s.upstreamReader.SetOnTake(nil)
 	s.upstreamReader.SetLimit(0)
+	handshake.release()
 	if err != nil {
 		l.Debug().Err(err).Msg("ClickHouse native handshake ended")
 		return nil
@@ -225,6 +241,14 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 		l.Debug().Err(err).Msg("ClickHouse native session ended")
 	}
 	return nil
+}
+
+// refuseDecode names the gateway running out of room rather than blaming the packet for it.
+func (s *nativeSession) refuseDecode(t *tap, err error, message string) error {
+	if errors.Is(err, errGatewayFull) {
+		return s.refuse(t, codeNotImplemented, errGatewayFull.Error())
+	}
+	return s.refuse(t, codeNotImplemented, message)
 }
 
 func (s *nativeSession) refuse(t *tap, code int, message string) error {
@@ -362,12 +386,20 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 			return fmt.Errorf("client hung up: %w", err)
 		}
 
-		// The rest of a started packet is expected promptly, so a half-sent one cannot hold what
-		// it allocated for as long as an idle session may sit.
-		_ = s.client.SetReadDeadline(time.Now().Add(packetDeadline))
+		// A half-sent packet must not hold what it allocated for as long as an idle session may
+		// sit, and a slow one must still finish, so the deadline moves with the bytes.
+		pushDeadline := func() { _ = s.client.SetReadDeadline(time.Now().Add(packetIdleTimeout)) }
+		pushDeadline()
+		t.refresh, t.sinceRefresh = pushDeadline, 0
+
+		account := &packetAccount{}
 		r.SetLimit(maxPacketBytes)
+		r.SetOnTake(account.charge)
 		err = s.handlePacket(t, r, code)
+		r.SetOnTake(nil)
 		r.SetLimit(0)
+		account.release()
+		t.refresh = nil
 		if err != nil {
 			return err
 		}
@@ -420,7 +452,7 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	var q proto.Query
 	if err := q.DecodeAware(r, s.rev); err != nil {
 		s.log.Warn().Err(err).Msg("Could not read a ClickHouse query packet")
-		return s.refuse(t, codeNotImplemented,
+		return s.refuseDecode(t, err,
 			"This session could not read the query packet, so the command blocking policy could not be "+
 				"applied to it.")
 	}
@@ -481,7 +513,7 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	if decodeErr != nil {
 		s.log.Warn().Err(decodeErr).Str("table", table).Msg("Could not read a ClickHouse data block")
 		s.outcomes.complete("INTERRUPTED: a data block could not be read, so the rest was not forwarded")
-		return s.refuse(t, codeNotImplemented,
+		return s.refuseDecode(t, decodeErr,
 			fmt.Sprintf("This session could not read the data block sent with this statement, so it was not "+
 				"forwarded: %v. Sending this data over ClickHouse's HTTP interface avoids the limitation.", decodeErr))
 	}
