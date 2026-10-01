@@ -35,6 +35,7 @@ type fakeClickHouse struct {
 	refuseWith     string
 	conn           net.Conn
 	answerQueries  bool
+	answerWith     []byte
 	events         []string
 	dataPackets    [][]byte
 }
@@ -147,6 +148,12 @@ func (f *fakeClickHouse) serve(conn net.Conn) {
 			f.queries = append(f.queries, q)
 			f.events = append(f.events, "query: "+q.Body)
 			f.mu.Unlock()
+
+			if f.answerWith != nil {
+				if _, err := conn.Write(f.answerWith); err != nil {
+					return
+				}
+			}
 
 			if f.answerQueries {
 				var reply proto.Buffer
@@ -915,4 +922,38 @@ func TestNativeRefusesAPacketTheGatewayHasNoRoomFor(t *testing.T) {
 
 	_, _, queries, _ := upstream.snapshot()
 	require.Empty(t, queries, "a refused packet must not reach ClickHouse")
+}
+
+// The target is configured, not chosen by the client, but a compromised one must not be able to
+// take the gateway's memory with a size it merely claims.
+func TestNativeBoundsWhatTheUpstreamDeclares(t *testing.T) {
+	upstream := startFakeClickHouse(t)
+
+	var answer proto.Buffer
+	proto.ServerCodeData.Encode(&answer)
+	answer.PutString("")
+	proto.BlockInfo{BucketNum: -1}.Encode(&answer)
+	answer.PutUVarInt(1)
+	answer.PutUVarInt(1)
+	answer.PutString("c")
+	answer.PutString("String")
+	answer.PutBool(false)
+	answer.PutUVarInt(uint64(maxServerPacketBytes) + 1)
+	answer.Buf = append(answer.Buf, []byte("short")...)
+	upstream.answerWith = append([]byte{}, answer.Buf...)
+
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+	reader := clientHandshake(t, conn, "someone", "")
+	writeQuery(t, conn, proto.Query{Body: "SELECT 1"})
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	relayed, err := reader.ReadRaw(len(upstream.answerWith))
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.Equal(t, upstream.answerWith, relayed,
+		"a block the gateway gave up on must still reach the client untouched")
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(maxServerPacketBytes),
+		"a declared size must not be allocated before it is read")
 }

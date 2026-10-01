@@ -11,7 +11,10 @@ import (
 const (
 	// The decoders allocate a declared length before reading it, so the reader is given this
 	// limit and refuses anything larger before allocating it.
-	maxPacketBytes         = 64 << 20
+	maxPacketBytes = 64 << 20
+	// Overrunning this degrades to a raw relay rather than ending the session, so ClickHouse's own
+	// answers get a far more generous bound than anything a client sends.
+	maxServerPacketBytes   = 256 << 20
 	maxNativeBytesInFlight = 512 << 20
 	deadlineRefreshBytes   = 1 << 20
 )

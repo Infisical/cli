@@ -38,16 +38,23 @@ func newNativeProxy(owner *ClickHouseProxy) *nativeProxy {
 
 // One byte at a time, or proto.Reader buffers past the packet.
 type tap struct {
-	src *bufio.Reader
-	buf []byte
+	src     *bufio.Reader
+	buf     []byte
+	holding bool
 
 	refresh      func()
 	sinceRefresh int
 }
 
 func newTap(r io.Reader) *tap {
-	return &tap{src: bufio.NewReaderSize(r, 64<<10)}
+	return &tap{src: bufio.NewReaderSize(r, 64<<10), holding: true}
 }
+
+func (t *tap) hold() { t.buf, t.holding = nil, true }
+
+// A packet forwarded from what was decoded has no use for its own bytes, and holding them would
+// keep a second copy of everything the decoder already charged for.
+func (t *tap) stopHolding() { t.buf, t.holding = nil, false }
 
 func (t *tap) Read(p []byte) (int, error) {
 	if len(p) == 0 {
@@ -58,7 +65,9 @@ func (t *tap) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	p[0] = b
-	t.buf = append(t.buf, b)
+	if t.holding {
+		t.buf = append(t.buf, b)
+	}
 	if t.refresh != nil {
 		if t.sinceRefresh++; t.sinceRefresh >= deadlineRefreshBytes {
 			t.sinceRefresh = 0
@@ -382,6 +391,7 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 	defer guard.disarm()
 
 	for {
+		t.hold()
 		_ = s.client.SetReadDeadline(time.Now().Add(nativeIdleTimeout))
 
 		code, err := r.UVarInt()
@@ -496,6 +506,8 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 			"This session could not read the data packet that followed this statement.")
 	}
 
+	t.stopHolding()
+
 	compressed := s.compressed.Load()
 	if compressed {
 		r.EnableCompression()
@@ -557,58 +569,15 @@ func (s *nativeSession) serverLoop() {
 			return
 		}
 
-		switch proto.ServerCode(code) {
-		case proto.ServerCodePong:
-
-		case proto.ServerCodeEndOfStream:
-			s.outcomes.complete("OK")
-
-		case proto.ServerCodeException:
-			var e proto.Exception
-			if err := e.DecodeAware(r, s.rev); err != nil {
-				relayRest(err.Error())
-				return
-			}
-			message := firstLine(e.Message, e.Name)
-			if len(message) > maxLoggedErrorBytes {
-				message = message[:maxLoggedErrorBytes] + "... [truncated]"
-			}
-			s.outcomes.complete(fmt.Sprintf("ERROR: Code %d: %s", e.Code, message))
-
-		case proto.ServerCodeProgress:
-			var p proto.Progress
-			if err := p.DecodeAware(r, s.rev); err != nil {
-				relayRest(err.Error())
-				return
-			}
-			s.outcomes.progress(p.Rows, p.Bytes)
-
-		case proto.ServerCodeProfile:
-			var p proto.Profile
-			if err := p.DecodeAware(r, s.rev); err != nil {
-				relayRest(err.Error())
-				return
-			}
-
-		case proto.ServerCodeTableColumns:
-			if _, err := r.Str(); err != nil {
-				relayRest(err.Error())
-				return
-			}
-			if _, err := r.Str(); err != nil {
-				relayRest(err.Error())
-				return
-			}
-
-		case proto.ServerCodeData, proto.ServerCodeTotals, proto.ServerCodeExtremes, proto.ServerCodeLog,
-			proto.ServerProfileEvents:
-			if err := s.skipServerBlock(r, proto.ServerCode(code)); err != nil {
-				relayRest(err.Error())
-				return
-			}
-
-		default:
-			relayRest(fmt.Sprintf("unreadable server packet %d", code))
+		account := &packetAccount{}
+		r.SetLimit(maxServerPacketBytes)
+		r.SetOnTake(account.charge)
+		err = s.readServerPacket(r, code)
+		r.SetOnTake(nil)
+		r.SetLimit(0)
+		account.release()
+		if err != nil {
+			relayRest(err.Error())
 			return
 		}
 
@@ -616,6 +585,58 @@ func (s *nativeSession) serverLoop() {
 			return
 		}
 	}
+}
+
+// An error here stops the parsing, not the session: the bytes are relayed on untouched.
+func (s *nativeSession) readServerPacket(r *proto.Reader, code uint64) error {
+	switch proto.ServerCode(code) {
+	case proto.ServerCodePong:
+
+	case proto.ServerCodeEndOfStream:
+		s.outcomes.complete("OK")
+
+	case proto.ServerCodeException:
+		var e proto.Exception
+		if err := e.DecodeAware(r, s.rev); err != nil {
+			return err
+		}
+		message := firstLine(e.Message, e.Name)
+		if len(message) > maxLoggedErrorBytes {
+			message = message[:maxLoggedErrorBytes] + "... [truncated]"
+		}
+		s.outcomes.complete(fmt.Sprintf("ERROR: Code %d: %s", e.Code, message))
+
+	case proto.ServerCodeProgress:
+		var p proto.Progress
+		if err := p.DecodeAware(r, s.rev); err != nil {
+			return err
+		}
+		s.outcomes.progress(p.Rows, p.Bytes)
+
+	case proto.ServerCodeProfile:
+		var p proto.Profile
+		if err := p.DecodeAware(r, s.rev); err != nil {
+			return err
+		}
+
+	case proto.ServerCodeTableColumns:
+		if _, err := r.Str(); err != nil {
+			return err
+		}
+		if _, err := r.Str(); err != nil {
+			return err
+		}
+
+	case proto.ServerCodeData, proto.ServerCodeTotals, proto.ServerCodeExtremes, proto.ServerCodeLog,
+		proto.ServerProfileEvents:
+		if err := s.skipServerBlock(r, proto.ServerCode(code)); err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unreadable server packet %d", code)
+	}
+	return nil
 }
 
 type refusalAwareWriter struct{ s *nativeSession }

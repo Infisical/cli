@@ -46,3 +46,22 @@ func TestTapRelaysWhatItHasAlreadyBuffered(t *testing.T) {
 		"every byte the upstream sent must reach the client, including what the tap buffered")
 	require.Equal(t, payload, client.Bytes())
 }
+
+func TestTapStopsHoldingBytesNothingWillRead(t *testing.T) {
+	tp := newTap(bytes.NewReader(bytes.Repeat([]byte("x"), 64)))
+	out := make([]byte, 1)
+
+	_, err := io.ReadFull(tp, out)
+	require.NoError(t, err)
+	require.Len(t, tp.buf, 1)
+
+	tp.stopHolding()
+	_, err = io.ReadFull(tp, make([]byte, 32))
+	require.NoError(t, err)
+	require.Empty(t, tp.buf, "a tap told to stop must keep nothing")
+
+	tp.hold()
+	_, err = io.ReadFull(tp, out)
+	require.NoError(t, err)
+	require.Len(t, tp.buf, 1, "the next packet is held again")
+}
