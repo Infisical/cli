@@ -116,3 +116,25 @@ func readNativeException(t *testing.T, conn net.Conn) (int, string) {
 	require.NoError(t, e.DecodeAware(r, proto.Version))
 	return int(e.Code), e.Message
 }
+
+func TestSniffCutsOffAClientThatSendsNothing(t *testing.T) {
+	restore := sniffTimeout
+	sniffTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { sniffTimeout = restore })
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := sniffProtocol(deadlineDeafConn{server})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "a client that sent nothing must not hold the connection")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sniff was never cut off")
+	}
+}

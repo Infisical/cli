@@ -9,7 +9,7 @@ import (
 // Native opens with a uvarint 0; HTTP with an ASCII method letter.
 const nativeHelloByte = 0x00
 
-const sniffTimeout = 30 * time.Second
+var sniffTimeout = 30 * time.Second
 
 type peekConn struct {
 	net.Conn
@@ -31,9 +31,13 @@ func (c *peekConn) CloseWrite() error {
 func sniffProtocol(conn net.Conn) (net.Conn, bool, error) {
 	reader := bufio.NewReaderSize(conn, 64<<10)
 
-	_ = conn.SetReadDeadline(time.Now().Add(sniffTimeout))
+	// No HTTP server exists yet, so ReadHeaderTimeout covers none of this, and a relayed session
+	// ignores a read deadline.
+	guard := newStallGuard(sniffTimeout, conn)
+	guard.arm()
+	defer guard.disarm()
+
 	first, err := reader.Peek(1)
-	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return conn, false, err
 	}
