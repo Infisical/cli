@@ -81,7 +81,7 @@ func startFakeClickHouse(t *testing.T, serverRevision ...int) *fakeClickHouse {
 func (f *fakeClickHouse) addr() string { return f.listener.Addr().String() }
 
 // The gateway finishes its handshake by forwarding the addendum, so this is how a test knows the
-// handshake has stopped charging and is not racing it.
+// handshake has stopped taking memory and is not racing it.
 func (f *fakeClickHouse) waitForHandshake(t *testing.T) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -839,7 +839,7 @@ func TestNativeStalledSessionsHoldNoMemory(t *testing.T) {
 		"a session mid-packet must hold what it sent, not what it might send")
 }
 
-func TestNativeChargesAndReleasesAHalfSentPacket(t *testing.T) {
+func TestNativeTakesAndGivesBackAHalfSentPacket(t *testing.T) {
 	const declared = 8 << 20
 
 	before := nativeBytesInFlight.Load()
@@ -849,11 +849,11 @@ func TestNativeChargesAndReleasesAHalfSentPacket(t *testing.T) {
 	startPartialQuery(t, conn, declared)
 
 	waitForBytesInFlight(t, func(held int64) bool { return held >= declared },
-		"the bytes a packet declared must be charged before they are allocated")
+		"the bytes a packet declared must be taken before they are allocated")
 
 	require.NoError(t, conn.Close())
 	waitForBytesInFlight(t, func(held int64) bool { return held <= before },
-		"a packet that never arrived must give its charge back")
+		"a packet that never arrived must give its memory back")
 }
 
 func TestNativeCutsOffAStalledPacketWithoutDeadlines(t *testing.T) {
@@ -869,12 +869,12 @@ func TestNativeCutsOffAStalledPacketWithoutDeadlines(t *testing.T) {
 	startPartialQuery(t, conn, 8<<20)
 
 	waitForBytesInFlight(t, func(held int64) bool { return held >= 8<<20 },
-		"the bytes a packet declared must be charged before they are allocated")
+		"the bytes a packet declared must be taken before they are allocated")
 	waitForBytesInFlight(t, func(held int64) bool { return held <= before },
 		"a stalled packet must be cut off even when the transport ignores deadlines")
 }
 
-// The budget is a package global that every session in this package charges, so a test that wants
+// The budget is a package global that every session in this package takes from, so a test that wants
 // it at a known value sets it outright and puts back whatever was there.
 func setGatewayHeld(t *testing.T, held int64) {
 	t.Helper()
@@ -935,7 +935,7 @@ func TestNativeRefusesAPacketTheGatewayHasNoRoomFor(t *testing.T) {
 	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
 	reader := clientHandshake(t, conn, "someone", "")
 
-	// Filled only once the handshake has stopped charging, or it is the handshake that is refused.
+	// Filled only once the handshake has stopped taking memory, or it is the handshake that is refused.
 	upstream.waitForHandshake(t)
 	nativeBytesInFlight.Store(maxNativeBytesInFlight)
 
@@ -983,9 +983,9 @@ func TestNativeBoundsWhatTheUpstreamDeclares(t *testing.T) {
 		"a declared size must not be allocated before it is read")
 }
 
-// Bytes waiting on a slow client are still memory the gateway is holding, so the charge has to
-// outlive the decode that brought them in.
-func TestNativeHoldsAServerPacketsChargeUntilItIsWritten(t *testing.T) {
+// Bytes waiting on a slow client are still memory the gateway is holding, so it has to stay taken
+// past the decode that brought them in.
+func TestNativeHoldsAServerPacketsMemoryUntilItIsWritten(t *testing.T) {
 	var col proto.ColStr
 	for i := 0; i < 20000; i++ {
 		col.Append(strings.Repeat("y", 100))
@@ -1004,17 +1004,17 @@ func TestNativeHoldsAServerPacketsChargeUntilItIsWritten(t *testing.T) {
 	reader := clientHandshake(t, conn, "someone", "")
 	writeQuery(t, conn, proto.Query{Body: "SELECT c FROM t"})
 
-	// One byte proves the write has begun, so the decode that charged it is over. The rest of the
+	// One byte proves the write has begun, so the decode that took it is over. The rest of the
 	// packet is still in the gateway's hands, waiting on a client that is not reading.
 	head, err := reader.ReadRaw(1)
 	require.NoError(t, err)
 	require.Equal(t, upstream.answerWith[:1], head)
 	require.Greater(t, nativeBytesInFlight.Load()-before, int64(1<<20),
-		"a packet waiting on the client must still be charged")
+		"a packet waiting on the client must still be taken")
 
 	relayed, err := reader.ReadRaw(len(upstream.answerWith) - 1)
 	require.NoError(t, err)
 	require.Equal(t, upstream.answerWith[1:], relayed)
 	waitForBytesInFlight(t, func(held int64) bool { return held <= before },
-		"the charge must go back once the bytes are gone")
+		"the memory must go back once the bytes are gone")
 }

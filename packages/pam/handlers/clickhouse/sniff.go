@@ -33,9 +33,9 @@ func sniffProtocol(conn net.Conn) (net.Conn, bool, error) {
 
 	// No HTTP server exists yet, so ReadHeaderTimeout covers none of this, and a relayed session
 	// ignores a read deadline.
-	guard := newStallGuard(sniffTimeout, conn)
-	guard.arm()
-	defer guard.disarm()
+	idle := newIdleTimer(sniffTimeout, conn)
+	idle.reset()
+	defer idle.stop()
 
 	first, err := reader.Peek(1)
 	if err != nil {

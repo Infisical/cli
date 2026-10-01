@@ -28,77 +28,77 @@ var errGatewayFull = errors.New("this gateway is already holding its share of Cl
 
 var nativeBytesInFlight atomic.Int64
 
-type packetAccount struct{ held int64 }
+type packetMemory struct{ held int64 }
 
-func (a *packetAccount) charge(n int) error {
+func (m *packetMemory) take(n int) error {
 	if nativeBytesInFlight.Add(int64(n)) > maxNativeBytesInFlight {
 		nativeBytesInFlight.Add(-int64(n))
 		return errGatewayFull
 	}
-	a.held += int64(n)
+	m.held += int64(n)
 	return nil
 }
 
-func (a *packetAccount) release() {
-	nativeBytesInFlight.Add(-a.held)
-	a.held = 0
+func (m *packetMemory) giveBack() {
+	nativeBytesInFlight.Add(-m.held)
+	m.held = 0
 }
 
 // A relayed session arrives over an SSH channel, whose SetReadDeadline does nothing, so a stalled
 // read is cut off by closing the connection instead of by the transport.
-type stallGuard struct {
+type idleTimer struct {
 	after time.Duration
 	conns []io.Closer
 
 	mu       sync.Mutex
 	timer    *time.Timer
-	armed    bool
+	running  bool
 	deadline time.Time
 }
 
-func newStallGuard(after time.Duration, conns ...io.Closer) *stallGuard {
-	g := &stallGuard{after: after, conns: conns}
-	g.timer = time.AfterFunc(after, g.fire)
-	g.timer.Stop()
-	return g
+func newIdleTimer(after time.Duration, conns ...io.Closer) *idleTimer {
+	it := &idleTimer{after: after, conns: conns}
+	it.timer = time.AfterFunc(after, it.expire)
+	it.timer.Stop()
+	return it
 }
 
-func (g *stallGuard) arm() {
-	g.mu.Lock()
-	g.deadline = time.Now().Add(g.after)
-	resting := !g.armed
-	g.armed = true
-	g.mu.Unlock()
+func (it *idleTimer) reset() {
+	it.mu.Lock()
+	it.deadline = time.Now().Add(it.after)
+	wasStopped := !it.running
+	it.running = true
+	it.mu.Unlock()
 
-	if resting {
-		g.timer.Reset(g.after)
+	if wasStopped {
+		it.timer.Reset(it.after)
 	}
 }
 
-func (g *stallGuard) disarm() {
-	g.mu.Lock()
-	g.armed = false
-	g.mu.Unlock()
-	g.timer.Stop()
+func (it *idleTimer) stop() {
+	it.mu.Lock()
+	it.running = false
+	it.mu.Unlock()
+	it.timer.Stop()
 }
 
-// Stop cannot call back a firing that has already begun, so the deadline is what decides: one that
-// belongs to a packet already finished finds the guard at rest, and a refreshed one reschedules.
-func (g *stallGuard) fire() {
-	g.mu.Lock()
-	if !g.armed {
-		g.mu.Unlock()
+// Stop cannot call back an expiry that has already begun, so the deadline is what decides: one that
+// belongs to a packet already finished finds the timer stopped, and a reset one reschedules.
+func (it *idleTimer) expire() {
+	it.mu.Lock()
+	if !it.running {
+		it.mu.Unlock()
 		return
 	}
-	if left := time.Until(g.deadline); left > 0 {
-		g.mu.Unlock()
-		g.timer.Reset(left)
+	if left := time.Until(it.deadline); left > 0 {
+		it.mu.Unlock()
+		it.timer.Reset(left)
 		return
 	}
-	g.armed = false
-	g.mu.Unlock()
+	it.running = false
+	it.mu.Unlock()
 
-	for _, c := range g.conns {
+	for _, c := range it.conns {
 		_ = c.Close()
 	}
 }

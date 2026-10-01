@@ -66,9 +66,9 @@ func TestTapStopsHoldingBytesNothingWillRead(t *testing.T) {
 	require.Len(t, tp.buf, 1, "the next packet is held again")
 }
 
-func TestTapLosesNothingWhenAChargeIsRefused(t *testing.T) {
+func TestTapLosesNothingWhenATakeIsRefused(t *testing.T) {
 	tp := newTap(bytes.NewReader([]byte("abc")))
-	tp.charge = func(int) error { return errGatewayFull }
+	tp.takeMemory = func(int) error { return errGatewayFull }
 
 	_, err := tp.Read(make([]byte, 1))
 	require.ErrorIs(t, err, errGatewayFull)
@@ -76,18 +76,18 @@ func TestTapLosesNothingWhenAChargeIsRefused(t *testing.T) {
 
 	rest, err := io.ReadAll(tp.rest())
 	require.NoError(t, err)
-	require.Equal(t, "abc", string(rest), "a refused charge must not swallow a byte the relay still owes")
+	require.Equal(t, "abc", string(rest), "a refused take must not swallow a byte the relay still owes")
 }
 
 func TestTapReservesNothingForAByteThatNeverArrives(t *testing.T) {
-	charged := 0
+	taken := 0
 	tp := newTap(bytes.NewReader(nil))
-	tp.charge = func(n int) error {
-		charged += n
+	tp.takeMemory = func(n int) error {
+		taken += n
 		return nil
 	}
 
 	_, err := tp.Read(make([]byte, 1))
 	require.ErrorIs(t, err, io.EOF)
-	require.Zero(t, charged, "a stream with nothing left to give must not reserve for it")
+	require.Zero(t, taken, "a stream with nothing left to give must not reserve for it")
 }

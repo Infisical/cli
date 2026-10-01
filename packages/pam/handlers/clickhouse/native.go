@@ -42,9 +42,9 @@ type tap struct {
 	buf     []byte
 	holding bool
 
-	// Held bytes are forwarded as they arrived, so they outlive the decode and have to be charged
-	// on their own.
-	charge func(n int) error
+	// Held bytes are forwarded as they arrived, so they outlive the decode and need their own share
+	// of the gateway's memory.
+	takeMemory func(n int) error
 
 	refresh      func()
 	sinceRefresh int
@@ -57,7 +57,7 @@ func newTap(r io.Reader) *tap {
 func (t *tap) hold() { t.buf, t.holding = nil, true }
 
 // A packet forwarded from what was decoded has no use for its own bytes, and holding them would
-// keep a second copy of everything the decoder already charged for.
+// keep a second copy of everything the decoder already took.
 func (t *tap) stopHolding() { t.buf, t.holding = nil, false }
 
 func (t *tap) Read(p []byte) (int, error) {
@@ -92,8 +92,8 @@ func (t *tap) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
-// Growing the buffer here rather than leaving it to append is what lets a charge be made before
-// the memory is taken, instead of after it already has been.
+// Growing the buffer here rather than leaving it to append is what lets the memory be taken from
+// the gateway's share before it is allocated, instead of after.
 func (t *tap) reserve() error {
 	if len(t.buf) < cap(t.buf) {
 		return nil
@@ -103,8 +103,8 @@ func (t *tap) reserve() error {
 	if grow < tapGrowthBytes {
 		grow = tapGrowthBytes
 	}
-	if t.charge != nil {
-		if err := t.charge(grow); err != nil {
+	if t.takeMemory != nil {
+		if err := t.takeMemory(grow); err != nil {
 			return err
 		}
 	}
@@ -145,8 +145,8 @@ type nativeSession struct {
 
 	outcomes *outcomeRecorder
 
-	clientFrames   packetAccount
-	upstreamFrames packetAccount
+	clientFrames   packetMemory
+	upstreamFrames packetMemory
 
 	// Both directions write to the client, so a refusal must not land inside a packet mid-write.
 	writeMu sync.Mutex
@@ -234,30 +234,30 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
 
-	defer s.clientFrames.release()
-	defer s.upstreamFrames.release()
-	clientReader.SetFrameAccount(s.clientFrames.charge)
-	s.upstreamReader.SetFrameAccount(s.upstreamFrames.charge)
+	defer s.clientFrames.giveBack()
+	defer s.upstreamFrames.giveBack()
+	clientReader.SetFrameAccount(s.clientFrames.take)
+	s.upstreamReader.SetFrameAccount(s.upstreamFrames.take)
 
-	handshakeGuard := newStallGuard(nativeHandshakeTimeout, clientConn, upstream)
-	handshakeGuard.arm()
+	handshakeTimer := newIdleTimer(nativeHandshakeTimeout, clientConn, upstream)
+	handshakeTimer.reset()
 
-	handshake := &packetAccount{}
+	handshake := &packetMemory{}
 	clientReader.SetLimit(maxPacketBytes)
-	clientReader.SetOnTake(handshake.charge)
-	clientTap.charge = handshake.charge
+	clientReader.SetOnTake(handshake.take)
+	clientTap.takeMemory = handshake.take
 	s.upstreamReader.SetLimit(maxPacketBytes)
-	s.upstreamReader.SetOnTake(handshake.charge)
-	s.upstreamTap.charge = handshake.charge
+	s.upstreamReader.SetOnTake(handshake.take)
+	s.upstreamTap.takeMemory = handshake.take
 	err = s.handshake(clientTap, clientReader)
 	clientReader.SetOnTake(nil)
 	clientReader.SetLimit(0)
-	clientTap.charge = nil
+	clientTap.takeMemory = nil
 	s.upstreamReader.SetOnTake(nil)
 	s.upstreamReader.SetLimit(0)
-	s.upstreamTap.charge = nil
-	handshake.release()
-	handshakeGuard.disarm()
+	s.upstreamTap.takeMemory = nil
+	handshake.giveBack()
+	handshakeTimer.stop()
 	if err != nil {
 		l.Debug().Err(err).Msg("ClickHouse native handshake ended")
 		return nil
@@ -429,8 +429,8 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 }
 
 func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
-	guard := newStallGuard(packetIdleTimeout, s.client)
-	defer guard.disarm()
+	idle := newIdleTimer(packetIdleTimeout, s.client)
+	defer idle.stop()
 
 	for {
 		t.hold()
@@ -441,17 +441,17 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 			return fmt.Errorf("client hung up: %w", err)
 		}
 
-		guard.arm()
-		t.refresh, t.sinceRefresh = guard.arm, 0
+		idle.reset()
+		t.refresh, t.sinceRefresh = idle.reset, 0
 
-		account := &packetAccount{}
+		memory := &packetMemory{}
 		r.SetLimit(maxPacketBytes)
-		r.SetOnTake(account.charge)
+		r.SetOnTake(memory.take)
 		err = s.handlePacket(t, r, code)
 		r.SetOnTake(nil)
 		r.SetLimit(0)
-		account.release()
-		guard.disarm()
+		memory.giveBack()
+		idle.stop()
 		t.refresh = nil
 		if err != nil {
 			return err
@@ -599,12 +599,12 @@ func (s *nativeSession) serverLoop() {
 	t := s.upstreamTap
 	r := s.upstreamReader
 
-	// The copy holds nothing of its own, so the charge goes back once the buffered bytes are gone
+	// The copy holds nothing of its own, so the memory goes back once the buffered bytes are gone
 	// rather than being kept for as long as the relay runs.
-	relayRest := func(reason string, release func()) {
+	relayRest := func(reason string, giveBack func()) {
 		s.outcomes.degrade(reason)
 		err := s.writeToClientUnlessRefused(t.take())
-		release()
+		giveBack()
 		if err != nil {
 			return
 		}
@@ -617,23 +617,23 @@ func (s *nativeSession) serverLoop() {
 			return
 		}
 
-		account := &packetAccount{}
+		memory := &packetMemory{}
 		r.SetLimit(maxServerPacketBytes)
-		r.SetOnTake(account.charge)
-		t.charge = account.charge
+		r.SetOnTake(memory.take)
+		t.takeMemory = memory.take
 		err = s.readServerPacket(r, code)
 		r.SetOnTake(nil)
 		r.SetLimit(0)
-		t.charge = nil
+		t.takeMemory = nil
 
 		if err != nil {
-			relayRest(err.Error(), account.release)
+			relayRest(err.Error(), memory.giveBack)
 			return
 		}
 
 		// Released only once the bytes are gone: a client reading slowly is holding them.
 		writeErr := s.writeToClientUnlessRefused(t.take())
-		account.release()
+		memory.giveBack()
 		if writeErr != nil {
 			return
 		}
