@@ -957,3 +957,39 @@ func TestNativeBoundsWhatTheUpstreamDeclares(t *testing.T) {
 	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(maxServerPacketBytes),
 		"a declared size must not be allocated before it is read")
 }
+
+// Bytes waiting on a slow client are still memory the gateway is holding, so the charge has to
+// outlive the decode that brought them in.
+func TestNativeHoldsAServerPacketsChargeUntilItIsWritten(t *testing.T) {
+	var col proto.ColStr
+	for i := 0; i < 20000; i++ {
+		col.Append(strings.Repeat("y", 100))
+	}
+	var answer proto.Buffer
+	proto.ServerCodeData.Encode(&answer)
+	answer.PutString("")
+	block := proto.Block{Rows: col.Rows(), Columns: 1}
+	require.NoError(t, block.EncodeBlock(&answer, proto.Version, []proto.InputColumn{{Name: "c", Data: &col}}))
+
+	upstream := startFakeClickHouse(t)
+	upstream.answerWith = append([]byte{}, answer.Buf...)
+
+	before := nativeBytesInFlight.Load()
+	conn := dialProxy(t, ClickHouseProxyConfig{NativeAddr: upstream.addr(), Username: "account", SessionID: "unit"})
+	reader := clientHandshake(t, conn, "someone", "")
+	writeQuery(t, conn, proto.Query{Body: "SELECT c FROM t"})
+
+	// One byte proves the write has begun, so the decode that charged it is over. The rest of the
+	// packet is still in the gateway's hands, waiting on a client that is not reading.
+	head, err := reader.ReadRaw(1)
+	require.NoError(t, err)
+	require.Equal(t, upstream.answerWith[:1], head)
+	require.Greater(t, nativeBytesInFlight.Load()-before, int64(1<<20),
+		"a packet waiting on the client must still be charged")
+
+	relayed, err := reader.ReadRaw(len(upstream.answerWith) - 1)
+	require.NoError(t, err)
+	require.Equal(t, upstream.answerWith[1:], relayed)
+	waitForBytesInFlight(t, func(held int64) bool { return held <= before },
+		"the charge must go back once the bytes are gone")
+}

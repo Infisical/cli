@@ -42,6 +42,10 @@ type tap struct {
 	buf     []byte
 	holding bool
 
+	// Held bytes are forwarded as they arrived, so they outlive the decode and have to be charged
+	// on their own.
+	charge func(n int) error
+
 	refresh      func()
 	sinceRefresh int
 }
@@ -66,7 +70,13 @@ func (t *tap) Read(p []byte) (int, error) {
 	}
 	p[0] = b
 	if t.holding {
+		before := cap(t.buf)
 		t.buf = append(t.buf, b)
+		if grew := cap(t.buf) - before; grew > 0 && t.charge != nil {
+			if err := t.charge(grew); err != nil {
+				return 0, err
+			}
+		}
 	}
 	if t.refresh != nil {
 		if t.sinceRefresh++; t.sinceRefresh >= deadlineRefreshBytes {
@@ -207,13 +217,17 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	handshake := &packetAccount{}
 	clientReader.SetLimit(maxPacketBytes)
 	clientReader.SetOnTake(handshake.charge)
+	clientTap.charge = handshake.charge
 	s.upstreamReader.SetLimit(maxPacketBytes)
 	s.upstreamReader.SetOnTake(handshake.charge)
+	s.upstreamTap.charge = handshake.charge
 	err = s.handshake(clientTap, clientReader)
 	clientReader.SetOnTake(nil)
 	clientReader.SetLimit(0)
+	clientTap.charge = nil
 	s.upstreamReader.SetOnTake(nil)
 	s.upstreamReader.SetLimit(0)
+	s.upstreamTap.charge = nil
 	handshake.release()
 	handshakeGuard.disarm()
 	if err != nil {
@@ -460,6 +474,8 @@ func (s *nativeSession) handlePacket(t *tap, r *proto.Reader, code uint64) error
 }
 
 func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
+	t.stopHolding()
+
 	var q proto.Query
 	if err := q.DecodeAware(r, s.rev); err != nil {
 		s.log.Warn().Err(err).Msg("Could not read a ClickHouse query packet")
@@ -572,16 +588,22 @@ func (s *nativeSession) serverLoop() {
 		account := &packetAccount{}
 		r.SetLimit(maxServerPacketBytes)
 		r.SetOnTake(account.charge)
+		t.charge = account.charge
 		err = s.readServerPacket(r, code)
 		r.SetOnTake(nil)
 		r.SetLimit(0)
-		account.release()
+		t.charge = nil
+
 		if err != nil {
 			relayRest(err.Error())
+			account.release()
 			return
 		}
 
-		if err := s.writeToClientUnlessRefused(t.take()); err != nil {
+		// Released only once the bytes are gone: a client reading slowly is holding them.
+		writeErr := s.writeToClientUnlessRefused(t.take())
+		account.release()
+		if writeErr != nil {
 			return
 		}
 	}
