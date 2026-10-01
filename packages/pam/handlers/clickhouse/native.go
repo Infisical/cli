@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
 	"github.com/rs/zerolog"
 )
@@ -95,6 +96,10 @@ type nativeSession struct {
 	refused atomic.Bool
 
 	compressed atomic.Bool
+	compressor *compress.Writer
+
+	// A rejected statement's data blocks still arrive, and ClickHouse would reject them outside a query.
+	droppingData bool
 }
 
 func (s *nativeSession) writeToClient(payload []byte) error {
@@ -168,7 +173,7 @@ func (p *nativeProxy) HandleConnection(ctx context.Context, clientConn net.Conn,
 	clientTap := newTap(clientConn)
 	clientReader := proto.NewReader(clientTap)
 
-	// A port that accepts TCP then says nothing is the HTTP port entered as the native one.
+	// The HTTP port entered as the native one usually never answers the handshake.
 	deadline := time.Now().Add(nativeHandshakeTimeout)
 	_ = clientConn.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
@@ -228,6 +233,13 @@ func (s *nativeSession) refuse(t *tap, code int, message string) error {
 	return errSessionRefused
 }
 
+// For a fully read statement: the stream is still in sync, so the session carries on as ClickHouse's would.
+func (s *nativeSession) reject(t *tap, code int, message string) error {
+	t.discard()
+	s.droppingData = true
+	return s.writeToClient(nativeExceptionPacket(s.rev, code, message))
+}
+
 func (p *nativeProxy) dialUpstream(ctx context.Context) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: nativeDialTimeout}
 	if !p.config.EnableTLS {
@@ -246,8 +258,8 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 		return fmt.Errorf("expected Hello, got client packet %d", code)
 	}
 
-	hello, err := decodeBoundedClientHello(r)
-	if err != nil {
+	var hello proto.ClientHello
+	if err := hello.Decode(r); err != nil {
 		return fmt.Errorf("decode client hello: %w", err)
 	}
 	t.discard()
@@ -290,7 +302,9 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 			fmt.Sprintf("ClickHouse refused the account this session uses: %s", e.Message))
 	}
 	if proto.ServerCode(serverCode) != proto.ServerCodeHello {
-		return fmt.Errorf("expected server Hello, got packet %d", serverCode)
+		s.log.Warn().Uint64("packetCode", serverCode).Msg("ClickHouse's native port did not answer the handshake")
+		return s.refuse(t, codeNetworkError, "The native port on this account did not complete ClickHouse's "+
+			"native handshake: "+unexpectedHandshakeReply(serverCode)+".")
 	}
 
 	var serverHello proto.ServerHello
@@ -313,7 +327,7 @@ func (s *nativeSession) handshake(t *tap, r *proto.Reader) error {
 
 	// At rev >= 54458 the quota key follows the handshake as a bare string. Ours is empty: not the client's to pick.
 	if proto.FeatureAddendum.In(s.rev) {
-		if _, err := readBoundedStr(r); err != nil {
+		if _, err := r.Str(); err != nil {
 			return fmt.Errorf("read client addendum: %w", err)
 		}
 		t.discard()
@@ -342,8 +356,34 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 			return fmt.Errorf("client hung up: %w", err)
 		}
 
+		budget := &packetBudget{}
+		if err := budget.acquire(); err != nil {
+			s.log.Warn().Err(err).Msg("Refused a ClickHouse packet the gateway had no room for")
+			return s.refuse(t, codeNotImplemented, err.Error())
+		}
+		r.SetLimit(maxPacketBytes)
+		err = s.handlePacket(t, r, code)
+		r.SetLimit(0)
+		budget.release()
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (s *nativeSession) handlePacket(t *tap, r *proto.Reader, code uint64) error {
+	{
 		switch proto.ClientCode(code) {
-		case proto.ClientCodePing, proto.ClientCodeCancel:
+		case proto.ClientCodeCancel:
+			if s.droppingData {
+				t.discard()
+				return nil
+			}
+			if err := s.forward(t.take()); err != nil {
+				return err
+			}
+
+		case proto.ClientCodePing:
 			if err := s.forward(t.take()); err != nil {
 				return err
 			}
@@ -370,33 +410,34 @@ func (s *nativeSession) clientLoop(t *tap, r *proto.Reader) error {
 					"policy could not be applied to it.", code))
 		}
 	}
+	return nil
 }
 
 func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
-	q, err := decodeBoundedQuery(r, s.rev)
-	if err != nil {
+	var q proto.Query
+	if err := q.DecodeAware(r, s.rev); err != nil {
 		s.log.Warn().Err(err).Msg("Could not read a ClickHouse query packet")
 		return s.refuse(t, codeNotImplemented,
 			"This session could not read the query packet, so the command blocking policy could not be "+
 				"applied to it.")
 	}
 	t.discard()
+	s.droppingData = false
+	s.compressed.Store(q.Compression == proto.CompressionEnabled)
 
 	// EncodeAware always writes StageComplete, so a partial stage would be silently upgraded to a full run.
 	if q.Stage != proto.StageComplete {
-		return s.refuse(t, codeNotImplemented,
+		return s.reject(t, codeNotImplemented,
 			fmt.Sprintf("This session only runs statements to completion, and this client asked for stage %d.",
 				int(q.Stage)))
 	}
-
-	s.compressed.Store(q.Compression == proto.CompressionEnabled)
 
 	statement := q.Body + nativeParameterSuffix(q.Parameters)
 
 	if blocked := s.proxy.blockedBy(q.Body, statement); blocked != nil {
 		s.proxy.logStatement(statement, fmt.Sprintf("BLOCKED: %s", blocked.String()))
 		s.log.Info().Str("pattern", blocked.String()).Msg("Blocked a statement by policy")
-		return s.refuse(t, codeAccessDenied,
+		return s.reject(t, codeAccessDenied,
 			"This statement is blocked by the command blocking policy on this account.")
 	}
 
@@ -412,9 +453,9 @@ func (s *nativeSession) handleQuery(t *tap, r *proto.Reader) error {
 	return s.forward(b.Buf)
 }
 
-// Replays the client's bytes rather than re-encoding a format we don't own.
+// Re-encoded from what was parsed, so ClickHouse never reads bytes whose extent only it understood.
 func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
-	table, err := readBoundedStr(r)
+	table, err := r.Str()
 	if err != nil {
 		s.log.Warn().Err(err).Msg("Could not read a ClickHouse data packet")
 		return s.refuse(t, codeNotImplemented,
@@ -422,27 +463,46 @@ func (s *nativeSession) handleData(t *tap, r *proto.Reader) error {
 	}
 
 	compressed := s.compressed.Load()
-
 	if compressed {
 		r.EnableCompression()
 	}
 	var (
 		block   proto.Block
-		discard proto.Results
+		decoded proto.Results
 	)
-	decodeErr := block.DecodeBlock(r, s.rev, boundedResult{discard.Auto()})
+	decodeErr := block.DecodeBlock(r, s.rev, decoded.Auto())
 	if compressed {
 		r.DisableCompression()
 	}
 
 	if decodeErr != nil {
 		s.log.Warn().Err(decodeErr).Str("table", table).Msg("Could not read a ClickHouse data block")
+		s.outcomes.complete("REFUSED: the data block could not be read")
 		return s.refuse(t, codeNotImplemented,
 			fmt.Sprintf("This session could not read the data block sent with this statement, so it was not "+
 				"forwarded: %v. Sending this data over ClickHouse's HTTP interface avoids the limitation.", decodeErr))
 	}
+	t.discard()
 
-	return s.forward(t.take())
+	if s.droppingData {
+		return nil
+	}
+
+	var compressor *compress.Writer
+	if compressed {
+		if s.compressor == nil {
+			s.compressor = compress.NewWriter(compress.Level(0), compress.LZ4)
+		}
+		compressor = s.compressor
+	}
+	packet, err := encodeDataPacket(s.rev, table, block, decoded, compressor)
+	if err != nil {
+		s.log.Warn().Err(err).Str("table", table).Msg("Could not re-encode a ClickHouse data block")
+		return s.refuse(nil, codeNotImplemented,
+			fmt.Sprintf("This session could not re-encode the data block sent with this statement, so it was "+
+				"not forwarded: %v. Sending this data over ClickHouse's HTTP interface avoids the limitation.", err))
+	}
+	return s.forward(packet)
 }
 
 // Read for the recording only: the first packet it cannot read ends the parsing, not the session.
@@ -585,6 +645,14 @@ func writeNativeError(w io.Writer, revision int, code int, message string) error
 }
 
 func nativeErrorPacket(revision int, code int, message string) []byte {
+	var b proto.Buffer
+	b.Buf = nativeExceptionPacket(revision, code, message)
+	proto.ServerCodeEndOfStream.Encode(&b)
+	return b.Buf
+}
+
+// No trailing EndOfStream: on a session that carries on, the client would read it as the next statement's end.
+func nativeExceptionPacket(revision int, code int, message string) []byte {
 	if revision <= 0 {
 		revision = maxNativeRevision
 	}
@@ -597,12 +665,31 @@ func nativeErrorPacket(revision int, code int, message string) []byte {
 		Message: message,
 	}
 	exception.EncodeAware(&b, revision)
-	proto.ServerCodeEndOfStream.Encode(&b)
 	return b.Buf
+}
+
+// A Hello that happens to hold a blank line gets "HTTP/1.1 400" from the HTTP port, read as packet 72.
+const httpResponseFirstByte = 'H'
+
+func unexpectedHandshakeReply(code uint64) string {
+	if code == httpResponseFirstByte {
+		return "it answered with HTTP, which looks like ClickHouse's HTTP port entered as the native one"
+	}
+	return fmt.Sprintf("it answered with packet %d, which is not ClickHouse's native protocol", code)
 }
 
 // ClickHouse validates credentials during the handshake, so a Hello exchange is a real auth check.
 func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) error {
+	return nativeHandshakeCheck(ctx, config, false)
+}
+
+// Sends no credential: any answer in the native protocol, a refused login included, proves the port.
+func ProbeNativeProtocol(ctx context.Context, config ClickHouseProxyConfig) error {
+	config.Username, config.Password = "", ""
+	return nativeHandshakeCheck(ctx, config, true)
+}
+
+func nativeHandshakeCheck(ctx context.Context, config ClickHouseProxyConfig, exceptionProvesPort bool) error {
 	dialCtx, cancel := context.WithTimeout(ctx, nativeDialTimeout)
 	defer cancel()
 
@@ -650,7 +737,7 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 					"handshake in the %s left of the connection test's budget: %w", budget.Round(time.Millisecond), err)
 			}
 			return fmt.Errorf("the port accepted the connection but did not answer ClickHouse's native "+
-				"handshake within %s, which is what the HTTP port does when it is entered as the native one: %w",
+				"handshake within %s, which is what the HTTP port usually does when it is entered as the native one: %w",
 				budget.Round(time.Second), err)
 		}
 		return fmt.Errorf("read hello response: %w", err)
@@ -668,8 +755,11 @@ func TestNativeConnection(ctx context.Context, config ClickHouseProxyConfig) err
 		if err := e.DecodeAware(r, maxNativeRevision); err != nil {
 			return fmt.Errorf("decode exception: %w", err)
 		}
+		if exceptionProvesPort {
+			return nil
+		}
 		return fmt.Errorf("clickhouse rejected the connection: %s", e.Message)
 	default:
-		return fmt.Errorf("unexpected server packet %d during the native handshake", code)
+		return errors.New(unexpectedHandshakeReply(code))
 	}
 }

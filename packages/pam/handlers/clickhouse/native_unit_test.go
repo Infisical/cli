@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -37,6 +38,11 @@ type fakeClickHouse struct {
 	refuseWith string
 	// The accepted connection, so a test can drop the upstream mid-session.
 	conn net.Conn
+	// Answers each query with a progress packet and an end of stream.
+	answerQueries bool
+	// What arrived after the handshake, in order, and the raw bytes of each data packet.
+	events      []string
+	dataPackets [][]byte
 }
 
 func (f *fakeClickHouse) disconnect() {
@@ -79,7 +85,8 @@ func startFakeClickHouse(t *testing.T, serverRevision ...int) *fakeClickHouse {
 func (f *fakeClickHouse) addr() string { return f.listener.Addr().String() }
 
 func (f *fakeClickHouse) serve(conn net.Conn) {
-	r := proto.NewReader(newTap(conn))
+	tp := newTap(conn)
+	r := proto.NewReader(tp)
 
 	code, err := r.UVarInt()
 	if err != nil || proto.ClientCode(code) != proto.ClientCodeHello {
@@ -124,7 +131,9 @@ func (f *fakeClickHouse) serve(conn net.Conn) {
 		f.mu.Unlock()
 	}
 
+	compressed := false
 	for {
+		tp.discard()
 		packet, err := r.UVarInt()
 		if err != nil {
 			return
@@ -133,17 +142,56 @@ func (f *fakeClickHouse) serve(conn net.Conn) {
 		f.bytesAfterHandshake++
 		f.mu.Unlock()
 
-		if proto.ClientCode(packet) != proto.ClientCodeQuery {
-			continue
+		switch proto.ClientCode(packet) {
+		case proto.ClientCodeQuery:
+			var q proto.Query
+			if err := q.DecodeAware(r, rev); err != nil {
+				return
+			}
+			compressed = q.Compression == proto.CompressionEnabled
+			f.mu.Lock()
+			f.queries = append(f.queries, q)
+			f.events = append(f.events, "query: "+q.Body)
+			f.mu.Unlock()
+
+			if f.answerQueries {
+				var reply proto.Buffer
+				proto.ServerCodeProgress.Encode(&reply)
+				proto.Progress{Rows: 7}.EncodeAware(&reply, rev)
+				proto.ServerCodeEndOfStream.Encode(&reply)
+				if _, err := conn.Write(reply.Buf); err != nil {
+					return
+				}
+			}
+
+		case proto.ClientCodeData:
+			if _, err := r.Str(); err != nil {
+				return
+			}
+			if compressed {
+				r.EnableCompression()
+			}
+			var (
+				block   proto.Block
+				results proto.Results
+			)
+			err := block.DecodeBlock(r, rev, results.Auto())
+			r.DisableCompression()
+			if err != nil {
+				return
+			}
+			f.mu.Lock()
+			f.events = append(f.events, fmt.Sprintf("data: %d rows", block.Rows))
+			f.dataPackets = append(f.dataPackets, tp.take())
+			f.mu.Unlock()
 		}
-		var q proto.Query
-		if err := q.DecodeAware(r, rev); err != nil {
-			return
-		}
-		f.mu.Lock()
-		f.queries = append(f.queries, q)
-		f.mu.Unlock()
 	}
+}
+
+func (f *fakeClickHouse) received() ([]string, [][]byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...), append([][]byte(nil), f.dataPackets...)
 }
 
 func (f *fakeClickHouse) snapshot() (proto.ClientHello, string, []proto.Query, int) {
@@ -450,7 +498,7 @@ func TestNativeHandshakeRefusesAnOversizedField(t *testing.T) {
 
 	var b proto.Buffer
 	proto.ClientCodeHello.Encode(&b)
-	b.PutUVarInt(uint64(maxHandshakeStringLen) + 1)
+	b.PutUVarInt(uint64(maxPacketBytes) + 1)
 	_, err := conn.Write(b.Buf)
 	require.NoError(t, err)
 

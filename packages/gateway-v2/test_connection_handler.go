@@ -129,6 +129,8 @@ type clickhouseTestParams struct {
 	SslEnabled            bool   `json:"sslEnabled"`
 	SslRejectUnauthorized *bool  `json:"sslRejectUnauthorized"`
 	SslCertificate        string `json:"sslCertificate"`
+	// Set when the caller has no credential to test with: each port is only checked for the right protocol.
+	ProbeOnly bool `json:"probeOnly"`
 }
 
 type ldapTestParams struct {
@@ -769,6 +771,12 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 						return connectFailure(err)
 					}
 					config.TargetAddr = net.JoinHostPort(target.host, strconv.Itoa(httpPort))
+					if params.ProbeOnly {
+						if err := clickhousehandler.ProbeHTTPInterface(httpCtx, config); err != nil {
+							return connectFailure(fmt.Errorf("ClickHouse's HTTP port %d: %w", httpPort, err))
+						}
+						return nil
+					}
 					if err := clickhousehandler.TestConnection(httpCtx, config); err != nil {
 						return authFailure(err)
 					}
@@ -786,6 +794,12 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 					return connectFailure(nativePortError(params.NativePort, err, httpPort > 0))
 				}
 				config.NativeAddr = net.JoinHostPort(target.host, strconv.Itoa(params.NativePort))
+				if params.ProbeOnly {
+					if err := clickhousehandler.ProbeNativeProtocol(nativeCtx, config); err != nil {
+						return connectFailure(nativePortError(params.NativePort, err, httpPort > 0))
+					}
+					return nil
+				}
 				if err := clickhousehandler.TestNativeConnection(nativeCtx, config); err != nil {
 					return authFailure(nativePortError(params.NativePort, err, httpPort > 0))
 				}

@@ -546,6 +546,32 @@ func TestConnection(ctx context.Context, config ClickHouseProxyConfig) error {
 	return nil
 }
 
+// ClickHouse answers /ping without a login, so this proves the interface while sending no credential.
+func ProbeHTTPInterface(ctx context.Context, config ClickHouseProxyConfig) error {
+	target := (&ClickHouseProxy{config: config}).scheme() + "://" + config.TargetAddr + "/ping"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+
+	transport := newTransport(config)
+	defer transport.CloseIdleConnections()
+
+	resp, err := (&http.Client{Transport: transport, Timeout: testQueryTimeout}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLoggedErrorBytes))
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "Ok." {
+		return fmt.Errorf("the port answered HTTP, but not as ClickHouse's HTTP interface: %s",
+			firstLine(string(body), resp.Status))
+	}
+	return nil
+}
+
 func firstLine(body string, fallback string) string {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
