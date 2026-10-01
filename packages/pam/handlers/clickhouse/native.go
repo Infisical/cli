@@ -64,9 +64,12 @@ func (t *tap) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	// Before the byte is taken off the reader, or a refusal here would consume one the relay then
-	// has no way to reach.
-	if t.holding {
+	// Peeked so the growth is reserved before the byte is consumed, where a refusal cannot swallow
+	// one, and only once there is a byte to consume.
+	if t.holding && len(t.buf) == cap(t.buf) {
+		if _, err := t.src.Peek(1); err != nil {
+			return 0, err
+		}
 		if err := t.reserve(); err != nil {
 			return 0, err
 		}

@@ -78,3 +78,16 @@ func TestTapLosesNothingWhenAChargeIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "abc", string(rest), "a refused charge must not swallow a byte the relay still owes")
 }
+
+func TestTapReservesNothingForAByteThatNeverArrives(t *testing.T) {
+	charged := 0
+	tp := newTap(bytes.NewReader(nil))
+	tp.charge = func(n int) error {
+		charged += n
+		return nil
+	}
+
+	_, err := tp.Read(make([]byte, 1))
+	require.ErrorIs(t, err, io.EOF)
+	require.Zero(t, charged, "a stream with nothing left to give must not reserve for it")
+}
