@@ -30,6 +30,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/cors"
 	"github.com/rs/zerolog/log"
@@ -1094,13 +1095,15 @@ func browserCliLogin() (models.UserCredentials, error) {
 	failure := make(chan error)
 	timeout := time.After(time.Second * time.Duration(SERVER_TIMEOUT))
 
-	//terminal state
-	oldState, err := term.GetState(int(os.Stdin.Fd()))
-	if err != nil {
-		return models.UserCredentials{}, err
+	// Skip in non-TTY (like an agent) so term.GetState doesn't fail
+	stdinIsTTY := isatty.IsTerminal(os.Stdin.Fd())
+	if stdinIsTTY {
+		oldState, err := term.GetState(int(os.Stdin.Fd()))
+		if err != nil {
+			return models.UserCredentials{}, err
+		}
+		defer restoreTerminal(oldState)
 	}
-
-	defer restoreTerminal(oldState)
 
 	//create handler
 	c := cors.New(cors.Options{
@@ -1115,7 +1118,10 @@ func browserCliLogin() (models.UserCredentials, error) {
 	log.Debug().Msgf("Callback server listening on port %d", callbackPort)
 
 	go http.Serve(listener, corsHandler)
-	go askToPasteJwtToken(success, failure)
+	// Skip in non-TTY (like an agent)
+	if stdinIsTTY {
+		go askToPasteJwtToken(success, failure)
+	}
 
 	for {
 		select {

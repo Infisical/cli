@@ -14,6 +14,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/manifoldco/promptui"
+	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -24,13 +25,23 @@ var initCmd = &cobra.Command{
 	Use:                   "init",
 	Short:                 "Used to connect your local project with Infisical project",
 	DisableFlagsInUseLine: true,
-	Example:               "infisical init",
-	Args:                  cobra.ExactArgs(0),
+	Example: `# Pick an organization and project interactively
+infisical init
+
+# Link this directory to a known project without prompting (the ID is in the project's settings in the dashboard)
+infisical init --project-id <project-id>`,
+	Args: cobra.ExactArgs(0),
 	PreRun: func(cmd *cobra.Command, args []string) {
 		util.RequireLogin()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		projectID, _ := cmd.Flags().GetString("project-id")
+
 		if util.WorkspaceConfigFileExistsInCurrentPath() {
+			if !isatty.IsTerminal(os.Stdin.Fd()) {
+				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). To link a different project, change workspaceId in .infisical.json.")
+			}
+
 			shouldOverride, err := shouldOverrideWorkspacePrompt()
 			if err != nil {
 				log.Error().Msg("Unable to parse your answer")
@@ -43,6 +54,12 @@ var initCmd = &cobra.Command{
 			}
 		}
 
+		// The org and project pickers below need a terminal. Without one, exit and
+		// point at --project-id instead of prompting.
+		if projectID == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
+			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (you can find it in your project's settings in the Infisical dashboard).")
+		}
+
 		userCreds, err := util.GetCurrentLoggedInUserDetails(true)
 		if err != nil {
 			util.HandleError(err, "Unable to get your login details")
@@ -50,6 +67,22 @@ var initCmd = &cobra.Command{
 
 		if userCreds.LoginExpired {
 			userCreds = util.EstablishUserLoginSession()
+		}
+
+		// Non-interactive path: we already know the project. Skip the org
+		// and workspace pickers and just write .infisical.json. Subsequent
+		// commands (secrets, run) will surface auth errors if the logged-in
+		// session cannot reach this project.
+		if projectID != "" {
+			if userCreds.OrganizationID != "" {
+				rejectTransientOrgOverride(userCreds)
+			}
+			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
+				util.HandleError(err)
+			}
+			hintDirectoryProfileBinding(userCreds)
+			Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION).Set("nonInteractive", true))
+			return
 		}
 
 		httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -112,26 +145,7 @@ var initCmd = &cobra.Command{
 				util.HandleError(err, "Unable to store your user credentials")
 			}
 		} else {
-			orgDisplay := userCreds.OrganizationName
-			if orgDisplay == "" {
-				orgDisplay = selectedOrgID
-			}
-
-			// An --org override is per command, so a project linked under it
-			// would not resolve on later runs that use the profile's default.
-			// That would surface later as an unrelated-looking "project not
-			// found", and a warning here can be silenced, so refuse and point
-			// at the two ways to make the organization stick.
-			if userCreds.OrganizationSource != util.OrgSourceProfileDefault && userCreds.Profile.OrganizationID != "" && userCreds.OrganizationID != userCreds.Profile.ScopedOrganizationID() {
-				profileOrg := userCreds.Profile.OrganizationName
-				if profileOrg == "" {
-					profileOrg = userCreds.Profile.ScopedOrganizationID()
-				}
-				util.PrintErrorMessageAndExit(
-					fmt.Sprintf("Profile '%s' defaults to organization %s, so a project linked here under %s (selected via %s) would not be found by later commands unless they also pass --org.", userCreds.ProfileName, profileOrg, orgDisplay, userCreds.OrganizationSource),
-					fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile create <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
-			}
-
+			orgDisplay := rejectTransientOrgOverride(userCreds)
 			util.PrintlnStderr(fmt.Sprintf("Using organization %s from profile '%s'. Pass --org to pick a different one.", orgDisplay, userCreds.ProfileName))
 		}
 
@@ -163,6 +177,32 @@ var initCmd = &cobra.Command{
 		Telemetry.CaptureEvent("cli-command:init", posthog.NewProperties().Set("version", util.CLI_VERSION))
 
 	},
+}
+
+// rejectTransientOrgOverride exits when the session's organization comes from
+// a per-command --org override that differs from the profile's default, and
+// otherwise returns the organization's display name.
+//
+// An --org override is per command, so a project linked under it would not
+// resolve on later runs that use the profile's default. That would surface
+// later as an unrelated-looking "project not found", and a warning here can be
+// silenced, so refuse and point at the two ways to make the organization stick.
+func rejectTransientOrgOverride(userCreds util.LoggedInUserDetails) string {
+	orgDisplay := userCreds.OrganizationName
+	if orgDisplay == "" {
+		orgDisplay = userCreds.OrganizationID
+	}
+
+	if userCreds.OrganizationSource != util.OrgSourceProfileDefault && userCreds.Profile.OrganizationID != "" && userCreds.OrganizationID != userCreds.Profile.ScopedOrganizationID() {
+		profileOrg := userCreds.Profile.OrganizationName
+		if profileOrg == "" {
+			profileOrg = userCreds.Profile.ScopedOrganizationID()
+		}
+		util.PrintErrorMessageAndExit(
+			fmt.Sprintf("Profile '%s' defaults to organization %s, so a project linked here under %s (selected via %s) would not be found by later commands unless they also pass --org.", userCreds.ProfileName, profileOrg, orgDisplay, userCreds.OrganizationSource),
+			fmt.Sprintf("Make %s the profile's default with [infisical profile set-org %s], or keep both organizations by running [infisical profile create <name> --org %s] and then [infisical profile bind <name>] in this directory.", orgDisplay, orgDisplay, orgDisplay))
+	}
+	return orgDisplay
 }
 
 // offerDirectoryProfileBinding asks (only when multiple profiles exist)
@@ -200,7 +240,36 @@ func offerDirectoryProfileBinding(profileName string) {
 	util.PrintlnStderr(fmt.Sprintf("Directory %s now uses profile '%s'. Manage bindings with [infisical profile bind] and [infisical profile unbind].", cwd, profileName))
 }
 
+// hintDirectoryProfileBinding runs after a non-interactive init. If the profile
+// was chosen with --profile or INFISICAL_PROFILE and is not the default, later
+// commands in this directory will not use it unless they choose it again. In
+// that case, it prints a note suggesting that the user bind the directory to
+// the profile. The interactive path asks the same question in
+// offerDirectoryProfileBinding.
+func hintDirectoryProfileBinding(userCreds util.LoggedInUserDetails) {
+	if userCreds.ProfileSource != util.ProfileSourceFlag && userCreds.ProfileSource != util.ProfileSourceEnv {
+		return
+	}
+
+	configFile, err := util.GetMigratedConfigFile()
+	if err != nil || userCreds.ProfileName == "" || configFile.ActiveProfile == userCreds.ProfileName {
+		return
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	if boundProfile, _, ok := util.FindGoverningDirectoryProfile(configFile, cwd); ok && boundProfile == userCreds.ProfileName {
+		return
+	}
+
+	util.PrintlnStderr(fmt.Sprintf("This directory was linked using profile '%s', but later commands run here will use a different profile unless you choose '%s' again. To use it here automatically, run [infisical profile bind %s].", userCreds.ProfileName, userCreds.ProfileName, userCreds.ProfileName))
+}
+
 func init() {
+	initCmd.Flags().String("project-id", "", "Project ID to link this directory to. When set, skips the interactive org and project pickers and writes .infisical.json directly.")
 	RootCmd.AddCommand(initCmd)
 }
 
