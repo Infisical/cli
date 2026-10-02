@@ -20,17 +20,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, error) {
+func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, string, error) {
 	serviceTokenParts := strings.SplitN(fullServiceToken, ".", 4)
 	if len(serviceTokenParts) < 4 {
-		return nil, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
+		return nil, "", fmt.Errorf("invalid service token entered. Please double check your service token and try again")
 	}
 
 	serviceToken := fmt.Sprintf("%v.%v.%v", serviceTokenParts[0], serviceTokenParts[1], serviceTokenParts[2])
 
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
-		return nil, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
+		return nil, "", fmt.Errorf("unable to get client with custom headers [err=%w]", err)
 	}
 
 	httpClient.SetAuthToken(serviceToken).
@@ -38,20 +38,22 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 	serviceTokenDetails, err := api.CallGetServiceTokenDetailsV2(httpClient)
 	if err != nil {
-		return nil, fmt.Errorf("unable to get service token details. [err=%v]", err)
+		return nil, "", fmt.Errorf("unable to get service token details. [err=%w]", err)
 	}
+
+	workspaceId := serviceTokenDetails.Workspace
 
 	// if multiple scopes are there then user needs to specify which environment and secret path
 	if environment == "" {
 		if len(serviceTokenDetails.Scopes) != 1 {
-			return nil, fmt.Errorf("you need to provide the --env for multiple environment scoped token")
+			return nil, workspaceId, fmt.Errorf("you need to provide the --env for multiple environment scoped token")
 		} else {
 			environment = serviceTokenDetails.Scopes[0].Environment
 		}
 	}
 
 	rawSecrets, err := api.CallGetSecretsV4(httpClient, api.GetSecretsV4Request{
-		WorkspaceId:              serviceTokenDetails.Workspace,
+		WorkspaceId:              workspaceId,
 		Environment:              environment,
 		SecretPath:               secretPath,
 		IncludeImport:            includeImports,
@@ -62,7 +64,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, workspaceId, err
 	}
 
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
@@ -74,11 +76,11 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 	if includeImports {
 		plainTextSecrets, err = InjectRawImportedSecret(plainTextSecrets, rawSecrets.Imports)
 		if err != nil {
-			return nil, err
+			return nil, workspaceId, err
 		}
 	}
 
-	return plainTextSecrets, nil
+	return plainTextSecrets, workspaceId, nil
 
 }
 
@@ -361,9 +363,17 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		}
 
 	} else {
+		// workspaceId for caching — use params.WorkspaceId if provided (via --projectId),
+		// otherwise populated from the service token details.
+		cacheWorkspaceId := params.WorkspaceId
+
 		if params.InfisicalToken != "" {
 			log.Debug().Msg("Trying to fetch secrets using service token")
-			secretsToReturn, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
+			var tokenWorkspaceId string
+			secretsToReturn, tokenWorkspaceId, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
+			if cacheWorkspaceId == "" {
+				cacheWorkspaceId = tokenWorkspaceId
+			}
 		} else if params.UniversalAuthAccessToken != "" {
 
 			if params.WorkspaceId == "" {
@@ -375,6 +385,33 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 
 			errorToReturn = err
 			secretsToReturn = res.Secrets
+		}
+
+		// cache secrets on success, fallback to cached secrets on connection/server failure
+		if errorToReturn == nil && cacheWorkspaceId != "" {
+			if backupEncryptionKey, err := GetBackupEncryptionKey(); err == nil {
+				WriteBackupSecrets(cacheWorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, secretsToReturn)
+			}
+		} else if errorToReturn != nil && cacheWorkspaceId != "" {
+			// Only fall back to cache for connection errors or server errors (5xx).
+			// Do not mask client errors (4xx) like 401/403 which indicate auth issues.
+			shouldFallback := true
+			var apiErr *api.APIError
+			if errors.As(errorToReturn, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+				shouldFallback = false
+			}
+
+			if shouldFallback {
+				backupEncryptionKey, _ := GetBackupEncryptionKey()
+				if backupEncryptionKey != nil {
+					backedUpSecrets, err := ReadBackupSecrets(cacheWorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
+					if len(backedUpSecrets) > 0 {
+						PrintWarning("Unable to fetch the latest secret(s) due to connection error, serving secrets from last successful fetch. For more info, run with --debug")
+						secretsToReturn = backedUpSecrets
+						errorToReturn = err
+					}
+				}
+			}
 		}
 	}
 
