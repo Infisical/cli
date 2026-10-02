@@ -5,3 +5,5 @@ package gatewayv2
 const CapabilitySessionLogMaskingBuiltInDetection = "sessionLogMaskingBuiltInDetection"
 
 const CapabilitySupportedAccountTypes = "supported_account_types"
+
+const CapabilityClickhouseNativeProtocol = "clickhouseNativeProtocol"
