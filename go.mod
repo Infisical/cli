@@ -263,4 +263,4 @@ require (
 
 replace github.com/zalando/go-keyring => github.com/Infisical/go-keyring v1.0.2
 
-replace github.com/ClickHouse/ch-go => github.com/Infisical/ch-go v0.74.1-0.20261001142912-ba7132cbecd4
+replace github.com/ClickHouse/ch-go => github.com/Infisical/ch-go v0.74.1-0.20261002151420-508f99a1ef44
