@@ -8,16 +8,15 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/spf13/cobra"
@@ -55,7 +54,11 @@ func parseAgentSecretReference(input string) (agentSecretReference, error) {
 			return agentSecretReference{}, errors.New("secret reference is missing its location")
 		}
 	}
-	if query.Get("domain") != config.INFISICAL_URL {
+	referenceDomain, domainErr := url.Parse(query.Get("domain"))
+	selectedDomain, selectedErr := url.Parse(config.INFISICAL_URL)
+	if domainErr != nil || selectedErr != nil || referenceDomain.User != nil || referenceDomain.Fragment != "" ||
+		!strings.EqualFold(referenceDomain.Scheme, selectedDomain.Scheme) || !strings.EqualFold(referenceDomain.Host, selectedDomain.Host) ||
+		referenceDomain.EscapedPath() != selectedDomain.EscapedPath() || referenceDomain.RawQuery != selectedDomain.RawQuery {
 		return agentSecretReference{}, errors.New("this reference belongs to a different Infisical instance; select its domain explicitly")
 	}
 	id := strings.TrimPrefix(reference.Path, "/")
@@ -161,7 +164,7 @@ func runAgentSecrets(cmd *cobra.Command, args []string) error {
 			return errors.New("--secret must be ENV_NAME=reference with a valid environment variable name")
 		}
 		if agentSecretAuthVariable(parts[0]) {
-			return errors.New("Infisical authentication variables cannot be used as injection targets")
+			return errors.New("Infisical CLI environment variables cannot be used as injection targets")
 		}
 		if _, exists := references[parts[0]]; exists {
 			return errors.New("each environment variable may be assigned only once")
@@ -207,28 +210,11 @@ func runAgentSecrets(cmd *cobra.Command, args []string) error {
 	if err := child.Start(); err != nil {
 		return errors.New("could not start the requested command")
 	}
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case sig := <-signals:
-				_ = child.Process.Signal(sig)
-			case <-done:
-				return
-			}
-		}
-	}()
+	stopForwarding := sandbox.ForwardTerminationSignals(child)
 	err = child.Wait()
-	close(done)
+	stopForwarding()
 	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			code := exitError.ExitCode()
-			if code < 0 {
-				code = 1
-			}
+		if code, ok := sandbox.WaitExitCode(err); ok {
 			os.Exit(code)
 		}
 		return errors.New("could not start the requested command")
@@ -237,12 +223,7 @@ func runAgentSecrets(cmd *cobra.Command, args []string) error {
 }
 
 func agentSecretAuthVariable(name string) bool {
-	switch strings.ToUpper(name) {
-	case "INFISICAL_TOKEN", "INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN", "INFISICAL_UNIVERSAL_AUTH_CLIENT_ID", "INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET", "INFISICAL_CUSTOM_HEADERS", "TOKEN":
-		return true
-	default:
-		return false
-	}
+	return strings.HasPrefix(strings.ToUpper(name), "INFISICAL_") || strings.EqualFold(name, "TOKEN")
 }
 
 func saveAgentSecret(cmd *cobra.Command, args []string) error {

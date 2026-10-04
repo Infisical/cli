@@ -23,7 +23,7 @@ References include the Infisical instance and secret ID. Use them verbatim. Sele
 infisical secrets agent run --secret 'OPENAI_API_KEY=REFERENCE_FROM_FIND' -- node application.js
 ```
 
-Only selected secrets are injected, without writing a plaintext env file. Infisical authentication environment variables are removed from the child environment.
+Only selected secrets are injected, without writing a plaintext env file. All inherited `INFISICAL_*` variables and the legacy `TOKEN` variable are removed from the child environment, including non-secret Infisical configuration. These names cannot be used as injection targets.
 
 The application still receives plaintext credentials and its output is not redacted. Only launch trusted commands that won't print, log, or transmit their environment. Never run `env`, `printenv`, or a secret-printing script through this command. Do not inject credentials into the coding agent itself.
 
