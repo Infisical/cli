@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -593,8 +594,22 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			blockedCommands = compilePolicyPatterns(rulePatterns(credentials.PolicyRules.CommandBlocking), pamConfig.SessionId, "command-blocking")
 		}
 
+		// An empty address is what tells the handler an interface is not served.
+		nativeAddr := ""
+		if credentials.NativePort > 0 {
+			nativeAddr = net.JoinHostPort(credentials.Host, strconv.Itoa(credentials.NativePort))
+		}
+		httpAddr := ""
+		if credentials.Port > 0 {
+			httpAddr = net.JoinHostPort(credentials.Host, strconv.Itoa(credentials.Port))
+		}
+		if httpAddr == "" && nativeAddr == "" {
+			return fmt.Errorf("clickhouse account has neither a HTTP port nor a native port configured")
+		}
+
 		proxy := clickhouse.NewClickHouseProxy(clickhouse.ClickHouseProxyConfig{
-			TargetAddr:      fmt.Sprintf("%s:%d", credentials.Host, credentials.Port),
+			TargetAddr:      httpAddr,
+			NativeAddr:      nativeAddr,
 			Username:        credentials.Username,
 			Password:        credentials.Password,
 			Database:        credentials.Database,
@@ -606,7 +621,8 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		})
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
-			Str("target", fmt.Sprintf("%s:%d", credentials.Host, credentials.Port)).
+			Str("target", httpAddr).
+			Str("nativeTarget", nativeAddr).
 			Bool("sslEnabled", credentials.SSLEnabled).
 			Msg("Starting ClickHouse PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
