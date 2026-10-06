@@ -2730,9 +2730,6 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 			return err
 		}
 
-		displayName := tm.getCertificateDisplayName(certificateId, certificate)
-		log.Info().Str("Certificate", displayName).Str("serial", *response.SerialNumber).Msg("certificate issued successfully")
-
 	case "failed":
 		errorMsg := "unknown error"
 		if response.ErrorMessage != nil {

@@ -47,6 +47,12 @@ func agentTestCertificate(t *testing.T, serial int64, expires time.Time) *api.Ce
 
 func agentTestRootCertificate(t *testing.T) string {
 	t.Helper()
+	_, _, certificate := agentTestRoot(t)
+	return certificate
+}
+
+func agentTestRoot(t *testing.T) (*x509.Certificate, ed25519.PrivateKey, string) {
+	t.Helper()
 	publicKey, key, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	root := &x509.Certificate{SerialNumber: big.NewInt(100), Subject: pkix.Name{CommonName: "Test Root"},
@@ -54,7 +60,22 @@ func agentTestRootCertificate(t *testing.T) string {
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
 	der, err := x509.CreateCertificate(rand.Reader, root, root, publicKey, key)
 	require.NoError(t, err)
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	parsed, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return parsed, key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func agentTestRootSignedCertificate(t *testing.T, serial int64) *api.CertificateData {
+	t.Helper()
+	certificate := agentTestCertificate(t, serial, time.Now().Add(90*24*time.Hour))
+	leaf, err := parseAgentCertificate([]byte(certificate.Certificate))
+	require.NoError(t, err)
+	root, key, rootPEM := agentTestRoot(t)
+	der, err := x509.CreateCertificate(rand.Reader, leaf, root, leaf.PublicKey, key)
+	require.NoError(t, err)
+	certificate.Certificate = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	certificate.CertificateChain = rootPEM
+	return certificate
 }
 
 func agentTestConfig(t *testing.T) *AgentCertificateConfig {
@@ -79,6 +100,7 @@ func agentTestManager(certificate *AgentCertificateConfig) *AgentManager {
 }
 
 type agentTestAPI struct {
+	omitResponseChain                                                      atomic.Bool
 	missingChain                                                           atomic.Bool
 	pollFailed                                                             atomic.Bool
 	onIssue                                                                func()
@@ -108,7 +130,11 @@ func newAgentTestAPI(t *testing.T, old, next *api.CertificateData) *agentTestAPI
 			if backend.pending.Load() {
 				_ = json.NewEncoder(w).Encode(api.CertificateResponse{CertificateRequestID: "request-1"})
 			} else {
-				_ = json.NewEncoder(w).Encode(api.CertificateResponse{Certificate: backend.next})
+				certificate := *backend.next
+				if backend.omitResponseChain.Load() {
+					certificate.CertificateChain = ""
+				}
+				_ = json.NewEncoder(w).Encode(api.CertificateResponse{Certificate: &certificate})
 			}
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/renew"):
 			backend.renewCalls.Add(1)
@@ -591,6 +617,23 @@ func TestManagedCertificateDoesNotEraseChainWhenBundleIsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, old.CertificateChain, string(chain))
 	assert.Zero(t, backend.issueCalls.Load())
+}
+
+func TestManagedCertificateDeliversRootOmittedEmptyResponseChain(t *testing.T) {
+	certificate := agentTestConfig(t)
+	next := agentTestRootSignedCertificate(t, 2)
+	backend := newAgentTestAPI(t, agentTestCertificate(t, 1, time.Now().Add(90*24*time.Hour)), next)
+	backend.omitResponseChain.Store(true)
+	runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+	runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+	chain, err := os.ReadFile(certificate.FileConfig.Chain.Path)
+	require.NoError(t, err)
+	assert.Empty(t, chain)
+	cert, err := os.ReadFile(certificate.FileConfig.Certificate.Path)
+	require.NoError(t, err)
+	assert.Equal(t, next.Certificate, string(cert))
+	assert.EqualValues(t, 1, backend.issueCalls.Load())
+	assert.EqualValues(t, 1, backend.bundleCalls.Load())
 }
 
 func TestCertificateStatePathRejectsSymlinkAliasToOutput(t *testing.T) {

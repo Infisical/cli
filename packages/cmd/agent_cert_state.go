@@ -26,6 +26,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/gofrs/flock"
+	"github.com/rs/zerolog/log"
 )
 
 type persistedCertificateState struct {
@@ -693,6 +694,21 @@ func (tm *AgentManager) completeManagedCertificate(certificateID int, certificat
 	}
 	setManagedCertificateState(state, leaf, certificate)
 	certificateData := *response.Certificate
+	if certificate.FileConfig.Chain.Path != "" && strings.TrimSpace(certificateData.CertificateChain) == "" {
+		httpClient, err := tm.createAuthenticatedClient()
+		if err != nil {
+			return err
+		}
+		bundle, err := api.CallGetCertificateBundle(httpClient, state.CertificateID)
+		if err != nil {
+			return err
+		}
+		bundleLeaf, err := parseAgentCertificate([]byte(bundle.Certificate))
+		if err != nil || !bytes.Equal(bundleLeaf.Raw, leaf.Raw) {
+			return fmt.Errorf("stored certificate bundle does not match the issued certificate")
+		}
+		certificateData.CertificateChain = bundle.CertificateChain
+	}
 	chain, hash, err := certificateChainOutput(certificate, certificateData.CertificateChain)
 	if err != nil {
 		return err
@@ -705,7 +721,16 @@ func (tm *AgentManager) completeManagedCertificate(certificateID int, certificat
 	if err := tm.writeManagedCertificateFiles(certificate, &api.CertificateResponse{Certificate: &certificateData}); err != nil {
 		return err
 	}
-	return tm.finishManagedCertificateDelivery(certificateID, certificate, state)
+	if err := tm.finishManagedCertificateDelivery(certificateID, certificate, state); err != nil {
+		return err
+	}
+	event := log.Info().Str("Certificate", tm.getCertificateDisplayName(certificateID, certificate)).Str("serial", state.SerialNumber)
+	if renewal {
+		event.Msg("certificate renewed successfully")
+	} else {
+		event.Msg("certificate issued successfully")
+	}
+	return nil
 }
 
 func (tm *AgentManager) finishManagedCertificateDelivery(certificateID int, certificate *AgentCertificateConfig, state *CertificateState) error {
