@@ -22,9 +22,11 @@ type certificateStateRecord struct {
 	// ConfigFingerprint is a hash of the certificate's configuration (see configFingerprint),
 	// not of the certificate itself.
 	ConfigFingerprint string `json:"config_fingerprint"`
-	// Files lists the outputs that were actually written. A configured private key or
-	// chain is legitimately absent when Infisical returns none (ACME or CSR issuance).
-	Files []string `json:"files"`
+	// Files maps each output that was actually written to the SHA-256 of its contents, so
+	// a key or chain that was changed or truncated afterwards is caught, not just a missing
+	// one. A configured private key or chain is legitimately absent when Infisical returns
+	// none (ACME or CSR issuance).
+	Files map[string]string `json:"files"`
 }
 
 func certificateStateFilePath(certConfig *AgentCertificateConfig) string {
@@ -64,7 +66,7 @@ func configFingerprint(certConfig *AgentCertificateConfig) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func writeCertificateStateFile(certConfig *AgentCertificateConfig, certificateID, serialNumber string, writtenPaths []string) error {
+func writeCertificateStateFile(certConfig *AgentCertificateConfig, certificateID, serialNumber string, writtenFiles map[string]string) error {
 	statePath := certificateStateFilePath(certConfig)
 	if statePath == "" || certificateID == "" {
 		return nil
@@ -74,7 +76,7 @@ func writeCertificateStateFile(certConfig *AgentCertificateConfig, certificateID
 		CertificateID:     certificateID,
 		SerialNumber:      serialNumber,
 		ConfigFingerprint: configFingerprint(certConfig),
-		Files:             writtenPaths,
+		Files:             writtenFiles,
 	})
 	if err != nil {
 		return err
@@ -111,9 +113,19 @@ func removeCertificateStateFile(certConfig *AgentCertificateConfig) error {
 	return nil
 }
 
-func allFilesExist(paths []string) bool {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err != nil {
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// filesUnchanged reports whether every file still holds exactly what the agent wrote.
+func filesUnchanged(files map[string]string) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for path, expectedHash := range files {
+		contents, err := os.ReadFile(path)
+		if err != nil || contentHash(string(contents)) != expectedHash {
 			return false
 		}
 	}
@@ -158,8 +170,8 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 	}
 
 	serialOnDisk, ok := serialOfCertificateOnDisk(certConfig)
-	if !allFilesExist(record.Files) || !ok || !serialEquals(serialOnDisk, record.SerialNumber) {
-		log.Info().Str("Certificate", displayName).Msg("certificate files on disk are missing or do not match the saved state; issuing a new certificate")
+	if !filesUnchanged(record.Files) || !ok || !serialEquals(serialOnDisk, record.SerialNumber) {
+		log.Info().Str("Certificate", displayName).Msg("certificate files on disk are missing or were changed since the agent wrote them; issuing a new certificate")
 		return false
 	}
 

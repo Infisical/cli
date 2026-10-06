@@ -461,3 +461,43 @@ func TestResumedCertificateIsRenewedByTheMonitoringLoop(t *testing.T) {
 	assert.Equal(t, 1, server.renewCalls)
 	assert.Zero(t, server.issueCalls)
 }
+
+func TestResumeCertificateFromDisk_IssuesWhenOutputContentsChanged(t *testing.T) {
+	cases := map[string]func(cfg *AgentCertificateConfig) error{
+		"private key replaced": func(cfg *AgentCertificateConfig) error {
+			return os.WriteFile(cfg.FileConfig.PrivateKey.Path, []byte("some-other-key"), 0600)
+		},
+		"private key truncated": func(cfg *AgentCertificateConfig) error {
+			return os.Truncate(cfg.FileConfig.PrivateKey.Path, 0)
+		},
+		"chain changed": func(cfg *AgentCertificateConfig) error {
+			return os.WriteFile(cfg.FileConfig.Chain.Path, []byte("some-other-chain"), 0644)
+		},
+	}
+
+	for name, tamper := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := newResumeTestConfig(t.TempDir())
+			cfg.FileConfig.Chain.Path = filepath.Join(filepath.Dir(cfg.FileConfig.Certificate.Path), "chain.pem")
+			notAfter := time.Now().Add(80 * 24 * time.Hour)
+
+			tm := &AgentManager{}
+			require.NoError(t, tm.WriteCertificateFiles(cfg, &api.CertificateResponse{
+				Certificate: &api.CertificateData{
+					Certificate:      newResumeTestCertificatePEM(t, 0x1234, notAfter),
+					CertificateChain: "chain",
+					PrivateKey:       "key",
+					SerialNumber:     "1234",
+					CertificateID:    resumeTestCertificateID,
+				},
+			}))
+
+			server := &resumeTestServer{status: "active", serial: "1234", notAfter: notAfter}
+			server.start(t, nil)
+			require.True(t, newResumeTestManager(cfg).resumeCertificateFromDisk(1, cfg), "untouched files resume")
+
+			require.NoError(t, tamper(cfg))
+			assert.False(t, newResumeTestManager(cfg).resumeCertificateFromDisk(1, cfg))
+		})
+	}
+}

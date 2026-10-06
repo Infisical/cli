@@ -2917,7 +2917,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		}
 	}
 
-	var writtenPaths []string
+	writtenFiles := map[string]string{}
 
 	if response.Certificate.PrivateKey != "" {
 		if err := os.MkdirAll(path.Dir(privateKeyPath), 0755); err != nil {
@@ -2926,7 +2926,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		if err := ioutil.WriteFile(privateKeyPath, []byte(response.Certificate.PrivateKey), privateKeyPerms); err != nil {
 			return fmt.Errorf("failed to write private key to %s: %v", privateKeyPath, err)
 		}
-		writtenPaths = append(writtenPaths, privateKeyPath)
+		writtenFiles[privateKeyPath] = contentHash(response.Certificate.PrivateKey)
 	} else if privateKeyPath != "" {
 		log.Warn().Str("path", privateKeyPath).Msg("private-key.path is configured but the certificate response does not include a private key (this is expected for certificates issued via ACME or stored without a private key); skipping private key file write")
 	}
@@ -2937,7 +2937,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), certificatePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
-	writtenPaths = append(writtenPaths, certificatePath)
+	writtenFiles[certificatePath] = contentHash(response.Certificate.Certificate)
 
 	if response.Certificate.CertificateChain != "" && chainPath != "" {
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
@@ -2946,11 +2946,11 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		if err := ioutil.WriteFile(chainPath, []byte(response.Certificate.CertificateChain), chainPerms); err != nil {
 			return fmt.Errorf("failed to write certificate chain to %s: %v", chainPath, err)
 		}
-		writtenPaths = append(writtenPaths, chainPath)
+		writtenFiles[chainPath] = contentHash(response.Certificate.CertificateChain)
 	}
 
 	if !certificate.HasCertificateID() {
-		if err := writeCertificateStateFile(certificate, response.Certificate.CertificateID, response.Certificate.SerialNumber, writtenPaths); err != nil {
+		if err := writeCertificateStateFile(certificate, response.Certificate.CertificateID, response.Certificate.SerialNumber, writtenFiles); err != nil {
 			log.Warn().Str("path", certificateStateFilePath(certificate)).Msgf("failed to save certificate state; the agent will issue a new certificate on its next start: %v", err)
 		}
 	}
