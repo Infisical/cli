@@ -102,7 +102,7 @@ func TestFetchCertificate_CombineCertificateChainAfterRestart(t *testing.T) {
 			require.NoError(t, os.WriteFile(cert.FileConfig.PrivateKey.Path, []byte("private key"), 0600))
 			require.NoError(t, os.WriteFile(cert.FileConfig.Chain.Path, []byte(chain), 0600))
 			require.True(t, serialMatchesCertificateOnDisk(cert, "01"))
-			require.True(t, allConfiguredOutputsExist(cert))
+			require.Equal(t, !combine, allConfiguredOutputsExist(cert))
 
 			var bundleCalls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +140,14 @@ func TestFetchCertificate_CombineCertificateChainAfterRestart(t *testing.T) {
 			callsAfterRestart := bundleCalls.Load()
 			require.NoError(t, tm.SyncFetchedCertificate(1, cert))
 			assert.Equal(t, callsAfterRestart, bundleCalls.Load(), "unchanged certificates should not be fetched again")
+
+			if combine {
+				require.NoError(t, os.Remove(cert.FileConfig.Chain.Path))
+			}
+			require.True(t, allConfiguredOutputsExist(cert))
+			tm = &AgentManager{accessToken: "test-token", certificateStates: map[int]*CertificateState{1: {}}}
+			require.NoError(t, tm.FetchCertificate(1, cert))
+			assert.Equal(t, callsAfterRestart, bundleCalls.Load(), "already-combined output should not be fetched on restart")
 		})
 	}
 }

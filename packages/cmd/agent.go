@@ -2448,7 +2448,7 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 	}
 
 	serialOnDiskMatches := serialMatchesCertificateOnDisk(certConfig, certificate.Certificate.SerialNumber)
-	alreadyDelivered := previousCertificateID == "" && !certConfig.FileConfig.CombineCertificateChain && serialOnDiskMatches && allConfiguredOutputsExist(certConfig)
+	alreadyDelivered := previousCertificateID == "" && serialOnDiskMatches && allConfiguredOutputsExist(certConfig)
 
 	if previousCertificateID == resolvedCertificateID || alreadyDelivered {
 		tm.mutex.Lock()
@@ -2816,9 +2816,13 @@ func isReplacementOnDisk(certConfig *AgentCertificateConfig) bool {
 }
 
 func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
+	chainPath := certConfig.FileConfig.Chain.Path
+	if certConfig.FileConfig.CombineCertificateChain {
+		chainPath = ""
+	}
 	for _, path := range []string{
 		certConfig.FileConfig.Certificate.Path,
-		certConfig.FileConfig.Chain.Path,
+		chainPath,
 		certConfig.FileConfig.PrivateKey.Path,
 	} {
 		if path == "" {
@@ -2827,6 +2831,15 @@ func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
 		if _, err := os.Stat(path); err != nil {
 			return false
 		}
+	}
+	if certConfig.FileConfig.CombineCertificateChain {
+		contents, err := os.ReadFile(certConfig.FileConfig.Certificate.Path)
+		if err != nil {
+			return false
+		}
+		_, chain := pem.Decode(contents)
+		block, _ := pem.Decode(chain)
+		return block != nil && block.Type == "CERTIFICATE"
 	}
 	return true
 }
