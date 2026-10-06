@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/stretchr/testify/assert"
@@ -81,9 +82,7 @@ func TestWriteCertificateFiles_CombineCertificateChain(t *testing.T) {
 			} else {
 				require.NoFileExists(t, filepath.Join(dir, "chain", "chain.pem"))
 			}
-			if !tc.wantCombined {
-				assert.True(t, allConfiguredOutputsExist(&cert))
-			}
+			assert.True(t, allConfiguredOutputsExist(&cert))
 			require.NoError(t, os.Remove(cert.FileConfig.PrivateKey.Path))
 			assert.False(t, allConfiguredOutputsExist(&cert))
 		})
@@ -93,16 +92,23 @@ func TestWriteCertificateFiles_CombineCertificateChain(t *testing.T) {
 func TestFetchCertificate_CombineCertificateChainAfterRestart(t *testing.T) {
 	leaf := selfSignedPEM(t, "leaf")
 	chain := selfSignedPEM(t, "intermediate")
-	for _, combine := range []bool{false, true} {
-		t.Run(fmt.Sprint(combine), func(t *testing.T) {
+	for _, tc := range []struct {
+		combine bool
+		chain   string
+	}{
+		{combine: false, chain: chain},
+		{combine: true, chain: chain},
+		{combine: true},
+	} {
+		t.Run(fmt.Sprintf("combine=%t/chain=%t", tc.combine, tc.chain != ""), func(t *testing.T) {
 			cert := distributionConfigWithKeyPath(t.TempDir())
-			cert.FileConfig.CombineCertificateChain = combine
+			cert.FileConfig.CombineCertificateChain = tc.combine
 			cert.FileConfig.Chain.Path = filepath.Join(filepath.Dir(cert.FileConfig.Certificate.Path), "chain.pem")
 			require.NoError(t, os.WriteFile(cert.FileConfig.Certificate.Path, []byte(leaf), 0600))
 			require.NoError(t, os.WriteFile(cert.FileConfig.PrivateKey.Path, []byte("private key"), 0600))
 			require.NoError(t, os.WriteFile(cert.FileConfig.Chain.Path, []byte(chain), 0600))
 			require.True(t, serialMatchesCertificateOnDisk(cert, "01"))
-			require.Equal(t, !combine, allConfiguredOutputsExist(cert))
+			require.True(t, allConfiguredOutputsExist(cert))
 
 			var bundleCalls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +123,7 @@ func TestFetchCertificate_CombineCertificateChainAfterRestart(t *testing.T) {
 				case "/v1/cert-manager/certificates/cert-01/bundle":
 					bundleCalls.Add(1)
 					_ = json.NewEncoder(w).Encode(api.CertificateBundleResponse{
-						Certificate: leaf, CertificateChain: chain, PrivateKey: "private key", SerialNumber: "01",
+						Certificate: leaf, CertificateChain: tc.chain, PrivateKey: "private key", SerialNumber: "01",
 					})
 				default:
 					http.NotFound(w, r)
@@ -130,8 +136,8 @@ func TestFetchCertificate_CombineCertificateChainAfterRestart(t *testing.T) {
 			require.NoError(t, tm.FetchCertificate(1, cert))
 			content, err := os.ReadFile(cert.FileConfig.Certificate.Path)
 			require.NoError(t, err)
-			if combine {
-				assert.Equal(t, leaf+chain, string(content))
+			if tc.combine {
+				assert.Equal(t, leaf+tc.chain, string(content))
 				assert.Equal(t, int32(1), bundleCalls.Load())
 			} else {
 				assert.Equal(t, leaf, string(content))
@@ -141,13 +147,22 @@ func TestFetchCertificate_CombineCertificateChainAfterRestart(t *testing.T) {
 			require.NoError(t, tm.SyncFetchedCertificate(1, cert))
 			assert.Equal(t, callsAfterRestart, bundleCalls.Load(), "unchanged certificates should not be fetched again")
 
-			if combine {
+			if tc.combine {
 				require.NoError(t, os.Remove(cert.FileConfig.Chain.Path))
 			}
 			require.True(t, allConfiguredOutputsExist(cert))
+			modifiedAt := time.Unix(1700000000, 0)
+			require.NoError(t, os.Chtimes(cert.FileConfig.Certificate.Path, modifiedAt, modifiedAt))
 			tm = &AgentManager{accessToken: "test-token", certificateStates: map[int]*CertificateState{1: {}}}
 			require.NoError(t, tm.FetchCertificate(1, cert))
-			assert.Equal(t, callsAfterRestart, bundleCalls.Load(), "already-combined output should not be fetched on restart")
+			if tc.combine && tc.chain == "" {
+				assert.Equal(t, callsAfterRestart+1, bundleCalls.Load(), "leaf-only output needs a bundle check to confirm there is no chain")
+			} else {
+				assert.Equal(t, callsAfterRestart, bundleCalls.Load(), "already-combined output should not be fetched on restart")
+			}
+			info, err := os.Stat(cert.FileConfig.Certificate.Path)
+			require.NoError(t, err)
+			assert.Equal(t, modifiedAt, info.ModTime(), "unchanged output should not be rewritten on restart")
 		})
 	}
 }
