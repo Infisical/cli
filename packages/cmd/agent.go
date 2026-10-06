@@ -2448,7 +2448,7 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 	}
 
 	serialOnDiskMatches := serialMatchesCertificateOnDisk(certConfig, certificate.Certificate.SerialNumber)
-	alreadyDelivered := previousCertificateID == "" && serialOnDiskMatches && allConfiguredOutputsExist(certConfig)
+	alreadyDelivered := previousCertificateID == "" && !certConfig.FileConfig.CombineCertificateChain && serialOnDiskMatches && allConfiguredOutputsExist(certConfig)
 
 	if previousCertificateID == resolvedCertificateID || alreadyDelivered {
 		tm.mutex.Lock()
@@ -2816,13 +2816,9 @@ func isReplacementOnDisk(certConfig *AgentCertificateConfig) bool {
 }
 
 func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
-	chainPath := certConfig.FileConfig.Chain.Path
-	if certConfig.FileConfig.CombineCertificateChain {
-		chainPath = ""
-	}
 	for _, path := range []string{
 		certConfig.FileConfig.Certificate.Path,
-		chainPath,
+		certConfig.FileConfig.Chain.Path,
 		certConfig.FileConfig.PrivateKey.Path,
 	} {
 		if path == "" {
