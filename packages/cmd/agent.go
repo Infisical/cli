@@ -124,6 +124,9 @@ type CertificateState struct {
 	CertificateRequestID string    `json:"certificate_request_id,omitempty"`
 	SerialNumber         string    `json:"serial_number"`
 	CertificateSHA256    string    `json:"certificate_sha256,omitempty"`
+	ChainSHA256          string    `json:"chain_sha256,omitempty"`
+	ChainOmitRoot        bool      `json:"chain_omit_root"`
+	DeliveryHook         string    `json:"delivery_hook,omitempty"`
 	CommonName           string    `json:"common_name"`
 	IssuedAt             time.Time `json:"issued_at"`
 	ExpiresAt            time.Time `json:"expires_at"`
@@ -1129,6 +1132,7 @@ type AgentManager struct {
 	certificateStates               map[int]*CertificateState
 	certificateContext              context.Context
 	certificatePollers              sync.WaitGroup
+	certificateUnlocks              map[int]func()
 	dynamicSecretLeases             *DynamicSecretLeaseManager
 	cacheManager                    *CacheManager
 	authConfigBytes                 []byte
@@ -2735,6 +2739,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 			errorMsg = *response.ErrorMessage
 		}
 		tm.handleFailedCertificateRequest(certificateId, errorMsg)
+		state.CertificateRequestID = ""
 		return persistCertificateState(certificate, state)
 
 	case "pending":
@@ -2921,11 +2926,11 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 	log.Info().Msg("starting certificate monitoring")
 	ctx, cancel := context.WithCancel(ctx)
 	tm.certificateContext = ctx
-	var unlocks []func()
+	tm.certificateUnlocks = make(map[int]func())
 	defer func() {
 		cancel()
 		tm.certificatePollers.Wait()
-		for _, unlock := range unlocks {
+		for _, unlock := range tm.certificateUnlocks {
 			unlock()
 		}
 	}()
@@ -2955,11 +2960,12 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 		if err != nil {
 			tm.mutex.Lock()
 			tm.certificateStates[cert.ID].Status = "blocked"
+			tm.certificateStates[cert.ID].NextRenewalCheck = time.Now().Add(failureRetryIntervalFor(&cert.Certificate))
 			tm.mutex.Unlock()
 			log.Error().Str("Certificate", tm.getCertificateDisplayName(cert.ID, &cert.Certificate)).Msgf("certificate state unavailable: %v", err)
 			continue
 		}
-		unlocks = append(unlocks, unlock)
+		tm.certificateUnlocks[cert.ID] = unlock
 		if err := tm.initializeManagedCertificate(cert.ID, &cert.Certificate); err != nil {
 			displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
 			log.Error().Str("Certificate", displayName).Msgf("initial certificate recovery failed: %v", err)
@@ -3050,6 +3056,30 @@ func (tm *AgentManager) CheckCertificateRenewals() {
 			continue
 		}
 
+		if state.Status == "blocked" {
+			if now.Before(state.NextRenewalCheck) {
+				continue
+			}
+			tm.mutex.Unlock()
+			unlock, err := lockCertificateState(&cert.Certificate)
+			tm.mutex.Lock()
+			state.NextRenewalCheck = now.Add(failureRetryIntervalFor(&cert.Certificate))
+			if err != nil {
+				state.LastError = err.Error()
+				continue
+			}
+			tm.certificateUnlocks[cert.ID] = unlock
+			tm.mutex.Unlock()
+			err = tm.initializeManagedCertificate(cert.ID, &cert.Certificate)
+			tm.mutex.Lock()
+			if err != nil {
+				state = tm.certificateStates[cert.ID]
+				state.Status = "failed"
+				state.LastError = err.Error()
+				state.LastRetry = now
+			}
+			continue
+		}
 		if state.Status == "failed" {
 			if state.RetryCount >= effectiveMaxFailureRetries(&cert.Certificate) {
 				if now.Sub(state.LastRetry) < failureRetryCooldownFor(&cert.Certificate) {

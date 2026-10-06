@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func validPersistedCertificateState(saved persistedCertificateState) bool {
 	case "pending_issuance", "renewing":
 		return saved.State.CertificateRequestID != ""
 	case "failed":
-		return saved.State.CertificateID != "" || saved.State.CertificateRequestID != ""
+		return saved.State.CertificateID != "" || saved.State.CertificateRequestID != "" || (saved.State.LastError != "" && !saved.State.LastRetry.IsZero())
 	case "requesting_issuance", "requesting_renewal", "pending":
 		return true
 	default:
@@ -64,6 +65,39 @@ func restoreRejectedCertificateRequest(certificate *AgentCertificateConfig, stat
 	return requestErr
 }
 
+func canonicalCertificatePath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if info, statErr := os.Lstat(absolute); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(absolute)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(absolute), target)
+		}
+		return canonicalCertificatePath(target)
+	}
+	parent := filepath.Dir(absolute)
+	if parent == absolute {
+		return "", err
+	}
+	resolvedParent, err := canonicalCertificatePath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(absolute)), nil
+}
+
 func validateCertificateStatePaths(certificates []AgentCertificateConfig) error {
 	outputs := make(map[string]bool)
 	for _, certificate := range certificates {
@@ -71,7 +105,7 @@ func validateCertificateStatePaths(certificates []AgentCertificateConfig) error 
 			if output == "" {
 				continue
 			}
-			absolute, err := filepath.Abs(output)
+			absolute, err := canonicalCertificatePath(output)
 			if err != nil {
 				return err
 			}
@@ -90,7 +124,7 @@ func validateCertificateStatePaths(certificates []AgentCertificateConfig) error 
 			continue
 		}
 		for _, statePath := range []string{certificateStatePath(&certificate), certificateStatePath(&certificate) + ".lock"} {
-			absolute, err := filepath.Abs(statePath)
+			absolute, err := canonicalCertificatePath(statePath)
 			if err != nil {
 				return err
 			}
@@ -139,6 +173,34 @@ func preflightCertificateOutputs(certificate *AgentCertificateConfig) error {
 	return nil
 }
 
+func certificateChainOutput(certificate *AgentCertificateConfig, chain string) (string, string, error) {
+	var output []byte
+	var der []byte
+	rest := []byte(chain)
+	for len(bytes.TrimSpace(rest)) > 0 {
+		block, remaining := pem.Decode(rest)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return "", "", fmt.Errorf("certificate chain contains invalid PEM")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return "", "", err
+		}
+		rest = remaining
+		if chainOmitRoot(certificate) && cert.IsCA && bytes.Equal(cert.RawIssuer, cert.RawSubject) && cert.CheckSignatureFrom(cert) == nil {
+			continue
+		}
+		output = append(output, pem.EncodeToMemory(block)...)
+		der = append(der, cert.Raw...)
+	}
+	hash := sha256.Sum256(der)
+	return string(output), hex.EncodeToString(hash[:]), nil
+}
+
+func chainOmitRoot(certificate *AgentCertificateConfig) bool {
+	return certificate.FileConfig.Chain.OmitRoot == nil || *certificate.FileConfig.Chain.OmitRoot
+}
+
 func certificateFingerprint(certificate *AgentCertificateConfig) (string, error) {
 	attributes := buildCertificateAttributes(certificate)
 	if attributes != nil {
@@ -171,7 +233,10 @@ func lockCertificateState(certificate *AgentCertificateConfig) (func(), error) {
 	if certificate.FileConfig.Certificate.Path == "" {
 		return nil, fmt.Errorf("certificate.path is required in file-output configuration")
 	}
-	statePath := certificateStatePath(certificate)
+	statePath, err := canonicalCertificatePath(certificateStatePath(certificate))
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(statePath), 0755); err != nil {
 		return nil, fmt.Errorf("cannot create certificate state directory: %w", err)
 	}
@@ -192,6 +257,9 @@ func lockCertificateState(certificate *AgentCertificateConfig) (func(), error) {
 }
 
 func persistCertificateState(certificate *AgentCertificateConfig, state *CertificateState) error {
+	if err := validateCertificateStatePaths([]AgentCertificateConfig{*certificate}); err != nil {
+		return err
+	}
 	fingerprint, err := certificateFingerprint(certificate)
 	if err != nil {
 		return err
@@ -200,7 +268,10 @@ func persistCertificateState(certificate *AgentCertificateConfig, state *Certifi
 	if err != nil {
 		return err
 	}
-	statePath := certificateStatePath(certificate)
+	statePath, err := canonicalCertificatePath(certificateStatePath(certificate))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(statePath), 0755); err != nil {
 		return fmt.Errorf("cannot create certificate state directory: %w", err)
 	}
@@ -273,6 +344,13 @@ func certificateMatchesIdentity(leaf *x509.Certificate, certificate *AgentCertif
 			return false
 		}
 		commonName, altNames = csr.Subject.CommonName, csr.DNSNames
+		altNames = append(slices.Clone(altNames), csr.EmailAddresses...)
+		for _, ip := range csr.IPAddresses {
+			altNames = append(altNames, ip.String())
+		}
+		for _, uri := range csr.URIs {
+			altNames = append(altNames, uri.String())
+		}
 	} else if certificate.Attributes != nil {
 		commonName, altNames = certificate.Attributes.CommonName, certificate.Attributes.AltNames
 		algorithm := certificate.Attributes.KeyAlgorithm
@@ -364,6 +442,18 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 			}
 			return tm.IssueCertificate(certificateID, certificate)
 		}
+		if saved.State.Status == "failed" && saved.State.CertificateRequestID == "" {
+			interval := failureRetryIntervalFor(certificate)
+			if saved.State.RetryCount >= effectiveMaxFailureRetries(certificate) {
+				interval = failureRetryCooldownFor(certificate)
+			}
+			if time.Since(saved.State.LastRetry) < interval {
+				tm.mutex.Lock()
+				tm.certificateStates[certificateID] = &saved.State
+				tm.mutex.Unlock()
+				return nil
+			}
+		}
 		tm.mutex.Lock()
 		restored := saved.State
 		if restored.CertificateRequestID == "" {
@@ -428,11 +518,34 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 		hash := sha256.Sum256(leaf.Raw)
 		repair = repair || hex.EncodeToString(hash[:]) != saved.State.CertificateSHA256
 	}
+	var bundle *api.CertificateBundleResponse
+	chainHash := saved.State.ChainSHA256
+	if certificate.FileConfig.Chain.Path != "" {
+		if chainHash == "" || saved.State.ChainOmitRoot != chainOmitRoot(certificate) {
+			bundle, err = api.CallGetCertificateBundle(httpClient, metadata.Certificate.ID)
+			if err != nil {
+				return err
+			}
+			_, chainHash, err = certificateChainOutput(certificate, bundle.CertificateChain)
+			if err != nil {
+				return err
+			}
+		}
+		chain, err := os.ReadFile(certificate.FileConfig.Chain.Path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("cannot read certificate chain: %w", err)
+		}
+		actualConfig := *certificate
+		omitRoot := false
+		actualConfig.FileConfig.Chain.OmitRoot = &omitRoot
+		_, actualHash, parseErr := certificateChainOutput(&actualConfig, string(chain))
+		repair = repair || err != nil || parseErr != nil || actualHash != chainHash
+	}
 	if !repair {
 		if !certificateMatchesIdentity(leaf, certificate) {
 			return fmt.Errorf("existing certificate does not match the configured identity")
 		}
-		for _, output := range []string{certificate.FileConfig.PrivateKey.Path, certificate.FileConfig.Chain.Path} {
+		for _, output := range []string{certificate.FileConfig.PrivateKey.Path} {
 			if output == "" {
 				continue
 			}
@@ -446,15 +559,15 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 				if _, err := tls.X509KeyPair(certificatePEM, outputData); err != nil {
 					repair = true
 				}
-			} else if _, err := parseAgentCertificate(outputData); err != nil {
-				repair = true
 			}
 		}
 	}
 	if repair {
-		bundle, err := api.CallGetCertificateBundle(httpClient, metadata.Certificate.ID)
-		if err != nil {
-			return err
+		if bundle == nil {
+			bundle, err = api.CallGetCertificateBundle(httpClient, metadata.Certificate.ID)
+			if err != nil {
+				return err
+			}
 		}
 		leaf, err = parseAgentCertificate([]byte(bundle.Certificate))
 		if err != nil || !certificateSerialMatches(metadata.Certificate.SerialNumber, leaf) || !certificateMatchesIdentity(leaf, certificate) {
@@ -472,14 +585,30 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 				return fmt.Errorf("cannot restore a matching private key: %w", err)
 			}
 		}
-		if certificate.FileConfig.Chain.Path != "" && bundle.CertificateChain == "" {
-			return fmt.Errorf("cannot restore configured chain output: certificate bundle has no chain")
+		chain, hash, err := certificateChainOutput(certificate, bundle.CertificateChain)
+		if err != nil {
+			return err
 		}
+		chainHash = hash
 		response := &api.CertificateResponse{Certificate: &api.CertificateData{
 			CertificateID: metadata.Certificate.ID, SerialNumber: bundle.SerialNumber,
-			Certificate: bundle.Certificate, PrivateKey: bundle.PrivateKey, CertificateChain: bundle.CertificateChain,
+			Certificate: bundle.Certificate, PrivateKey: bundle.PrivateKey, CertificateChain: chain,
 		}}
-		if err := tm.WriteCertificateFiles(certificate, response); err != nil {
+		delivery := saved.State
+		if delivery.DeliveryHook == "" {
+			delivery.DeliveryHook = "issuance"
+			if saved.State.CertificateID != "" && saved.State.CertificateID != metadata.Certificate.ID {
+				delivery.DeliveryHook = "renewal"
+			}
+		}
+		delivery.CertificateID = metadata.Certificate.ID
+		setManagedCertificateState(&delivery, leaf, certificate)
+		delivery.ChainSHA256, delivery.ChainOmitRoot = chainHash, chainOmitRoot(certificate)
+		if err := persistCertificateState(certificate, &delivery); err != nil {
+			return err
+		}
+		saved.State = delivery
+		if err := tm.writeManagedCertificateFiles(certificate, response); err != nil {
 			return err
 		}
 	}
@@ -494,7 +623,12 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 	state := tm.certificateStates[certificateID]
 	state.CertificateID = metadata.Certificate.ID
 	setManagedCertificateState(state, leaf, certificate)
+	state.ChainSHA256, state.ChainOmitRoot = chainHash, chainOmitRoot(certificate)
+	state.DeliveryHook = saved.State.DeliveryHook
 	if err := persistCertificateState(certificate, state); err != nil {
+		return err
+	}
+	if err := tm.finishManagedCertificateDelivery(certificateID, certificate, state); err != nil {
 		return err
 	}
 	if certificate.CSR == "" && tm.ShouldRenewCertificate(certificateID) {
@@ -531,6 +665,10 @@ func (tm *AgentManager) completeManagedCertificate(certificateID int, certificat
 	state.CertificateID = response.Certificate.CertificateID
 	state.CertificateRequestID = ""
 	state.Status = "active"
+	state.DeliveryHook = "issuance"
+	if renewal {
+		state.DeliveryHook = "renewal"
+	}
 	// Save the identity before touching output files so a partial delivery can be repaired without another CA request.
 	if err := persistCertificateState(certificate, state); err != nil {
 		return err
@@ -553,16 +691,48 @@ func (tm *AgentManager) completeManagedCertificate(certificateID int, certificat
 		}
 	}
 	setManagedCertificateState(state, leaf, certificate)
+	certificateData := *response.Certificate
+	chain, hash, err := certificateChainOutput(certificate, certificateData.CertificateChain)
+	if err != nil {
+		return err
+	}
+	certificateData.CertificateChain = chain
+	state.ChainSHA256, state.ChainOmitRoot = hash, chainOmitRoot(certificate)
 	if err := persistCertificateState(certificate, state); err != nil {
 		return err
 	}
+	if err := tm.writeManagedCertificateFiles(certificate, &api.CertificateResponse{Certificate: &certificateData}); err != nil {
+		return err
+	}
+	return tm.finishManagedCertificateDelivery(certificateID, certificate, state)
+}
+
+func (tm *AgentManager) finishManagedCertificateDelivery(certificateID int, certificate *AgentCertificateConfig, state *CertificateState) error {
+	switch state.DeliveryHook {
+	case "renewal":
+		tm.ExecutePostHook(certificate.PostHooks.OnRenewal.Command, certificate.PostHooks.OnRenewal.Timeout, "renewal", certificateID, certificate)
+	case "issuance":
+		tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateID, certificate)
+	default:
+		return nil
+	}
+	state.DeliveryHook = ""
+	return persistCertificateState(certificate, state)
+}
+
+func (tm *AgentManager) writeManagedCertificateFiles(certificate *AgentCertificateConfig, response *api.CertificateResponse) error {
 	if err := tm.WriteCertificateFiles(certificate, response); err != nil {
 		return err
 	}
-	if renewal {
-		tm.ExecutePostHook(certificate.PostHooks.OnRenewal.Command, certificate.PostHooks.OnRenewal.Timeout, "renewal", certificateID, certificate)
-	} else {
-		tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateID, certificate)
+	if certificate.FileConfig.Chain.Path != "" && response.Certificate.CertificateChain == "" {
+		permission := os.FileMode(0600)
+		if configured, err := strconv.ParseUint(certificate.FileConfig.Chain.Permission, 8, 32); err == nil {
+			permission = os.FileMode(configured)
+		}
+		if err := os.MkdirAll(filepath.Dir(certificate.FileConfig.Chain.Path), 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(certificate.FileConfig.Chain.Path, nil, permission)
 	}
 	return nil
 }
