@@ -835,6 +835,38 @@ func certAgent_AcmeCA_CertificateIssuance(t *testing.T) {
 	if _, err := os.Stat(chainPath); err == nil {
 		agentHelpers.VerifyChainFile(t, chainPath)
 	}
+	initialSerial := readCertificateSerial(t, certPath)
+	statePath := certPath + ".infisical-state.json"
+	stateWrittenAt := fileModTime(t, statePath)
+	cmd.Stop()
+	restarted := &helpers.Command{Test: t, Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"}, Env: map[string]string{}}
+	restarted.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Restarted Agent stderr:\n%s", restarted.Stderr())
+		}
+		restarted.Stop()
+	})
+	require.Eventually(t, func() bool {
+		info, err := os.Stat(statePath)
+		if err != nil || !info.ModTime().After(stateWrittenAt) {
+			return false
+		}
+		data, err := os.ReadFile(statePath)
+		if err != nil {
+			return false
+		}
+		var state struct {
+			State struct {
+				Status string `json:"status"`
+			} `json:"state"`
+		}
+		return json.Unmarshal(data, &state) == nil && state.State.Status == "active"
+	}, 120*time.Second, 2*time.Second, "ACME restart recovery failed: %s", restarted.Stderr())
+	require.True(t, restarted.IsRunning())
+	require.Equal(t, initialSerial, readCertificateSerial(t, certPath))
+	require.NotContains(t, restarted.Stderr(), "issuing certificate")
+	require.NotContains(t, restarted.Stderr(), "renewing certificate")
 }
 
 func setupAcmeCertAgentTest(t *testing.T, ctx context.Context, certCount ...int) (*agentHelpers.CertAgentTestHelper, string) { //nolint:unparam
