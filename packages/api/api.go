@@ -1376,6 +1376,22 @@ func CallRetrieveCertificate(httpClient *resty.Client, certificateId string) (*R
 	return &resBody, nil
 }
 
+func CallListCertificateProfileCertificates(httpClient *resty.Client, profileID, search string, offset int) (*ListCertificateProfileCertificatesResponse, error) {
+	var resBody ListCertificateProfileCertificatesResponse
+	response, err := httpClient.R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParams(map[string]string{"search": search, "offset": strconv.Itoa(offset), "limit": "100"}).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificate-profiles/%s/certificates", config.INFISICAL_URL, profileID))
+	if err != nil {
+		return nil, NewGenericRequestError("CallListCertificateProfileCertificates", err)
+	}
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse("CallListCertificateProfileCertificates", response, nil)
+	}
+	return &resBody, nil
+}
+
 func CallGetCertificateBundle(httpClient *resty.Client, certificateId string) (*CertificateBundleResponse, error) {
 	var resBody CertificateBundleResponse
 	response, err := httpClient.

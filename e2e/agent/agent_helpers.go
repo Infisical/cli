@@ -603,6 +603,7 @@ type agentCertificateFileOutput struct {
 type agentFileOutputEntry struct {
 	Path       string `yaml:"path"`
 	Permission string `yaml:"permission,omitempty"`
+	OmitRoot   *bool  `yaml:"omit-root,omitempty"`
 }
 
 type agentCertificatePostHooks struct {
@@ -621,6 +622,11 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 
 	var certs []agentCertificateConfig
 	for _, cert := range opts.Certificates {
+		var omitRoot *bool
+		if cert.IncludeRootInChain {
+			omit := false
+			omitRoot = &omit
+		}
 		c := agentCertificateConfig{
 			ProjectSlug:     cert.ProjectSlug,
 			ApplicationName: cert.ApplicationName,
@@ -645,7 +651,7 @@ func (h *CertAgentTestHelper) GenerateAgentConfig(opts AgentConfigOptions) strin
 			FileOutput: agentCertificateFileOutput{
 				Certificate: agentFileOutputEntry{Path: cert.CertPath, Permission: cert.CertPermission},
 				PrivateKey:  agentFileOutputEntry{Path: cert.KeyPath, Permission: cert.KeyPermission},
-				Chain:       agentFileOutputEntry{Path: cert.ChainPath, Permission: cert.ChainPermission},
+				Chain:       agentFileOutputEntry{Path: cert.ChainPath, Permission: cert.ChainPermission, OmitRoot: omitRoot},
 			},
 		}
 
@@ -724,6 +730,7 @@ type CertificateConfigEntry struct {
 	CertPermission      string
 	KeyPermission       string
 	ChainPermission     string
+	IncludeRootInChain  bool
 	PostHookOnFailure   string
 	CertificateID       string
 	ReplaceOnRenewals   bool

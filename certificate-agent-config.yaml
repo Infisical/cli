@@ -32,6 +32,15 @@ certificates:
       renew-before-expiry: "1d" # When to start checking for renewal before expiration
       status-check-interval: "6h" # How often to check certificate status and renewal needs
 
+      # State defaults to <certificate.path>.infisical-state.json and contains no private key.
+      # Keep it across restarts so the Agent can resume pending requests and repair missing outputs.
+      # Pre-upgrade recovery requires read access to the certificate profile.
+      # An override and its .lock file must also be allowed in systemd write paths.
+      # state-path: "/etc/ssl/infisical/certificate-state.json"
+
+      # An unknown request outcome after a crash stops automatic issuance to avoid duplicate orders.
+      # Check Infisical before restoring or removing the state file.
+
     # Post-hooks for automation
     post-hooks:
       on-issuance:
