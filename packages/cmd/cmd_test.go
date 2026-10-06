@@ -1,10 +1,64 @@
 package cmd
 
 import (
+	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/telemetry"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 )
+
+func TestTelemetryFlagDisablesTelemetry(t *testing.T) {
+	flag := RootCmd.PersistentFlags().Lookup("telemetry")
+	originalFlagValue := flag.Value.String()
+	originalFlagChanged := flag.Changed
+	silentFlag := RootCmd.PersistentFlags().Lookup("silent")
+	originalSilentValue := silentFlag.Value.String()
+	originalSilentChanged := silentFlag.Changed
+	originalOut := RootCmd.OutOrStdout()
+	originalErr := RootCmd.ErrOrStderr()
+	originalTelemetry := Telemetry
+	originalAPIKey := telemetry.POSTHOG_API_KEY_FOR_CLI
+	originalLogger := log.Logger
+	originalLogLevel := zerolog.GlobalLevel()
+	testCommand := &cobra.Command{Use: "telemetry-regression-test", Run: func(*cobra.Command, []string) {}}
+	RootCmd.AddCommand(testCommand)
+	t.Cleanup(func() {
+		RootCmd.RemoveCommand(testCommand)
+		_ = flag.Value.Set(originalFlagValue)
+		flag.Changed = originalFlagChanged
+		_ = silentFlag.Value.Set(originalSilentValue)
+		silentFlag.Changed = originalSilentChanged
+		RootCmd.SetArgs(nil)
+		RootCmd.SetOut(originalOut)
+		RootCmd.SetErr(originalErr)
+		Telemetry = originalTelemetry
+		telemetry.POSTHOG_API_KEY_FOR_CLI = originalAPIKey
+		log.Logger = originalLogger
+		zerolog.SetGlobalLevel(originalLogLevel)
+	})
+
+	telemetry.POSTHOG_API_KEY_FOR_CLI = "test-api-key"
+	Telemetry = telemetry.NewTelemetry(true)
+	telemetry.POSTHOG_API_KEY_FOR_CLI = ""
+	RootCmd.SetOut(&bytes.Buffer{})
+	RootCmd.SetErr(&bytes.Buffer{})
+	RootCmd.SetArgs([]string{"--telemetry=false", "--silent", testCommand.Name()})
+
+	if _, err := RootCmd.ExecuteC(); err != nil {
+		t.Fatalf("execute root command: %v", err)
+	}
+	if Telemetry == nil {
+		t.Fatal("telemetry was not initialized")
+	}
+	if reflect.ValueOf(Telemetry).Elem().FieldByName("isEnabled").Bool() {
+		t.Fatal("telemetry remained enabled after --telemetry=false")
+	}
+}
 
 func TestFilterReservedEnvVars(t *testing.T) {
 
