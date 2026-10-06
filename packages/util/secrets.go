@@ -276,6 +276,26 @@ func FilterSecretsByTag(plainTextSecrets []models.SingleEnvironmentVariable, tag
 	return filteredSecrets
 }
 
+func resolveWorkspaceID(workspaceID, projectConfigFilePath string) (string, error) {
+	if workspaceID != "" {
+		return workspaceID, nil
+	}
+
+	if projectConfigFilePath == "" {
+		workspaceConfig, err := GetWorkSpaceFromFile()
+		if err != nil {
+			return "", err
+		}
+		return workspaceConfig.WorkspaceId, nil
+	}
+
+	workspaceConfig, err := GetWorkSpaceFromFilePath(projectConfigFilePath)
+	if err != nil {
+		return "", err
+	}
+	return workspaceConfig.WorkspaceId, nil
+}
+
 func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectConfigFilePath string) ([]models.SingleEnvironmentVariable, error) {
 	var secretsToReturn []models.SingleEnvironmentVariable
 	// var serviceTokenDetails api.GetServiceTokenDetailsResponse
@@ -365,6 +385,13 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			log.Debug().Msg("Trying to fetch secrets using service token")
 			secretsToReturn, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
 		} else if params.UniversalAuthAccessToken != "" {
+
+			if params.WorkspaceId == "" {
+				workspaceID, err := resolveWorkspaceID(params.WorkspaceId, projectConfigFilePath)
+				if err == nil {
+					params.WorkspaceId = workspaceID
+				}
+			}
 
 			if params.WorkspaceId == "" {
 				PrintErrorMessageAndExit("Project ID is required when using machine identity")
