@@ -375,9 +375,6 @@ func certificateMatchesIdentity(leaf *x509.Certificate, certificate *AgentCertif
 			}
 		}
 	}
-	if commonName != "" && commonName != leaf.Subject.CommonName {
-		return false
-	}
 	actual := slices.Clone(leaf.DNSNames)
 	actual = append(actual, leaf.EmailAddresses...)
 	for _, ip := range leaf.IPAddresses {
@@ -385,6 +382,12 @@ func certificateMatchesIdentity(leaf *x509.Certificate, certificate *AgentCertif
 	}
 	for _, uri := range leaf.URIs {
 		actual = append(actual, uri.String())
+	}
+	if commonName != "" && commonName != leaf.Subject.CommonName {
+		// Some CAs omit the subject common name and encode the requested identity only in SANs.
+		if leaf.Subject.CommonName != "" || !slices.Contains(actual, commonName) {
+			return false
+		}
 	}
 	for _, name := range altNames {
 		if !slices.Contains(actual, name) {

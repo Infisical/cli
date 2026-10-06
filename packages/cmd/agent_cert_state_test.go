@@ -683,6 +683,46 @@ func TestManagedCertificateCSRWithExternalPrivateKey(t *testing.T) {
 	}
 }
 
+func TestManagedCertificateReusesSANOnlyIdentity(t *testing.T) {
+	for _, csrMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CSR=%t", csrMode), func(t *testing.T) {
+			certificate := agentTestConfig(t)
+			next := agentTestCertificate(t, 2, time.Now().Add(90*24*time.Hour))
+			leaf, err := parseAgentCertificate([]byte(next.Certificate))
+			require.NoError(t, err)
+			block, _ := pem.Decode([]byte(next.PrivateKey))
+			key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+			require.NoError(t, err)
+			if csrMode {
+				csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: leaf.Subject, DNSNames: leaf.DNSNames}, key)
+				require.NoError(t, err)
+				certificate.CSR = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr}))
+			}
+			leaf.Subject.CommonName = ""
+			leaf.RawSubject = nil
+			assert.True(t, certificateMatchesIdentity(leaf, certificate))
+			unrelated := *leaf
+			unrelated.DNSNames = []string{"unrelated.example.test"}
+			assert.False(t, certificateMatchesIdentity(&unrelated, certificate))
+			unrelated = *leaf
+			unrelated.Subject.CommonName = "unrelated.example.test"
+			assert.False(t, certificateMatchesIdentity(&unrelated, certificate))
+			der, err := x509.CreateCertificate(rand.Reader, leaf, leaf, leaf.PublicKey, key)
+			require.NoError(t, err)
+			next.Certificate = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+			issued, err := parseAgentCertificate([]byte(next.Certificate))
+			require.NoError(t, err)
+			assert.Empty(t, issued.Subject.CommonName)
+			next.CertificateChain = next.Certificate
+			backend := newAgentTestAPI(t, agentTestCertificate(t, 1, time.Now().Add(90*24*time.Hour)), next)
+			runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+			runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+			assert.EqualValues(t, 1, backend.issueCalls.Load())
+			assert.EqualValues(t, 0, backend.bundleCalls.Load())
+		})
+	}
+}
+
 func TestCertificateStatePathRejectsSymlinkAliasToOutput(t *testing.T) {
 	certificate := agentTestConfig(t)
 	aliasRoot := t.TempDir()
