@@ -636,6 +636,53 @@ func TestManagedCertificateDeliversRootOmittedEmptyResponseChain(t *testing.T) {
 	assert.EqualValues(t, 1, backend.bundleCalls.Load())
 }
 
+func TestManagedCertificateCSRWithExternalPrivateKey(t *testing.T) {
+	for _, mode := range []string{"missing external key", "existing external key", "mismatched external key", "mismatched CSR"} {
+		t.Run(mode, func(t *testing.T) {
+			certificate := agentTestConfig(t)
+			next := agentTestCertificate(t, 2, time.Now().Add(90*24*time.Hour))
+			privateKey := next.PrivateKey
+			csrKey := privateKey
+			if mode == "mismatched CSR" {
+				csrKey = agentTestCertificate(t, 3, time.Now().Add(90*24*time.Hour)).PrivateKey
+			}
+			block, _ := pem.Decode([]byte(csrKey))
+			key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+			require.NoError(t, err)
+			leaf, err := parseAgentCertificate([]byte(next.Certificate))
+			require.NoError(t, err)
+			csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: leaf.Subject, DNSNames: leaf.DNSNames}, key)
+			require.NoError(t, err)
+			certificate.CSR = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr}))
+			if mode == "existing external key" {
+				require.NoError(t, os.WriteFile(certificate.FileConfig.PrivateKey.Path, []byte(privateKey), 0600))
+			}
+			if mode == "mismatched external key" {
+				require.NoError(t, os.WriteFile(certificate.FileConfig.PrivateKey.Path, []byte(agentTestCertificate(t, 3, time.Now().Add(90*24*time.Hour)).PrivateKey), 0600))
+			}
+			next.PrivateKey = ""
+			backend := newAgentTestAPI(t, agentTestCertificate(t, 1, time.Now().Add(90*24*time.Hour)), next)
+			if strings.HasPrefix(mode, "mismatched") {
+				runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "failed" })
+			} else {
+				runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+				require.NoError(t, os.Remove(certificate.FileConfig.Certificate.Path))
+				runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+				runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+				key, err := os.ReadFile(certificate.FileConfig.PrivateKey.Path)
+				if mode == "missing external key" {
+					assert.ErrorIs(t, err, os.ErrNotExist)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, privateKey, string(key))
+				}
+				assert.EqualValues(t, 1, backend.bundleCalls.Load())
+			}
+			assert.EqualValues(t, 1, backend.issueCalls.Load())
+		})
+	}
+}
+
 func TestCertificateStatePathRejectsSymlinkAliasToOutput(t *testing.T) {
 	certificate := agentTestConfig(t)
 	aliasRoot := t.TempDir()

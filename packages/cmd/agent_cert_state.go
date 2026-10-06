@@ -394,6 +394,26 @@ func certificateMatchesIdentity(leaf *x509.Certificate, certificate *AgentCertif
 	return true
 }
 
+func validateManagedCertificateKey(certificate *AgentCertificateConfig, certificatePEM, key []byte) error {
+	if len(key) == 0 {
+		if certificate.FileConfig.PrivateKey.Path == "" {
+			return nil
+		}
+		var err error
+		key, err = os.ReadFile(certificate.FileConfig.PrivateKey.Path)
+		if errors.Is(err, os.ErrNotExist) && certificate.CSR != "" {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("certificate private key is unavailable: %w", err)
+		}
+	}
+	if _, err := tls.X509KeyPair(certificatePEM, key); err != nil {
+		return fmt.Errorf("certificate does not match its private key: %w", err)
+	}
+	return nil
+}
+
 func (tm *AgentManager) recoverCertificateID(certificate *AgentCertificateConfig, leaf *x509.Certificate) (string, error) {
 	httpClient, err := tm.createAuthenticatedClient()
 	if err != nil {
@@ -555,6 +575,9 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 				continue
 			}
 			outputData, err := os.ReadFile(output)
+			if errors.Is(err, os.ErrNotExist) && certificate.CSR != "" {
+				continue
+			}
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("cannot read certificate output %s: %w", output, err)
 			}
@@ -578,17 +601,8 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 		if err != nil || !certificateSerialMatches(metadata.Certificate.SerialNumber, leaf) || !certificateMatchesIdentity(leaf, certificate) {
 			return fmt.Errorf("stored certificate bundle does not match the certificate identity")
 		}
-		if certificate.FileConfig.PrivateKey.Path != "" {
-			key := []byte(bundle.PrivateKey)
-			if len(key) == 0 {
-				key, err = os.ReadFile(certificate.FileConfig.PrivateKey.Path)
-				if err != nil {
-					return fmt.Errorf("cannot restore the certificate's locally managed private key: %w", err)
-				}
-			}
-			if _, err := tls.X509KeyPair([]byte(bundle.Certificate), key); err != nil {
-				return fmt.Errorf("cannot restore a matching private key: %w", err)
-			}
+		if err := validateManagedCertificateKey(certificate, []byte(bundle.Certificate), []byte(bundle.PrivateKey)); err != nil {
+			return err
 		}
 		chain, hash, err := certificateChainOutput(certificate, bundle.CertificateChain)
 		if err != nil {
@@ -679,18 +693,11 @@ func (tm *AgentManager) completeManagedCertificate(certificateID int, certificat
 	if err != nil {
 		return fmt.Errorf("cannot parse issued certificate: %w", err)
 	}
-	if response.Certificate.PrivateKey != "" {
-		if _, err := tls.X509KeyPair([]byte(response.Certificate.Certificate), []byte(response.Certificate.PrivateKey)); err != nil {
-			return fmt.Errorf("issued certificate does not match its private key: %w", err)
-		}
-	} else if certificate.FileConfig.PrivateKey.Path != "" {
-		key, err := os.ReadFile(certificate.FileConfig.PrivateKey.Path)
-		if err != nil {
-			return fmt.Errorf("issued certificate has no private key and no locally managed key is available: %w", err)
-		}
-		if _, err := tls.X509KeyPair([]byte(response.Certificate.Certificate), key); err != nil {
-			return fmt.Errorf("issued certificate does not match the locally managed private key: %w", err)
-		}
+	if !certificateMatchesIdentity(leaf, certificate) {
+		return fmt.Errorf("issued certificate does not match the configured identity")
+	}
+	if err := validateManagedCertificateKey(certificate, []byte(response.Certificate.Certificate), []byte(response.Certificate.PrivateKey)); err != nil {
+		return err
 	}
 	setManagedCertificateState(state, leaf, certificate)
 	certificateData := *response.Certificate
