@@ -254,7 +254,8 @@ type AgentCertificateConfig struct {
 		} `yaml:"on-failure,omitempty"`
 	} `yaml:"post-hooks,omitempty"`
 	FileConfig struct {
-		PrivateKey struct {
+		CombineCertificateChain bool `yaml:"combine-certificate-chain,omitempty"`
+		PrivateKey              struct {
 			Path       string `yaml:"path,omitempty"`
 			Permission string `yaml:"permission,omitempty"`
 		} `yaml:"private-key,omitempty"`
@@ -2815,9 +2816,13 @@ func isReplacementOnDisk(certConfig *AgentCertificateConfig) bool {
 }
 
 func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
+	chainPath := certConfig.FileConfig.Chain.Path
+	if certConfig.FileConfig.CombineCertificateChain {
+		chainPath = ""
+	}
 	for _, path := range []string{
 		certConfig.FileConfig.Certificate.Path,
-		certConfig.FileConfig.Chain.Path,
+		chainPath,
 		certConfig.FileConfig.PrivateKey.Path,
 	} {
 		if path == "" {
@@ -2909,11 +2914,15 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 	if err := os.MkdirAll(path.Dir(certificatePath), 0755); err != nil {
 		return fmt.Errorf("failed to create directory for certificate %s: %v", certificatePath, err)
 	}
-	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), certificatePerms); err != nil {
+	certificateContent := response.Certificate.Certificate
+	if certificate.FileConfig.CombineCertificateChain && response.Certificate.CertificateChain != "" {
+		certificateContent = strings.TrimSpace(certificateContent) + "\n" + strings.TrimSpace(response.Certificate.CertificateChain) + "\n"
+	}
+	if err := ioutil.WriteFile(certificatePath, []byte(certificateContent), certificatePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
 
-	if response.Certificate.CertificateChain != "" && chainPath != "" {
+	if !certificate.FileConfig.CombineCertificateChain && response.Certificate.CertificateChain != "" && chainPath != "" {
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for certificate chain %s: %v", chainPath, err)
 		}
