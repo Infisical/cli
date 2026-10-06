@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -122,6 +123,7 @@ func certAgent_BasicCertificateIssuance(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 			},
 		},
 	})
@@ -160,6 +162,75 @@ func certAgent_BasicCertificateIssuance(t *testing.T) {
 	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
 	agentHelpers.VerifyChainFile(t, chainPath)
 	agentHelpers.VerifyCertificateCommonName(t, certPath, "test.example.com")
+}
+
+func certAgent_DefaultRootOmissionSurvivesRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	helper := setupCertAgentTest(t, ctx)
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath: clientIDPath, ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{{
+			ApplicationName: helper.ApplicationName, ProfileSlug: helper.ProfileSlug,
+			CommonName: "default-chain.example.com", TTL: "1h", RenewBeforeExpiry: "10m", StatusCheckInterval: "5s",
+			CertPath: certPath, KeyPath: keyPath, ChainPath: chainPath,
+		}},
+	})
+	config, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(config), "omit-root:")
+	runAgent := func() *helpers.Command {
+		cmd := &helpers.Command{Test: t, Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"}, Env: map[string]string{}}
+		cmd.Start(ctx)
+		t.Cleanup(func() {
+			if t.Failed() {
+				t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			}
+			cmd.Stop()
+		})
+		return cmd
+	}
+	first := runAgent()
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: first, ExpectedString: "certificate issued successfully", Timeout: 120 * time.Second, Interval: 2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "initial issuance failed: %s", first.Stderr())
+	agentHelpers.VerifyCertificateFile(t, certPath)
+	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
+	chain, err := os.ReadFile(chainPath)
+	require.NoError(t, err)
+	require.Empty(t, chain)
+	initialSerial := readCertificateSerial(t, certPath)
+	statePath := certPath + ".infisical-state.json"
+	stateWrittenAt := fileModTime(t, statePath)
+	first.Stop()
+	second := runAgent()
+	require.Eventually(t, func() bool {
+		info, err := os.Stat(statePath)
+		if err != nil || !info.ModTime().After(stateWrittenAt) {
+			return false
+		}
+		data, err := os.ReadFile(statePath)
+		if err != nil {
+			return false
+		}
+		var state struct {
+			State struct {
+				Status string `json:"status"`
+			} `json:"state"`
+		}
+		return json.Unmarshal(data, &state) == nil && state.State.Status == "active"
+	}, 120*time.Second, 2*time.Second, "restart recovery failed: %s", second.Stderr())
+	require.True(t, second.IsRunning())
+	require.Equal(t, initialSerial, readCertificateSerial(t, certPath))
+	require.NotContains(t, second.Stderr(), "issuing certificate")
+	chain, err = os.ReadFile(chainPath)
+	require.NoError(t, err)
+	require.Empty(t, chain)
 }
 
 func certAgent_CertificateRenewal(t *testing.T) {
@@ -349,6 +420,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 				CertPath:            certPath1,
 				KeyPath:             keyPath1,
 				ChainPath:           chainPath1,
+				IncludeRootInChain:  true,
 			},
 			{
 				ApplicationName:     helper.ApplicationName,
@@ -360,6 +432,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 				CertPath:            certPath2,
 				KeyPath:             keyPath2,
 				ChainPath:           chainPath2,
+				IncludeRootInChain:  true,
 			},
 		},
 	})
@@ -435,6 +508,7 @@ func certAgent_FilePermissions(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				CertPermission:      "0644",
 				KeyPermission:       "0640",
 				ChainPermission:     "0644",
@@ -502,6 +576,7 @@ func certAgent_AltNames(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				AltNames:            expectedAltNames,
 			},
 		},
@@ -570,6 +645,7 @@ func certAgent_CSRBasedIssuance(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				CSR:                 csrPEM,
 			},
 		},
@@ -647,6 +723,7 @@ func certAgent_CSRPathBasedIssuance(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				CSRPath:             csrFilePath,
 			},
 		},
@@ -714,6 +791,7 @@ func certAgent_AcmeCA_CertificateIssuance(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 			},
 		},
 	})
@@ -1044,6 +1122,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 				CertPath:            certPath1,
 				KeyPath:             keyPath1,
 				ChainPath:           chainPath1,
+				IncludeRootInChain:  true,
 			},
 			{
 				ApplicationName:     helper.ApplicationName,
@@ -1055,6 +1134,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 				CertPath:            certPath2,
 				KeyPath:             keyPath2,
 				ChainPath:           chainPath2,
+				IncludeRootInChain:  true,
 			},
 		},
 	})
@@ -1208,6 +1288,7 @@ func certAgent_AcmeCA_CSRBasedIssuance(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				CSR:                 csrPEM,
 			},
 		},
@@ -1360,6 +1441,7 @@ func certAgent_CertificateWithFullAttributes(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				KeyAlgorithm:        "RSA_2048",
 				KeyUsages:           []string{"digital_signature", "key_encipherment"},
 				ExtendedKeyUsages:   []string{"server_auth"},
@@ -1873,6 +1955,7 @@ func certAgent_SignatureAlgorithm(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 				KeyAlgorithm:        "RSA_2048",
 				SignatureAlgorithm:  "RSA-SHA256",
 			},
@@ -1944,6 +2027,7 @@ func certAgent_V1LegacyIssuance(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 			},
 		},
 	})
@@ -2011,6 +2095,7 @@ func certAgent_V1ValidationRejectsAppOnly(t *testing.T) {
 				CertPath:            certPath,
 				KeyPath:             keyPath,
 				ChainPath:           chainPath,
+				IncludeRootInChain:  true,
 			},
 		},
 	})
@@ -2537,6 +2622,7 @@ func normalizeSerial(serial string) string {
 
 func TestCertAgent_InternalCA(t *testing.T) {
 	t.Run("BasicCertificateIssuance", certAgent_BasicCertificateIssuance)
+	t.Run("DefaultRootOmissionSurvivesRestart", certAgent_DefaultRootOmissionSurvivesRestart)
 	t.Run("CertificateRenewal", certAgent_CertificateRenewal)
 	t.Run("PostHookExecution", certAgent_PostHookExecution)
 	t.Run("MultipleCertificates", certAgent_MultipleCertificates)
