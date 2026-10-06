@@ -174,6 +174,13 @@ func preflightCertificateOutputs(certificate *AgentCertificateConfig) error {
 }
 
 func certificateChainOutput(certificate *AgentCertificateConfig, chain string) (string, string, error) {
+	if certificate.FileConfig.Chain.Path != "" && strings.TrimSpace(chain) == "" {
+		return "", "", fmt.Errorf("configured certificate chain is missing from the remote bundle")
+	}
+	return formatCertificateChain(chain, chainOmitRoot(certificate))
+}
+
+func formatCertificateChain(chain string, omitRoot bool) (string, string, error) {
 	var output []byte
 	var der []byte
 	rest := []byte(chain)
@@ -187,7 +194,7 @@ func certificateChainOutput(certificate *AgentCertificateConfig, chain string) (
 			return "", "", err
 		}
 		rest = remaining
-		if chainOmitRoot(certificate) && cert.IsCA && bytes.Equal(cert.RawIssuer, cert.RawSubject) && cert.CheckSignatureFrom(cert) == nil {
+		if omitRoot && cert.IsCA && bytes.Equal(cert.RawIssuer, cert.RawSubject) && cert.CheckSignatureFrom(cert) == nil {
 			continue
 		}
 		output = append(output, pem.EncodeToMemory(block)...)
@@ -535,10 +542,7 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("cannot read certificate chain: %w", err)
 		}
-		actualConfig := *certificate
-		omitRoot := false
-		actualConfig.FileConfig.Chain.OmitRoot = &omitRoot
-		_, actualHash, parseErr := certificateChainOutput(&actualConfig, string(chain))
+		_, actualHash, parseErr := formatCertificateChain(string(chain), false)
 		repair = repair || err != nil || parseErr != nil || actualHash != chainHash
 	}
 	if !repair {
@@ -595,11 +599,8 @@ func (tm *AgentManager) initializeManagedCertificate(certificateID int, certific
 			Certificate: bundle.Certificate, PrivateKey: bundle.PrivateKey, CertificateChain: chain,
 		}}
 		delivery := saved.State
-		if delivery.DeliveryHook == "" {
-			delivery.DeliveryHook = "issuance"
-			if saved.State.CertificateID != "" && saved.State.CertificateID != metadata.Certificate.ID {
-				delivery.DeliveryHook = "renewal"
-			}
+		if delivery.DeliveryHook == "" && saved.State.CertificateID != "" && saved.State.CertificateID != metadata.Certificate.ID {
+			delivery.DeliveryHook = "renewal"
 		}
 		delivery.CertificateID = metadata.Certificate.ID
 		setManagedCertificateState(&delivery, leaf, certificate)

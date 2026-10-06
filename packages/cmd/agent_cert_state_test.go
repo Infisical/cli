@@ -79,6 +79,7 @@ func agentTestManager(certificate *AgentCertificateConfig) *AgentManager {
 }
 
 type agentTestAPI struct {
+	missingChain                                                           atomic.Bool
 	pollFailed                                                             atomic.Bool
 	onIssue                                                                func()
 	issueError                                                             atomic.Int32
@@ -149,9 +150,13 @@ func newAgentTestAPI(t *testing.T, old, next *api.CertificateData) *agentTestAPI
 			if strings.Contains(r.URL.Path, backend.next.CertificateID+"/") {
 				certificate = backend.next
 			}
+			chain := certificate.CertificateChain
+			if backend.missingChain.Load() {
+				chain = ""
+			}
 			_ = json.NewEncoder(w).Encode(api.CertificateBundleResponse{
 				Certificate: certificate.Certificate, PrivateKey: certificate.PrivateKey,
-				SerialNumber: certificate.SerialNumber, CertificateChain: certificate.CertificateChain,
+				SerialNumber: certificate.SerialNumber, CertificateChain: chain,
 			})
 		case strings.HasPrefix(r.URL.Path, prefix+"certificates/"):
 			backend.statusCalls.Add(1)
@@ -560,12 +565,28 @@ func TestManagedCertificateDoesNotRequestWhenOutputsAreUnwritable(t *testing.T) 
 
 func TestManagedCertificateRepairsValidButWrongChain(t *testing.T) {
 	certificate := agentTestConfig(t)
+	hookOutput := filepath.Join(t.TempDir(), "issuance-hook")
+	certificate.PostHooks.OnIssuance.Command = fmt.Sprintf("touch %q", hookOutput)
 	old := agentTestCertificate(t, 1, time.Now().Add(90*24*time.Hour))
 	backend := newAgentTestAPI(t, old, agentTestCertificate(t, 2, time.Now().Add(90*24*time.Hour)))
 	seedAgentCertificate(t, certificate, old, true)
 	wrong := agentTestCertificate(t, 99, time.Now().Add(90*24*time.Hour))
 	require.NoError(t, os.WriteFile(certificate.FileConfig.Chain.Path, []byte(wrong.Certificate), 0600))
 	runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "active" })
+	chain, err := os.ReadFile(certificate.FileConfig.Chain.Path)
+	require.NoError(t, err)
+	assert.Equal(t, old.CertificateChain, string(chain))
+	assert.Zero(t, backend.issueCalls.Load())
+	assert.Never(t, func() bool { _, err := os.Stat(hookOutput); return err == nil }, 200*time.Millisecond, 10*time.Millisecond)
+}
+
+func TestManagedCertificateDoesNotEraseChainWhenBundleIsEmpty(t *testing.T) {
+	certificate := agentTestConfig(t)
+	old := agentTestCertificate(t, 1, time.Now().Add(90*24*time.Hour))
+	backend := newAgentTestAPI(t, old, agentTestCertificate(t, 2, time.Now().Add(90*24*time.Hour)))
+	seedAgentCertificate(t, certificate, old, true)
+	backend.missingChain.Store(true)
+	runAgentMonitor(t, certificate, func(manager *AgentManager) bool { return manager.certificateStates[1].Status == "failed" })
 	chain, err := os.ReadFile(certificate.FileConfig.Chain.Path)
 	require.NoError(t, err)
 	assert.Equal(t, old.CertificateChain, string(chain))
