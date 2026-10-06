@@ -265,19 +265,31 @@ func TestResumeCertificateFromDisk_IssuesWhenCertificateHasExpired(t *testing.T)
 	assert.False(t, tm.resumeCertificateFromDisk(1, cfg))
 }
 
-func TestResumeCertificateFromDisk_IssuesCSRCertificateWithinRenewalWindow(t *testing.T) {
-	cfg := newResumeTestConfig(t.TempDir())
-	cfg.CSR = "-----BEGIN CERTIFICATE REQUEST-----"
-	notAfter := time.Now().Add(10 * 24 * time.Hour)
-	deliverCertificate(t, cfg, 0x1234, notAfter)
+// CSR-based certificates are never renewed while the agent runs, so they keep being
+// issued on every start instead of resumed, and no state is saved for them.
+func TestResumeCertificateFromDisk_NeverResumesCSRCertificates(t *testing.T) {
+	for name, setCSR := range map[string]func(cfg *AgentCertificateConfig){
+		"csr":      func(cfg *AgentCertificateConfig) { cfg.CSR = "-----BEGIN CERTIFICATE REQUEST-----" },
+		"csr-path": func(cfg *AgentCertificateConfig) { cfg.CSRPath = "./request.csr" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := newResumeTestConfig(t.TempDir())
+			setCSR(cfg)
+			notAfter := time.Now().Add(80 * 24 * time.Hour)
+			deliverCertificate(t, cfg, 0x1234, notAfter)
 
-	server := &resumeTestServer{status: "active", serial: "1234", notAfter: notAfter}
-	server.start(t, nil)
+			_, err := os.Stat(certificateStateFilePath(cfg))
+			assert.True(t, os.IsNotExist(err), "no state file is saved for CSR certificates")
 
-	tm := newResumeTestManager(cfg)
-	assert.False(t, tm.resumeCertificateFromDisk(1, cfg))
-	assert.Zero(t, server.renewCalls)
-	assert.Equal(t, "pending", tm.certificateStates[1].Status)
+			server := &resumeTestServer{status: "active", serial: "1234", notAfter: notAfter}
+			server.start(t, nil)
+
+			tm := newResumeTestManager(cfg)
+			assert.False(t, tm.resumeCertificateFromDisk(1, cfg))
+			assert.Zero(t, server.renewCalls)
+			assert.Equal(t, "pending", tm.certificateStates[1].Status)
+		})
+	}
 }
 
 func TestResumeCertificateFromDisk_IssuesWhenInfisicalReturnsADifferentCertificate(t *testing.T) {

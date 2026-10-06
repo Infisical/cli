@@ -150,10 +150,22 @@ func readCertificateStateFile(certConfig *AgentCertificateConfig) (*certificateS
 	return &record, nil
 }
 
+// resumesOnRestart reports whether the agent saves state for this certificate and picks it
+// back up on restart. Certificates distributed by certificate-id are fetched, not issued.
+// CSR-based certificates are left out because the agent never renews them while running,
+// so issuing on every start is what keeps them from expiring.
+func (c *AgentCertificateConfig) resumesOnRestart() bool {
+	return !c.HasCertificateID() && c.CSR == "" && c.CSRPath == ""
+}
+
 // resumeCertificateFromDisk adopts the certificate already on disk when it is still the
 // one Infisical issued for this config and is active. It returns false when the agent
 // should issue a new certificate instead.
 func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig *AgentCertificateConfig) bool {
+	if !certConfig.resumesOnRestart() {
+		return false
+	}
+
 	displayName := tm.getCertificateDisplayName(certificateId, certConfig)
 
 	record, err := readCertificateStateFile(certConfig)
@@ -220,14 +232,6 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 	if !tm.ShouldRenewCertificate(certificateId) {
 		log.Info().Str("Certificate", displayName).Str("serial", state.SerialNumber).Time("expires", state.ExpiresAt).Msg("resuming management of the existing certificate on disk")
 		return true
-	}
-
-	// The agent never renews CSR-based certificates, so a fresh issuance is the
-	// only way to replace one that has entered its renewal window.
-	if certConfig.CSR != "" || certConfig.CSRPath != "" {
-		state.Status = "pending"
-		log.Info().Str("Certificate", displayName).Msg("certificate on disk is within its renewal window; issuing a new certificate")
-		return false
 	}
 
 	log.Info().Str("Certificate", displayName).Msg("certificate on disk is within its renewal window; renewing")

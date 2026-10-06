@@ -2911,7 +2911,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 
 	// Drop the resume record before touching any output, so a write that fails or is
 	// interrupted partway can never leave a record describing files that were replaced.
-	if !certificate.HasCertificateID() {
+	if certificate.resumesOnRestart() {
 		if err := removeCertificateStateFile(certificate); err != nil {
 			return fmt.Errorf("failed to remove saved certificate state %s: %v", certificateStateFilePath(certificate), err)
 		}
@@ -2949,7 +2949,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		writtenFiles[chainPath] = contentHash(response.Certificate.CertificateChain)
 	}
 
-	if !certificate.HasCertificateID() {
+	if certificate.resumesOnRestart() {
 		if err := writeCertificateStateFile(certificate, response.Certificate.CertificateID, response.Certificate.SerialNumber, writtenFiles); err != nil {
 			log.Warn().Str("path", certificateStateFilePath(certificate)).Msgf("failed to save certificate state; the agent will issue a new certificate on its next start: %v", err)
 		}
