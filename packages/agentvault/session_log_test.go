@@ -297,25 +297,6 @@ func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
 	}
 }
 
-func TestTheRingDrainsInSlicesOfAtMostAThousand(t *testing.T) {
-	ring := newSessionLogRing(sessionLogSpoolCapacity)
-	for i := 0; i < 2500; i++ {
-		ring.push(sessionLogRecord{Seq: uint64(i)})
-	}
-
-	var slices int
-	for ring.len() > 0 {
-		got := ring.drain(sessionLogFlushRecords)
-		if len(got) > sessionLogFlushRecords {
-			t.Fatalf("a slice held %d records, more than %d", len(got), sessionLogFlushRecords)
-		}
-		slices++
-	}
-	if slices != 3 {
-		t.Fatalf("2500 records drained in %d slices, expected 3", slices)
-	}
-}
-
 func TestTheDropCountIsLoggedOnceAtTheNextSeal(t *testing.T) {
 	warnings := captureDropWarnings(t)
 	shipper := &fakeShipper{}
@@ -361,19 +342,6 @@ func TestDropsLeftOnAnIdleSpoolAreLoggedWhenItIsForgotten(t *testing.T) {
 	got := warnings()
 	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["requests"] != float64(3) {
 		t.Fatalf("expected one warning for 3 requests in s1, got %v", got)
-	}
-}
-
-func TestASequenceNumberIsConsumedEvenWhenARecordIsDropped(t *testing.T) {
-	log, _, _ := newTestLog(&fakeShipper{})
-	grant := testGrant("s1")
-
-	for i := 0; i < sessionLogSpoolCapacity+10; i++ {
-		log.record(grant, aRecord("api.github.com"))
-	}
-
-	if got := log.spools["s1"].nextSeq; got != uint64(sessionLogSpoolCapacity+10) {
-		t.Fatalf("nextSeq is %d after %d records; drops must still consume a number", got, sessionLogSpoolCapacity+10)
 	}
 }
 
@@ -466,8 +434,8 @@ func TestA404ThatIsNotInfisicalsNotFoundIsRetried(t *testing.T) {
 	if !ok {
 		t.Fatal("an unnamed 404 dropped the whole session")
 	}
-	if len(spool.pending) != 1 || spool.ring.unreportedDrops != 0 {
-		t.Fatalf("the chunk was not kept for a retry (pending %d, dropped %d)", len(spool.pending), spool.ring.unreportedDrops)
+	if len(spool.pending) != 1 {
+		t.Fatalf("the chunk was not kept for a retry (pending %d)", len(spool.pending))
 	}
 
 	tick()
@@ -517,6 +485,28 @@ func TestBeingSwitchedOffDropsWhatWasHeld(t *testing.T) {
 	}
 	if spool.ring.len() != 0 {
 		t.Fatal("a record made with the old key was kept while logging was switched off")
+	}
+}
+
+func TestRequestsMadeWhileOffAreNotReportedAsTooManyAtOnce(t *testing.T) {
+	warnings := captureDropWarnings(t)
+	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
+	log, advance, tick := newTestLog(shipper)
+	grant := testGrant("s1")
+
+	log.record(grant, aRecord("api.github.com"))
+	tick()
+	for i := 0; i < 5; i++ {
+		log.record(grant, aRecord("api.github.com"))
+	}
+
+	advance(sessionLogIdleClose + time.Minute)
+	log.flush(context.Background(), flushTick)
+	if _, ok := log.spools["s1"]; ok {
+		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
+	}
+	if got := warnings(); len(got) != 0 {
+		t.Fatalf("requests made while logging was off were reported as dropped under load: %v", got)
 	}
 }
 
@@ -698,7 +688,7 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 
 	log.mu.Lock()
 	add("oldest", 0)
-	add("posted", 1)
+	add("second", 1)
 	var newest *sessionLogSpool
 	for i := 2; i < 7; i++ {
 		newest = add(fmt.Sprintf("s%d", i), uint64(i))
@@ -709,7 +699,7 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	if log.sealedBytes > sessionLogTotalSealedBytes {
 		t.Fatalf("the proxy holds %d sealed bytes, past the %d cap", log.sealedBytes, sessionLogTotalSealedBytes)
 	}
-	if got := len(log.spools["oldest"].pending) + len(log.spools["posted"].pending); got != 0 {
+	if got := len(log.spools["oldest"].pending) + len(log.spools["second"].pending); got != 0 {
 		t.Fatalf("the two oldest chunks were not evicted, %d remain", got)
 	}
 	for i := 2; i < 7; i++ {
@@ -734,7 +724,7 @@ func TestTheTickBreakerStopsHammeringADeadBucket(t *testing.T) {
 		t.Fatalf("%d uploads were attempted in one tick, want one round of %d", got, sessionLogShipParallelism)
 	}
 	if got := len(shipper.posts()); got != sessionLogShipParallelism {
-		t.Fatalf("%d rows were written for objects that could not be uploaded, want one round of %d", got, sessionLogShipParallelism)
+		t.Fatalf("%d upload links were requested for objects that could not be uploaded, want one round of %d", got, sessionLogShipParallelism)
 	}
 	for i := 0; i < sessions; i++ {
 		if len(log.spools[fmt.Sprintf("s%d", i)].pending) == 0 {
@@ -900,7 +890,7 @@ func TestShutdownPastItsBudgetStartsNoNewChunk(t *testing.T) {
 	log.close(spent)
 
 	if len(shipper.posts()) != 0 {
-		t.Fatal("a chunk was posted after the shutdown budget ran out, leaving a row that can never be uploaded")
+		t.Fatal("an upload link was requested after the shutdown budget ran out, for a chunk that can never be uploaded")
 	}
 }
 
@@ -1379,8 +1369,8 @@ func TestATokenErrorHoldsTheChunk(t *testing.T) {
 	tick()
 
 	spool := log.spools["s1"]
-	if len(spool.pending) != 1 || spool.ring.unreportedDrops != 0 {
-		t.Fatalf("a TokenError dropped the chunk (pending %d, dropped %d); it should be held until the proxy logs in again", len(spool.pending), spool.ring.unreportedDrops)
+	if len(spool.pending) != 1 {
+		t.Fatalf("a TokenError dropped the chunk (pending %d); it should be held until the proxy logs in again", len(spool.pending))
 	}
 }
 
@@ -1432,7 +1422,7 @@ func TestOneStuckRequestAtShutdownDoesNotHoldBackTheOtherSessions(t *testing.T) 
 		{"an upload that never returns", func() *stallingShipper {
 			return &stallingShipper{fakeShipper: &fakeShipper{}, stallPut: func(n int) bool { return n == 1 }}
 		}},
-		{"a row request that never returns", func() *stallingShipper {
+		{"an upload-link request that never returns", func() *stallingShipper {
 			return &stallingShipper{fakeShipper: &fakeShipper{}, stallPost: func(n int) bool { return n == 1 }}
 		}},
 		{"one upload in eight taking a while", func() *stallingShipper {

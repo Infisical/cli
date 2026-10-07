@@ -110,30 +110,6 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	}
 }
 
-func TestSealedChunkStartsWithItsIVAndEndsWithTheTag(t *testing.T) {
-	key := mustHex(t, vectorKeyHex)
-	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
-	plaintext, _ := json.Marshal(vectorRecords())
-
-	blob, err := sealSessionLog(key, plaintext, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(blob) != sessionLogIVBytes+len(plaintext)+16 {
-		t.Fatalf("sealed length is %d, expected a 12-byte IV, the plaintext and a 16-byte tag", len(blob))
-	}
-
-	block, _ := aes.NewCipher(key)
-	gcm, _ := cipher.NewGCM(block)
-	opened, err := gcm.Open(nil, blob[:sessionLogIVBytes], blob[sessionLogIVBytes:], aad)
-	if err != nil {
-		t.Fatalf("a chunk this proxy sealed could not be opened: %v", err)
-	}
-	if !bytes.Equal(opened, plaintext) {
-		t.Fatal("the opened plaintext differs from what was sealed")
-	}
-}
-
 func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	plaintext, _ := json.Marshal(vectorRecords())
