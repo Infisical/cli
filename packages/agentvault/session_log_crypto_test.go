@@ -23,6 +23,10 @@ const (
 	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6rCvRUkqg+3ST5GVMelW0mjOO"
 )
 
+// The uploaded object is IV ‖ ciphertext ‖ tag. The 12-byte IV encodes without padding, so the object's base64
+// is the two strings joined. The browser test pins the same object.
+const vectorBlob = vectorIVBase64 + vectorCiphertext
+
 var vectorContext = struct{ sessionID, chunkID string }{
 	sessionID: "sess-1",
 	chunkID:   "01a0a9c5-231d-7abc-8def-0123456789ab",
@@ -69,23 +73,20 @@ func TestSealMatchesTheBrowserVector(t *testing.T) {
 
 	iv := mustHex(t, vectorIVHex)
 	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
-	ciphertext, gotIV, err := sealSessionLogWithRand(bytes.NewReader(iv), mustHex(t, vectorKeyHex), plaintext, aad)
+	blob, err := sealSessionLogWithRand(bytes.NewReader(iv), mustHex(t, vectorKeyHex), plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if encodeSessionLogIV(gotIV) != vectorIVBase64 {
-		t.Fatalf("IV encodes as %q, the backend expects %q", encodeSessionLogIV(gotIV), vectorIVBase64)
-	}
-	if base64.StdEncoding.EncodeToString(ciphertext) != vectorCiphertext {
-		t.Fatal("the sealed bytes differ from the vector the browser opens")
+	if base64.StdEncoding.EncodeToString(blob) != vectorBlob {
+		t.Fatal("the sealed object differs from the vector the browser opens")
 	}
 }
 
 func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	key := make([]byte, 32)
 	spool := newSessionLogSpool(newSessionLogGrant("sess-1", key), time.Now())
-	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"), 0)
+	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,33 +98,34 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 		t.Fatalf("the digest is %d characters, the backend expects 43", len(chunk.meta.CiphertextSha256))
 	}
 
-	iv, err := base64.RawStdEncoding.DecodeString(chunk.meta.IV)
-	if err != nil {
-		t.Fatal(err)
+	if chunk.meta.CiphertextBytes != len(chunk.ciphertext) {
+		t.Fatalf("the chunk reports %d bytes, the object is %d", chunk.meta.CiphertextBytes, len(chunk.ciphertext))
 	}
+
+	iv, sealed := chunk.ciphertext[:sessionLogIVBytes], chunk.ciphertext[sessionLogIVBytes:]
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
-	if _, err := gcm.Open(nil, iv, chunk.ciphertext, buildSessionLogAAD("sess-1", chunk.meta.ChunkID)); err != nil {
+	if _, err := gcm.Open(nil, iv, sealed, buildSessionLogAAD("sess-1", chunk.meta.ChunkID)); err != nil {
 		t.Fatalf("the chunk does not open under its session and chunk ID: %v", err)
 	}
 }
 
-func TestSealedChunkOpensWithTheTagAppended(t *testing.T) {
+func TestSealedChunkStartsWithItsIVAndEndsWithTheTag(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
 	plaintext, _ := json.Marshal(vectorRecords())
 
-	ciphertext, iv, err := sealSessionLog(key, plaintext, aad)
+	blob, err := sealSessionLog(key, plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ciphertext) != len(plaintext)+16 {
-		t.Fatalf("sealed length is %d, expected the plaintext plus a 16-byte tag", len(ciphertext))
+	if len(blob) != sessionLogIVBytes+len(plaintext)+16 {
+		t.Fatalf("sealed length is %d, expected a 12-byte IV, the plaintext and a 16-byte tag", len(blob))
 	}
 
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
-	opened, err := gcm.Open(nil, iv, ciphertext, aad)
+	opened, err := gcm.Open(nil, blob[:sessionLogIVBytes], blob[sessionLogIVBytes:], aad)
 	if err != nil {
 		t.Fatalf("a chunk this proxy sealed could not be opened: %v", err)
 	}
@@ -136,10 +138,11 @@ func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	plaintext, _ := json.Marshal(vectorRecords())
 	aad := buildSessionLogAAD(vectorContext.sessionID, vectorContext.chunkID)
-	ciphertext, iv, err := sealSessionLog(key, plaintext, aad)
+	blob, err := sealSessionLog(key, plaintext, aad)
 	if err != nil {
 		t.Fatal(err)
 	}
+	iv, ciphertext := blob[:sessionLogIVBytes], blob[sessionLogIVBytes:]
 
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
@@ -161,13 +164,11 @@ func TestIVsDoNotRepeat(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	seen := make(map[string]bool, 256)
 	for i := 0; i < 256; i++ {
-		_, iv, err := sealSessionLog(key, []byte("[]"), nil)
+		blob, err := sealSessionLog(key, []byte("[]"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(iv) != sessionLogIVBytes {
-			t.Fatalf("IV is %d bytes, the contract is %d", len(iv), sessionLogIVBytes)
-		}
+		iv := blob[:sessionLogIVBytes]
 		if seen[string(iv)] {
 			t.Fatal("an IV repeated, which would void GCM's guarantees for this key")
 		}
@@ -189,7 +190,7 @@ func TestChunkIDsAreLowercaseUUIDv7sThatSortInMintOrder(t *testing.T) {
 		t.Fatalf("%q did not sort before %q", earlier, later)
 	}
 	if earlier != strings.ToLower(earlier) {
-		t.Fatalf("%q is not lowercase, which is how Infisical returns it and the browser rebuilds the AAD", earlier)
+		t.Fatalf("%q is not lowercase, which is how the browser rebuilds the AAD from the object name", earlier)
 	}
 	parsed, err := uuid.Parse(earlier)
 	if err != nil {

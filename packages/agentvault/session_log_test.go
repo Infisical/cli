@@ -20,8 +20,6 @@ type shipperCall struct {
 	url       string
 	bytes     int
 	records   int
-	iv        string
-	dropped   uint64
 	body      []byte
 	final     bool
 }
@@ -52,7 +50,7 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, records: req.RecordCount, iv: req.IV, dropped: req.DroppedCount, final: final})
+	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, records: req.RecordCount, final: final})
 
 	result := f.postDefault
 	if len(f.postResults) > 0 {
@@ -243,7 +241,7 @@ func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
 	}
 }
 
-func TestTheDropCountIsReportedOnceAndRidesTheFirstChunk(t *testing.T) {
+func TestTheDropCountIsLoggedOnceAtTheNextSeal(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)
 	grant := testGrant("s1")
@@ -258,7 +256,7 @@ func TestTheDropCountIsReportedOnceAndRidesTheFirstChunk(t *testing.T) {
 		t.Fatal("nothing was shipped")
 	}
 	if log.spools["s1"].ring.unreportedDrops != 0 {
-		t.Fatal("the drop count was not reset after being reported")
+		t.Fatal("the drop count was not reset after being logged")
 	}
 }
 
@@ -275,10 +273,11 @@ func TestASequenceNumberIsConsumedEvenWhenARecordIsDropped(t *testing.T) {
 	}
 }
 
-func TestTheProxyWideFuseDropsTheNewest(t *testing.T) {
+func TestTheProxyWideFuseDropsTheNewestAndCountsThem(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
-	for i := 0; i < sessionLogTotalCapacity/sessionLogSpoolCapacity+2; i++ {
+	sessions := sessionLogTotalCapacity/sessionLogSpoolCapacity + 2
+	for i := 0; i < sessions; i++ {
 		grant := testGrant(fmt.Sprintf("s%d", i))
 		for j := 0; j < sessionLogSpoolCapacity; j++ {
 			log.record(grant, aRecord("api.github.com"))
@@ -287,6 +286,13 @@ func TestTheProxyWideFuseDropsTheNewest(t *testing.T) {
 
 	if log.unsealedRecords > sessionLogTotalCapacity {
 		t.Fatalf("the proxy holds %d records, past the %d fuse", log.unsealedRecords, sessionLogTotalCapacity)
+	}
+	var counted uint64
+	for _, spool := range log.spools {
+		counted += spool.ring.unreportedDrops
+	}
+	if want := uint64(sessions*sessionLogSpoolCapacity - sessionLogTotalCapacity); counted != want {
+		t.Fatalf("the fuse counted %d dropped requests, expected %d; nothing else reports them", counted, want)
 	}
 }
 
@@ -406,7 +412,7 @@ func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
 	}
 }
 
-func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
+func TestBeingSwitchedOffDropsWhatWasHeld(t *testing.T) {
 	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
@@ -420,9 +426,6 @@ func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
 		t.Fatalf("switched off=%v, pending=%d, ring=%d; expected everything held to be dropped",
 			log.hold.off, len(spool.pending), spool.ring.len())
 	}
-	if spool.ring.unreportedDrops != 2 {
-		t.Fatalf("%d records were counted as dropped, expected 2", spool.ring.unreportedDrops)
-	}
 	if log.unsealedRecords != 0 || log.sealedBytes != 0 {
 		t.Fatalf("totals not restored: records=%d sealed bytes=%d", log.unsealedRecords, log.sealedBytes)
 	}
@@ -432,8 +435,8 @@ func TestBeingSwitchedOffDropsWhatWasHeldAndCountsIt(t *testing.T) {
 	if len(shipper.posts()) != 1 {
 		t.Fatal("the proxy kept sending while logging was switched off")
 	}
-	if spool.ring.unreportedDrops != 3 {
-		t.Fatalf("a record made with the old key was not counted as dropped, got %d", spool.ring.unreportedDrops)
+	if spool.ring.len() != 0 {
+		t.Fatal("a record made with the old key was kept while logging was switched off")
 	}
 }
 
@@ -454,9 +457,6 @@ func TestAKeyIssuedAfterTheSwitchOffResumesRecordingAtOnce(t *testing.T) {
 	if len(posts) != 2 || len(shipper.puts()) != 1 {
 		t.Fatalf("posts=%d uploads=%d, expected the new record to ship", len(posts), len(shipper.puts()))
 	}
-	if posts[1].dropped != 1 {
-		t.Fatalf("the chunk after the switch-off carried %d dropped, expected 1", posts[1].dropped)
-	}
 }
 
 func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
@@ -469,45 +469,6 @@ func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
 
 	if log.hold.off || log.spools["s1"].ring.len() != 1 {
 		t.Fatal("a refusal sent before a newer key was issued still dropped what was held")
-	}
-}
-
-func TestDropsAreStillReportedAfterAnIdleSpoolIsForgotten(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
-	log, advance, tick := newTestLog(shipper)
-
-	log.record(testGrant("s1"), aRecord("api.github.com"))
-	tick()
-
-	advance(sessionLogIdleClose + time.Minute)
-	log.flush(context.Background(), flushTick)
-	if _, ok := log.spools["s1"]; ok {
-		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
-	}
-
-	log.record(testGrant("s1"), aRecord("api.github.com"))
-	tick()
-
-	posts := shipper.posts()
-	if len(posts) != 2 || posts[1].dropped != 1 {
-		t.Fatalf("posts were %+v, expected the drop to survive the spool being forgotten", posts)
-	}
-}
-
-func TestRecordsArePausedAsCountedGapsNotSilentLosses(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogCeilingReachedName)}}}
-	log, _, tick := newTestLog(shipper)
-	grant := testGrant("s1")
-
-	log.record(grant, aRecord("api.github.com"))
-	tick()
-
-	before := log.spools["s1"].ring.unreportedDrops
-	for i := 0; i < 5; i++ {
-		log.record(grant, aRecord("api.github.com"))
-	}
-	if got := log.spools["s1"].ring.unreportedDrops - before; got != 5 {
-		t.Fatalf("%d records were counted as dropped while paused, expected 5", got)
 	}
 }
 
@@ -529,22 +490,7 @@ func TestAPoisonChunkIsDroppedAndTheRestShip(t *testing.T) {
 	}
 }
 
-func TestARefusedChunkIsCountedOnTheNextOne(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusUnprocessableEntity, "")}}}
-	log, _, tick := newTestLog(shipper)
-
-	log.record(testGrant("s1"), aRecord("api.github.com"))
-	tick()
-	log.record(testGrant("s1"), aRecord("api.github.com"))
-	tick()
-
-	posts := shipper.posts()
-	if len(posts) != 2 || posts[1].dropped != 1 {
-		t.Fatalf("posts were %+v, expected the second to carry one dropped record", posts)
-	}
-}
-
-func TestAClockSkewRefusalIsDroppedCountedAndLoggedOnce(t *testing.T) {
+func TestAClockSkewRefusalIsDroppedAndLoggedOnce(t *testing.T) {
 	skew := scriptedResult{err: apiErr(http.StatusBadRequest, sessionLogClockSkewName)}
 	shipper := &fakeShipper{postResults: []scriptedResult{skew, skew}}
 	log, _, tick := newTestLog(shipper)
@@ -564,8 +510,8 @@ func TestAClockSkewRefusalIsDroppedCountedAndLoggedOnce(t *testing.T) {
 	tick()
 
 	posts := shipper.posts()
-	if len(posts) != 3 || posts[2].dropped != 2 {
-		t.Fatalf("posts were %+v, expected the third to carry both refused records", posts)
+	if len(posts) != 3 {
+		t.Fatalf("posts were %+v, expected all three chunks to be sent", posts)
 	}
 	if log.clockSkewReported {
 		t.Fatal("an accepted chunk did not end the clock skew episode")
@@ -584,21 +530,16 @@ func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 	}
 	tick()
 
-	const gcmTag = 16
+	const overhead = sessionLogIVBytes + 16
 	pending := log.spools["s1"].pending
 	if len(pending) < 2 {
 		t.Fatalf("a ~12 MB flush sealed into %d chunk(s); it must be split", len(pending))
 	}
-	var next uint64
 	var total int
 	for i, chunk := range pending {
-		if chunk.meta.CiphertextBytes-gcmTag > sessionLogMaxChunkPlaintext {
-			t.Fatalf("chunk %d holds %d bytes of plaintext, over %d", i, chunk.meta.CiphertextBytes-gcmTag, sessionLogMaxChunkPlaintext)
+		if chunk.meta.CiphertextBytes-overhead > sessionLogMaxChunkPlaintext {
+			t.Fatalf("chunk %d holds %d bytes of plaintext, over %d", i, chunk.meta.CiphertextBytes-overhead, sessionLogMaxChunkPlaintext)
 		}
-		if chunk.meta.FirstSeq != next {
-			t.Fatalf("chunk %d starts at seq %d, expected %d; a record was lost or reordered", i, chunk.meta.FirstSeq, next)
-		}
-		next = chunk.meta.LastSeq + 1
 		total += chunk.meta.RecordCount
 	}
 	if total != sessionLogFlushRecords {
@@ -623,7 +564,7 @@ func TestARateLimitIsRetriedRatherThanTreatedAsPoison(t *testing.T) {
 	}
 }
 
-func TestThePendingCapEvictsTheOldestAndCountsIt(t *testing.T) {
+func TestThePendingCapEvictsTheOldest(t *testing.T) {
 	shipper := &fakeShipper{postDefault: scriptedResult{err: errors.New("infisical unreachable")}}
 	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
@@ -637,37 +578,33 @@ func TestThePendingCapEvictsTheOldestAndCountsIt(t *testing.T) {
 	if len(spool.pending) > sessionLogPendingChunks {
 		t.Fatalf("pending holds %d chunks, the cap is %d", len(spool.pending), sessionLogPendingChunks)
 	}
-	if spool.ring.unreportedDrops == 0 {
-		t.Fatal("evicted chunks were not counted as dropped records")
-	}
 }
 
 func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 	log, _, _ := newTestLog(&fakeShipper{})
 
 	blob := make([]byte, 12<<20)
-	add := func(sessionID string, order uint64, state chunkState, carried uint64) *sessionLogSpool {
+	add := func(sessionID string, order uint64) *sessionLogSpool {
 		spool, ok := log.spools[sessionID]
 		if !ok {
 			spool = newSessionLogSpool(testGrant(sessionID), log.now())
 			log.spools[sessionID] = spool
 		}
 		spool.pending = append(spool.pending, &sealedChunk{
-			meta:       api.CreateAgentVaultSessionLogChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100, DroppedCount: carried},
+			meta:       api.CreateAgentVaultSessionLogChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100},
 			ciphertext: blob,
 			sealOrder:  order,
-			state:      state,
 		})
 		log.sealedBytes += len(blob)
 		return spool
 	}
 
 	log.mu.Lock()
-	add("oldest", 0, chunkSealed, 7)
-	add("posted", 1, chunkPosted, 3)
+	add("oldest", 0)
+	add("posted", 1)
 	var newest *sessionLogSpool
 	for i := 2; i < 7; i++ {
-		newest = add(fmt.Sprintf("s%d", i), uint64(i), chunkSealed, 0)
+		newest = add(fmt.Sprintf("s%d", i), uint64(i))
 	}
 	log.enforcePendingCapsLocked(newest)
 	log.mu.Unlock()
@@ -682,12 +619,6 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 		if len(log.spools[fmt.Sprintf("s%d", i)].pending) != 1 {
 			t.Fatalf("s%d lost its chunk; only the oldest should go", i)
 		}
-	}
-	if got := log.spools["oldest"].ring.unreportedDrops; got != 107 {
-		t.Fatalf("the unposted chunk counted %d dropped, expected 107", got)
-	}
-	if got := log.spools["posted"].ring.unreportedDrops; got != 0 {
-		t.Fatalf("the posted chunk counted %d dropped, expected 0", got)
 	}
 }
 
@@ -882,7 +813,7 @@ func TestASessionThatIsGoneDoesNotReserveItsSequenceNumbers(t *testing.T) {
 	}
 }
 
-func TestRecordsLostToASealFailureAreStillCounted(t *testing.T) {
+func TestRecordsLostToASealFailureAreNotShipped(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, tick := newTestLog(shipper)
 
@@ -896,8 +827,8 @@ func TestRecordsLostToASealFailureAreStillCounted(t *testing.T) {
 	if spool == nil {
 		t.Fatal("the spool disappeared")
 	}
-	if spool.ring.unreportedDrops != 3 {
-		t.Fatalf("%d records were counted as dropped after a seal failure, expected 3", spool.ring.unreportedDrops)
+	if spool.ring.len() != 0 || len(spool.pending) != 0 {
+		t.Fatalf("records that failed to seal were kept (ring %d, pending %d)", spool.ring.len(), len(spool.pending))
 	}
 	if len(shipper.posts()) != 0 {
 		t.Fatal("a chunk was shipped despite the seal failing")
@@ -1047,8 +978,8 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 			}
 			continue
 		}
-		if len(spool.pending) != 0 || spool.ring.unreportedDrops != 1 {
-			t.Fatalf("%d: a refused chunk was not dropped and counted (pending %d, dropped %d)", tc.status, len(spool.pending), spool.ring.unreportedDrops)
+		if len(spool.pending) != 0 {
+			t.Fatalf("%d: a refused chunk was not dropped (pending %d)", tc.status, len(spool.pending))
 		}
 	}
 }
@@ -1158,15 +1089,12 @@ func TestAChunkSpansItsEarliestAndLatestRecordWhenTheClockSteps(t *testing.T) {
 	log.record(grant, aRecord("api.github.com"))
 
 	spool := log.spools["s1"]
-	chunk, err := spool.sealSlice(spool.ring.drain(3), []byte("[]"), 0)
+	chunk, err := spool.sealSlice(spool.ring.drain(3), []byte("[]"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if chunk.meta.StartedAt != "2026-09-16T10:00:00Z" || chunk.meta.EndedAt != "2026-09-16T10:00:00.1Z" {
 		t.Fatalf("the chunk spans %s to %s, expected the earliest and latest record", chunk.meta.StartedAt, chunk.meta.EndedAt)
-	}
-	if chunk.meta.FirstSeq != 0 || chunk.meta.LastSeq != 2 {
-		t.Fatalf("the chunk spans seq %d to %d, expected the first and last record", chunk.meta.FirstSeq, chunk.meta.LastSeq)
 	}
 }
 

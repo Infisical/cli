@@ -93,30 +93,14 @@ func (r *sessionLogRing) takeUnreportedDrops() uint64 {
 	return dropped
 }
 
-type chunkState int
-
-const (
-	chunkSealed chunkState = iota
-	chunkPosted
-)
-
 type sealedChunk struct {
 	meta       api.CreateAgentVaultSessionLogChunkRequest
 	ciphertext []byte
 	sealOrder  uint64
 
-	// uploadURL, urlExpires and state are guarded by the recorder's mu.
+	// uploadURL and urlExpires are guarded by the recorder's mu.
 	uploadURL  string
 	urlExpires time.Time
-	state      chunkState
-}
-
-// A posted chunk's row already reports its records and drops, so counting them here would double-report.
-func (c *sealedChunk) lostCount() uint64 {
-	if c.state == chunkPosted {
-		return 0
-	}
-	return c.meta.DroppedCount + uint64(c.meta.RecordCount)
 }
 
 type sessionLogSpool struct {
@@ -197,13 +181,13 @@ func packSessionLogRecords(records []sessionLogRecord) ([]sessionLogGroup, error
 	return groups, nil
 }
 
-func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte, dropped uint64) (*sealedChunk, error) {
+func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte) (*sealedChunk, error) {
 	chunkID, err := newSessionLogChunkID()
 	if err != nil {
 		return nil, err
 	}
 	aad := buildSessionLogAAD(s.sessionID, chunkID)
-	ciphertext, iv, err := sealSessionLog(s.key, plaintext, aad)
+	ciphertext, err := sealSessionLog(s.key, plaintext, aad)
 	if err != nil {
 		return nil, err
 	}
@@ -218,18 +202,13 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 			latest = rec
 		}
 	}
-	first, last := records[0], records[len(records)-1]
 	return &sealedChunk{
 		meta: api.CreateAgentVaultSessionLogChunkRequest{
 			ChunkID:          chunkID,
 			StartedAt:        earliest.Ts,
 			EndedAt:          latest.Ts,
-			FirstSeq:         first.Seq,
-			LastSeq:          last.Seq,
 			RecordCount:      len(records),
-			DroppedCount:     dropped,
 			CiphertextBytes:  len(ciphertext),
-			IV:               encodeSessionLogIV(iv),
 			CiphertextSha256: infisicalCiphertextSha256(ciphertext),
 		},
 		ciphertext: ciphertext,

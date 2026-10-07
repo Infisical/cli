@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -235,13 +234,10 @@ func TestAWholeRequestRoundTripsFromProxyToSealedChunk(t *testing.T) {
 		t.Fatal("the uploaded chunk contains readable record fields; it was not sealed")
 	}
 
-	iv, err := base64.RawStdEncoding.DecodeString(posts[0].iv)
-	if err != nil {
-		t.Fatal(err)
-	}
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
-	plaintext, err := gcm.Open(nil, iv, puts[0].body, buildSessionLogAAD("s1", posts[0].chunkID))
+	iv, sealed := puts[0].body[:sessionLogIVBytes], puts[0].body[sessionLogIVBytes:]
+	plaintext, err := gcm.Open(nil, iv, sealed, buildSessionLogAAD("s1", posts[0].chunkID))
 	if err != nil {
 		t.Fatalf("the uploaded chunk does not open with the session key and its AAD: %v", err)
 	}
