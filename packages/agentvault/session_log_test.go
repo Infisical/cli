@@ -872,68 +872,6 @@ func TestEveryRecordCarriesTheProxyAndATimestamp(t *testing.T) {
 	}
 }
 
-func TestSequenceNumbersSurviveASpoolBeingForgotten(t *testing.T) {
-	shipper := &fakeShipper{}
-	log, advance, tick := newTestLog(shipper)
-	grant := testGrant("s1")
-
-	log.record(grant, aRecord("api.github.com"))
-	log.record(grant, aRecord("api.github.com"))
-	tick()
-
-	advance(sessionLogIdleClose + time.Minute)
-	log.flush(context.Background(), flushTick)
-	if _, ok := log.spools["s1"]; ok {
-		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
-	}
-
-	log.record(grant, aRecord("api.github.com"))
-	got := log.spools["s1"].ring.drain(1)[0]
-	if got.Seq != 2 {
-		t.Fatalf("seq restarted at %d after the spool was rebuilt, expected it to continue at 2", got.Seq)
-	}
-}
-
-func TestAFullForgottenListDropsOnlyTheLongestForgottenSession(t *testing.T) {
-	log, _, _ := newTestLog(&fakeShipper{})
-	now := log.now()
-	log.forgotten.remember("oldest", forgottenSpool{nextSeq: 1})
-	for i := 1; i < sessionLogForgottenCapacity; i++ {
-		log.forgotten.remember(fmt.Sprintf("s%d", i), forgottenSpool{nextSeq: 1})
-	}
-
-	spool := newSessionLogSpool(testGrant("newest"), now)
-	log.spools["newest"] = spool
-	log.mu.Lock()
-	log.forgetSpoolLocked("newest", spool)
-	log.mu.Unlock()
-
-	if log.forgotten.len() != sessionLogForgottenCapacity {
-		t.Fatalf("the forgotten list holds %d sessions, want the cap of %d", log.forgotten.len(), sessionLogForgottenCapacity)
-	}
-	if _, ok := log.forgotten.byID["oldest"]; ok {
-		t.Fatal("the longest forgotten session was kept")
-	}
-	if _, ok := log.forgotten.byID["s1"]; !ok {
-		t.Fatal("a more recently forgotten session was evicted too")
-	}
-	if _, ok := log.forgotten.byID["newest"]; !ok {
-		t.Fatal("the session just forgotten was not kept")
-	}
-}
-
-func TestASessionThatIsGoneDoesNotReserveItsSequenceNumbers(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(http.StatusNotFound, infisicalNotFoundName)}}}
-	log, _, tick := newTestLog(shipper)
-
-	log.record(testGrant("s1"), aRecord("api.github.com"))
-	tick()
-
-	if _, ok := log.forgotten.byID["s1"]; ok {
-		t.Fatal("a session the server has forgotten is still holding a sequence number")
-	}
-}
-
 func TestRecordsLostToASealFailureAreNotShipped(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, tick := newTestLog(shipper)

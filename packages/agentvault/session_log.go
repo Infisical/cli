@@ -1,7 +1,6 @@
 package agentvault
 
 import (
-	"container/list"
 	"context"
 	"sort"
 	"sync"
@@ -18,11 +17,10 @@ const (
 	sessionLogFlushRecords      = 1000
 	sessionLogMaxChunkPlaintext = 4 << 20
 
-	sessionLogSpoolCapacity     = 5000                   // one session's ring; full: overwrite the oldest line, count it
-	sessionLogTotalCapacity     = 200_000                // all rings together; full: drop new lines, count them
-	sessionLogPendingChunks     = 10                     // one session's sealed chunks; full: drop the oldest, count it
-	sessionLogTotalSealedBytes  = 64 << 20               // all sealed chunks; full: drop the oldest chunk of any session
-	sessionLogForgottenCapacity = maxSessionCacheEntries // idle sessions remembered; full: forget the one forgotten longest
+	sessionLogSpoolCapacity    = 5000     // one session's ring; full: overwrite the oldest line, count it
+	sessionLogTotalCapacity    = 200_000  // all rings together; full: drop new lines, count them
+	sessionLogPendingChunks    = 10       // one session's sealed chunks; full: drop the oldest, log it
+	sessionLogTotalSealedBytes = 64 << 20 // all sealed chunks; full: drop the oldest chunk of any session
 
 	sessionLogIdleClose = 15 * time.Minute
 
@@ -54,52 +52,6 @@ func grantIssuedSince(snapshot uint64) bool { return sessionLogGrantsIssued.Load
 func newSessionLogGrant(sessionID string, key []byte) *sessionLogGrant {
 	return &sessionLogGrant{sessionID: sessionID, key: key, issued: sessionLogGrantsIssued.Add(1)}
 }
-
-type forgottenSpool struct {
-	nextSeq uint64
-}
-
-// Idle sessions in the order they were forgotten, so a full list drops the oldest without a scan.
-type forgottenSpools struct {
-	capacity int
-	order    *list.List // of forgottenEntry, oldest first
-	byID     map[string]*list.Element
-}
-
-type forgottenEntry struct {
-	sessionID string
-	spool     forgottenSpool
-}
-
-func newForgottenSpools(capacity int) *forgottenSpools {
-	return &forgottenSpools{capacity: capacity, order: list.New(), byID: make(map[string]*list.Element)}
-}
-
-func (f *forgottenSpools) remember(sessionID string, spool forgottenSpool) {
-	f.drop(sessionID)
-	if f.order.Len() >= f.capacity {
-		f.drop(f.order.Front().Value.(forgottenEntry).sessionID)
-	}
-	f.byID[sessionID] = f.order.PushBack(forgottenEntry{sessionID: sessionID, spool: spool})
-}
-
-func (f *forgottenSpools) take(sessionID string) (forgottenSpool, bool) {
-	el, ok := f.byID[sessionID]
-	if !ok {
-		return forgottenSpool{}, false
-	}
-	f.drop(sessionID)
-	return el.Value.(forgottenEntry).spool, true
-}
-
-func (f *forgottenSpools) drop(sessionID string) {
-	if el, ok := f.byID[sessionID]; ok {
-		f.order.Remove(el)
-		delete(f.byID, sessionID)
-	}
-}
-
-func (f *forgottenSpools) len() int { return f.order.Len() }
 
 type sessionLogShipper interface {
 	createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error)
@@ -154,8 +106,6 @@ type sessionLogRecorder struct {
 	mu     sync.Mutex
 	spools map[string]*sessionLogSpool
 
-	forgotten *forgottenSpools
-
 	unsealedRecords int
 	sealedBytes     int
 	nextSealOrder   uint64
@@ -169,12 +119,11 @@ type sessionLogRecorder struct {
 
 func newSessionLogRecorder(proxyID string, shipper sessionLogShipper) *sessionLogRecorder {
 	return &sessionLogRecorder{
-		proxyID:   proxyID,
-		shipper:   shipper,
-		now:       time.Now,
-		spools:    make(map[string]*sessionLogSpool),
-		forgotten: newForgottenSpools(sessionLogForgottenCapacity),
-		wake:      make(chan struct{}, 1),
+		proxyID: proxyID,
+		shipper: shipper,
+		now:     time.Now,
+		spools:  make(map[string]*sessionLogSpool),
+		wake:    make(chan struct{}, 1),
 	}
 }
 
@@ -192,9 +141,6 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	spool, ok := r.spools[g.sessionID]
 	if !ok {
 		spool = newSessionLogSpool(g, r.now())
-		if prior, ok := r.forgotten.take(g.sessionID); ok {
-			spool.nextSeq = prior.nextSeq
-		}
 		r.spools[g.sessionID] = spool
 	}
 
@@ -360,7 +306,6 @@ func (r *sessionLogRecorder) forgetIdleSpoolsLocked(now time.Time) {
 
 func (r *sessionLogRecorder) forgetSpoolLocked(sessionID string, spool *sessionLogSpool) {
 	logUnrecordedRequests(sessionID, spool.ring.takeUnreportedDrops())
-	r.forgotten.remember(sessionID, forgottenSpool{nextSeq: spool.nextSeq})
 	delete(r.spools, sessionID)
 }
 
