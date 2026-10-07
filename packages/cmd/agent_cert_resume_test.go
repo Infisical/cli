@@ -27,10 +27,10 @@ const resumeTestCertificateID = "cert-uuid-1"
 
 type resumeTestServer struct {
 	mu         sync.Mutex
-	id         string
 	status     string
 	serial     string
 	notAfter   time.Time
+	renewedBy  string
 	renewCalls int
 	issueCalls int
 }
@@ -45,14 +45,12 @@ func (s *resumeTestServer) start(t *testing.T, renewed *api.RenewCertificateResp
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/cert-manager/certificates/"):
 			var resp api.RetrieveCertificateResponse
 			resp.Certificate.ID = strings.TrimPrefix(r.URL.Path, "/v1/cert-manager/certificates/")
-			if s.id != "" {
-				resp.Certificate.ID = s.id
-			}
 			resp.Certificate.Status = s.status
 			resp.Certificate.SerialNumber = s.serial
 			resp.Certificate.CommonName = "example.com"
 			resp.Certificate.NotBefore = time.Now().Add(-time.Hour)
 			resp.Certificate.NotAfter = s.notAfter
+			resp.Certificate.RenewedByCertificateID = s.renewedBy
 			_ = json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/cert-manager/certificates/"+resumeTestCertificateID+"/renew":
 			s.renewCalls++
@@ -292,18 +290,6 @@ func TestResumeCertificateFromDisk_NeverResumesCSRCertificates(t *testing.T) {
 	}
 }
 
-func TestResumeCertificateFromDisk_IssuesWhenInfisicalReturnsADifferentCertificate(t *testing.T) {
-	cfg := newResumeTestConfig(t.TempDir())
-	notAfter := time.Now().Add(80 * 24 * time.Hour)
-	deliverCertificate(t, cfg, 0x1234, notAfter)
-
-	server := &resumeTestServer{id: "cert-uuid-other", status: "active", serial: "1234", notAfter: notAfter}
-	server.start(t, nil)
-
-	tm := newResumeTestManager(cfg)
-	assert.False(t, tm.resumeCertificateFromDisk(1, cfg))
-}
-
 func TestResumeCertificateFromDisk_ResumesWhenNoKeyOrChainWasIssued(t *testing.T) {
 	cfg := newResumeTestConfig(t.TempDir())
 	cfg.FileConfig.Chain.Path = filepath.Join(filepath.Dir(cfg.FileConfig.Certificate.Path), "chain.pem")
@@ -512,4 +498,20 @@ func TestResumeCertificateFromDisk_IssuesWhenOutputContentsChanged(t *testing.T)
 			assert.False(t, newResumeTestManager(cfg).resumeCertificateFromDisk(1, cfg))
 		})
 	}
+}
+
+// A certificate renewed outside the agent (or whose renewal the agent never saved) still
+// reports active, but Infisical won't renew it again, so it must not be resumed.
+func TestResumeCertificateFromDisk_IssuesWhenCertificateWasAlreadyRenewed(t *testing.T) {
+	cfg := newResumeTestConfig(t.TempDir())
+	notAfter := time.Now().Add(80 * 24 * time.Hour)
+	deliverCertificate(t, cfg, 0x1234, notAfter)
+
+	server := &resumeTestServer{status: "active", serial: "1234", notAfter: notAfter, renewedBy: "cert-uuid-2"}
+	server.start(t, nil)
+
+	tm := newResumeTestManager(cfg)
+	assert.False(t, tm.resumeCertificateFromDisk(1, cfg))
+	assert.Zero(t, server.renewCalls)
+	assert.Equal(t, "pending", tm.certificateStates[1].Status)
 }

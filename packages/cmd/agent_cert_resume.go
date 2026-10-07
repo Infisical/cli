@@ -204,7 +204,14 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 		return false
 	}
 
-	if existing.Certificate.ID != record.CertificateID || !serialEquals(serialOnDisk, existing.Certificate.SerialNumber) {
+	// A renewed certificate stays active until it expires, but Infisical refuses to renew it
+	// again, so resuming it would leave the agent unable to renew when the window comes.
+	if existing.Certificate.RenewedByCertificateID != "" {
+		log.Info().Str("Certificate", displayName).Str("renewedBy", existing.Certificate.RenewedByCertificateID).Msg("certificate on disk has already been renewed in Infisical; issuing a new certificate")
+		return false
+	}
+
+	if !serialEquals(serialOnDisk, existing.Certificate.SerialNumber) {
 		log.Info().Str("Certificate", displayName).Msg("certificate on disk does not match the one recorded in Infisical; issuing a new certificate")
 		return false
 	}
