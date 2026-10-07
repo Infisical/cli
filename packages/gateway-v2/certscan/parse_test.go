@@ -310,13 +310,13 @@ func TestPKCS12WithExcessiveKDFWorkSkipsTheLibraryDecoder(t *testing.T) {
 	if _, err := asn1.Unmarshal(pfx, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	parsed.MacData.Iterations = 1 << 40
+	parsed.MacData.Iterations = 1 << 30
 	patched, err := asn1.Marshal(parsed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pkcs12KDFWorkWithinLimit(patched) {
-		t.Fatal("expected a MAC with 2^40 iterations to exceed the KDF budget")
+		t.Fatal("expected a MAC with 2^30 iterations to exceed the KDF budget")
 	}
 	start := time.Now()
 	res := Parse(patched, nil)

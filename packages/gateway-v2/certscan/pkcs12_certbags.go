@@ -249,7 +249,8 @@ func pkcs12KDFWorkWithinLimit(data []byte) bool {
 		return false
 	}
 	budget := kdfBudget{remaining: maxKDFIterations}
-	if !budget.spend(2*pfx.MacData.Iterations, pfx.MacData.Iterations > 0) {
+	macIterations, macOK := pfx.MacData.Iterations, pfx.MacData.Iterations > 0
+	if !budget.spend(macIterations, macOK) || !budget.spend(macIterations, macOK) {
 		return false
 	}
 	authSafe, err := unwrapOctetString(pfx.AuthSafe.Content)

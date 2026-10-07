@@ -74,6 +74,8 @@ type scanner struct {
 	req        Request
 	retained   atomic.Int64
 	stopReads  context.CancelCauseFunc
+	claimedMu  sync.Mutex
+	claimed    map[string]bool
 	hasTimeout bool
 	sudo       bool
 	sudoPaths  map[string]bool
@@ -247,10 +249,11 @@ func runBounded(ctx context.Context, label string, count, limit int, work func(i
 }
 
 type readOutcome struct {
-	realPath string
-	data     []byte
-	status   FileStatus
-	parsed   ParseResult
+	duplicate bool
+	realPath  string
+	data      []byte
+	status    FileStatus
+	parsed    ParseResult
 }
 
 func classifyReadFailure(stderr []byte) FileStatus {
@@ -328,18 +331,42 @@ func (s *scanner) complete(p string, outcome readOutcome) readOutcome {
 		outcome.parsed = Parse(outcome.data, s.passwords[outcome.realPath])
 	}
 	outcome.data = nil
+	if !s.claimRealPath(outcome.realPath) {
+		return readOutcome{realPath: outcome.realPath, status: outcome.status, duplicate: true}
+	}
+	copies := map[*byte][]byte{}
 	retained := 0
 	for _, chain := range outcome.parsed.Chains {
-		for i, certificate := range chain.Certificates {
-			chain.Certificates[i] = bytes.Clone(certificate)
-			retained += len(certificate)
+		for _, certificate := range chain.Certificates {
+			if _, seen := copies[&certificate[0]]; !seen {
+				copies[&certificate[0]] = nil
+				retained += len(certificate)
+			}
 		}
 	}
 	if s.retained.Add(int64(retained)) > maxResponseBytes {
 		s.stopReads(errResponseFull)
 		return readOutcome{}
 	}
+	for _, chain := range outcome.parsed.Chains {
+		for i, certificate := range chain.Certificates {
+			if copies[&certificate[0]] == nil {
+				copies[&certificate[0]] = bytes.Clone(certificate)
+			}
+			chain.Certificates[i] = copies[&certificate[0]]
+		}
+	}
 	return outcome
+}
+
+func (s *scanner) claimRealPath(realPath string) bool {
+	s.claimedMu.Lock()
+	defer s.claimedMu.Unlock()
+	if s.claimed[realPath] {
+		return false
+	}
+	s.claimed[realPath] = true
+	return true
 }
 
 func (s *scanner) readAll(ctx context.Context, paths []string) []readOutcome {
@@ -386,7 +413,7 @@ func (r *Response) markTruncated(reason TruncatedReason) {
 }
 
 func Scan(ctx context.Context, runner Runner, req Request) (Response, error) {
-	s := &scanner{runner: runner, req: req, sudoPaths: map[string]bool{}, passwords: map[string]*string{}}
+	s := &scanner{runner: runner, req: req, sudoPaths: map[string]bool{}, passwords: map[string]*string{}, claimed: map[string]bool{}}
 	for _, kp := range req.KeystorePasswords {
 		s.passwords[kp.Path] = &kp.Password
 	}
@@ -423,6 +450,7 @@ func Scan(ctx context.Context, runner Runner, req Request) (Response, error) {
 
 	if len(resp.DeniedFolders) > maxDeniedFolders {
 		resp.DeniedFolders = resp.DeniedFolders[:maxDeniedFolders]
+		resp.markTruncated(TruncatedIncomplete)
 	}
 	seenRealPaths := make(map[string]bool)
 	size := 0
@@ -435,7 +463,7 @@ func Scan(ctx context.Context, runner Runner, req Request) (Response, error) {
 			resp.markTruncated(TruncatedTimeLimit)
 			continue
 		}
-		if seenRealPaths[outcome.realPath] {
+		if outcome.duplicate || seenRealPaths[outcome.realPath] {
 			continue
 		}
 

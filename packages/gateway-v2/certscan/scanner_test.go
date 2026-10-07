@@ -3,11 +3,14 @@ package certscan
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -774,5 +777,30 @@ func TestSkipFoldersAreMatchedLiterally(t *testing.T) {
 	command := buildFindCommand([]string{"/srv"}, []string{"/srv/app[1]"}, 4)
 	if !strings.Contains(command, `-path '/srv/app\[1]'`) {
 		t.Fatalf("expected an escaped skip folder, got %s", command)
+	}
+}
+
+func TestCompleteCopiesASharedIssuerOnce(t *testing.T) {
+	p := newTestPKI(t)
+	second := mustCert(t, &x509.Certificate{
+		SerialNumber: big.NewInt(4), Subject: pkix.Name{CommonName: "web.example.com"},
+		NotBefore: p.leaf.NotBefore, NotAfter: p.leaf.NotAfter, BasicConstraintsValid: true,
+	}, p.inter, &p.leafKey.PublicKey, p.interKey)
+	bundle := append(append(pemOf("CERTIFICATE", p.leaf.Raw), pemOf("CERTIFICATE", second.Raw)...), pemOf("CERTIFICATE", p.inter.Raw)...)
+
+	s := &scanner{req: Request{MaxFileSizeBytes: 1 << 20}, claimed: map[string]bool{}, stopReads: func(error) {}}
+	outcome := s.complete("/etc/ssl/bundle.pem", readOutcome{realPath: "/etc/ssl/bundle.pem", data: bundle, status: StatusOK})
+	chains := outcome.parsed.Chains
+	if len(chains) != 2 || len(chains[0].Certificates) != 2 || len(chains[1].Certificates) != 2 {
+		t.Fatalf("expected two leaf chains sharing the issuer, got %+v", chains)
+	}
+	if &chains[0].Certificates[1][0] != &chains[1].Certificates[1][0] {
+		t.Fatal("expected the shared issuer to be copied once")
+	}
+	if want := int64(len(p.leaf.Raw) + len(second.Raw) + len(p.inter.Raw)); s.retained.Load() != want {
+		t.Fatalf("expected %d retained bytes, got %d", want, s.retained.Load())
+	}
+	if alias := s.complete("/etc/ssl/alias.pem", readOutcome{realPath: "/etc/ssl/bundle.pem", data: bundle, status: StatusOK}); !alias.duplicate {
+		t.Fatal("expected a second path to the same file to be skipped")
 	}
 }
