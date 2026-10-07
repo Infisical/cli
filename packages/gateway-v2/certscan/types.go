@@ -22,6 +22,7 @@ const (
 	TruncatedMaxFiles     TruncatedReason = "maxFiles"
 	TruncatedResponseSize TruncatedReason = "responseSize"
 	TruncatedTimeLimit    TruncatedReason = "timeLimit"
+	TruncatedIncomplete   TruncatedReason = "incomplete"
 )
 
 type Format string

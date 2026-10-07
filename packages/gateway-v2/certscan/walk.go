@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -15,6 +16,8 @@ var certificatePatterns = []string{
 
 var pseudoFilesystems = []string{"/proc", "/sys", "/dev"}
 
+var findPatternEscaper = strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`, "[", `\[`)
+
 var findPermissionDenied = regexp.MustCompile(`find: [‘'"](.+?)[’'"]: Permission denied`)
 
 func buildFindCommand(roots, skips []string, depth int) string {
@@ -25,7 +28,10 @@ func buildFindCommand(roots, skips []string, depth int) string {
 		b.WriteString(util.ShellQuote(root))
 	}
 	fmt.Fprintf(&b, " -maxdepth %d \\(", depth)
-	pruned := append(append([]string{}, pseudoFilesystems...), skips...)
+	pruned := slices.Clone(pseudoFilesystems)
+	for _, skip := range skips {
+		pruned = append(pruned, findPatternEscaper.Replace(skip))
+	}
 	for i, p := range pruned {
 		if i > 0 {
 			b.WriteString(" -o")

@@ -76,8 +76,9 @@ func TestScanReadsRealFilesThroughTheHostShell(t *testing.T) {
 		byPath[f.Path] = f
 	}
 	want := map[string]FileStatus{cert: StatusOK, quoted: StatusOK, big: StatusTooLarge, missing: StatusNotFound}
-	if os.Geteuid() != 0 {
-		want[denied] = StatusAccessDenied
+	want[denied] = StatusAccessDenied
+	if os.Geteuid() == 0 || exec.Command("sudo", "-n", "true").Run() == nil {
+		want[denied] = StatusOK
 	}
 	for path, status := range want {
 		if byPath[path].Status != status {
@@ -91,7 +92,7 @@ func TestScanReadsRealFilesThroughTheHostShell(t *testing.T) {
 		t.Fatal("a symlink to a file already reported must not be reported again")
 	}
 	for _, c := range runner.commands {
-		if strings.Contains(c, "readlink -f -- '") {
+		if strings.Contains(c, "readlink -f -- '") && !strings.Contains(c, "sudo -n") {
 			t.Fatalf("expected the batch read to cover every readable file, got a per-file read %q", c)
 		}
 	}

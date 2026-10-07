@@ -80,6 +80,9 @@ func (s *scanner) readBatch(ctx context.Context, paths []string, batch []int, ou
 		return
 	}
 	parseReadBatch(res.Stdout, len(batch), func(j int, record batchRecord) {
+		if ctx.Err() != nil {
+			return
+		}
 		i := batch[j]
 		if !record.read {
 			status := classifyReadFailure([]byte(record.errText))

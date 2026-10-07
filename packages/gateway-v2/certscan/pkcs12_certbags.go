@@ -30,6 +30,8 @@ var (
 	oidAES256CBC                = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
 	oidCertBagType              = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 3}
 	oidX509CertificateType      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 22, 1}
+	oidPBMAC1                   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 14}
+	oidPKCS8ShroudedKeyBagType  = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 10, 1, 2}
 )
 
 var errUnsupportedPKCS12Encryption = errors.New("the keystore uses an encryption scheme that is not supported")
@@ -39,9 +41,26 @@ type p12ContentInfo struct {
 	Content     asn1.RawValue `asn1:"tag:0,explicit,optional"`
 }
 
+type p12DigestInfo struct {
+	Algorithm pkix.AlgorithmIdentifier
+	Digest    []byte
+}
+
+type p12MacData struct {
+	Mac        p12DigestInfo
+	MacSalt    []byte
+	Iterations int `asn1:"optional,default:1"`
+}
+
 type p12PFX struct {
 	Version  int
 	AuthSafe p12ContentInfo
+	MacData  p12MacData `asn1:"optional"`
+}
+
+type p12EncryptedPrivateKeyInfo struct {
+	Algorithm     pkix.AlgorithmIdentifier
+	EncryptedData []byte
 }
 
 type p12EncryptedContentInfo struct {
@@ -195,6 +214,82 @@ func certificatesFromSafeContents(der []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
+func kdfIterations(algorithm pkix.AlgorithmIdentifier) (int, bool) {
+	if algorithm.Algorithm.Equal(oidPBES2) {
+		var params p12PBES2Params
+		if _, err := asn1.Unmarshal(algorithm.Parameters.FullBytes, &params); err != nil {
+			return 0, false
+		}
+		var kdf p12PBKDF2Params
+		if _, err := asn1.Unmarshal(params.KeyDerivation.Parameters.FullBytes, &kdf); err != nil {
+			return 0, false
+		}
+		return kdf.Iterations, kdf.Iterations > 0
+	}
+	var params legacyPBEParams
+	if _, err := asn1.Unmarshal(algorithm.Parameters.FullBytes, &params); err != nil {
+		return 0, false
+	}
+	return params.Iterations, params.Iterations > 0
+}
+
+type kdfBudget struct{ remaining int }
+
+func (b *kdfBudget) spend(iterations int, ok bool) bool {
+	if !ok || iterations > b.remaining {
+		return false
+	}
+	b.remaining -= iterations
+	return true
+}
+
+func pkcs12KDFWorkWithinLimit(data []byte) bool {
+	var pfx p12PFX
+	if _, err := asn1.Unmarshal(data, &pfx); err != nil || pfx.MacData.Mac.Algorithm.Algorithm.Equal(oidPBMAC1) {
+		return false
+	}
+	budget := kdfBudget{remaining: maxKDFIterations}
+	if !budget.spend(2*pfx.MacData.Iterations, pfx.MacData.Iterations > 0) {
+		return false
+	}
+	authSafe, err := unwrapOctetString(pfx.AuthSafe.Content)
+	if err != nil {
+		return false
+	}
+	var contents []p12ContentInfo
+	if _, err := asn1.Unmarshal(authSafe, &contents); err != nil {
+		return false
+	}
+	for _, ci := range contents {
+		switch {
+		case ci.ContentType.Equal(oidEncryptedDataContentType):
+			var ed p12EncryptedData
+			if _, err := asn1.Unmarshal(ci.Content.Bytes, &ed); err != nil || !budget.spend(kdfIterations(ed.EncryptedContentInfo.Algorithm)) {
+				return false
+			}
+		case ci.ContentType.Equal(oidDataContentType):
+			safeContents, err := unwrapOctetString(ci.Content)
+			if err != nil {
+				return false
+			}
+			var bags []p12SafeBag
+			if _, err := asn1.Unmarshal(safeContents, &bags); err != nil {
+				return false
+			}
+			for _, bag := range bags {
+				if !bag.ID.Equal(oidPKCS8ShroudedKeyBagType) {
+					continue
+				}
+				var key p12EncryptedPrivateKeyInfo
+				if _, err := asn1.Unmarshal(bag.Value.Bytes, &key); err != nil || !budget.spend(kdfIterations(key.Algorithm)) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 func decodePKCS12CertificateBags(data []byte, password string) ([]*x509.Certificate, error) {
 	var pfx p12PFX
 	if _, err := asn1.Unmarshal(data, &pfx); err != nil {
@@ -212,6 +307,7 @@ func decodePKCS12CertificateBags(data []byte, password string) ([]*x509.Certific
 		return nil, err
 	}
 
+	budget := kdfBudget{remaining: maxKDFIterations}
 	var certs []*x509.Certificate
 	for _, ci := range contents {
 		var safeContents []byte
@@ -226,6 +322,9 @@ func decodePKCS12CertificateBags(data []byte, password string) ([]*x509.Certific
 				return nil, err
 			}
 			info := ed.EncryptedContentInfo
+			if !budget.spend(kdfIterations(info.Algorithm)) {
+				return nil, errUnsupportedPKCS12Encryption
+			}
 			decrypt := decryptLegacyPBE
 			if info.Algorithm.Algorithm.Equal(oidPBES2) {
 				decrypt = decryptPBES2

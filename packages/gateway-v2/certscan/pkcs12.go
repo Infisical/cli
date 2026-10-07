@@ -21,15 +21,17 @@ func parsePKCS12(data []byte, password *string) ParseResult {
 		secret = *password
 	}
 
-	_, leaf, caCerts, err := pkcs12.DecodeChain(data, secret)
-	if err == nil {
-		result.Status = StatusOK
-		result.Chains = chainFromOrdered(append([]*x509.Certificate{leaf}, caCerts...))
-		return result
-	}
-	if errors.Is(err, pkcs12.ErrIncorrectPassword) {
-		result.Status = passwordStatus(password)
-		return result
+	if pkcs12KDFWorkWithinLimit(data) {
+		_, leaf, caCerts, err := pkcs12.DecodeChain(data, secret)
+		if err == nil {
+			result.Status = StatusOK
+			result.Chains = chainFromOrdered(append([]*x509.Certificate{leaf}, caCerts...))
+			return result
+		}
+		if errors.Is(err, pkcs12.ErrIncorrectPassword) {
+			result.Status = passwordStatus(password)
+			return result
+		}
 	}
 
 	certs, bagErr := decodePKCS12CertificateBags(data, secret)

@@ -378,6 +378,7 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
+	software.sslmate.com/src/go-pkcs12 v0.7.3 // indirect
 	tags.cncf.io/container-device-interface v1.0.1 // indirect
 )
 

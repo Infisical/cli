@@ -141,14 +141,13 @@ func dialSSH(ctx context.Context, budget time.Duration, targetHost string, targe
 	if err != nil {
 		return nil, connectFailure(fmt.Errorf("failed to dial target SSH server: %w", err))
 	}
-	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	context.AfterFunc(ctx, func() { _ = conn.Close() })
 
 	clientConn, chans, reqs, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User:            env.Username,
 		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	})
-	stopClose()
 	if err != nil {
 		_ = conn.Close()
 		err = fmt.Errorf("failed to dial target SSH server: %w", err)

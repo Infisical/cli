@@ -5,6 +5,8 @@ import (
 	"crypto/x509"
 )
 
+const maxChainLength = 10
+
 func isCACert(c *x509.Certificate) bool {
 	if c.BasicConstraintsValid && !c.IsCA {
 		return false
@@ -68,7 +70,7 @@ func buildChains(certs []*x509.Certificate) []Chain {
 		chain := Chain{Kind: ChainKindLeaf, Certificates: [][]byte{cert.Raw}}
 		visited := map[int]bool{i: true}
 		current := cert
-		for !isSelfIssued(current) {
+		for !isSelfIssued(current) && len(chain.Certificates) < maxChainLength {
 			next := findIssuer(current, pool, visited)
 			if next == -1 {
 				break

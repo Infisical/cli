@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -38,7 +39,11 @@ const (
 	readTimeout         = 20 * time.Second
 	findOutputLimit     = 16 * 1024 * 1024
 	probeOutputLimit    = 64 * 1024
+	maxSudoListings     = 64
+	maxDeniedFolders    = 1000
 )
+
+var errResponseFull = errors.New("the scan found more certificate data than one response can hold")
 
 type RunResult struct {
 	Stdout    []byte
@@ -67,6 +72,8 @@ func Normalize(req *Request) error {
 type scanner struct {
 	runner     Runner
 	req        Request
+	retained   atomic.Int64
+	stopReads  context.CancelCauseFunc
 	hasTimeout bool
 	sudo       bool
 	sudoPaths  map[string]bool
@@ -84,8 +91,8 @@ func (s *scanner) commandPrefix(limit time.Duration, sudo bool) string {
 	return prefix
 }
 
-func (s *scanner) listFiles(ctx context.Context, command string) (RunResult, bool, error) {
-	res, err := s.run(ctx, command, findTimeout, findOutputLimit)
+func (s *scanner) listFiles(ctx context.Context, command string, outputLimit int) (RunResult, bool, error) {
+	res, err := s.run(ctx, command, findTimeout, outputLimit)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return res, true, nil
 	}
@@ -126,9 +133,13 @@ func (s *scanner) probe(ctx context.Context) (HostInfo, error) {
 
 func (s *scanner) find(ctx context.Context) ([]string, []string, TruncatedReason, error) {
 	command := s.commandPrefix(findTimeout, false) + buildFindCommand(s.req.SearchFolderPaths, s.req.SkipFolderPaths, s.req.MaxFolderDepth)
-	res, timedOut, err := s.listFiles(ctx, command)
+	res, timedOut, err := s.listFiles(ctx, command, findOutputLimit)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to list files: %w", err)
+	}
+	if !timedOut && res.ExitCode > 1 {
+		line, _, _ := strings.Cut(strings.TrimSpace(string(res.Stderr)), "\n")
+		return nil, nil, "", fmt.Errorf("failed to list files: exit code %d: %s", res.ExitCode, line)
 	}
 	paths := parseFindOutput(res.Stdout)
 	var reason TruncatedReason
@@ -144,12 +155,17 @@ func (s *scanner) find(ctx context.Context) ([]string, []string, TruncatedReason
 		return paths, denied, reason, nil
 	}
 
+	var stillDenied []string
+	if len(denied) > maxSudoListings {
+		stillDenied = denied[maxSudoListings:]
+		denied = denied[:maxSudoListings]
+	}
 	listings := make([]sudoListing, len(denied))
+	listingOutputLimit := findOutputLimit / len(denied)
 	runBounded(ctx, "listing a folder", len(denied), sudoFindConcurrency, func(i int) {
-		listings[i] = s.sudoListFolder(ctx, denied[i])
+		listings[i] = s.sudoListFolder(ctx, denied[i], listingOutputLimit)
 	}, nil)
 
-	var stillDenied []string
 	for _, listing := range listings {
 		if reason == "" && (!listing.ran || listing.timedOut) {
 			reason = TruncatedTimeLimit
@@ -161,6 +177,9 @@ func (s *scanner) find(ctx context.Context) ([]string, []string, TruncatedReason
 		if reason == "" && listing.truncated {
 			reason = TruncatedFileList
 		}
+		if reason == "" && listing.failed {
+			reason = TruncatedIncomplete
+		}
 		stillDenied = append(stillDenied, listing.denied...)
 	}
 	return paths, stillDenied, reason, nil
@@ -168,27 +187,30 @@ func (s *scanner) find(ctx context.Context) ([]string, []string, TruncatedReason
 
 type sudoListing struct {
 	ran       bool
+	failed    bool
 	timedOut  bool
 	truncated bool
 	paths     []string
 	denied    []string
 }
 
-func (s *scanner) sudoListFolder(ctx context.Context, folder string) sudoListing {
+func (s *scanner) sudoListFolder(ctx context.Context, folder string, outputLimit int) sudoListing {
 	depth := remainingDepth(folder, s.req.SearchFolderPaths, s.req.MaxFolderDepth)
 	if depth < 0 {
 		return sudoListing{ran: true}
 	}
 	command := s.commandPrefix(findTimeout, true) + buildFindCommand([]string{folder}, s.req.SkipFolderPaths, depth)
-	res, timedOut, err := s.listFiles(ctx, command)
+	res, timedOut, err := s.listFiles(ctx, command, outputLimit)
 	if err != nil {
 		log.Debug().Err(err).Str("folder", folder).Msg("certscan: sudo folder listing did not complete")
-		return sudoListing{ran: true}
+		return sudoListing{ran: true, failed: true}
 	}
 	listing := sudoListing{ran: true, timedOut: timedOut}
 	if res.ExitCode != 0 && len(res.Stdout) == 0 {
 		if classifyReadFailure(res.Stderr) == StatusAccessDenied {
 			listing.denied = []string{folder}
+		} else {
+			listing.failed = true
 		}
 		return listing
 	}
@@ -306,10 +328,23 @@ func (s *scanner) complete(p string, outcome readOutcome) readOutcome {
 		outcome.parsed = Parse(outcome.data, s.passwords[outcome.realPath])
 	}
 	outcome.data = nil
+	retained := 0
+	for _, chain := range outcome.parsed.Chains {
+		for i, certificate := range chain.Certificates {
+			chain.Certificates[i] = bytes.Clone(certificate)
+			retained += len(certificate)
+		}
+	}
+	if s.retained.Add(int64(retained)) > maxResponseBytes {
+		s.stopReads(errResponseFull)
+		return readOutcome{}
+	}
 	return outcome
 }
 
 func (s *scanner) readAll(ctx context.Context, paths []string) []readOutcome {
+	ctx, s.stopReads = context.WithCancelCause(ctx)
+	defer s.stopReads(nil)
 	outcomes := make([]readOutcome, len(paths))
 	escalate := make([]bool, len(paths))
 	batches := s.unprivilegedBatches(paths, readBatchSize)
@@ -382,9 +417,18 @@ func Scan(ctx context.Context, runner Runner, req Request) (Response, error) {
 	}
 
 	outcomes := s.readAll(ctx, unique)
+	if s.retained.Load() > maxResponseBytes {
+		resp.markTruncated(TruncatedResponseSize)
+	}
 
+	if len(resp.DeniedFolders) > maxDeniedFolders {
+		resp.DeniedFolders = resp.DeniedFolders[:maxDeniedFolders]
+	}
 	seenRealPaths := make(map[string]bool)
 	size := 0
+	for _, folder := range resp.DeniedFolders {
+		size += len(folder) + 4
+	}
 	for i, p := range unique {
 		outcome := outcomes[i]
 		if outcome.status == "" {

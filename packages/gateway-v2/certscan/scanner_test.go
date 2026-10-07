@@ -450,12 +450,14 @@ func TestScanSudoFindFailuresAreNotReportedAsDenied(t *testing.T) {
 			hook: func(context.Context) (RunResult, error) {
 				return RunResult{}, errors.New("ssh: session failed")
 			},
+			wantReason: TruncatedIncomplete,
 		},
 		{
 			name: "unrelated failure",
 			hook: func(context.Context) (RunResult, error) {
 				return RunResult{Stderr: []byte("find: memory exhausted"), ExitCode: 1}, nil
 			},
+			wantReason: TruncatedIncomplete,
 		},
 		{
 			name:       "deadline",
@@ -757,5 +759,20 @@ func TestScanListsDeniedFoldersConcurrentlyInFolderOrder(t *testing.T) {
 	}
 	if reason != "" {
 		t.Fatalf("unexpected truncation %q", reason)
+	}
+}
+
+func TestScanFailsWhenFindCannotRun(t *testing.T) {
+	runner := &fakeRunner{findErr: "sh: 1: find: not found\n", findExitCode: 127}
+	_, err := normalizedScan(t, context.Background(), runner, Request{SearchFolderPaths: []string{"/etc/ssl"}, MaxFolderDepth: 8, MaxFileSizeBytes: 1024})
+	if err == nil || !strings.Contains(err.Error(), "find: not found") {
+		t.Fatalf("expected the find failure, got %v", err)
+	}
+}
+
+func TestSkipFoldersAreMatchedLiterally(t *testing.T) {
+	command := buildFindCommand([]string{"/srv"}, []string{"/srv/app[1]"}, 4)
+	if !strings.Contains(command, `-path '/srv/app\[1]'`) {
+		t.Fatalf("expected an escaped skip folder, got %s", command)
 	}
 }

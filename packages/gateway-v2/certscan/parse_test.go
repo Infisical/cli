@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"math/big"
 	"testing"
@@ -293,5 +294,36 @@ func TestKeyOwningChainIsAlwaysLeaf(t *testing.T) {
 	chains := chainFromOrdered([]*x509.Certificate{p.inter, p.root})
 	if len(chains) != 1 || chains[0].Kind != ChainKindLeaf || len(chains[0].Certificates) != 2 {
 		t.Fatalf("unexpected chains %+v", chains)
+	}
+}
+
+func TestPKCS12WithExcessiveKDFWorkSkipsTheLibraryDecoder(t *testing.T) {
+	p := newTestPKI(t)
+	pfx, err := pkcs12.Modern.Encode(p.leafKey, p.leaf, []*x509.Certificate{p.inter}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pkcs12KDFWorkWithinLimit(pfx) {
+		t.Fatal("expected an ordinary keystore to fit the KDF budget")
+	}
+	var parsed p12PFX
+	if _, err := asn1.Unmarshal(pfx, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	parsed.MacData.Iterations = 1 << 40
+	patched, err := asn1.Marshal(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkcs12KDFWorkWithinLimit(patched) {
+		t.Fatal("expected a MAC with 2^40 iterations to exceed the KDF budget")
+	}
+	start := time.Now()
+	res := Parse(patched, nil)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("parsing took %s", elapsed)
+	}
+	if res.Status != StatusLocked {
+		t.Fatalf("expected locked, got %+v", res)
 	}
 }
