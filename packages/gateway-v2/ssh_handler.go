@@ -2,10 +2,14 @@ package gatewayv2
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/gateway-v2/certscan"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -102,53 +106,89 @@ func buildSSHExecAuth(env sshExecEnvelope, onAttempt func()) ([]ssh.AuthMethod, 
 	}
 }
 
-func doSSHExec(targetHost string, targetPort int, env sshExecEnvelope) (sshExecResult, error) {
+const (
+	sshExecMaxTimeout      = 14 * time.Minute
+	sshSessionDrainTimeout = 5 * time.Second
+)
+
+func sshCommandBudget(timeoutMs int, defaultTimeout time.Duration) time.Duration {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		return defaultTimeout
+	}
+	if timeout > sshExecMaxTimeout {
+		return sshExecMaxTimeout
+	}
+	return timeout
+}
+
+func dialSSH(ctx context.Context, budget time.Duration, targetHost string, targetPort int, env sshExecEnvelope) (client *ssh.Client, err error) {
+	defer func() {
+		deadline, ok := ctx.Deadline()
+		if err != nil && (errors.Is(ctx.Err(), context.DeadlineExceeded) || ok && !time.Now().Before(deadline)) {
+			err = connectFailure(fmt.Errorf("failed to dial target SSH server: timed out after %s", budget))
+		}
+	}()
 	credentialOffered := false
 	authMethods, err := buildSSHExecAuth(env, func() { credentialOffered = true })
 	if err != nil {
-		return sshExecResult{}, err
+		return nil, err
 	}
 
-	timeout := time.Duration(env.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = sshExecDefaultTimeout
+	addr := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, connectFailure(fmt.Errorf("failed to dial target SSH server: %w", err))
 	}
+	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
 
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", targetHost, targetPort), &ssh.ClientConfig{
+	clientConn, chans, reqs, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User:            env.Username,
 		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         timeout,
 	})
+	stopClose()
 	if err != nil {
+		_ = conn.Close()
 		err = fmt.Errorf("failed to dial target SSH server: %w", err)
 		if credentialOffered {
-			return sshExecResult{}, authFailure(err)
+			return nil, authFailure(err)
 		}
-		return sshExecResult{}, connectFailure(err)
+		return nil, connectFailure(err)
 	}
-	defer client.Close()
+	return ssh.NewClient(clientConn, chans, reqs), nil
+}
 
+func runSSHCommand(ctx context.Context, client *ssh.Client, command string, outputLimit int) (certscan.RunResult, error) {
 	sess, err := client.NewSession()
 	if err != nil {
-		return sshExecResult{}, fmt.Errorf("failed to open SSH session: %w", err)
+		return certscan.RunResult{}, fmt.Errorf("failed to open SSH session: %w", err)
 	}
 	defer sess.Close()
 
 	var stdout, stderr bytes.Buffer
-	stdoutW := &limitedWriter{buf: &stdout, limit: maxSshExecOutputBytes}
-	stderrW := &limitedWriter{buf: &stderr, limit: maxSshExecOutputBytes}
+	stdoutW := &limitedWriter{buf: &stdout, limit: outputLimit}
+	stderrW := &limitedWriter{buf: &stderr, limit: outputLimit}
 	sess.Stdout = stdoutW
 	sess.Stderr = stderrW
 
 	// sess.Run has no deadline of its own and the TLS connection deadline is a no-op, so bound the command here
 	done := make(chan error, 1)
-	go func() { done <- sess.Run(env.Command) }()
+	go func() { done <- sess.Run(command) }()
 	var runErr error
 	select {
 	case runErr = <-done:
-	case <-time.After(timeout):
-		return sshExecResult{}, fmt.Errorf("command timed out after %s", timeout)
+	case <-ctx.Done():
+		_ = sess.Signal(ssh.SIGKILL)
+		_ = sess.Close()
+		err := fmt.Errorf("command did not finish: %w", context.Cause(ctx))
+		select {
+		case <-done:
+			return certscan.RunResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Truncated: stdoutW.truncated || stderrW.truncated}, err
+		case <-time.After(sshSessionDrainTimeout):
+			return certscan.RunResult{}, err
+		}
 	}
 
 	exitCode := 0
@@ -157,16 +197,37 @@ func doSSHExec(targetHost string, targetPort int, env sshExecEnvelope) (sshExecR
 		if ok := asExitError(runErr, &exitErr); ok {
 			exitCode = exitErr.ExitStatus()
 		} else {
-			return sshExecResult{}, fmt.Errorf("failed to run command: %w", runErr)
+			return certscan.RunResult{}, fmt.Errorf("failed to run command: %w", runErr)
 		}
 	}
 
-	return sshExecResult{
-		Stdout:    stdout.String(),
-		Stderr:    stderr.String(),
+	return certscan.RunResult{
+		Stdout:    stdout.Bytes(),
+		Stderr:    stderr.Bytes(),
 		ExitCode:  exitCode,
 		Truncated: stdoutW.truncated || stderrW.truncated,
 	}, nil
+}
+
+func doSSHExec(ctx context.Context, targetHost string, targetPort int, env sshExecEnvelope) (sshExecResult, error) {
+	budget := sshCommandBudget(env.TimeoutMs, sshExecDefaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	client, err := dialSSH(ctx, budget, targetHost, targetPort, env)
+	if err != nil {
+		return sshExecResult{}, err
+	}
+	defer client.Close()
+
+	output, err := runSSHCommand(ctx, client, env.Command, maxSshExecOutputBytes)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return sshExecResult{}, fmt.Errorf("command timed out after %s", budget)
+	}
+	if err != nil {
+		return sshExecResult{}, err
+	}
+	return sshExecResult{string(output.Stdout), string(output.Stderr), output.ExitCode, output.Truncated}, nil
 }
 
 // limitedWriter caps captured output so a hostile or misbehaving target can't exhaust gateway memory

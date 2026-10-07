@@ -7,3 +7,5 @@ const CapabilitySessionLogMaskingBuiltInDetection = "sessionLogMaskingBuiltInDet
 const CapabilitySupportedAccountTypes = "supported_account_types"
 
 const CapabilityClickhouseNativeProtocol = "clickhouseNativeProtocol"
+
+const CapabilityCertificateScan = "certificateScan"
