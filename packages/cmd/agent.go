@@ -2733,7 +2733,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 
 		certData := api.CertificateData{
 			Certificate:   *response.Certificate,
-			CertificateID: state.CertificateRequestID,
+			CertificateID: *response.CertificateID,
 			SerialNumber:  *response.SerialNumber,
 		}
 		if response.IssuingCaCertificate != nil {
@@ -2831,22 +2831,35 @@ func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
 }
 
 func serialMatchesCertificateOnDisk(certConfig *AgentCertificateConfig, serialNumber string) bool {
-	if certConfig.FileConfig.Certificate.Path == "" || serialNumber == "" {
-		return false
+	onDisk, ok := serialOfCertificateOnDisk(certConfig)
+	return ok && serialEquals(onDisk, serialNumber)
+}
+
+func serialOfCertificateOnDisk(certConfig *AgentCertificateConfig) (*big.Int, bool) {
+	if certConfig.FileConfig.Certificate.Path == "" {
+		return nil, false
 	}
 
 	contents, err := os.ReadFile(certConfig.FileConfig.Certificate.Path)
 	if err != nil {
-		return false
+		return nil, false
 	}
 
 	block, _ := pem.Decode(contents)
 	if block == nil {
-		return false
+		return nil, false
 	}
 
 	parsed, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
+		return nil, false
+	}
+
+	return parsed.SerialNumber, true
+}
+
+func serialEquals(serial *big.Int, serialNumber string) bool {
+	if serialNumber == "" {
 		return false
 	}
 
@@ -2855,7 +2868,7 @@ func serialMatchesCertificateOnDisk(certConfig *AgentCertificateConfig, serialNu
 		return false
 	}
 
-	return parsed.SerialNumber.Cmp(expected) == 0
+	return serial.Cmp(expected) == 0
 }
 
 func (tm *AgentManager) WriteCertificateFiles(certificate *AgentCertificateConfig, response *api.CertificateResponse) error {
@@ -2885,24 +2898,36 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		return fmt.Errorf("certificate.path is required in file-output configuration")
 	}
 
-	if response.Certificate.PrivateKey != "" {
-		if privateKeyPath == "" {
-			return fmt.Errorf("private-key.path is required when private key is present")
+	if response.Certificate.PrivateKey != "" && privateKeyPath == "" {
+		return fmt.Errorf("private-key.path is required when private key is present")
+	}
+	if response.Certificate.PrivateKey == "" && privateKeyPath != "" && isReplacement {
+		if _, err := os.Stat(privateKeyPath); err == nil {
+			return fmt.Errorf(
+				"refusing to replace the certificate at %s: the new certificate has no private key in Infisical (expected for CSR or ACME issuance), so the existing key at %s would no longer match it. Remove 'private-key.path', or manage the key on this machine and reload the service yourself",
+				certificatePath, privateKeyPath)
 		}
+	}
+
+	// Drop the resume record before touching any output, so a write that fails or is
+	// interrupted partway can never leave a record describing files that were replaced.
+	if certificate.resumesOnRestart() {
+		if err := removeCertificateStateFile(certificate); err != nil {
+			return fmt.Errorf("failed to remove saved certificate state %s: %v", certificateStateFilePath(certificate), err)
+		}
+	}
+
+	writtenFiles := map[string]string{}
+
+	if response.Certificate.PrivateKey != "" {
 		if err := os.MkdirAll(path.Dir(privateKeyPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for private key %s: %v", privateKeyPath, err)
 		}
 		if err := ioutil.WriteFile(privateKeyPath, []byte(response.Certificate.PrivateKey), privateKeyPerms); err != nil {
 			return fmt.Errorf("failed to write private key to %s: %v", privateKeyPath, err)
 		}
+		writtenFiles[privateKeyPath] = contentHash(response.Certificate.PrivateKey)
 	} else if privateKeyPath != "" {
-		if isReplacement {
-			if _, err := os.Stat(privateKeyPath); err == nil {
-				return fmt.Errorf(
-					"refusing to replace the certificate at %s: the new certificate has no private key in Infisical (expected for CSR or ACME issuance), so the existing key at %s would no longer match it. Remove 'private-key.path', or manage the key on this machine and reload the service yourself",
-					certificatePath, privateKeyPath)
-			}
-		}
 		log.Warn().Str("path", privateKeyPath).Msg("private-key.path is configured but the certificate response does not include a private key (this is expected for certificates issued via ACME or stored without a private key); skipping private key file write")
 	}
 
@@ -2912,6 +2937,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), certificatePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
+	writtenFiles[certificatePath] = contentHash(response.Certificate.Certificate)
 
 	if response.Certificate.CertificateChain != "" && chainPath != "" {
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
@@ -2919,6 +2945,13 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		}
 		if err := ioutil.WriteFile(chainPath, []byte(response.Certificate.CertificateChain), chainPerms); err != nil {
 			return fmt.Errorf("failed to write certificate chain to %s: %v", chainPath, err)
+		}
+		writtenFiles[chainPath] = contentHash(response.Certificate.CertificateChain)
+	}
+
+	if certificate.resumesOnRestart() {
+		if err := writeCertificateStateFile(certificate, response.Certificate.CertificateID, response.Certificate.SerialNumber, writtenFiles); err != nil {
+			log.Warn().Str("path", certificateStateFilePath(certificate)).Msgf("failed to save certificate state; the agent will issue a new certificate on its next start: %v", err)
 		}
 	}
 
@@ -2974,6 +3007,9 @@ func (tm *AgentManager) MonitorCertificates(ctx context.Context) {
 				displayName := tm.getCertificateDisplayName(cert.ID, &cert.Certificate)
 				log.Error().Str("Certificate", displayName).Msgf("initial certificate fetch failed: %v", err)
 			}
+			continue
+		}
+		if tm.resumeCertificateFromDisk(cert.ID, &cert.Certificate) {
 			continue
 		}
 		if err := tm.IssueCertificate(cert.ID, &cert.Certificate); err != nil {
