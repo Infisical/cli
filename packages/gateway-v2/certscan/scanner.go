@@ -401,6 +401,9 @@ func estimateSize(file FileResult) int {
 	for _, chain := range file.Chains {
 		for _, certificate := range chain.Certificates {
 			size += base64.StdEncoding.EncodedLen(len(certificate)) + 4
+			if size > maxResponseBytes {
+				return size
+			}
 		}
 	}
 	return size

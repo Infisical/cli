@@ -804,3 +804,15 @@ func TestCompleteCopiesASharedIssuerOnce(t *testing.T) {
 		t.Fatal("expected a second path to the same file to be skipped")
 	}
 }
+
+func TestEstimateSizeStopsAtTheResponseCap(t *testing.T) {
+	issuer := make([]byte, 1<<20)
+	chains := make([]Chain, 1600)
+	for i := range chains {
+		chains[i] = Chain{Kind: ChainKindLeaf, Certificates: [][]byte{{0x30}, issuer}}
+	}
+	size := estimateSize(FileResult{Path: "/a.pem", RealPath: "/a.pem", ParseResult: ParseResult{Chains: chains}})
+	if size <= maxResponseBytes || size > 2*maxResponseBytes {
+		t.Fatalf("expected the estimate to stop just past the cap, got %d", size)
+	}
+}
