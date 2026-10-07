@@ -24,7 +24,6 @@ const (
 
 	sessionLogIdleClose = 15 * time.Minute
 
-	sessionLogPauseBackoff    = 15 * time.Minute
 	sessionLogPutTimeout      = 10 * time.Second
 	sessionLogFinalTimeout    = 3 * time.Second
 	sessionLogCloseTimeout    = 5 * time.Second
@@ -58,23 +57,17 @@ type sessionLogShipper interface {
 	putObject(ctx context.Context, url string, ciphertext []byte) error
 }
 
-// Being off or paused also drops new records, while an outage only holds them until the next retry.
+// Being off drops new records, while an outage only holds them until the next retry.
 type sessionLogHold struct {
 	off        bool
 	offThrough uint64
-
-	pausedUntil time.Time
 
 	s3Down        bool
 	infisicalDown bool
 }
 
-func (h *sessionLogHold) dropsRecords(now time.Time) bool {
-	return h.off || now.Before(h.pausedUntil)
-}
-
-func (h *sessionLogHold) canShip(now time.Time) bool {
-	return !h.dropsRecords(now) && !h.s3Down && !h.infisicalDown
+func (h *sessionLogHold) canShip() bool {
+	return !h.off && !h.s3Down && !h.infisicalDown
 }
 
 func (h *sessionLogHold) clearOutages() {
@@ -153,8 +146,8 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	rec.Ts = rec.at.UTC().Format(time.RFC3339Nano)
 	spool.lastRecordAt = now
 
-	if !r.admitLocked(g, now) {
-		// Off and paused say so when they start; the proxy-wide cap is only reported here.
+	if !r.admitLocked(g) {
+		// Switching off says so when it happens; the proxy-wide cap is only reported here.
 		if r.unsealedRecords >= sessionLogTotalCapacity {
 			spool.ring.unreportedDrops++
 		}
@@ -174,16 +167,13 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 }
 
 // Also switches recording back on when a grant issued after logs went off arrives.
-func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant, now time.Time) bool {
+func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant) bool {
 	if r.hold.off {
 		if g.issued <= r.hold.offThrough {
 			return false
 		}
 		r.hold.off = false
 		log.Info().Msg("agent-vault: session logs are back on, recording again")
-	}
-	if now.Before(r.hold.pausedUntil) {
-		return false
 	}
 	if r.unsealedRecords >= sessionLogTotalCapacity {
 		return false
@@ -500,7 +490,7 @@ func (res shipmentResult) shipped() bool {
 func (r *sessionLogRecorder) nextShipments(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, width int) []shipment {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.hold.canShip(r.now()) {
+	if !r.hold.canShip() {
 		return nil
 	}
 
@@ -624,10 +614,6 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).Int("records", lost).
 			Msg("agent-vault: Infisical no longer accepts session logs for this session, dropping what was held")
 
-	case chunkOrgFull:
-		r.pause()
-		log.Error().Err(err).Msg("agent-vault: session logs have reached their limit for this organization, retrying in 15m")
-
 	case chunkLoggingOff:
 		r.switchOff(grantsIssuedAtSend)
 
@@ -675,12 +661,6 @@ func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	}
 	r.hold.off = true
 	r.hold.offThrough = grantsIssuedAtSend
-}
-
-func (r *sessionLogRecorder) pause() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.hold.pausedUntil = r.now().Add(sessionLogPauseBackoff)
 }
 
 func (r *sessionLogRecorder) dropRefused(spool *sessionLogSpool, chunk *sealedChunk) {

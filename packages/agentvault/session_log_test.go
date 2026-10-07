@@ -492,30 +492,6 @@ func TestARejectedProxyTokenKeepsEverything(t *testing.T) {
 	}
 }
 
-func TestTheCeilingPausesTheWholeProxyAndLiftsAfterTheBackoff(t *testing.T) {
-	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogCeilingReachedName)}}}
-	log, advance, tick := newTestLog(shipper)
-
-	log.record(testGrant("s1"), aRecord("api.github.com"))
-	tick()
-
-	if !log.hold.dropsRecords(log.now()) || log.hold.off {
-		t.Fatal("expected a ceiling pause")
-	}
-
-	log.record(testGrant("s2"), aRecord("api.github.com"))
-	tick()
-	if len(shipper.posts()) != 1 {
-		t.Fatalf("a second session posted while paused; the pause is proxy-wide")
-	}
-
-	advance(sessionLogPauseBackoff + time.Second)
-	log.flush(context.Background(), flushTick)
-	if len(shipper.posts()) < 2 {
-		t.Fatal("nothing was retried after the pause lifted")
-	}
-}
-
 func TestBeingSwitchedOffDropsWhatWasHeld(t *testing.T) {
 	shipper := &fakeShipper{postResults: []scriptedResult{{err: apiErr(400, sessionLogDisabledName)}}}
 	log, _, tick := newTestLog(shipper)
