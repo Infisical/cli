@@ -96,6 +96,7 @@ func (r *sessionLogRing) takeUnreportedDrops() uint64 {
 type sealedChunk struct {
 	meta       api.CreateAgentVaultSessionLogChunkRequest
 	ciphertext []byte
+	records    int
 	sealOrder  uint64
 
 	// uploadURL and urlExpires are guarded by the recorder's mu.
@@ -129,7 +130,7 @@ func (s *sessionLogSpool) popPending() *sealedChunk {
 func (s *sessionLogSpool) heldRecords() int {
 	held := s.ring.len()
 	for _, chunk := range s.pending {
-		held += chunk.meta.RecordCount
+		held += chunk.records
 	}
 	return held
 }
@@ -192,12 +193,9 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 		return nil, err
 	}
 
-	// The wall clock can step, so the first and last records are not always the earliest and latest.
-	earliest, latest := records[0], records[0]
+	// The wall clock can step, so the last record is not always the latest.
+	latest := records[0]
 	for _, rec := range records[1:] {
-		if rec.at.Before(earliest.at) {
-			earliest = rec
-		}
 		if rec.at.After(latest.at) {
 			latest = rec
 		}
@@ -205,12 +203,11 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 	return &sealedChunk{
 		meta: api.CreateAgentVaultSessionLogChunkRequest{
 			ChunkID:          chunkID,
-			StartedAt:        earliest.Ts,
 			EndedAt:          latest.Ts,
-			RecordCount:      len(records),
 			CiphertextBytes:  len(ciphertext),
 			CiphertextSha256: infisicalCiphertextSha256(ciphertext),
 		},
 		ciphertext: ciphertext,
+		records:    len(records),
 	}, nil
 }

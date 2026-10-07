@@ -520,7 +520,7 @@ func (r *sessionLogRecorder) evictOldestLocked(spool *sessionLogSpool) {
 	log.Warn().
 		Str("sessionId", spool.sessionID).
 		Str("chunkId", oldest.meta.ChunkID).
-		Int("records", oldest.meta.RecordCount).
+		Int("records", oldest.records).
 		Msg("agent-vault: dropped an unshipped session log chunk, the buffer is full")
 }
 
@@ -698,7 +698,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 
 	case chunkRefused:
 		r.dropRefused(spool, chunk)
-		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.meta.RecordCount).
+		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.records).
 			Msg("agent-vault: Infisical refused a session log chunk, dropping it")
 
 	case chunkRetry:

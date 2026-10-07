@@ -25,7 +25,6 @@ type shipperCall struct {
 	chunkID   string
 	url       string
 	bytes     int
-	records   int
 	body      []byte
 	final     bool
 }
@@ -56,7 +55,8 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, records: req.RecordCount, final: final})
+	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, final: final})
+	post := len(f.calls) - 1
 
 	result := f.postDefault
 	if len(f.postResults) > 0 {
@@ -71,7 +71,41 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 		f.nextURL++
 		url = fmt.Sprintf("https://bucket.example/put/%d", f.nextURL)
 	}
+	f.calls[post].url = url
 	return api.CreateAgentVaultSessionLogChunkResponse{UploadURL: url, ExpiresInSeconds: 300}, nil
+}
+
+// Opens each upload with the test key and counts the records in it, in upload order.
+func (f *fakeShipper) uploadedRecordCounts(t *testing.T) []int {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	posted := make(map[string]shipperCall)
+	for _, call := range f.calls {
+		if call.kind == "post" {
+			posted[call.url] = call
+		}
+	}
+	block, _ := aes.NewCipher(make([]byte, 32))
+	gcm, _ := cipher.NewGCM(block)
+	var counts []int
+	for _, call := range f.calls {
+		if call.kind != "put" {
+			continue
+		}
+		post := posted[call.url]
+		plaintext, err := gcm.Open(nil, call.body[:sessionLogIVBytes], call.body[sessionLogIVBytes:], buildSessionLogAAD(post.sessionID, post.chunkID))
+		if err != nil {
+			t.Fatalf("the upload to %s does not open: %v", call.url, err)
+		}
+		var records []sessionLogRecord
+		if err := json.Unmarshal(plaintext, &records); err != nil {
+			t.Fatalf("the upload to %s is not a record list: %v", call.url, err)
+		}
+		counts = append(counts, len(records))
+	}
+	return counts
 }
 
 func (f *fakeShipper) putObject(_ context.Context, url string, ciphertext []byte) error {
@@ -263,7 +297,7 @@ func TestTheRingKeepsItsOrderWhileItGrowsPastAWrap(t *testing.T) {
 	}
 }
 
-func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
+func TestTheRingDrainsInSlicesOfAtMostAThousand(t *testing.T) {
 	ring := newSessionLogRing(sessionLogSpoolCapacity)
 	for i := 0; i < 2500; i++ {
 		ring.push(sessionLogRecord{Seq: uint64(i)})
@@ -273,7 +307,7 @@ func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
 	for ring.len() > 0 {
 		got := ring.drain(sessionLogFlushRecords)
 		if len(got) > sessionLogFlushRecords {
-			t.Fatalf("a slice held %d records, the server's limit is %d", len(got), sessionLogFlushRecords)
+			t.Fatalf("a slice held %d records, more than %d", len(got), sessionLogFlushRecords)
 		}
 		slices++
 	}
@@ -677,8 +711,9 @@ func TestTheByteCapEvictsTheOldestChunkOnTheProxy(t *testing.T) {
 			log.spools[sessionID] = spool
 		}
 		spool.pending = append(spool.pending, &sealedChunk{
-			meta:       api.CreateAgentVaultSessionLogChunkRequest{ChunkID: fmt.Sprintf("c%d", order), RecordCount: 100},
+			meta:       api.CreateAgentVaultSessionLogChunkRequest{ChunkID: fmt.Sprintf("c%d", order)},
 			ciphertext: blob,
+			records:    100,
 			sealOrder:  order,
 		})
 		log.sealedBytes += len(blob)
@@ -1070,7 +1105,7 @@ func TestServerErrorsAreRetriedAndBadChunksAreDropped(t *testing.T) {
 	}
 }
 
-func TestTheRecorderShipsNoChunkOverTheServersRecordLimit(t *testing.T) {
+func TestAFlushShipsInSlicesOfAtMostAThousandRecords(t *testing.T) {
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)
 
@@ -1079,16 +1114,16 @@ func TestTheRecorderShipsNoChunkOverTheServersRecordLimit(t *testing.T) {
 	}
 	log.flush(context.Background(), flushFinal)
 
-	posts := shipper.posts()
-	if len(posts) != 3 {
-		t.Fatalf("2500 records shipped as %d chunks, expected 3", len(posts))
+	counts := shipper.uploadedRecordCounts(t)
+	if len(counts) != 3 {
+		t.Fatalf("2500 records shipped as %d chunks, expected 3", len(counts))
 	}
 	total := 0
-	for _, post := range posts {
-		if post.records > sessionLogFlushRecords {
-			t.Fatalf("a chunk carried %d records; the server refuses more than %d", post.records, sessionLogFlushRecords)
+	for _, records := range counts {
+		if records > sessionLogFlushRecords {
+			t.Fatalf("a chunk carried %d records, more than %d", records, sessionLogFlushRecords)
 		}
-		total += post.records
+		total += records
 	}
 	if total != 2500 {
 		t.Fatalf("the chunks carried %d records, expected 2500", total)
@@ -1163,7 +1198,7 @@ func TestShutdownWaitsForAFlushInProgressSoNoChunkShipsTwice(t *testing.T) {
 	}
 }
 
-func TestAChunkSpansItsEarliestAndLatestRecordWhenTheClockSteps(t *testing.T) {
+func TestAChunkEndsAtItsLatestRecordWhenTheClockSteps(t *testing.T) {
 	log, advance, _ := newTestLog(&fakeShipper{})
 	grant := testGrant("s1")
 
@@ -1179,8 +1214,8 @@ func TestAChunkSpansItsEarliestAndLatestRecordWhenTheClockSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chunk.meta.StartedAt != "2026-09-16T10:00:00Z" || chunk.meta.EndedAt != "2026-09-16T10:00:00.1Z" {
-		t.Fatalf("the chunk spans %s to %s, expected the earliest and latest record", chunk.meta.StartedAt, chunk.meta.EndedAt)
+	if chunk.meta.EndedAt != "2026-09-16T10:00:00.1Z" {
+		t.Fatalf("the chunk ends at %s, expected the latest record", chunk.meta.EndedAt)
 	}
 }
 
@@ -1316,9 +1351,9 @@ func TestRequestsArrivingDuringAPassWaitForTheNext(t *testing.T) {
 	}
 	tick()
 
-	posts := shipper.posts()
-	if len(posts) != 1 || posts[0].records != 10 {
-		t.Fatalf("the pass sent %d chunks, want one with the 10 records it started with", len(posts))
+	counts := shipper.uploadedRecordCounts(t)
+	if len(counts) != 1 || counts[0] != 10 {
+		t.Fatalf("the pass uploaded chunks holding %v records, want one with the 10 it started with", counts)
 	}
 	if got := log.spools["s1"].ring.len(); got != 1 {
 		t.Fatalf("the ring holds %d records, want the 1 that arrived during the upload", got)

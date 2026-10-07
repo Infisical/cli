@@ -245,8 +245,8 @@ func TestAWholeRequestRoundTripsFromProxyToSealedChunk(t *testing.T) {
 	if err := json.Unmarshal(plaintext, &records); err != nil {
 		t.Fatalf("the opened chunk is not a JSON record list: %v", err)
 	}
-	if len(records) != 3 || posts[0].records != 3 {
-		t.Fatalf("the chunk holds %d records and declares %d, expected 3", len(records), posts[0].records)
+	if len(records) != 3 {
+		t.Fatalf("the chunk holds %d records, expected 3", len(records))
 	}
 	for i, record := range records {
 		if want := fmt.Sprintf("/v1/thing/%d", i); record.Path != want || record.Decision != decisionPassthrough {
