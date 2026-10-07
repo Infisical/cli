@@ -1,7 +1,11 @@
 package agentvault
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +15,8 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 )
 
 type shipperCall struct {
@@ -146,6 +152,41 @@ func newTestLog(shipper sessionLogShipper) (log *sessionLogRecorder, advance fun
 	return log, advance, tick
 }
 
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// Captures the proxy's log for the rest of the test and returns the drop warnings written so far.
+func captureDropWarnings(t *testing.T) func() []map[string]any {
+	t.Helper()
+	out := &lockedBuffer{}
+	restore := zlog.Logger
+	zlog.Logger = zerolog.New(out)
+	t.Cleanup(func() { zlog.Logger = restore })
+	return func() []map[string]any {
+		out.mu.Lock()
+		defer out.mu.Unlock()
+		var warnings []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(out.buf.String()), "\n") {
+			var entry map[string]any
+			if json.Unmarshal([]byte(line), &entry) != nil {
+				continue
+			}
+			if entry["level"] == "warn" && strings.Contains(fmt.Sprint(entry["message"]), "weren't recorded") {
+				warnings = append(warnings, entry)
+			}
+		}
+		return warnings
+	}
+}
+
 func aRecord(host string) sessionLogRecord {
 	return sessionLogRecord{Method: "GET", Host: host, Port: "443", Path: "/zen", Status: 200, Decision: decisionPassthrough}
 }
@@ -242,8 +283,9 @@ func TestTheRingDrainsInSlicesTheServerAccepts(t *testing.T) {
 }
 
 func TestTheDropCountIsLoggedOnceAtTheNextSeal(t *testing.T) {
+	warnings := captureDropWarnings(t)
 	shipper := &fakeShipper{}
-	log, _, _ := newTestLog(shipper)
+	log, _, tick := newTestLog(shipper)
 	grant := testGrant("s1")
 
 	for i := 0; i < sessionLogSpoolCapacity+50; i++ {
@@ -251,12 +293,40 @@ func TestTheDropCountIsLoggedOnceAtTheNextSeal(t *testing.T) {
 	}
 	log.flush(context.Background(), flushFinal)
 
-	posts := shipper.posts()
-	if len(posts) == 0 {
+	if len(shipper.posts()) == 0 {
 		t.Fatal("nothing was shipped")
 	}
-	if log.spools["s1"].ring.unreportedDrops != 0 {
-		t.Fatal("the drop count was not reset after being logged")
+	got := warnings()
+	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["requests"] != float64(50) {
+		t.Fatalf("expected one warning for 50 requests in s1, got %v", got)
+	}
+
+	log.record(grant, aRecord("api.github.com"))
+	tick()
+	if n := len(warnings()); n != 1 {
+		t.Fatalf("the drops were logged %d times; once is the only report they get", n)
+	}
+}
+
+func TestDropsLeftOnAnIdleSpoolAreLoggedWhenItIsForgotten(t *testing.T) {
+	warnings := captureDropWarnings(t)
+	log, advance, _ := newTestLog(&fakeShipper{})
+
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	log.flush(context.Background(), flushFinal)
+	log.mu.Lock()
+	log.spools["s1"].ring.unreportedDrops = 3
+	log.mu.Unlock()
+
+	advance(sessionLogIdleClose + time.Minute)
+	log.flush(context.Background(), flushTick)
+
+	if _, ok := log.spools["s1"]; ok {
+		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
+	}
+	got := warnings()
+	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["requests"] != float64(3) {
+		t.Fatalf("expected one warning for 3 requests in s1, got %v", got)
 	}
 }
 
@@ -535,15 +605,31 @@ func TestAFlushTooBigForOneChunkIsSplitBySize(t *testing.T) {
 	if len(pending) < 2 {
 		t.Fatalf("a ~12 MB flush sealed into %d chunk(s); it must be split", len(pending))
 	}
-	var total int
+	block, _ := aes.NewCipher(grant.key)
+	gcm, _ := cipher.NewGCM(block)
+	var next uint64
 	for i, chunk := range pending {
 		if chunk.meta.CiphertextBytes-overhead > sessionLogMaxChunkPlaintext {
 			t.Fatalf("chunk %d holds %d bytes of plaintext, over %d", i, chunk.meta.CiphertextBytes-overhead, sessionLogMaxChunkPlaintext)
 		}
-		total += chunk.meta.RecordCount
+		iv, sealed := chunk.ciphertext[:sessionLogIVBytes], chunk.ciphertext[sessionLogIVBytes:]
+		plaintext, err := gcm.Open(nil, iv, sealed, buildSessionLogAAD("s1", chunk.meta.ChunkID))
+		if err != nil {
+			t.Fatalf("chunk %d does not open: %v", i, err)
+		}
+		var records []sessionLogRecord
+		if err := json.Unmarshal(plaintext, &records); err != nil {
+			t.Fatalf("chunk %d is not a record list: %v", i, err)
+		}
+		for _, rec := range records {
+			if rec.Seq != next {
+				t.Fatalf("chunk %d has seq %d where %d was next; a record was lost, repeated or reordered", i, rec.Seq, next)
+			}
+			next++
+		}
 	}
-	if total != sessionLogFlushRecords {
-		t.Fatalf("the chunks hold %d records, expected %d", total, sessionLogFlushRecords)
+	if next != sessionLogFlushRecords {
+		t.Fatalf("the chunks hold %d records, expected %d", next, sessionLogFlushRecords)
 	}
 }
 
