@@ -409,7 +409,7 @@ func backupSecretsFileName(workspace string, environment string, secretsPath str
 	if expanded {
 		return fmt.Sprintf("project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
 	}
-	return fmt.Sprintf("project_secrets_%s_%s_%s_raw.json", workspace, environment, formattedPath)
+	return fmt.Sprintf("raw_project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
 }
 
 func WriteBackupSecrets(workspace string, environment string, secretsPath string, expanded bool, encryptionKey []byte, secrets []models.SingleEnvironmentVariable) error {
