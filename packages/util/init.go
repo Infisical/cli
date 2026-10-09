@@ -56,7 +56,7 @@ func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, or
 	var workspaceNames []string
 
 	for _, workspace := range workspaces {
-		if workspace.OrganizationId == orgID {
+		if workspace.OrganizationId == orgID && workspace.Type == WORKSPACE_TYPE_SECRET_MANAGER {
 			filteredWorkspaces = append(filteredWorkspaces, workspace)
 			workspaceNames = append(workspaceNames, workspace.Name)
 		}
@@ -67,7 +67,7 @@ func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, or
 		if selectedSubOrgName != nil && strings.TrimSpace(*selectedSubOrgName) != "" {
 			scopeHint = fmt.Sprintf(" (sub-organization: %s)", strings.TrimSpace(*selectedSubOrgName))
 		}
-		message := fmt.Sprintf("You don't have any projects created in this organization%s. You must first create a project at %s", scopeHint, config.INFISICAL_URL)
+		message := fmt.Sprintf("You don't have any secret management projects created in this organization%s. You must first create a secret management project at %s", scopeHint, config.INFISICAL_URL)
 		PrintErrorMessageAndExit(message)
 	}
 

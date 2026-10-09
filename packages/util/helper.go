@@ -556,8 +556,8 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 }
 
 // ResolveEnvironmentName resolves the environment slug for `agent-proxy connect`, in order:
-// the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.json
-// (git-branch mapping, then defaultEnvironment) > the flag's own default value.
+// the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.yaml
+// (git-branch mapping, then default-environment) > the flag's own default value.
 // It keys off cmd.Flags().Changed rather than an empty-value check so env and workspace
 // are still consulted when --env is left at its default.
 func ResolveEnvironmentName(cmd *cobra.Command) string {
@@ -576,8 +576,8 @@ func ResolveEnvironmentName(cmd *cobra.Command) string {
 }
 
 // ResolveSecretPath resolves the secret path (folder) for a command, in order:
-// the --path flag (if explicitly set) > INFISICAL_SECRET_PATH > .infisical.json
-// defaultSecretPath > the flag's own default value ("/").
+// the --path flag (if explicitly set) > INFISICAL_SECRET_PATH > .infisical.yaml
+// default-secret-path > the flag's own default value ("/").
 func ResolveSecretPath(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("path") {
 		value, _ := cmd.Flags().GetString("path")
@@ -595,7 +595,7 @@ func ResolveSecretPath(cmd *cobra.Command) string {
 
 // ResolveAgentProxyAddress resolves the agent proxy address for `agent-proxy connect`, in order:
 // the --proxy flag (if explicitly set) > INFISICAL_AGENT_PROXY_ADDRESS > empty (the caller
-// requires a non-empty result). It is deliberately NOT sourced from .infisical.json: that file
+// requires a non-empty result). It is deliberately NOT sourced from .infisical.yaml: that file
 // is usually committed to a repo, so a poisoned proxy address would silently route all agent
 // traffic and its auth token through an attacker-controlled host.
 func ResolveAgentProxyAddress(cmd *cobra.Command) string {

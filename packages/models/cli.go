@@ -170,6 +170,7 @@ type Workspace struct {
 	Plan           string `json:"plan,omitempty"`
 	V              int    `json:"__v"`
 	OrganizationId string `json:"orgId"`
+	Type           string `json:"type"`
 }
 
 type WorkspaceConfigFile struct {
@@ -178,6 +179,24 @@ type WorkspaceConfigFile struct {
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 	DefaultSecretPath             string            `json:"defaultSecretPath,omitempty"`
 	Domain                        string            `json:"domain,omitempty"`
+}
+
+type GeneralConfigSection struct {
+	Domain string `yaml:"domain,omitempty"`
+}
+
+type SecretsManagementConfigSection struct {
+	ProjectID          string `yaml:"project-id"`
+	DefaultEnvironment string `yaml:"default-environment"`
+	DefaultSecretPath  string `yaml:"default-secret-path,omitempty"`
+	Mappings           struct {
+		GitBranchToEnvironment map[string]string `yaml:"git-branch-to-environment"`
+	} `yaml:"mappings"`
+}
+
+type WorkspaceConfigFileYaml struct {
+	General           GeneralConfigSection           `yaml:"general"`
+	SecretsManagement SecretsManagementConfigSection `yaml:"secrets-management"`
 }
 
 type SymmetricEncryptionResult struct {
