@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -22,49 +24,50 @@ func buildSessionLogAAD(sessionID, chunkID string) []byte {
 	return sum[:]
 }
 
-func sealSessionLog(key, plaintext, aad []byte) (ciphertext []byte, iv []byte, err error) {
+// Returns IV ‖ ciphertext ‖ tag: the object holds its own IV, so nothing about a chunk has to be stored elsewhere.
+func sealSessionLog(key, plaintext, aad []byte) ([]byte, error) {
 	return sealSessionLogWithRand(rand.Reader, key, plaintext, aad)
 }
 
-func sealSessionLogWithRand(random io.Reader, key, plaintext, aad []byte) (ciphertext []byte, iv []byte, err error) {
+func sealSessionLogWithRand(random io.Reader, key, plaintext, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("agent-vault: session log key is not a valid AES key: %w", err)
+		return nil, fmt.Errorf("agent-vault: session log key is not a valid AES key: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, nil, fmt.Errorf("agent-vault: could not build GCM: %w", err)
+		return nil, fmt.Errorf("agent-vault: could not build GCM: %w", err)
 	}
 
-	iv = make([]byte, sessionLogIVBytes)
-	if _, err = io.ReadFull(random, iv); err != nil {
-		return nil, nil, fmt.Errorf("agent-vault: could not read a nonce: %w", err)
+	blob := make([]byte, sessionLogIVBytes, sessionLogIVBytes+len(plaintext)+gcm.Overhead())
+	if _, err = io.ReadFull(random, blob); err != nil {
+		return nil, fmt.Errorf("agent-vault: could not read a nonce: %w", err)
 	}
 
-	return gcm.Seal(nil, iv, plaintext, aad), iv, nil
+	return gcm.Seal(blob, blob[:sessionLogIVBytes], plaintext, aad), nil
 }
 
-func encodeSessionLogIV(iv []byte) string {
-	return base64.RawStdEncoding.EncodeToString(iv)
-}
-
-// The browser checks the downloaded object against this before decrypting, so an edited object reads as
-// changed rather than as a decryption failure.
+// Infisical signs this into the upload link, so S3 refuses any other body.
 func infisicalCiphertextSha256(ciphertext []byte) string {
 	sum := sha256.Sum256(ciphertext)
 	return base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-// S3 wants the digest in padded base64, while Infisical stores it unpadded.
+// S3 wants the digest in padded base64, while Infisical takes it unpadded.
 func s3ChecksumHeader(ciphertext []byte) string {
 	sum := sha256.Sum256(ciphertext)
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-func newSessionLogChunkID() (string, error) {
-	id, err := uuid.NewV7()
+// A UUIDv7 carrying the time of the chunk's last request, which is what Infisical places it by in a date range.
+func newSessionLogChunkID(lastRecordAt time.Time) (string, error) {
+	id, err := uuid.NewRandom()
 	if err != nil {
 		return "", fmt.Errorf("agent-vault: could not mint a session log chunk id: %w", err)
 	}
+	var ms [8]byte
+	binary.BigEndian.PutUint64(ms[:], uint64(lastRecordAt.UnixMilli()))
+	copy(id[0:6], ms[2:8])
+	id[6] = 0x70 | (id[6] & 0x0F)
 	return id.String(), nil
 }

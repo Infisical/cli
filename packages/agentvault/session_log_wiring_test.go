@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -235,13 +234,10 @@ func TestAWholeRequestRoundTripsFromProxyToSealedChunk(t *testing.T) {
 		t.Fatal("the uploaded chunk contains readable record fields; it was not sealed")
 	}
 
-	iv, err := base64.RawStdEncoding.DecodeString(posts[0].iv)
-	if err != nil {
-		t.Fatal(err)
-	}
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
-	plaintext, err := gcm.Open(nil, iv, puts[0].body, buildSessionLogAAD("s1", posts[0].chunkID))
+	iv, sealed := puts[0].body[:sessionLogIVBytes], puts[0].body[sessionLogIVBytes:]
+	plaintext, err := gcm.Open(nil, iv, sealed, buildSessionLogAAD("s1", posts[0].chunkID))
 	if err != nil {
 		t.Fatalf("the uploaded chunk does not open with the session key and its AAD: %v", err)
 	}
@@ -249,8 +245,8 @@ func TestAWholeRequestRoundTripsFromProxyToSealedChunk(t *testing.T) {
 	if err := json.Unmarshal(plaintext, &records); err != nil {
 		t.Fatalf("the opened chunk is not a JSON record list: %v", err)
 	}
-	if len(records) != 3 || posts[0].records != 3 {
-		t.Fatalf("the chunk holds %d records and declares %d, expected 3", len(records), posts[0].records)
+	if len(records) != 3 {
+		t.Fatalf("the chunk holds %d records, expected 3", len(records))
 	}
 	for i, record := range records {
 		if want := fmt.Sprintf("/v1/thing/%d", i); record.Path != want || record.Decision != decisionPassthrough {

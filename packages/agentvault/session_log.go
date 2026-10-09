@@ -1,7 +1,6 @@
 package agentvault
 
 import (
-	"container/list"
 	"context"
 	"sort"
 	"sync"
@@ -17,16 +16,17 @@ const (
 	sessionLogFlushSlack        = time.Second
 	sessionLogFlushRecords      = 1000
 	sessionLogMaxChunkPlaintext = 4 << 20
+	// A chunk is named by its last request, and Infisical lists a date range from 3 minutes past its end, so a chunk
+	// must not reach further back than this.
+	sessionLogMaxChunkSpan = 2 * time.Minute
 
-	sessionLogSpoolCapacity     = 5000                   // one session's ring; full: overwrite the oldest line, count it
-	sessionLogTotalCapacity     = 200_000                // all rings together; full: drop new lines, count them
-	sessionLogPendingChunks     = 10                     // one session's sealed chunks; full: drop the oldest, count it
-	sessionLogTotalSealedBytes  = 64 << 20               // all sealed chunks; full: drop the oldest chunk of any session
-	sessionLogForgottenCapacity = maxSessionCacheEntries // idle sessions remembered; full: forget the one forgotten longest
+	sessionLogSpoolCapacity    = 5000     // one session's ring; full: overwrite the oldest line, count it
+	sessionLogTotalCapacity    = 200_000  // all rings together; full: drop new lines, count them
+	sessionLogPendingChunks    = 10       // one session's sealed chunks; full: drop the oldest, log it
+	sessionLogTotalSealedBytes = 64 << 20 // all sealed chunks; full: drop the oldest chunk of any session
 
 	sessionLogIdleClose = 15 * time.Minute
 
-	sessionLogPauseBackoff    = 15 * time.Minute
 	sessionLogPutTimeout      = 10 * time.Second
 	sessionLogFinalTimeout    = 3 * time.Second
 	sessionLogCloseTimeout    = 5 * time.Second
@@ -55,75 +55,22 @@ func newSessionLogGrant(sessionID string, key []byte) *sessionLogGrant {
 	return &sessionLogGrant{sessionID: sessionID, key: key, issued: sessionLogGrantsIssued.Add(1)}
 }
 
-type forgottenSpool struct {
-	nextSeq         uint64
-	unreportedDrops uint64
-}
-
-// Idle sessions in the order they were forgotten, so a full list drops the oldest without a scan.
-type forgottenSpools struct {
-	capacity int
-	order    *list.List // of forgottenEntry, oldest first
-	byID     map[string]*list.Element
-}
-
-type forgottenEntry struct {
-	sessionID string
-	spool     forgottenSpool
-}
-
-func newForgottenSpools(capacity int) *forgottenSpools {
-	return &forgottenSpools{capacity: capacity, order: list.New(), byID: make(map[string]*list.Element)}
-}
-
-func (f *forgottenSpools) remember(sessionID string, spool forgottenSpool) {
-	f.drop(sessionID)
-	if f.order.Len() >= f.capacity {
-		f.drop(f.order.Front().Value.(forgottenEntry).sessionID)
-	}
-	f.byID[sessionID] = f.order.PushBack(forgottenEntry{sessionID: sessionID, spool: spool})
-}
-
-func (f *forgottenSpools) take(sessionID string) (forgottenSpool, bool) {
-	el, ok := f.byID[sessionID]
-	if !ok {
-		return forgottenSpool{}, false
-	}
-	f.drop(sessionID)
-	return el.Value.(forgottenEntry).spool, true
-}
-
-func (f *forgottenSpools) drop(sessionID string) {
-	if el, ok := f.byID[sessionID]; ok {
-		f.order.Remove(el)
-		delete(f.byID, sessionID)
-	}
-}
-
-func (f *forgottenSpools) len() int { return f.order.Len() }
-
 type sessionLogShipper interface {
 	createChunk(ctx context.Context, final bool, sessionID string, req api.CreateAgentVaultSessionLogChunkRequest) (api.CreateAgentVaultSessionLogChunkResponse, error)
 	putObject(ctx context.Context, url string, ciphertext []byte) error
 }
 
-// Being off or paused also drops new records, while an outage only holds them until the next retry.
+// Being off drops new records, while an outage only holds them until the next retry.
 type sessionLogHold struct {
 	off        bool
 	offThrough uint64
-
-	pausedUntil time.Time
 
 	s3Down        bool
 	infisicalDown bool
 }
 
-func (h *sessionLogHold) dropsRecords(now time.Time) bool {
-	return h.off || now.Before(h.pausedUntil)
-}
-
-func (h *sessionLogHold) canShip(now time.Time) bool {
-	return !h.dropsRecords(now) && !h.s3Down && !h.infisicalDown
+func (h *sessionLogHold) canShip() bool {
+	return !h.off && !h.s3Down && !h.infisicalDown
 }
 
 func (h *sessionLogHold) clearOutages() {
@@ -140,7 +87,7 @@ const (
 )
 
 // record() appends each request to its session's ring. A flush seals the ring into encrypted chunks and
-// queues them on the spool. Each queued chunk then gets its index row (createChunk) and is uploaded to S3
+// queues them on the spool. Each queued chunk then gets its upload link (createChunk) and is uploaded to S3
 // (putObject). When Infisical refuses a chunk, handleCreateFailure classifies the refusal and handles it.
 type sessionLogRecorder struct {
 	proxyID string
@@ -155,8 +102,6 @@ type sessionLogRecorder struct {
 	mu     sync.Mutex
 	spools map[string]*sessionLogSpool
 
-	forgotten *forgottenSpools
-
 	unsealedRecords int
 	sealedBytes     int
 	nextSealOrder   uint64
@@ -170,12 +115,11 @@ type sessionLogRecorder struct {
 
 func newSessionLogRecorder(proxyID string, shipper sessionLogShipper) *sessionLogRecorder {
 	return &sessionLogRecorder{
-		proxyID:   proxyID,
-		shipper:   shipper,
-		now:       time.Now,
-		spools:    make(map[string]*sessionLogSpool),
-		forgotten: newForgottenSpools(sessionLogForgottenCapacity),
-		wake:      make(chan struct{}, 1),
+		proxyID: proxyID,
+		shipper: shipper,
+		now:     time.Now,
+		spools:  make(map[string]*sessionLogSpool),
+		wake:    make(chan struct{}, 1),
 	}
 }
 
@@ -193,9 +137,6 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	spool, ok := r.spools[g.sessionID]
 	if !ok {
 		spool = newSessionLogSpool(g, r.now())
-		if prior, ok := r.forgotten.take(g.sessionID); ok {
-			spool.nextSeq, spool.ring.unreportedDrops = prior.nextSeq, prior.unreportedDrops
-		}
 		r.spools[g.sessionID] = spool
 	}
 
@@ -208,8 +149,11 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	rec.Ts = rec.at.UTC().Format(time.RFC3339Nano)
 	spool.lastRecordAt = now
 
-	if !r.admitLocked(g, now) {
-		spool.ring.unreportedDrops++
+	if !r.admitLocked(g) {
+		// Switching off says so when it happens; the proxy-wide cap is only reported here.
+		if r.unsealedRecords >= sessionLogTotalCapacity {
+			spool.ring.unreportedDrops++
+		}
 		return
 	}
 
@@ -226,16 +170,13 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 }
 
 // Also switches recording back on when a grant issued after logs went off arrives.
-func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant, now time.Time) bool {
+func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant) bool {
 	if r.hold.off {
 		if g.issued <= r.hold.offThrough {
 			return false
 		}
 		r.hold.off = false
 		log.Info().Msg("agent-vault: session logs are back on, recording again")
-	}
-	if now.Before(r.hold.pausedUntil) {
-		return false
 	}
 	if r.unsealedRecords >= sessionLogTotalCapacity {
 		return false
@@ -356,10 +297,17 @@ func (r *sessionLogRecorder) forgetIdleSpoolsLocked(now time.Time) {
 	}
 }
 
-// Keeps the drop count too, so a spool forgotten while logging was off still reports what it lost.
 func (r *sessionLogRecorder) forgetSpoolLocked(sessionID string, spool *sessionLogSpool) {
-	r.forgotten.remember(sessionID, forgottenSpool{nextSeq: spool.nextSeq, unreportedDrops: spool.ring.unreportedDrops})
+	logUnrecordedRequests(sessionID, spool.ring.takeUnreportedDrops())
 	delete(r.spools, sessionID)
+}
+
+func logUnrecordedRequests(sessionID string, dropped uint64) {
+	if dropped == 0 {
+		return
+	}
+	log.Warn().Str("sessionId", sessionID).Uint64("requests", dropped).
+		Msg("agent-vault: some requests weren't recorded in the session log, too many came in at once")
 }
 
 func (r *sessionLogRecorder) dueSpools(pass flushPass, now time.Time) []*sessionLogSpool {
@@ -448,22 +396,17 @@ func (r *sessionLogRecorder) sealNext(spool *sessionLogSpool, unsealed map[*sess
 	r.unsealedRecords -= len(records)
 	dropped := spool.ring.takeUnreportedDrops()
 	r.mu.Unlock()
+	logUnrecordedRequests(spool.sessionID, dropped)
 
 	groups, err := packSessionLogRecords(records)
 	if err != nil {
-		r.dropUnsealed(spool, len(records), dropped, err)
+		r.dropUnsealed(spool, len(records), err)
 		return true
 	}
-	for i, group := range groups {
-		var groupDropped uint64
-		// Only the first chunk of a split batch carries the drop count, so drops aren't reported twice.
-		if i == 0 {
-			groupDropped = dropped
-		}
-
-		chunk, err := spool.sealSlice(group.records, group.plaintext, groupDropped)
+	for _, group := range groups {
+		chunk, err := spool.sealSlice(group.records, group.plaintext)
 		if err != nil {
-			r.dropUnsealed(spool, len(group.records), groupDropped, err)
+			r.dropUnsealed(spool, len(group.records), err)
 			continue
 		}
 
@@ -478,10 +421,7 @@ func (r *sessionLogRecorder) sealNext(spool *sessionLogSpool, unsealed map[*sess
 	return true
 }
 
-func (r *sessionLogRecorder) dropUnsealed(spool *sessionLogSpool, records int, dropped uint64, err error) {
-	r.mu.Lock()
-	spool.ring.unreportedDrops += dropped + uint64(records)
-	r.mu.Unlock()
+func (r *sessionLogRecorder) dropUnsealed(spool *sessionLogSpool, records int, err error) {
 	log.Error().Err(err).Str("sessionId", spool.sessionID).Int("records", records).
 		Msg("agent-vault: could not seal a session log chunk, dropping those records")
 }
@@ -514,11 +454,11 @@ func (r *sessionLogRecorder) oldestPendingLocked() *sessionLogSpool {
 
 func (r *sessionLogRecorder) evictOldestLocked(spool *sessionLogSpool) {
 	oldest := spool.pending[0]
-	r.discardHeadLocked(spool, oldest, true)
+	r.discardHeadLocked(spool, oldest)
 	log.Warn().
 		Str("sessionId", spool.sessionID).
 		Str("chunkId", oldest.meta.ChunkID).
-		Int("records", oldest.meta.RecordCount).
+		Int("records", oldest.records).
 		Msg("agent-vault: dropped an unshipped session log chunk, the buffer is full")
 }
 
@@ -553,7 +493,7 @@ func (res shipmentResult) shipped() bool {
 func (r *sessionLogRecorder) nextShipments(due []*sessionLogSpool, stopped map[*sessionLogSpool]bool, width int) []shipment {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.hold.canShip(r.now()) {
+	if !r.hold.canShip() {
 		return nil
 	}
 
@@ -592,7 +532,7 @@ func (r *sessionLogRecorder) sendShipment(ctx context.Context, next shipment, pa
 
 	uploadURL := next.uploadURL
 	if uploadURL == "" || r.now().Add(sessionLogUploadURLMargin).After(next.urlExpires) {
-		// Past the shutdown budget, a new row could only be written for an upload that can no longer happen.
+		// Past the shutdown budget, a new link could only be minted for an upload that can no longer happen.
 		if ctx.Err() != nil {
 			res.skipped = true
 			return res
@@ -620,13 +560,12 @@ func (r *sessionLogRecorder) sendShipment(ctx context.Context, next shipment, pa
 }
 
 func (r *sessionLogRecorder) applyShipments(ctx context.Context, results []shipmentResult, stopped map[*sessionLogSpool]bool) {
-	// Rows first, then successes, then failures: a refusal can switch logging off and discard every queue,
-	// and a chunk that already has its row, or has landed, must not be counted as dropped by that.
+	// Links first, then successes, then failures: a refusal can switch logging off and discard every queue,
+	// so a chunk that has landed comes off its queue before that.
 	r.mu.Lock()
 	for _, res := range results {
 		if res.posted {
 			r.clockSkewReported = false
-			res.chunk.state = chunkPosted
 			res.chunk.uploadURL = res.postedURL
 			res.chunk.urlExpires = res.postedExpires
 		}
@@ -637,7 +576,7 @@ func (r *sessionLogRecorder) applyShipments(ctx context.Context, results []shipm
 	for _, res := range results {
 		if res.shipped() {
 			r.mu.Lock()
-			r.discardHeadLocked(res.spool, res.chunk, false)
+			r.discardHeadLocked(res.spool, res.chunk)
 			r.mu.Unlock()
 			continue
 		}
@@ -672,15 +611,11 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 
 	case chunkSessionGone:
 		r.mu.Lock()
-		lost := r.discardAllLocked(spool, false)
+		lost := r.discardAllLocked(spool)
 		delete(r.spools, spool.sessionID)
 		r.mu.Unlock()
 		log.Warn().Err(err).Str("sessionId", spool.sessionID).Int("records", lost).
 			Msg("agent-vault: Infisical no longer accepts session logs for this session, dropping what was held")
-
-	case chunkOrgFull:
-		r.pause()
-		log.Error().Err(err).Msg("agent-vault: session logs have reached their limit for this organization, retrying in 15m")
 
 	case chunkLoggingOff:
 		r.switchOff(grantsIssuedAtSend)
@@ -697,7 +632,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 
 	case chunkRefused:
 		r.dropRefused(spool, chunk)
-		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.meta.RecordCount).
+		log.Error().Err(err).Str("chunkId", chunk.meta.ChunkID).Int("records", chunk.records).
 			Msg("agent-vault: Infisical refused a session log chunk, dropping it")
 
 	case chunkRetry:
@@ -709,8 +644,8 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 	}
 }
 
-// Drops everything held and counts it, unless a grant was issued after the refused request went out, which
-// makes the refusal stale (see sessionLogGrantsIssued).
+// Drops everything held, unless a grant was issued after the refused request went out, which makes the
+// refusal stale (see sessionLogGrantsIssued).
 func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -720,7 +655,7 @@ func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 
 	var lost int
 	for _, spool := range r.spools {
-		lost += r.discardAllLocked(spool, true)
+		lost += r.discardAllLocked(spool)
 	}
 
 	if !r.hold.off {
@@ -731,47 +666,30 @@ func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	r.hold.offThrough = grantsIssuedAtSend
 }
 
-func (r *sessionLogRecorder) pause() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.hold.pausedUntil = r.now().Add(sessionLogPauseBackoff)
-}
-
 func (r *sessionLogRecorder) dropRefused(spool *sessionLogSpool, chunk *sealedChunk) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Counted as dropped, or an agent that gets its own chunk refused could erase what it did.
-	r.discardHeadLocked(spool, chunk, true)
+	r.discardHeadLocked(spool, chunk)
 }
 
-// A gone session passes countDropped false: its spool is deleted, so no later chunk could report the loss.
-func (r *sessionLogRecorder) discardAllLocked(spool *sessionLogSpool, countDropped bool) (lost int) {
+func (r *sessionLogRecorder) discardAllLocked(spool *sessionLogSpool) (lost int) {
 	lost = spool.heldRecords()
 
 	held := spool.ring.len()
 	spool.ring.drain(held)
 	r.unsealedRecords -= held
-	if countDropped {
-		spool.ring.unreportedDrops += uint64(held)
-	}
 
 	for _, chunk := range spool.pending {
 		r.sealedBytes -= len(chunk.ciphertext)
-		if countDropped {
-			spool.ring.unreportedDrops += chunk.lostCount()
-		}
 	}
 	spool.pending = nil
 	return lost
 }
 
-func (r *sessionLogRecorder) discardHeadLocked(spool *sessionLogSpool, chunk *sealedChunk, countDropped bool) {
+func (r *sessionLogRecorder) discardHeadLocked(spool *sessionLogSpool, chunk *sealedChunk) {
 	if len(spool.pending) == 0 || spool.pending[0] != chunk {
 		return
 	}
 	spool.popPending()
 	r.sealedBytes -= len(chunk.ciphertext)
-	if countDropped {
-		spool.ring.unreportedDrops += chunk.lostCount()
-	}
 }
