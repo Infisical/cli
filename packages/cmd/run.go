@@ -221,7 +221,7 @@ func init() {
 	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
 	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
-	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
+	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.yaml (or legacy .infisical.json) resides")
 }
 
 // Will execute a single command and pass in the given secrets into the process

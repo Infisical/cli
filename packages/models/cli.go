@@ -188,9 +188,9 @@ type GeneralConfigSection struct {
 type SecretsManagementConfigSection struct {
 	ProjectID          string `yaml:"project-id"`
 	DefaultEnvironment string `yaml:"default-environment"`
+	DefaultSecretPath  string `yaml:"default-secret-path,omitempty"`
 	Mappings           struct {
-		GitBranchToEnvironment  map[string]string `yaml:"git-branch-to-environment"`
-
+		GitBranchToEnvironment map[string]string `yaml:"git-branch-to-environment"`
 	} `yaml:"mappings"`
 }
 

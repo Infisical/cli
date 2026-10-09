@@ -1,4 +1,5 @@
 .infisical.json
+.infisical.yaml
 dist/
 agent-config.test.yaml
 
