@@ -27,146 +27,154 @@ const (
 	FormatDotEnvEval   string = "dotenv-eval"
 )
 
-// exportCmd represents the export command
-var exportCmd = &cobra.Command{
-	Use:                   "export",
-	Short:                 "Used to export environment variables to a file",
-	DisableFlagsInUseLine: true,
-	Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
-	Args:                  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
+func buildExportCmd() *cobra.Command {
+	exportCmd := &cobra.Command{
+		Use:                   "export",
+		Short:                 "Used to export environment variables to a file",
+		DisableFlagsInUseLine: true,
+		Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
+		Args:                  cobra.NoArgs,
+		Run:                   runExport,
+	}
 
-		shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
-		if err != nil {
-			util.HandleError(err)
-		}
+	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
+	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
+	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, dotenv-export, dotenv-eval, json, csv, yaml)")
+	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
+	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
+	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
+	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
+	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
+	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
+	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
+	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 
-		includeImports, err := cmd.Flags().GetBool("include-imports")
-		if err != nil {
-			util.HandleError(err)
-		}
+	return exportCmd
+}
 
-		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-		if err != nil {
-			util.HandleError(err)
-		}
+func runExport(cmd *cobra.Command, args []string) {
+	environmentName := util.ResolveEnvironmentName(cmd)
 
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+	shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
+	if err != nil {
+		util.HandleError(err)
+	}
 
-		format, err := cmd.Flags().GetString("format")
-		if err != nil {
-			util.HandleError(err)
-		}
+	includeImports, err := cmd.Flags().GetBool("include-imports")
+	if err != nil {
+		util.HandleError(err)
+	}
 
-		templatePath, err := cmd.Flags().GetString("template")
-		if err != nil {
-			util.HandleError(err)
-		}
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err)
+	}
 
-		secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+	token, err := util.GetInfisicalToken(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
 
-		tagSlugs, err := cmd.Flags().GetString("tags")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+	format, err := cmd.Flags().GetString("format")
+	if err != nil {
+		util.HandleError(err)
+	}
 
-		secretsPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+	templatePath, err := cmd.Flags().GetString("template")
+	if err != nil {
+		util.HandleError(err)
+	}
 
-		outputFile, err := cmd.Flags().GetString("output-file")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
+	secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
 
-		request := models.GetAllSecretsParameters{
-			Environment:              environmentName,
-			TagSlugs:                 tagSlugs,
-			WorkspaceId:              projectId,
-			SecretsPath:              secretsPath,
-			IncludeImport:            includeImports,
-			ExpandSecretReferences:   shouldExpandSecrets,
-			IncludePersonalOverrides: secretOverriding,
-		}
+	tagSlugs, err := cmd.Flags().GetString("tags")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
 
-		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-			request.InfisicalToken = token.Token
-		} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
-			request.UniversalAuthAccessToken = token.Token
-		}
+	secretsPath := util.ResolveSecretPath(cmd)
 
-		if templatePath != "" {
-			dynamicSecretLeases := NewDynamicSecretLeaseManager(nil, nil)
+	outputFile, err := cmd.Flags().GetString("output-file")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
 
-			accessToken := ""
-			if token != nil {
-				accessToken = token.Token
-			} else {
-				log.Debug().Msg("GetAllEnvironmentVariables: Trying to fetch secrets using logged in details")
-				loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
-				if err != nil {
-					util.HandleError(err)
-				}
-				accessToken = loggedInUserDetails.UserCredentials.JTWToken
-			}
+	request := models.GetAllSecretsParameters{
+		Environment:              environmentName,
+		TagSlugs:                 tagSlugs,
+		WorkspaceId:              projectId,
+		SecretsPath:              secretsPath,
+		IncludeImport:            includeImports,
+		ExpandSecretReferences:   shouldExpandSecrets,
+		IncludePersonalOverrides: secretOverriding,
+	}
 
-			currentEtag := ""
-			processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+		request.InfisicalToken = token.Token
+	} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
+		request.UniversalAuthAccessToken = token.Token
+	}
+
+	if templatePath != "" {
+		dynamicSecretLeases := NewDynamicSecretLeaseManager(nil, nil)
+
+		accessToken := ""
+		if token != nil {
+			accessToken = token.Token
+		} else {
+			log.Debug().Msg("GetAllEnvironmentVariables: Trying to fetch secrets using logged in details")
+			loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
 			if err != nil {
 				util.HandleError(err)
 			}
-			util.PrintStdout(processedTemplate.String())
-			return
+			accessToken = loggedInUserDetails.UserCredentials.JTWToken
 		}
 
-		secrets, err := util.GetAllEnvironmentVariables(request, "")
-		if err != nil {
-			util.HandleError(err, "Unable to fetch secrets")
-		}
-
-		var output string
-		secrets = util.FilterSecretsByTag(secrets, tagSlugs)
-		secrets = util.SortSecretsByKeys(secrets)
-
-		output, err = formatEnvs(secrets, format)
+		currentEtag := ""
+		processedTemplate, err := ProcessTemplate(1, templatePath, nil, accessToken, &currentEtag, dynamicSecretLeases, nil)
 		if err != nil {
 			util.HandleError(err)
 		}
+		util.PrintStdout(processedTemplate.String())
+		return
+	}
 
-		// Handle output file logic - only save to file if --output-file is specified
-		if outputFile != "" {
-			finalPath, err := resolveOutputPath(outputFile, format)
-			if err != nil {
-				util.HandleError(err, "Unable to resolve output path")
-			}
+	secrets, err := util.GetAllEnvironmentVariables(request, "")
+	if err != nil {
+		util.HandleError(err, "Unable to fetch secrets")
+	}
 
-			err = writeToFile(finalPath, output, 0644)
-			if err != nil {
-				util.HandleError(err, "Failed to write output to file")
-			}
+	var output string
+	secrets = util.FilterSecretsByTag(secrets, tagSlugs)
+	secrets = util.SortSecretsByKeys(secrets)
 
-			util.PrintfStderr("Successfully exported secrets to: %s\n", finalPath)
-		} else {
-			// Original behavior - print to stdout when no output file specified
-			util.PrintStdout(output)
+	output, err = formatEnvs(secrets, format)
+	if err != nil {
+		util.HandleError(err)
+	}
+
+	// Handle output file logic - only save to file if --output-file is specified
+	if outputFile != "" {
+		finalPath, err := resolveOutputPath(outputFile, format)
+		if err != nil {
+			util.HandleError(err, "Unable to resolve output path")
 		}
 
-		// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))
-	},
+		err = writeToFile(finalPath, output, 0644)
+		if err != nil {
+			util.HandleError(err, "Failed to write output to file")
+		}
+
+		util.PrintfStderr("Successfully exported secrets to: %s\n", finalPath)
+	} else {
+		// Original behavior - print to stdout when no output file specified
+		util.PrintStdout(output)
+	}
+
+	// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))
 }
 
 // resolveOutputPath determines the final output path based on the provided path and format
@@ -260,21 +268,6 @@ func getDefaultExtension(format string) string {
 	default:
 		return ".env"
 	}
-}
-
-func init() {
-	RootCmd.AddCommand(exportCmd)
-	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
-	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
-	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, dotenv-export, dotenv-eval, json, csv, yaml)")
-	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
-	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
-	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
-	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
-	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
-	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
-	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 }
 
 // Format according to the format flag

@@ -555,7 +555,7 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 	return value, nil
 }
 
-// ResolveEnvironmentName resolves the environment slug for `agent-proxy connect`, in order:
+// ResolveEnvironmentName resolves the environment slug for a command, in order:
 // the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.json
 // (git-branch mapping, then defaultEnvironment) > the flag's own default value.
 // It keys off cmd.Flags().Changed rather than an empty-value check so env and workspace
@@ -568,8 +568,10 @@ func ResolveEnvironmentName(cmd *cobra.Command) string {
 	if value := strings.TrimSpace(os.Getenv(INFISICAL_ENVIRONMENT_NAME)); value != "" {
 		return value
 	}
-	if value := GetEnvFromWorkspaceFile(); value != "" {
-		return value
+	if workspaceFile, err := workspaceFileForCommand(cmd); err == nil {
+		if value := envFromWorkspaceConfig(workspaceFile); value != "" {
+			return value
+		}
 	}
 	value, _ := cmd.Flags().GetString("env")
 	return value
@@ -586,11 +588,48 @@ func ResolveSecretPath(cmd *cobra.Command) string {
 	if value := strings.TrimSpace(os.Getenv(INFISICAL_SECRET_PATH_NAME)); value != "" {
 		return value
 	}
-	if value := GetSecretPathFromWorkspaceFile(); value != "" {
+	if value := secretPathFromCommandWorkspace(cmd); value != "" {
 		return value
 	}
 	value, _ := cmd.Flags().GetString("path")
 	return value
+}
+
+// ResolveSecretPaths is ResolveSecretPath for commands whose --path flag can be repeated
+// (`run`). Explicit flags are returned as given; otherwise the single path from
+// INFISICAL_SECRET_PATH or .infisical.json defaultSecretPath, then the flag's default.
+func ResolveSecretPaths(cmd *cobra.Command) []string {
+	if cmd.Flags().Changed("path") {
+		values, _ := cmd.Flags().GetStringArray("path")
+		return values
+	}
+	if value := strings.TrimSpace(os.Getenv(INFISICAL_SECRET_PATH_NAME)); value != "" {
+		return []string{value}
+	}
+	if value := secretPathFromCommandWorkspace(cmd); value != "" {
+		return []string{value}
+	}
+	values, _ := cmd.Flags().GetStringArray("path")
+	return values
+}
+
+// workspaceFileForCommand returns the .infisical.json a command works against: the one in
+// --project-config-dir when the command has that flag and it is set, otherwise the nearest one
+// above the current directory.
+func workspaceFileForCommand(cmd *cobra.Command) (models.WorkspaceConfigFile, error) {
+	if flag := cmd.Flags().Lookup("project-config-dir"); flag != nil && flag.Value.String() != "" {
+		return GetWorkSpaceFromFilePath(flag.Value.String())
+	}
+	return GetWorkSpaceFromFile()
+}
+
+func secretPathFromCommandWorkspace(cmd *cobra.Command) string {
+	workspaceFile, err := workspaceFileForCommand(cmd)
+	if err != nil {
+		log.Debug().Msgf("secretPathFromCommandWorkspace: [err=%s]", err)
+		return ""
+	}
+	return workspaceFile.DefaultSecretPath
 }
 
 // ResolveAgentProxyAddress resolves the agent proxy address for `agent-proxy connect`, in order:

@@ -28,18 +28,40 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var agentProxyRunCmd = &cobra.Command{
-	Use:                   "run [flags] -- [agent start command]",
-	Short:                 "Launch an agent on this machine, sandboxed, with credentials brokered on the wire",
-	Example:               "infisical secrets agent-proxy run --env=dev --path=/myapp -- claude",
-	DisableFlagsInUseLine: true,
-	Args: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return fmt.Errorf("provide the agent command to run after '--', e.g. -- claude")
-		}
-		return nil
-	},
-	Run: runAgentProxyRun,
+func buildAgentProxyRunCmd() *cobra.Command {
+	agentProxyRunCmd := &cobra.Command{
+		Use:                   "run [flags] -- [agent start command]",
+		Short:                 "Launch an agent on this machine, sandboxed, with credentials brokered on the wire",
+		Example:               "infisical secrets agent-proxy run --env=dev --path=/myapp -- claude",
+		DisableFlagsInUseLine: true,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return fmt.Errorf("provide the agent command to run after '--', e.g. -- claude")
+			}
+			return nil
+		},
+		Run: runAgentProxyRun,
+	}
+
+	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
+	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
+	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
+	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
+	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
+	agentProxyRunCmd.Flags().Bool("no-sandbox", false, "disable the OS sandbox; the agent can then read your files and reach the network directly")
+	agentProxyRunCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
+	agentProxyRunCmd.Flags().Int("poll-interval", 60, "interval in seconds to refresh permissions and credentials")
+	agentProxyRunCmd.Flags().String("log-file", "", "write the proxy activity log to this path instead of a temporary file")
+	agentProxyRunCmd.Flags().StringArray("allow-read", nil, "allow the agent to read a path the sandbox denies by default (can be specified multiple times)")
+	agentProxyRunCmd.Flags().StringArray("allow-write", nil, "allow the agent to write a path (can be specified multiple times)")
+	agentProxyRunCmd.Flags().StringArray("allow-host", nil, "allow the agent to reach a host that has no proxied service (can be specified multiple times)")
+	agentProxyRunCmd.Flags().StringArray("pass-env", nil, "pass one of your environment variables through to the agent (can be specified multiple times)")
+	agentProxyRunCmd.Flags().StringArray("set-env", nil, "set an environment variable in the agent as KEY=VALUE (can be specified multiple times)")
+	// --proxy exists only so we can reject it with a helpful message pointing at connect.
+	agentProxyRunCmd.Flags().String("proxy", "", "")
+	_ = agentProxyRunCmd.Flags().MarkHidden("proxy")
+
+	return agentProxyRunCmd
 }
 
 // secretShapedEnvSubstrings: env vars whose name contains any of these are scrubbed from the child
@@ -522,26 +544,4 @@ func isSecretShapedEnvName(name string) bool {
 		}
 	}
 	return false
-}
-
-func init() {
-	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
-	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
-	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
-	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
-	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
-	agentProxyRunCmd.Flags().Bool("no-sandbox", false, "disable the OS sandbox; the agent can then read your files and reach the network directly")
-	agentProxyRunCmd.Flags().String("unmatched-host", "allow", "policy for hosts with no proxied service: allow | block")
-	agentProxyRunCmd.Flags().Int("poll-interval", 60, "interval in seconds to refresh permissions and credentials")
-	agentProxyRunCmd.Flags().String("log-file", "", "write the proxy activity log to this path instead of a temporary file")
-	agentProxyRunCmd.Flags().StringArray("allow-read", nil, "allow the agent to read a path the sandbox denies by default (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("allow-write", nil, "allow the agent to write a path (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("allow-host", nil, "allow the agent to reach a host that has no proxied service (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("pass-env", nil, "pass one of your environment variables through to the agent (can be specified multiple times)")
-	agentProxyRunCmd.Flags().StringArray("set-env", nil, "set an environment variable in the agent as KEY=VALUE (can be specified multiple times)")
-	// --proxy exists only so we can reject it with a helpful message pointing at connect.
-	agentProxyRunCmd.Flags().String("proxy", "", "")
-	_ = agentProxyRunCmd.Flags().MarkHidden("proxy")
-
-	agentProxyCmd.AddCommand(agentProxyRunCmd)
 }

@@ -25,155 +25,166 @@ import (
 var ErrManualSignalInterrupt = errors.New("signal: interrupt")
 var watcherWaitGroup = new(sync.WaitGroup)
 
-// runCmd represents the run command
-var runCmd = &cobra.Command{
-	Example: `
+func buildRunCmd() *cobra.Command {
+	runCmd := &cobra.Command{
+		Example: `
 	infisical run --env=dev -- npm run dev
 	infisical run --command "first-command && second-command; more-commands..."
 	`,
-	Use:                   "run [any infisical run command flags] -- [your application start command]",
-	Short:                 "Used to inject environments variables into your application process",
-	DisableFlagsInUseLine: true,
-	Args: func(cmd *cobra.Command, args []string) error {
-		// Check if the --command flag has been set
-		commandFlagSet := cmd.Flags().Changed("command")
+		Use:                   "run [any infisical run command flags] -- [your application start command]",
+		Short:                 "Used to inject environments variables into your application process",
+		DisableFlagsInUseLine: true,
+		Args:                  validateRunArgs,
+		Run:                   runRun,
+	}
 
-		// If the --command flag has been set, check if a value was provided
-		if commandFlagSet {
+	runCmd.Flags().String("token", "", "fetch secrets using service token or machine identity access token")
+	runCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	runCmd.Flags().StringP("env", "e", "dev", "set the environment (dev, prod, etc.) from which your secrets should be pulled from")
+	runCmd.Flags().Bool("expand", true, "parse shell parameter expansions in your secrets")
+	runCmd.Flags().Bool("include-imports", true, "import linked secrets ")
+	runCmd.Flags().Bool("recursive", false, "fetch secrets from all sub-folders")
+	runCmd.Flags().Bool("secret-overriding", true, "prioritizes personal secrets, if any, with the same name over shared secrets")
+	runCmd.Flags().Bool("watch", false, "enable reload of application when secrets change")
+	runCmd.Flags().Int("watch-interval", 10, "interval in seconds to check for secret changes")
+	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
+	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
+	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
+	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
+
+	return runCmd
+}
+
+func validateRunArgs(cmd *cobra.Command, args []string) error {
+	// Check if the --command flag has been set
+	commandFlagSet := cmd.Flags().Changed("command")
+
+	// If the --command flag has been set, check if a value was provided
+	if commandFlagSet {
+		command := cmd.Flag("command").Value.String()
+		if command == "" {
+			return fmt.Errorf("you need to provide a command after the flag --command")
+		}
+
+		// If the --command flag has been set, args should not be provided
+		if len(args) > 0 {
+			return fmt.Errorf("you cannot set any arguments after --command flag. --command only takes a string command")
+		}
+	} else {
+		// If the --command flag has not been set, at least one arg should be provided
+		if len(args) == 0 {
+			return fmt.Errorf("at least one argument is required after the run command, received %d", len(args))
+		}
+	}
+
+	return nil
+}
+
+func runRun(cmd *cobra.Command, args []string) {
+	environmentName := util.ResolveEnvironmentName(cmd)
+
+	token, err := util.GetInfisicalToken(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	projectConfigDir, err := cmd.Flags().GetString("project-config-dir")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	command, err := cmd.Flags().GetString("command")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	watchMode, err := cmd.Flags().GetBool("watch")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	watchModeInterval, err := cmd.Flags().GetInt("watch-interval")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	// If the --watch flag has been set, the --watch-interval flag should also be set
+	if watchMode && watchModeInterval < 5 {
+		util.HandleError(fmt.Errorf("watch interval must be at least 5 seconds, you passed %d seconds", watchModeInterval))
+	}
+
+	shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	tagSlugs, err := cmd.Flags().GetString("tags")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	secretsPaths := util.ResolveSecretPaths(cmd)
+
+	includeImports, err := cmd.Flags().GetBool("include-imports")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	recursive, err := cmd.Flags().GetBool("recursive")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	request := models.GetMultiPathSecretsParameters{
+		Environment:            environmentName,
+		WorkspaceId:            projectId,
+		TagSlugs:               tagSlugs,
+		SecretsPaths:           secretsPaths,
+		IncludeImport:          includeImports,
+		Recursive:              recursive,
+		ExpandSecretReferences: shouldExpandSecrets,
+	}
+
+	injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
+	if err != nil {
+		util.HandleError(err, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
+	}
+
+	log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
+
+	if watchMode {
+		executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
+	} else {
+		if cmd.Flags().Changed("command") {
 			command := cmd.Flag("command").Value.String()
-			if command == "" {
-				return fmt.Errorf("you need to provide a command after the flag --command")
+			err = executeMultipleCommandWithEnvs(command, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
+			if err != nil {
+				util.PrintlnStderr(err)
+				os.Exit(1)
 			}
 
-			// If the --command flag has been set, args should not be provided
-			if len(args) > 0 {
-				return fmt.Errorf("you cannot set any arguments after --command flag. --command only takes a string command")
-			}
 		} else {
-			// If the --command flag has not been set, at least one arg should be provided
-			if len(args) == 0 {
-				return fmt.Errorf("at least one argument is required after the run command, received %d", len(args))
+			err = executeSingleCommandWithEnvs(args, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
+			if err != nil {
+				util.PrintlnStderr(err)
+				os.Exit(1)
 			}
 		}
-
-		return nil
-	},
-	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
-
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		projectConfigDir, err := cmd.Flags().GetString("project-config-dir")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		command, err := cmd.Flags().GetString("command")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		watchMode, err := cmd.Flags().GetBool("watch")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		watchModeInterval, err := cmd.Flags().GetInt("watch-interval")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		// If the --watch flag has been set, the --watch-interval flag should also be set
-		if watchMode && watchModeInterval < 5 {
-			util.HandleError(fmt.Errorf("watch interval must be at least 5 seconds, you passed %d seconds", watchModeInterval))
-		}
-
-		shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		tagSlugs, err := cmd.Flags().GetString("tags")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretsPaths, err := cmd.Flags().GetStringArray("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		includeImports, err := cmd.Flags().GetBool("include-imports")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		recursive, err := cmd.Flags().GetBool("recursive")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		request := models.GetMultiPathSecretsParameters{
-			Environment:            environmentName,
-			WorkspaceId:            projectId,
-			TagSlugs:               tagSlugs,
-			SecretsPaths:           secretsPaths,
-			IncludeImport:          includeImports,
-			Recursive:              recursive,
-			ExpandSecretReferences: shouldExpandSecrets,
-		}
-
-		injectableEnvironment, err := fetchAndFormatSecretsForShell(request, projectConfigDir, secretOverriding, token)
-		if err != nil {
-			util.HandleError(err, "Could not fetch secrets", "If you are using a service token to fetch secrets, please ensure it is valid")
-		}
-
-		log.Debug().Msgf("injecting the following environment variables into shell: %v", injectableEnvironment.Variables)
-
-		if watchMode {
-			executeCommandWithWatchMode(command, args, watchModeInterval, request, projectConfigDir, secretOverriding, token)
-		} else {
-			if cmd.Flags().Changed("command") {
-				command := cmd.Flag("command").Value.String()
-				err = executeMultipleCommandWithEnvs(command, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
-				if err != nil {
-					util.PrintlnStderr(err)
-					os.Exit(1)
-				}
-
-			} else {
-				err = executeSingleCommandWithEnvs(args, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
-				if err != nil {
-					util.PrintlnStderr(err)
-					os.Exit(1)
-				}
-			}
-		}
-
-	},
+	}
 }
 
 func filterReservedEnvVars(env map[string]models.SingleEnvironmentVariable) {
@@ -207,29 +218,12 @@ func filterReservedEnvVars(env map[string]models.SingleEnvironmentVariable) {
 	}
 }
 
-func init() {
-	RootCmd.AddCommand(runCmd)
-	runCmd.Flags().String("token", "", "fetch secrets using service token or machine identity access token")
-	runCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
-	runCmd.Flags().StringP("env", "e", "dev", "set the environment (dev, prod, etc.) from which your secrets should be pulled from")
-	runCmd.Flags().Bool("expand", true, "parse shell parameter expansions in your secrets")
-	runCmd.Flags().Bool("include-imports", true, "import linked secrets ")
-	runCmd.Flags().Bool("recursive", false, "fetch secrets from all sub-folders")
-	runCmd.Flags().Bool("secret-overriding", true, "prioritizes personal secrets, if any, with the same name over shared secrets")
-	runCmd.Flags().Bool("watch", false, "enable reload of application when secrets change")
-	runCmd.Flags().Int("watch-interval", 10, "interval in seconds to check for secret changes")
-	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
-	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
-	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
-	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
-}
-
 // Will execute a single command and pass in the given secrets into the process
 func executeSingleCommandWithEnvs(args []string, secretsCount int, env []string) error {
 	command := args[0]
 	argsForCommand := args[1:]
 
-	log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
+	log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
 
 	cmd := exec.Command(command, argsForCommand...)
 	cmd.Stdin = os.Stdin
@@ -257,7 +251,7 @@ func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
 
-	log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
+	log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
 	log.Debug().Msgf("executing command: %s %s %s \n", shell[0], shell[1], fullCommand)
 
 	return execBasicCmd(cmd)
@@ -335,7 +329,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 			log.Info().Msg(color.HiMagentaString("[HOT RELOAD] Environment changes detected. Reloading process..."))
 			beingTerminated = true
 
-			log.Debug().Msgf(color.HiMagentaString("[HOT RELOAD] Sending SIGTERM to PID %d", cmd.Process.Pid))
+			log.Debug().Msg(color.HiMagentaString("[HOT RELOAD] Sending SIGTERM to PID %d", cmd.Process.Pid))
 			if e := cmd.Process.Signal(syscall.SIGTERM); e != nil {
 				log.Error().Err(e).Msg(color.HiMagentaString("[HOT RELOAD] Failed to send SIGTERM"))
 			}
@@ -376,7 +370,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 		watcherWaitGroup.Add(1)
 
 		// start the process
-		log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", environmentVariables.SecretsCount))
+		log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", environmentVariables.SecretsCount))
 
 		cmd, err = util.RunCommand(commandFlag, args, environmentVariables.Variables, false)
 		if err != nil {

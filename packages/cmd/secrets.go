@@ -28,435 +28,365 @@ func maskSecretValue(value string) string {
 	return "******"
 }
 
-var secretsCmd = &cobra.Command{
-	Example:               `infisical secrets`,
-	Short:                 "Used to create, read update and delete secrets",
-	Use:                   "secrets",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
+func runSecrets(cmd *cobra.Command, args []string) {
+	environmentName := util.ResolveEnvironmentName(cmd)
+
+	token, err := util.GetInfisicalToken(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	secretsPath := util.ResolveSecretPath(cmd)
+
+	shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
+	if err != nil {
+		util.HandleError(err)
+	}
+
+	includeImports, err := cmd.Flags().GetBool("include-imports")
+	if err != nil {
+		util.HandleError(err)
+	}
+
+	recursive, err := cmd.Flags().GetBool("recursive")
+	if err != nil {
+		util.HandleError(err)
+	}
+
+	tagSlugs, err := cmd.Flags().GetString("tags")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	plainOutput, err := cmd.Flags().GetBool("plain")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	request := models.GetAllSecretsParameters{
+		Environment:              environmentName,
+		WorkspaceId:              projectId,
+		TagSlugs:                 tagSlugs,
+		SecretsPath:              secretsPath,
+		IncludeImport:            includeImports,
+		Recursive:                recursive,
+		ExpandSecretReferences:   shouldExpandSecrets,
+		IncludePersonalOverrides: secretOverriding,
+	}
+
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+		request.InfisicalToken = token.Token
+	} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
+		request.UniversalAuthAccessToken = token.Token
+	}
+
+	secrets, err := util.GetAllEnvironmentVariables(request, "")
+	if err != nil {
+		util.HandleError(err)
+	}
+
+	// Sort the secrets by key so we can create a consistent output
+	secrets = util.SortSecretsByKeys(secrets)
+
+	if outputFormat != "" {
+
+		var outputStructure []map[string]any
+		for _, secret := range secrets {
+			outputStructure = append(outputStructure, map[string]any{
+				"secretKey":   secret.Key,
+				"secretValue": secret.Value,
+			})
 		}
 
-		token, err := util.GetInfisicalToken(cmd)
+		output, err := util.FormatOutput(outputFormat, outputStructure, &util.FormatOutputOptions{
+			DotEnvArrayKeyAttribute:   "secretKey",
+			DotEnvArrayValueAttribute: "secretValue",
+		})
 		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
+			util.HandleError(err, "Unable to format output")
 		}
-
-		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretsPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		shouldExpandSecrets, err := cmd.Flags().GetBool("expand")
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		includeImports, err := cmd.Flags().GetBool("include-imports")
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		recursive, err := cmd.Flags().GetBool("recursive")
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		tagSlugs, err := cmd.Flags().GetString("tags")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretOverriding, err := cmd.Flags().GetBool("secret-overriding")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		plainOutput, err := cmd.Flags().GetBool("plain")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		outputFormat, err := cmd.Flags().GetString("output")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		request := models.GetAllSecretsParameters{
-			Environment:              environmentName,
-			WorkspaceId:              projectId,
-			TagSlugs:                 tagSlugs,
-			SecretsPath:              secretsPath,
-			IncludeImport:            includeImports,
-			Recursive:                recursive,
-			ExpandSecretReferences:   shouldExpandSecrets,
-			IncludePersonalOverrides: secretOverriding,
-		}
-
-		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-			request.InfisicalToken = token.Token
-		} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
-			request.UniversalAuthAccessToken = token.Token
-		}
-
-		secrets, err := util.GetAllEnvironmentVariables(request, "")
-		if err != nil {
-			util.HandleError(err)
-		}
-
-		// Sort the secrets by key so we can create a consistent output
-		secrets = util.SortSecretsByKeys(secrets)
-
-		if outputFormat != "" {
-
-			var outputStructure []map[string]any
+		util.PrintStdout(output)
+	} else {
+		if plainOutput {
 			for _, secret := range secrets {
-				outputStructure = append(outputStructure, map[string]any{
-					"secretKey":   secret.Key,
-					"secretValue": secret.Value,
-				})
-			}
-
-			output, err := util.FormatOutput(outputFormat, outputStructure, &util.FormatOutputOptions{
-				DotEnvArrayKeyAttribute:   "secretKey",
-				DotEnvArrayValueAttribute: "secretValue",
-			})
-			if err != nil {
-				util.HandleError(err, "Unable to format output")
-			}
-			util.PrintStdout(output)
-		} else {
-			if plainOutput {
-				for _, secret := range secrets {
-					util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
-				}
-			} else {
-				visualize.PrintAllSecretDetails(secrets)
-			}
-		}
-
-		Telemetry.CaptureEvent("cli-command:secrets", posthog.NewProperties().Set("secretCount", len(secrets)).Set("version", util.CLI_VERSION))
-	},
-}
-
-var secretsGetCmd = &cobra.Command{
-	Example:               `secrets get <secret name A> <secret name B>..."`,
-	Short:                 "Used to retrieve secrets by name",
-	Use:                   "get [secrets]",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.MinimumNArgs(1),
-	Run:                   getSecretsByNames,
-}
-
-var secretsGenerateExampleEnvCmd = &cobra.Command{
-	Example:               `secrets generate-example-env > .example-env`,
-	Short:                 "Used to generate a example .env file",
-	Use:                   "generate-example-env",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-	Run:                   generateExampleEnv,
-}
-
-var secretsSetCmd = &cobra.Command{
-	Example:               `secrets set <secretName=secretValue> <secretName=secretValue> <secretName=@/path/to/file>..."`,
-	Short:                 "Used set secrets",
-	Use:                   "set [secrets]",
-	DisableFlagsInUseLine: true,
-	Args: func(cmd *cobra.Command, args []string) error {
-		if cmd.Flags().Changed("file") {
-			if len(args) > 0 {
-				return fmt.Errorf("secrets cannot be provided as command-line arguments when the --file option is used. Please choose either file-based or argument-based secret input")
-			}
-			return nil
-		}
-		return cobra.MinimumNArgs(1)(cmd, args)
-	},
-	Run: func(cmd *cobra.Command, args []string) {
-		token, err := util.GetInfisicalToken(cmd)
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
-			}
-		}
-
-		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		if token == nil && projectId == "" {
-			_, err := util.GetWorkSpaceFromFile()
-			if err != nil {
-				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-			}
-		}
-
-		secretsPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretType, err := cmd.Flags().GetString("type")
-		if err != nil || (secretType != util.SECRET_TYPE_SHARED && secretType != util.SECRET_TYPE_PERSONAL) {
-			util.HandleError(err, "Unable to parse secret type")
-		}
-
-		outputFormat, err := cmd.Flags().GetString("output")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		tags, err := cmd.Flags().GetStringArray("tag")
-		if err != nil {
-			util.HandleError(err, `Unable to parse "tag" flag`)
-		}
-
-		showValues, err := cmd.Flags().GetBool("show-values")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		processedArgs := []string{}
-		for _, arg := range args {
-			splitKeyValue := strings.SplitN(arg, "=", 2)
-			if len(splitKeyValue) != 2 {
-				util.HandleError(fmt.Errorf("invalid argument format: %s. Expected format: key=value or key=@filepath", arg), "")
-			}
-
-			key := splitKeyValue[0]
-			value := splitKeyValue[1]
-
-			if strings.HasPrefix(value, "\\@") {
-				value = "@" + value[2:]
-			} else if strings.HasPrefix(value, "@") {
-				filePath := strings.TrimPrefix(value, "@")
-				content, err := os.ReadFile(filePath)
-				if err != nil {
-					util.HandleError(err, fmt.Sprintf("Unable to read file %s", filePath))
-				}
-				value = string(content)
-			}
-
-			processedArgs = append(processedArgs, fmt.Sprintf("%s=%s", key, value))
-		}
-
-		file, err := cmd.Flags().GetString("file")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		var secretOperations []models.SecretSetOperation
-		if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
-			if projectId == "" {
-				util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
-			}
-
-			secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
-
-			if err != nil {
-				util.HandleError(err, "Unable to set secrets")
+				util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
 			}
 		} else {
-			if projectId == "" {
-				workspaceFile, err := util.GetWorkSpaceFromFile()
-				if err != nil {
-					util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
-				}
-
-				projectId = workspaceFile.WorkspaceId
-			}
-
-			loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
-			if err != nil {
-				util.HandleError(err, "unable to authenticate [err=%v]")
-			}
-
-			if loggedInUserDetails.LoginExpired {
-				loggedInUserDetails = util.EstablishUserLoginSession()
-			}
-
-			secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
-				Type:  "",
-				Token: loggedInUserDetails.UserCredentials.JTWToken,
-			}, file, tags)
-
-			if err != nil {
-				util.HandleError(err, "Unable to set secrets")
-			}
+			visualize.PrintAllSecretDetails(secrets)
 		}
+	}
 
-		// Print secret operations
-		headers := [...]string{"SECRET NAME", "SECRET VALUE", "STATUS"}
-		rows := [][3]string{}
-		for _, secretOperation := range secretOperations {
-			secretValue := secretOperation.SecretValue
-			if !showValues {
-				secretValue = maskSecretValue(secretValue)
-			}
-			rows = append(rows, [...]string{secretOperation.SecretKey, secretValue, secretOperation.SecretOperation})
-		}
-
-		if outputFormat != "" {
-
-			var outputStructure []map[string]any
-			for _, secretOperation := range secretOperations {
-				outputStructure = append(outputStructure, map[string]any{
-					"secretKey":   secretOperation.SecretKey,
-					"secretValue": secretOperation.SecretValue,
-					"operation":   secretOperation.SecretOperation,
-				})
-			}
-
-			output, err := util.FormatOutput(outputFormat, outputStructure, &util.FormatOutputOptions{
-				DotEnvArrayKeyAttribute:   "secretKey",
-				DotEnvArrayValueAttribute: "secretValue",
-			})
-
-			if err != nil {
-				util.HandleError(err, "Unable to format output")
-			}
-			util.PrintStdout(output)
-		} else {
-			visualize.Table(headers, rows)
-		}
-		Telemetry.CaptureEvent("cli-command:secrets set", posthog.NewProperties().Set("version", util.CLI_VERSION))
-	},
+	Telemetry.CaptureEvent("cli-command:secrets", posthog.NewProperties().Set("secretCount", len(secrets)).Set("version", util.CLI_VERSION))
 }
 
-var secretsDeleteCmd = &cobra.Command{
-	Example:               `secrets delete <secret name A> <secret name B>..."`,
-	Short:                 "Used to delete secrets by name",
-	Use:                   "delete [secrets]",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		environmentName, _ := cmd.Flags().GetString("env")
-		if !cmd.Flags().Changed("env") {
-			environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-			if environmentFromWorkspace != "" {
-				environmentName = environmentFromWorkspace
+func validateSecretsSetArgs(cmd *cobra.Command, args []string) error {
+	if cmd.Flags().Changed("file") {
+		if len(args) > 0 {
+			return fmt.Errorf("secrets cannot be provided as command-line arguments when the --file option is used. Please choose either file-based or argument-based secret input")
+		}
+		return nil
+	}
+	return cobra.MinimumNArgs(1)(cmd, args)
+}
+
+func runSecretsSet(cmd *cobra.Command, args []string) {
+	token, err := util.GetInfisicalToken(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	environmentName := util.ResolveEnvironmentName(cmd)
+
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	if token == nil && projectId == "" {
+		_, err := util.GetWorkSpaceFromFile()
+		if err != nil {
+			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
+		}
+	}
+
+	secretsPath := util.ResolveSecretPath(cmd)
+
+	secretType, err := cmd.Flags().GetString("type")
+	if err != nil || (secretType != util.SECRET_TYPE_SHARED && secretType != util.SECRET_TYPE_PERSONAL) {
+		util.HandleError(err, "Unable to parse secret type")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	tags, err := cmd.Flags().GetStringArray("tag")
+	if err != nil {
+		util.HandleError(err, `Unable to parse "tag" flag`)
+	}
+
+	showValues, err := cmd.Flags().GetBool("show-values")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	processedArgs := []string{}
+	for _, arg := range args {
+		splitKeyValue := strings.SplitN(arg, "=", 2)
+		if len(splitKeyValue) != 2 {
+			util.HandleError(fmt.Errorf("invalid argument format: %s. Expected format: key=value or key=@filepath", arg), "")
+		}
+
+		key := splitKeyValue[0]
+		value := splitKeyValue[1]
+
+		if strings.HasPrefix(value, "\\@") {
+			value = "@" + value[2:]
+		} else if strings.HasPrefix(value, "@") {
+			filePath := strings.TrimPrefix(value, "@")
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				util.HandleError(err, fmt.Sprintf("Unable to read file %s", filePath))
 			}
+			value = string(content)
 		}
 
-		token, err := util.GetInfisicalToken(cmd)
+		processedArgs = append(processedArgs, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	file, err := cmd.Flags().GetString("file")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	var secretOperations []models.SecretSetOperation
+	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+		if projectId == "" {
+			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
+		}
+
+		secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
+
 		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
+			util.HandleError(err, "Unable to set secrets")
 		}
-
-		projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretsPath, err := cmd.Flags().GetString("path")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		secretType, err := cmd.Flags().GetString("type")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		outputFormat, err := cmd.Flags().GetString("output")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag")
-		}
-
-		httpClient, err := util.GetRestyClientWithCustomHeaders()
-		if err != nil {
-			util.HandleError(err, "Unable to get resty client with custom headers")
-		}
-
-		httpClient.SetHeader("Accept", "application/json")
-
+	} else {
 		if projectId == "" {
 			workspaceFile, err := util.GetWorkSpaceFromFile()
 			if err != nil {
 				util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
 			}
+
 			projectId = workspaceFile.WorkspaceId
 		}
 
-		if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
-			httpClient.SetAuthToken(token.Token)
-		} else {
-			util.RequireLogin()
-
-			loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
-			if err != nil {
-				util.HandleError(err, "Unable to authenticate")
-			}
-
-			if loggedInUserDetails.LoginExpired {
-				loggedInUserDetails = util.EstablishUserLoginSession()
-			}
-
-			httpClient.SetAuthToken(loggedInUserDetails.UserCredentials.JTWToken)
+		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
+		if err != nil {
+			util.HandleError(err, "unable to authenticate [err=%v]")
 		}
 
-		for _, secretName := range args {
-			request := api.DeleteSecretV3Request{
-				WorkspaceId: projectId,
-				Environment: environmentName,
-				SecretName:  secretName,
-				Type:        secretType,
-				SecretPath:  secretsPath,
-			}
-
-			err = api.CallDeleteSecretsRawV3(httpClient, request)
-			if err != nil {
-				util.HandleError(err, "Unable to complete your delete request")
-			}
+		if loggedInUserDetails.LoginExpired {
+			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		if outputFormat != "" {
-			var outputStructure []map[string]any
-			for _, secretName := range args {
-				outputStructure = append(outputStructure, map[string]any{
-					"secretKey": secretName,
-				})
-			}
-			output, err := util.FormatOutput(outputFormat, outputStructure, &util.FormatOutputOptions{
-				DotEnvArrayKeyAttribute: "secretKey",
+		secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
+			Type:  "",
+			Token: loggedInUserDetails.UserCredentials.JTWToken,
+		}, file, tags)
+
+		if err != nil {
+			util.HandleError(err, "Unable to set secrets")
+		}
+	}
+
+	// Print secret operations
+	headers := [...]string{"SECRET NAME", "SECRET VALUE", "STATUS"}
+	rows := [][3]string{}
+	for _, secretOperation := range secretOperations {
+		secretValue := secretOperation.SecretValue
+		if !showValues {
+			secretValue = maskSecretValue(secretValue)
+		}
+		rows = append(rows, [...]string{secretOperation.SecretKey, secretValue, secretOperation.SecretOperation})
+	}
+
+	if outputFormat != "" {
+
+		var outputStructure []map[string]any
+		for _, secretOperation := range secretOperations {
+			outputStructure = append(outputStructure, map[string]any{
+				"secretKey":   secretOperation.SecretKey,
+				"secretValue": secretOperation.SecretValue,
+				"operation":   secretOperation.SecretOperation,
 			})
-			if err != nil {
-				util.HandleError(err, "Unable to format output")
-			}
-			util.PrintStdout(output)
-		} else {
-			util.PrintfStderr("secret name(s) [%v] have been deleted from your project \n", strings.Join(args, ", "))
 		}
 
-		Telemetry.CaptureEvent("cli-command:secrets delete", posthog.NewProperties().Set("secretCount", len(args)).Set("version", util.CLI_VERSION))
-	},
+		output, err := util.FormatOutput(outputFormat, outputStructure, &util.FormatOutputOptions{
+			DotEnvArrayKeyAttribute:   "secretKey",
+			DotEnvArrayValueAttribute: "secretValue",
+		})
+
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
+		}
+		util.PrintStdout(output)
+	} else {
+		visualize.Table(headers, rows)
+	}
+	Telemetry.CaptureEvent("cli-command:secrets set", posthog.NewProperties().Set("version", util.CLI_VERSION))
+}
+
+func runSecretsDelete(cmd *cobra.Command, args []string) {
+	environmentName := util.ResolveEnvironmentName(cmd)
+
+	token, err := util.GetInfisicalToken(cmd)
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	projectId, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	secretsPath := util.ResolveSecretPath(cmd)
+
+	secretType, err := cmd.Flags().GetString("type")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		util.HandleError(err, "Unable to get resty client with custom headers")
+	}
+
+	httpClient.SetHeader("Accept", "application/json")
+
+	if projectId == "" {
+		workspaceFile, err := util.GetWorkSpaceFromFile()
+		if err != nil {
+			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project or pass in project id with --projectId flag")
+		}
+		projectId = workspaceFile.WorkspaceId
+	}
+
+	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+		httpClient.SetAuthToken(token.Token)
+	} else {
+		util.RequireLogin()
+
+		loggedInUserDetails, err := util.GetCurrentLoggedInUserDetails(true)
+		if err != nil {
+			util.HandleError(err, "Unable to authenticate")
+		}
+
+		if loggedInUserDetails.LoginExpired {
+			loggedInUserDetails = util.EstablishUserLoginSession()
+		}
+
+		httpClient.SetAuthToken(loggedInUserDetails.UserCredentials.JTWToken)
+	}
+
+	for _, secretName := range args {
+		request := api.DeleteSecretV3Request{
+			WorkspaceId: projectId,
+			Environment: environmentName,
+			SecretName:  secretName,
+			Type:        secretType,
+			SecretPath:  secretsPath,
+		}
+
+		err = api.CallDeleteSecretsRawV3(httpClient, request)
+		if err != nil {
+			util.HandleError(err, "Unable to complete your delete request")
+		}
+	}
+
+	if outputFormat != "" {
+		var outputStructure []map[string]any
+		for _, secretName := range args {
+			outputStructure = append(outputStructure, map[string]any{
+				"secretKey": secretName,
+			})
+		}
+		output, err := util.FormatOutput(outputFormat, outputStructure, &util.FormatOutputOptions{
+			DotEnvArrayKeyAttribute: "secretKey",
+		})
+		if err != nil {
+			util.HandleError(err, "Unable to format output")
+		}
+		util.PrintStdout(output)
+	} else {
+		util.PrintfStderr("secret name(s) [%v] have been deleted from your project \n", strings.Join(args, ", "))
+	}
+
+	Telemetry.CaptureEvent("cli-command:secrets delete", posthog.NewProperties().Set("secretCount", len(args)).Set("version", util.CLI_VERSION))
 }
 
 func getSecretsByNames(cmd *cobra.Command, args []string) {
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -478,10 +408,7 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	recursive, err := cmd.Flags().GetBool("recursive")
 	if err != nil {
@@ -593,18 +520,9 @@ func getSecretsByNames(cmd *cobra.Command, args []string) {
 }
 
 func generateExampleEnv(cmd *cobra.Command, args []string) {
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -823,7 +741,52 @@ func getSecretsByKeys(secrets []models.SingleEnvironmentVariable) map[string]mod
 	return secretMapByName
 }
 
-func init() {
+func buildSecretsCmd() *cobra.Command {
+	secretsCmd := &cobra.Command{
+		Example:               `infisical secrets`,
+		Short:                 "Used to create, read update and delete secrets",
+		Use:                   "secrets",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.NoArgs,
+		Run:                   runSecrets,
+	}
+
+	secretsGetCmd := &cobra.Command{
+		Example:               `secrets get <secret name A> <secret name B>..."`,
+		Short:                 "Used to retrieve secrets by name",
+		Use:                   "get [secrets]",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.MinimumNArgs(1),
+		Run:                   getSecretsByNames,
+	}
+
+	secretsGenerateExampleEnvCmd := &cobra.Command{
+		Example:               `secrets generate-example-env > .example-env`,
+		Short:                 "Used to generate a example .env file",
+		Use:                   "generate-example-env",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.NoArgs,
+		Run:                   generateExampleEnv,
+	}
+
+	secretsSetCmd := &cobra.Command{
+		Example:               `secrets set <secretName=secretValue> <secretName=secretValue> <secretName=@/path/to/file>..."`,
+		Short:                 "Used set secrets",
+		Use:                   "set [secrets]",
+		DisableFlagsInUseLine: true,
+		Args:                  validateSecretsSetArgs,
+		Run:                   runSecretsSet,
+	}
+
+	secretsDeleteCmd := &cobra.Command{
+		Example:               `secrets delete <secret name A> <secret name B>..."`,
+		Short:                 "Used to delete secrets by name",
+		Use:                   "delete [secrets]",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.MinimumNArgs(1),
+		Run:                   runSecretsDelete,
+	}
+
 	// not doing this one
 	secretsGenerateExampleEnvCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsGenerateExampleEnvCmd.Flags().String("projectId", "", "manually set the projectId when using machine identity based auth")
@@ -860,35 +823,8 @@ func init() {
 	util.AddOutputFlagsToCmd(secretsDeleteCmd, "The output to format the secrets in.")
 	secretsCmd.AddCommand(secretsDeleteCmd)
 
-	// *** Folders sub command ***
-	folderCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
-
-	// Add getCmd, createCmd and deleteCmd flags here
-	getCmd.Flags().StringP("path", "p", "/", "The path from where folders should be fetched from")
-	getCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	getCmd.Flags().String("projectId", "", "manually set the projectId to fetch folders from when using machine identity based auth")
-	util.AddOutputFlagsToCmd(getCmd, "The output to format the folders in.")
-	folderCmd.AddCommand(getCmd)
-
-	// Add createCmd flags here
-	createCmd.Flags().StringP("path", "p", "/", "Path to where the folder should be created")
-	createCmd.Flags().StringP("name", "n", "", "Name of the folder to be created in selected `--path`")
-	createCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	createCmd.Flags().String("projectId", "", "manually set the project ID for creating folders in when using machine identity based auth")
-	util.AddOutputFlagsToCmd(createCmd, "The output to format the folders in.")
-	folderCmd.AddCommand(createCmd)
-
-	// Add deleteCmd flags here
-	deleteCmd.Flags().StringP("path", "p", "/", "Path to the folder to be deleted")
-	deleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	deleteCmd.Flags().String("projectId", "", "manually set the projectId to delete folders when using machine identity based auth")
-	deleteCmd.Flags().StringP("name", "n", "", "Name of the folder to be deleted within selected `--path`")
-	util.AddOutputFlagsToCmd(deleteCmd, "The output to format the folders in.")
-	folderCmd.AddCommand(deleteCmd)
-
-	secretsCmd.AddCommand(folderCmd)
-
-	// ** End of folders sub command
+	secretsCmd.AddCommand(buildFolderCmd())
+	secretsCmd.AddCommand(buildAgentProxyCmd())
 
 	secretsCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	secretsCmd.Flags().String("projectId", "", "manually set the projectId to fetch secrets when using machine identity based auth")
@@ -901,5 +837,6 @@ func init() {
 	secretsCmd.Flags().Bool("plain", false, "print values without formatting, one per line (deprecated, use --output instead)")
 	secretsCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	util.AddOutputFlagsToCmd(secretsCmd, "The output to format the secrets in.")
-	RootCmd.AddCommand(secretsCmd)
+
+	return secretsCmd
 }

@@ -334,7 +334,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		}
 
 		res, err := GetPlainTextSecretsV4(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
-			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true, params.IncludePersonalOverrides)
+			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
 		if err == nil {
@@ -342,7 +342,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			if err != nil {
 				return nil, err
 			}
-			WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey, res.Secrets)
+			WriteBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, params.ExpandSecretReferences, backupEncryptionKey, res.Secrets)
 		}
 
 		secretsToReturn = res.Secrets
@@ -351,7 +351,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		if !isConnected {
 			backupEncryptionKey, _ := GetBackupEncryptionKey()
 			if backupEncryptionKey != nil {
-				backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, backupEncryptionKey)
+				backedUpSecrets, err := ReadBackupSecrets(params.WorkspaceId, params.Environment, params.SecretsPath, params.ExpandSecretReferences, backupEncryptionKey)
 				if len(backedUpSecrets) > 0 {
 					PrintWarning("Unable to fetch the latest secret(s) due to connection error, serving secrets from last successful fetch. For more info, run with --debug")
 					secretsToReturn = backedUpSecrets
@@ -402,9 +402,18 @@ func GetBackupEncryptionKey() ([]byte, error) {
 	return []byte(encryptionKey), nil
 }
 
-func WriteBackupSecrets(workspace string, environment string, secretsPath string, encryptionKey []byte, secrets []models.SingleEnvironmentVariable) error {
+// backupSecretsFileName names the offline backup for one fetch. Expanded and raw (--expand=false)
+// fetches return different values for the same secrets, so they are backed up separately;
+func backupSecretsFileName(workspace string, environment string, secretsPath string, expanded bool) string {
 	formattedPath := strings.ReplaceAll(secretsPath, "/", "-")
-	fileName := fmt.Sprintf("project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
+	if expanded {
+		return fmt.Sprintf("project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
+	}
+	return fmt.Sprintf("raw_project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
+}
+
+func WriteBackupSecrets(workspace string, environment string, secretsPath string, expanded bool, encryptionKey []byte, secrets []models.SingleEnvironmentVariable) error {
+	fileName := backupSecretsFileName(workspace, environment, secretsPath, expanded)
 	secrets_backup_folder_name := "secrets-backup"
 
 	_, fullConfigFileDirPath, err := GetFullConfigFilePath()
@@ -434,9 +443,8 @@ func WriteBackupSecrets(workspace string, environment string, secretsPath string
 	return nil
 }
 
-func ReadBackupSecrets(workspace string, environment string, secretsPath string, encryptionKey []byte) ([]models.SingleEnvironmentVariable, error) {
-	formattedPath := strings.ReplaceAll(secretsPath, "/", "-")
-	fileName := fmt.Sprintf("project_secrets_%s_%s_%s.json", workspace, environment, formattedPath)
+func ReadBackupSecrets(workspace string, environment string, secretsPath string, expanded bool, encryptionKey []byte) ([]models.SingleEnvironmentVariable, error) {
+	fileName := backupSecretsFileName(workspace, environment, secretsPath, expanded)
 	secrets_backup_folder_name := "secrets-backup"
 
 	_, fullConfigFileDirPath, err := GetFullConfigFilePath()
@@ -495,20 +503,15 @@ func GetEnvFromWorkspaceFile() string {
 		return ""
 	}
 
+	return envFromWorkspaceConfig(workspaceFile)
+}
+
+func envFromWorkspaceConfig(workspaceFile models.WorkspaceConfigFile) string {
 	if env := GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
 		return env
 	}
 
 	return workspaceFile.DefaultEnvironment
-}
-
-func GetSecretPathFromWorkspaceFile() string {
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		log.Debug().Msgf("GetSecretPathFromWorkspaceFile: [err=%s]", err)
-		return ""
-	}
-	return workspaceFile.DefaultSecretPath
 }
 
 func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
