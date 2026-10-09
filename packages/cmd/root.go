@@ -95,7 +95,7 @@ func Execute() {
 	}
 }
 
-// resolveDomain picks the domain by precedence: --domain flag > env > .infisical.json > default (flagValue).
+// resolveDomain picks the domain by precedence: --domain flag > env > .infisical.yaml > default (flagValue).
 // Must run after flag parsing (PersistentPreRun, not init) so cmd.Flags().Changed is reliable.
 func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	if cmd.Flags().Changed("domain") {
@@ -112,13 +112,13 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	}
 
 	if !valid {
-		util.PrintWarningWithWriter("The 'domain' field in .infisical.json is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
+		util.PrintWarningWithWriter("The 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json) is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
 		return flagValue
 	}
 
-	// A .infisical.json is usually committed to the repo, so a malicious one could redirect requests
+	// A .infisical.yaml is usually committed to the repo, so a malicious one could redirect requests
 	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
-	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.json; all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
+	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.yaml (or a legacy .infisical.json); all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
 	return domain
 }
 
@@ -150,7 +150,7 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default, colored), plain (no color), json (structured). Set NO_COLOR=1 to disable colors in console mode. Can also set via LOG_FORMAT env var.")
 	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
 	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
-	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'domain' field in .infisical.json. Required for non-US Cloud users.")
+	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json). Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
 	RootCmd.PersistentFlags().String("profile", "", "Use a specific login profile for this command (see [infisical profile list]). Can also set via the INFISICAL_PROFILE environment variable.")
 	RootCmd.PersistentFlags().String("org", "", "Use a specific organization for this command, by name, slug, or id. Overrides the profile's default organization without changing it. Can also set via the INFISICAL_ORG environment variable.")
