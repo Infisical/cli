@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 )
@@ -1120,6 +1121,108 @@ func TestAChunkEndsAtItsLatestRecordWhenTheClockSteps(t *testing.T) {
 	}
 	if chunk.meta.EndedAt != "2026-09-16T10:00:00.1Z" {
 		t.Fatalf("the chunk ends at %s, expected the latest record", chunk.meta.EndedAt)
+	}
+}
+
+func TestAChunkIDCarriesTheTimeOfItsLatestRecord(t *testing.T) {
+	log, advance, _ := newTestLog(&fakeShipper{})
+	grant := testGrant("s1")
+
+	log.record(grant, aRecord("api.github.com"))
+	advance(90 * time.Second)
+	log.record(grant, aRecord("api.github.com"))
+	advance(-time.Minute)
+	log.record(grant, aRecord("api.github.com"))
+
+	spool := log.spools["s1"]
+	chunk, err := spool.sealSlice(spool.ring.drain(3), []byte("[]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endedAt, err := time.Parse(time.RFC3339Nano, chunk.meta.EndedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, nsec := uuid.MustParse(chunk.meta.ChunkID).Time().UnixTime()
+	if idAt := time.Unix(sec, nsec); idAt.UnixMilli() != endedAt.UnixMilli() {
+		t.Fatalf("the chunk id carries %s but the chunk ends at %s; Infisical refuses that", idAt.UTC(), endedAt)
+	}
+}
+
+func recordsAt(times ...time.Time) []sessionLogRecord {
+	records := make([]sessionLogRecord, len(times))
+	for i, at := range times {
+		records[i] = aRecord("api.github.com")
+		records[i].at = at
+		records[i].Ts = at.Format(time.RFC3339Nano)
+	}
+	return records
+}
+
+func TestABatchIsSplitSoNoChunkSpansMoreThanTwoMinutes(t *testing.T) {
+	base := time.Date(2026, 9, 16, 20, 50, 33, 0, time.UTC)
+
+	// A laptop that slept between two requests.
+	groups, err := packSessionLogRecords(recordsAt(base, base.Add(6*time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("records 6 minutes apart packed into %d chunk(s), expected 2", len(groups))
+	}
+
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(90*time.Second), base.Add(30*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("records 90 seconds apart packed into %d chunks, expected 1", len(groups))
+	}
+
+	// A clock that stepped back: the span is measured from the earliest record, not the first.
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(-90*time.Second), base.Add(time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || len(groups[1].records) != 1 {
+		t.Fatalf("a record 150 seconds after the earliest one was packed with it")
+	}
+}
+
+func TestASizeCutAndASpanCutCanHappenInOneBatch(t *testing.T) {
+	base := time.Date(2026, 9, 16, 20, 50, 33, 0, time.UTC)
+	times := make([]time.Time, sessionLogFlushRecords)
+	for i := range times {
+		times[i] = base
+	}
+	times[len(times)-1] = base.Add(3 * time.Minute)
+	records := recordsAt(times...)
+	for i := range records {
+		records[i].Path = truncatePath("/" + strings.Repeat("&", maxLoggedPathLen))
+	}
+
+	groups, err := packSessionLogRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) < 3 {
+		t.Fatalf("a ~12 MB batch with one late record packed into %d chunks, expected at least 3", len(groups))
+	}
+	total := 0
+	for i, group := range groups {
+		if len(group.plaintext) > sessionLogMaxChunkPlaintext {
+			t.Fatalf("chunk %d holds %d bytes, over %d", i, len(group.plaintext), sessionLogMaxChunkPlaintext)
+		}
+		if !spansAtMost(group.records, sessionLogMaxChunkSpan) {
+			t.Fatalf("chunk %d spans more than %s", i, sessionLogMaxChunkSpan)
+		}
+		total += len(group.records)
+	}
+	if last := groups[len(groups)-1]; len(last.records) != 1 || !last.records[0].at.Equal(times[len(times)-1]) {
+		t.Fatal("the late record did not get a chunk of its own")
+	}
+	if total != len(records) {
+		t.Fatalf("the chunks hold %d records, expected %d", total, len(records))
 	}
 }
 

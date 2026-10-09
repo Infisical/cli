@@ -16,6 +16,9 @@ const (
 	sessionLogFlushSlack        = time.Second
 	sessionLogFlushRecords      = 1000
 	sessionLogMaxChunkPlaintext = 4 << 20
+	// A chunk is named by its last request, and Infisical lists a date range from 3 minutes past its end, so a chunk
+	// must not reach further back than this.
+	sessionLogMaxChunkSpan = 2 * time.Minute
 
 	sessionLogSpoolCapacity    = 5000     // one session's ring; full: overwrite the oldest line, count it
 	sessionLogTotalCapacity    = 200_000  // all rings together; full: drop new lines, count them

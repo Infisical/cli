@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -57,10 +59,15 @@ func s3ChecksumHeader(ciphertext []byte) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-func newSessionLogChunkID() (string, error) {
-	id, err := uuid.NewV7()
+// A UUIDv7 carrying the time of the chunk's last request, which is what Infisical places it by in a date range.
+func newSessionLogChunkID(lastRecordAt time.Time) (string, error) {
+	id, err := uuid.NewRandom()
 	if err != nil {
 		return "", fmt.Errorf("agent-vault: could not mint a session log chunk id: %w", err)
 	}
+	var ms [8]byte
+	binary.BigEndian.PutUint64(ms[:], uint64(lastRecordAt.UnixMilli()))
+	copy(id[0:6], ms[2:8])
+	id[6] = 0x70 | (id[6] & 0x0F)
 	return id.String(), nil
 }

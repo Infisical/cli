@@ -152,27 +152,33 @@ func TestIVsDoNotRepeat(t *testing.T) {
 	}
 }
 
-func TestChunkIDsAreLowercaseUUIDv7sThatSortInMintOrder(t *testing.T) {
-	earlier, err := newSessionLogChunkID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	later, err := newSessionLogChunkID()
+func TestAChunkIDIsALowercaseUUIDv7CarryingItsTime(t *testing.T) {
+	at := time.Date(2026, 9, 16, 20, 50, 33, 123_456_789, time.UTC)
+	id, err := newSessionLogChunkID(at)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !(earlier < later) {
-		t.Fatalf("%q did not sort before %q", earlier, later)
+	if id != strings.ToLower(id) {
+		t.Fatalf("%q is not lowercase, which is how the browser rebuilds the AAD from the object name", id)
 	}
-	if earlier != strings.ToLower(earlier) {
-		t.Fatalf("%q is not lowercase, which is how the browser rebuilds the AAD from the object name", earlier)
-	}
-	parsed, err := uuid.Parse(earlier)
+	parsed, err := uuid.Parse(id)
 	if err != nil {
 		t.Fatalf("a minted chunk id did not parse: %v", err)
 	}
-	if parsed.Version() != 7 {
-		t.Fatalf("a chunk id is UUID version %d, the server only accepts 7", parsed.Version())
+	if parsed.Version() != 7 || parsed.Variant() != uuid.RFC4122 {
+		t.Fatalf("a chunk id is UUID version %d variant %s, the server only accepts version 7 RFC 4122", parsed.Version(), parsed.Variant())
+	}
+	sec, nsec := parsed.Time().UnixTime()
+	if got := time.Unix(sec, nsec).UnixMilli(); got != at.UnixMilli() {
+		t.Fatalf("the chunk id carries %d ms, expected %d", got, at.UnixMilli())
+	}
+
+	other, err := newSessionLogChunkID(at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == id {
+		t.Fatal("two chunks closed in the same millisecond got the same id")
 	}
 }
