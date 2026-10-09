@@ -178,3 +178,101 @@ func TestGetBoolFlagOrEnv(t *testing.T) {
 		}
 	})
 }
+
+// newRunLikeTestCmd mirrors `run`: a repeatable --path and a --project-config-dir flag.
+func newRunLikeTestCmd(t *testing.T) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run"}
+	cmd.Flags().StringP("env", "e", "dev", "")
+	cmd.Flags().StringArray("path", []string{"/"}, "")
+	cmd.Flags().String("project-config-dir", "", "")
+	return cmd
+}
+
+func TestResolveSecretPaths(t *testing.T) {
+	t.Run("repeated flags win and are returned as given", func(t *testing.T) {
+		writeWorkspace(t, `{"defaultSecretPath":"/fromfile"}`)
+		t.Setenv(INFISICAL_SECRET_PATH_NAME, "/fromenv")
+		cmd := newRunLikeTestCmd(t)
+		_ = cmd.Flags().Set("path", "/a")
+		_ = cmd.Flags().Set("path", "/b")
+		got := ResolveSecretPaths(cmd)
+		if len(got) != 2 || got[0] != "/a" || got[1] != "/b" {
+			t.Fatalf("got %v, want [/a /b]", got)
+		}
+	})
+
+	t.Run("env over file", func(t *testing.T) {
+		writeWorkspace(t, `{"defaultSecretPath":"/fromfile"}`)
+		t.Setenv(INFISICAL_SECRET_PATH_NAME, "/fromenv")
+		if got := ResolveSecretPaths(newRunLikeTestCmd(t)); len(got) != 1 || got[0] != "/fromenv" {
+			t.Fatalf("got %v, want [/fromenv]", got)
+		}
+	})
+
+	t.Run("file when flag and env unset", func(t *testing.T) {
+		writeWorkspace(t, `{"defaultSecretPath":"/fromfile"}`)
+		t.Setenv(INFISICAL_SECRET_PATH_NAME, "")
+		if got := ResolveSecretPaths(newRunLikeTestCmd(t)); len(got) != 1 || got[0] != "/fromfile" {
+			t.Fatalf("got %v, want [/fromfile]", got)
+		}
+	})
+
+	t.Run("defaults to the flag default", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv(INFISICAL_SECRET_PATH_NAME, "")
+		if got := ResolveSecretPaths(newRunLikeTestCmd(t)); len(got) != 1 || got[0] != "/" {
+			t.Fatalf("got %v, want [/]", got)
+		}
+	})
+}
+
+// A command pointed at another project with --project-config-dir must take its environment and
+// path defaults from that project's .infisical.json, never from the one in the current directory.
+func TestResolveUsesProjectConfigDir(t *testing.T) {
+	writeWorkspace(t, `{"workspaceId":"cwd-project","defaultEnvironment":"cwd-env","defaultSecretPath":"/cwd-path"}`)
+	t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+	t.Setenv(INFISICAL_SECRET_PATH_NAME, "")
+
+	selected := t.TempDir()
+	if err := os.WriteFile(filepath.Join(selected, ".infisical.json"),
+		[]byte(`{"workspaceId":"selected-project","defaultEnvironment":"selected-env","defaultSecretPath":"/selected-path"}`), 0o600); err != nil {
+		t.Fatalf("write selected workspace: %v", err)
+	}
+
+	t.Run("selected file wins over the current directory", func(t *testing.T) {
+		cmd := newRunLikeTestCmd(t)
+		_ = cmd.Flags().Set("project-config-dir", selected)
+		if got := ResolveEnvironmentName(cmd); got != "selected-env" {
+			t.Errorf("environment: got %q, want selected-env", got)
+		}
+		if got := ResolveSecretPaths(cmd); len(got) != 1 || got[0] != "/selected-path" {
+			t.Errorf("paths: got %v, want [/selected-path]", got)
+		}
+	})
+
+	t.Run("selected file without defaults falls back to the flag defaults, not the cwd file", func(t *testing.T) {
+		bare := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bare, ".infisical.json"), []byte(`{"workspaceId":"bare"}`), 0o600); err != nil {
+			t.Fatalf("write bare workspace: %v", err)
+		}
+		cmd := newRunLikeTestCmd(t)
+		_ = cmd.Flags().Set("project-config-dir", bare)
+		if got := ResolveEnvironmentName(cmd); got != "dev" {
+			t.Errorf("environment: got %q, want dev", got)
+		}
+		if got := ResolveSecretPaths(cmd); len(got) != 1 || got[0] != "/" {
+			t.Errorf("paths: got %v, want [/]", got)
+		}
+	})
+
+	t.Run("without the flag the current directory is used", func(t *testing.T) {
+		cmd := newRunLikeTestCmd(t)
+		if got := ResolveEnvironmentName(cmd); got != "cwd-env" {
+			t.Errorf("environment: got %q, want cwd-env", got)
+		}
+		if got := ResolveSecretPaths(cmd); len(got) != 1 || got[0] != "/cwd-path" {
+			t.Errorf("paths: got %v, want [/cwd-path]", got)
+		}
+	})
+}

@@ -223,7 +223,7 @@ func executeSingleCommandWithEnvs(args []string, secretsCount int, env []string)
 	command := args[0]
 	argsForCommand := args[1:]
 
-	log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
+	log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
 
 	cmd := exec.Command(command, argsForCommand...)
 	cmd.Stdin = os.Stdin
@@ -251,7 +251,7 @@ func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
 
-	log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
+	log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
 	log.Debug().Msgf("executing command: %s %s %s \n", shell[0], shell[1], fullCommand)
 
 	return execBasicCmd(cmd)
@@ -329,7 +329,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 			log.Info().Msg(color.HiMagentaString("[HOT RELOAD] Environment changes detected. Reloading process..."))
 			beingTerminated = true
 
-			log.Debug().Msgf(color.HiMagentaString("[HOT RELOAD] Sending SIGTERM to PID %d", cmd.Process.Pid))
+			log.Debug().Msg(color.HiMagentaString("[HOT RELOAD] Sending SIGTERM to PID %d", cmd.Process.Pid))
 			if e := cmd.Process.Signal(syscall.SIGTERM); e != nil {
 				log.Error().Err(e).Msg(color.HiMagentaString("[HOT RELOAD] Failed to send SIGTERM"))
 			}
@@ -370,7 +370,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 		watcherWaitGroup.Add(1)
 
 		// start the process
-		log.Info().Msgf(color.GreenString("Injecting %v Infisical secrets into your application process", environmentVariables.SecretsCount))
+		log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", environmentVariables.SecretsCount))
 
 		cmd, err = util.RunCommand(commandFlag, args, environmentVariables.Variables, false)
 		if err != nil {
