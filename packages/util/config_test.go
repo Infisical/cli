@@ -171,7 +171,19 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// useTempHome points the home directory at a temp dir so the workspace config lockfiles land there instead of the
+// real ~/.infisical.
+func useTempHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
 func TestGetWorkSpaceFromFilePath(t *testing.T) {
+	useTempHome(t)
+
 	t.Run("reads yaml when only yaml exists", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestFile(t, filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
@@ -283,6 +295,7 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 }
 
 func TestGetWorkSpaceFromFileMigratesParentConfig(t *testing.T) {
+	useTempHome(t)
 	root := t.TempDir()
 	jsonPath := filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)

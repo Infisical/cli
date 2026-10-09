@@ -347,12 +347,21 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
 		return err
 	}
 
-	err = util.WriteToFile(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
+	// share the lock with the legacy .infisical.json migration so a command migrating this directory can't
+	// overwrite the newly selected project with the old one
+	unlock, err := util.LockWorkspaceConfigDir(".")
 	if err != nil {
-		return err
+		log.Debug().Err(err).Msg("writeWorkspaceFile: unable to lock the workspace config, writing it without the lock")
+	} else {
+		defer unlock()
 	}
 
-	
+	// written atomically so commands reading .infisical.yaml without the lock never see a partial file
+	err = util.WriteFileAtomic(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
+	if err != nil {
+		return fmt.Errorf("unable to write %s [err=%v]", util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, err)
+	}
+
 	if _, err := os.Stat(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err != nil {
 		return nil
 	}

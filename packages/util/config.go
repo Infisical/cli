@@ -68,17 +68,27 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
-	// check if the yaml config file exists
-	_, err := os.Stat(yamlConfigFilePath)
-	if err == nil {
-		return readWorkspaceConfigYaml(yamlConfigFilePath)
+	if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
+		return workspaceConfigFile, err
 	}
-	if !os.IsNotExist(err) {
-		return models.WorkspaceConfigFile{}, err
+
+	unlock, lockErr := LockWorkspaceConfigDir(configFileDir)
+	if lockErr == nil {
+		defer unlock() //nolint:errcheck
+
+		// another command may have migrated the JSON or run `infisical init` while we waited for the lock
+		if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
+			return workspaceConfigFile, err
+		}
 	}
 
 	if _, err := os.Stat(jsonConfigFilePath); os.IsNotExist(err) {
 		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
+	}
+
+	if lockErr != nil {
+		log.Debug().Err(lockErr).Msgf("GetWorkSpaceFromFilePath: unable to lock [dir=%s], reading the legacy file without migrating it", configFileDir)
+		return GetWorkspaceConfigByPath(jsonConfigFilePath)
 	}
 
 	workspaceConfigFile, err := migrateWorkspaceConfigToYaml(jsonConfigFilePath, yamlConfigFilePath)
@@ -90,8 +100,21 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 	return workspaceConfigFile, nil
 }
 
+func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.WorkspaceConfigFile, exists bool, err error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return models.WorkspaceConfigFile{}, false, nil
+		}
+		return models.WorkspaceConfigFile{}, true, err
+	}
+
+	workspaceConfigFile, err = readWorkspaceConfigYaml(path)
+	return workspaceConfigFile, true, err
+}
+
 // migrateWorkspaceConfigToYaml converts the legacy JSON workspace config into YAML. The JSON file is only
-// removed once the YAML file has been fully written and read back successfully.
+// removed once the YAML file has been fully written and read back successfully. Callers must hold
+// LockWorkspaceConfigDir for the directory.
 func migrateWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) (models.WorkspaceConfigFile, error) {
 	legacyWorkspaceConfig, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
 	if err != nil {
@@ -103,21 +126,8 @@ func migrateWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath 
 		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
 	}
 
-	// write to a temp file and rename it so a partially written .infisical.yaml is never left behind
-	tempFile, err := os.CreateTemp(filepath.Dir(yamlConfigFilePath), INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME+".tmp-*")
-	if err != nil {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to create temp file [err=%s]", err)
-	}
-	defer os.Remove(tempFile.Name()) // no-op once the rename succeeds
-
-	if _, err := tempFile.Write(yamlConfigFileAsBytes); err != nil {
-		tempFile.Close()
-		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to write temp file [err=%s]", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to close temp file [err=%s]", err)
-	}
-	if err := os.Rename(tempFile.Name(), yamlConfigFilePath); err != nil {
+	// written atomically so a partially written .infisical.yaml is never left behind or seen by lockless readers
+	if err := WriteFileAtomic(yamlConfigFilePath, yamlConfigFileAsBytes, 0600); err != nil {
 		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
 	}
 

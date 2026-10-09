@@ -25,6 +25,7 @@ func newResolveTestCmd(t *testing.T) *cobra.Command {
 // deterministic. The first read migrates it to .infisical.yaml.
 func writeWorkspace(t *testing.T, contents string) {
 	t.Helper()
+	useTempHome(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(contents), 0o600); err != nil {
