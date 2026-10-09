@@ -56,7 +56,7 @@ func GetWorkspacesInOrganization(workspaceResponse api.GetWorkSpacesResponse, or
 	var workspaceNames []string
 
 	for _, workspace := range workspaces {
-		if workspace.OrganizationId == orgID {
+		if workspace.OrganizationId == orgID && workspace.Type == WORKSPACE_TYPE_SECRET_MANAGER {
 			filteredWorkspaces = append(filteredWorkspaces, workspace)
 			workspaceNames = append(workspaceNames, workspace.Name)
 		}

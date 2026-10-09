@@ -28,13 +28,17 @@ func ConfigFileExists() bool {
 	}
 }
 
+// WorkspaceConfigFileExistsInCurrentPath reports whether the current directory
+// has a workspace config file, either the YAML one or a legacy .infisical.json.
 func WorkspaceConfigFileExistsInCurrentPath() bool {
-	if _, err := os.Stat(INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err == nil {
-		return true
-	} else {
-		log.Debug().Err(err)
-		return false
+	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+		if _, err := os.Stat(fileName); err == nil {
+			return true
+		} else {
+			log.Debug().Err(err)
+		}
 	}
+	return false
 }
 
 func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {

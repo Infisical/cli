@@ -4,7 +4,6 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/posthog/posthog-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // runCmd represents the run command
@@ -39,7 +39,7 @@ infisical init --project-id <project-id>`,
 
 		if util.WorkspaceConfigFileExistsInCurrentPath() {
 			if !isatty.IsTerminal(os.Stdin.Fd()) {
-				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project (.infisical.json exists). To link a different project, change workspaceId in .infisical.json.")
+				util.PrintErrorMessageAndExit("This directory is already linked to an Infisical project. To link a different project, change secrets-management.project-id in .infisical.yaml (or workspaceId in a legacy .infisical.json).")
 			}
 
 			shouldOverride, err := shouldOverrideWorkspacePrompt()
@@ -70,7 +70,7 @@ infisical init --project-id <project-id>`,
 		}
 
 		// Non-interactive path: we already know the project. Skip the org
-		// and workspace pickers and just write .infisical.json. Subsequent
+		// and workspace pickers and just write .infisical.yaml. Subsequent
 		// commands (secrets, run) will surface auth errors if the logged-in
 		// session cannot reach this project.
 		if projectID != "" {
@@ -157,7 +157,7 @@ infisical init --project-id <project-id>`,
 		filteredWorkspaces, workspaceNames := util.GetWorkspacesInOrganization(workspaceResponse, selectedOrgID, selectedSubOrgName)
 
 		prompt := promptui.Select{
-			Label: "Which of your Infisical projects would you like to connect this project to?",
+			Label: "Select the secret management project to link this directory to",
 			Items: workspaceNames,
 			Size:  7,
 		}
@@ -269,7 +269,7 @@ func hintDirectoryProfileBinding(userCreds util.LoggedInUserDetails) {
 }
 
 func init() {
-	initCmd.Flags().String("project-id", "", "Project ID to link this directory to. When set, skips the interactive org and project pickers and writes .infisical.json directly.")
+	initCmd.Flags().String("project-id", "", "Project ID to link this directory to. When set, skips the interactive org and project pickers and writes .infisical.yaml directly.")
 	RootCmd.AddCommand(initCmd)
 }
 
@@ -336,19 +336,32 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 }
 
 func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
-	workspaceFileToSave := models.WorkspaceConfigFile{
-		WorkspaceId: selectedWorkspace.ID,
+	workspaceFileToSave := models.WorkspaceConfigFileYaml{
+		SecretsManagement: models.SecretsManagementConfigSection{
+			ProjectID: selectedWorkspace.ID,
+		},
 	}
 
-	marshalledWorkspaceFile, err := json.MarshalIndent(workspaceFileToSave, "", "    ")
+	marshalledWorkspaceFile, err := yaml.Marshal(workspaceFileToSave)
 	if err != nil {
 		return err
 	}
 
-	err = util.WriteToFile(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
+	err = util.WriteToFile(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
 	if err != nil {
 		return err
 	}
+
+	
+	if _, err := os.Stat(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err != nil {
+		return nil
+	}
+
+	if err := os.Remove(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err != nil {
+		util.PrintWarning(fmt.Sprintf("Wrote %s but unable to remove the legacy %s; delete it manually [err=%s]", util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, err))
+		return nil
+	}
+	util.PrintlnStderr(fmt.Sprintf("Replaced the legacy %s with %s.", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
 
 	return nil
 }

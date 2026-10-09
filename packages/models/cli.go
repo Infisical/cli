@@ -170,6 +170,7 @@ type Workspace struct {
 	Plan           string `json:"plan,omitempty"`
 	V              int    `json:"__v"`
 	OrganizationId string `json:"orgId"`
+	Type           string `json:"type"`
 }
 
 type WorkspaceConfigFile struct {
