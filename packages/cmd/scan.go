@@ -351,9 +351,10 @@ var scanCmd = &cobra.Command{
 			var (
 				gitCmd      *sources.GitCmd
 				scmPlatform scm.Platform
+				logOpts     string
 			)
 
-			logOpts, err := cmd.Flags().GetString("log-opts")
+			logOpts, err = cmd.Flags().GetString("log-opts")
 			if err != nil {
 				log.Fatal().Err(err).Msg("could not call GetString() for log-opts")
 			}
@@ -522,6 +523,11 @@ var scanGitChangesCmd = &cobra.Command{
 		if reportPath != "" {
 			reportFindings(findings, reportPath, ext, cfg)
 		}
+
+		if err != nil {
+			os.Exit(1)
+		}
+
 		if len(findings) != 0 {
 			os.Exit(exitCode)
 		}
