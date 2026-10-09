@@ -334,7 +334,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		}
 
 		res, err := GetPlainTextSecretsV4(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
-			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true, params.IncludePersonalOverrides)
+			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
 		if err == nil {

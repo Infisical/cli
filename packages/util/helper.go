@@ -555,7 +555,7 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 	return value, nil
 }
 
-// ResolveEnvironmentName resolves the environment slug for `agent-proxy connect`, in order:
+// ResolveEnvironmentName resolves the environment slug for a command, in order:
 // the --env flag (if explicitly set) > INFISICAL_ENVIRONMENT > .infisical.json
 // (git-branch mapping, then defaultEnvironment) > the flag's own default value.
 // It keys off cmd.Flags().Changed rather than an empty-value check so env and workspace
@@ -591,6 +591,24 @@ func ResolveSecretPath(cmd *cobra.Command) string {
 	}
 	value, _ := cmd.Flags().GetString("path")
 	return value
+}
+
+// ResolveSecretPaths is ResolveSecretPath for commands whose --path flag can be repeated
+// (`run`). Explicit flags are returned as given; otherwise the single path from
+// INFISICAL_SECRET_PATH or .infisical.json defaultSecretPath, then the flag's default.
+func ResolveSecretPaths(cmd *cobra.Command) []string {
+	if cmd.Flags().Changed("path") {
+		values, _ := cmd.Flags().GetStringArray("path")
+		return values
+	}
+	if value := strings.TrimSpace(os.Getenv(INFISICAL_SECRET_PATH_NAME)); value != "" {
+		return []string{value}
+	}
+	if value := GetSecretPathFromWorkspaceFile(); value != "" {
+		return []string{value}
+	}
+	values, _ := cmd.Flags().GetStringArray("path")
+	return values
 }
 
 // ResolveAgentProxyAddress resolves the agent proxy address for `agent-proxy connect`, in order:
