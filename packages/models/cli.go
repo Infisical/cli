@@ -180,6 +180,24 @@ type WorkspaceConfigFile struct {
 	Domain                        string            `json:"domain,omitempty"`
 }
 
+type GeneralConfigSection struct {
+	Domain string `yaml:"domain,omitempty"`
+}
+
+type SecretsManagementConfigSection struct {
+	ProjectID          string `yaml:"project-id"`
+	DefaultEnvironment string `yaml:"default-environment"`
+	Mappings           struct {
+		GitBranchToEnvironment  map[string]string `yaml:"git-branch-to-environment"`
+
+	} `yaml:"mappings"`
+}
+
+type WorkspaceConfigFileYaml struct {
+	General           GeneralConfigSection           `yaml:"general"`
+	SecretsManagement SecretsManagementConfigSection `yaml:"secrets-management"`
+}
+
 type SymmetricEncryptionResult struct {
 	CipherText []byte `json:"CipherText"`
 	Nonce      []byte `json:"Nonce"`
