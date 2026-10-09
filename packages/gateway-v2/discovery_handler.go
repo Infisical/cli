@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -82,12 +83,24 @@ func serveRPCOverTLS(
 	req = req.WithContext(opCtx)
 
 	rw := newBufferedResponseWriter()
-	mux.ServeHTTP(rw, req)
+	dispatchRPC(mux, rw, req, logLabel)
 	if err := rw.writeTo(conn); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
 	}
 	log.Debug().Str("path", req.URL.Path).Int("status", rw.status).Msg(logLabel + ": response written")
 	return nil
+}
+
+func dispatchRPC(handler http.Handler, rw *bufferedResponseWriter, req *http.Request, logLabel string) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Error().Str("panic", fmt.Sprint(recovered)).Bytes("stack", debug.Stack()).Str("path", req.URL.Path).Msg(logLabel + ": recovered from panic")
+			if !rw.wroteStart {
+				writeRPCError(rw, http.StatusInternalServerError, "The request failed unexpectedly")
+			}
+		}
+	}()
+	handler.ServeHTTP(rw, req)
 }
 
 func serveDiscoveryOverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, forwardConfig *ForwardConfig) error {
@@ -98,6 +111,7 @@ var discoveryMux = sync.OnceValue(func() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/exec", handleDiscoveryExec)
 	mux.HandleFunc("/v1/sweep", handleDiscoverySweep)
+	mux.HandleFunc("/v1/scan-certificates", handleDiscoveryScanCertificates)
 	return mux
 })
 
@@ -117,7 +131,7 @@ func handleDiscoveryExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := r.Context().Value(rpcTargetContextKey{}).(rpcTarget)
-	result, execErr := doSSHExec(target.host, target.port, env)
+	result, execErr := doSSHExec(r.Context(), target.host, target.port, env)
 	if execErr != nil {
 		writeRPCError(w, http.StatusBadGateway, execErr.Error())
 		return

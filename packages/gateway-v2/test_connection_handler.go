@@ -810,7 +810,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		}
 		redactSecrets = append(redactSecrets, params.Password, params.PrivateKey)
 		op = func() error {
-			_, err := doSSHExec(target.host, target.port, sshExecEnvelope{
+			_, err := doSSHExec(ctx, target.host, target.port, sshExecEnvelope{
 				Command:     "true",
 				AuthMethod:  params.AuthMethod,
 				Username:    params.Username,

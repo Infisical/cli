@@ -468,6 +468,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 		}
 		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
 		capabilities[CapabilityClickhouseNativeProtocol] = true
+		capabilities[CapabilityCertificateScan] = true
 		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
 		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
