@@ -250,8 +250,11 @@ func pkcs12KDFWorkWithinLimit(data []byte) bool {
 	}
 	budget := kdfBudget{remaining: maxKDFIterations}
 	macIterations, macOK := pfx.MacData.Iterations, pfx.MacData.Iterations > 0
-	if !budget.spend(macIterations, macOK) || !budget.spend(macIterations, macOK) {
-		return false
+	// go-pkcs12 verifies the MAC a second time when the empty password fails, so budget for both runs.
+	for range 2 {
+		if !budget.spend(macIterations, macOK) {
+			return false
+		}
 	}
 	authSafe, err := unwrapOctetString(pfx.AuthSafe.Content)
 	if err != nil {

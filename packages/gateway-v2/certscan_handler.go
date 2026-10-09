@@ -79,7 +79,7 @@ func handleDiscoveryScanCertificates(w http.ResponseWriter, r *http.Request) {
 		writeRPCErrorWithKind(w, http.StatusBadGateway, message, string(classifyTestConnFailure(err)))
 		return
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	result, err := runCertificateScan(ctx, sshClientRunner{client: client}, env.Request)
 	if err != nil {

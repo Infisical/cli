@@ -217,7 +217,7 @@ func doSSHExec(ctx context.Context, targetHost string, targetPort int, env sshEx
 	if err != nil {
 		return sshExecResult{}, err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	output, err := runSSHCommand(ctx, client, env.Command, maxSshExecOutputBytes)
 	if errors.Is(err, context.DeadlineExceeded) {

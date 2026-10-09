@@ -40,6 +40,20 @@ func TestParseDeniedFolders(t *testing.T) {
 	}
 }
 
+func TestParseDeniedFoldersUnescapesGNUAndReadsBusybox(t *testing.T) {
+	stderr := `find: '/srv/q/a\303\261o locked': Permission denied
+find: '/srv/q/it\'s locked': Permission denied
+find: '/srv/q/back\\slash': Permission denied
+find: /srv/b/locked dir: Permission denied
+find: /srv/b/missing: No such file or directory
+`
+	got := parseDeniedFolders([]byte(stderr))
+	want := []string{"/srv/q/año locked", "/srv/q/it's locked", `/srv/q/back\slash`, "/srv/b/locked dir"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected denied %q", got)
+	}
+}
+
 func TestRemainingDepth(t *testing.T) {
 	if d := remainingDepth("/etc/letsencrypt/live", []string{"/etc/letsencrypt"}, 8); d != 7 {
 		t.Fatalf("expected 7, got %d", d)

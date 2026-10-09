@@ -3,9 +3,10 @@ package certscan
 import (
 	"bytes"
 	"fmt"
-	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -18,7 +19,14 @@ var pseudoFilesystems = []string{"/proc", "/sys", "/dev"}
 
 var findPatternEscaper = strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`, "[", `\[`)
 
-var findPermissionDenied = regexp.MustCompile(`find: [‘'"](.+?)[’'"]: Permission denied`)
+const (
+	findErrorPrefix       = "find: "
+	findPermissionDenied  = ": Permission denied"
+	findQuoteChars        = "'\"‘"
+	findClosingQuoteChars = "'\"’"
+)
+
+var cEscapes = map[byte]byte{'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v'}
 
 func buildFindCommand(roots, skips []string, depth int) string {
 	var b strings.Builder
@@ -66,12 +74,65 @@ func parseFindOutput(stdout []byte) []string {
 	return paths
 }
 
+// parseDeniedFolders reads GNU find's quoted, C-escaped paths ('/a\303\261o', '/it\'s') and busybox's raw unquoted ones.
 func parseDeniedFolders(stderr []byte) []string {
 	var denied []string
-	for _, match := range findPermissionDenied.FindAllSubmatch(stderr, -1) {
-		denied = append(denied, string(match[1]))
+	for _, line := range strings.Split(string(stderr), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if !strings.HasPrefix(line, findErrorPrefix) || !strings.HasSuffix(line, findPermissionDenied) {
+			continue
+		}
+		folder := strings.TrimSuffix(strings.TrimPrefix(line, findErrorPrefix), findPermissionDenied)
+		if strings.HasPrefix(folder, "/") {
+			denied = append(denied, folder)
+			continue
+		}
+		if unquoted, ok := unquoteFindPath(folder); ok {
+			denied = append(denied, unquoted)
+		}
 	}
 	return denied
+}
+
+func unquoteFindPath(quoted string) (string, bool) {
+	open, openSize := utf8.DecodeRuneInString(quoted)
+	closing, closeSize := utf8.DecodeLastRuneInString(quoted)
+	if len(quoted) < openSize+closeSize || !strings.ContainsRune(findQuoteChars, open) || !strings.ContainsRune(findClosingQuoteChars, closing) {
+		return "", false
+	}
+	body := quoted[openSize : len(quoted)-closeSize]
+	var out []byte
+	for i := 0; i < len(body); i++ {
+		if body[i] != '\\' || i+1 == len(body) {
+			out = append(out, body[i])
+			continue
+		}
+		i++
+		if n := octalRun(body[i:]); n > 0 {
+			v, _ := strconv.ParseUint(body[i:i+n], 8, 8)
+			out = append(out, byte(v))
+			i += n - 1
+			continue
+		}
+		if c, ok := cEscapes[body[i]]; ok {
+			out = append(out, c)
+			continue
+		}
+		out = append(out, body[i])
+	}
+	folder := string(out)
+	return folder, strings.HasPrefix(folder, "/")
+}
+
+func octalRun(s string) int {
+	n := 0
+	for n < 3 && n < len(s) && s[n] >= '0' && s[n] <= '7' {
+		n++
+	}
+	if n == 3 && s[0] > '3' {
+		return 0
+	}
+	return n
 }
 
 func remainingDepth(folder string, roots []string, depth int) int {

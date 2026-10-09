@@ -59,7 +59,7 @@ func (f *fakeRunner) Run(ctx context.Context, command string, _ int) (RunResult,
 			out += "S:1\n"
 		}
 		return RunResult{Stdout: []byte(out)}, nil
-	case strings.Contains(command, "sudo -n find -L"):
+	case strings.Contains(command, "sudo -n ") && strings.Contains(command, "find -L"):
 		for folder, hook := range f.sudoFinds {
 			if strings.Contains(command, "find -L "+util.ShellQuote(folder)+" ") {
 				return hook(ctx)
@@ -89,7 +89,7 @@ func (f *fakeRunner) Run(ctx context.Context, command string, _ int) (RunResult,
 				return hook(ctx)
 			}
 		}
-		sudo := strings.Contains(command, "sudo -n readlink")
+		sudo := strings.Contains(command, "sudo -n ")
 		for p, file := range f.files {
 			if !strings.Contains(command, util.ShellQuote(p)) {
 				continue
@@ -275,7 +275,7 @@ func TestScanWithoutSudoReportsDenied(t *testing.T) {
 		t.Fatalf("unexpected denied %v", resp.DeniedFolders)
 	}
 	for _, c := range runner.commands[1:] {
-		if strings.Contains(c, "sudo -n readlink") || strings.Contains(c, "sudo -n find") {
+		if strings.Contains(c, "sudo -n ") {
 			t.Fatalf("sudo must not be used when unavailable: %s", c)
 		}
 	}
@@ -311,7 +311,7 @@ func TestNormalizeRejectsBadInput(t *testing.T) {
 func TestReadCommandOpensFileBeforeResolvingIt(t *testing.T) {
 	s := &scanner{hasTimeout: true}
 	cmd := readCommand("/etc/ssl/private/a b.pem", 1024, s.commandPrefix(readTimeout, true))
-	want := `timeout -s KILL 20 sudo -n head -c 0 -- '/etc/ssl/private/a b.pem' && timeout -s KILL 20 sudo -n readlink -f -- '/etc/ssl/private/a b.pem' && timeout -s KILL 20 sudo -n head -c 1025 -- '/etc/ssl/private/a b.pem'`
+	want := `sudo -n timeout -s KILL 20 head -c 0 -- '/etc/ssl/private/a b.pem' && sudo -n timeout -s KILL 20 readlink -f -- '/etc/ssl/private/a b.pem' && sudo -n timeout -s KILL 20 head -c 1025 -- '/etc/ssl/private/a b.pem'`
 	if cmd != want {
 		t.Fatalf("got %s", cmd)
 	}
@@ -698,7 +698,7 @@ func TestScanEscalatesABatchAccessDeniedStraightToSudo(t *testing.T) {
 		t.Fatalf("unexpected files %+v", resp.Files)
 	}
 	reads := commandsContaining(runner.commands, perFileRead)
-	if len(reads) != 1 || !strings.Contains(reads[0], "sudo -n head -c 0 -- '/opt/root.pem'") {
+	if len(reads) != 1 || !strings.Contains(reads[0], "sudo -n timeout -s KILL 20 head -c 0 -- '/opt/root.pem'") {
 		t.Fatalf("expected a single sudo read, got %q", reads)
 	}
 }

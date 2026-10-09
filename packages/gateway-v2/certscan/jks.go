@@ -66,6 +66,7 @@ func (r *jksReader) utf() (string, error) {
 	return string(b), nil
 }
 
+// certificate returns a nil certificate when the entry is intact but Go can't parse it, so the caller skips it and keeps reading.
 func (r *jksReader) certificate(version int) (*x509.Certificate, error) {
 	if version == 2 {
 		if _, err := r.utf(); err != nil {
@@ -80,7 +81,11 @@ func (r *jksReader) certificate(version int) (*x509.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	return x509.ParseCertificate(raw)
+	cert, err := x509.ParseCertificate(raw)
+	if err != nil {
+		return nil, nil
+	}
+	return cert, nil
 }
 
 func jksParseError(format Format, message string) ParseResult {
@@ -135,20 +140,31 @@ func parseJKS(data []byte, format Format) ParseResult {
 				return fail(err)
 			}
 			var chain []*x509.Certificate
+			leafParsed := true
 			for j := 0; j < chainLen; j++ {
 				cert, err := r.certificate(version)
 				if err != nil {
 					return fail(err)
 				}
+				if cert == nil {
+					leafParsed = leafParsed && j > 0
+					continue
+				}
 				chain = append(chain, cert)
 			}
-			result.Chains = append(result.Chains, chainFromOrdered(chain)...)
+			if leafParsed {
+				result.Chains = append(result.Chains, chainFromOrdered(chain)...)
+			} else {
+				trusted = append(trusted, chain...)
+			}
 		case jksTagTrustedCert:
 			cert, err := r.certificate(version)
 			if err != nil {
 				return fail(err)
 			}
-			trusted = append(trusted, cert)
+			if cert != nil {
+				trusted = append(trusted, cert)
+			}
 		case jksTagSecretKey:
 			if err := skipSealedSecretKey(r); err != nil {
 				return fail(err)

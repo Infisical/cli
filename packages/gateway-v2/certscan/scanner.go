@@ -31,6 +31,8 @@ const (
 	probeTimeoutMarker  = "T:"
 	probeSudoMarker     = "S:"
 	probeSudoCommand    = "sudo -n find / -maxdepth 0"
+	// sudo is probed in the same shape it runs later, so a sudoers rule that doesn't allow timeout isn't taken as sudo access.
+	probeTimedSudoCommand = "sudo -n timeout -s KILL 10 find / -maxdepth 0"
 
 	readConcurrency     = 4
 	sudoFindConcurrency = 4
@@ -83,12 +85,13 @@ type scanner struct {
 }
 
 func (s *scanner) commandPrefix(limit time.Duration, sudo bool) string {
+	// timeout runs inside sudo: from outside, its KILL only reaches sudo, and sudo without use_pty leaves the root command running.
 	prefix := ""
-	if s.hasTimeout {
-		prefix = fmt.Sprintf("timeout -s KILL %d ", int(limit.Seconds()))
-	}
 	if sudo {
-		prefix += "sudo -n "
+		prefix = "sudo -n "
+	}
+	if s.hasTimeout {
+		prefix += fmt.Sprintf("timeout -s KILL %d ", int(limit.Seconds()))
 	}
 	return prefix
 }
@@ -120,8 +123,8 @@ func probeValue(stdout []byte, prefix string) string {
 }
 
 func (s *scanner) probe(ctx context.Context) (HostInfo, error) {
-	command := fmt.Sprintf(`printf '%s%%s\n' "$(uname -n 2>/dev/null)"; command -v timeout >/dev/null 2>&1 && echo '%s1'; %s >/dev/null 2>&1 && echo '%s1'; true`,
-		probeHostnameMarker, probeTimeoutMarker, probeSudoCommand, probeSudoMarker)
+	command := fmt.Sprintf(`printf '%s%%s\n' "$(uname -n 2>/dev/null)"; if command -v timeout >/dev/null 2>&1; then echo '%s1'; %s >/dev/null 2>&1 && echo '%s1'; else %s >/dev/null 2>&1 && echo '%s1'; fi; true`,
+		probeHostnameMarker, probeTimeoutMarker, probeTimedSudoCommand, probeSudoMarker, probeSudoCommand, probeSudoMarker)
 	runCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	res, err := s.runner.Run(runCtx, command, probeOutputLimit)

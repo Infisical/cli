@@ -177,6 +177,60 @@ func TestParseJKS(t *testing.T) {
 	}
 }
 
+func TestParseJKSSkipsACertificateGoCannotParse(t *testing.T) {
+	p := newTestPKI(t)
+	bad := func(b *jksBuilder) {
+		b.utf("X.509")
+		b.u32(3)
+		b.buf.Write([]byte{0x30, 0x01, 0x00})
+	}
+	data := buildJKS(jksMagic, func(b *jksBuilder) int {
+		b.u32(jksTagTrustedCert)
+		b.utf("broken")
+		b.u64(0)
+		bad(b)
+		b.u32(jksTagTrustedCert)
+		b.utf("root")
+		b.u64(0)
+		b.cert(p.root)
+		b.u32(jksTagPrivateKey)
+		b.utf("server")
+		b.u64(0)
+		b.u32(4)
+		b.buf.Write([]byte{9, 9, 9, 9})
+		b.u32(2)
+		bad(b)
+		b.cert(p.inter)
+		b.u32(jksTagPrivateKey)
+		b.utf("api")
+		b.u64(0)
+		b.u32(4)
+		b.buf.Write([]byte{9, 9, 9, 9})
+		b.u32(2)
+		b.cert(p.leaf)
+		bad(b)
+		return 4
+	})
+	res := Parse(data, nil)
+	if res.Status != StatusOK || res.Err != "" {
+		t.Fatalf("unexpected result %+v", res)
+	}
+	var leaves, cas int
+	for _, c := range res.Chains {
+		switch {
+		case c.Kind == ChainKindLeaf && len(c.Certificates) == 1 && commonName(t, c.Certificates[0]) == "api.example.com":
+			leaves++
+		case c.Kind == ChainKindCA:
+			cas++
+		default:
+			t.Fatalf("unexpected chain %+v", c)
+		}
+	}
+	if leaves != 1 || cas != 2 {
+		t.Fatalf("expected the api leaf plus the root and intermediate as CAs, got %+v", res.Chains)
+	}
+}
+
 func TestParseJCEKSKeepsCertificatesBeforeAnUnreadableSecretKey(t *testing.T) {
 	p := newTestPKI(t)
 	data := buildJKS(jceksMagic, func(b *jksBuilder) int {
