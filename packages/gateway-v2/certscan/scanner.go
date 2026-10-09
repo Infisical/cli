@@ -68,6 +68,12 @@ func Normalize(req *Request) error {
 	if len(req.SearchFolderPaths) == 0 && len(req.FilePaths) == 0 {
 		return errors.New("at least one folder or file is required")
 	}
+	// parseDeniedFolders relies on search folders being absolute, the same rule the backend enforces.
+	for _, folder := range req.SearchFolderPaths {
+		if !strings.HasPrefix(folder, "/") {
+			return fmt.Errorf("folder paths must be absolute: %q", folder)
+		}
+	}
 	return nil
 }
 

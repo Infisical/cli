@@ -231,6 +231,22 @@ func TestParseJKSSkipsACertificateGoCannotParse(t *testing.T) {
 	}
 }
 
+func TestParseJKSWithOnlyUnparsableCertificatesIsAParseError(t *testing.T) {
+	data := buildJKS(jksMagic, func(b *jksBuilder) int {
+		b.u32(jksTagTrustedCert)
+		b.utf("broken")
+		b.u64(0)
+		b.utf("X.509")
+		b.u32(3)
+		b.buf.Write([]byte{0x30, 0x01, 0x00})
+		return 1
+	})
+	res := Parse(data, nil)
+	if res.Status != StatusParseError || res.Err == "" || !res.IsKeystore {
+		t.Fatalf("expected a parseError, got %+v", res)
+	}
+}
+
 func TestParseJCEKSKeepsCertificatesBeforeAnUnreadableSecretKey(t *testing.T) {
 	p := newTestPKI(t)
 	data := buildJKS(jceksMagic, func(b *jksBuilder) int {

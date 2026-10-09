@@ -306,6 +306,9 @@ func TestNormalizeRejectsBadInput(t *testing.T) {
 	if err := Normalize(&Request{SearchFolderPaths: []string{"/etc"}, MaxFolderDepth: 50, MaxFileSizeBytes: 1024}); err == nil {
 		t.Fatal("expected an error for a depth over the limit")
 	}
+	if err := Normalize(&Request{SearchFolderPaths: []string{"/etc", "certs"}, MaxFolderDepth: 8, MaxFileSizeBytes: 1024}); err == nil {
+		t.Fatal("expected an error for a relative folder")
+	}
 }
 
 func TestReadCommandOpensFileBeforeResolvingIt(t *testing.T) {

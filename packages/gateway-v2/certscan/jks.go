@@ -106,6 +106,7 @@ func parseJKS(data []byte, format Format) ParseResult {
 	}
 
 	var trusted []*x509.Certificate
+	sawUnparsable := false
 	fail := func(e error) ParseResult {
 		if len(result.Chains) == 0 && len(trusted) == 0 {
 			return jksParseError(format, e.Error())
@@ -147,6 +148,7 @@ func parseJKS(data []byte, format Format) ParseResult {
 					return fail(err)
 				}
 				if cert == nil {
+					sawUnparsable = true
 					leafParsed = leafParsed && j > 0
 					continue
 				}
@@ -162,7 +164,9 @@ func parseJKS(data []byte, format Format) ParseResult {
 			if err != nil {
 				return fail(err)
 			}
-			if cert != nil {
+			if cert == nil {
+				sawUnparsable = true
+			} else {
 				trusted = append(trusted, cert)
 			}
 		case jksTagSecretKey:
@@ -172,6 +176,10 @@ func parseJKS(data []byte, format Format) ParseResult {
 		default:
 			return fail(fmt.Errorf("unknown keystore entry type %d", tag))
 		}
+	}
+	// Matches parsePEM: a keystore whose certificates all failed to parse is an error, not a file without certificates.
+	if sawUnparsable && len(result.Chains) == 0 && len(trusted) == 0 {
+		return jksParseError(format, "certificate entries could not be parsed")
 	}
 	return finishJKS(result, trusted)
 }
