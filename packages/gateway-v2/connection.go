@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,7 +138,7 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 				kubernetesServiceHost := os.Getenv(KUBERNETES_SERVICE_HOST_ENV_NAME)
 				kubernetesServicePort := os.Getenv(KUBERNETES_SERVICE_PORT_HTTPS_ENV_NAME)
 
-				fullBaseUrl := fmt.Sprintf("https://%s:%s", kubernetesServiceHost, kubernetesServicePort)
+				fullBaseUrl := fmt.Sprintf("https://%s", net.JoinHostPort(kubernetesServiceHost, kubernetesServicePort))
 				targetURL = fullBaseUrl
 
 				log.Info().Msgf("Redirected request to Kubernetes API server: %s", targetURL)
@@ -207,7 +208,7 @@ func handleHTTPProxy(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, 
 }
 
 func handleTCPProxy(ctx context.Context, conn *tls.Conn, forwardConfig *ForwardConfig) error {
-	target := fmt.Sprintf("%s:%d", forwardConfig.TargetHost, forwardConfig.TargetPort)
+	target := net.JoinHostPort(forwardConfig.TargetHost, strconv.Itoa(forwardConfig.TargetPort))
 	localConn, err := net.Dial("tcp", target)
 	if err != nil {
 		log.Error().Msgf("Failed to connect to local service %s: %v", target, err)
