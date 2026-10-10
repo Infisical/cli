@@ -254,7 +254,8 @@ type AgentCertificateConfig struct {
 		} `yaml:"on-failure,omitempty"`
 	} `yaml:"post-hooks,omitempty"`
 	FileConfig struct {
-		PrivateKey struct {
+		CombineCertificateChain bool `yaml:"combine-certificate-chain,omitempty"`
+		PrivateKey              struct {
 			Path       string `yaml:"path,omitempty"`
 			Permission string `yaml:"permission,omitempty"`
 		} `yaml:"private-key,omitempty"`
@@ -2447,7 +2448,37 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 	}
 
 	serialOnDiskMatches := serialMatchesCertificateOnDisk(certConfig, certificate.Certificate.SerialNumber)
-	alreadyDelivered := previousCertificateID == "" && serialOnDiskMatches && allConfiguredOutputsExist(certConfig)
+	outputsExist := allConfiguredOutputsExist(certConfig)
+	alreadyDelivered := previousCertificateID == "" && serialOnDiskMatches && outputsExist
+	var contentsOnDisk []byte
+	if alreadyDelivered && certConfig.FileConfig.CombineCertificateChain {
+		// Leaf-only output needs a bundle check to distinguish a missing chain from no chain.
+		contentsOnDisk, _ = os.ReadFile(certConfig.FileConfig.Certificate.Path)
+		_, chain := pem.Decode(contentsOnDisk)
+		block, _ := pem.Decode(chain)
+		alreadyDelivered = block != nil && block.Type == "CERTIFICATE"
+	}
+
+	var bundle *api.CertificateBundleResponse
+	if previousCertificateID != resolvedCertificateID && !alreadyDelivered {
+		bundle, err = api.CallGetCertificateBundle(httpClient, resolvedCertificateID)
+		if err != nil {
+			recordFailure(err.Error())
+			log.Error().Str("Certificate", displayName).Msgf("failed to fetch certificate bundle: %v", err)
+			return fmt.Errorf("failed to fetch certificate bundle: %v", err)
+		}
+
+		if bundle.Certificate == "" {
+			reason := "certificate bundle did not include certificate content"
+			recordFailure(reason)
+			log.Error().Str("Certificate", displayName).Msg(reason)
+			return fmt.Errorf("certificate %s: %s", resolvedCertificateID, reason)
+		}
+
+		if certConfig.FileConfig.CombineCertificateChain && previousCertificateID == "" && serialOnDiskMatches && outputsExist {
+			alreadyDelivered = bundle.CertificateChain == "" && bytes.Equal(contentsOnDisk, []byte(bundle.Certificate))
+		}
+	}
 
 	if previousCertificateID == resolvedCertificateID || alreadyDelivered {
 		tm.mutex.Lock()
@@ -2468,20 +2499,6 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 	isRenewal := (previousCertificateID != "" || isReplacement) && !serialOnDiskMatches
 	if isRenewal {
 		log.Info().Str("Certificate", displayName).Str("previous", previousCertificateID).Str("resolved", resolvedCertificateID).Msg("a more recent renewal is available; fetching it")
-	}
-
-	bundle, err := api.CallGetCertificateBundle(httpClient, resolvedCertificateID)
-	if err != nil {
-		recordFailure(err.Error())
-		log.Error().Str("Certificate", displayName).Msgf("failed to fetch certificate bundle: %v", err)
-		return fmt.Errorf("failed to fetch certificate bundle: %v", err)
-	}
-
-	if bundle.Certificate == "" {
-		reason := "certificate bundle did not include certificate content"
-		recordFailure(reason)
-		log.Error().Str("Certificate", displayName).Msg(reason)
-		return fmt.Errorf("certificate %s: %s", resolvedCertificateID, reason)
 	}
 
 	serialNumber := bundle.SerialNumber
@@ -2815,9 +2832,13 @@ func isReplacementOnDisk(certConfig *AgentCertificateConfig) bool {
 }
 
 func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
+	chainPath := certConfig.FileConfig.Chain.Path
+	if certConfig.FileConfig.CombineCertificateChain {
+		chainPath = ""
+	}
 	for _, path := range []string{
 		certConfig.FileConfig.Certificate.Path,
-		certConfig.FileConfig.Chain.Path,
+		chainPath,
 		certConfig.FileConfig.PrivateKey.Path,
 	} {
 		if path == "" {
@@ -2934,12 +2955,16 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 	if err := os.MkdirAll(path.Dir(certificatePath), 0755); err != nil {
 		return fmt.Errorf("failed to create directory for certificate %s: %v", certificatePath, err)
 	}
-	if err := ioutil.WriteFile(certificatePath, []byte(response.Certificate.Certificate), certificatePerms); err != nil {
+	certificateContent := response.Certificate.Certificate
+	if certificate.FileConfig.CombineCertificateChain && response.Certificate.CertificateChain != "" {
+		certificateContent = strings.TrimSpace(certificateContent) + "\n" + strings.TrimSpace(response.Certificate.CertificateChain) + "\n"
+	}
+	if err := ioutil.WriteFile(certificatePath, []byte(certificateContent), certificatePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
 	writtenFiles[certificatePath] = contentHash(response.Certificate.Certificate)
 
-	if response.Certificate.CertificateChain != "" && chainPath != "" {
+	if !certificate.FileConfig.CombineCertificateChain && response.Certificate.CertificateChain != "" && chainPath != "" {
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for certificate chain %s: %v", chainPath, err)
 		}
