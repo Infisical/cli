@@ -1107,11 +1107,11 @@ func TestAChunkEndsAtItsLatestRecordWhenTheClockSteps(t *testing.T) {
 	log, advance, _ := newTestLog(&fakeShipper{})
 	grant := testGrant("s1")
 
+	// The latest record is neither the first nor the last one.
+	log.record(grant, aRecord("api.github.com"))
 	advance(100 * time.Millisecond)
 	log.record(grant, aRecord("api.github.com"))
-	advance(-100 * time.Millisecond)
-	log.record(grant, aRecord("api.github.com"))
-	advance(50 * time.Millisecond)
+	advance(-50 * time.Millisecond)
 	log.record(grant, aRecord("api.github.com"))
 
 	spool := log.spools["s1"]
@@ -1139,13 +1139,17 @@ func TestAChunkIDCarriesTheTimeOfItsLatestRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest := time.Date(2026, 9, 16, 10, 1, 30, 0, time.UTC)
 	endedAt, err := time.Parse(time.RFC3339Nano, chunk.meta.EndedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !endedAt.Equal(latest) {
+		t.Fatalf("the chunk ends at %s, expected its latest record at %s", endedAt, latest)
+	}
 	sec, nsec := uuid.MustParse(chunk.meta.ChunkID).Time().UnixTime()
-	if idAt := time.Unix(sec, nsec); idAt.UnixMilli() != endedAt.UnixMilli() {
-		t.Fatalf("the chunk id carries %s but the chunk ends at %s; Infisical refuses that", idAt.UTC(), endedAt)
+	if idAt := time.Unix(sec, nsec); idAt.UnixMilli() != latest.UnixMilli() {
+		t.Fatalf("the chunk id carries %s, expected its latest record at %s", idAt.UTC(), latest)
 	}
 }
 
@@ -1159,33 +1163,41 @@ func recordsAt(times ...time.Time) []sessionLogRecord {
 	return records
 }
 
-func TestABatchIsSplitSoNoChunkSpansMoreThanTwoMinutes(t *testing.T) {
+func TestABatchIsSplitSoNoChunkSpansMoreThanTenMinutes(t *testing.T) {
 	base := time.Date(2026, 9, 16, 20, 50, 33, 0, time.UTC)
 
 	// A laptop that slept between two requests.
-	groups, err := packSessionLogRecords(recordsAt(base, base.Add(6*time.Minute)))
+	groups, err := packSessionLogRecords(recordsAt(base, base.Add(12*time.Minute)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(groups) != 2 {
-		t.Fatalf("records 6 minutes apart packed into %d chunk(s), expected 2", len(groups))
+		t.Fatalf("records 12 minutes apart packed into %d chunk(s), expected 2", len(groups))
 	}
 
-	groups, err = packSessionLogRecords(recordsAt(base, base.Add(90*time.Second), base.Add(30*time.Second)))
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(sessionLogMaxChunkSpan), base.Add(30*time.Second)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(groups) != 1 {
-		t.Fatalf("records 90 seconds apart packed into %d chunks, expected 1", len(groups))
+		t.Fatalf("records exactly the span apart packed into %d chunks, expected 1", len(groups))
+	}
+
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(sessionLogMaxChunkSpan+time.Millisecond)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("records a millisecond over the span apart packed into %d chunk(s), expected 2", len(groups))
 	}
 
 	// A clock that stepped back: the span is measured from the earliest record, not the first.
-	groups, err = packSessionLogRecords(recordsAt(base, base.Add(-90*time.Second), base.Add(time.Minute)))
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(-6*time.Minute), base.Add(5*time.Minute)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(groups) != 2 || len(groups[1].records) != 1 {
-		t.Fatalf("a record 150 seconds after the earliest one was packed with it")
+		t.Fatalf("a record 11 minutes after the earliest one was packed with it")
 	}
 }
 
@@ -1195,7 +1207,7 @@ func TestASizeCutAndASpanCutCanHappenInOneBatch(t *testing.T) {
 	for i := range times {
 		times[i] = base
 	}
-	times[len(times)-1] = base.Add(3 * time.Minute)
+	times[len(times)-1] = base.Add(11 * time.Minute)
 	records := recordsAt(times...)
 	for i := range records {
 		records[i].Path = truncatePath("/" + strings.Repeat("&", maxLoggedPathLen))
@@ -1223,6 +1235,27 @@ func TestASizeCutAndASpanCutCanHappenInOneBatch(t *testing.T) {
 	}
 	if total != len(records) {
 		t.Fatalf("the chunks hold %d records, expected %d", total, len(records))
+	}
+}
+
+func TestABatchTooBigForOneChunkKeepsARecordExactlyTheSpanAwayInItsChunk(t *testing.T) {
+	base := time.Date(2026, 9, 16, 20, 50, 33, 0, time.UTC)
+	times := make([]time.Time, sessionLogFlushRecords)
+	for i := range times {
+		times[i] = base
+	}
+	times[len(times)-1] = base.Add(sessionLogMaxChunkSpan)
+	records := recordsAt(times...)
+	for i := range records {
+		records[i].Path = truncatePath("/" + strings.Repeat("&", maxLoggedPathLen))
+	}
+
+	groups, err := packSessionLogRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := groups[len(groups)-1]; len(last.records) == 1 {
+		t.Fatal("a record exactly the span after the others was split off; only a longer span splits")
 	}
 }
 
