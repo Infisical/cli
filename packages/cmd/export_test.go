@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v2"
 )
@@ -131,6 +133,126 @@ func TestFormatAsDotEnvEval(t *testing.T) {
 			assert.Equal(t, tt.expected, formatAsDotEnvEval(tt.input))
 		})
 	}
+}
+
+func TestMergeSecretsByKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []models.SingleEnvironmentVariable
+		expected []models.SingleEnvironmentVariable
+	}{
+		{
+			name:     "Empty input",
+			input:    []models.SingleEnvironmentVariable{},
+			expected: []models.SingleEnvironmentVariable{},
+		},
+		{
+			name: "Distinct keys are all kept",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "VALUE1"},
+				{Key: "KEY2", Value: "VALUE2"},
+			},
+			expected: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "VALUE1"},
+				{Key: "KEY2", Value: "VALUE2"},
+			},
+		},
+		{
+			name: "Duplicate keys across paths keep the last value",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "FROM_FIRST_PATH"},
+				{Key: "KEY2", Value: "VALUE2"},
+				{Key: "KEY1", Value: "FROM_SECOND_PATH"},
+			},
+			expected: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "FROM_SECOND_PATH"},
+				{Key: "KEY2", Value: "VALUE2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := util.SortSecretsByKeys(mergeSecretsByKey(tt.input))
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMergeAndFilterSecrets(t *testing.T) {
+	teamTag := []models.Tag{{Slug: "team"}}
+
+	tests := []struct {
+		name     string
+		input    []models.SingleEnvironmentVariable
+		tagSlugs string
+		expected []models.SingleEnvironmentVariable
+	}{
+		{
+			name: "An untagged secret on a later path drops the tagged one from an earlier path",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "old", Tags: teamTag},
+				{Key: "KEY2", Value: "kept", Tags: teamTag},
+				{Key: "KEY1", Value: "new"},
+			},
+			tagSlugs: "team",
+			expected: []models.SingleEnvironmentVariable{
+				{Key: "KEY2", Value: "kept", Tags: teamTag},
+			},
+		},
+		{
+			name: "A tagged secret on a later path overrides an untagged one from an earlier path",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "old"},
+				{Key: "KEY1", Value: "new", Tags: teamTag},
+			},
+			tagSlugs: "team",
+			expected: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "new", Tags: teamTag},
+			},
+		},
+		{
+			name: "Without tags the merged result is returned as is",
+			input: []models.SingleEnvironmentVariable{
+				{Key: "KEY2", Value: "VALUE2"},
+				{Key: "KEY1", Value: "old"},
+				{Key: "KEY1", Value: "new"},
+			},
+			tagSlugs: "",
+			expected: []models.SingleEnvironmentVariable{
+				{Key: "KEY1", Value: "new"},
+				{Key: "KEY2", Value: "VALUE2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, mergeAndFilterSecrets(tt.input, tt.tagSlugs))
+		})
+	}
+}
+
+func newExportTestCmd() *cobra.Command {
+	c := &cobra.Command{Use: "export"}
+	c.Flags().StringArray("path", []string{"/"}, "")
+	return c
+}
+
+func TestExportPathFlagAcceptsMultipleValues(t *testing.T) {
+	// the export command must declare --path as a repeatable string array
+	paths, err := exportCmd.Flags().GetStringArray("path")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"/"}, paths)
+
+	// repeated --path values accumulate instead of overwriting one another
+	cmd := newExportTestCmd()
+	assert.NoError(t, cmd.Flags().Set("path", "/first"))
+	assert.NoError(t, cmd.Flags().Set("path", "/second"))
+
+	paths, err = cmd.Flags().GetStringArray("path")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"/first", "/second"}, paths)
 }
 
 func TestPosixShellQuote(t *testing.T) {

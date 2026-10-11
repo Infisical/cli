@@ -83,7 +83,7 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		secretsPath, err := cmd.Flags().GetString("path")
+		secretsPaths, err := cmd.Flags().GetStringArray("path")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag")
 		}
@@ -93,20 +93,16 @@ var exportCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag")
 		}
 
-		request := models.GetAllSecretsParameters{
-			Environment:              environmentName,
-			TagSlugs:                 tagSlugs,
-			WorkspaceId:              projectId,
-			SecretsPath:              secretsPath,
-			IncludeImport:            includeImports,
-			ExpandSecretReferences:   shouldExpandSecrets,
-			IncludePersonalOverrides: secretOverriding,
-		}
-
-		if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-			request.InfisicalToken = token.Token
-		} else if token != nil && token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER {
-			request.UniversalAuthAccessToken = token.Token
+		// TagSlugs is intentionally left unset: filtering server side would drop untagged
+		// secrets from each path before the paths are merged, so a secret that is tagged on
+		// an earlier path could survive even though a later path overrides it with an
+		// untagged one. Tags are applied client side once the merge has happened.
+		request := models.GetMultiPathSecretsParameters{
+			Environment:            environmentName,
+			WorkspaceId:            projectId,
+			SecretsPaths:           secretsPaths,
+			IncludeImport:          includeImports,
+			ExpandSecretReferences: shouldExpandSecrets,
 		}
 
 		if templatePath != "" {
@@ -133,14 +129,13 @@ var exportCmd = &cobra.Command{
 			return
 		}
 
-		secrets, err := util.GetAllEnvironmentVariables(request, "")
+		secrets, err := fetchSecrets(request, "", secretOverriding, token)
 		if err != nil {
 			util.HandleError(err, "Unable to fetch secrets")
 		}
 
 		var output string
-		secrets = util.FilterSecretsByTag(secrets, tagSlugs)
-		secrets = util.SortSecretsByKeys(secrets)
+		secrets = mergeAndFilterSecrets(secrets, tagSlugs)
 
 		output, err = formatEnvs(secrets, format)
 		if err != nil {
@@ -167,6 +162,31 @@ var exportCmd = &cobra.Command{
 
 		// Telemetry.CaptureEvent("cli-command:export", posthog.NewProperties().Set("secretsCount", len(secrets)).Set("version", util.CLI_VERSION))
 	},
+}
+
+// mergeAndFilterSecrets turns the secrets fetched from every path into the final set to
+// export. The merge has to run before the tag filter so that a key present on several
+// paths resolves to the last path first, and only that winning secret is then checked
+// against the requested tags.
+func mergeAndFilterSecrets(secrets []models.SingleEnvironmentVariable, tagSlugs string) []models.SingleEnvironmentVariable {
+	secrets = mergeSecretsByKey(secrets)
+	secrets = util.FilterSecretsByTag(secrets, tagSlugs)
+
+	return util.SortSecretsByKeys(secrets)
+}
+
+// mergeSecretsByKey collapses secrets that share the same key, which can happen when
+// secrets are fetched from multiple paths. The last path a key was found in wins.
+// The returned order is not stable, so callers are expected to sort the result.
+func mergeSecretsByKey(secrets []models.SingleEnvironmentVariable) []models.SingleEnvironmentVariable {
+	secretsByKey := getSecretsByKeys(secrets)
+
+	mergedSecrets := make([]models.SingleEnvironmentVariable, 0, len(secretsByKey))
+	for _, secret := range secretsByKey {
+		mergedSecrets = append(mergedSecrets, secret)
+	}
+
+	return mergedSecrets
 }
 
 // resolveOutputPath determines the final output path based on the provided path and format
@@ -272,7 +292,7 @@ func init() {
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
 	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
-	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
+	exportCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 }
