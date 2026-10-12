@@ -3,6 +3,7 @@ package util
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -269,4 +270,68 @@ func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	if filepath.Base(found) != INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
 		t.Errorf("FindWorkspaceConfigFile = %q, want the legacy json file", found)
 	}
+}
+
+func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
+	t.Run("carries every field over and leaves the json in place", func(t *testing.T) {
+		dir := t.TempDir()
+		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
+
+		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err != nil {
+			t.Fatalf("ConvertLegacyWorkspaceConfigToYaml: %v", err)
+		}
+
+		cfg, err := readWorkspaceConfigYaml(yamlPath)
+		if err != nil {
+			t.Fatalf("readWorkspaceConfigYaml: %v", err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+
+		info, err := os.Stat(yamlPath)
+		if err != nil {
+			t.Fatalf("stat %s: %v", yamlPath, err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Errorf("yaml perm = %o, want 600", info.Mode().Perm())
+		}
+		if !fileExists(jsonPath) {
+			t.Error("the legacy json should be left for the caller to remove")
+		}
+	})
+
+	t.Run("refuses to overwrite an existing yaml", func(t *testing.T) {
+		dir := t.TempDir()
+		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
+		const existingYAML = "secrets-management:\n  project-id: proj-existing\n"
+		writeTestFile(t, yamlPath, existingYAML)
+
+		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
+			t.Fatal("expected an error when the yaml already exists")
+		}
+		raw, err := os.ReadFile(yamlPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", yamlPath, err)
+		}
+		if string(raw) != existingYAML {
+			t.Errorf("existing yaml was modified:\n%s", raw)
+		}
+	})
+
+	t.Run("invalid json leaves no yaml behind", func(t *testing.T) {
+		dir := t.TempDir()
+		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, jsonPath, "{not json")
+
+		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
+			t.Fatal("expected an error for invalid json")
+		}
+		if fileExists(yamlPath) {
+			t.Error("no yaml should be written when the json cannot be read")
+		}
+	})
 }

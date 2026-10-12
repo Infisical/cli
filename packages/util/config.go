@@ -107,6 +107,46 @@ func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
 	return workspaceConfigFromYaml(workspaceConfigFileYaml), nil
 }
 
+func ConvertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) error {
+	if _, err := os.Stat(yamlConfigFilePath); err == nil {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: %s already exists", yamlConfigFilePath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to check %s [err=%s]", yamlConfigFilePath, err)
+	}
+
+	legacyWorkspaceConfig, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
+	if err != nil {
+		return err
+	}
+
+	yamlConfigFileAsBytes, err := yaml.Marshal(workspaceConfigToYaml(legacyWorkspaceConfig))
+	if err != nil {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
+	}
+
+	// written atomically so a partially written .infisical.yaml is never left behind
+	if err := WriteFileAtomic(yamlConfigFilePath, yamlConfigFileAsBytes, 0600); err != nil {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
+	}
+
+	if _, err := readWorkspaceConfigYaml(yamlConfigFilePath); err != nil {
+		os.Remove(yamlConfigFilePath)
+		return err
+	}
+
+	return nil
+}
+
+func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.WorkspaceConfigFileYaml {
+	var workspaceConfigYaml models.WorkspaceConfigFileYaml
+	workspaceConfigYaml.General.Domain = workspaceConfig.Domain
+	workspaceConfigYaml.SecretsManagement.ProjectID = workspaceConfig.WorkspaceId
+	workspaceConfigYaml.SecretsManagement.DefaultEnvironment = workspaceConfig.DefaultEnvironment
+	workspaceConfigYaml.SecretsManagement.DefaultSecretPath = workspaceConfig.DefaultSecretPath
+	workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment = workspaceConfig.GitBranchToEnvironmentMapping
+	return workspaceConfigYaml
+}
+
 func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {
 	return models.WorkspaceConfigFile{
 		WorkspaceId:                   workspaceConfigYaml.SecretsManagement.ProjectID,

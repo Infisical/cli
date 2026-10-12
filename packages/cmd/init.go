@@ -347,7 +347,7 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
 		return err
 	}
 
-	err = util.WriteToFile(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
+	err = util.WriteFileAtomic(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0o600)
 	if err != nil {
 		return err
 	}

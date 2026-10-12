@@ -191,6 +191,9 @@ func init() {
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
+			if cmd != migrateConfigCmd {
+				util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, cmd.ErrOrStderr())
+			}
 		}
 
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
