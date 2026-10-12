@@ -54,3 +54,22 @@ jobs:
           #   INFISICAL_VAULT_FILE_PASSPHRASE: ${{ secrets.CLI_TESTS_INFISICAL_VAULT_FILE_PASSPHRASE }}
 
         run: go test -v -count=1 ./test
+
+  test-template-paths:
+    runs-on: ${{ matrix.os }}
+    name: Template paths (${{ matrix.os }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Setup Go
+        uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4.3.0
+        with:
+          go-version: "1.26.9"
+      # -vet=off: packages/cmd/run.go has existing printf vet failures
+      - name: Run template path tests
+        run: go test -vet=off -count=1 -run TestProcessTemplate ./packages/cmd/
