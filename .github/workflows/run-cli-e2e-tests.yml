@@ -157,3 +157,7 @@ jobs:
       # --exit-code 0 so leaks in test fixtures don't fail the job; a failed git scan still exits 1.
       - name: Run infisical scan
         run: ./infisical-cli scan -v --exit-code 0
+      # Windows regression check for agent source-path templates (backslash paths).
+      # -vet=off: packages/cmd/run.go has existing printf vet failures.
+      - name: Run template path tests
+        run: go test -vet=off -count=1 -run TestProcessTemplate ./packages/cmd/
