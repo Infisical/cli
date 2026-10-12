@@ -68,36 +68,16 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
+	// the yaml file takes precedence over the legacy json file when both exist
 	if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
 		return workspaceConfigFile, err
-	}
-
-	unlock, lockErr := LockWorkspaceConfigDir(configFileDir)
-	if lockErr == nil {
-		defer unlock() //nolint:errcheck
-
-		// another command may have migrated the JSON or run `infisical init` while we waited for the lock
-		if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
-			return workspaceConfigFile, err
-		}
 	}
 
 	if _, err := os.Stat(jsonConfigFilePath); os.IsNotExist(err) {
 		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
 	}
 
-	if lockErr != nil {
-		log.Debug().Err(lockErr).Msgf("GetWorkSpaceFromFilePath: unable to lock [dir=%s], reading the legacy file without migrating it", configFileDir)
-		return GetWorkspaceConfigByPath(jsonConfigFilePath)
-	}
-
-	workspaceConfigFile, err := migrateWorkspaceConfigToYaml(jsonConfigFilePath, yamlConfigFilePath)
-	if err != nil {
-		log.Debug().Err(err).Msgf("GetWorkSpaceFromFilePath: unable to migrate [path=%s] to yaml, reading the legacy file instead", jsonConfigFilePath)
-		return GetWorkspaceConfigByPath(jsonConfigFilePath)
-	}
-
-	return workspaceConfigFile, nil
+	return GetWorkspaceConfigByPath(jsonConfigFilePath)
 }
 
 func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.WorkspaceConfigFile, exists bool, err error) {
@@ -110,40 +90,6 @@ func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.Wo
 
 	workspaceConfigFile, err = readWorkspaceConfigYaml(path)
 	return workspaceConfigFile, true, err
-}
-
-// migrateWorkspaceConfigToYaml converts the legacy JSON workspace config into YAML. The JSON file is only
-// removed once the YAML file has been fully written and read back successfully. Callers must hold
-// LockWorkspaceConfigDir for the directory.
-func migrateWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) (models.WorkspaceConfigFile, error) {
-	legacyWorkspaceConfig, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	yamlConfigFileAsBytes, err := yaml.Marshal(workspaceConfigToYaml(legacyWorkspaceConfig))
-	if err != nil {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
-	}
-
-	// written atomically so a partially written .infisical.yaml is never left behind or seen by lockless readers
-	if err := WriteFileAtomic(yamlConfigFilePath, yamlConfigFileAsBytes, 0600); err != nil {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("migrateWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
-	}
-
-	workspaceConfigFile, err := readWorkspaceConfigYaml(yamlConfigFilePath)
-	if err != nil {
-		os.Remove(yamlConfigFilePath)
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	if err := os.Remove(jsonConfigFilePath); err != nil {
-		PrintWarning(fmt.Sprintf("Wrote %s but unable to remove the legacy %s; delete it manually [err=%s]", yamlConfigFilePath, jsonConfigFilePath, err))
-		return workspaceConfigFile, nil
-	}
-	PrintlnStderr(fmt.Sprintf("Migrated the legacy %s to %s.", jsonConfigFilePath, yamlConfigFilePath))
-
-	return workspaceConfigFile, nil
 }
 
 func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
@@ -159,16 +105,6 @@ func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
 	}
 
 	return workspaceConfigFromYaml(workspaceConfigFileYaml), nil
-}
-
-func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.WorkspaceConfigFileYaml {
-	var workspaceConfigYaml models.WorkspaceConfigFileYaml
-	workspaceConfigYaml.General.Domain = workspaceConfig.Domain
-	workspaceConfigYaml.SecretsManagement.ProjectID = workspaceConfig.WorkspaceId
-	workspaceConfigYaml.SecretsManagement.DefaultEnvironment = workspaceConfig.DefaultEnvironment
-	workspaceConfigYaml.SecretsManagement.DefaultSecretPath = workspaceConfig.DefaultSecretPath
-	workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment = workspaceConfig.GitBranchToEnvironmentMapping
-	return workspaceConfigYaml
 }
 
 func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {

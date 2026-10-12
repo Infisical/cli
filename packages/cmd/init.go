@@ -347,30 +347,15 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
 		return err
 	}
 
-	// share the lock with the legacy .infisical.json migration so a command migrating this directory can't
-	// overwrite the newly selected project with the old one
-	unlock, err := util.LockWorkspaceConfigDir(".")
+	err = util.WriteToFile(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
 	if err != nil {
-		log.Debug().Err(err).Msg("writeWorkspaceFile: unable to lock the workspace config, writing it without the lock")
-	} else {
-		defer unlock()
+		return err
 	}
 
-	// written atomically so commands reading .infisical.yaml without the lock never see a partial file
-	err = util.WriteFileAtomic(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0600)
-	if err != nil {
-		return fmt.Errorf("unable to write %s [err=%v]", util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, err)
+	// the legacy file is left in place; .infisical.yaml takes precedence over it from now on
+	if _, err := os.Stat(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err == nil {
+		util.PrintWarning(fmt.Sprintf("The legacy %s in this directory is no longer used because %s takes precedence. You can delete it.", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
 	}
-
-	if _, err := os.Stat(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err != nil {
-		return nil
-	}
-
-	if err := os.Remove(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err != nil {
-		util.PrintWarning(fmt.Sprintf("Wrote %s but unable to remove the legacy %s; delete it manually [err=%s]", util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, err))
-		return nil
-	}
-	util.PrintlnStderr(fmt.Sprintf("Replaced the legacy %s with %s.", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
 
 	return nil
 }

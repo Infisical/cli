@@ -22,10 +22,9 @@ func newResolveTestCmd(t *testing.T) *cobra.Command {
 }
 
 // writeWorkspace drops a legacy .infisical.json into an isolated cwd so file-fallback is
-// deterministic. The first read migrates it to .infisical.yaml.
+// deterministic.
 func writeWorkspace(t *testing.T, contents string) {
 	t.Helper()
-	useTempHome(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, ".infisical.json"), []byte(contents), 0o600); err != nil {
@@ -143,21 +142,21 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy json is migrated to yaml on first resolve", func(t *testing.T) {
+	t.Run("legacy json is read without being migrated", func(t *testing.T) {
 		writeWorkspace(t, `{"defaultEnvironment":"fromfile"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
 			t.Fatalf("got %q, want fromfile", got)
 		}
-		if fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("legacy %s should have been removed", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		if !fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("legacy %s should not be removed", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		}
-		if !fileExists(INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("%s should have been created", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		if fileExists(INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("%s should not be created", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 		}
-		// the second resolve reads the migrated yaml
+		// the second resolve still reads the legacy json
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
-			t.Fatalf("got %q after migration, want fromfile", got)
+			t.Fatalf("got %q on the second resolve, want fromfile", got)
 		}
 	})
 

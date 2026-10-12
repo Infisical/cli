@@ -11,13 +11,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// isolateWorkspaceDir runs the test from an empty directory with a temp home, so the workspace config and its
-// lockfile stay out of the repository and the real ~/.infisical.
+// isolateWorkspaceDir runs the test from an empty directory, so the workspace config stays out of the repository.
 func isolateWorkspaceDir(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	return dir
@@ -70,7 +66,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 		}
 	})
 
-	t.Run("replaces a legacy json config", func(t *testing.T) {
+	t.Run("leaves a legacy json config in place", func(t *testing.T) {
 		dir := isolateWorkspaceDir(t)
 		jsonPath := filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		if err := os.WriteFile(jsonPath, []byte(`{"workspaceId":"proj-old"}`), 0o600); err != nil {
@@ -81,9 +77,15 @@ func TestWriteWorkspaceFile(t *testing.T) {
 			t.Fatalf("writeWorkspaceFile: %v", err)
 		}
 
-		if _, err := os.Stat(jsonPath); !os.IsNotExist(err) {
-			t.Errorf("legacy %s should have been removed [stat err=%v]", jsonPath, err)
+		legacy, err := util.GetWorkspaceConfigByPath(jsonPath)
+		if err != nil {
+			t.Fatalf("legacy %s should be left in place: %v", jsonPath, err)
 		}
+		if legacy.WorkspaceId != "proj-old" {
+			t.Errorf("legacy WorkspaceId = %q, want proj-old", legacy.WorkspaceId)
+		}
+
+		// the yaml takes precedence over the legacy json
 		cfg, err := util.GetWorkSpaceFromFile()
 		if err != nil {
 			t.Fatalf("GetWorkSpaceFromFile: %v", err)
