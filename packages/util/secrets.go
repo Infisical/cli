@@ -68,7 +68,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Comment: secret.SecretComment, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Comment: secret.SecretComment, Type: secret.Type, WorkspaceId: secret.Workspace, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags, SecretValueHidden: secret.SecretValueHidden})
 	}
 
 	if includeImports {
@@ -82,7 +82,18 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 }
 
-func GetPlainTextSecretsV4(accessToken string, workspaceId string, environmentName string, secretsPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) (models.PlaintextSecretResult, error) {
+func GetPlainTextSecretsV4(
+	accessToken string,
+	workspaceId string,
+	environmentName string,
+	secretsPath string,
+	includeImports bool,
+	recursive bool,
+	tagSlugs string,
+	expandSecretReferences bool,
+	includePersonalOverrides bool,
+	viewSecretValue *bool,
+) (models.PlaintextSecretResult, error) {
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
 		return models.PlaintextSecretResult{}, err
@@ -99,6 +110,7 @@ func GetPlainTextSecretsV4(accessToken string, workspaceId string, environmentNa
 		TagSlugs:                 tagSlugs,
 		ExpandSecretReferences:   expandSecretReferences,
 		IncludePersonalOverrides: includePersonalOverrides,
+		ViewSecretValue:          viewSecretValue,
 	}
 
 	if secretsPath != "" {
@@ -114,7 +126,17 @@ func GetPlainTextSecretsV4(accessToken string, workspaceId string, environmentNa
 	plainTextSecrets := []models.SingleEnvironmentVariable{}
 
 	for _, secret := range rawSecrets.Secrets {
-		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{Key: secret.SecretKey, Value: secret.SecretValue, Comment: secret.SecretComment, Type: secret.Type, WorkspaceId: secret.Workspace, SecretPath: secret.SecretPath, SkipMultilineEncoding: secret.SkipMultilineEncoding, Tags: secret.Tags})
+		plainTextSecrets = append(plainTextSecrets, models.SingleEnvironmentVariable{
+			Key:                   secret.SecretKey,
+			Value:                 secret.SecretValue,
+			Comment:               secret.SecretComment,
+			Type:                  secret.Type,
+			WorkspaceId:           secret.Workspace,
+			SecretPath:            secret.SecretPath,
+			SkipMultilineEncoding: secret.SkipMultilineEncoding,
+			Tags:                  secret.Tags,
+			SecretValueHidden:     secret.SecretValueHidden,
+		})
 	}
 
 	if includeImports {
@@ -238,12 +260,13 @@ func InjectRawImportedSecret(secrets []models.SingleEnvironmentVariable, importe
 		for _, sec := range plainTextImportedSecrets {
 			if _, ok := hasOverriden[sec.SecretKey]; !ok {
 				secrets = append(secrets, models.SingleEnvironmentVariable{
-					Key:         sec.SecretKey,
-					WorkspaceId: sec.Workspace,
-					Value:       sec.SecretValue,
-					Type:        sec.Type,
-					ID:          sec.ID,
-					Comment:     sec.SecretComment,
+					Key:               sec.SecretKey,
+					WorkspaceId:       sec.Workspace,
+					Value:             sec.SecretValue,
+					Type:              sec.Type,
+					ID:                sec.ID,
+					Comment:           sec.SecretComment,
+					SecretValueHidden: sec.SecretValueHidden,
 				})
 				hasOverriden[sec.SecretKey] = true
 			}
@@ -333,11 +356,21 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			params.WorkspaceId = infisicalDotJson.WorkspaceId
 		}
 
-		res, err := GetPlainTextSecretsV4(loggedInUserDetails.UserCredentials.JTWToken, params.WorkspaceId,
-			params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, true, params.IncludePersonalOverrides)
+		res, err := GetPlainTextSecretsV4(
+			loggedInUserDetails.UserCredentials.JTWToken,
+			params.WorkspaceId,
+			params.Environment,
+			params.SecretsPath,
+			params.IncludeImport,
+			params.Recursive,
+			params.TagSlugs,
+			true,
+			params.IncludePersonalOverrides,
+			params.ViewSecretValue,
+		)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
-		if err == nil {
+		if err == nil && (params.ViewSecretValue == nil || *params.ViewSecretValue) {
 			backupEncryptionKey, err := GetBackupEncryptionKey()
 			if err != nil {
 				return nil, err
@@ -371,7 +404,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			}
 
 			log.Debug().Msg("Trying to fetch secrets using universal auth")
-			res, err := GetPlainTextSecretsV4(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
+			res, err := GetPlainTextSecretsV4(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides, params.ViewSecretValue)
 
 			errorToReturn = err
 			secretsToReturn = res.Secrets
@@ -646,6 +679,17 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	// pull current secrets
 	secrets, err := GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest, "")
 	if err != nil {
+		// on 403, retry without secret values so users with only write + describe permissions can still set secrets
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+			viewSecretValue := false
+			getAllEnvironmentVariablesRequest.ViewSecretValue = &viewSecretValue
+
+			secrets, err = GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest, "")
+		}
+	}
+
+	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
 	}
 
@@ -727,10 +771,10 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 			}
 
 			// Only add to modifications if the value is different
-			if existingSecret.Value != value || tagsChanged {
+			if existingSecret.Value != value || tagsChanged || existingSecret.SecretValueHidden {
 				secretsToModify = append(secretsToModify, encryptedSecretDetails)
 				message := "SECRET VALUE MODIFIED"
-				if existingSecret.Value == value {
+				if existingSecret.Value == value && !existingSecret.SecretValueHidden {
 					// We only display SECRET TAGS UPDATED if the value has not changed
 					// otherwise value changes should take precedence
 					message = "SECRET TAGS MODIFIED"
