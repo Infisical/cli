@@ -140,14 +140,8 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string,
 
 type CreateAgentVaultSessionLogChunkRequest struct {
 	ChunkID          string `json:"chunkId"`
-	StartedAt        string `json:"startedAt"`
 	EndedAt          string `json:"endedAt"`
-	FirstSeq         uint64 `json:"firstSeq"`
-	LastSeq          uint64 `json:"lastSeq"`
-	RecordCount      int    `json:"recordCount"`
-	DroppedCount     uint64 `json:"droppedCount"`
 	CiphertextBytes  int    `json:"ciphertextBytes"`
-	IV               string `json:"iv"`
 	CiphertextSha256 string `json:"ciphertextSha256"`
 }
 
