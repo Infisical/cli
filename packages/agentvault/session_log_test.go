@@ -1199,6 +1199,24 @@ func TestABatchIsSplitSoNoChunkSpansMoreThanTenMinutes(t *testing.T) {
 	if len(groups) != 2 || len(groups[1].records) != 1 {
 		t.Fatalf("a record 11 minutes after the earliest one was packed with it")
 	}
+
+	// The same step the other way: a record before the earliest one also widens the span.
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(5*time.Minute), base.Add(-6*time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || len(groups[1].records) != 1 {
+		t.Fatalf("a record 11 minutes before the latest one was packed with it")
+	}
+
+	// The span starts over with the first record of each new chunk.
+	groups, err = packSessionLogRecords(recordsAt(base, base.Add(12*time.Minute), base.Add(12*time.Minute+time.Second), base.Add(12*time.Minute+2*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || len(groups[1].records) != 3 {
+		t.Fatalf("records seconds apart after a span cut packed into %d chunks, expected 2", len(groups))
+	}
 }
 
 func TestASizeCutAndASpanCutCanHappenInOneBatch(t *testing.T) {
