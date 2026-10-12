@@ -644,6 +644,10 @@ func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (Ge
 		req.SetQueryParam("tagSlugs", request.TagSlugs)
 	}
 
+	if request.ViewSecretValue != nil {
+		req.SetQueryParam("viewSecretValue", strconv.FormatBool(*request.ViewSecretValue))
+	}
+
 	response, err := req.Get(fmt.Sprintf("%v/v4/secrets", config.INFISICAL_URL))
 
 	if err != nil {
