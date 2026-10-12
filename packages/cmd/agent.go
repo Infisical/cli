@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1055,7 +1056,8 @@ func newTemplateFunctions(accessToken string, currentEtag *string, dynamicSecret
 func ProcessTemplate(templateId int, templatePath string, data interface{}, accessToken string, currentEtag *string, dynamicSecretManager *DynamicSecretLeaseManager, agentManager *AgentManager) (*bytes.Buffer, error) {
 	templateFunctions := newTemplateFunctions(accessToken, currentEtag, dynamicSecretManager, agentManager, templateId)
 
-	templateName := path.Base(templatePath)
+	// must match the name ParseFiles assigns (filepath.Base), otherwise the root template stays empty (e.g. backslash paths on Windows)
+	templateName := filepath.Base(templatePath)
 	tmpl, err := template.New(templateName).Funcs(templates.CompileTemplateFunctions(templateFunctions)).ParseFiles(templatePath)
 	if err != nil {
 		return nil, err
