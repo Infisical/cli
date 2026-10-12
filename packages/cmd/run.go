@@ -224,12 +224,16 @@ func init() {
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.json resides")
 }
 
-func logInjectingSecrets(secretsCount int) {
+func injectingSecretsMessage(secretsCount int) string {
 	noun := "secrets"
 	if secretsCount == 1 {
 		noun = "secret"
 	}
-	log.Info().Msg(color.GreenString("Injecting %v Infisical %s into your application process", secretsCount, noun))
+	return fmt.Sprintf("Injecting %v Infisical %s into your application process", secretsCount, noun)
+}
+
+func logInjectingSecrets(secretsCount int) {
+	log.Info().Msg(color.New(color.FgGreen).Sprint(injectingSecretsMessage(secretsCount)))
 }
 
 // Will execute a single command and pass in the given secrets into the process
