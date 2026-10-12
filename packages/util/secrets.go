@@ -370,7 +370,7 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 		)
 		log.Debug().Msgf("GetAllEnvironmentVariables: Trying to fetch secrets JTW token [err=%s]", err)
 
-		if err == nil {
+		if err == nil && (params.ViewSecretValue == nil || *params.ViewSecretValue) {
 			backupEncryptionKey, err := GetBackupEncryptionKey()
 			if err != nil {
 				return nil, err
@@ -679,8 +679,9 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	// pull current secrets
 	secrets, err := GetAllEnvironmentVariables(getAllEnvironmentVariablesRequest, "")
 	if err != nil {
-		// if the error is a APIError, print the error details
-		if apiErr, ok := err.(*api.APIError); ok && apiErr != nil && apiErr.StatusCode == http.StatusForbidden {
+		// on 403, retry without secret values so users with only write + describe permissions can still set secrets
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
 			viewSecretValue := false
 			getAllEnvironmentVariablesRequest.ViewSecretValue = &viewSecretValue
 
