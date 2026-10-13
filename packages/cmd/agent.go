@@ -1563,7 +1563,6 @@ func (tm *AgentManager) RevokeCredentials() error {
 		return fmt.Errorf("unable to get custom headers: %v", err)
 	}
 
-	var revokedLeasesCount atomic.Int32
 	revokedLeasesChan := make(chan bool, len(dynamicSecretLeases))
 
 	for _, lease := range dynamicSecretLeases {
@@ -1608,24 +1607,17 @@ func (tm *AgentManager) RevokeCredentials() error {
 		}(lease)
 	}
 
-	var shouldBreak atomic.Bool
-	for {
+	// wait for one result per lease; with no leases there is nothing to wait for
+	timeout := time.After(5 * time.Minute)
+	for range dynamicSecretLeases {
 		select {
 		case <-revokedLeasesChan:
-			revokedLeasesCount.Add(1)
-			if revokedLeasesCount.Load() == int32(len(dynamicSecretLeases)) {
-				shouldBreak.Store(true)
-			}
-		case <-time.After(5 * time.Minute):
+		case <-timeout:
 			log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
 			return fmt.Errorf("credential revocation timed out after 5 minutes")
 		}
-
-		if shouldBreak.Load() {
-			log.Info().Msg("all dynamic secret leases have been revoked")
-			break
-		}
 	}
+	log.Info().Msg("all dynamic secret leases have been revoked")
 
 	var deletedTokens []string
 
