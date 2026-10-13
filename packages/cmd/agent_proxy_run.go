@@ -75,10 +75,10 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("--proxy is not valid for 'run' (it starts its own ephemeral proxy); use 'agent-proxy connect --proxy=host:port' for a remote proxy"))
 	}
 
-	// Same resolution order as `connect`: flag, then env var, then .infisical.json.
+	// Same resolution order as `connect`: flag, then env var, then .infisical.yaml.
 	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.default-environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
 	}
 
 	secretPath := util.ResolveSecretPath(cmd)
@@ -93,7 +93,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		}
 	}
 	if projectID == "" {
-		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
+		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.yaml (or a legacy .infisical.json)"))
 	}
 
 	unmatchedHost, _ := cmd.Flags().GetString("unmatched-host")
@@ -340,7 +340,7 @@ func sandboxSource(cmd *cobra.Command) string {
 	}
 }
 
-// resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.json (a committed
+// resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.yaml (a committed
 // file must not be able to silently disable the boundary).
 func resolveSandboxEnabled(cmd *cobra.Command) bool {
 	if cmd.Flags().Changed("sandbox") {
