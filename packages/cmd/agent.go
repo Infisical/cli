@@ -51,6 +51,11 @@ import (
 
 const DEFAULT_INFISICAL_CLOUD_URL = "https://app.infisical.com"
 
+// AGENT_USER_AGENT identifies agent traffic to the backend so it can be
+// attributed separately from interactive CLI usage (which sends api.USER_AGENT).
+// The backend matches on the "infisical-agent" prefix.
+var AGENT_USER_AGENT = "infisical-agent/" + util.CLI_VERSION
+
 const CACHE_TYPE_KUBERNETES = "kubernetes"
 
 const DYNAMIC_SECRET_LEASE_TEMPLATE = "dynamic-secret-lease-%s-%s-%s-%s-%s-%s"
@@ -998,7 +1003,7 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 
 		temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
 			SiteUrl:             config.INFISICAL_URL,
-			UserAgent:           api.USER_AGENT,
+			UserAgent:           AGENT_USER_AGENT,
 			AutoTokenRefresh:    false,
 			RetryRequestsConfig: agentManager.SdkRetryConfig(),
 		})
@@ -1202,7 +1207,7 @@ func NewAgentManager(options NewAgentMangerOptions) *AgentManager {
 
 	agentManager.infisicalClient = infisicalSdk.NewInfisicalClient(ctx, infisicalSdk.Config{
 		SiteUrl:             config.INFISICAL_URL,
-		UserAgent:           api.USER_AGENT, // ? Should we perhaps use a different user agent for the Agent for better analytics?
+		UserAgent:           AGENT_USER_AGENT,
 		AutoTokenRefresh:    true,
 		CustomHeaders:       customHeaders,
 		RetryRequestsConfig: retryConfig,
@@ -1521,7 +1526,7 @@ func revokeDynamicSecretLease(accessToken, projectSlug, environment, secretPath,
 
 	temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
 		SiteUrl:             config.INFISICAL_URL,
-		UserAgent:           api.USER_AGENT,
+		UserAgent:           AGENT_USER_AGENT,
 		AutoTokenRefresh:    false,
 		CustomHeaders:       customHeaders,
 		RetryRequestsConfig: retryConfig,
@@ -1644,7 +1649,7 @@ func (tm *AgentManager) RevokeCredentials() error {
 
 				temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
 					SiteUrl:          config.INFISICAL_URL,
-					UserAgent:        api.USER_AGENT,
+					UserAgent:        AGENT_USER_AGENT,
 					AutoTokenRefresh: false,
 					CustomHeaders:    customHeaders,
 				})
@@ -1674,7 +1679,7 @@ func (tm *AgentManager) RevokeCredentials() error {
 	if !slices.Contains(deletedTokens, token) {
 		temporaryInfisicalClient := infisicalSdk.NewInfisicalClient(context.Background(), infisicalSdk.Config{
 			SiteUrl:          config.INFISICAL_URL,
-			UserAgent:        api.USER_AGENT,
+			UserAgent:        AGENT_USER_AGENT,
 			AutoTokenRefresh: false,
 			CustomHeaders:    customHeaders,
 		})
