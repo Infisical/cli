@@ -192,7 +192,11 @@ func init() {
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
 			if cmd != migrateConfigCmd {
-				util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, cmd.ErrOrStderr())
+				projectConfigDir := ""
+				if f := cmd.Flags().Lookup("project-config-dir"); f != nil {
+					projectConfigDir = f.Value.String()
+				}
+				util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, projectConfigDir, cmd.ErrOrStderr())
 			}
 		}
 

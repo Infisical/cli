@@ -14,7 +14,10 @@ const workspaceConfigMigrationGuideURL = "https://infisical.com/docs/cli/project
 // DisplayWorkspaceConfigMigrationNoticeWithWriter prints a once-per-day notice when the
 // workspace config in use is a legacy .infisical.json rather than a .infisical.yaml.
 // Stays quiet in --silent mode, and can be disabled with INFISICAL_DISABLE_WORKSPACE_CONFIG_MIGRATION_NOTICE.
-func DisplayWorkspaceConfigMigrationNoticeWithWriter(isSilent bool, w io.Writer) {
+//
+// projectConfigDir is the value of --project-config-dir when the command defines it; when set,
+// only that directory is considered so the notice names the same file the command reads.
+func DisplayWorkspaceConfigMigrationNoticeWithWriter(isSilent bool, projectConfigDir string, w io.Writer) {
 	if isSilent {
 		return
 	}
@@ -23,7 +26,7 @@ func DisplayWorkspaceConfigMigrationNoticeWithWriter(isSilent bool, w io.Writer)
 	}
 
 	// if the workspace config is not a legacy .infisical.json, don't print the notice
-	legacyConfigFilePath, err := FindWorkspaceConfigFile()
+	legacyConfigFilePath, err := ResolveWorkspaceConfigFile(projectConfigDir)
 	if err != nil || filepath.Base(legacyConfigFilePath) != INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
 		return
 	}
@@ -34,9 +37,9 @@ func DisplayWorkspaceConfigMigrationNoticeWithWriter(isSilent bool, w io.Writer)
 		Message: fmt.Sprintf(
 			"What's happening: the CLI is reading a legacy %s, and support for it will be removed\n"+
 				"in a future release. File in use: %s\n"+
-				"What to do: run `infisical migrate-config` to convert it to %s.",
+				"What to do: run `infisical migrate-config` in %s to convert it to %s.",
 			INFISICAL_WORKSPACE_CONFIG_FILE_NAME, legacyConfigFilePath,
-			INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME,
+			filepath.Dir(legacyConfigFilePath), INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME,
 		),
 		DocsURL: workspaceConfigMigrationGuideURL,
 	}, w)

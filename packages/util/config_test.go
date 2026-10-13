@@ -335,3 +335,61 @@ func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveWorkspaceConfigFile(t *testing.T) {
+	t.Run("empty dir walks up from cwd", func(t *testing.T) {
+		root := t.TempDir()
+		jsonPath := filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
+		nested := filepath.Join(root, "a", "b")
+		if err := os.MkdirAll(nested, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		t.Chdir(nested)
+
+		got, err := ResolveWorkspaceConfigFile("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != jsonPath {
+			t.Errorf("got %q, want %q", got, jsonPath)
+		}
+	})
+
+	t.Run("explicit dir does not walk up", func(t *testing.T) {
+		root := t.TempDir()
+		writeTestFile(t, filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), legacyWorkspaceJSON)
+		empty := filepath.Join(root, "empty")
+		if err := os.MkdirAll(empty, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		t.Chdir(root)
+
+		if _, err := ResolveWorkspaceConfigFile("empty"); err == nil {
+			t.Error("expected an error when the explicit dir has no config")
+		}
+	})
+
+	t.Run("explicit dir prefers yaml and returns an absolute path", func(t *testing.T) {
+		root := t.TempDir()
+		cfgDir := filepath.Join(root, "cfg")
+		if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		writeTestFile(t, filepath.Join(cfgDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), legacyWorkspaceJSON)
+		yamlPath := filepath.Join(cfgDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, yamlPath, workspaceYAML)
+		t.Chdir(root)
+
+		got, err := ResolveWorkspaceConfigFile("cfg")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !filepath.IsAbs(got) {
+			t.Errorf("expected an absolute path, got %q", got)
+		}
+		if filepath.Base(got) != INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME {
+			t.Errorf("expected the yaml to win, got %q", got)
+		}
+	})
+}

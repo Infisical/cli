@@ -157,6 +157,37 @@ func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml)
 	}
 }
 
+// findWorkspaceConfigFileInDir looks for a .infisical.yaml (or legacy .infisical.json) in exactly
+// the given directory, without walking up. The YAML file takes precedence.
+func findWorkspaceConfigFileInDir(dir string) (string, bool) {
+	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+		path := filepath.Join(dir, fileName)
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// ResolveWorkspaceConfigFile returns the path of the workspace config file a command will read.
+// With an explicit projectConfigDir (the --project-config-dir flag) only that directory is
+// considered, matching GetWorkSpaceFromFilePath. Otherwise it walks up from the current directory.
+func ResolveWorkspaceConfigFile(projectConfigDir string) (string, error) {
+	if projectConfigDir == "" {
+		return FindWorkspaceConfigFile()
+	}
+
+	path, found := findWorkspaceConfigFileInDir(projectConfigDir)
+	if !found {
+		return "", fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, projectConfigDir)
+	}
+
+	if absPath, err := filepath.Abs(path); err == nil {
+		path = absPath
+	}
+	return path, nil
+}
+
 // FindWorkspaceConfigFile searches for a .infisical.yaml (or legacy .infisical.json) file in the current directory
 // and all parent directories. In each directory the YAML file takes precedence.
 func FindWorkspaceConfigFile() (string, error) {
@@ -166,15 +197,9 @@ func FindWorkspaceConfigFile() (string, error) {
 	}
 
 	for {
-		for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
-			path := filepath.Join(dir, fileName)
-			_, err := os.Stat(path)
-			if err == nil {
-				// file found
-				log.Debug().Msgf("FindWorkspaceConfigFile: workspace file found at [path=%s]", path)
-
-				return path, nil
-			}
+		if path, found := findWorkspaceConfigFileInDir(dir); found {
+			log.Debug().Msgf("FindWorkspaceConfigFile: workspace file found at [path=%s]", path)
+			return path, nil
 		}
 
 		// check if we have reached the root directory

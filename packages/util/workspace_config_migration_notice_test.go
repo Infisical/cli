@@ -44,7 +44,7 @@ func TestWorkspaceConfigMigrationNoticeShownForLegacyJSON(t *testing.T) {
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 
 	var buf bytes.Buffer
-	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, &buf)
+	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
 
 	out := buf.String()
 	for _, want := range []string{
@@ -62,7 +62,7 @@ func TestWorkspaceConfigMigrationNoticeShownForLegacyJSON(t *testing.T) {
 	}
 
 	buf.Reset()
-	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, &buf)
+	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
 	if buf.Len() != 0 {
 		t.Errorf("expected no notice within the TTL, got:\n%s", buf.String())
 	}
@@ -78,7 +78,7 @@ func TestWorkspaceConfigMigrationNoticeShownForLegacyJSONInParentDir(t *testing.
 	t.Chdir(nested)
 
 	var buf bytes.Buffer
-	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, &buf)
+	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
 	if !strings.Contains(buf.String(), "Important:") {
 		t.Errorf("expected the notice for a legacy json in a parent dir, got:\n%s", buf.String())
 	}
@@ -129,7 +129,7 @@ func TestWorkspaceConfigMigrationNoticeNotShown(t *testing.T) {
 			tc.setup(t, projectDir)
 
 			var buf bytes.Buffer
-			DisplayWorkspaceConfigMigrationNoticeWithWriter(tc.isSilent, &buf)
+			DisplayWorkspaceConfigMigrationNoticeWithWriter(tc.isSilent, "", &buf)
 			if buf.Len() != 0 {
 				t.Errorf("expected no notice, got:\n%s", buf.String())
 			}
@@ -138,4 +138,72 @@ func TestWorkspaceConfigMigrationNoticeNotShown(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Reproduces: cwd apps/web, --project-config-dir ../../services/api, legacy json at the repo root.
+// The notice must describe the file the run reads (services/api), not the one found walking up from cwd.
+func TestWorkspaceConfigMigrationNoticeHonorsProjectConfigDir(t *testing.T) {
+	layout := func(t *testing.T) (repoDir string, apiDir string) {
+		t.Helper()
+		repoDir = setupWorkspaceConfigMigrationNoticeTest(t)
+		apiDir = filepath.Join(repoDir, "services", "api")
+		webDir := filepath.Join(repoDir, "apps", "web")
+		for _, dir := range []string{apiDir, webDir} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+		}
+		t.Chdir(webDir)
+		return repoDir, apiDir
+	}
+	projectConfigDir := filepath.Join("..", "..", "services", "api")
+
+	t.Run("yaml in project config dir, legacy json above cwd", func(t *testing.T) {
+		repoDir, apiDir := layout(t)
+		writeTestFile(t, filepath.Join(repoDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), legacyWorkspaceJSON)
+		writeTestFile(t, filepath.Join(apiDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
+
+		var buf bytes.Buffer
+		DisplayWorkspaceConfigMigrationNoticeWithWriter(false, projectConfigDir, &buf)
+		if buf.Len() != 0 {
+			t.Errorf("expected no notice when the run uses a yaml, got:\n%s", buf.String())
+		}
+		if fileExists(migrationNoticeCachePathForTest(t)) {
+			t.Error("expected no notice cache file to be written")
+		}
+	})
+
+	t.Run("legacy json in project config dir, yaml above cwd", func(t *testing.T) {
+		repoDir, apiDir := layout(t)
+		writeTestFile(t, filepath.Join(repoDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
+		apiJSONPath := filepath.Join(apiDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, apiJSONPath, legacyWorkspaceJSON)
+
+		var buf bytes.Buffer
+		DisplayWorkspaceConfigMigrationNoticeWithWriter(false, projectConfigDir, &buf)
+		out := buf.String()
+		for _, want := range []string{
+			"Important: .infisical.json is deprecated",
+			"File in use: " + apiJSONPath,
+			"run `infisical migrate-config` in " + apiDir,
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("notice missing %q, got:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, filepath.Join(repoDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)) {
+			t.Errorf("notice must not name the repo root json, got:\n%s", out)
+		}
+	})
+
+	t.Run("empty project config dir, legacy json above cwd", func(t *testing.T) {
+		repoDir, _ := layout(t)
+		writeTestFile(t, filepath.Join(repoDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), legacyWorkspaceJSON)
+
+		var buf bytes.Buffer
+		DisplayWorkspaceConfigMigrationNoticeWithWriter(false, projectConfigDir, &buf)
+		if buf.Len() != 0 {
+			t.Errorf("expected no notice when the project config dir has no config, got:\n%s", buf.String())
+		}
+	})
 }
