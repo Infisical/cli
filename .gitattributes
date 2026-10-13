@@ -1,0 +1,2 @@
+# systemd units and logrotate configs: keep LF on Windows checkouts, since they are embedded into Linux files
+*.tmpl text eol=lf

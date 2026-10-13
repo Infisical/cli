@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -150,8 +151,9 @@ func renderAgentSystemdUnit(opts agentServiceOptions) (string, error) {
 		"Name":        opts.Name,
 		"Description": agentServiceDisplayName(opts.Name),
 		"ExecStart":   strings.Join(execStart, " "),
-		// relative paths in the agent config resolve from the directory that holds it
-		"WorkingDirectory": strings.ReplaceAll(filepath.Dir(opts.ConfigPath), "%", "%%"),
+		// relative paths in the agent config resolve from the directory that holds it.
+		// path, not filepath: unit files hold Linux paths whatever OS renders them
+		"WorkingDirectory": strings.ReplaceAll(path.Dir(opts.ConfigPath), "%", "%%"),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to execute template: %w", err)
