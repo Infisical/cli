@@ -134,9 +134,9 @@ jobs:
           INFISICAL_CLI_EXECUTABLE: ${{ github.workspace }}/infisical-cli
           CLI_E2E_DEFAULT_RUN_METHOD: subprocess
 
-  scan-test:
+  os-specific-test:
     runs-on: ${{ matrix.os }}
-    name: Scan Testing (${{ matrix.os }})
+    name: OS-Specific Testing (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
