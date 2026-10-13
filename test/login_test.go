@@ -33,7 +33,7 @@ func UserInitCmd() {
 				} else if strings.Contains(terminalOut, "Select the root or sub-organization within") && step < 1 {
 					step += 1
 					stepChan <- step
-				} else if strings.Contains(terminalOut, "Which of your Infisical projects would you like to connect this project to?") && step < 2 {
+				} else if strings.Contains(terminalOut, "Select the secret management project to link this directory to") && step < 2 {
 					step += 1
 					stepChan <- step
 				}

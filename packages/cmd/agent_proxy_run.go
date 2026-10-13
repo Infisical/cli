@@ -53,10 +53,10 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.HandleError(fmt.Errorf("--proxy is not valid for 'run' (it starts its own ephemeral proxy); use 'agent-proxy connect --proxy=host:port' for a remote proxy"))
 	}
 
-	// Same resolution order as `connect`: flag, then env var, then .infisical.json.
+	// Same resolution order as `connect`: flag, then env var, then .infisical.yaml.
 	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.default-environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
 	}
 
 	secretPath := util.ResolveSecretPath(cmd)
@@ -71,7 +71,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		}
 	}
 	if projectID == "" {
-		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
+		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.yaml (or a legacy .infisical.json)"))
 	}
 
 	unmatchedHost, _ := cmd.Flags().GetString("unmatched-host")
@@ -318,7 +318,7 @@ func sandboxSource(cmd *cobra.Command) string {
 	}
 }
 
-// resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.json (a committed
+// resolveSandboxEnabled reads the toggle from flag or env only, never .infisical.yaml (a committed
 // file must not be able to silently disable the boundary).
 func resolveSandboxEnabled(cmd *cobra.Command) bool {
 	if cmd.Flags().Changed("sandbox") {
@@ -525,9 +525,9 @@ func isSecretShapedEnvName(name string) bool {
 }
 
 func init() {
-	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
-	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
-	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
+	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT, then .infisical.yaml or a legacy .infisical.json)")
+	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH, then secrets-management.default-secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
+	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
 	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
 	agentProxyRunCmd.Flags().Bool("no-sandbox", false, "disable the OS sandbox; the agent can then read your files and reach the network directly")

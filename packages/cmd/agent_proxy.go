@@ -143,7 +143,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 
 	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set defaultEnvironment in .infisical.json"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.default-environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
 	}
 
 	secretPath := util.ResolveSecretPath(cmd)
@@ -158,7 +158,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 		}
 	}
 	if projectID == "" {
-		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.json"))
+		util.HandleError(fmt.Errorf("project id is required; pass --projectId, set INFISICAL_PROJECT_ID, or run inside a project with .infisical.yaml (or a legacy .infisical.json)"))
 	}
 
 	token, tokenSource := resolveAgentToken(cmd)
@@ -475,9 +475,9 @@ func runAgentProcess(args, env []string) error {
 
 func init() {
 	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy as host:port (falls back to INFISICAL_AGENT_PROXY_ADDRESS)")
-	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
-	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
-	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
+	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT, then .infisical.yaml or a legacy .infisical.json)")
+	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH, then secrets-management.default-secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
+	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
