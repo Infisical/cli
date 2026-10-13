@@ -21,13 +21,7 @@ import (
 )
 
 func getDynamicSecretList(cmd *cobra.Command, args []string) {
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -44,10 +38,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -133,13 +124,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredentialName := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -161,10 +146,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	plainOutput, err := cmd.Flags().GetBool("plain")
 	if err != nil {
@@ -306,13 +288,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeaseId := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -334,10 +310,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -432,13 +405,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeaseId := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -455,10 +422,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -551,13 +515,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredentialName := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -574,10 +532,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {

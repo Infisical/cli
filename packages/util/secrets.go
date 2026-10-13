@@ -529,16 +529,6 @@ func DeleteBackupSecrets() error {
 	return os.RemoveAll(fullPathToSecretsBackupFolder)
 }
 
-func GetEnvFromWorkspaceFile() string {
-	workspaceFile, err := GetWorkSpaceFromFile()
-	if err != nil {
-		log.Debug().Msgf("getEnvFromWorkspaceFile: [err=%s]", err)
-		return ""
-	}
-
-	return envFromWorkspaceConfig(workspaceFile)
-}
-
 func envFromWorkspaceConfig(workspaceFile models.WorkspaceConfigFile) string {
 	if env := GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
 		return env
