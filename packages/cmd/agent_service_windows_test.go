@@ -1,0 +1,90 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/Infisical/infisical-merge/packages/config"
+)
+
+func writeAgentServiceTestConfig(t *testing.T, path string, exitAfterAuth bool) {
+	t.Helper()
+
+	// ParseAgentConfig points the CLI at the config's address; put it back for the other tests
+	previousURL := config.INFISICAL_URL
+	t.Cleanup(func() { config.INFISICAL_URL = previousURL })
+
+	content := fmt.Sprintf(`infisical:
+  address: "http://127.0.0.1:1"
+  exit-after-auth: %t
+auth:
+  type: "universal-auth"
+  config:
+    client-id: "./client-id"
+    client-secret: "./client-secret"
+`, exitAfterAuth)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+}
+
+func TestValidateAgentServiceName(t *testing.T) {
+	for _, name := range []string{"infisical-agent", "chef.secrets_1", "A"} {
+		assert.NoError(t, validateAgentServiceName(name), "name %q", name)
+	}
+
+	for _, name := range []string{"", "-agent", "my agent", "agent@1", "../agent", `agent\x`, strings.Repeat("a", 129)} {
+		assert.Error(t, validateAgentServiceName(name), "name %q", name)
+	}
+}
+
+func TestNewAgentServiceOptions(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentServiceTestConfig(t, filepath.Join(dir, "agent-config.yaml"), false)
+	t.Chdir(dir)
+
+	opts, err := newAgentServiceOptions("infisical-agent", "agent-config.yaml")
+	require.NoError(t, err)
+
+	// a relative config path is stored as an absolute one
+	require.True(t, filepath.IsAbs(opts.ConfigPath), opts.ConfigPath)
+	configInfo, err := os.Stat(opts.ConfigPath)
+	require.NoError(t, err)
+	expectedInfo, err := os.Stat(filepath.Join(dir, "agent-config.yaml"))
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(expectedInfo, configInfo))
+
+	assert.True(t, filepath.IsAbs(opts.Executable), opts.Executable)
+	assert.Equal(t, "infisical-agent", opts.Name)
+}
+
+func TestNewAgentServiceOptionsRejectsBadInput(t *testing.T) {
+	dir := t.TempDir()
+
+	exitAfterAuthConfig := filepath.Join(dir, "exit-after-auth.yaml")
+	writeAgentServiceTestConfig(t, exitAfterAuthConfig, true)
+	_, err := newAgentServiceOptions("infisical-agent", exitAfterAuthConfig)
+	assert.ErrorContains(t, err, "exit-after-auth")
+
+	_, err = newAgentServiceOptions("infisical-agent", filepath.Join(dir, "missing.yaml"))
+	assert.ErrorContains(t, err, "unable to read the agent config")
+
+	unsupportedAuthConfig := filepath.Join(dir, "unsupported-auth.yaml")
+	require.NoError(t, os.WriteFile(unsupportedAuthConfig, []byte("auth:\n  type: \"not-a-method\"\n"), 0o600))
+	_, err = newAgentServiceOptions("infisical-agent", unsupportedAuthConfig)
+	assert.ErrorContains(t, err, "not-a-method")
+
+	validConfig := filepath.Join(dir, "agent-config.yaml")
+	writeAgentServiceTestConfig(t, validConfig, false)
+	_, err = newAgentServiceOptions("bad name", validConfig)
+	assert.ErrorContains(t, err, "invalid service name")
+}
+
+func TestAgentServiceLogFile(t *testing.T) {
+	t.Setenv("ProgramData", `D:\Data`)
+	assert.Equal(t, `D:\Data\Infisical\Agent\chef-secrets.log`, agentServiceLogFile("chef-secrets"))
+}

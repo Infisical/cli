@@ -43,7 +43,6 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
-	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
@@ -3549,17 +3548,8 @@ var agentCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag config")
 		}
 
-		logFile, err := cmd.Flags().GetString("log-file")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag log-file")
-		}
-
-		if isService, exitCode := runAgentAsWindowsService(configPath, logFile); isService {
+		if isService, exitCode := runAgentAsWindowsService(configPath); isService {
 			os.Exit(exitCode)
-		}
-
-		if logFile != "" {
-			setAgentLogOutput(logFile, true)
 		}
 
 		if exitCode := runAgent(configPath, nil, nil); exitCode != 0 {
@@ -3569,7 +3559,8 @@ var agentCmd = &cobra.Command{
 }
 
 // runAgent runs the agent until it gets a shutdown signal or stop is closed, and returns the exit code.
-// ready, when set, is called once the config is loaded and the agent's workers have started.
+// Config errors are logged and return 0, as the agent always has. ready, when set, is called once the
+// config is loaded and the agent's workers have started.
 func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 	log.Info().Msg("starting Infisical agent...")
 
@@ -3582,7 +3573,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 		if err != nil {
 			if !FileExists(configPath) {
 				log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
-				return 1
+				return 0
 			}
 		} // pgrep -f "dev-agent"
 		agentConfigInBytes = data
@@ -3592,7 +3583,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 		decodedAgentConfig, err := base64.StdEncoding.DecodeString(agentConfigInBase64)
 		if err != nil {
 			log.Error().Msgf("Unable to decode base64 config file because %v", err)
-			return 1
+			return 0
 		}
 
 		agentConfigInBytes = decodedAgentConfig
@@ -3600,31 +3591,31 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 
 	if !FileExists(configPath) && agentConfigInBase64 == "" {
 		log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
-		return 1
+		return 0
 	}
 
 	agentConfig, err := ParseAgentConfig(agentConfigInBytes)
 	if err != nil {
 		log.Error().Msgf("Unable to parse %s because %v. Please ensure that it follows the Infisical Agent config structure", configPath, err)
-		return 1
+		return 0
 	}
 
 	err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
 	if err != nil {
 		log.Error().Msgf("Certificate configuration validation failed: %v", err)
-		return 1
+		return 0
 	}
 
 	err = processCertificateCSRPaths(&agentConfig.Certificates)
 	if err != nil {
 		log.Error().Msgf("Failed to load CSR files: %v", err)
-		return 1
+		return 0
 	}
 
 	err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
 	if err != nil {
 		log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
-		return 1
+		return 0
 	}
 
 	authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
@@ -3646,7 +3637,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 	if err != nil {
 		log.Error().Msgf("unable to marshal auth config because %v", err)
 		cancel()
-		return 1
+		return 0
 	}
 
 	var certificates []AgentCertificateConfig
@@ -3670,7 +3661,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 	if err != nil {
 		log.Error().Msgf("unable to setup cache manager: %v", err)
 		cancel()
-		return 1
+		return 0
 	}
 	tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(tm.cacheManager, tm.SdkRetryConfig())
 
@@ -3765,8 +3756,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 		}()
 	}
 
-	// tell systemd (Type=notify) or the Windows service handler that the agent is up
-	systemd.SdNotify(false, systemd.SdNotifyReady)
+	// tell the Windows service handler that the agent is up
 	if ready != nil {
 		ready()
 	}
@@ -4044,7 +4034,6 @@ func init() {
 		RootCmd.HelpFunc()(command, strings)
 	})
 	agentCmd.Flags().String("config", "agent-config.yaml", "The path to agent config yaml file")
-	agentCmd.Flags().String("log-file", "", "Also write agent logs to this file. It is rotated once it reaches 100MB")
 
 	certManagerAgentCmd.Flags().String("config", "certificate-agent-config.yaml", "The path to certificate agent config yaml file")
 	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")

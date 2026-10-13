@@ -253,19 +253,7 @@ func initLog() {
 // flags and environment variables. Called via cobra.OnInitialize after flags
 // are parsed.
 func initLogOutput() {
-	format := resolveLogFormat()
-	w := formatLogWriter(resolveLogDestination(), format)
-
-	if format == "json" {
-		// Raw JSON output - zerolog default without ConsoleWriter
-		log.Logger = zerolog.New(w).With().Timestamp().Logger()
-		return
-	}
-	log.Logger = log.Output(w)
-}
-
-// resolveLogFormat returns the lowercased log format: flag > env > default (console).
-func resolveLogFormat() string {
+	// Determine format: flag > env > default
 	format := logFormat
 	if format == "" {
 		format = os.Getenv("LOG_FORMAT")
@@ -273,35 +261,37 @@ func resolveLogFormat() string {
 	if format == "" {
 		format = "console"
 	}
-	return strings.ToLower(format)
-}
 
-// resolveLogDestination returns the stream logs go to: flag > env > default (stderr).
-func resolveLogDestination() io.Writer {
+	// Determine destination: flag > env > default
 	dest := logDestination
 	if dest == "" {
 		dest = os.Getenv("LOG_DESTINATION")
 	}
+	if dest == "" {
+		dest = "stderr"
+	}
 
+	// Select output writer based on destination
+	var w io.Writer
 	switch strings.ToLower(dest) {
 	case "stdout":
-		return os.Stdout
+		w = os.Stdout
 	default:
-		return os.Stderr
+		w = os.Stderr
 	}
-}
 
-// formatLogWriter wraps w so zerolog's JSON events are written in the given format.
-func formatLogWriter(w io.Writer, format string) io.Writer {
-	switch format {
+	// Configure logger based on format
+	switch strings.ToLower(format) {
 	case "json":
-		return w
+		// Raw JSON output - zerolog default without ConsoleWriter
+		log.Logger = zerolog.New(w).With().Timestamp().Logger()
 	case "plain":
 		// Plain text without colors
-		return GetLoggerConfig(w, true)
+		log.Logger = log.Output(GetLoggerConfig(w, true))
 	default: // "console"
 		// Colored console output, disable only if explicitly requested via NO_COLOR
-		return GetLoggerConfig(w, shouldDisableColor())
+		noColor := shouldDisableColor()
+		log.Logger = log.Output(GetLoggerConfig(w, noColor))
 	}
 }
 
