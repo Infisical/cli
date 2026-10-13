@@ -13,20 +13,22 @@ var secretsManagementCommands = []func() *cobra.Command{
 	buildRunCmd,
 	buildExportCmd,
 	buildSecretsCmd,
+	buildDynamicSecretsCmd,
 }
 
 func init() {
 	smCmd := &cobra.Command{
 		Use:   smCommandName,
-		Short: "Secrets Management commands (run, export, secrets)",
+		Short: "Secrets Management commands (run, export, secrets, dynamic-secrets)",
 		Long: `Secrets Management commands, grouped under one namespace.
 
 The same commands are also available at the top level (infisical run, infisical export,
-infisical secrets), and both forms behave identically. New Secrets Management features
-are added under this namespace.`,
+infisical secrets, infisical dynamic-secrets), and both forms behave identically. New
+Secrets Management features are added under this namespace.`,
 		Example: `  infisical sm run --env=dev -- npm run dev
   infisical sm export --env=prod --format=json
-  infisical sm secrets get DB_PASSWORD`,
+  infisical sm secrets get DB_PASSWORD
+  infisical sm dynamic-secrets lease create my-db-credentials`,
 		DisableFlagsInUseLine: true,
 		// Without Args and Run, cobra prints help and exits 0 for `infisical sm rnu`, so a typo
 		// would look like success. NoArgs turns it into an "unknown command" error instead.
