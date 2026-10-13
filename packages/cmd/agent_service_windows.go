@@ -1,0 +1,401 @@
+//go:build windows
+
+package cmd
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.org/x/sys/windows/svc/mgr"
+)
+
+// the agent writes every Event Log entry under one id; the message carries the detail
+const agentEventLogID = 1
+
+// how long the SCM should wait between status updates while the agent starts or stops
+const agentServiceWaitHint = 30 * time.Second
+
+func checkAgentServiceSupport() error {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return errors.New("managing the agent service requires Administrator rights, re-run the command from an elevated prompt (Run as administrator)")
+	}
+	return nil
+}
+
+// defaultAgentServiceLogFile returns a file under ProgramData: a service has no console, so its logs need a home.
+func defaultAgentServiceLogFile(name string) string {
+	programData := os.Getenv("ProgramData")
+	if programData == "" {
+		programData = `C:\ProgramData`
+	}
+	return filepath.Join(programData, "Infisical", "Agent", name+".log")
+}
+
+func installAgentService(opts agentServiceOptions) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("unable to connect to the Service Control Manager: %w", err)
+	}
+	defer m.Disconnect()
+
+	if existing, err := m.OpenService(opts.Name); err == nil {
+		existing.Close()
+		return fmt.Errorf("a service named %s already exists. To replace it, first run: infisical agent service uninstall %s", opts.Name, opts.Name)
+	}
+
+	s, err := m.CreateService(opts.Name, opts.Executable, mgr.Config{
+		DisplayName: agentServiceDisplayName(opts.Name),
+		Description: "Authenticates with Infisical and keeps secrets, tokens and certificates on this machine up to date. " + agentServiceMarker + ".",
+		StartType:   mgr.StartAutomatic,
+	}, opts.args()...)
+	if err != nil {
+		return fmt.Errorf("unable to create the %s service: %w", opts.Name, err)
+	}
+	defer s.Close()
+
+	// restart the agent when it crashes or stops with an error, like Restart=on-failure does under systemd
+	restart := mgr.RecoveryAction{Type: mgr.ServiceRestart, Delay: 5 * time.Second}
+	resetPeriod := uint32((24 * time.Hour).Seconds())
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{restart, restart, restart}, resetPeriod); err != nil {
+		return deleteIncompleteService(s, fmt.Errorf("unable to set the service's recovery actions: %w", err))
+	}
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		return deleteIncompleteService(s, fmt.Errorf("unable to set the service's recovery actions: %w", err))
+	}
+
+	// lets the agent's errors show up in Event Viewer under the service name
+	if err := eventlog.InstallAsEventCreate(opts.Name, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
+		// a source left behind by an earlier install still works
+		log.Debug().Msgf("unable to register the %s event log source: %v", opts.Name, err)
+	}
+
+	log.Info().Msgf("Installed the %s service. It starts automatically on boot and logs to %s", opts.Name, opts.LogFile)
+	log.Info().Msgf("Start it now with: infisical agent service start %s", opts.Name)
+	return nil
+}
+
+func deleteIncompleteService(s *mgr.Service, cause error) error {
+	if err := s.Delete(); err != nil {
+		return fmt.Errorf("%w (removing the incomplete service also failed: %v)", cause, err)
+	}
+	return cause
+}
+
+func uninstallAgentService(name string) error {
+	m, s, err := openAgentWindowsService(name)
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	defer s.Close()
+
+	if err := stopWindowsService(s); err != nil {
+		log.Warn().Msgf("unable to stop the %s service: %v", name, err)
+	}
+
+	if err := s.Delete(); err != nil {
+		return fmt.Errorf("unable to delete the %s service: %w", name, err)
+	}
+
+	if err := eventlog.Remove(name); err != nil {
+		log.Debug().Msgf("unable to remove the %s event log source: %v", name, err)
+	}
+
+	log.Info().Msgf("Uninstalled the %s service", name)
+	return nil
+}
+
+func startAgentService(name string) error {
+	m, s, err := openAgentWindowsService(name)
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	defer s.Close()
+
+	if err := s.Start(); err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+			log.Info().Msgf("The %s service is already running", name)
+			return nil
+		}
+		return fmt.Errorf("unable to start the %s service: %w", name, err)
+	}
+
+	// the agent reports Running once it has loaded its config, or stops if it could not
+	status, err := waitForWindowsService(s, agentServiceWaitHint, func(state svc.State) bool {
+		return state != svc.StartPending
+	})
+	if err != nil {
+		return err
+	}
+
+	if status.State != svc.Running {
+		return fmt.Errorf("the %s service stopped while starting (exit code %d). Check the agent's log file and the Application log in Event Viewer", name, status.ServiceSpecificExitCode)
+	}
+
+	log.Info().Msgf("Started the %s service", name)
+	return nil
+}
+
+func stopAgentService(name string) error {
+	m, s, err := openAgentWindowsService(name)
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	defer s.Close()
+
+	if err := stopWindowsService(s); err != nil {
+		return err
+	}
+
+	log.Info().Msgf("Stopped the %s service", name)
+	return nil
+}
+
+// openAgentWindowsService opens an installed agent service, refusing services that
+// 'infisical agent service install' did not create.
+func openAgentWindowsService(name string) (*mgr.Mgr, *mgr.Service, error) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to connect to the Service Control Manager: %w", err)
+	}
+
+	s, err := m.OpenService(name)
+	if err != nil {
+		m.Disconnect()
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return nil, nil, fmt.Errorf("no agent service named %s is installed", name)
+		}
+		return nil, nil, fmt.Errorf("unable to open the %s service: %w", name, err)
+	}
+
+	config, err := s.Config()
+	if err != nil {
+		s.Close()
+		m.Disconnect()
+		return nil, nil, fmt.Errorf("unable to read the %s service's configuration: %w", name, err)
+	}
+
+	if !strings.Contains(config.BinaryPathName, " agent --config ") {
+		s.Close()
+		m.Disconnect()
+		return nil, nil, fmt.Errorf("the %s service was not installed by 'infisical agent service install', refusing to manage it", name)
+	}
+
+	return m, s, nil
+}
+
+// stopWindowsService asks the service to stop and waits for it to exit. The agent can take a while
+// when it revokes its credentials on shutdown.
+func stopWindowsService(s *mgr.Service) error {
+	status, err := s.Query()
+	if err != nil {
+		return fmt.Errorf("unable to query the service: %w", err)
+	}
+
+	if status.State == svc.Stopped {
+		return nil
+	}
+
+	if status.State != svc.StopPending {
+		if _, err := s.Control(svc.Stop); err != nil {
+			return fmt.Errorf("unable to stop the service: %w", err)
+		}
+	}
+
+	_, err = waitForWindowsService(s, 2*time.Minute, func(state svc.State) bool {
+		return state == svc.Stopped
+	})
+	return err
+}
+
+// waitForWindowsService polls the service until done accepts its state or the timeout passes.
+func waitForWindowsService(s *mgr.Service, timeout time.Duration, done func(svc.State) bool) (svc.Status, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := s.Query()
+		if err != nil {
+			return status, fmt.Errorf("unable to query the service: %w", err)
+		}
+
+		if done(status.State) {
+			return status, nil
+		}
+
+		if time.Now().After(deadline) {
+			return status, fmt.Errorf("timed out after %s waiting for the service, it is still %s", timeout, windowsServiceStateName(status.State))
+		}
+
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func windowsServiceStateName(state svc.State) string {
+	switch state {
+	case svc.Stopped:
+		return "stopped"
+	case svc.StartPending:
+		return "starting"
+	case svc.StopPending:
+		return "stopping"
+	case svc.Running:
+		return "running"
+	default:
+		return fmt.Sprintf("in state %d", state)
+	}
+}
+
+// runAgentAsWindowsService runs the agent under the Service Control Manager when the SCM started this
+// process. It reports false when the agent was started any other way, such as from a terminal.
+func runAgentAsWindowsService(configPath, logFile string) (bool, int) {
+	isService, err := svc.IsWindowsService()
+	if err != nil || !isService {
+		return false, 0
+	}
+
+	service := &agentWindowsService{configPath: configPath, logFile: logFile}
+
+	// the name is ignored for services that run in their own process; Execute learns the real one
+	if err := svc.Run(defaultAgentServiceName, service); err != nil {
+		setAgentLogOutput(logFile, false)
+		log.Error().Msgf("unable to run as a Windows service: %v", err)
+		return true, 1
+	}
+
+	return true, service.exitCode
+}
+
+// agentWindowsService implements the SCM protocol: it reports the agent's state to the SCM and turns
+// the SCM's stop and shutdown requests into a graceful agent shutdown.
+type agentWindowsService struct {
+	configPath string
+	logFile    string
+	exitCode   int
+}
+
+func (s *agentWindowsService) Execute(args []string, requests <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
+	status <- svc.Status{State: svc.StartPending, WaitHint: uint32(agentServiceWaitHint.Milliseconds())}
+
+	// a service has no console, so logs go to the log file, with errors copied into the Event Log
+	// under the name the service was installed as (args[0])
+	elog, elogErr := eventlog.Open(args[0])
+	if elogErr == nil {
+		defer elog.Close()
+		setAgentLogOutput(s.logFile, false, eventLogWriter{elog: elog})
+	} else {
+		setAgentLogOutput(s.logFile, false)
+		log.Warn().Msgf("unable to open the Windows Event Log, errors are only written to the log file: %v", elogErr)
+	}
+
+	// the SCM starts services in C:\Windows\System32, so resolve relative config paths from the config's directory
+	if filepath.IsAbs(s.configPath) {
+		if err := os.Chdir(filepath.Dir(s.configPath)); err != nil {
+			log.Error().Msgf("unable to change to the config directory: %v", err)
+		}
+	}
+
+	stop := make(chan struct{})
+	ready := make(chan struct{}, 1)
+	exited := make(chan int, 1)
+	go func() {
+		exited <- runAgent(s.configPath, stop, func() { ready <- struct{}{} })
+	}()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	stopping := false
+	var checkpoint uint32
+	reportStopPending := func() {
+		checkpoint++
+		status <- svc.Status{State: svc.StopPending, CheckPoint: checkpoint, WaitHint: uint32(agentServiceWaitHint.Milliseconds())}
+	}
+
+	for {
+		select {
+		case <-ready:
+			status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+			if elog != nil {
+				_ = elog.Info(agentEventLogID, fmt.Sprintf("Infisical Agent started with config %s", s.configPath))
+			}
+
+		case req := <-requests:
+			switch req.Cmd {
+			case svc.Interrogate:
+				status <- req.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				if !stopping {
+					stopping = true
+					log.Info().Msg("the Service Control Manager asked the agent to stop")
+					close(stop)
+				}
+				reportStopPending()
+			}
+
+		case <-ticker.C:
+			// keep the SCM from treating a slow shutdown, such as revoking credentials, as a hung service
+			if stopping {
+				reportStopPending()
+			}
+
+		case code := <-exited:
+			if elog != nil {
+				_ = elog.Info(agentEventLogID, "Infisical Agent stopped")
+			}
+
+			// a requested stop is never reported as a failure: a non-zero exit code would make the
+			// recovery actions restart the service the user just stopped
+			if stopping || code == 0 {
+				return false, 0
+			}
+
+			log.Error().Msgf("the agent exited with code %d", code)
+			s.exitCode = code
+			return true, uint32(code)
+		}
+	}
+}
+
+// eventLogWriter copies error logs into the Windows Event Log, where Windows monitoring tools look for
+// service failures. Everything else stays in the log file.
+type eventLogWriter struct {
+	elog *eventlog.Log
+}
+
+func (w eventLogWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (w eventLogWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
+	if level < zerolog.ErrorLevel || level > zerolog.PanicLevel {
+		return len(p), nil
+	}
+
+	// the Event Log records its own time and level
+	var msg bytes.Buffer
+	formatter := zerolog.ConsoleWriter{
+		Out:          &msg,
+		NoColor:      true,
+		PartsExclude: []string{zerolog.TimestampFieldName, zerolog.LevelFieldName},
+	}
+	if _, err := formatter.Write(p); err == nil {
+		// failing to reach the Event Log must not stop the agent logging to its file
+		_ = w.elog.Error(agentEventLogID, strings.TrimSpace(msg.String()))
+	}
+
+	return len(p), nil
+}
+
+// MultiLevelWriter only passes the level to writers that implement zerolog.LevelWriter
+var _ zerolog.LevelWriter = eventLogWriter{}

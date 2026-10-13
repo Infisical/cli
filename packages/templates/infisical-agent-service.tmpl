@@ -1,0 +1,15 @@
+# {{ .Marker }}. Remove it with: sudo infisical agent service uninstall {{ .Name }}
+[Unit]
+Description={{ .Description }}
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+ExecStart={{ .ExecStart }}
+WorkingDirectory={{ .WorkingDirectory }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

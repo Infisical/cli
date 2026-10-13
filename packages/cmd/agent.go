@@ -42,6 +42,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
@@ -3549,236 +3550,269 @@ var agentCmd = &cobra.Command{
 	Short:                 "Used to launch a client daemon that streamlines authentication and secret retrieval processes in various environments",
 	DisableFlagsInUseLine: true,
 	Run: func(cmd *cobra.Command, args []string) {
-
-		log.Info().Msg("starting Infisical agent...")
-
 		configPath, err := cmd.Flags().GetString("config")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag config")
 		}
 
-		var agentConfigInBytes []byte
-
-		agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
-
-		if agentConfigInBase64 == "" {
-			data, err := ioutil.ReadFile(configPath)
-			if err != nil {
-				if !FileExists(configPath) {
-					log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
-					return
-				}
-			} // pgrep -f "dev-agent"
-			agentConfigInBytes = data
+		logFile, err := cmd.Flags().GetString("log-file")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag log-file")
 		}
 
-		if agentConfigInBase64 != "" {
-			decodedAgentConfig, err := base64.StdEncoding.DecodeString(agentConfigInBase64)
-			if err != nil {
-				log.Error().Msgf("Unable to decode base64 config file because %v", err)
+		if isService, exitCode := runAgentAsWindowsService(configPath, logFile); isService {
+			os.Exit(exitCode)
+		}
+
+		if logFile != "" {
+			setAgentLogOutput(logFile, true)
+		}
+
+		if exitCode := runAgent(configPath, nil, nil); exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	},
+}
+
+// runAgent runs the agent until it gets a shutdown signal or stop is closed, and returns the exit code.
+// ready, when set, is called once the config is loaded and the agent's workers have started.
+func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
+	log.Info().Msg("starting Infisical agent...")
+
+	var agentConfigInBytes []byte
+
+	agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
+
+	if agentConfigInBase64 == "" {
+		data, err := ioutil.ReadFile(configPath)
+		if err != nil {
+			if !FileExists(configPath) {
+				log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
+				return 1
+			}
+		} // pgrep -f "dev-agent"
+		agentConfigInBytes = data
+	}
+
+	if agentConfigInBase64 != "" {
+		decodedAgentConfig, err := base64.StdEncoding.DecodeString(agentConfigInBase64)
+		if err != nil {
+			log.Error().Msgf("Unable to decode base64 config file because %v", err)
+			return 1
+		}
+
+		agentConfigInBytes = decodedAgentConfig
+	}
+
+	if !FileExists(configPath) && agentConfigInBase64 == "" {
+		log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
+		return 1
+	}
+
+	agentConfig, err := ParseAgentConfig(agentConfigInBytes)
+	if err != nil {
+		log.Error().Msgf("Unable to parse %s because %v. Please ensure that it follows the Infisical Agent config structure", configPath, err)
+		return 1
+	}
+
+	err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
+	if err != nil {
+		log.Error().Msgf("Certificate configuration validation failed: %v", err)
+		return 1
+	}
+
+	err = processCertificateCSRPaths(&agentConfig.Certificates)
+	if err != nil {
+		log.Error().Msgf("Failed to load CSR files: %v", err)
+		return 1
+	}
+
+	err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
+	if err != nil {
+		log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
+		return 1
+	}
+
+	authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
+
+	if !authMethodValid {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	tokenRefreshNotifier := make(chan bool)
+	monitoringChan := make(chan bool, len(agentConfig.Templates))
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	filePaths := agentConfig.Sinks
+
+	configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
+	if err != nil {
+		log.Error().Msgf("unable to marshal auth config because %v", err)
+		cancel()
+		return 1
+	}
+
+	var certificates []AgentCertificateConfig
+	if agentConfig.Version != "" {
+		certificates = agentConfig.Certificates
+	}
+
+	tm := NewAgentManager(NewAgentMangerOptions{
+		FileDeposits:                   filePaths,
+		Templates:                      agentConfig.Templates,
+		Certificates:                   certificates,
+		AuthConfigBytes:                configBytes,
+		NewAccessTokenNotificationChan: tokenRefreshNotifier,
+		ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
+		AuthStrategy:                   authStrategy,
+		RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
+		RetryConfig:                    agentConfig.Infisical.RetryConfig,
+	})
+
+	tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
+	if err != nil {
+		log.Error().Msgf("unable to setup cache manager: %v", err)
+		cancel()
+		return 1
+	}
+	tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(tm.cacheManager, tm.SdkRetryConfig())
+
+	// start a http server that returns a json object of the whole cache
+	if util.IsDevelopmentMode() && tm.cacheManager != nil && tm.cacheManager.IsEnabled {
+
+		go func() {
+			http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
+
+				all, err := tm.cacheManager.cacheStorage.GetAll()
+				if err != nil {
+					log.Error().Msgf("unable to get all cache: %v", err)
+					json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+					return
+				}
+
+				json.NewEncoder(w).Encode(all)
+
+			})
+			log.Info().Msg("starting cache http server on port 9000")
+			http.ListenAndServe(":9000", nil)
+		}()
+	}
+
+	go tm.ManageTokenLifecycle()
+
+	var monitoredTemplatesFinished atomic.Int32
+
+	// when all templates have finished rendering once, we delete the unused leases from the cache.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-monitoringChan:
+				monitoredTemplatesFinished.Add(1)
+				if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
+					if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
+						log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
+					}
+
+					if tm.exitAfterAuth {
+						log.Info().Msg("agent is exiting after all templates have finished rendering once...")
+						os.Exit(0)
+					}
+				}
+			}
+		}
+	}()
+
+	for _, template := range tm.templates {
+		log.Info().Msgf("template engine started for template %v...", template.ID)
+		go tm.MonitorSecretChanges(ctx, template.Template, template.ID, sigChan, monitoringChan)
+	}
+
+	if len(tm.certificates) > 0 {
+		go func() {
+			if !tm.waitForToken(ctx) {
 				return
 			}
 
-			agentConfigInBytes = decodedAgentConfig
-		}
+			httpClient, err := tm.createAuthenticatedClient()
+			if err != nil {
+				log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
+				return
+			}
 
-		if !FileExists(configPath) && agentConfigInBase64 == "" {
-			log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
-			return
-		}
+			if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
+				log.Error().Msgf("failed to resolve certificate name references: %v", err)
+				return
+			}
 
-		agentConfig, err := ParseAgentConfig(agentConfigInBytes)
-		if err != nil {
-			log.Error().Msgf("Unable to parse %s because %v. Please ensure that it follows the Infisical Agent config structure", configPath, err)
-			return
-		}
-
-		err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
-		if err != nil {
-			log.Error().Msgf("Certificate configuration validation failed: %v", err)
-			return
-		}
-
-		err = processCertificateCSRPaths(&agentConfig.Certificates)
-		if err != nil {
-			log.Error().Msgf("Failed to load CSR files: %v", err)
-			return
-		}
-
-		err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
-		if err != nil {
-			log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
-			return
-		}
-
-		authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
-
-		if !authMethodValid {
-			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-
-		tokenRefreshNotifier := make(chan bool)
-		monitoringChan := make(chan bool, len(agentConfig.Templates))
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-		filePaths := agentConfig.Sinks
-
-		configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
-		if err != nil {
-			log.Error().Msgf("unable to marshal auth config because %v", err)
-			cancel()
-			return
-		}
-
-		var certificates []AgentCertificateConfig
-		if agentConfig.Version != "" {
-			certificates = agentConfig.Certificates
-		}
-
-		tm := NewAgentManager(NewAgentMangerOptions{
-			FileDeposits:                   filePaths,
-			Templates:                      agentConfig.Templates,
-			Certificates:                   certificates,
-			AuthConfigBytes:                configBytes,
-			NewAccessTokenNotificationChan: tokenRefreshNotifier,
-			ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
-			AuthStrategy:                   authStrategy,
-			RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
-			RetryConfig:                    agentConfig.Infisical.RetryConfig,
-		})
-
-		tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
-		if err != nil {
-			log.Error().Msgf("unable to setup cache manager: %v", err)
-			cancel()
-			return
-		}
-		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(tm.cacheManager, tm.SdkRetryConfig())
-
-		// start a http server that returns a json object of the whole cache
-		if util.IsDevelopmentMode() && tm.cacheManager != nil && tm.cacheManager.IsEnabled {
-
-			go func() {
-				http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
-
-					all, err := tm.cacheManager.cacheStorage.GetAll()
-					if err != nil {
-						log.Error().Msgf("unable to get all cache: %v", err)
-						json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
-						return
-					}
-
-					json.NewEncoder(w).Encode(all)
-
-				})
-				log.Info().Msg("starting cache http server on port 9000")
-				http.ListenAndServe(":9000", nil)
-			}()
-		}
-
-		go tm.ManageTokenLifecycle()
-
-		var monitoredTemplatesFinished atomic.Int32
-
-		// when all templates have finished rendering once, we delete the unused leases from the cache.
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-monitoringChan:
-					monitoredTemplatesFinished.Add(1)
-					if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
-						if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
-							log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
-						}
-
-						if tm.exitAfterAuth {
-							log.Info().Msg("agent is exiting after all templates have finished rendering once...")
-							os.Exit(0)
-						}
+			for i := range tm.certificates {
+				for j := range agentConfig.Certificates {
+					if tm.certificates[i].ID == j+1 {
+						tm.certificates[i].Certificate = agentConfig.Certificates[j]
+						break
 					}
 				}
 			}
+
+			log.Info().Msg("certificate management engine starting...")
+			tm.MonitorCertificates(ctx)
 		}()
+	}
 
-		for _, template := range tm.templates {
-			log.Info().Msgf("template engine started for template %v...", template.ID)
-			go tm.MonitorSecretChanges(ctx, template.Template, template.ID, sigChan, monitoringChan)
-		}
+	// a service manager stops the agent through stop instead of sending it a signal
+	if stop != nil {
+		go func() {
+			<-stop
+			sigChan <- syscall.SIGTERM
+		}()
+	}
 
-		if len(tm.certificates) > 0 {
-			go func() {
-				if !tm.waitForToken(ctx) {
-					return
-				}
+	// tell systemd (Type=notify) or the Windows service handler that the agent is up
+	systemd.SdNotify(false, systemd.SdNotifyReady)
+	if ready != nil {
+		ready()
+	}
 
-				httpClient, err := tm.createAuthenticatedClient()
-				if err != nil {
-					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
-					return
-				}
+	for {
+		select {
+		case <-tokenRefreshNotifier:
+			go tm.WriteTokenToFiles()
+		case <-sigChan:
+			tm.isShuttingDown = true
+			tm.cancelContext()
+			log.Info().Msg("agent is gracefully shutting down...")
+			cancel()
 
-				if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
-					log.Error().Msgf("failed to resolve certificate name references: %v", err)
-					return
-				}
+			exitCode := 0
 
-				for i := range tm.certificates {
-					for j := range agentConfig.Certificates {
-						if tm.certificates[i].ID == j+1 {
-							tm.certificates[i].Certificate = agentConfig.Certificates[j]
-							break
-						}
-					}
-				}
+			if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
 
-				log.Info().Msg("certificate management engine starting...")
-				tm.MonitorCertificates(ctx)
-			}()
-		}
+				done := make(chan error, 1)
 
-		for {
-			select {
-			case <-tokenRefreshNotifier:
-				go tm.WriteTokenToFiles()
-			case <-sigChan:
-				tm.isShuttingDown = true
-				tm.cancelContext()
-				log.Info().Msg("agent is gracefully shutting down...")
-				cancel()
+				go func() {
+					done <- tm.RevokeCredentials()
+				}()
 
-				exitCode := 0
-
-				if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
-
-					done := make(chan error, 1)
-
-					go func() {
-						done <- tm.RevokeCredentials()
-					}()
-
-					select {
-					case err := <-done:
-						if err != nil {
-							log.Error().Msgf("unable to revoke credentials [err=%v]", err)
-							exitCode = 1
-						}
-					// 5 minute timeout to prevent any hanging edge cases
-					case <-time.After(5 * time.Minute):
-						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
+				select {
+				case err := <-done:
+					if err != nil {
+						log.Error().Msgf("unable to revoke credentials [err=%v]", err)
 						exitCode = 1
 					}
+				// 5 minute timeout to prevent any hanging edge cases
+				case <-time.After(5 * time.Minute):
+					log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
+					exitCode = 1
 				}
-
-				os.Exit(exitCode)
 			}
-		}
 
-	},
+			return exitCode
+		}
+	}
 }
 
 func validateCertificateOnlyMode(config *Config) error {
@@ -4011,9 +4045,12 @@ var certManagerAgentCmd = &cobra.Command{
 func init() {
 	agentCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
 		command.Flags().MarkHidden("domain")
-		command.Parent().HelpFunc()(command, strings)
+		// RootCmd, not command.Parent(): subcommands such as 'agent service install' inherit this
+		// help func, and their parent resolves back to it
+		RootCmd.HelpFunc()(command, strings)
 	})
 	agentCmd.Flags().String("config", "agent-config.yaml", "The path to agent config yaml file")
+	agentCmd.Flags().String("log-file", "", "Also write agent logs to this file. It is rotated once it reaches 100MB")
 
 	certManagerAgentCmd.Flags().String("config", "certificate-agent-config.yaml", "The path to certificate agent config yaml file")
 	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")
