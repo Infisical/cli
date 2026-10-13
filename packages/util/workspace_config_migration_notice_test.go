@@ -8,11 +8,20 @@ import (
 	"testing"
 )
 
-// setupWorkspaceConfigMigrationNoticeTest points HOME at a temp dir so the notice cache is isolated,
+// isolateHomeDir points the home dir at a temp dir. os.UserHomeDir reads HOME on Unix
+// and USERPROFILE on Windows, so both are set.
+func isolateHomeDir(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+// setupWorkspaceConfigMigrationNoticeTest points the home dir at a temp dir so the notice cache is isolated,
 // chdirs into a fresh project dir, and returns the project dir.
 func setupWorkspaceConfigMigrationNoticeTest(t *testing.T) string {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	isolateHomeDir(t)
 	t.Setenv("INFISICAL_DISABLE_WORKSPACE_CONFIG_MIGRATION_NOTICE", "")
 	t.Setenv("INFISICAL_DISABLE_MIGRATION_NOTICES", "")
 	projectDir := t.TempDir()

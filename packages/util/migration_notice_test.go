@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// setupMigrationNoticeTest points HOME at a temp dir so the notice cache is isolated.
+// setupMigrationNoticeTest points the home dir at a temp dir so the notice cache is isolated.
 func setupMigrationNoticeTest(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	isolateHomeDir(t)
 	t.Setenv("INFISICAL_DISABLE_MIGRATION_NOTICES", "")
 }
 
