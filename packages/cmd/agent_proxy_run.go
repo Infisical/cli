@@ -43,9 +43,9 @@ func buildAgentProxyRunCmd() *cobra.Command {
 		Run: runAgentProxyRun,
 	}
 
-	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
-	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
-	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
+	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT, then .infisical.yaml or a legacy .infisical.json)")
+	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH, then secrets-management.default-secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
+	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
 	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
 	agentProxyRunCmd.Flags().Bool("no-sandbox", false, "disable the OS sandbox; the agent can then read your files and reach the network directly")

@@ -57,9 +57,9 @@ infisical secrets agent-proxy connect -- claude`,
 	}
 
 	agentProxyConnectCmd.Flags().String("proxy", "", "address of the agent proxy as host:port (falls back to INFISICAL_AGENT_PROXY_ADDRESS)")
-	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT or .infisical.json)")
-	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH or defaultSecretPath in .infisical.json)")
-	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID or .infisical.json)")
+	agentProxyConnectCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT, then .infisical.yaml or a legacy .infisical.json)")
+	agentProxyConnectCmd.Flags().String("path", "/", "secret path (folder) scope (falls back to INFISICAL_SECRET_PATH, then secrets-management.default-secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
+	agentProxyConnectCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	agentProxyConnectCmd.Flags().String("client-id", "", "universal auth client id for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("client-secret", "", "universal auth client secret for the agent machine identity")
 	agentProxyConnectCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")

@@ -150,6 +150,47 @@ func TestSmRejectsUnknownSubcommand(t *testing.T) {
 	}
 }
 
+// `sm agent-proxy` is a shorter path to `secrets agent-proxy`: same subcommands and flags, its own
+// instances. It has no `secrets` parent, so the --env/--tags that `secrets` passes down (which
+// agent-proxy ignores) are not inherited there.
+func TestSmAgentProxyShortcut(t *testing.T) {
+	for _, sub := range [][]string{{}, {"connect"}, {"start"}, {"run"}} {
+		viaSecrets := findCommand(t, append([]string{"secrets", "agent-proxy"}, sub...))
+		shortcut := findCommand(t, append([]string{smCommandName, "agent-proxy"}, sub...))
+		name := strings.TrimSpace("agent-proxy " + strings.Join(sub, " "))
+
+		if viaSecrets == shortcut {
+			t.Errorf("%s: shortcut shares its instance with `secrets agent-proxy`", name)
+		}
+		if got, want := shortcut.CommandPath(), "infisical sm "+name; got != want {
+			t.Errorf("%s: shortcut path is %q, want %q", name, got, want)
+		}
+
+		want, got := flagSignature(viaSecrets.LocalFlags()), flagSignature(shortcut.LocalFlags())
+		for flag, signature := range want {
+			if got[flag] != signature {
+				t.Errorf("%s: --%s differs on the shortcut: secrets=%q sm=%q", name, flag, signature, got[flag])
+			}
+		}
+		for flag := range got {
+			if _, ok := want[flag]; !ok {
+				t.Errorf("%s: --%s exists only on the shortcut", name, flag)
+			}
+		}
+		for _, inherited := range []string{"env", "tags"} {
+			if len(sub) == 0 && shortcut.InheritedFlags().Lookup(inherited) != nil {
+				t.Errorf("%s: shortcut should not inherit --%s from `secrets`", name, inherited)
+			}
+		}
+	}
+
+	for _, child := range RootCmd.Commands() {
+		if child.Name() == "agent-proxy" {
+			t.Errorf("agent-proxy must not be added at the top level; only `sm agent-proxy` is new")
+		}
+	}
+}
+
 func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 	cases := map[string]string{
 		"secrets get":                     "secrets",
@@ -160,6 +201,7 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 		"secrets agent-proxy run":         "secrets",
 		"sm secrets agent-proxy run":      "secrets",
 		"sm dynamic-secrets lease create": "dynamic-secrets",
+		"sm agent-proxy run":              "agent-proxy",
 	}
 	for path, want := range cases {
 		if got := topLevelCommandName(findCommand(t, strings.Fields(path))); got != want {
