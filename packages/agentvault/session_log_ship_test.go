@@ -65,7 +65,6 @@ func TestTheChunkPostCarriesTheProxyTokenAndTheBucketPutDoesNot(t *testing.T) {
 	ciphertext := []byte("sealed-bytes")
 	res, err := shipper.createChunk(context.Background(), false, "sess-1", api.CreateAgentVaultSessionLogChunkRequest{
 		ChunkID:         "01a0a9c5-231d-7abc-8def-0123456789ab",
-		RecordCount:     1,
 		CiphertextBytes: len(ciphertext),
 	})
 	if err != nil {

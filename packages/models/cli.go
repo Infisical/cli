@@ -113,6 +113,7 @@ type SingleEnvironmentVariable struct {
 	Comment               string `json:"comment"`
 	Etag                  string `json:"Etag"`
 	SkipMultilineEncoding bool   `json:"skipMultilineEncoding"`
+	SecretValueHidden     bool   `json:"secretValueHidden"`
 }
 
 // TLDR; Why you shouldn't depend on "SkipMultilineEncoding" and instead use this method
@@ -208,6 +209,7 @@ type GetAllSecretsParameters struct {
 	Recursive                bool
 	ExpandSecretReferences   bool
 	IncludePersonalOverrides bool
+	ViewSecretValue          *bool // true and nil = view the secret value, only explicit false will hide the value
 }
 
 type InjectableEnvironmentResult struct {

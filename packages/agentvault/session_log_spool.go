@@ -93,30 +93,15 @@ func (r *sessionLogRing) takeUnreportedDrops() uint64 {
 	return dropped
 }
 
-type chunkState int
-
-const (
-	chunkSealed chunkState = iota
-	chunkPosted
-)
-
 type sealedChunk struct {
 	meta       api.CreateAgentVaultSessionLogChunkRequest
 	ciphertext []byte
+	records    int
 	sealOrder  uint64
 
-	// uploadURL, urlExpires and state are guarded by the recorder's mu.
+	// uploadURL and urlExpires are guarded by the recorder's mu.
 	uploadURL  string
 	urlExpires time.Time
-	state      chunkState
-}
-
-// A posted chunk's row already reports its records and drops, so counting them here would double-report.
-func (c *sealedChunk) lostCount() uint64 {
-	if c.state == chunkPosted {
-		return 0
-	}
-	return c.meta.DroppedCount + uint64(c.meta.RecordCount)
 }
 
 type sessionLogSpool struct {
@@ -145,7 +130,7 @@ func (s *sessionLogSpool) popPending() *sealedChunk {
 func (s *sessionLogSpool) heldRecords() int {
 	held := s.ring.len()
 	for _, chunk := range s.pending {
-		held += chunk.meta.RecordCount
+		held += chunk.records
 	}
 	return held
 }
@@ -166,29 +151,39 @@ type sessionLogGroup struct {
 }
 
 func packSessionLogRecords(records []sessionLogRecord) ([]sessionLogGroup, error) {
-	whole, err := json.Marshal(records)
-	if err != nil {
-		return nil, err
-	}
-	if len(whole) <= sessionLogMaxChunkPlaintext {
-		return []sessionLogGroup{{records: records, plaintext: whole}}, nil
+	if spansAtMost(records, sessionLogMaxChunkSpan) {
+		whole, err := json.Marshal(records)
+		if err != nil {
+			return nil, err
+		}
+		if len(whole) <= sessionLogMaxChunkPlaintext {
+			return []sessionLogGroup{{records: records, plaintext: whole}}, nil
+		}
 	}
 
 	var groups []sessionLogGroup
 	var buf []byte
+	var earliest, latest time.Time
 	start := 0
 	for i, rec := range records {
 		part, err := json.Marshal(rec)
 		if err != nil {
 			return nil, err
 		}
-		if len(buf) > 0 && len(buf)+1+len(part)+1 > sessionLogMaxChunkPlaintext {
-			groups = append(groups, sessionLogGroup{records: records[start:i], plaintext: append(buf, ']')})
-			buf, start = nil, i
+		if len(buf) > 0 {
+			tooBig := len(buf)+1+len(part)+1 > sessionLogMaxChunkPlaintext
+			// Min and max rather than first and last, because the wall clock can step.
+			tooLong := maxTime(latest, rec.at).Sub(minTime(earliest, rec.at)) > sessionLogMaxChunkSpan
+			if tooBig || tooLong {
+				groups = append(groups, sessionLogGroup{records: records[start:i], plaintext: append(buf, ']')})
+				buf, start = nil, i
+			}
 		}
 		if len(buf) == 0 {
+			earliest, latest = rec.at, rec.at
 			buf = append(buf, '[')
 		} else {
+			earliest, latest = minTime(earliest, rec.at), maxTime(latest, rec.at)
 			buf = append(buf, ',')
 		}
 		buf = append(buf, part...)
@@ -197,41 +192,58 @@ func packSessionLogRecords(records []sessionLogRecord) ([]sessionLogGroup, error
 	return groups, nil
 }
 
-func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte, dropped uint64) (*sealedChunk, error) {
-	chunkID, err := newSessionLogChunkID()
-	if err != nil {
-		return nil, err
+func spansAtMost(records []sessionLogRecord, span time.Duration) bool {
+	if len(records) == 0 {
+		return true
 	}
-	aad := buildSessionLogAAD(s.sessionID, chunkID)
-	ciphertext, iv, err := sealSessionLog(s.key, plaintext, aad)
-	if err != nil {
-		return nil, err
-	}
-
-	// The wall clock can step, so the first and last records are not always the earliest and latest.
-	earliest, latest := records[0], records[0]
+	earliest, latest := records[0].at, records[0].at
 	for _, rec := range records[1:] {
-		if rec.at.Before(earliest.at) {
-			earliest = rec
-		}
+		earliest, latest = minTime(earliest, rec.at), maxTime(latest, rec.at)
+	}
+	return latest.Sub(earliest) <= span
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte) (*sealedChunk, error) {
+	// The wall clock can step, so the last record is not always the latest.
+	latest := records[0]
+	for _, rec := range records[1:] {
 		if rec.at.After(latest.at) {
 			latest = rec
 		}
 	}
-	first, last := records[0], records[len(records)-1]
+
+	chunkID, err := newSessionLogChunkID(latest.at)
+	if err != nil {
+		return nil, err
+	}
+	aad := buildSessionLogAAD(s.sessionID, chunkID)
+	ciphertext, err := sealSessionLog(s.key, plaintext, aad)
+	if err != nil {
+		return nil, err
+	}
+
 	return &sealedChunk{
 		meta: api.CreateAgentVaultSessionLogChunkRequest{
 			ChunkID:          chunkID,
-			StartedAt:        earliest.Ts,
 			EndedAt:          latest.Ts,
-			FirstSeq:         first.Seq,
-			LastSeq:          last.Seq,
-			RecordCount:      len(records),
-			DroppedCount:     dropped,
 			CiphertextBytes:  len(ciphertext),
-			IV:               encodeSessionLogIV(iv),
 			CiphertextSha256: infisicalCiphertextSha256(ciphertext),
 		},
 		ciphertext: ciphertext,
+		records:    len(records),
 	}, nil
 }

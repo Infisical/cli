@@ -18,9 +18,8 @@ import (
 )
 
 const (
-	sessionLogCeilingReachedName = "AgentVaultSessionLogCeilingReached"
-	sessionLogDisabledName       = "AgentVaultSessionLogDisabled"
-	sessionLogClockSkewName      = "AgentVaultSessionLogClockSkew"
+	sessionLogDisabledName  = "AgentVaultSessionLogDisabled"
+	sessionLogClockSkewName = "AgentVaultSessionLogClockSkew"
 	// Infisical's 403 for a proxy JWT that no longer verifies, e.g. after its signing secret rotated.
 	sessionLogTokenErrorName = "TokenError"
 )
@@ -31,7 +30,6 @@ const (
 	chunkRetry chunkRefusal = iota
 	chunkTokenRejected
 	chunkSessionGone
-	chunkOrgFull
 	chunkLoggingOff
 	chunkClockSkew
 	chunkRefused
@@ -43,8 +41,6 @@ func classifyChunkError(err error) chunkRefusal {
 		return chunkTokenRejected
 	case isSessionGone(err):
 		return chunkSessionGone
-	case isSessionLogErrorNamed(err, sessionLogCeilingReachedName):
-		return chunkOrgFull
 	case isSessionLogErrorNamed(err, sessionLogDisabledName):
 		return chunkLoggingOff
 	case isSessionLogErrorNamed(err, sessionLogClockSkewName):
@@ -140,7 +136,7 @@ func (c *sessionLogShipperClient) putObject(ctx context.Context, uploadURL strin
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", strconv.Itoa(len(ciphertext)))
 	req.Header.Set("If-None-Match", "*")
-	// Signed into the link, so S3 refuses any body whose digest isn't the one Infisical recorded.
+	// Signed into the link, so S3 refuses any body whose digest isn't the one sent to Infisical.
 	req.Header.Set("X-Amz-Checksum-Sha256", s3ChecksumHeader(ciphertext))
 
 	res, err := c.put.Do(req)

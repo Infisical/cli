@@ -454,14 +454,15 @@ type ImportedRawSecretV3 struct {
 	Environment string `json:"environment"`
 	FolderId    string `json:"folderId"`
 	Secrets     []struct {
-		ID            string `json:"id"`
-		Workspace     string `json:"workspace"`
-		Environment   string `json:"environment"`
-		Version       int    `json:"version"`
-		Type          string `json:"type"`
-		SecretKey     string `json:"secretKey"`
-		SecretValue   string `json:"secretValue"`
-		SecretComment string `json:"secretComment"`
+		ID                string `json:"id"`
+		Workspace         string `json:"workspace"`
+		Environment       string `json:"environment"`
+		Version           int    `json:"version"`
+		Type              string `json:"type"`
+		SecretKey         string `json:"secretKey"`
+		SecretValue       string `json:"secretValue"`
+		SecretComment     string `json:"secretComment"`
+		SecretValueHidden bool   `json:"secretValueHidden"`
 	} `json:"secrets"`
 }
 
@@ -686,6 +687,7 @@ type GetSecretsV4Request struct {
 	TagSlugs                 string `json:"tagSlugs,omitempty"`
 	ExpandSecretReferences   bool   `json:"expandSecretReferences"`
 	IncludePersonalOverrides bool   `json:"includePersonalOverrides"`
+	ViewSecretValue          *bool  `json:"viewSecretValue,omitempty"`
 }
 
 type GetSecretsV4Response struct {
@@ -701,6 +703,7 @@ type GetSecretsV4Response struct {
 		SecretPath            string       `json:"secretPath"`
 		SkipMultilineEncoding bool         `json:"skipMultilineEncoding"`
 		Tags                  []models.Tag `json:"tags"`
+		SecretValueHidden     bool         `json:"secretValueHidden"`
 	} `json:"secrets"`
 	Imports []ImportedRawSecretV3 `json:"imports"`
 	ETag    string
