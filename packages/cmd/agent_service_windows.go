@@ -211,6 +211,12 @@ func installAgentService(name string, configPath string) error {
 	if err := restrictToAdministrators(logDir); err != nil {
 		return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logDir, err)
 	}
+	// a log file that already exists keeps its own owner and permissions, e.g. one a standard user created to read the logs
+	if logFile := agentServiceLogFile(opts.Name); FileExists(logFile) {
+		if err := restrictToAdministrators(logFile); err != nil {
+			return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logFile, err)
+		}
+	}
 
 	s, err := m.CreateService(opts.Name, executable, mgr.Config{
 		DisplayName: fmt.Sprintf("Infisical Agent (%s)", opts.Name),

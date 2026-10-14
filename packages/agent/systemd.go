@@ -17,9 +17,15 @@ const ConfigPathEnvName = "INFISICAL_AGENT_CONFIG_PATH"
 
 const agentsConfigDir = "/etc/infisical/agents"
 
+// UnitName returns the systemd unit of an agent. systemctl gets the full unit name, so a name that itself ends in
+// a unit suffix (e.g. app.service) cannot make it act on a different unit.
+func UnitName(name string) string {
+	return name + ".service"
+}
+
 // agentServiceFilePath returns the systemd unit path for an agent with the given name.
 func agentServiceFilePath(name string) string {
-	return fmt.Sprintf("/etc/systemd/system/%s.service", name)
+	return filepath.Join("/etc/systemd/system", UnitName(name))
 }
 
 // agentEnvFilePath returns the systemd environment file path for an agent.
@@ -54,8 +60,9 @@ func EnsureAgentSystemdService(name string) error {
 }
 
 // InstallAgentSystemdService installs the systemd unit for an agent that runs the given config. The service is
-// named after the agent, so several agents can run on the same machine.
-func InstallAgentSystemdService(name string, configPath string, serviceLogFile string) (string, error) {
+// named after the agent, so several agents can run on the same machine. It logs to the systemd journal
+// (journalctl -u <name>), which only root can read by default: debug logs include rendered secrets.
+func InstallAgentSystemdService(name string, configPath string) (string, error) {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return "", nil
@@ -79,12 +86,8 @@ func InstallAgentSystemdService(name string, configPath string, serviceLogFile s
 		return "", fmt.Errorf("failed to write environment file: %v", err)
 	}
 
-	if err := util.WriteSystemdServiceFile(serviceLogFile, agentEnvFilePath(name), name, "agent", fmt.Sprintf("Infisical Agent Service (%s)", name)); err != nil {
+	if err := util.WriteSystemdServiceFile("", agentEnvFilePath(name), name, "agent", fmt.Sprintf("Infisical Agent Service (%s)", name)); err != nil {
 		return "", fmt.Errorf("failed to write systemd service file: %v", err)
-	}
-
-	if err := util.WriteLogrotateFile(serviceLogFile, name); err != nil {
-		return "", fmt.Errorf("failed to write logrotate file: %v", err)
 	}
 
 	reloadCmd := exec.Command("systemctl", "daemon-reload")
@@ -103,7 +106,7 @@ func StartAgentSystemdService(name string) error {
 		return err
 	}
 
-	if out, err := exec.Command("systemctl", "start", name).CombinedOutput(); err != nil {
+	if out, err := exec.Command("systemctl", "start", UnitName(name)).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to start '%s': %v: %s. See its logs with: journalctl -u %s", name, err, strings.TrimSpace(string(out)), name)
 	}
 
@@ -117,7 +120,7 @@ func StopAgentSystemdService(name string) error {
 		return err
 	}
 
-	if out, err := exec.Command("systemctl", "stop", name).CombinedOutput(); err != nil {
+	if out, err := exec.Command("systemctl", "stop", UnitName(name)).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to stop '%s': %v: %s", name, err, strings.TrimSpace(string(out)))
 	}
 
@@ -125,7 +128,7 @@ func StopAgentSystemdService(name string) error {
 	return nil
 }
 
-// UninstallAgentSystemdService stops and removes an agent service, with its environment and logrotate files.
+// UninstallAgentSystemdService stops and removes an agent service, with its environment file.
 func UninstallAgentSystemdService(name string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service uninstallation - not on Linux")
@@ -141,14 +144,14 @@ func UninstallAgentSystemdService(name string) error {
 		return err
 	}
 
-	// Stop the service if it's running
-	stopCmd := exec.Command("systemctl", "stop", name)
+	// Stop the service first: removing its files would not stop an agent that is still running
+	stopCmd := exec.Command("systemctl", "stop", UnitName(name))
 	if err := stopCmd.Run(); err != nil {
-		log.Warn().Msgf("Failed to stop service: %v", err)
+		return fmt.Errorf("failed to stop service: %w", err)
 	}
 
 	// Disable the service
-	disableCmd := exec.Command("systemctl", "disable", name)
+	disableCmd := exec.Command("systemctl", "disable", UnitName(name))
 	if err := disableCmd.Run(); err != nil {
 		log.Warn().Msgf("Failed to disable service: %v", err)
 	}
@@ -161,11 +164,6 @@ func UninstallAgentSystemdService(name string) error {
 	// Remove the systemd environment file
 	if err := os.Remove(agentEnvFilePath(name)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove environment file: %v", err)
-	}
-
-	// Remove the logrotate file if install created one
-	if err := os.Remove(filepath.Join("/etc/logrotate.d", name)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove logrotate file: %v", err)
 	}
 
 	// Reload systemd to apply changes

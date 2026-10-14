@@ -4080,9 +4080,10 @@ func validateAgentServiceConfig(configPath string) (*Config, error) {
 	return agentConfig, nil
 }
 
-// agentSystemdPaths returns the files a systemd-run agent reads or writes (its config and log file, template sources
-// and destinations, token sinks), with relative paths resolved from the config's directory, as `agent start` does.
-func agentSystemdPaths(configPath string, serviceLogFile string, agentConfig *Config) []string {
+// agentSystemdPaths returns the files a systemd-run agent reads or writes (its config, credential files, cache,
+// template sources and destinations, token sinks), with relative paths resolved from the config's directory, as
+// `agent start` does.
+func agentSystemdPaths(configPath string, agentConfig *Config) []string {
 	paths := []string{configPath}
 	add := func(path string) {
 		if path == "" {
@@ -4093,7 +4094,18 @@ func agentSystemdPaths(configPath string, serviceLogFile string, agentConfig *Co
 		}
 		paths = append(paths, path)
 	}
-	add(serviceLogFile)
+	// every text setting of an auth method is a file the agent reads (client id and secret, identity id, tokens, keys)
+	if authSettings, ok := agentConfig.Auth.Config.(map[interface{}]interface{}); ok {
+		for _, setting := range authSettings {
+			if path, isText := setting.(string); isText {
+				add(path)
+			}
+		}
+	}
+	if agentConfig.Cache.Persistent != nil {
+		add(agentConfig.Cache.Persistent.Path)
+		add(agentConfig.Cache.Persistent.ServiceAccountTokenPath)
+	}
 	for _, template := range agentConfig.Templates {
 		add(template.SourcePath)
 		add(template.DestinationPath)
@@ -4181,7 +4193,7 @@ var agentStartCmd = &cobra.Command{
 var agentSystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd services for the Infisical agent",
-	Long:  "Manage systemd services for the Infisical agent. Use 'systemd install' to install and enable a service. The service makes /home inaccessible and has its own /tmp, so keep the config, templates and their output elsewhere, e.g. in /etc/infisical/agents.",
+	Long:  "Manage systemd services for the Infisical agent. Use 'systemd install' to install and enable a service. The service logs to the systemd journal (journalctl -u <name>). It makes /home inaccessible and has its own /tmp, so keep the config, templates and their output elsewhere, e.g. in /etc/infisical/agents.",
 	Example: `  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml
   sudo infisical agent systemd start my-agent
   sudo infisical agent systemd uninstall my-agent`,
@@ -4193,7 +4205,7 @@ var agentSystemdInstallCmd = &cobra.Command{
 	Use:                   "install [name]",
 	Short:                 "Install and enable systemd service for the agent (requires sudo)",
 	Long:                  "Install and enable systemd service for the agent. Must be run with sudo on Linux. The service is named infisical-agent unless you pass a name, so several agents can run on one machine.",
-	Example:               "  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml --log-file /var/log/infisical/my-agent.log",
+	Example:               "  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -4211,11 +4223,6 @@ var agentSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to parse flag config")
 		}
 
-		serviceLogFile, err := cmd.Flags().GetString("log-file")
-		if err != nil {
-			util.HandleError(err, "Unable to parse log-file flag")
-		}
-
 		// the service does not start the agent from the current directory, so store an absolute path
 		configPath, err = filepath.Abs(configPath)
 		if err != nil {
@@ -4227,11 +4234,11 @@ var agentSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Failed to install agent systemd service")
 		}
 
-		if err := agent.CheckPathsVisibleToSystemd(agentSystemdPaths(configPath, serviceLogFile, agentConfig)); err != nil {
+		if err := agent.CheckPathsVisibleToSystemd(agentSystemdPaths(configPath, agentConfig)); err != nil {
 			util.HandleError(err, "Failed to install agent systemd service")
 		}
 
-		installedServiceName, err := agent.InstallAgentSystemdService(name, configPath, serviceLogFile)
+		installedServiceName, err := agent.InstallAgentSystemdService(name, configPath)
 		if err != nil {
 			util.HandleError(err, "Failed to install agent systemd service")
 		}
@@ -4240,13 +4247,14 @@ var agentSystemdInstallCmd = &cobra.Command{
 			return
 		}
 
-		enableCmd := exec.Command("systemctl", "enable", installedServiceName)
+		enableCmd := exec.Command("systemctl", "enable", agent.UnitName(installedServiceName))
 		if err := enableCmd.Run(); err != nil {
 			util.HandleError(err, "Failed to enable agent systemd service")
 		}
 
 		log.Info().Msgf("Successfully installed and enabled %s service", installedServiceName)
 		log.Info().Msgf("To start the service, run: sudo infisical agent systemd start %s", installedServiceName)
+		log.Info().Msgf("Its logs go to the systemd journal: sudo journalctl -u %s", installedServiceName)
 	},
 }
 
@@ -4298,7 +4306,6 @@ func init() {
 	agentStartCmd.Flags().String("config", "", "The path to agent config yaml file. Defaults to INFISICAL_AGENT_CONFIG_PATH, then agent-config.yaml")
 
 	agentSystemdInstallCmd.Flags().String("config", "agent-config.yaml", "The path to the agent config yaml file the service runs with")
-	agentSystemdInstallCmd.Flags().String("log-file", "", "path to write service logs (e.g. /var/log/infisical/agent.log)")
 	agentSystemdCmd.AddCommand(agentSystemdInstallCmd)
 	agentSystemdCmd.AddCommand(newAgentServiceActionCmd("systemd", "uninstall", "Uninstall and remove systemd service for the agent (requires sudo)", checkAgentSystemdSupport, agent.UninstallAgentSystemdService))
 	agentSystemdCmd.AddCommand(newAgentServiceActionCmd("systemd", "start", "Start the agent's systemd service (requires sudo)", checkAgentSystemdSupport, agent.StartAgentSystemdService))

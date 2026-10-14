@@ -174,7 +174,8 @@ jobs:
           echo "client-id" | sudo tee "$dir/client-id" > /dev/null
           echo "client-secret" | sudo tee "$dir/client-secret" > /dev/null
           printf '%s\n' 'infisical:' '  address: "http://127.0.0.1:1"' 'auth:' '  type: "universal-auth"' '  config:' '    client-id: "./client-id"' '    client-secret: "./client-secret"' | sudo tee "$dir/agent-config.yaml" > /dev/null
-          log=/var/log/infisical/ci-agent.log
+          # the service logs to the systemd journal
+          journal() { sudo journalctl -u ci-agent.service --no-pager; }
 
           # a config under /home is refused, since the service could not read it
           cp "$dir/agent-config.yaml" "$RUNNER_TEMP/agent-config.yaml"
@@ -183,18 +184,18 @@ jobs:
             exit 1
           fi
 
-          sudo ./infisical-cli agent systemd install ci-agent --config "$dir/agent-config.yaml" --log-file "$log"
+          sudo ./infisical-cli agent systemd install ci-agent --config "$dir/agent-config.yaml"
           # Type=notify: start only returns once the agent reported it is ready
           sudo ./infisical-cli agent systemd start ci-agent
           systemctl is-active --quiet ci-agent
 
           for _ in $(seq 1 60); do
-            sudo grep -q "unable to authenticate" "$log" && break
+            grep -q "unable to authenticate" <(journal) && break
             sleep 1
           done
-          sudo cat "$log"
-          sudo grep -q "unable to authenticate" "$log"
-          if sudo grep -q "unable to get client id" "$log"; then
+          journal
+          grep -q "unable to authenticate" <(journal)
+          if grep -q "unable to get client id" <(journal); then
             echo "client-id was not resolved from the config directory"
             exit 1
           fi
