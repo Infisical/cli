@@ -202,10 +202,23 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 		"sm secrets agent-proxy run":      "secrets",
 		"sm dynamic-secrets lease create": "dynamic-secrets",
 		"sm agent-proxy run":              "agent-proxy",
+		"sm projects list":                "projects",
 	}
 	for path, want := range cases {
 		if got := topLevelCommandName(findCommand(t, strings.Fields(path))); got != want {
 			t.Errorf("topLevelCommandName(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// Projects are typed per product, so `projects` lives only under `sm`, not at the top level.
+func TestProjectsIsRegisteredOnlyUnderSm(t *testing.T) {
+	for _, path := range [][]string{{"projects", "list"}, {"projects", "get"}, {"projects", "create"}} {
+		findCommand(t, smPath(path))
+	}
+	for _, child := range RootCmd.Commands() {
+		if child.Name() == "projects" {
+			t.Fatal("projects is registered at the top level; it should only be under sm")
 		}
 	}
 }
