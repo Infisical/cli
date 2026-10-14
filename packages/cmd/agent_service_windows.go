@@ -35,6 +35,38 @@ const agentServiceWaitHint = 30 * time.Second
 
 var agentServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
+// the service name becomes a file name (<name>.log), and Windows reserves these device names, with or without an extension
+var windowsReservedNamePattern = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
+
+// agentServiceMarker is written into the service description, so that uninstall, start and stop
+// refuse to touch a service some other tool created
+const agentServiceMarker = "Installed by 'infisical agent service install'"
+
+// only SYSTEM and Administrators may access what a LocalSystem service runs, obeys or logs (logs can hold
+// secret values at debug level); OICI makes new files in a directory, such as rotated logs, inherit it
+const agentServiceAdminOnlySDDL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+
+func restrictToAdministrators(path string) error {
+	sd, err := windows.SecurityDescriptorFromString(agentServiceAdminOnlySDDL)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// checkAgentServiceExecutable rejects binaries a standard user could replace, since the service runs them as LocalSystem
+func checkAgentServiceExecutable(executable string) error {
+	programFiles := filepath.Clean(os.Getenv("ProgramFiles"))
+	if programFiles == "." || !strings.HasPrefix(strings.ToLower(filepath.Clean(executable)), strings.ToLower(programFiles)+`\`) {
+		return fmt.Errorf("the service runs as LocalSystem, so infisical.exe must be in a folder only Administrators can change. Copy it to %s and run the install from there (it is running from %s)", filepath.Join(programFiles, "Infisical"), executable)
+	}
+	return nil
+}
+
 // agentServiceOptions describes an agent service the way the Service Control Manager runs it.
 type agentServiceOptions struct {
 	Name       string
@@ -68,6 +100,9 @@ func newAgentServiceOptions(name, configPath string) (agentServiceOptions, error
 func validateAgentServiceName(name string) error {
 	if !agentServiceNamePattern.MatchString(name) {
 		return fmt.Errorf("invalid service name %q: use up to 128 letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	if windowsReservedNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: Windows reserves it as a device name", name)
 	}
 	return nil
 }
@@ -145,7 +180,7 @@ The service is named infisical-agent unless you pass a name, so several agents w
 var agentServiceInstallCmd = &cobra.Command{
 	Use:   "install [name]",
 	Short: "Install the agent as a Windows service that starts on boot (requires Administrator)",
-	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
+	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so infisical.exe must be in Program Files and the config is restricted to Administrators. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
 	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
   infisical agent service install chef-secrets --config C:\infisical\chef.yaml`,
 	DisableFlagsInUseLine: true,
@@ -197,6 +232,10 @@ func newAgentServiceActionCmd(action string, short string, run func(name string)
 }
 
 func installAgentService(opts agentServiceOptions) error {
+	if err := checkAgentServiceExecutable(opts.Executable); err != nil {
+		return err
+	}
+
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("unable to connect to the Service Control Manager: %w", err)
@@ -208,9 +247,21 @@ func installAgentService(opts agentServiceOptions) error {
 		return fmt.Errorf("a service named %s already exists. To replace it, first run: infisical agent service uninstall %s", opts.Name, opts.Name)
 	}
 
+	// the config decides what the service runs (execute commands) and writes, so a standard user must not be able to change it
+	if err := restrictToAdministrators(opts.ConfigPath); err != nil {
+		return fmt.Errorf("unable to restrict access to %s to Administrators: %w", opts.ConfigPath, err)
+	}
+	logDir := filepath.Dir(agentServiceLogFile(opts.Name))
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return fmt.Errorf("unable to create %s: %w", logDir, err)
+	}
+	if err := restrictToAdministrators(logDir); err != nil {
+		return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logDir, err)
+	}
+
 	s, err := m.CreateService(opts.Name, opts.Executable, mgr.Config{
 		DisplayName: fmt.Sprintf("Infisical Agent (%s)", opts.Name),
-		Description: "Authenticates with Infisical and keeps secrets, tokens and certificates on this machine up to date. Installed by 'infisical agent service install'.",
+		Description: "Authenticates with Infisical and keeps secrets, tokens and certificates on this machine up to date. " + agentServiceMarker + ".",
 		StartType:   mgr.StartAutomatic,
 	}, "agent", "--config", opts.ConfigPath)
 	if err != nil {
@@ -218,10 +269,13 @@ func installAgentService(opts agentServiceOptions) error {
 	}
 	defer s.Close()
 
-	// restart the agent when it crashes or stops with an error
-	restart := mgr.RecoveryAction{Type: mgr.ServiceRestart, Delay: 5 * time.Second}
+	// restart the agent when it crashes or stops on its own, backing off so a broken config does not restart it every few seconds
 	resetPeriod := uint32((24 * time.Hour).Seconds())
-	if err := s.SetRecoveryActions([]mgr.RecoveryAction{restart, restart, restart}, resetPeriod); err != nil {
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: time.Minute},
+	}, resetPeriod); err != nil {
 		return deleteIncompleteService(s, fmt.Errorf("unable to set the service's recovery actions: %w", err))
 	}
 	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
@@ -235,6 +289,7 @@ func installAgentService(opts agentServiceOptions) error {
 	}
 
 	log.Info().Msgf("Installed the %s service. It starts automatically on boot and logs to %s", opts.Name, agentServiceLogFile(opts.Name))
+	log.Info().Msgf("Only Administrators can now change %s. Keep the templates and credential files it points to in folders only Administrators can change too", opts.ConfigPath)
 	log.Info().Msgf("Start it now with: infisical agent service start %s", opts.Name)
 	return nil
 }
@@ -254,8 +309,9 @@ func uninstallAgentService(name string) error {
 	defer m.Disconnect()
 	defer s.Close()
 
+	// Delete only marks the service for removal, it does not stop a running agent
 	if err := stopWindowsService(s); err != nil {
-		log.Warn().Msgf("unable to stop the %s service: %v", name, err)
+		return err
 	}
 
 	if err := s.Delete(); err != nil {
@@ -342,7 +398,7 @@ func openAgentWindowsService(name string) (*mgr.Mgr, *mgr.Service, error) {
 		return nil, nil, fmt.Errorf("unable to read the %s service's configuration: %w", name, err)
 	}
 
-	if !strings.Contains(config.BinaryPathName, " agent --config ") {
+	if !strings.Contains(config.Description, agentServiceMarker) {
 		s.Close()
 		m.Disconnect()
 		return nil, nil, fmt.Errorf("the %s service was not installed by 'infisical agent service install', refusing to manage it", name)
@@ -351,8 +407,8 @@ func openAgentWindowsService(name string) (*mgr.Mgr, *mgr.Service, error) {
 	return m, s, nil
 }
 
-// stopWindowsService asks the service to stop and waits for it to exit. The agent can take a while
-// when it revokes its credentials on shutdown.
+// stopWindowsService asks the service to stop and waits for it to exit. The agent can take up to five
+// minutes when it revokes its credentials on shutdown.
 func stopWindowsService(s *mgr.Service) error {
 	status, err := s.Query()
 	if err != nil {
@@ -369,7 +425,7 @@ func stopWindowsService(s *mgr.Service) error {
 		}
 	}
 
-	_, err = waitForWindowsService(s, 2*time.Minute, func(state svc.State) bool {
+	_, err = waitForWindowsService(s, 5*time.Minute+agentServiceWaitHint, func(state svc.State) bool {
 		return state == svc.Stopped
 	})
 	return err
@@ -510,10 +566,15 @@ func (s *agentWindowsService) Execute(args []string, requests <-chan svc.ChangeR
 
 			// a requested stop is never reported as a failure: a non-zero exit code would make the
 			// recovery actions restart the service the user just stopped
-			if stopping || code == 0 {
+			if stopping {
 				return false, 0
 			}
 
+			// the SCM did not ask the agent to stop, so report a failure even for exit code 0 (what the agent
+			// returns for a config it cannot load), letting the recovery actions retry, e.g. once a missing config appears
+			if code == 0 {
+				code = 1
+			}
 			log.Error().Msgf("the agent exited with code %d", code)
 			s.exitCode = code
 			return true, uint32(code)

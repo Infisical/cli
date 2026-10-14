@@ -37,7 +37,7 @@ func TestValidateAgentServiceName(t *testing.T) {
 		assert.NoError(t, validateAgentServiceName(name), "name %q", name)
 	}
 
-	for _, name := range []string{"", "-agent", "my agent", "agent@1", "../agent", `agent\x`, strings.Repeat("a", 129)} {
+	for _, name := range []string{"", "-agent", "my agent", "agent@1", "../agent", `agent\x`, strings.Repeat("a", 129), "NUL", "con", "COM1", "lpt9.agent"} {
 		assert.Error(t, validateAgentServiceName(name), "name %q", name)
 	}
 }

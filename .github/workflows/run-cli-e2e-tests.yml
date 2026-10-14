@@ -160,7 +160,7 @@ jobs:
       # -vet=off: packages/cmd/run.go has existing printf vet failures.
       # TestProcessTemplate is the Windows regression check for backslash source-paths in agent templates.
       - name: Run agent unit tests
-        run: go test -vet=off -count=1 -run 'TestProcessTemplate|AgentService' ./packages/cmd/
+        run: go test -vet=off -count=1 -run 'TestProcessTemplate|AgentService|RevokeCredentials' ./packages/cmd/
       # The agent points at a closed port, so auth keeps failing and being retried and the service stays up.
       # Auth failing on the network rather than on reading ./client-id proves relative paths resolve from the config's directory.
       - name: Test agent service (Windows Service Control Manager)
@@ -182,10 +182,23 @@ jobs:
               client-id: "./client-id"
               client-secret: "./client-secret"
           "@
+          $config = Join-Path $dir 'agent-config.yaml'
           $log = Join-Path $env:ProgramData 'Infisical\Agent\ci-agent.log'
 
-          ./infisical-cli.exe agent service install ci-agent --config (Join-Path $dir 'agent-config.yaml')
-          ./infisical-cli.exe agent service start ci-agent
+          # the service runs as LocalSystem, so a binary outside Program Files (which a standard user could replace) is refused
+          $PSNativeCommandUseErrorActionPreference = $false
+          ./infisical-cli.exe agent service install ci-agent --config $config
+          if ($LASTEXITCODE -eq 0) { throw 'install from outside Program Files was not refused' }
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $exe = Join-Path $env:ProgramFiles 'Infisical\infisical.exe'
+          New-Item -ItemType Directory -Force -Path (Split-Path $exe) | Out-Null
+          Copy-Item ./infisical-cli.exe $exe
+          & $exe agent service install ci-agent --config $config
+          foreach ($path in @($config, (Split-Path $log))) {
+            if ((Get-Acl $path).Access | Where-Object { $_.IdentityReference -match 'Users' }) { throw "$path is still accessible to standard users" }
+          }
+          & $exe agent service start ci-agent
           if ((Get-Service ci-agent).Status -ne 'Running') { throw 'service is not running after start' }
 
           $deadline = (Get-Date).AddSeconds(60)
@@ -200,10 +213,10 @@ jobs:
           $errors = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'ci-agent'; Level = 2 } -MaxEvents 5
           $errors | Format-List TimeCreated, Message
 
-          ./infisical-cli.exe agent service stop ci-agent
+          & $exe agent service stop ci-agent
           if ((Get-Service ci-agent).Status -ne 'Stopped') { throw 'service did not stop' }
 
-          ./infisical-cli.exe agent service uninstall ci-agent
+          & $exe agent service uninstall ci-agent
           # the SCM removes a deleted service once the last handle to it closes
           $deadline = (Get-Date).AddSeconds(15)
           while (Get-Service ci-agent -ErrorAction SilentlyContinue) {

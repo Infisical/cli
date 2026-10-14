@@ -3552,9 +3552,8 @@ var agentCmd = &cobra.Command{
 			os.Exit(exitCode)
 		}
 
-		if exitCode := runAgent(configPath, nil, nil); exitCode != 0 {
-			os.Exit(exitCode)
-		}
+		// exit right away, as the agent always has, instead of waiting for a pending update check
+		os.Exit(runAgent(configPath, nil, nil))
 	},
 }
 
