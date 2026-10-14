@@ -3781,6 +3781,11 @@ func runAgent(configPath string, configData []byte, stop <-chan struct{}, ready 
 			exitCode := 0
 
 			if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
+				// 5 minute timeout to prevent any hanging edge cases
+				revocationTimeout := 5 * time.Minute
+
+				// systemd stops a service after 90s by default: ask it (Type=notify) to wait for the revocation instead
+				systemd.SdNotify(false, fmt.Sprintf("EXTEND_TIMEOUT_USEC=%d", (revocationTimeout+30*time.Second).Microseconds()))
 
 				done := make(chan error, 1)
 
@@ -3794,8 +3799,7 @@ func runAgent(configPath string, configData []byte, stop <-chan struct{}, ready 
 						log.Error().Msgf("unable to revoke credentials [err=%v]", err)
 						exitCode = 1
 					}
-				// 5 minute timeout to prevent any hanging edge cases
-				case <-time.After(5 * time.Minute):
+				case <-time.After(revocationTimeout):
 					log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
 					exitCode = 1
 				}
