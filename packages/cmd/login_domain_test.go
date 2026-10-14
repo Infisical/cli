@@ -12,7 +12,7 @@ import (
 // normalizes, decides on, and attributes to a source.
 //
 // configured is the raw value from --domain, INFISICAL_DOMAIN,
-// INFISICAL_API_URL, or the 'domain' field in .infisical.json. wantApply false
+// INFISICAL_API_URL, or the 'general.domain' field in .infisical.yaml. wantApply false
 // means interactive login falls through to the hosting picker.
 func TestPresetDomainSelection(t *testing.T) {
 	cases := []struct {
@@ -73,7 +73,7 @@ func TestPresetDomainSelection(t *testing.T) {
 			wantLabel:  "--domain flag",
 		},
 		{
-			name:        "self-hosted from .infisical.json is used without prompting",
+			name:        "self-hosted from .infisical.yaml is used without prompting",
 			configured:  "https://infisical.example.com",
 			projectFile: true,
 			wantDomain:  "https://infisical.example.com",
@@ -143,11 +143,11 @@ func TestPresetDomainSelection(t *testing.T) {
 			wantApply:  true,
 			wantLabel:  "INFISICAL_DOMAIN environment variable",
 		},
-		// A cloud region named by .infisical.json is an instance selection, so it
+		// A cloud region named by .infisical.yaml is an instance selection, so it
 		// must be honored instead of dropping the user into the picker, where
 		// accepting the default would silently send them to US cloud.
 		{
-			name:        "EU cloud from .infisical.json skips the picker",
+			name:        "EU cloud from .infisical.yaml skips the picker",
 			configured:  util.INFISICAL_DEFAULT_EU_URL,
 			projectFile: true,
 			wantDomain:  util.INFISICAL_DEFAULT_EU_URL,
@@ -155,7 +155,7 @@ func TestPresetDomainSelection(t *testing.T) {
 			wantLabel:   "configuration",
 		},
 		{
-			name:        "EU cloud with an /api/ suffix from .infisical.json skips the picker",
+			name:        "EU cloud with an /api/ suffix from .infisical.yaml skips the picker",
 			configured:  util.INFISICAL_DEFAULT_EU_URL + "/api/",
 			projectFile: true,
 			wantDomain:  util.INFISICAL_DEFAULT_EU_URL,
@@ -163,7 +163,7 @@ func TestPresetDomainSelection(t *testing.T) {
 			wantLabel:   "configuration",
 		},
 		{
-			name:        "US cloud from .infisical.json skips the picker",
+			name:        "US cloud from .infisical.yaml skips the picker",
 			configured:  util.INFISICAL_DEFAULT_US_URL,
 			projectFile: true,
 			wantDomain:  util.INFISICAL_DEFAULT_US_URL,
@@ -171,7 +171,7 @@ func TestPresetDomainSelection(t *testing.T) {
 			wantLabel:   "configuration",
 		},
 		{
-			name:        "env beats .infisical.json in the source label",
+			name:        "env beats .infisical.yaml in the source label",
 			configured:  util.INFISICAL_DEFAULT_EU_URL,
 			envName:     util.INFISICAL_DOMAIN_ENV_NAME,
 			projectFile: true,
@@ -180,7 +180,7 @@ func TestPresetDomainSelection(t *testing.T) {
 			wantLabel:   "INFISICAL_DOMAIN environment variable",
 		},
 		{
-			name:        "an invalid .infisical.json domain is not a source",
+			name:        "an invalid .infisical.yaml domain is not a source",
 			configured:  util.INFISICAL_DEFAULT_US_URL,
 			projectFile: false,
 			wantDomain:  util.INFISICAL_DEFAULT_US_URL,

@@ -20,23 +20,8 @@ import (
 	infisicalSdkModels "github.com/infisical/go-sdk/packages/models"
 )
 
-var dynamicSecretCmd = &cobra.Command{
-	Example:               `infisical dynamic-secrets`,
-	Short:                 "Used to list dynamic secrets",
-	Use:                   "dynamic-secrets",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-	Run:                   getDynamicSecretList,
-}
-
 func getDynamicSecretList(cmd *cobra.Command, args []string) {
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -53,10 +38,7 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -139,32 +121,10 @@ func getDynamicSecretList(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets", posthog.NewProperties().Set("count", len(dynamicSecretRootCredentials)).Set("version", util.CLI_VERSION))
 }
 
-var dynamicSecretLeaseCmd = &cobra.Command{
-	Example:               `lease`,
-	Short:                 "Manage leases for dynamic secrets",
-	Use:                   "lease",
-	DisableFlagsInUseLine: true,
-}
-
-var dynamicSecretLeaseCreateCmd = &cobra.Command{
-	Example:               `lease create <dynamic secret name>"`,
-	Short:                 "Used to lease dynamic secret by name",
-	Use:                   "create [dynamic-secret]",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
-	Run:                   createDynamicSecretLeaseByName,
-}
-
 func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredentialName := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -186,10 +146,7 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	plainOutput, err := cmd.Flags().GetBool("plain")
 	if err != nil {
@@ -328,25 +285,10 @@ func createDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease", posthog.NewProperties().Set("type", dynamicSecretRootCredential.Type).Set("version", util.CLI_VERSION))
 }
 
-var dynamicSecretLeaseRenewCmd = &cobra.Command{
-	Example:               `lease renew <dynamic secret name>"`,
-	Short:                 "Used to renew dynamic secret lease by name",
-	Use:                   "renew [lease-id]",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
-	Run:                   renewDynamicSecretLeaseByName,
-}
-
 func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeaseId := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -368,10 +310,7 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -463,25 +402,10 @@ func renewDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease renew", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
 
-var dynamicSecretLeaseRevokeCmd = &cobra.Command{
-	Example:               `lease delete <dynamic secret name>"`,
-	Short:                 "Used to delete dynamic secret lease by name",
-	Use:                   "delete [lease-id]",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
-	Run:                   revokeDynamicSecretLeaseByName,
-}
-
 func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretLeaseId := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -498,10 +422,7 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -591,25 +512,10 @@ func revokeDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease revoke", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
 
-var dynamicSecretLeaseListCmd = &cobra.Command{
-	Example:               `lease list <dynamic secret name>"`,
-	Short:                 "Used to list leases of a dynamic secret by name",
-	Use:                   "list [dynamic-secret]",
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
-	Run:                   listDynamicSecretLeaseByName,
-}
-
 func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	dynamicSecretRootCredentialName := args[0]
 
-	environmentName, _ := cmd.Flags().GetString("env")
-	if !cmd.Flags().Changed("env") {
-		environmentFromWorkspace := util.GetEnvFromWorkspaceFile()
-		if environmentFromWorkspace != "" {
-			environmentName = environmentFromWorkspace
-		}
-	}
+	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -626,10 +532,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	secretsPath, err := cmd.Flags().GetString("path")
-	if err != nil {
-		util.HandleError(err, "Unable to parse path flag")
-	}
+	secretsPath := util.ResolveSecretPath(cmd)
 
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
@@ -713,7 +616,62 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 	Telemetry.CaptureEvent("cli-command:dynamic-secrets lease list", posthog.NewProperties().Set("lease-count", len(dynamicSecretLeases)).Set("version", util.CLI_VERSION))
 }
 
-func init() {
+// buildDynamicSecretsCmd builds the dynamic-secrets command tree. It is a constructor rather than
+// package-level commands because the tree is registered twice: as `infisical dynamic-secrets` and
+// `infisical sm dynamic-secrets`.
+func buildDynamicSecretsCmd() *cobra.Command {
+	dynamicSecretCmd := &cobra.Command{
+		Example:               `infisical dynamic-secrets`,
+		Short:                 "Used to list dynamic secrets",
+		Use:                   "dynamic-secrets",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.NoArgs,
+		Run:                   getDynamicSecretList,
+	}
+
+	dynamicSecretLeaseCmd := &cobra.Command{
+		Example:               `lease`,
+		Short:                 "Manage leases for dynamic secrets",
+		Use:                   "lease",
+		DisableFlagsInUseLine: true,
+	}
+
+	dynamicSecretLeaseCreateCmd := &cobra.Command{
+		Example:               `lease create <dynamic secret name>"`,
+		Short:                 "Used to lease dynamic secret by name",
+		Use:                   "create [dynamic-secret]",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.ExactArgs(1),
+		Run:                   createDynamicSecretLeaseByName,
+	}
+
+	dynamicSecretLeaseRenewCmd := &cobra.Command{
+		Example:               `lease renew <dynamic secret name>"`,
+		Short:                 "Used to renew dynamic secret lease by name",
+		Use:                   "renew [lease-id]",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.ExactArgs(1),
+		Run:                   renewDynamicSecretLeaseByName,
+	}
+
+	dynamicSecretLeaseRevokeCmd := &cobra.Command{
+		Example:               `lease delete <dynamic secret name>"`,
+		Short:                 "Used to delete dynamic secret lease by name",
+		Use:                   "delete [lease-id]",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.ExactArgs(1),
+		Run:                   revokeDynamicSecretLeaseByName,
+	}
+
+	dynamicSecretLeaseListCmd := &cobra.Command{
+		Example:               `lease list <dynamic secret name>"`,
+		Short:                 "Used to list leases of a dynamic secret by name",
+		Use:                   "list [dynamic-secret]",
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.ExactArgs(1),
+		Run:                   listDynamicSecretLeaseByName,
+	}
+
 	dynamicSecretLeaseCreateCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseCreateCmd.Flags().String("token", "", "Create dynamic secret leases using machine identity access token")
 	dynamicSecretLeaseCreateCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
@@ -762,5 +720,6 @@ func init() {
 	dynamicSecretCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	dynamicSecretCmd.Flags().String("path", "/", "get dynamic secret within a folder path")
 	util.AddOutputFlagsToCmd(dynamicSecretCmd, "The output to format the dynamic secrets in.")
-	RootCmd.AddCommand(dynamicSecretCmd)
+
+	return dynamicSecretCmd
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 )
 
 func ConfigFileExists() bool {
@@ -29,12 +30,14 @@ func ConfigFileExists() bool {
 }
 
 func WorkspaceConfigFileExistsInCurrentPath() bool {
-	if _, err := os.Stat(INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err == nil {
-		return true
-	} else {
-		log.Debug().Err(err)
-		return false
+	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+		if _, err := os.Stat(fileName); err == nil {
+			return true
+		} else {
+			log.Debug().Err(err)
+		}
 	}
+	return false
 }
 
 func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
@@ -43,18 +46,7 @@ func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
 		return models.WorkspaceConfigFile{}, err
 	}
 
-	configFileAsBytes, err := os.ReadFile(cfgFile)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	var workspaceConfigFile models.WorkspaceConfigFile
-	err = json.Unmarshal(configFileAsBytes, &workspaceConfigFile)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	return workspaceConfigFile, nil
+	return GetWorkSpaceFromFilePath(filepath.Dir(cfgFile))
 }
 
 func GetDomainFromFile() (domain string, valid bool) {
@@ -73,28 +65,131 @@ func GetDomainFromFile() (domain string, valid bool) {
 }
 
 func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile, error) {
-	configFilePath := filepath.Join(configFileDir, ".infisical.json")
+	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
-	_, configFileStatusError := os.Stat(configFilePath)
-	if os.IsNotExist(configFileStatusError) {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("file %s does not exist", configFilePath)
+	// the yaml file takes precedence over the legacy json file when both exist
+	if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
+		return workspaceConfigFile, err
 	}
 
-	configFileAsBytes, err := os.ReadFile(configFilePath)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
+	if _, err := os.Stat(jsonConfigFilePath); os.IsNotExist(err) {
+		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
 	}
 
-	var workspaceConfigFile models.WorkspaceConfigFile
-	err = json.Unmarshal(configFileAsBytes, &workspaceConfigFile)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	return workspaceConfigFile, nil
+	return GetWorkspaceConfigByPath(jsonConfigFilePath)
 }
 
-// FindWorkspaceConfigFile searches for a .infisical.json file in the current directory and all parent directories.
+func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.WorkspaceConfigFile, exists bool, err error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return models.WorkspaceConfigFile{}, false, nil
+		}
+		return models.WorkspaceConfigFile{}, true, err
+	}
+
+	workspaceConfigFile, err = readWorkspaceConfigYaml(path)
+	return workspaceConfigFile, true, err
+}
+
+func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
+	configFileAsBytes, err := os.ReadFile(path)
+	if err != nil {
+		return models.WorkspaceConfigFile{}, fmt.Errorf("readWorkspaceConfigYaml: unable to read workspace config file because [%s]", err)
+	}
+
+	var workspaceConfigFileYaml models.WorkspaceConfigFileYaml
+	err = yaml.Unmarshal(configFileAsBytes, &workspaceConfigFileYaml)
+	if err != nil {
+		return models.WorkspaceConfigFile{}, fmt.Errorf("readWorkspaceConfigYaml: unable to unmarshal workspace config file because [%s]", err)
+	}
+
+	return workspaceConfigFromYaml(workspaceConfigFileYaml), nil
+}
+
+func ConvertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) error {
+	if _, err := os.Stat(yamlConfigFilePath); err == nil {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: %s already exists", yamlConfigFilePath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to check %s [err=%s]", yamlConfigFilePath, err)
+	}
+
+	legacyWorkspaceConfig, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
+	if err != nil {
+		return err
+	}
+
+	yamlConfigFileAsBytes, err := yaml.Marshal(workspaceConfigToYaml(legacyWorkspaceConfig))
+	if err != nil {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
+	}
+
+	// written atomically so a partially written .infisical.yaml is never left behind
+	if err := WriteFileAtomic(yamlConfigFilePath, yamlConfigFileAsBytes, 0600); err != nil {
+		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
+	}
+
+	if _, err := readWorkspaceConfigYaml(yamlConfigFilePath); err != nil {
+		os.Remove(yamlConfigFilePath)
+		return err
+	}
+
+	return nil
+}
+
+func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.WorkspaceConfigFileYaml {
+	var workspaceConfigYaml models.WorkspaceConfigFileYaml
+	workspaceConfigYaml.General.Domain = workspaceConfig.Domain
+	workspaceConfigYaml.SecretsManagement.ProjectID = workspaceConfig.WorkspaceId
+	workspaceConfigYaml.SecretsManagement.DefaultEnvironment = workspaceConfig.DefaultEnvironment
+	workspaceConfigYaml.SecretsManagement.DefaultSecretPath = workspaceConfig.DefaultSecretPath
+	workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment = workspaceConfig.GitBranchToEnvironmentMapping
+	return workspaceConfigYaml
+}
+
+func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {
+	return models.WorkspaceConfigFile{
+		WorkspaceId:                   workspaceConfigYaml.SecretsManagement.ProjectID,
+		DefaultEnvironment:            workspaceConfigYaml.SecretsManagement.DefaultEnvironment,
+		GitBranchToEnvironmentMapping: workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment,
+		DefaultSecretPath:             workspaceConfigYaml.SecretsManagement.DefaultSecretPath,
+		Domain:                        workspaceConfigYaml.General.Domain,
+	}
+}
+
+// findWorkspaceConfigFileInDir looks for a .infisical.yaml (or legacy .infisical.json) in exactly
+// the given directory, without walking up. The YAML file takes precedence.
+func findWorkspaceConfigFileInDir(dir string) (string, bool) {
+	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+		path := filepath.Join(dir, fileName)
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// ResolveWorkspaceConfigFile returns the path of the workspace config file a command will read.
+// With an explicit projectConfigDir (the --project-config-dir flag) only that directory is
+// considered, matching GetWorkSpaceFromFilePath. Otherwise it walks up from the current directory.
+func ResolveWorkspaceConfigFile(projectConfigDir string) (string, error) {
+	if projectConfigDir == "" {
+		return FindWorkspaceConfigFile()
+	}
+
+	path, found := findWorkspaceConfigFileInDir(projectConfigDir)
+	if !found {
+		return "", fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, projectConfigDir)
+	}
+
+	if absPath, err := filepath.Abs(path); err == nil {
+		path = absPath
+	}
+	return path, nil
+}
+
+// FindWorkspaceConfigFile searches for a .infisical.yaml (or legacy .infisical.json) file in the current directory
+// and all parent directories. In each directory the YAML file takes precedence.
 func FindWorkspaceConfigFile() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -102,12 +197,8 @@ func FindWorkspaceConfigFile() (string, error) {
 	}
 
 	for {
-		path := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-		_, err := os.Stat(path)
-		if err == nil {
-			// file found
+		if path, found := findWorkspaceConfigFileInDir(dir); found {
 			log.Debug().Msgf("FindWorkspaceConfigFile: workspace file found at [path=%s]", path)
-
 			return path, nil
 		}
 
@@ -121,7 +212,7 @@ func FindWorkspaceConfigFile() (string, error) {
 	}
 
 	// file not found
-	return "", fmt.Errorf("file not found: %s", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	return "", fmt.Errorf("file not found: %s or %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
 }
 

@@ -72,7 +72,7 @@ func runLoginStatus(cmd *cobra.Command, args []string) {
 			_, envSet := util.GetEnvDomain()
 			workspaceConfig, _ := util.GetWorkSpaceFromFile()
 			if !envSet && workspaceConfig.Domain == "" {
-				util.PrintErrorMessageAndExit("--token requires the Infisical instance to be set via --domain, the INFISICAL_DOMAIN env var, or the 'domain' field in .infisical.json so the status reflects the correct instance")
+				util.PrintErrorMessageAndExit("--token requires the Infisical instance to be set via --domain, the INFISICAL_DOMAIN env var, or the 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json) so the status reflects the correct instance")
 			}
 		}
 		ctx, err := buildContextFromToken(flagToken, "--token flag", envDomain)
