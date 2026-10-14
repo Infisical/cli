@@ -1942,7 +1942,7 @@ func (tm *AgentManager) MonitorSecretChanges(ctx context.Context, secretTemplate
 
 							existingEtag = currentEtag
 
-							if !firstRun && execCommand != "" {
+							if execCommand != "" {
 								log.Info().Msgf("executing command: %s", execCommand)
 								err := ExecuteCommandWithTimeout(execCommand, execTimeout)
 
