@@ -137,6 +137,9 @@ var profileNoticeExemptCommands = map[string]bool{
 func topLevelCommandName(cmd *cobra.Command) string {
 	current := cmd
 	for current.Parent() != nil && current.Parent() != RootCmd {
+		if current.Parent().Name() == smCommandName && current.Parent().Parent() == RootCmd {
+			break
+		}
 		current = current.Parent()
 	}
 	return current.Name()
