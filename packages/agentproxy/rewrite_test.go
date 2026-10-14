@@ -56,6 +56,19 @@ func TestBasicAuthFromTwoCredentials(t *testing.T) {
 	}
 }
 
+func TestBasicAuthUsernameOnly(t *testing.T) {
+	req := newReq(t, "")
+	svc := &resolvedService{credentials: []resolvedCredential{
+		{role: roleHeaderRewrite, headerPurpose: purposeUsername, value: "user"},
+	}}
+	if err := applyCredentials(req, svc); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Basic dXNlcjo=" {
+		t.Fatalf("unexpected basic auth header: %q", got)
+	}
+}
+
 func TestSubstitutionInQuery(t *testing.T) {
 	req := newReq(t, "")
 	svc := &resolvedService{credentials: []resolvedCredential{
