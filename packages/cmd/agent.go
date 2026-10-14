@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -40,9 +41,11 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 
+	"github.com/Infisical/infisical-merge/packages/agent"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
@@ -3759,7 +3762,8 @@ func runAgent(configPath string, configData []byte, stop <-chan struct{}, ready 
 		}()
 	}
 
-	// tell the Windows service handler that the agent is up
+	// tell systemd (Type=notify) or the Windows service handler that the agent is up
+	systemd.SdNotify(false, systemd.SdNotifyReady)
 	if ready != nil {
 		ready()
 	}
@@ -4029,6 +4033,259 @@ var certManagerAgentCmd = &cobra.Command{
 	},
 }
 
+const defaultAgentServiceName = "infisical-agent"
+
+var agentServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+
+// the service name becomes a file name (<name>.log on Windows), and Windows reserves these device names, with or without an extension
+var reservedServiceNamePattern = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
+
+func agentServiceNameFromArgs(args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	return defaultAgentServiceName
+}
+
+func validateAgentServiceName(name string) error {
+	if !agentServiceNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: use up to 128 letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	if reservedServiceNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: Windows reserves it as a device name", name)
+	}
+	return nil
+}
+
+// validateAgentServiceConfig reports config errors at install time rather than on the service's first start.
+func validateAgentServiceConfig(configPath string) (*Config, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read the agent config: %w", err)
+	}
+
+	agentConfig, err := ParseAgentConfig(data)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse the agent config at %s: %w", configPath, err)
+	}
+
+	if valid, _ := util.IsAuthMethodValid(agentConfig.Auth.Type, false); !valid {
+		return nil, fmt.Errorf("the auth method '%s' in %s is not supported", agentConfig.Auth.Type, configPath)
+	}
+
+	if agentConfig.Infisical.ExitAfterAuth {
+		return nil, fmt.Errorf("%s sets 'exit-after-auth: true', so the agent would exit after its first render and the service would keep being restarted. Remove it to run the agent as a service", configPath)
+	}
+
+	return agentConfig, nil
+}
+
+// agentSystemdPaths returns the files a systemd-run agent reads or writes (its config and log file, template sources
+// and destinations, token sinks), with relative paths resolved from the config's directory, as `agent start` does.
+func agentSystemdPaths(configPath string, serviceLogFile string, agentConfig *Config) []string {
+	paths := []string{configPath}
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(configPath), path)
+		}
+		paths = append(paths, path)
+	}
+	add(serviceLogFile)
+	for _, template := range agentConfig.Templates {
+		add(template.SourcePath)
+		add(template.DestinationPath)
+	}
+	for _, sink := range agentConfig.Sinks {
+		add(sink.Config.Path)
+	}
+	return paths
+}
+
+func checkAgentSystemdSupport() error {
+	if runtime.GOOS != "linux" {
+		return errors.New("systemd service management is only supported on Linux")
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("systemd service management requires root/sudo privileges")
+	}
+	return nil
+}
+
+func checkAgentWindowsServiceSupport() error {
+	if runtime.GOOS != "windows" {
+		return errors.New("Windows service management is only supported on Windows")
+	}
+	return checkAgentServiceAdministrator()
+}
+
+// newAgentServiceActionCmd builds the uninstall, start and stop commands of 'agent systemd' (Linux) and
+// 'agent service' (Windows), which differ only in the platform check and what they run.
+func newAgentServiceActionCmd(group string, action string, short string, check func() error, run func(name string) error) *cobra.Command {
+	sudo := ""
+	if group == "systemd" {
+		sudo = "sudo "
+	}
+	return &cobra.Command{
+		Use:                   action + " [name]",
+		Short:                 short,
+		Example:               fmt.Sprintf("  %sinfisical agent %s %s\n  %sinfisical agent %s %s my-agent", sudo, group, action, sudo, group, action),
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.MaximumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			if err := check(); err != nil {
+				util.HandleError(err)
+			}
+
+			name := agentServiceNameFromArgs(args)
+			if err := validateAgentServiceName(name); err != nil {
+				util.HandleError(err)
+			}
+
+			if err := run(name); err != nil {
+				util.HandleError(err, fmt.Sprintf("Unable to %s the agent service", action))
+			}
+		},
+	}
+}
+
+var agentStartCmd = &cobra.Command{
+	Use:                   "start",
+	Short:                 "Run the agent with the config from --config or the INFISICAL_AGENT_CONFIG_PATH environment variable",
+	Long:                  "Run the agent, as 'infisical agent' does. This is what the agent's systemd service runs: the config comes from --config or INFISICAL_AGENT_CONFIG_PATH, and relative paths in it resolve from the config's directory.",
+	Example:               "  INFISICAL_AGENT_CONFIG_PATH=/etc/infisical/agents/my-agent.yaml infisical agent start",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		configPath, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "config", []string{agent.ConfigPathEnvName}, "agent-config.yaml")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag config")
+		}
+
+		configPath, err = filepath.Abs(configPath)
+		if err != nil {
+			util.HandleError(err, "Unable to resolve the config path")
+		}
+
+		// a service manager does not start the agent from the config's directory
+		if err := os.Chdir(filepath.Dir(configPath)); err != nil {
+			util.HandleError(err, "Unable to change to the config directory")
+		}
+
+		os.Exit(runAgent(configPath, nil, nil, nil))
+	},
+}
+
+var agentSystemdCmd = &cobra.Command{
+	Use:   "systemd",
+	Short: "Manage systemd services for the Infisical agent",
+	Long:  "Manage systemd services for the Infisical agent. Use 'systemd install' to install and enable a service. The service makes /home inaccessible and has its own /tmp, so keep the config, templates and their output elsewhere, e.g. in /etc/infisical/agents.",
+	Example: `  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml
+  sudo infisical agent systemd start my-agent
+  sudo infisical agent systemd uninstall my-agent`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var agentSystemdInstallCmd = &cobra.Command{
+	Use:                   "install [name]",
+	Short:                 "Install and enable systemd service for the agent (requires sudo)",
+	Long:                  "Install and enable systemd service for the agent. Must be run with sudo on Linux. The service is named infisical-agent unless you pass a name, so several agents can run on one machine.",
+	Example:               "  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml --log-file /var/log/infisical/my-agent.log",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := checkAgentSystemdSupport(); err != nil {
+			util.HandleError(err)
+		}
+
+		name := agentServiceNameFromArgs(args)
+		if err := validateAgentServiceName(name); err != nil {
+			util.HandleError(err)
+		}
+
+		configPath, err := cmd.Flags().GetString("config")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag config")
+		}
+
+		serviceLogFile, err := cmd.Flags().GetString("log-file")
+		if err != nil {
+			util.HandleError(err, "Unable to parse log-file flag")
+		}
+
+		// the service does not start the agent from the current directory, so store an absolute path
+		configPath, err = filepath.Abs(configPath)
+		if err != nil {
+			util.HandleError(err, "Unable to resolve the config path")
+		}
+
+		agentConfig, err := validateAgentServiceConfig(configPath)
+		if err != nil {
+			util.HandleError(err, "Failed to install agent systemd service")
+		}
+
+		if err := agent.CheckPathsVisibleToSystemd(agentSystemdPaths(configPath, serviceLogFile, agentConfig)); err != nil {
+			util.HandleError(err, "Failed to install agent systemd service")
+		}
+
+		installedServiceName, err := agent.InstallAgentSystemdService(name, configPath, serviceLogFile)
+		if err != nil {
+			util.HandleError(err, "Failed to install agent systemd service")
+		}
+
+		if installedServiceName == "" {
+			return
+		}
+
+		enableCmd := exec.Command("systemctl", "enable", installedServiceName)
+		if err := enableCmd.Run(); err != nil {
+			util.HandleError(err, "Failed to enable agent systemd service")
+		}
+
+		log.Info().Msgf("Successfully installed and enabled %s service", installedServiceName)
+		log.Info().Msgf("To start the service, run: sudo infisical agent systemd start %s", installedServiceName)
+	},
+}
+
+var agentServiceCmd = &cobra.Command{
+	Use:   "service",
+	Short: "Manage Windows services for the Infisical agent",
+	Long: `Install, start, stop and uninstall the agent as a Windows service. The service starts on boot, restarts when it fails, and logs to %ProgramData%\Infisical\Agent\<name>.log, with errors also written to the Windows Event Log.
+
+The service is named infisical-agent unless you pass a name, so several agents with different configs can run on one machine. Relative paths in the agent config are resolved from the directory that holds the config file. Run these commands from an elevated prompt (Run as administrator).`,
+	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
+  infisical agent service start`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var agentServiceInstallCmd = &cobra.Command{
+	Use:   "install [name]",
+	Short: "Install the agent as a Windows service that starts on boot (requires Administrator)",
+	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so it runs its own copy of infisical.exe from %ProgramFiles%\\Infisical\\Agent\\<name> (uninstall and install again to upgrade it) and the config is restricted to Administrators. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
+	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
+  infisical agent service install chef-secrets --config C:\infisical\chef.yaml`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := checkAgentWindowsServiceSupport(); err != nil {
+			util.HandleError(err)
+		}
+
+		configPath, err := cmd.Flags().GetString("config")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag config")
+		}
+
+		if err := installAgentService(agentServiceNameFromArgs(args), configPath); err != nil {
+			util.HandleError(err, "Unable to install the agent service")
+		}
+	},
+}
+
 func init() {
 	agentCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
 		command.Flags().MarkHidden("domain")
@@ -4037,6 +4294,25 @@ func init() {
 		RootCmd.HelpFunc()(command, strings)
 	})
 	agentCmd.Flags().String("config", "agent-config.yaml", "The path to agent config yaml file")
+
+	agentStartCmd.Flags().String("config", "", "The path to agent config yaml file. Defaults to INFISICAL_AGENT_CONFIG_PATH, then agent-config.yaml")
+
+	agentSystemdInstallCmd.Flags().String("config", "agent-config.yaml", "The path to the agent config yaml file the service runs with")
+	agentSystemdInstallCmd.Flags().String("log-file", "", "path to write service logs (e.g. /var/log/infisical/agent.log)")
+	agentSystemdCmd.AddCommand(agentSystemdInstallCmd)
+	agentSystemdCmd.AddCommand(newAgentServiceActionCmd("systemd", "uninstall", "Uninstall and remove systemd service for the agent (requires sudo)", checkAgentSystemdSupport, agent.UninstallAgentSystemdService))
+	agentSystemdCmd.AddCommand(newAgentServiceActionCmd("systemd", "start", "Start the agent's systemd service (requires sudo)", checkAgentSystemdSupport, agent.StartAgentSystemdService))
+	agentSystemdCmd.AddCommand(newAgentServiceActionCmd("systemd", "stop", "Stop the agent's systemd service (requires sudo)", checkAgentSystemdSupport, agent.StopAgentSystemdService))
+
+	agentServiceInstallCmd.Flags().String("config", "agent-config.yaml", "The path to the agent config yaml file the service runs with")
+	agentServiceCmd.AddCommand(agentServiceInstallCmd)
+	agentServiceCmd.AddCommand(newAgentServiceActionCmd("service", "uninstall", "Stop and remove the agent's Windows service (requires Administrator)", checkAgentWindowsServiceSupport, uninstallAgentService))
+	agentServiceCmd.AddCommand(newAgentServiceActionCmd("service", "start", "Start the agent's Windows service (requires Administrator)", checkAgentWindowsServiceSupport, startAgentService))
+	agentServiceCmd.AddCommand(newAgentServiceActionCmd("service", "stop", "Stop the agent's Windows service (requires Administrator)", checkAgentWindowsServiceSupport, stopAgentService))
+
+	agentCmd.AddCommand(agentStartCmd)
+	agentCmd.AddCommand(agentSystemdCmd)
+	agentCmd.AddCommand(agentServiceCmd)
 
 	certManagerAgentCmd.Flags().String("config", "certificate-agent-config.yaml", "The path to certificate agent config yaml file")
 	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")

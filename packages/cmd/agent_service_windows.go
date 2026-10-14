@@ -9,34 +9,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
 	"gopkg.in/natefinch/lumberjack.v2"
-
-	"github.com/Infisical/infisical-merge/packages/util"
 )
-
-const defaultAgentServiceName = "infisical-agent"
 
 // the agent writes every Event Log entry under one id; the message carries the detail
 const agentEventLogID = 1
 
 // how long the SCM should wait between status updates while the agent starts or stops
 const agentServiceWaitHint = 30 * time.Second
-
-var agentServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-
-// the service name becomes a file name (<name>.log), and Windows reserves these device names, with or without an extension
-var windowsReservedNamePattern = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
 
 // agentServiceMarker is written into the service description, so that uninstall, start and stop
 // refuse to touch a service some other tool created
@@ -149,7 +138,7 @@ func newAgentServiceOptions(name, configPath string) (agentServiceOptions, error
 		return agentServiceOptions{}, fmt.Errorf("unable to resolve the config path: %w", err)
 	}
 
-	if err := validateAgentServiceConfig(configPath); err != nil {
+	if _, err := validateAgentServiceConfig(configPath); err != nil {
 		return agentServiceOptions{}, err
 	}
 
@@ -159,39 +148,6 @@ func newAgentServiceOptions(name, configPath string) (agentServiceOptions, error
 	}
 
 	return agentServiceOptions{Name: name, Executable: executable, ConfigPath: configPath}, nil
-}
-
-func validateAgentServiceName(name string) error {
-	if !agentServiceNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid service name %q: use up to 128 letters, digits, '.', '_' or '-', starting with a letter or digit", name)
-	}
-	if windowsReservedNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid service name %q: Windows reserves it as a device name", name)
-	}
-	return nil
-}
-
-// validateAgentServiceConfig reports config errors at install time rather than on the service's first start.
-func validateAgentServiceConfig(configPath string) error {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("unable to read the agent config: %w", err)
-	}
-
-	agentConfig, err := ParseAgentConfig(data)
-	if err != nil {
-		return fmt.Errorf("unable to parse the agent config at %s: %w", configPath, err)
-	}
-
-	if valid, _ := util.IsAuthMethodValid(agentConfig.Auth.Type, false); !valid {
-		return fmt.Errorf("the auth method '%s' in %s is not supported", agentConfig.Auth.Type, configPath)
-	}
-
-	if agentConfig.Infisical.ExitAfterAuth {
-		return fmt.Errorf("%s sets 'exit-after-auth: true', so the agent would exit after its first render and the service would keep being restarted. Remove it to run the agent as a service", configPath)
-	}
-
-	return nil
 }
 
 // agentServiceLogFile returns the file a service logs to: a service has no console.
@@ -215,13 +171,6 @@ func setAgentServiceLogOutput(name string, extra ...io.Writer) {
 	log.Logger = log.Output(zerolog.MultiLevelWriter(writers...))
 }
 
-func agentServiceNameFromArgs(args []string) string {
-	if len(args) > 0 {
-		return args[0]
-	}
-	return defaultAgentServiceName
-}
-
 func checkAgentServiceAdministrator() error {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("managing the agent service requires Administrator rights, re-run the command from an elevated prompt (Run as administrator)")
@@ -229,81 +178,12 @@ func checkAgentServiceAdministrator() error {
 	return nil
 }
 
-var agentServiceCmd = &cobra.Command{
-	Use:   "service",
-	Short: "Run the agent as a Windows service",
-	Long: `Install, start, stop and uninstall the agent as a Windows service. The service starts on boot, restarts when it fails, and logs to %ProgramData%\Infisical\Agent\<name>.log, with errors also written to the Windows Event Log.
-
-The service is named infisical-agent unless you pass a name, so several agents with different configs can run on one machine. Relative paths in the agent config are resolved from the directory that holds the config file. Run these commands from an elevated prompt (Run as administrator).`,
-	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
-  infisical agent service start`,
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
-}
-
-var agentServiceInstallCmd = &cobra.Command{
-	Use:   "install [name]",
-	Short: "Install the agent as a Windows service that starts on boot (requires Administrator)",
-	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so it runs its own copy of infisical.exe from %ProgramFiles%\\Infisical\\Agent\\<name> (uninstall and install again to upgrade it) and the config is restricted to Administrators. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
-	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
-  infisical agent service install chef-secrets --config C:\infisical\chef.yaml`,
-	DisableFlagsInUseLine: true,
-	Args:                  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := checkAgentServiceAdministrator(); err != nil {
-			util.HandleError(err)
-		}
-
-		configPath, err := cmd.Flags().GetString("config")
-		if err != nil {
-			util.HandleError(err, "Unable to parse flag config")
-		}
-
-		opts, err := newAgentServiceOptions(agentServiceNameFromArgs(args), configPath)
-		if err != nil {
-			util.HandleError(err, "Unable to install the agent service")
-		}
-
-		if err := installAgentService(opts); err != nil {
-			util.HandleError(err, "Unable to install the agent service")
-		}
-	},
-}
-
-// newAgentServiceActionCmd builds the uninstall, start and stop commands, which differ only in what they run
-// on the opened service.
-func newAgentServiceActionCmd(action string, short string, run func(name string, s *mgr.Service) error) *cobra.Command {
-	return &cobra.Command{
-		Use:                   action + " [name]",
-		Short:                 short,
-		Example:               fmt.Sprintf("  infisical agent service %s\n  infisical agent service %s chef-secrets", action, action),
-		DisableFlagsInUseLine: true,
-		Args:                  cobra.MaximumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			if err := checkAgentServiceAdministrator(); err != nil {
-				util.HandleError(err)
-			}
-
-			name := agentServiceNameFromArgs(args)
-			if err := validateAgentServiceName(name); err != nil {
-				util.HandleError(err)
-			}
-
-			m, s, err := openAgentWindowsService(name)
-			if err != nil {
-				util.HandleError(err, fmt.Sprintf("Unable to %s the agent service", action))
-			}
-			defer m.Disconnect()
-			defer s.Close()
-
-			if err := run(name, s); err != nil {
-				util.HandleError(err, fmt.Sprintf("Unable to %s the agent service", action))
-			}
-		},
+func installAgentService(name string, configPath string) error {
+	opts, err := newAgentServiceOptions(name, configPath)
+	if err != nil {
+		return err
 	}
-}
 
-func installAgentService(opts agentServiceOptions) error {
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("unable to connect to the Service Control Manager: %w", err)
@@ -375,7 +255,29 @@ func deleteIncompleteService(s *mgr.Service, cause error) error {
 	return cause
 }
 
-func uninstallAgentService(name string, s *mgr.Service) error {
+// uninstall, start and stop each open the agent's service once for their action
+var (
+	uninstallAgentService = withAgentWindowsService(uninstallOpenedAgentService)
+	startAgentService     = withAgentWindowsService(startOpenedAgentService)
+	stopAgentService      = withAgentWindowsService(stopOpenedAgentService)
+)
+
+// withAgentWindowsService opens an agent service that 'infisical agent service install' created, runs action on
+// it and closes it.
+func withAgentWindowsService(action func(name string, s *mgr.Service) error) func(name string) error {
+	return func(name string) error {
+		m, s, err := openAgentWindowsService(name)
+		if err != nil {
+			return err
+		}
+		defer m.Disconnect()
+		defer s.Close()
+
+		return action(name, s)
+	}
+}
+
+func uninstallOpenedAgentService(name string, s *mgr.Service) error {
 	// Delete only marks the service for removal, it does not stop a running agent
 	if err := stopWindowsService(s); err != nil {
 		return err
@@ -401,7 +303,7 @@ func uninstallAgentService(name string, s *mgr.Service) error {
 	return nil
 }
 
-func startAgentService(name string, s *mgr.Service) error {
+func startOpenedAgentService(name string, s *mgr.Service) error {
 	if err := s.Start(); err != nil {
 		if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 			log.Info().Msgf("The %s service is already running", name)
@@ -426,7 +328,7 @@ func startAgentService(name string, s *mgr.Service) error {
 	return nil
 }
 
-func stopAgentService(name string, s *mgr.Service) error {
+func stopOpenedAgentService(name string, s *mgr.Service) error {
 	if err := stopWindowsService(s); err != nil {
 		return err
 	}
@@ -667,14 +569,3 @@ func (w eventLogWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 
 // MultiLevelWriter only passes the level to writers that implement zerolog.LevelWriter
 var _ zerolog.LevelWriter = eventLogWriter{}
-
-func init() {
-	agentServiceInstallCmd.Flags().String("config", "agent-config.yaml", "The path to the agent config yaml file the service runs with")
-
-	agentServiceCmd.AddCommand(agentServiceInstallCmd)
-	agentServiceCmd.AddCommand(newAgentServiceActionCmd("uninstall", "Stop and remove the agent service (requires Administrator)", uninstallAgentService))
-	agentServiceCmd.AddCommand(newAgentServiceActionCmd("start", "Start the agent service (requires Administrator)", startAgentService))
-	agentServiceCmd.AddCommand(newAgentServiceActionCmd("stop", "Stop the agent service (requires Administrator)", stopAgentService))
-
-	agentCmd.AddCommand(agentServiceCmd)
-}

@@ -160,9 +160,54 @@ jobs:
       # -vet=off: packages/cmd/run.go has existing printf vet failures.
       # TestProcessTemplate is the Windows regression check for backslash source-paths in agent templates.
       - name: Run agent unit tests
-        run: go test -vet=off -count=1 -run 'TestProcessTemplate|AgentService|RevokeCredentials' ./packages/cmd/
+        run: go test -vet=off -count=1 -run 'TestProcessTemplate|AgentService|AgentSystemd|RevokeCredentials|PathsVisibleToSystemd' ./packages/cmd/ ./packages/agent/
       # The agent points at a closed port, so auth keeps failing and being retried and the service stays up.
       # Auth failing on the network rather than on reading ./client-id proves relative paths resolve from the config's directory.
+      - name: Test agent service (systemd)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # the shared systemd unit runs `infisical agent start` from PATH, makes /home inaccessible and has its own /tmp
+          sudo cp ./infisical-cli /usr/local/bin/infisical
+          dir=/etc/infisical/agents/ci
+          sudo mkdir -p "$dir"
+          echo "client-id" | sudo tee "$dir/client-id" > /dev/null
+          echo "client-secret" | sudo tee "$dir/client-secret" > /dev/null
+          printf '%s\n' 'infisical:' '  address: "http://127.0.0.1:1"' 'auth:' '  type: "universal-auth"' '  config:' '    client-id: "./client-id"' '    client-secret: "./client-secret"' | sudo tee "$dir/agent-config.yaml" > /dev/null
+          log=/var/log/infisical/ci-agent.log
+
+          # a config under /home is refused, since the service could not read it
+          cp "$dir/agent-config.yaml" "$RUNNER_TEMP/agent-config.yaml"
+          if sudo ./infisical-cli agent systemd install ci-agent --config "$RUNNER_TEMP/agent-config.yaml"; then
+            echo "install accepted a config under /home"
+            exit 1
+          fi
+
+          sudo ./infisical-cli agent systemd install ci-agent --config "$dir/agent-config.yaml" --log-file "$log"
+          # Type=notify: start only returns once the agent reported it is ready
+          sudo ./infisical-cli agent systemd start ci-agent
+          systemctl is-active --quiet ci-agent
+
+          for _ in $(seq 1 60); do
+            sudo grep -q "unable to authenticate" "$log" && break
+            sleep 1
+          done
+          sudo cat "$log"
+          sudo grep -q "unable to authenticate" "$log"
+          if sudo grep -q "unable to get client id" "$log"; then
+            echo "client-id was not resolved from the config directory"
+            exit 1
+          fi
+
+          sudo ./infisical-cli agent systemd stop ci-agent
+          if systemctl is-active --quiet ci-agent; then
+            echo "service is still active after stop"
+            exit 1
+          fi
+
+          sudo ./infisical-cli agent systemd uninstall ci-agent
+          test ! -e /etc/systemd/system/ci-agent.service
+          test ! -e /etc/infisical/agents/ci-agent.env.conf
       - name: Test agent service (Windows Service Control Manager)
         if: runner.os == 'Windows'
         shell: pwsh

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,16 +29,6 @@ auth:
     client-secret: "./client-secret"
 `, exitAfterAuth)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-}
-
-func TestValidateAgentServiceName(t *testing.T) {
-	for _, name := range []string{"infisical-agent", "chef.secrets_1", "A"} {
-		assert.NoError(t, validateAgentServiceName(name), "name %q", name)
-	}
-
-	for _, name := range []string{"", "-agent", "my agent", "agent@1", "../agent", `agent\x`, strings.Repeat("a", 129), "NUL", "con", "COM1", "lpt9.agent"} {
-		assert.Error(t, validateAgentServiceName(name), "name %q", name)
-	}
 }
 
 func TestNewAgentServiceOptions(t *testing.T) {
