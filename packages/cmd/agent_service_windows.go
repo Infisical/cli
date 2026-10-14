@@ -43,11 +43,16 @@ var windowsReservedNamePattern = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1
 const agentServiceMarker = "Installed by 'infisical agent service install'"
 
 // only SYSTEM and Administrators may access what a LocalSystem service runs, obeys or logs (logs can hold
-// secret values at debug level); OICI makes new files in a directory, such as rotated logs, inherit it
-const agentServiceAdminOnlySDDL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+// secret values at debug level), and Administrators own it, so a standard user can neither change it nor
+// take it over; OICI makes new files in a directory, such as rotated logs, inherit it
+const agentServiceAdminOnlySDDL = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 
 func restrictToAdministrators(path string) error {
 	sd, err := windows.SecurityDescriptorFromString(agentServiceAdminOnlySDDL)
+	if err != nil {
+		return err
+	}
+	owner, _, err := sd.Owner()
 	if err != nil {
 		return err
 	}
@@ -55,16 +60,67 @@ func restrictToAdministrators(path string) error {
 	if err != nil {
 		return err
 	}
-	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 }
 
-// checkAgentServiceExecutable rejects binaries a standard user could replace, since the service runs them as LocalSystem
-func checkAgentServiceExecutable(executable string) error {
-	programFiles := filepath.Clean(os.Getenv("ProgramFiles"))
-	if programFiles == "." || !strings.HasPrefix(strings.ToLower(filepath.Clean(executable)), strings.ToLower(programFiles)+`\`) {
-		return fmt.Errorf("the service runs as LocalSystem, so infisical.exe must be in a folder only Administrators can change. Copy it to %s and run the install from there (it is running from %s)", filepath.Join(programFiles, "Infisical"), executable)
+// checkAgentServiceConfigOwner refuses a config that Administrators or SYSTEM do not own. Install hands the config
+// to Administrators, so any other owner means it was replaced, e.g. by a standard user renaming a folder above it.
+func checkAgentServiceConfigOwner(configPath string) error {
+	sd, err := windows.GetNamedSecurityInfo(configPath, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("unable to read the owner of %s: %w", configPath, err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("unable to read the owner of %s: %w", configPath, err)
+	}
+	if !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !owner.IsWellKnown(windows.WinLocalSystemSid) {
+		return fmt.Errorf("%s is owned by %s rather than Administrators, so it may have been replaced and the agent will not run it. Check the file, then run 'infisical agent service uninstall' and 'install' again", configPath, owner)
 	}
 	return nil
+}
+
+// agentServiceDir holds a service's own copy of infisical.exe
+func agentServiceDir(name string) string {
+	programFiles := os.Getenv("ProgramFiles")
+	if programFiles == "" {
+		programFiles = `C:\Program Files`
+	}
+	return filepath.Join(programFiles, "Infisical", "Agent", name)
+}
+
+// copyAgentServiceExecutable copies infisical.exe into a folder only Administrators can change and returns the copy.
+// The service runs it as LocalSystem, so it must not run a binary from a folder a standard user can write to (npm, Scoop).
+func copyAgentServiceExecutable(name, executable string) (string, error) {
+	dir := agentServiceDir(name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := restrictToAdministrators(dir); err != nil {
+		return "", err
+	}
+
+	target := filepath.Join(dir, "infisical.exe")
+	if strings.EqualFold(filepath.Clean(executable), target) {
+		return target, nil
+	}
+
+	source, err := os.Open(executable)
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+
+	copied, err := os.Create(target)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(copied, source); err != nil {
+		copied.Close()
+		return "", err
+	}
+	return target, copied.Close()
 }
 
 // agentServiceOptions describes an agent service the way the Service Control Manager runs it.
@@ -180,7 +236,7 @@ The service is named infisical-agent unless you pass a name, so several agents w
 var agentServiceInstallCmd = &cobra.Command{
 	Use:   "install [name]",
 	Short: "Install the agent as a Windows service that starts on boot (requires Administrator)",
-	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so infisical.exe must be in Program Files and the config is restricted to Administrators. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
+	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so it runs its own copy of infisical.exe from %ProgramFiles%\\Infisical\\Agent\\<name> (uninstall and install again to upgrade it) and the config is restricted to Administrators. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
 	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
   infisical agent service install chef-secrets --config C:\infisical\chef.yaml`,
 	DisableFlagsInUseLine: true,
@@ -232,10 +288,6 @@ func newAgentServiceActionCmd(action string, short string, run func(name string)
 }
 
 func installAgentService(opts agentServiceOptions) error {
-	if err := checkAgentServiceExecutable(opts.Executable); err != nil {
-		return err
-	}
-
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("unable to connect to the Service Control Manager: %w", err)
@@ -245,6 +297,11 @@ func installAgentService(opts agentServiceOptions) error {
 	if existing, err := m.OpenService(opts.Name); err == nil {
 		existing.Close()
 		return fmt.Errorf("a service named %s already exists. To replace it, first run: infisical agent service uninstall %s", opts.Name, opts.Name)
+	}
+
+	executable, err := copyAgentServiceExecutable(opts.Name, opts.Executable)
+	if err != nil {
+		return fmt.Errorf("unable to copy infisical.exe into %s: %w", agentServiceDir(opts.Name), err)
 	}
 
 	// the config decides what the service runs (execute commands) and writes, so a standard user must not be able to change it
@@ -259,7 +316,7 @@ func installAgentService(opts agentServiceOptions) error {
 		return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logDir, err)
 	}
 
-	s, err := m.CreateService(opts.Name, opts.Executable, mgr.Config{
+	s, err := m.CreateService(opts.Name, executable, mgr.Config{
 		DisplayName: fmt.Sprintf("Infisical Agent (%s)", opts.Name),
 		Description: "Authenticates with Infisical and keeps secrets, tokens and certificates on this machine up to date. " + agentServiceMarker + ".",
 		StartType:   mgr.StartAutomatic,
@@ -289,6 +346,7 @@ func installAgentService(opts agentServiceOptions) error {
 	}
 
 	log.Info().Msgf("Installed the %s service. It starts automatically on boot and logs to %s", opts.Name, agentServiceLogFile(opts.Name))
+	log.Info().Msgf("The service runs its own copy of infisical.exe from %s. To upgrade it, uninstall and install the service again", filepath.Dir(executable))
 	log.Info().Msgf("Only Administrators can now change %s. Keep the templates and credential files it points to in folders only Administrators can change too", opts.ConfigPath)
 	log.Info().Msgf("Start it now with: infisical agent service start %s", opts.Name)
 	return nil
@@ -320,6 +378,11 @@ func uninstallAgentService(name string) error {
 
 	if err := eventlog.Remove(name); err != nil {
 		log.Debug().Msgf("unable to remove the %s event log source: %v", name, err)
+	}
+
+	// the service's own copy of infisical.exe
+	if err := os.RemoveAll(agentServiceDir(name)); err != nil {
+		log.Warn().Msgf("unable to remove %s: %v", agentServiceDir(name), err)
 	}
 
 	log.Info().Msgf("Uninstalled the %s service", name)
@@ -506,6 +569,12 @@ func (s *agentWindowsService) Execute(args []string, requests <-chan svc.ChangeR
 	} else {
 		setAgentServiceLogOutput(args[0])
 		log.Warn().Msgf("unable to open the Windows Event Log, errors are only written to the log file: %v", elogErr)
+	}
+
+	if err := checkAgentServiceConfigOwner(s.configPath); err != nil {
+		log.Error().Msg(err.Error())
+		s.exitCode = 1
+		return true, 1
 	}
 
 	// the SCM starts services in C:\Windows\System32, so resolve relative config paths from the config's directory

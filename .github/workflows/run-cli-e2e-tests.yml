@@ -185,17 +185,16 @@ jobs:
           $config = Join-Path $dir 'agent-config.yaml'
           $log = Join-Path $env:ProgramData 'Infisical\Agent\ci-agent.log'
 
-          # the service runs as LocalSystem, so a binary outside Program Files (which a standard user could replace) is refused
-          $PSNativeCommandUseErrorActionPreference = $false
-          ./infisical-cli.exe agent service install ci-agent --config $config
-          if ($LASTEXITCODE -eq 0) { throw 'install from outside Program Files was not refused' }
-          $PSNativeCommandUseErrorActionPreference = $true
+          $exe = './infisical-cli.exe'
+          $serviceDir = Join-Path $env:ProgramFiles 'Infisical\Agent\ci-agent'
 
-          $exe = Join-Path $env:ProgramFiles 'Infisical\infisical.exe'
-          New-Item -ItemType Directory -Force -Path (Split-Path $exe) | Out-Null
-          Copy-Item ./infisical-cli.exe $exe
           & $exe agent service install ci-agent --config $config
-          foreach ($path in @($config, (Split-Path $log))) {
+          # the service runs as LocalSystem: it runs its own copy of infisical.exe, and what it runs, obeys and logs is
+          # owned by Administrators and closed to standard users
+          $binary = (Get-CimInstance Win32_Service -Filter "Name='ci-agent'").PathName
+          if ($binary -notlike "*$serviceDir\infisical.exe*") { throw "the service does not run its own copy of infisical.exe: $binary" }
+          if ((Get-Acl $config).Owner -ne 'BUILTIN\Administrators') { throw "the config is owned by $((Get-Acl $config).Owner)" }
+          foreach ($path in @($config, (Split-Path $log), $serviceDir)) {
             if ((Get-Acl $path).Access | Where-Object { $_.IdentityReference -match 'Users' }) { throw "$path is still accessible to standard users" }
           }
           & $exe agent service start ci-agent
@@ -223,3 +222,4 @@ jobs:
             if ((Get-Date) -gt $deadline) { throw 'service still exists after uninstall' }
             Start-Sleep -Seconds 1
           }
+          if (Test-Path $serviceDir) { throw "uninstall left $serviceDir behind" }
