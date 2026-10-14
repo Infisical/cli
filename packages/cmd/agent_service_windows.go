@@ -380,10 +380,13 @@ func uninstallAgentService(name string) error {
 		log.Debug().Msgf("unable to remove the %s event log source: %v", name, err)
 	}
 
-	// the service's own copy of infisical.exe
-	if err := os.RemoveAll(agentServiceDir(name)); err != nil {
-		log.Warn().Msgf("unable to remove %s: %v", agentServiceDir(name), err)
+	// only the service's own copy of infisical.exe: the folder may also hold the config, templates or credentials,
+	// so it is removed only once empty
+	copied := filepath.Join(agentServiceDir(name), "infisical.exe")
+	if err := os.Remove(copied); err != nil && !os.IsNotExist(err) {
+		log.Warn().Msgf("unable to remove %s: %v", copied, err)
 	}
+	_ = os.Remove(agentServiceDir(name))
 
 	log.Info().Msgf("Uninstalled the %s service", name)
 	return nil
