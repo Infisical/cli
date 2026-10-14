@@ -64,21 +64,29 @@ func restrictToAdministrators(path string) error {
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 }
 
-// checkAgentServiceConfigOwner refuses a config that Administrators or SYSTEM do not own. Install hands the config
-// to Administrators, so any other owner means it was replaced, e.g. by a standard user renaming a folder above it.
-func checkAgentServiceConfigOwner(configPath string) error {
-	sd, err := windows.GetNamedSecurityInfo(configPath, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+// readAgentServiceConfig reads the config, refusing one that Administrators or SYSTEM do not own: install hands the
+// config to Administrators, so any other owner means it was replaced, e.g. by a standard user renaming a folder above
+// it. The owner is checked on the same open file the config is read from, so it cannot be swapped in between.
+func readAgentServiceConfig(configPath string) ([]byte, error) {
+	file, err := os.Open(configPath)
 	if err != nil {
-		return fmt.Errorf("unable to read the owner of %s: %w", configPath, err)
+		return nil, fmt.Errorf("unable to open the agent config: %w", err)
+	}
+	defer file.Close()
+
+	sd, err := windows.GetSecurityInfo(windows.Handle(file.Fd()), windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read the owner of %s: %w", configPath, err)
 	}
 	owner, _, err := sd.Owner()
 	if err != nil {
-		return fmt.Errorf("unable to read the owner of %s: %w", configPath, err)
+		return nil, fmt.Errorf("unable to read the owner of %s: %w", configPath, err)
 	}
 	if !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !owner.IsWellKnown(windows.WinLocalSystemSid) {
-		return fmt.Errorf("%s is owned by %s rather than Administrators, so it may have been replaced and the agent will not run it. Check the file, then run 'infisical agent service uninstall' and 'install' again", configPath, owner)
+		return nil, fmt.Errorf("%s is owned by %s rather than Administrators, so it may have been replaced and the agent will not run it. Check the file, then run 'infisical agent service uninstall' and 'install' again", configPath, owner)
 	}
-	return nil
+
+	return io.ReadAll(file)
 }
 
 // agentServiceDir holds a service's own copy of infisical.exe
@@ -574,7 +582,8 @@ func (s *agentWindowsService) Execute(args []string, requests <-chan svc.ChangeR
 		log.Warn().Msgf("unable to open the Windows Event Log, errors are only written to the log file: %v", elogErr)
 	}
 
-	if err := checkAgentServiceConfigOwner(s.configPath); err != nil {
+	configData, err := readAgentServiceConfig(s.configPath)
+	if err != nil {
 		log.Error().Msg(err.Error())
 		s.exitCode = 1
 		return true, 1
@@ -591,7 +600,7 @@ func (s *agentWindowsService) Execute(args []string, requests <-chan svc.ChangeR
 	ready := make(chan struct{}, 1)
 	exited := make(chan int, 1)
 	go func() {
-		exited <- runAgent(s.configPath, stop, func() { ready <- struct{}{} })
+		exited <- runAgent(s.configPath, configData, stop, func() { ready <- struct{}{} })
 	}()
 
 	ticker := time.NewTicker(5 * time.Second)

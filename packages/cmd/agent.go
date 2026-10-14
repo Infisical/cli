@@ -3553,21 +3553,25 @@ var agentCmd = &cobra.Command{
 		}
 
 		// exit right away, as the agent always has, instead of waiting for a pending update check
-		os.Exit(runAgent(configPath, nil, nil))
+		os.Exit(runAgent(configPath, nil, nil, nil))
 	},
 }
 
 // runAgent runs the agent until it gets a shutdown signal or stop is closed, and returns the exit code.
-// Config errors are logged and return 0, as the agent always has. ready, when set, is called once the
-// config is loaded and the agent's workers have started.
-func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
+// Config errors are logged and return 0, as the agent always has. configData, when set, is used instead of
+// reading the config, so a caller that checked the file runs exactly what it checked. ready, when set, is
+// called once the config is loaded and the agent's workers have started.
+func runAgent(configPath string, configData []byte, stop <-chan struct{}, ready func()) int {
 	log.Info().Msg("starting Infisical agent...")
 
-	var agentConfigInBytes []byte
+	agentConfigInBytes := configData
 
-	agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
+	agentConfigInBase64 := ""
+	if configData == nil {
+		agentConfigInBase64 = os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
+	}
 
-	if agentConfigInBase64 == "" {
+	if configData == nil && agentConfigInBase64 == "" {
 		data, err := ioutil.ReadFile(configPath)
 		if err != nil {
 			if !FileExists(configPath) {
@@ -3588,7 +3592,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 		agentConfigInBytes = decodedAgentConfig
 	}
 
-	if !FileExists(configPath) && agentConfigInBase64 == "" {
+	if configData == nil && !FileExists(configPath) && agentConfigInBase64 == "" {
 		log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
 		return 0
 	}
