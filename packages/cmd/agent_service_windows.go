@@ -270,8 +270,9 @@ var agentServiceInstallCmd = &cobra.Command{
 	},
 }
 
-// newAgentServiceActionCmd builds the uninstall, start and stop commands, which differ only in what they run.
-func newAgentServiceActionCmd(action string, short string, run func(name string) error) *cobra.Command {
+// newAgentServiceActionCmd builds the uninstall, start and stop commands, which differ only in what they run
+// on the opened service.
+func newAgentServiceActionCmd(action string, short string, run func(name string, s *mgr.Service) error) *cobra.Command {
 	return &cobra.Command{
 		Use:                   action + " [name]",
 		Short:                 short,
@@ -288,7 +289,14 @@ func newAgentServiceActionCmd(action string, short string, run func(name string)
 				util.HandleError(err)
 			}
 
-			if err := run(name); err != nil {
+			m, s, err := openAgentWindowsService(name)
+			if err != nil {
+				util.HandleError(err, fmt.Sprintf("Unable to %s the agent service", action))
+			}
+			defer m.Disconnect()
+			defer s.Close()
+
+			if err := run(name, s); err != nil {
 				util.HandleError(err, fmt.Sprintf("Unable to %s the agent service", action))
 			}
 		},
@@ -367,14 +375,7 @@ func deleteIncompleteService(s *mgr.Service, cause error) error {
 	return cause
 }
 
-func uninstallAgentService(name string) error {
-	m, s, err := openAgentWindowsService(name)
-	if err != nil {
-		return err
-	}
-	defer m.Disconnect()
-	defer s.Close()
-
+func uninstallAgentService(name string, s *mgr.Service) error {
 	// Delete only marks the service for removal, it does not stop a running agent
 	if err := stopWindowsService(s); err != nil {
 		return err
@@ -400,14 +401,7 @@ func uninstallAgentService(name string) error {
 	return nil
 }
 
-func startAgentService(name string) error {
-	m, s, err := openAgentWindowsService(name)
-	if err != nil {
-		return err
-	}
-	defer m.Disconnect()
-	defer s.Close()
-
+func startAgentService(name string, s *mgr.Service) error {
 	if err := s.Start(); err != nil {
 		if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 			log.Info().Msgf("The %s service is already running", name)
@@ -432,14 +426,7 @@ func startAgentService(name string) error {
 	return nil
 }
 
-func stopAgentService(name string) error {
-	m, s, err := openAgentWindowsService(name)
-	if err != nil {
-		return err
-	}
-	defer m.Disconnect()
-	defer s.Close()
-
+func stopAgentService(name string, s *mgr.Service) error {
 	if err := stopWindowsService(s); err != nil {
 		return err
 	}
@@ -519,25 +506,10 @@ func waitForWindowsService(s *mgr.Service, timeout time.Duration, done func(svc.
 		}
 
 		if time.Now().After(deadline) {
-			return status, fmt.Errorf("timed out after %s waiting for the service, it is still %s", timeout, windowsServiceStateName(status.State))
+			return status, fmt.Errorf("timed out after %s waiting for the service", timeout)
 		}
 
 		time.Sleep(250 * time.Millisecond)
-	}
-}
-
-func windowsServiceStateName(state svc.State) string {
-	switch state {
-	case svc.Stopped:
-		return "stopped"
-	case svc.StartPending:
-		return "starting"
-	case svc.StopPending:
-		return "stopping"
-	case svc.Running:
-		return "running"
-	default:
-		return fmt.Sprintf("in state %d", state)
 	}
 }
 
