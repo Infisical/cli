@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -121,6 +122,18 @@ func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 	return httpClient
 }
 
+func projectsOutputFormat(cmd *cobra.Command) string {
+	outputFormat, err := cmd.Flags().GetString("output")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+	if outputFormat != "" && !slices.Contains(util.SUPPORTED_OUTPUT_FORMATS, outputFormat) {
+		_, err := util.FormatOutput(outputFormat, struct{}{}, nil)
+		util.HandleError(err, "Unable to format output")
+	}
+	return outputFormat
+}
+
 func printFormattedOutput[T any](outputFormat string, value T) {
 	output, err := util.FormatOutput(outputFormat, value, nil)
 	if err != nil {
@@ -130,10 +143,7 @@ func printFormattedOutput[T any](outputFormat string, value T) {
 }
 
 func runProjectsList(cmd *cobra.Command, args []string) {
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := projectsOutputFormat(cmd)
 
 	projects, err := api.CallListProjects(projectsHTTPClient(cmd), secretManagerProjectType)
 	if err != nil {
@@ -152,10 +162,7 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 }
 
 func runProjectsGet(cmd *cobra.Command, args []string) {
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := projectsOutputFormat(cmd)
 
 	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
 	if err != nil {
@@ -184,10 +191,7 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 }
 
 func runProjectsCreate(cmd *cobra.Command, args []string) {
-	outputFormat, err := cmd.Flags().GetString("output")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	outputFormat := projectsOutputFormat(cmd)
 	name, _ := cmd.Flags().GetString("name")
 	if name == "" {
 		util.HandleError(fmt.Errorf("the project name is required; pass --name"))
