@@ -153,3 +153,105 @@ func TestPosixShellQuote(t *testing.T) {
 		})
 	}
 }
+
+func TestQuoteCharacter(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		expected  string
+		expectErr bool
+	}{
+		{name: "single", input: "single", expected: "'"},
+		{name: "double", input: "double", expected: "\""},
+		{name: "none", input: "none", expected: ""},
+		{name: "empty defaults to single", input: "", expected: "'"},
+		{name: "case insensitive", input: "DOUBLE", expected: "\""},
+		{name: "invalid value returns error", input: "backtick", expectErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := quoteCharacter(tt.input)
+			if tt.expectErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestFormatAsDotEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []models.SingleEnvironmentVariable
+		quote    string
+		expected string
+	}{
+		{
+			name:     "single quote keeps the existing default behavior",
+			input:    []models.SingleEnvironmentVariable{{Key: "KEY1", Value: "VALUE1"}, {Key: "KEY2", Value: "VALUE2"}},
+			quote:    "'",
+			expected: "KEY1='VALUE1'\nKEY2='VALUE2'\n",
+		},
+		{
+			name:     "double quote wraps values in double quotes",
+			input:    []models.SingleEnvironmentVariable{{Key: "KEY1", Value: "VALUE1"}},
+			quote:    "\"",
+			expected: "KEY1=\"VALUE1\"\n",
+		},
+		{
+			name:     "none emits bare values for docker --env-file",
+			input:    []models.SingleEnvironmentVariable{{Key: "KEY1", Value: "VALUE1"}},
+			quote:    "",
+			expected: "KEY1=VALUE1\n",
+		},
+		{
+			name:     "double quote with multiline-encoded value emits escaped newlines for dotenv expansion",
+			input:    []models.SingleEnvironmentVariable{{Key: "PRIVATE_KEY", Value: "line1\nline2", SkipMultilineEncoding: true}},
+			quote:    "\"",
+			expected: "PRIVATE_KEY=\"line1\\nline2\"\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, formatAsDotEnv(tt.input, tt.quote))
+		})
+	}
+}
+
+func TestFormatAsDotEnvExport(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []models.SingleEnvironmentVariable
+		quote    string
+		expected string
+	}{
+		{
+			name:     "single quote keeps the existing default behavior",
+			input:    []models.SingleEnvironmentVariable{{Key: "KEY1", Value: "VALUE1"}},
+			quote:    "'",
+			expected: "export KEY1='VALUE1'\n",
+		},
+		{
+			name:     "double quote wraps values in double quotes",
+			input:    []models.SingleEnvironmentVariable{{Key: "KEY1", Value: "VALUE1"}},
+			quote:    "\"",
+			expected: "export KEY1=\"VALUE1\"\n",
+		},
+		{
+			name:     "none emits bare values",
+			input:    []models.SingleEnvironmentVariable{{Key: "KEY1", Value: "VALUE1"}},
+			quote:    "",
+			expected: "export KEY1=VALUE1\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, formatAsDotEnvExport(tt.input, tt.quote))
+		})
+	}
+}

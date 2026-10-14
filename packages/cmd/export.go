@@ -27,6 +27,12 @@ const (
 	FormatDotEnvEval   string = "dotenv-eval"
 )
 
+const (
+	QuoteSingle string = "single"
+	QuoteDouble string = "double"
+	QuoteNone   string = "none"
+)
+
 // exportCmd represents the export command
 var exportCmd = &cobra.Command{
 	Use:                   "export",
@@ -64,6 +70,16 @@ var exportCmd = &cobra.Command{
 		}
 
 		format, err := cmd.Flags().GetString("format")
+		if err != nil {
+			util.HandleError(err)
+		}
+
+		quoteFlag, err := cmd.Flags().GetString("quote")
+		if err != nil {
+			util.HandleError(err)
+		}
+
+		quote, err := quoteCharacter(quoteFlag)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -142,7 +158,7 @@ var exportCmd = &cobra.Command{
 		secrets = util.FilterSecretsByTag(secrets, tagSlugs)
 		secrets = util.SortSecretsByKeys(secrets)
 
-		output, err = formatEnvs(secrets, format)
+		output, err = formatEnvs(secrets, format, quote)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -267,6 +283,7 @@ func init() {
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	exportCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets")
 	exportCmd.Flags().StringP("format", "f", "dotenv", "Set the format of the output file (dotenv, dotenv-export, dotenv-eval, json, csv, yaml)")
+	exportCmd.Flags().String("quote", "single", "Set the quote character wrapping values for the dotenv and dotenv-export formats (single, double, none)")
 	exportCmd.Flags().Bool("secret-overriding", true, "Prioritizes personal secrets, if any, with the same name over shared secrets")
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
@@ -278,12 +295,12 @@ func init() {
 }
 
 // Format according to the format flag
-func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string, error) {
+func formatEnvs(envs []models.SingleEnvironmentVariable, format string, quote string) (string, error) {
 	switch strings.ToLower(format) {
 	case FormatDotenv:
-		return formatAsDotEnv(envs), nil
+		return formatAsDotEnv(envs, quote), nil
 	case FormatDotEnvExport:
-		return formatAsDotEnvExport(envs), nil
+		return formatAsDotEnvExport(envs, quote), nil
 	case FormatDotEnvEval:
 		return formatAsDotEnvEval(envs), nil
 	case FormatJson:
@@ -309,22 +326,40 @@ func formatAsCSV(envs []models.SingleEnvironmentVariable) string {
 	return csvString.String()
 }
 
-// Format environment variables as a dotenv file
-func formatAsDotEnv(envs []models.SingleEnvironmentVariable) string {
+// Format environment variables as a dotenv file. quote is the character used to
+// wrap each value ("'", "\"", or "" for none); resolve it via quoteCharacter.
+func formatAsDotEnv(envs []models.SingleEnvironmentVariable, quote string) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("%s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		dotenv += fmt.Sprintf("%s=%s%s%s\n", env.Key, quote, escapeNewLinesIfRequired(env), quote)
 	}
 	return dotenv
 }
 
-// Format environment variables as a dotenv file with export at the beginning
-func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
+// Format environment variables as a dotenv file with export at the beginning.
+// quote behaves as in formatAsDotEnv.
+func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable, quote string) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		dotenv += fmt.Sprintf("export %s=%s%s%s\n", env.Key, quote, escapeNewLinesIfRequired(env), quote)
 	}
 	return dotenv
+}
+
+// quoteCharacter maps the --quote flag value to the character used to wrap
+// dotenv values. An empty value defaults to single quotes so existing exports
+// are unaffected.
+func quoteCharacter(quote string) (string, error) {
+	switch strings.ToLower(quote) {
+	case QuoteSingle, "":
+		return "'", nil
+	case QuoteDouble:
+		return "\"", nil
+	case QuoteNone:
+		return "", nil
+	default:
+		return "", fmt.Errorf("invalid quote type: %s. Available quote types are [%s]", quote, strings.Join([]string{QuoteSingle, QuoteDouble, QuoteNone}, ", "))
+	}
 }
 
 // Format environment variables for shell eval/source. Values are wrapped in
