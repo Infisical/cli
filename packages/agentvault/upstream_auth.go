@@ -65,10 +65,11 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 		if err != nil {
 			return nil, err
 		}
-		if retryResp.StatusCode != http.StatusUnauthorized && retryResp.StatusCode != http.StatusForbidden {
+		// Only a 401 or an insufficient_scope challenge is about the token. Any other 403 is the upstream's
+		// answer to the request, which the refreshed token may only now have reached.
+		if retryResp.StatusCode != http.StatusUnauthorized && !ps.reportInsufficientScope(retryResp, sessionToken, svc, &fresh) {
 			return retryResp, nil
 		}
-		ps.reportInsufficientScope(retryResp, sessionToken, svc, &fresh)
 		_ = retryResp.Body.Close()
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Int("retryStatus", retryResp.StatusCode).
 			Msg("agent-vault: the upstream rejected the refreshed OAuth token too")

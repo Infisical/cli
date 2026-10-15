@@ -540,9 +540,15 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	}
 
 	if matched != nil {
-		// Before anything is injected, so the names it records can only have come from the agent.
+		// Before anything is injected, so the names it records can only have come from the agent. Parsed
+		// only for a session log; with logs off the body is still buffered for an OAuth credential, so a
+		// rejected token's request can be sent again.
 		if matched.kind == serviceKindMCP {
-			outcome.mcp = inspectMCPRequest(req)
+			if grant != nil {
+				outcome.mcp = inspectMCPRequest(req)
+			} else if matched.credential.refreshable {
+				bufferMCPRequest(req)
+			}
 		}
 
 		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,

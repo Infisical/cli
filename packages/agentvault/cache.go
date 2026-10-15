@@ -442,6 +442,7 @@ func (c *sessionCache) close() {
 var (
 	errCredentialNotRefreshable = errors.New("the refresh did not return a refreshable credential")
 	errServiceHostChanged       = errors.New("the service's host pattern changed while its credential was refreshed")
+	errServiceRemoved           = errors.New("the service was removed from the session while its credential was refreshed")
 )
 
 func credentialHash(cred *credential) string {
@@ -519,12 +520,14 @@ func (c *sessionCache) currentCredential(key, serviceID, hostPattern string) (cr
 
 // Copy on write: requests in flight hold pointers into the old slice and read it without the lock. A newer
 // cached credential wins over a delayed refresh or scope report, including the credential returned for retry.
+// A poll that removed the session or the service during the refresh revoked that access, so the fresh token
+// is refused rather than handed to a retry.
 func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash string, cred credential) (credential, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
 	if !ok {
-		return cred, nil
+		return credential{}, errSessionGone
 	}
 	for i, svc := range entry.services {
 		if svc.id != serviceID {
@@ -565,5 +568,5 @@ func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash 
 		delete(swap.replaced, credentialHash(&cred))
 		return cred, nil
 	}
-	return cred, nil
+	return credential{}, errServiceRemoved
 }

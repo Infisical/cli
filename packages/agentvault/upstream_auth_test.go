@@ -664,7 +664,11 @@ func TestConcurrentScopeReportsEachReachInfisicalWhenTheirTokenOrScopesDiffer(t 
 				oauthResolver: oauthResolver{issue: oauthToken("tok-value"), gate: make(chan struct{})},
 				entered:       make(chan []string, 2),
 			}
+			resolver.setServices(oauthMCPService("mcp.example", "tok-value"))
 			cache := newTestCache(resolver)
+			if _, err := cache.get("tok"); err != nil {
+				t.Fatal(err)
+			}
 			sent := oauthToken("tok-value")
 
 			var wg sync.WaitGroup
@@ -716,6 +720,70 @@ func TestCredentialFlightKeyIsCanonicalPerScopeSet(t *testing.T) {
 	}
 	if credentialFlightKey("k", "svc", "a.example", "hash", nil) == credentialFlightKey("k", "svc", "b.example", "hash", nil) {
 		t.Fatal("refreshes for different destinations share a key")
+	}
+}
+
+func TestAPlain403AfterARefreshPassesThrough(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token")}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") },
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer new-token" {
+				acceptOnly("new-token")(w, r)
+				return
+			}
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("not your project"))
+		})
+
+	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
+	if resp.StatusCode != http.StatusForbidden || body != "not your project" {
+		t.Fatalf("got %d: %s", resp.StatusCode, body)
+	}
+	if got := len(up.recorded()); got != 2 {
+		t.Fatalf("upstream saw %d requests, want the original and one retry", got)
+	}
+	if calls := resolver.refreshCalls(); len(calls) != 1 || calls[0].requiredScopes != nil {
+		t.Fatalf("refresh calls = %+v, want only the 401's refresh", calls)
+	}
+}
+
+func TestARefreshedTokenIsRefusedWhenAPollRemovedTheAccessMeanwhile(t *testing.T) {
+	cases := []struct {
+		name   string
+		remove func(cache *sessionCache, resolver *oauthResolver)
+		want   error
+	}{
+		{"session removed", func(cache *sessionCache, _ *oauthResolver) {
+			cache.mu.Lock()
+			delete(cache.entries, sessionKey("tok"))
+			cache.mu.Unlock()
+		}, errSessionGone},
+		{"service removed", func(cache *sessionCache, resolver *oauthResolver) {
+			resolver.setServices()
+			cache.refresh()
+		}, errServiceRemoved},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := &oauthResolver{issue: oauthToken("new-token"), gate: make(chan struct{})}
+			resolver.setServices(oauthMCPService("mcp.example", "old-token"))
+			cache := newTestCache(resolver)
+			injectedToken(t, cache)
+
+			sent := oauthToken("old-token")
+			done := make(chan error, 1)
+			go func() {
+				_, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent, nil)
+				done <- err
+			}()
+
+			tc.remove(cache, resolver)
+			close(resolver.gate)
+
+			if err := <-done; !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 

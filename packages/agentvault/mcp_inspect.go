@@ -67,31 +67,46 @@ func (r erroringReader) Read([]byte) (int, error) { return 0, r.err }
 // Returns nil when the request is not one the proxy parses, so the record carries no mcp detail at all.
 // Never refuses or alters the request: whatever is read is put back so the upstream gets the same bytes.
 func inspectMCPRequest(req *http.Request) *mcpDetail {
-	if !strings.EqualFold(req.Method, http.MethodPost) {
+	body, applicable, whole := bufferMCPRequest(req)
+	if !applicable {
 		return nil
+	}
+	if !whole {
+		return unparsedMCP()
+	}
+	return parseMCPBody(body)
+}
+
+// Reads a JSON-RPC POST body into memory, up to maxMCPInspectBody, so it can be parsed for the log and sent
+// again on an OAuth retry. applicable is false when the request is not one the proxy buffers, and whole is
+// false when the body could not be held in full. Whatever is read is put back so the upstream gets the same
+// bytes.
+func bufferMCPRequest(req *http.Request) (body []byte, applicable, whole bool) {
+	if !strings.EqualFold(req.Method, http.MethodPost) {
+		return nil, false, false
 	}
 	mediaType, _, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		return nil
+		return nil, false, false
 	}
 	if req.Header.Get("Content-Encoding") != "" || req.ContentLength > maxMCPInspectBody {
-		return unparsedMCP()
+		return nil, true, false
 	}
 	if req.Body == nil || req.Body == http.NoBody {
-		return parseMCPBody(nil)
+		return nil, true, true
 	}
 
 	original := req.Body
-	body, err := io.ReadAll(io.LimitReader(original, maxMCPInspectBody+1))
+	body, err = io.ReadAll(io.LimitReader(original, maxMCPInspectBody+1))
 	if err != nil {
 		// Put back as it failed, so whatever reads the body next meets the same error and a truncated body
 		// is refused or fails exactly as it would have without the inspection.
 		req.Body = rechainedBody{Reader: io.MultiReader(bytes.NewReader(body), erroringReader{err}), Closer: original}
-		return unparsedMCP()
+		return nil, true, false
 	}
 	if len(body) > maxMCPInspectBody {
 		req.Body = rechainedBody{Reader: io.MultiReader(bytes.NewReader(body), original), Closer: original}
-		return unparsedMCP()
+		return nil, true, false
 	}
 	_ = original.Close()
 	if len(body) == 0 {
@@ -99,7 +114,7 @@ func inspectMCPRequest(req *http.Request) *mcpDetail {
 	} else {
 		req.Body = &bufferedBody{Reader: bytes.NewReader(body), data: body}
 	}
-	return parseMCPBody(body)
+	return body, true, true
 }
 
 func parseMCPBody(body []byte) *mcpDetail {
