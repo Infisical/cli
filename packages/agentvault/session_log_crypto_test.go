@@ -101,6 +101,9 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	if chunk.meta.CiphertextBytes != len(chunk.ciphertext) {
 		t.Fatalf("the chunk reports %d bytes, the object is %d", chunk.meta.CiphertextBytes, len(chunk.ciphertext))
 	}
+	if want := len(vectorRecords()); chunk.meta.RecordCount != want || chunk.records != want {
+		t.Fatalf("the chunk reports %d records and tracks %d, it sealed %d", chunk.meta.RecordCount, chunk.records, want)
+	}
 
 	iv, sealed := chunk.ciphertext[:sessionLogIVBytes], chunk.ciphertext[sessionLogIVBytes:]
 	block, _ := aes.NewCipher(key)

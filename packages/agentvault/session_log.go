@@ -618,7 +618,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 			Msg("agent-vault: Infisical no longer accepts session logs for this session, dropping what was held")
 
 	case chunkLoggingOff:
-		r.switchOff(grantsIssuedAtSend)
+		r.switchOff(grantsIssuedAtSend, err)
 
 	case chunkClockSkew:
 		r.dropRefused(spool, chunk)
@@ -646,7 +646,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 
 // Drops everything held, unless a grant was issued after the refused request went out, which makes the
 // refusal stale (see sessionLogGrantsIssued).
-func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
+func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if grantIssuedSince(grantsIssuedAtSend) {
@@ -659,7 +659,7 @@ func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	}
 
 	if !r.hold.off {
-		log.Warn().Int("records", lost).
+		log.Warn().Err(err).Int("records", lost).
 			Msg("agent-vault: session logs are disabled, dropping what was held until they're turned back on")
 	}
 	r.hold.off = true
