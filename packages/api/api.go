@@ -76,6 +76,7 @@ const (
 	operationCallIssueCertificate                  = "CallIssueCertificate"
 	operationCallRetrieveCertificate               = "CallRetrieveCertificate"
 	operationCallGetCertificateBundle              = "CallGetCertificateBundle"
+	operationCallGetCertificateBody                = "CallGetCertificateBody"
 	operationCallRenewCertificate                  = "CallRenewCertificate"
 	operationCallGetCertificateRequest             = "CallGetCertificateRequest"
 	operationCallRevokeUserSession                 = "CallRevokeUserSession"
@@ -1390,6 +1391,25 @@ func CallGetCertificateBundle(httpClient *resty.Client, certificateId string) (*
 
 	if response.IsError() {
 		return nil, NewAPIErrorWithResponse(operationCallGetCertificateBundle, response, nil)
+	}
+
+	return &resBody, nil
+}
+
+func CallGetCertificateBody(httpClient *resty.Client, certificateId string) (*CertificateBodyResponse, error) {
+	var resBody CertificateBodyResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/%s/certificate", config.INFISICAL_URL, certificateId))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallGetCertificateBody, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallGetCertificateBody, response, nil)
 	}
 
 	return &resBody, nil

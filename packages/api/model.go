@@ -1207,6 +1207,12 @@ type CertificateBundleResponse struct {
 	SerialNumber     string `json:"serialNumber"`
 }
 
+type CertificateBodyResponse struct {
+	Certificate      string `json:"certificate"`
+	CertificateChain string `json:"certificateChain"`
+	SerialNumber     string `json:"serialNumber"`
+}
+
 type RenewCertificateRequest struct {
 	RemoveRootsFromChain bool `json:"removeRootsFromChain,omitempty"`
 }
