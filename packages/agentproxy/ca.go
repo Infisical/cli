@@ -226,7 +226,7 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 
-	notAfter := time.Now().Add(leafTTL)
+	notAfter := time.Now().Add(leafTTL).Round(0)
 	// a leaf must never outlive its issuer, or clients would reject the chain near intermediate expiry
 	if notAfter.After(interCert.NotAfter) {
 		notAfter = interCert.NotAfter
