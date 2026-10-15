@@ -99,10 +99,14 @@ inherits the rest of your environment unchanged.
 
 Two ways to get a session, exactly one of them required:
 
-  --access-bundle   mint one now over the named bundle (needs your login or a machine identity).
-                    Revoked when the agent exits unless --keep-session is set.
+  --access-bundle   mint one now over the named bundle, or set INFISICAL_AGENT_VAULT_ACCESS_BUNDLE
+                    (needs your login or a machine identity). Revoked when the agent exits unless
+                    --keep-session is set.
   --session-token   run with a session token minted in the dashboard, or set INFISICAL_AGENT_VAULT_SESSION_TOKEN
                     to keep it off the command line. Never revoked by this command.
+
+Both accept a variable instead of the flag, and a flag beats a variable. If both variables are set and
+neither flag is passed, the run stops and asks which you meant.
 
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match a fingerprint from the Proxies page.
@@ -133,55 +137,110 @@ func nonBlank(values []string) []string {
 	return kept
 }
 
-const agentVaultSessionTokenEnv = "INFISICAL_AGENT_VAULT_SESSION_TOKEN"
+const (
+	agentVaultSessionTokenEnv = "INFISICAL_AGENT_VAULT_SESSION_TOKEN"
+	agentVaultAccessBundleEnv = "INFISICAL_AGENT_VAULT_ACCESS_BUNDLE"
+)
+
+// Where a setting came from. A flag was typed for this run; a variable is ambient and may be left over
+// from another one.
+type agentVaultSource int
+
+const (
+	agentVaultSourceNone agentVaultSource = iota
+	agentVaultSourceEnv
+	agentVaultSourceFlag
+)
 
 // An explicit but empty --session-token is an error rather than a fall back to the environment: that
 // shape is "$SOME_VAR" with the variable unset, and running on a session the operator did not name is
 // the surprise worth avoiding.
-func resolveAgentVaultSessionToken(cmd *cobra.Command) (token string, fromFlag bool, err error) {
-	fromFlag = cmd.Flags().Changed("session-token")
+func resolveAgentVaultSessionToken(cmd *cobra.Command) (token string, source agentVaultSource, err error) {
 	flagValue, err := cmd.Flags().GetString("session-token")
 	if err != nil {
-		return "", fromFlag, err
+		return "", agentVaultSourceNone, err
 	}
-	if fromFlag && strings.TrimSpace(flagValue) == "" {
-		return "", fromFlag, fmt.Errorf(
-			"--session-token was given but is empty; pass a session token from the dashboard, or drop the flag and set %s", agentVaultSessionTokenEnv)
+	if cmd.Flags().Changed("session-token") {
+		if strings.TrimSpace(flagValue) == "" {
+			return "", agentVaultSourceFlag, fmt.Errorf(
+				"--session-token was given but is empty; pass a session token from the dashboard, or drop the flag and set %s", agentVaultSessionTokenEnv)
+		}
+		return strings.TrimSpace(flagValue), agentVaultSourceFlag, nil
 	}
-	token, err = util.GetCmdFlagOrEnvWithDefaultValue(cmd, "session-token", []string{agentVaultSessionTokenEnv}, "")
-	if err != nil {
-		return "", fromFlag, err
+	if token = strings.TrimSpace(os.Getenv(agentVaultSessionTokenEnv)); token != "" {
+		return token, agentVaultSourceEnv, nil
 	}
-	return strings.TrimSpace(token), fromFlag, nil
+	return "", agentVaultSourceNone, nil
+}
+
+// The variable names one bundle; the flag stays repeatable so that passing it twice is still rejected
+// by name rather than silently taking the last one.
+func resolveAgentVaultAccessBundles(cmd *cobra.Command) (bundles []string, source agentVaultSource, err error) {
+	if cmd.Flags().Changed("access-bundle") {
+		values, err := cmd.Flags().GetStringArray("access-bundle")
+		if err != nil {
+			return nil, agentVaultSourceNone, err
+		}
+		if bundles = nonBlank(values); len(bundles) == 0 {
+			return nil, agentVaultSourceFlag, fmt.Errorf("--access-bundle was given but names no bundle; pass a name like 'coding-agent'")
+		}
+		return bundles, agentVaultSourceFlag, nil
+	}
+	if name := strings.TrimSpace(os.Getenv(agentVaultAccessBundleEnv)); name != "" {
+		return []string{name}, agentVaultSourceEnv, nil
+	}
+	return nil, agentVaultSourceNone, nil
+}
+
+// A session comes either from a token or from a bundle to mint over, never both. A flag beats a
+// variable; two variables with no flag is a tie this refuses to break, since neither was typed for
+// this run and guessing wrong is invisible.
+func decideAgentVaultSession(tokenSource, bundleSource agentVaultSource) (useToken bool, warning string, err error) {
+	switch {
+	case tokenSource == agentVaultSourceNone && bundleSource == agentVaultSourceNone:
+		return false, "", fmt.Errorf(
+			"a session is required; pass --access-bundle <name> to mint one (or set %s), or --session-token <session token> from the dashboard (or set %s)",
+			agentVaultAccessBundleEnv, agentVaultSessionTokenEnv)
+	case bundleSource == agentVaultSourceNone:
+		return true, "", nil
+	case tokenSource == agentVaultSourceNone:
+		return false, "", nil
+	case tokenSource == agentVaultSourceFlag && bundleSource == agentVaultSourceFlag:
+		return false, "", fmt.Errorf("--access-bundle and --session-token are two ways to get one session; pass one of them, not both")
+	case tokenSource == agentVaultSourceEnv && bundleSource == agentVaultSourceEnv:
+		return false, "", fmt.Errorf(
+			"%s and %s are both set, and they are two ways to get one session. Unset one, or pass --session-token or --access-bundle to say which you mean",
+			agentVaultSessionTokenEnv, agentVaultAccessBundleEnv)
+	case tokenSource == agentVaultSourceFlag:
+		return true, fmt.Sprintf("%s is set, but --session-token was passed: running on that session and ignoring the bundle in the environment.", agentVaultAccessBundleEnv), nil
+	default:
+		return false, fmt.Sprintf("%s is set, but --access-bundle was passed: minting a new session and ignoring the token in the environment.", agentVaultSessionTokenEnv), nil
+	}
 }
 
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
-	accessBundles, _ := cmd.Flags().GetStringArray("access-bundle")
-
-	sessionToken, sessionTokenFromFlag, err := resolveAgentVaultSessionToken(cmd)
+	sessionToken, tokenSource, err := resolveAgentVaultSessionToken(cmd)
+	if err != nil {
+		util.HandleError(err)
+	}
+	accessBundles, bundleSource, err := resolveAgentVaultAccessBundles(cmd)
 	if err != nil {
 		util.HandleError(err)
 	}
 
-	// Whether the flag was given has to come from the flag set: pflag discards a lone empty value, so
-	// --access-bundle "" parses to an empty slice and is otherwise indistinguishable from the flag never
-	// appearing. Blanks alongside a real name are dropped here too, or the count below would report two
-	// bundles to someone who named one. Same shape as PAM's --account.
-	accessBundles = nonBlank(accessBundles)
-	if cmd.Flags().Changed("access-bundle") && len(accessBundles) == 0 {
-		util.HandleError(fmt.Errorf("--access-bundle was given but names no bundle; pass a name like 'coding-agent'"))
+	useToken, warning, err := decideAgentVaultSession(tokenSource, bundleSource)
+	if err != nil {
+		util.HandleError(err)
 	}
-	if len(accessBundles) == 0 && sessionToken == "" {
-		util.HandleError(fmt.Errorf("a session is required; pass --access-bundle <name> to mint one, or --session-token <session token> (or %s) from the dashboard", agentVaultSessionTokenEnv))
+	if warning != "" {
+		util.PrintWarning(warning)
 	}
-	if len(accessBundles) > 0 && sessionToken != "" {
-		if sessionTokenFromFlag {
-			util.HandleError(fmt.Errorf("--access-bundle and --session-token are two ways to get one session; pass one of them, not both"))
-		}
-		// The flag was typed for this run; an exported variable may be left over from another one.
-		util.PrintWarning(fmt.Sprintf("%s is set, but --access-bundle was passed: minting a new session and ignoring the token in the environment.", agentVaultSessionTokenEnv))
+	if useToken {
+		accessBundles = nil
+	} else {
 		sessionToken = ""
 	}
+
 	if len(accessBundles) > 1 {
 		util.HandleError(fmt.Errorf("a session carries one access bundle; pass --access-bundle once"))
 	}
@@ -542,7 +601,7 @@ func runAgentVaultChild(args, env []string) int {
 }
 
 func init() {
-	agentVaultRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name`")
+	agentVaultRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name` (falls back to "+agentVaultAccessBundleEnv+")")
 	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one (falls back to "+agentVaultSessionTokenEnv+")")
 	agentVaultRunCmd.Flags().String("ttl", "7d", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
