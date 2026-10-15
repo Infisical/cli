@@ -1,7 +1,14 @@
 package cmd
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -110,11 +117,56 @@ func mockCertificateServer(t *testing.T, bundle func() (int, api.CertificateBund
 	return &bundleCalls
 }
 
+type testCertificateChain struct {
+	leaf, intermediate, root string
+}
+
+func newTestCertificateChain(t *testing.T) testCertificateChain {
+	t.Helper()
+	issue := func(cn string, serial int64, isCA bool, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey, string) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(serial),
+			Subject:               pkix.Name{CommonName: cn},
+			NotBefore:             time.Now().Add(-time.Minute),
+			NotAfter:              time.Now().Add(time.Hour),
+			IsCA:                  isCA,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		}
+		if parent == nil {
+			parent, parentKey = template, key
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, parentKey)
+		require.NoError(t, err)
+		parsed, err := x509.ParseCertificate(der)
+		require.NoError(t, err)
+		return parsed, key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	}
+	root, rootKey, rootPEM := issue("root", 100, true, nil, nil)
+	intermediate, intermediateKey, intermediatePEM := issue("intermediate", 200, true, root, rootKey)
+	_, _, leafPEM := issue("leaf", 1, false, intermediate, intermediateKey)
+	return testCertificateChain{leaf: leafPEM, intermediate: intermediatePEM, root: rootPEM}
+}
+
+func TestWithoutRootCertificates(t *testing.T) {
+	c := newTestCertificateChain(t)
+	assert.Equal(t, c.intermediate, withoutRootCertificates(c.intermediate+c.root))
+	assert.Equal(t, c.intermediate, withoutRootCertificates(c.intermediate))
+	assert.Equal(t, "", withoutRootCertificates(c.root))
+
+	cert := distributionConfigWithKeyPath(t.TempDir())
+	assert.Equal(t, c.intermediate, chainToWrite(cert, c.intermediate+c.root))
+	keepRoot := false
+	cert.FileConfig.Chain.OmitRoot = &keepRoot
+	assert.Equal(t, c.intermediate+c.root, chainToWrite(cert, c.intermediate+c.root))
+}
+
 func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
-	leaf := selfSignedPEM(t, "leaf")
-	intermediate := selfSignedPEM(t, "intermediate")
-	rotatedIntermediate := selfSignedPEM(t, "rotated intermediate")
-	combined := leaf + intermediate
+	c := newTestCertificateChain(t)
+	rotated := newTestCertificateChain(t)
+	combined := c.leaf + c.intermediate
 
 	for _, tc := range []struct {
 		name        string
@@ -125,14 +177,15 @@ func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
 		wantCert    string
 		wantChain   string
 		wantRewrite bool
+		wantBundle  bool
 	}{
-		{name: "separate files up to date", chain: intermediate, certOnDisk: leaf, chainOnDisk: intermediate, wantCert: leaf, wantChain: intermediate},
-		{name: "combined file up to date", combine: true, chain: intermediate, certOnDisk: combined, wantCert: combined},
-		{name: "chainless combined file up to date", combine: true, certOnDisk: leaf, wantCert: leaf},
-		{name: "leaf-only file converted to combined", combine: true, chain: intermediate, certOnDisk: leaf, chainOnDisk: intermediate, wantCert: combined, wantChain: intermediate, wantRewrite: true},
-		{name: "combined file split after opting out", chain: intermediate, certOnDisk: combined, wantCert: leaf, wantChain: intermediate, wantRewrite: true},
-		{name: "rotated chain refreshed in combined file", combine: true, chain: rotatedIntermediate, certOnDisk: combined, wantCert: leaf + rotatedIntermediate, wantRewrite: true},
-		{name: "rotated chain refreshed in chain file", chain: rotatedIntermediate, certOnDisk: leaf, chainOnDisk: intermediate, wantCert: leaf, wantChain: rotatedIntermediate, wantRewrite: true},
+		{name: "separate files up to date", chain: c.intermediate, certOnDisk: c.leaf, chainOnDisk: c.intermediate, wantCert: c.leaf, wantChain: c.intermediate},
+		{name: "combined file up to date", combine: true, chain: c.intermediate, certOnDisk: combined, wantCert: combined, wantBundle: true},
+		{name: "chainless combined file up to date", combine: true, certOnDisk: c.leaf, wantCert: c.leaf, wantBundle: true},
+		{name: "combined file without root matches a bundle with root", combine: true, chain: c.intermediate + c.root, certOnDisk: combined, wantCert: combined, wantBundle: true},
+		{name: "leaf-only file converted to combined", combine: true, chain: c.intermediate, certOnDisk: c.leaf, chainOnDisk: c.intermediate, wantCert: combined, wantChain: c.intermediate, wantRewrite: true, wantBundle: true},
+		{name: "combined file split after opting out", chain: c.intermediate, certOnDisk: combined, chainOnDisk: c.intermediate, wantCert: c.leaf, wantChain: c.intermediate, wantRewrite: true, wantBundle: true},
+		{name: "rotated chain refreshed in combined file", combine: true, chain: rotated.intermediate, certOnDisk: combined, wantCert: c.leaf + rotated.intermediate, wantRewrite: true, wantBundle: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cert := distributionConfigWithKeyPath(t.TempDir())
@@ -146,8 +199,8 @@ func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
 			modifiedAt := time.Unix(1700000000, 0)
 			require.NoError(t, os.Chtimes(cert.FileConfig.Certificate.Path, modifiedAt, modifiedAt))
 
-			mockCertificateServer(t, func() (int, api.CertificateBundleResponse) {
-				return http.StatusOK, api.CertificateBundleResponse{Certificate: leaf, CertificateChain: tc.chain, PrivateKey: "private key", SerialNumber: "01"}
+			bundleCalls := mockCertificateServer(t, func() (int, api.CertificateBundleResponse) {
+				return http.StatusOK, api.CertificateBundleResponse{Certificate: c.leaf, CertificateChain: tc.chain, PrivateKey: "private key", SerialNumber: "01"}
 			})
 
 			tm := &AgentManager{accessToken: "test-token", certificateStates: map[int]*CertificateState{1: {}}}
@@ -164,13 +217,14 @@ func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
 			info, err := os.Stat(cert.FileConfig.Certificate.Path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantRewrite, !info.ModTime().Equal(modifiedAt))
+			assert.Equal(t, tc.wantBundle, bundleCalls.Load() > 0)
 			assert.Equal(t, "active", tm.certificateStates[1].Status)
 		})
 	}
 }
 
 func TestFetchCertificate_RestartKeepsMatchingFilesWhenBundleIsUnavailable(t *testing.T) {
-	leaf := selfSignedPEM(t, "leaf")
+	leaf := newTestCertificateChain(t).leaf
 	cert := distributionConfigWithKeyPath(t.TempDir())
 	cert.FileConfig.CombineCertificateChain = true
 	require.NoError(t, os.WriteFile(cert.FileConfig.Certificate.Path, []byte(leaf), 0600))
@@ -190,8 +244,8 @@ func TestFetchCertificate_RestartKeepsMatchingFilesWhenBundleIsUnavailable(t *te
 }
 
 func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
-	leaf := selfSignedPEM(t, "renewed leaf")
-	intermediate := selfSignedPEM(t, "intermediate")
+	c := newTestCertificateChain(t)
+	leaf, intermediate := c.leaf, c.intermediate
 
 	for _, tc := range []struct {
 		name       string
@@ -236,6 +290,40 @@ func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
 			content, err := os.ReadFile(cert.FileConfig.Certificate.Path)
 			require.NoError(t, err)
 			assert.Len(t, pemCertificateBlocks(content), 2)
+		})
+	}
+}
+
+func TestIssueCertificate_SendsRemoveRootsAtTopLevel(t *testing.T) {
+	keepRoot := false
+	for _, tc := range []struct {
+		name     string
+		omitRoot *bool
+		want     any
+	}{
+		{name: "default omits root", want: true},
+		{name: "omit-root false keeps root", omitRoot: &keepRoot, want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			t.Cleanup(server.Close)
+			withMockInfisicalURL(t, server.URL)
+
+			cert := distributionConfigWithKeyPath(t.TempDir())
+			cert.CertificateID = ""
+			cert.ProfileID = "profile-1"
+			cert.Attributes = &CertificateAttributes{CommonName: "app.example.com"}
+			cert.FileConfig.Chain.OmitRoot = tc.omitRoot
+			tm := &AgentManager{accessToken: "test-token", certificateStates: map[int]*CertificateState{1: {}}}
+			_ = tm.IssueCertificate(1, cert)
+
+			assert.Equal(t, tc.want, body["removeRootsFromChain"])
+			attributes, _ := body["attributes"].(map[string]any)
+			assert.NotContains(t, attributes, "removeRootsFromChain")
 		})
 	}
 }

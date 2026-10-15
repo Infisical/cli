@@ -1138,23 +1138,23 @@ type AltName struct {
 }
 
 type CertificateAttributes struct {
-	TTL                  string    `json:"ttl,omitempty"`
-	SignatureAlgorithm   string    `json:"signatureAlgorithm,omitempty"`
-	KeyAlgorithm         string    `json:"keyAlgorithm,omitempty"`
-	CommonName           string    `json:"commonName,omitempty"`
-	KeyUsages            []string  `json:"keyUsages,omitempty"`
-	ExtendedKeyUsages    []string  `json:"extendedKeyUsages,omitempty"`
-	NotBefore            string    `json:"notBefore,omitempty"`
-	NotAfter             string    `json:"notAfter,omitempty"`
-	AltNames             []AltName `json:"altNames,omitempty"`
-	RemoveRootsFromChain bool      `json:"removeRootsFromChain,omitempty"`
+	TTL                string    `json:"ttl,omitempty"`
+	SignatureAlgorithm string    `json:"signatureAlgorithm,omitempty"`
+	KeyAlgorithm       string    `json:"keyAlgorithm,omitempty"`
+	CommonName         string    `json:"commonName,omitempty"`
+	KeyUsages          []string  `json:"keyUsages,omitempty"`
+	ExtendedKeyUsages  []string  `json:"extendedKeyUsages,omitempty"`
+	NotBefore          string    `json:"notBefore,omitempty"`
+	NotAfter           string    `json:"notAfter,omitempty"`
+	AltNames           []AltName `json:"altNames,omitempty"`
 }
 
 type IssueCertificateRequest struct {
-	ProfileID     string                 `json:"profileId"`
-	ApplicationID string                 `json:"applicationId,omitempty"`
-	CSR           string                 `json:"csr,omitempty"`
-	Attributes    *CertificateAttributes `json:"attributes,omitempty"`
+	ProfileID            string                 `json:"profileId"`
+	ApplicationID        string                 `json:"applicationId,omitempty"`
+	CSR                  string                 `json:"csr,omitempty"`
+	Attributes           *CertificateAttributes `json:"attributes,omitempty"`
+	RemoveRootsFromChain bool                   `json:"removeRootsFromChain,omitempty"`
 }
 
 type CertificateData struct {

@@ -2264,14 +2264,6 @@ func buildCertificateAttributes(certificate *AgentCertificateConfig) *api.Certif
 	setStringSlice(&attributes.KeyUsages, certAttrs.KeyUsages)
 	setStringSlice(&attributes.ExtendedKeyUsages, certAttrs.ExtendedKeyUsages)
 
-	removeRoots := true
-	if certificate.FileConfig.Chain.OmitRoot != nil && !*certificate.FileConfig.Chain.OmitRoot {
-		removeRoots = false
-	}
-
-	attributes.RemoveRootsFromChain = removeRoots
-	hasAny = true
-
 	if len(certAttrs.AltNames) > 0 {
 		altNames := make([]api.AltName, len(certAttrs.AltNames))
 		for i, altName := range certAttrs.AltNames {
@@ -2472,10 +2464,16 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 
 	serialOnDiskMatches := serialMatchesCertificateOnDisk(certConfig, certificate.Certificate.SerialNumber)
 	onDiskAfterRestart := previousCertificateID == "" && serialOnDiskMatches
+	combine := certConfig.FileConfig.CombineCertificateChain
+
+	if onDiskAfterRestart && !combine && allConfiguredOutputsExist(certConfig) && certificateFileHoldsOnlyLeaf(certConfig) {
+		markActive()
+		return nil
+	}
 
 	bundle, err := api.CallGetCertificateBundle(httpClient, resolvedCertificateID)
 	if err != nil {
-		if onDiskAfterRestart {
+		if onDiskAfterRestart && combine {
 			log.Warn().Str("Certificate", displayName).Msgf("could not fetch the certificate bundle to verify the files on disk, keeping them: %v", err)
 			markActive()
 			return nil
@@ -2492,7 +2490,7 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 		return fmt.Errorf("certificate %s: %s", resolvedCertificateID, reason)
 	}
 
-	if onDiskAfterRestart && certificateFilesMatch(certConfig, bundle) {
+	if onDiskAfterRestart && combine && certificateFilesMatch(certConfig, bundle) {
 		markActive()
 		return nil
 	}
@@ -2566,8 +2564,9 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 	state := tm.certificateStates[certificateId]
 
 	request := api.IssueCertificateRequest{
-		ProfileID:     certificate.ProfileID,
-		ApplicationID: certificate.ApplicationID,
+		ProfileID:            certificate.ProfileID,
+		ApplicationID:        certificate.ApplicationID,
+		RemoveRootsFromChain: omitRootFromChain(certificate),
 	}
 
 	if certificate.CSR != "" {
@@ -2836,7 +2835,68 @@ func isReplacementOnDisk(certConfig *AgentCertificateConfig) bool {
 	return err == nil
 }
 
+func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
+	for _, path := range []string{
+		certConfig.FileConfig.Certificate.Path,
+		certConfig.FileConfig.Chain.Path,
+		certConfig.FileConfig.PrivateKey.Path,
+	} {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func certificateFileHoldsOnlyLeaf(certConfig *AgentCertificateConfig) bool {
+	contents, err := os.ReadFile(certConfig.FileConfig.Certificate.Path)
+	return err == nil && len(pemCertificateBlocks(contents)) == 1
+}
+
+func omitRootFromChain(certConfig *AgentCertificateConfig) bool {
+	return certConfig.FileConfig.Chain.OmitRoot == nil || *certConfig.FileConfig.Chain.OmitRoot
+}
+
+func chainToWrite(certConfig *AgentCertificateConfig, chain string) string {
+	if !omitRootFromChain(certConfig) {
+		return chain
+	}
+	return withoutRootCertificates(chain)
+}
+
+func withoutRootCertificates(chain string) string {
+	var kept []byte
+	removed := false
+	rest := []byte(chain)
+	for {
+		block, next := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = next
+		if block.Type == "CERTIFICATE" {
+			if parsed, err := x509.ParseCertificate(block.Bytes); err == nil && isSelfSigned(parsed) {
+				removed = true
+				continue
+			}
+		}
+		kept = append(kept, pem.EncodeToMemory(block)...)
+	}
+	if !removed {
+		return chain
+	}
+	return string(kept)
+}
+
+func isSelfSigned(certificate *x509.Certificate) bool {
+	return bytes.Equal(certificate.RawSubject, certificate.RawIssuer) && certificate.CheckSignatureFrom(certificate) == nil
+}
+
 func certificateFileContent(certConfig *AgentCertificateConfig, certificate, chain string) string {
+	chain = chainToWrite(certConfig, chain)
 	if !certConfig.FileConfig.CombineCertificateChain || chain == "" {
 		return certificate
 	}
@@ -2844,16 +2904,11 @@ func certificateFileContent(certConfig *AgentCertificateConfig, certificate, cha
 }
 
 func certificateFilesMatch(certConfig *AgentCertificateConfig, bundle *api.CertificateBundleResponse) bool {
-	fileConfig := certConfig.FileConfig
-	if !fileHasCertificates(fileConfig.Certificate.Path, certificateFileContent(certConfig, bundle.Certificate, bundle.CertificateChain)) {
+	if !fileHasCertificates(certConfig.FileConfig.Certificate.Path, certificateFileContent(certConfig, bundle.Certificate, bundle.CertificateChain)) {
 		return false
 	}
-	if !fileConfig.CombineCertificateChain && fileConfig.Chain.Path != "" && bundle.CertificateChain != "" &&
-		!fileHasCertificates(fileConfig.Chain.Path, bundle.CertificateChain) {
-		return false
-	}
-	if fileConfig.PrivateKey.Path != "" && bundle.PrivateKey != "" {
-		if _, err := os.Stat(fileConfig.PrivateKey.Path); err != nil {
+	if certConfig.FileConfig.PrivateKey.Path != "" && bundle.PrivateKey != "" {
+		if _, err := os.Stat(certConfig.FileConfig.PrivateKey.Path); err != nil {
 			return false
 		}
 	}
@@ -2967,11 +3022,12 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
 
-	if !certificate.FileConfig.CombineCertificateChain && response.Certificate.CertificateChain != "" && chainPath != "" {
+	chain := chainToWrite(certificate, response.Certificate.CertificateChain)
+	if !certificate.FileConfig.CombineCertificateChain && chain != "" && chainPath != "" {
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for certificate chain %s: %v", chainPath, err)
 		}
-		if err := ioutil.WriteFile(chainPath, []byte(response.Certificate.CertificateChain), chainPerms); err != nil {
+		if err := ioutil.WriteFile(chainPath, []byte(chain), chainPerms); err != nil {
 			return fmt.Errorf("failed to write certificate chain to %s: %v", chainPath, err)
 		}
 	}
@@ -3260,19 +3316,15 @@ func (tm *AgentManager) RenewCertificate(certificateId int, certificate *AgentCe
 		return err
 	}
 
-	removeRoots := true
-	if certificate.FileConfig.Chain.OmitRoot != nil && !*certificate.FileConfig.Chain.OmitRoot {
-		removeRoots = false
-	}
-
 	request := api.RenewCertificateRequest{
-		RemoveRootsFromChain: removeRoots,
+		RemoveRootsFromChain: omitRootFromChain(certificate),
 	}
 	response, err := api.CallRenewCertificate(httpClient, state.CertificateID, request)
 	if err != nil {
 		return fmt.Errorf("failed to renew certificate: %v", err)
 	}
 
+	// The renew response omits the new private key, so the issued certificate is read from the request.
 	if response.CertificateRequestID != "" {
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
 		log.Info().Str("Certificate", displayName).Msg("certificate submitted for renewal to external CA")
